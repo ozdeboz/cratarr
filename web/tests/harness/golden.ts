@@ -8,16 +8,13 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { track, type Track } from './aspects-record.ts';
+import { track, type Track } from './recorded.ts';
 
 // The picture side's wiring installs itself into the conversion (v2.ts), as the app has it (snapshot-v2.ts).
 await import('../../src/lib/visuals/picture-wiring.ts');
 const { newEngine, stepEngine } = await import('../../src/lib/visuals/engine/graph.ts');
 const { LivePatch } = await import('../../src/lib/visuals/engine/live-patch.ts');
 const { rollOf } = await import('../../src/lib/visuals/engine/dice.ts');
-const { effectSlotsOf } = await import('../../src/lib/visuals/engine/settings-view.ts');
-const { FREE } = await import('../../src/lib/visuals/engine/sidechain.ts');
-const { chainNow } = await import('../../src/lib/visuals/chain-params.ts');
 const { musicOf, newMusicState } = await import('../../src/lib/visuals/music-core.ts');
 const { newNormalState, signalsFor } = await import('../../src/lib/visuals/normal.ts');
 const { T } = await import('../../src/lib/visuals/routes.ts');
@@ -146,8 +143,6 @@ export function goldenFrames(make: () => PatchV2, run: RunOptions = {}): Map<str
     }
     const ofType = (type: string) => flat.modules.find((x) => x.type === type);
     const kind = (type: string, knob: string) => types[type]?.knobs.find((x) => x.id === knob);
-    const slots = { ...effectSlotsOf(flat), lattice: asSet(flat, ofType('fluid'), 'lattice', types) ?? 0 };
-    const speed = asSet(flat, ofType('clock'), 'speed', types) ?? kind('clock', 'speed')?.default ?? 1;
     const lighting = Array.from({ length: BANDS }, (_, b) => asSet(flat, ofType('music'), `hold.${b}`, types) ?? kind('music', 'hold')?.default ?? 0.15);
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: now, lighting });
     let signals: ReturnType<typeof signalsFor> | null = null;
@@ -181,21 +176,19 @@ export function goldenFrames(make: () => PatchV2, run: RunOptions = {}): Map<str
       for (const [id, v] of Object.entries(stepped.macros)) put(out, `macro.${id}`, v);
       out.set('nexts', stepped.nexts.length);
       out.set('dice', stepped.dice.length);
-      if (stepped.aspects && fv) {
-        const d = stepped.aspects;
-        const stirred = stepped.fluid ?? { forces: [], flow: { energy: 0, swirl: 0 } };
+      if (stepped.device && fv) {
         put(out, 'camera', fv.camera);
         // What each stage draws with: the device's values, each stage's own modules' over them (the renderer's).
-        const now = chainNow(d, { how: slots, levers: FREE, ceiling: 1, coverage: null, fire: fv.fire, position: m.position, beat: m.playing ? m.beat : null, forces: stirred.forces, flow: stirred.flow, dt, speed });
-        put(out, 'chain', stagesNow(now, ids, (id) => stepped.params[id]));
+        put(out, 'chain', stagesNow(stepped.device.stages, ids, (id) => stepped.params[id]));
       }
     }
     // The meters' numbers (the frame loop's), and with the loop closed, the meters' values back in.
-    const stats = frameStats(stepped, { patch: flat, how: { ...effectSlotsOf(flat), lattice: asSet(flat, ofType('fluid'), 'lattice', types) ?? 0 }, levers: FREE, t: at, look: null });
+    const stats = frameStats(stepped, { patch: flat, t: at, look: null });
     if (keep && stats) put(out, 'stats', stats);
-    if (meters && stats && stepped.aspects) {
-      const lights = stepped.aspects.hits.reduce((a, h) => a + Math.max(0, h), 0) / Math.max(1, stepped.aspects.hits.length);
-      meters.add({ ...stats, tiles: [screenTile(at, Math.min(1, BRIGHT * stepped.aspects.flash * (1 + 0.6 * lights)))] });
+    if (meters && stats && stepped.device) {
+      const show = stepped.device.stages.show;
+      const lights = show.hits.reduce((a, h) => a + Math.max(0, h), 0) / Math.max(1, show.hits.length);
+      meters.add({ ...stats, tiles: [screenTile(at, Math.min(1, BRIGHT * show.flash * (1 + 0.6 * lights)))] });
       if (now - meteredAt >= 250) {
         meterValues = meters.now();
         meteredAt = now;

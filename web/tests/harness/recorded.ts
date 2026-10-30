@@ -1,6 +1,8 @@
-// The equivalence harness (decision 0057, step 2): today's engine (aspects.ts) and the one engine stepped frame by frame
-// over recorded tracks (tests/fixtures/tracks: four of the library's, their signals and beats as the server sends
-// them), each frame's whole outcome flattened, so the new engine is proved against today's before the old code goes.
+// The recorded tracks (tests/fixtures/tracks: four of the library's, their signals and beats as the server sends them)
+// and a recorder of the one engine over them, frame by frame, each frame's numbers flattened: what the device gives
+// its stages and its meters, and every module's node values. For the tests that hold the engine to itself (a chain in
+// a device, cables merged or converted); the golden frames (golden.ts) hold it to its references. (0.9.19: today's
+// summary and the old engine it came from are gone, and the equivalence proofs against them with them.)
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -10,11 +12,9 @@ import { dirname, join } from 'node:path';
 const { decode: decodeSignals } = await import('../../src/lib/visuals/signals.ts');
 const { decode: decodeBeats } = await import('../../src/lib/visuals/beats.ts');
 const { musicOf, newMusicState } = await import('../../src/lib/visuals/music-core.ts');
-const { newAspects, stepAspects } = await import('../../src/lib/visuals/aspects.ts');
 const { FLUID_FULL } = await import('../../src/lib/visuals/settings.svelte.ts');
 
-import type { AspectsNow } from '../../src/lib/visuals/aspects.ts';
-import { ASPECTS } from '../../src/lib/visuals/routes.ts';
+import type { EngineFrame } from '../../src/lib/visuals/engine/graph.ts';
 import type { Music } from '../../src/lib/visuals/music-core.ts';
 import type { VisualSettings } from '../../src/lib/visuals/settings.svelte.ts';
 import type { Signals } from '../../src/lib/visuals/signals.ts';
@@ -34,41 +34,31 @@ export function track(id: string): Track {
   return { id, signals, beats: raw.length ? decodeBeats(buffer(raw)) : null };
 }
 
-/** What an engine is stepped with each frame, and gives: today's AspectsNow, whatever runs it. */
+/** What an engine is stepped with each frame, and gives: the one engine's frame, however its patch is made. */
 export type StepOptions = { still: boolean; now: number; fluidFull: number };
-export type Engine = { name: string; step(m: Music, s: VisualSettings, dt: number, opts: StepOptions): AspectsNow };
+export type Engine = { name: string; step(m: Music, s: VisualSettings, dt: number, opts: StepOptions): EngineFrame };
 
-/** Today's engine. */
-export function todays(): Engine {
-  const st = newAspects();
-  return { name: 'aspects.ts', step: (m, s, dt, opts) => stepAspects(st, m, s, dt, opts) };
+/** A value's numbers by path, objects and arrays walked. */
+function put(out: Map<string, number>, key: string, v: unknown) {
+  if (typeof v === 'number') return void out.set(key, v);
+  if (typeof v === 'boolean') return void out.set(key, v ? 1 : 0);
+  if (!v || typeof v !== 'object') return;
+  if (ArrayBuffer.isView(v)) return Array.from(v as unknown as ArrayLike<number>).forEach((x, i) => out.set(`${key}.${i}`, x));
+  for (const [k, x] of Object.entries(v as object)) put(out, `${key}.${k}`, x);
 }
 
-const WALKS = new Set([ASPECTS.indexOf('look'), ASPECTS.indexOf('behaviour')]);
-
-/** A frame's outcome as named numbers: everything AspectsNow says, each part's and band's apart, the steps' Nexts as 0/1. */
-export function flatten(a: AspectsNow): Map<string, number> {
+/** A frame's outcome as named numbers: what the device gives (its stages, its meter), every module's node values (by
+ *  its own name, whatever device it sits in: `cratarr/show/tonemap` is `tonemap`). */
+export function flatten(f: EngineFrame): Map<string, number> {
   const out = new Map<string, number>();
-  const put = (k: string, v: number | boolean) => out.set(k, typeof v === 'boolean' ? (v ? 1 : 0) : v);
-  // The walks (Look's and Behaviour's columns) left with the Whole frame (0057: Randoms and the Dice now): not compared.
-  a.given.forEach((v, i) => WALKS.has(i) || put(`given.${i}`, v));
-  for (const k of ['lit', 'glow', 'turn', 'scale', 'keep', 'gamma', 'flash', 'saturation', 'smoothing', 'floor', 'fluid', 'warp', 'tunnel', 'effects', 'facets', 'dive'] as const) put(k, a[k]);
-  a.rates.forEach((v, i) => put(`rates.${i}`, v));
-  a.shape.forEach((v, i) => put(`shape.${i}`, v));
-  a.hits.forEach((v, i) => put(`hits.${i}`, v));
-  a.parts.forEach((p, i) => {
-    for (const k of ['turn', 'size', 'morph', 'hue', 'spread', 'weight'] as const) put(`parts.${i}.${k}`, p[k] ?? 0);
-  });
-  for (const [k, v] of Object.entries(a.levels)) put(`levels.${k}`, v);
-  for (const [k, v] of Object.entries(a.nexts)) put(`nexts.${k}`, v);
-  a.routed.amounts.forEach((v, i) => put(`routed.amounts.${i}`, v));
-  a.routed.knobs.forEach((v, i) => put(`routed.knobs.${i}`, v));
+  put(out, 'device', f.device);
+  for (const [id, p] of Object.entries(f.params)) put(out, `params.${id.slice(id.lastIndexOf('/') + 1)}`, p);
   return out;
 }
 
 export const FPS = 30;
 
-/** Steps `engine` over `t` from `from` for `seconds` at FPS, as the precheck does (musicOf, playing). One map a frame. */
+/** Steps `engine` over `t` from `from` for `seconds` at FPS (musicOf, playing). One map a frame. */
 export function record(engine: Engine, t: Track, s: VisualSettings, from = 0, seconds = 30, still = false): Map<string, number>[] {
   const state = newMusicState();
   const dt = 1 / FPS;
@@ -81,7 +71,8 @@ export function record(engine: Engine, t: Track, s: VisualSettings, from = 0, se
   return frames;
 }
 
-/** Where two recordings part: each field's largest difference, and the frame it was at. */
+/** Where two recordings part: each field's largest difference, and the frame it was at (a field the second lacks:
+ *  Infinity). */
 export function compare(a: Map<string, number>[], b: Map<string, number>[]): Map<string, { most: number; frame: number }> {
   const out = new Map<string, { most: number; frame: number }>();
   for (let f = 0; f < Math.min(a.length, b.length); f++)

@@ -6,7 +6,7 @@ import { FILL_ANGLES, LENS_SHAPES, fillTexture, type Irregular } from '../shape-
 import { diveCamera, diveFit, diveTarget, type DiveFit } from '../zoom';
 import { IDENTITY, type Affine } from '../transform';
 import { program } from '../sources/gl';
-import type { PointsParams } from '../chain-params';
+import type { PointsParams } from '../stage-values';
 import type { Light } from './light';
 import { none, uniforms } from './shared';
 

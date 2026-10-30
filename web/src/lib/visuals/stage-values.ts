@@ -3,12 +3,25 @@
 // device gives where it has none. Which module of a type a stage reads: the light loop's and the Flame's, the first of
 // each in the patch; Show's, the compiled graph's parts on the light. The renderer's (render.ts), and the golden
 // frames' (tests/harness/golden.ts), so what is proved is what is drawn. Pure.
-import type { ChainNow, ShowParams } from './chain-params';
 import type { NodeParams } from './engine/graph';
+import type { Shown } from './render';
 import { compile, stageOf, stagesOf, type TypeOf } from './picture-graph';
 import type { PatchV2 } from './ports';
 import { flatten } from './v2';
 import { DIVE_MOST, TUNNEL_MOST } from './zoom';
+
+/** The points' camera: their size and turn, and the dive's rate. */
+export type PointsParams = Pick<Shown, 'scale' | 'turn' | 'dive'>;
+/** The flame's own loop on the light: the share kept, the fluid (its amount, read-back, pushes, flow, step), the
+ *  tunnel's rate, the facets. */
+export type CarryParams = Pick<Shown, 'keep' | 'fluid' | 'warp' | 'tunnel' | 'facets' | 'forces' | 'flow' | 'dt'>;
+/** The show: the display's curve and gains, the bands' lights, the fire, the ceiling; the share kept (the points
+ *  held at a time) and the waves' bend. */
+export type ShowParams = Pick<Shown, 'brightness' | 'keep' | 'gamma' | 'vibrancy' | 'zoom' | 'flash' | 'hits' | 'ceiling' | 'exposure' | 'saturation' | 'smoothing' | 'floor' | 'fire' | 'flow'>;
+/** The effects: the device's and the loop's. */
+export type EffectsParams = Shown['effects'];
+/** Each stage's values: the points', the light loop's, Show's, the finish's effects. */
+export type StageValues = { points: PointsParams; carry: CarryParams; show: ShowParams; effects: EffectsParams };
 
 /** The light loop's modules and the Flame. */
 const LOOP_TYPES = new Set(['trails', 'fluid', 'tunnel', 'dive', 'flame']);
@@ -38,7 +51,7 @@ export function ownShow(look: ShowParams, of: (type: string) => NodeParams | und
 
 /** The light loop's and the camera's values with each module's own where it has them: Trails' keep, the Fluid's,
  *  Tunnel's, Dive's, the Flame's size. */
-export function ownLoop(now: ChainNow, of: (type: string) => NodeParams | undefined): ChainNow {
+export function ownLoop(now: StageValues, of: (type: string) => NodeParams | undefined): StageValues {
   const [trails, fluid, tunnel, dive, flame] = [of('trails'), of('fluid'), of('tunnel'), of('dive'), of('flame')];
   const keep = trails?.keep ?? now.carry.keep;
   return {
@@ -60,7 +73,7 @@ export function ownLoop(now: ChainNow, of: (type: string) => NodeParams | undefi
 }
 
 /** The stages' values as drawn: the device's, each stage's own modules' over them. */
-export function stagesNow(now: ChainNow, ids: StageIds, params: (id: string) => NodeParams | undefined): ChainNow {
+export function stagesNow(now: StageValues, ids: StageIds, params: (id: string) => NodeParams | undefined): StageValues {
   const loop = ownLoop(now, (type) => (ids.loop.has(type) ? params(ids.loop.get(type)!) : undefined));
   return { ...loop, show: ownShow(loop.show, (type) => (ids.show.has(type) ? params(ids.show.get(type)!) : undefined)) };
 }

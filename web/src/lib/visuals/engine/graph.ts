@@ -7,9 +7,12 @@
 // the chain's own modules (chain.ts); and every other module's knobs as their cables move them (evaluate.ts's rule).
 // What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
-import type { AspectsNow } from '../aspects';
 import { throughMacros } from '../macro-map';
-import { hazeOf } from '../aspects';
+import { effectsNow, settingsReport, type Report } from '../effects';
+import type { StageValues } from '../stage-values';
+import { asSet } from '../v2';
+import { DIVE_MOST, TUNNEL_MOST } from '../zoom';
+import { effectSlotsOf } from './settings-view';
 import { heightOf, shapeOf, type Shape } from '../evaluate';
 import { seedOf } from '../flame';
 import type { Levers } from './sidechain';
@@ -35,7 +38,7 @@ import { musicView } from './music-signals';
 import { flowAt, PLAIN, WAVES, type FieldShape } from '../field';
 import { effectKnobIds, effectOfType } from '../effect-modules';
 import { engineOf } from '../engine-module';
-import { NO_STRIKE, adsrOf, courseStep, newAccent, stepAccent, type AccentState, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
+import { hazeOf, NO_STRIKE, adsrOf, courseStep, newAccent, stepAccent, type AccentState, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
 
 const NA = ASPECTS.length;
 const IS_LEVEL = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
@@ -192,10 +195,21 @@ const faceKeys = (id: string): FaceKeys => ({ input: `${id}.in`, reduction: `${i
 /** A step whose Next fired this frame (0057 §7e), and the step it moves on to (past its last, its first). */
 export type NextRequest = { module: string; knob: string; to: number };
 
+/** What the Cratarr device gives the light's stages this frame (0.9.19, the architecture audit's visuals step 3: no
+ *  summary between the modules and the renderer): each stage's values as the device's modules make them, those a
+ *  stage's own module does not give its device's defaults (Trails' keep, the Curve's haze, Tone map's flash, the
+ *  Fluid's share, Tunnel and Dive at their settings); the effects as their slots, levels and routes set them; the
+ *  Flame's turn, size and lights. The renderer lays each stage's own modules' values over them (stage-values.ts). And
+ *  what the meters count of it: the motions the waves, the zooms and the effects make, a new symmetry. */
+export type DeviceFrame = {
+  stages: StageValues;
+  meter: { waves: number; fluid: number; tunnel: number; dive: number; effects: Report; symmetry: boolean };
+};
+
 export type EngineFrame = {
-  /** What the picture is drawn with this frame (today's renderer's input, until step 3's modules take knob values); null
-   *  where the patch has no Cratarr device (a blank slate: nothing is drawn). */
-  aspects: AspectsNow | null;
+  /** What the light's stages draw with this frame; null where the patch has no Cratarr device (a blank slate: nothing
+   *  of the light is drawn). */
+  device: DeviceFrame | null;
   /** Every module's knobs as their cables move them (the chain's: its settings, its columns given in `aspects`). */
   knobs: Record<string, Record<string, number>>;
   /** What each chain module's node draws with this frame (step 5, the one engine), from its own knobs: a Show part's
@@ -282,6 +296,8 @@ export type EngineOptions = {
   view?: { cover: { key: string | null; colours: PaletteColour[] | null }; glide: number | null };
   /** The Fluid's flow where a Grid drifting on it is (the frame's units a second), as the renderer last read it back. */
   fluidFlow?: (x: number, y: number) => [number, number];
+  /** The device's most brightness (its Brightness setting): Show's ceiling. */
+  ceiling?: number;
 };
 
 /** A point on the screen, 0..1 each way. */
@@ -1060,11 +1076,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   // Its Turn: where in the turn it is (0..1), the rate run on.
   st.clock.phase = (((st.clock.phase + (clock * step) / (2 * Math.PI)) % 1) + 1) % 1;
   outputs['clock.phase'] = st.clock.phase;
-  const trackInto = (a: Aspect) => {
-    let sum = 0;
-    for (const c of (plan.trackCables[a] ??= columnOf(a).flatMap((key) => into.get(at + key) ?? []))) if (trackAdsr(c.from.module, typeOf, into)) sum += depthOf(c) * heightOf(shapeOf(c.value), finite(xOf(c))) * walkOf(c);
-    return sum;
-  };
+
   // Each chain module's node values from its own knobs (step 5): what aspects.ts made of the chain's columns, its
   // Accent's courses its own.
   const params: Record<string, NodeParams> = {};
@@ -1120,9 +1132,9 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   for (const id of Object.keys(st.flames)) if (!moduleOf.has(id)) delete st.flames[id];
   for (const id of Object.keys(st.flameNodes)) if (!moduleOf.has(id)) delete st.flameNodes[id];
 
-  // The frame's summary as the meters, the precheck and the labs read it (aspects.ts's AspectsNow): the Cratarr device's
-  // modules' own values, each column what its module's is; none without a Flame. A view of the modules, not an engine.
-  const aspects = flameModule ? summaryOf() : null;
+  // The Cratarr device's own values (its modules', each column what its module's is), for its stages, its Fluid's
+  // stirring and the meters; none without a Flame.
+  const dev = flameModule ? deviceOf() : null;
 
   // Every other module's knobs, as the evaluator moves a knob.
   if (!plan.others) {
@@ -1212,29 +1224,29 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   // At (the Flame's parts by default), kicked by the bands' hits, the beats, downbeats and sections, each worth its own
   // Stir, Flow and Swirl (their macros in) times what the cables into them give.
   let fluid: EngineFrame['fluid'] = null;
-  if (opts.view && aspects && flameModule) {
+  if (opts.view && dev && flameModule) {
     const fluidOwn = moduleOf.get(at + 'fluid');
     const fl = params[flameModule.id]?.flame;
     const bend = ofType('bend');
-    const waves = bend ? (params[bend.id]?.waves ?? aspects.given[A.waves]) : aspects.given[A.waves];
+    const waves = bend ? (params[bend.id]?.waves ?? dev.given[A.waves]) : dev.given[A.waves];
     const gains = fluidGains(p);
     const beat = m.playing ? m.beat : null;
     const own = (aspect: 'stir' | 'flow' | 'swirl') => (fluidOwn ? baseOf(fluidOwn, aspect, unset(fluidOwn, 'fluid', aspect)) : unset(undefined, 'fluid', aspect));
     fluid = stir(st.stirring, {
       t: opts.now / 1000,
       dt: step,
-      amount: aspects.fluid,
+      amount: dev.fluid,
       parts: ((fluidOwn && pointsAt[`${fluidOwn.id}.at`]) ?? flamePointsOf(flameModule.id) ?? []) as ([number, number] | null)[],
       turns: fl?.rates ?? [],
       lights: fl?.hits ?? [],
-      level: aspects.bands.map((v) => v[B.level]),
+      level: dev.bands.map((v) => v[B.level]),
       continuity: Array.from({ length: BANDS }, (_, b) => baseOf(flameModule, CONTINUITY_AT[b], unset(flameModule, 'flame', CONTINUITY_AT[b]))),
       hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
       beat: beat ? { ...beat, nextIn: beat.length - beat.since } : null,
-      downbeat: aspects.track[T.downbeat],
-      section: aspects.track[T.section],
-      loudness: aspects.lit,
-      swell: aspects.track[T.swell],
+      downbeat: dev.track[T.downbeat],
+      section: dev.track[T.section],
+      loudness: dev.lit,
+      swell: dev.track[T.swell],
       bps: m.bps,
       waves,
       position: m.position,
@@ -1249,7 +1261,59 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const seeds = gridAt({ module: id, port: 'points' });
     if (seeds) points[id] = seeds;
   }
-  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice, flames, fluid };
+  // The stages' values (the renderer's), from the device's: the light loop and the camera at the levers' pace, the effects
+  // as their slots set them (the frame loop's chainNow until 0.9.19).
+  let device: DeviceFrame | null = null;
+  if (dev && flameModule) {
+    const first = (type: string) => given.modules.find((x) => x.type === type);
+    const how = { ...effectSlotsOf(given), lattice: asSet(given, first('fluid'), 'lattice', types) ?? 0 };
+    const speed = asSet(given, first('clock'), 'speed', types) ?? types.clock?.knobs.find((k) => k.id === 'speed')?.default ?? 1;
+    const stirred = fluid ?? { forces: [], flow: { energy: 0, swirl: 0 } };
+    const pace = L.pace;
+    const bend = first('bend');
+    device = {
+      stages: {
+        points: { turn: dev.turn, scale: dev.scale, dive: DIVE_MOST * dev.dive * pace },
+        carry: {
+          keep: dev.keep,
+          fluid: dev.fluid,
+          tunnel: TUNNEL_MOST * dev.tunnel * pace,
+          facets: { amount: dev.facets, hex: Math.round(how.lattice) === 1 },
+          forces: stirred.forces,
+          flow: stirred.flow,
+          // At the Speed setting's pace, as the turning; the fluid takes at most 0.05 s a step.
+          dt: dt * speed * pace,
+          warp: dev.warp,
+        },
+        show: {
+          brightness: 1,
+          keep: dev.keep,
+          gamma: dev.gamma,
+          vibrancy: 1,
+          zoom: 1,
+          flash: dev.flash,
+          hits: dev.hits,
+          ceiling: opts.ceiling ?? 1,
+          saturation: dev.saturation,
+          exposure: 1,
+          smoothing: dev.smoothing,
+          floor: dev.floor,
+          fire: flames[flameModule.id]?.fire ?? 0,
+          flow: stirred.flow,
+        },
+        effects: effectsNow(how, dev.effects, m.position, m.playing ? m.beat : null, L, dev.routed),
+      },
+      meter: {
+        waves: (bend ? (params[bend.id]?.waves ?? dev.given[A.waves]) : dev.given[A.waves]) * pace,
+        fluid: dev.fluid,
+        tunnel: dev.tunnel * pace,
+        dive: dev.dive * pace,
+        effects: settingsReport(how, dev.effects, L, dev.routed),
+        symmetry: dev.symmetry,
+      },
+    };
+  }
+  return { device, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice, flames, fluid };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
@@ -1284,8 +1348,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     return ((types[own.type] ?? ENGINE_TYPES[own.type])?.knobs ?? []).filter((k) => k.kind === 'step' && !own.columns.has(k.id));
   }
 
-  /** The frame's summary (AspectsNow) from the Cratarr device's modules' own columns and values. */
-  function summaryOf(): AspectsNow {
+  /** The Cratarr device's own values, from its modules' own columns and values. */
+  function deviceOf() {
     const ownOf = new Map(plan.owns!.map((e) => [e.own.id, e.own]));
     const W = new Float32Array(NA);
     const level = new Float32Array(NA).fill(1);
@@ -1325,7 +1389,6 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       const a = own.columns.get(r.knob) ?? (slot && r.knob === 'effect' ? A[SLOT_MOMENT[slot]] : undefined);
       if (a !== undefined && IS_MOMENT[a] && (r.module.startsWith(at) || slot)) moments[ASPECTS[a] as (typeof MOMENT_ASPECTS)[number]] = true;
     }
-    const walk = (a: Aspect) => (W[A[a]] - trackInto(a)) / held.evolution;
     return {
       given: W,
       track: raw,
@@ -1344,16 +1407,13 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       saturation: sat?.saturation ?? clamp(accented(`${flameModule!.id}|chain`, 'saturation', 0.35), 0, 1.25),
       smoothing: blur?.smoothing ?? 12 * clamp(chainSettings.smoothing, 0, 1) ** 2,
       floor: haze.floor,
-      levels: { fluid: level[A.fluid], smoothing: level[A.smoothing], haze: level[A.haze], tunnel: level[A.tunnel], dive: level[A.dive] },
       fluid,
       warp: fluidOwn?.warp ?? 0.12 * fluid,
       tunnel: of('tunnel', 'tunnel')?.tunnel ?? clamp(chainSettings.tunnel, 0, 1),
       effects: clamp(chainSettings.effects * level[A.effects], 0, 1),
       facets: fluidOwn?.facets ?? clamp(chainSettings.facets, 0, 1),
       dive: of('dive', 'dive')?.dive ?? clamp(chainSettings.dive, 0, 1),
-      look: walk('look'),
-      behaviour: walk('behaviour'),
-      nexts: moments,
+      symmetry: moments.symmetry,
       routed: { amounts: AMOUNT_ASPECTS.map((a) => level[A[a]]), knobs: KNOB_ASPECTS.map((a) => clamp(W[A[a]], -1, 1)) },
     };
   }

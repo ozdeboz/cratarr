@@ -136,7 +136,7 @@ test('pinned whole: a module (module:<id>), a category (category:<name>), a poly
 test("Dice: rolls as its trigger rises, seeded by its seed input (Music's: the track's own), its scope from its knob", async () => {
   const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
   const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');
-  const { TRACKS, track } = await import('./harness/aspects-record.ts');
+  const { TRACKS, track } = await import('./harness/recorded.ts');
   const { FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
   const t = track(TRACKS[0]);
   const st = newEngine();

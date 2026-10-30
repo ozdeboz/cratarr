@@ -3,7 +3,7 @@
 // its own stages, as a synth's.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRACKS, track } from './harness/aspects-record.ts';
+import { TRACKS, track } from './harness/recorded.ts';
 
 const { adsrOf } = await import('../src/lib/visuals/engine/modules.ts');
 const { musicOf, newMusicState, ATTACK } = await import('../src/lib/visuals/music-core.ts');

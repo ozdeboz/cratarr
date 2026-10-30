@@ -10,14 +10,12 @@
 import { coverUrl } from '../api';
 import { reducedMotion } from '../motion';
 import { playing } from '../remote.svelte';
-import { chainNow } from './chain-params';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
 import { rollOf, type Roll, type Rolled } from './engine/dice';
 import type { Randomized } from './engine/randomize';
-import { effectSlotsOf } from './engine/settings-view';
 import { frameStats } from './engine/frame-stats';
-import { FREE, holding, leversOf, type Levers } from './engine/sidechain';
+import { holding, leversOf, type Levers } from './engine/sidechain';
 import { seedOf } from './flame';
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
@@ -27,9 +25,8 @@ import type { ModuleType, SignalRef } from './patch';
 import type { PatchV2 } from './ports';
 import { ceilingOf } from './quality';
 import { FlameRenderer, type PictureInputs } from './render';
-import { A, T } from './routes';
+import { T } from './routes';
 import { BANDS, FLUID_FULL, type VisualSettings } from './settings.svelte';
-import type { EffectSettings } from './effects';
 import { asSet } from './v2';
 import { applyEdit } from './patch-edits';
 
@@ -141,10 +138,7 @@ export class VisualsLoop {
     const live = new LivePatch();
     let rebuildsSeen = -1;
     let storeSeen: PatchV2 | null = null;
-    // What the old side of the light loop and the meters still read of the patch (the effects' slots, the Fluid's
-    // Lattice, the Clock's Speed) and Music's Hold, each from its module's knobs as set: worked out as the patch changes.
-    let slots: EffectSettings & { lattice: number } = { ...effectSlotsOf(host.store.patch), lattice: 0 };
-    let speed = 1;
+    // Music's Hold, from its module's knobs as set: worked out as the patch changes.
     let lighting: number[] = [];
     const engine = newEngine();
     const normal = newNormalState();
@@ -287,12 +281,8 @@ export class VisualsLoop {
       if (patch !== storeSeen || easing) {
         storeSeen = patch;
         const ofType = (type: string) => flat.modules.find((x) => x.type === type);
-        const fluid = ofType('fluid');
-        const clock = ofType('clock');
         const music = ofType('music');
         const kind = (type: string, knob: string) => host.types[type]?.knobs.find((k) => k.id === knob);
-        slots = { ...effectSlotsOf(flat), lattice: asSet(flat, fluid, 'lattice', host.types) ?? 0 };
-        speed = asSet(flat, clock, 'speed', host.types) ?? kind('clock', 'speed')?.default ?? 1;
         lighting = Array.from({ length: BANDS }, (_, b) => asSet(flat, music, `hold.${b}`, host.types) ?? kind('music', 'hold')?.default ?? 0.15);
       }
       if (live.rebuilds !== rebuildsSeen) {
@@ -394,13 +384,13 @@ export class VisualsLoop {
         aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined,
         fluidFlow: renderer?.fluidFlow(),
         view: { cover: { key: m.key ?? null, colours: cover?.key === m.key ? cover.colours : null }, glide },
+        ceiling: device.brightness,
       });
       const fv = flameId ? stepped.flames[flameId] : undefined;
       wantsCover = fv?.mode === 'cover';
       // The sidechains act only through their cables (toV2's holds, in sight); what they hold back is read off the
       // Duckers' outputs for the page's mark, nothing else.
       const sidechains = leversOf(stepped.outputs);
-      const levers = FREE;
       // The layers past the flame and the picture's own loop: the compositor's, from the patch (setPatch), each
       // module's knobs as the engine moves them; where a roll is easing in, where each knob is going.
       const inputs: PictureInputs = {
@@ -422,13 +412,13 @@ export class VisualsLoop {
       };
       // A patch with no Cratarr device (a blank slate): no flame, whatever else reaches the Screen drawn from black
       // (the renderer blanks it when nothing does).
-      if (!stepped.aspects) {
+      if (!stepped.device) {
         const [w, h] = sized();
         renderer.frame(passes, null, w, h, inputs);
         pictureTaken();
         return;
       }
-      const d = stepped.aspects;
+      const stages = stepped.device.stages;
 
       // A new track's look, as the patch's Dice roll it: worked out over the next frames. Each one after the first is an
       // undo step of its own (the owner: the track may change what is on, Undo brings back the look before it).
@@ -456,19 +446,16 @@ export class VisualsLoop {
 
       const [w, h, resized, top] = sized();
 
-      // The Fluid's stirring is its own (the engine's, stirred with the frame); the Show's Bend's waves for the meters.
-      const beatNow = m.playing ? m.beat : null;
-      const stirred = stepped.fluid ?? { forces: [], flow: { energy: 0, swirl: 0 } };
 
       renderer.frame(
         passes,
-        chainNow(d, { how: slots, levers, ceiling: device.brightness, coverage: null, fire: fv.fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed }),
+        stages,
         w,
         h,
         inputs,
       );
       renderer.measure(w, h, now / 1000);
-      const stats = frameStats(stepped, { patch: flat, how: slots, levers, t: now / 1000, look: lookCame, diveTurn: renderer.diveTurnRate })!;
+      const stats = frameStats(stepped, { patch: flat, t: now / 1000, look: lookCame, diveTurn: renderer.diveTurnRate })!;
       lookCame = null;
       renderer.meterAdd(stats);
       if (now - meteredAt >= 250) {

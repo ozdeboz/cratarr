@@ -2,7 +2,7 @@
 // purity"), worked out by the engine where it runs with a view, no longer by the page's frame loop: npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRACKS, track } from './harness/aspects-record.ts';
+import { TRACKS, track } from './harness/recorded.ts';
 const { DEFAULTS, FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
 const { flatten, toV2 } = await import('../src/lib/visuals/v2.ts');
@@ -97,9 +97,9 @@ test('a module taken out of the rack does nothing, whatever the settings from be
   p.cables = p.cables.filter((c) => p.modules.some((x) => x.id === c.from.module) && p.modules.some((x) => x.id === c.to.module));
   const old = { ...structuredClone(DEFAULTS), fluid: 0.8, tunnel: 0.6, dive: 0.5 };
   const f = stepEngine(newEngine(), p, types, m, () => 0, 1 / 30, { now: 20000, fluidFull: FLUID_FULL });
-  assert.equal(f.aspects!.fluid, 0);
-  assert.equal(f.aspects!.tunnel, 0);
-  assert.equal(f.aspects!.dive, 0);
+  assert.equal(f.device!.meter.fluid, 0);
+  assert.equal(f.device!.meter.tunnel, 0);
+  assert.equal(f.device!.meter.dive, 0);
 });
 
 test("the look's macros move the Flame's look: Hue by degrees at once, as its knob would", () => {

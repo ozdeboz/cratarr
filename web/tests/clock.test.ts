@@ -3,7 +3,7 @@
 // way through each, and the LFO back at the cycle's start on every bar.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FPS, track } from './harness/aspects-record.ts';
+import { FPS, track } from './harness/recorded.ts';
 
 const { newClockTriggers, stepClockTriggers, RATIOS, UNIT_RATIO } = await import('../src/lib/visuals/engine/clock.ts');
 const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');

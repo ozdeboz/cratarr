@@ -2,7 +2,7 @@
 // over discrete): what made a picture stand still, jump or go black where it should glide.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { track, TRACKS } from './harness/aspects-record.ts';
+import { track, TRACKS } from './harness/recorded.ts';
 
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
 const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');

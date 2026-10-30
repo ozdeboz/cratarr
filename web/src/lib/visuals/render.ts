@@ -11,7 +11,7 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { FieldShape } from './field';
-import type { ChainNow, ShowParams } from './chain-params';
+import type { ShowParams, StageValues } from './stage-values';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { compile, composeOf, plan, STAGES, stageOf, stageRefusal, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
 import { fxOfModule, type Fx } from './nodes/effect-runs';
@@ -36,7 +36,7 @@ import { stageIdsOf, stagesNow, type StageIds } from './stage-values';
 import { none } from './nodes/shared';
 
 /** Show's look with only `parts` of Show's drawn in its pass (by type), the rest at their neutral: no bend, no
- *  smoothing, Haze at 0 (its gamma 3: aspects.ts hazeOf), all of its colour. A part elsewhere (Blur after the layers)
+ *  smoothing, Haze at 0 (its gamma 3: engine/modules.ts hazeOf), all of its colour. A part elsewhere (Blur after the layers)
  *  is a module of its own. */
 function showWith(look: ShowParams, parts: ReadonlySet<string>): ShowParams {
   return {
@@ -56,7 +56,7 @@ const partsUpTo = (parts: ReadonlySet<string>, type: string) => new Set([...part
 /** The size the cover is drawn at as a picture (16:9, the middle of a square cover). */
 const COVER: [number, number] = [320, 180];
 
-/** Everything the nodes read in a frame, as one (the frozen renderer's look; chain-params.ts groups it by node). */
+/** Everything the nodes read in a frame, as one (stage-values.ts groups it by stage). */
 export type Shown = {
   /** Brightness, around 1. */
   brightness: number;
@@ -377,7 +377,7 @@ export class FlameRenderer {
   /** One frame of the patch: the flame (its light faded by `now.carry.keep`, `passes` more steps of every point in it,
    *  shown), what the compose step draws, the effects, onto the screen. `now` null: no flame data (no Cratarr chain):
    *  its stages are skipped and the rest drawn as the patch wires it; where nothing reaches the screen, it is blank. */
-  frame(passes: number, now: ChainNow | null, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
+  frame(passes: number, now: StageValues | null, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
     const given = inputs && 'extra' in inputs ? inputsOfExtras(inputs) : inputs;
     const knobsAt = (id: string) => given?.knobs(id) ?? this.knobsIn.get(id) ?? {};
     // Each stage with its own modules' values (stage-values.ts), the device's where it has none.

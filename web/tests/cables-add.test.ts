@@ -4,12 +4,12 @@
 // equivalence harness holds to today's).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRACKS, compare, record, todays, track, type Engine } from './harness/aspects-record.ts';
+import { TRACKS, compare, record, track, type Engine } from './harness/recorded.ts';
 
 const { DEFAULTS } = await import('../src/lib/visuals/settings.svelte.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
 const { flatten, toV2 } = await import('../src/lib/visuals/v2.ts');
-const { ASPECTS, MOMENT_ASPECTS, routeKey } = await import('../src/lib/visuals/routes.ts');
+const { routeKey } = await import('../src/lib/visuals/routes.ts');
 type PatchV2 = import('../src/lib/visuals/ports.ts').PatchV2;
 
 /** The engine over today's settings converted: cables only adding (toV2 as it ships) or as before that step. */
@@ -24,7 +24,7 @@ const engineOver = (addOnly: boolean): Engine => {
         from = s;
         p = flatten(toV2(s, { addOnly }));
       }
-      return stepEngine(st, p!, {}, m, () => 0, dt, opts).aspects;
+      return stepEngine(st, p!, {}, m, () => 0, dt, opts);
     },
   };
 };
@@ -55,9 +55,8 @@ test('the conversion has what it says: VCAs into gains, a Merge and a Gate into 
   assert.ok(!p.cables.some((c) => c.mode === 'level'), 'no level cable left');
 });
 
-const MOMENT_GIVEN = new Set(MOMENT_ASPECTS.map((a) => `given.${ASPECTS.indexOf(a)}`));
 
-test('cables only add: the engine over the converted patch gives what today’s engine gave, frame by frame, on every recorded track', () => {
+test('cables only add: the engine over the patch converted so gives what it gave over the conversion before that step, frame by frame, on every recorded track', () => {
   const variants: [string, typeof busy][] = [
     ['the Cratarr chain', structuredClone(DEFAULTS)],
     ['every kind of cable', busy],
@@ -65,12 +64,13 @@ test('cables only add: the engine over the converted patch gives what today’s 
   for (const id of TRACKS) {
     const t = track(id);
     for (const [name, s] of variants) {
-      // Today's engine (level cables letting through, moments its own) against the one engine over the conversion.
-      const a = record(todays(), t, s, 30, 30, false);
+      // The conversion before cables only added (level cables letting through, moments their columns' own) against it.
+      const a = record(engineOver(false), t, s, 30, 30, false);
       const b = record(engineOver(true), t, s, 30, 30, false);
       for (const [k, d] of compare(a, b)) {
-        // A moment column's own sum is the Merge's now (what it gives is the Gate's firing, compared with the rest).
-        if (MOMENT_GIVEN.has(k)) continue;
+        // A moment column's own sum is the Merge's now, and what it fires the Gate's (a moment exactly two seconds after
+        // the last a frame later: 0057 §7e item 3): its firing apart, everything else alike.
+        if (k === 'device.meter.symmetry') continue;
         if (d.most > 1e-6 && process.env.TRACE) {
           const fires = (f: Map<string, number>[]) => f.map((x, i) => (x.get(k) ? i : -1)).filter((i) => i >= 0).join(',');
           console.log(`TRACE ${k}: before ${fires(a)} | after ${fires(b)}`);

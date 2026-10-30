@@ -1,5 +1,5 @@
 // Saved visuals read as the app reads them, and a headless browser to drive a lab page with: shared by
-// check-migration.mjs and prune-cables.mjs (decision 0057). Run with node's strip-types and tests/ts-resolve.mjs.
+// check-migration.mjs (decision 0057). Run with node's strip-types and tests/ts-resolve.mjs.
 //
 // A file is a device's kept settings (`{"cratarr-visuals": "<json>"}`, as localStorage holds them), the server's
 // snapshots (a JSON list of rows with `name` and `settings`, as `sqlite3 -json` gives them from visual_snapshot or
