@@ -16,7 +16,7 @@ export type ExportOptions = {
   /** Opus's, kb/s. */
   bitrate: number;
   layout: ExportLayout;
-  /** Download…'s first choice in the app (and an installed page): to this device, or as files (0.9.19). */
+  /** Download…'s first choice in the app (and an installed page): to this device, or as files (0.10). */
   where: 'device' | 'files';
 };
 
@@ -24,7 +24,7 @@ export const FORMATS: { value: ExportFormat; label: string }[] = [
   { value: 'original', label: 'Original files' },
   { value: 'flac-cd', label: 'FLAC at CD quality' },
   { value: 'opus', label: 'Opus' },
-  // 0.9.19 (the owner, 2026-10-30): MP3 too, beside the ones before.
+  // 0.10 (the owner, 2026-10-30): MP3 too, beside the ones before.
   { value: 'mp3-320', label: 'MP3 at 320 kb/s' },
   { value: 'mp3-v0', label: 'MP3 V0' },
 ];

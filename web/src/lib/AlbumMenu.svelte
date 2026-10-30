@@ -240,7 +240,7 @@
   const actions = $derived.by<SheetAction[]>(() => {
     if (ask || exporting || step !== 'menu') return [];
     const t = tracks;
-    // Following someone (0.9.19): its tracks asked of them, next or at the end of their queue.
+    // Following someone (0.10): its tracks asked of them, next or at the end of their queue.
     if (followingNow()) {
       const askOf = (how: 'next' | 'last') => () => {
         onclose();
@@ -362,7 +362,7 @@
   $effect(() => {
     if (untrack(() => start) === 'cover') untrack(askCover);
   });
-  /** Download… (decision 0058, amended 0.9.19): its tracks, in lib/DownloadStep. */
+  /** Download… (decision 0058, amended 0.10): its tracks, in lib/DownloadStep. */
   let exporting = $state(false);
   // Opened at the playlists for an album outside Music: there is nothing to add it to.
   $effect(() => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The visuals by themselves (0.9.19; the owner, 2026-10-30; lib/visualsAuto): the switch, and while on how long the
+  // The visuals by themselves (0.10; the owner, 2026-10-30; lib/visualsAuto): the switch, and while on how long the
   // screen is left alone first, the snapshot they start from (or as last seen), and whether the look stays or a new
   // one comes each track. In Settings → This device, and without its heading in the sheet a long press on the player's
   // visuals button opens (lib/VisualsAutoSheet), as the info button's Details (lib/DetailsSheet).

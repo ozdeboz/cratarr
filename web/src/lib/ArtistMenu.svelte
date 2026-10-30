@@ -93,7 +93,7 @@
     if (ids[0]) toList.ask([ids[0]]);
   });
   let step = $state<ToPlaylistStep>('menu');
-  /** Download… (decision 0058, amended 0.9.19): their tracks, in lib/DownloadStep. */
+  /** Download… (decision 0058, amended 0.10): their tracks, in lib/DownloadStep. */
   let exporting = $state(false);
 
   /** Bandcamp's previews (an artist found there): never downloaded or kept (decision 0071). */

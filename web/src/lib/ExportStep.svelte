@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Download… as files (decision 0058, amended 0.9.19; lib/DownloadStep): one step for every object and selection,
+  // Download… as files (decision 0058, amended 0.10; lib/DownloadStep): one step for every object and selection,
   // inside its menu sheet (lib/MenuSheet), and the panel's Export tab under its playlists. What it will hold (how many
   // tracks, about how large, how many missing are left out); for playlists with their tracks or only the playlist
   // files, several as they are or combined into one; for a list of tracks with a playlist file or not; the format and

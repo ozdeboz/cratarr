@@ -1,4 +1,4 @@
-// The one clock for where the playing track is (0.9.19; the architecture audit, 2026-10-29: four clocks, each the
+// The one clock for where the playing track is (0.10; the architecture audit, 2026-10-29: four clocks, each the
 // position its own way). This device's player says it to the frame itself (lib/localPlayer positionNow). Another
 // player says it now and then, through the server: the clock holds where it was at a moment (the anchor) and runs on
 // from it, and every view (the player's bar, the visuals' Music, the band glass) reads that one anchor. A report that

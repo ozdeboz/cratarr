@@ -848,7 +848,7 @@
       : []),
   ]);
   const subsOf = (id: string): Sub[] => (id === LIBRARY.id ? librarySubs : id === DISCOVER.id ? discoverSubs : []);
-  // One section open at a time (0.9.19; the owner, 2026-10-30): the page's own, or the one tapped open. A tap on a
+  // One section open at a time (0.10; the owner, 2026-10-30): the page's own, or the one tapped open. A tap on a
   // section's name only opens it (no page change; one of its links goes there); folded, the sidebar unfolds for it
   // (peek). One opened by hand folds again on a tap or the pointer elsewhere, and the page's comes back.
   let opened = $state<string | null>(null);

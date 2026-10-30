@@ -1,4 +1,4 @@
-// The page's asks of the player that plays, as the server's PlayerCommand (lib/player/commands; 0.9.19, one protocol):
+// The page's asks of the player that plays, as the server's PlayerCommand (lib/player/commands; 0.10, one protocol):
 // the same command the op made before, field for field, and which player the page drives.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

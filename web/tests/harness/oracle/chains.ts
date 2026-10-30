@@ -1,4 +1,4 @@
-// FROZEN (0.9.19: the app reaches none of it; the tests' and scripts/check-migration's fixture): the visuals' preset chains (decision 0056: "chains are presets"). The owner, after 70: "we should also have some
+// FROZEN (0.10: the app reaches none of it; the tests' and scripts/check-migration's fixture): the visuals' preset chains (decision 0056: "chains are presets"). The owner, after 70: "we should also have some
 // sensible presets, but nothing extreme the way we now have. Currently we have way too many lines. So we need a few
 // sensible chains as presets, the ability to start from scratch"; asked which: Calm, Pulse and Flow; and from scratch,
 // nothing at all (an empty patch: no source, so nothing is drawn until one is added).

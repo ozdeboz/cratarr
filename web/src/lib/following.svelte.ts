@@ -1,4 +1,4 @@
-// Following and queue requests (0.9.19; the owner, 2026-10-30: "This is a queue matter"): one's own player listening
+// Following and queue requests (0.10; the owner, 2026-10-30: "This is a queue matter"): one's own player listening
 // along to another user's (who lets others follow them), the tracks asked of the one followed, and those asked of
 // one's own players, accepted (a thumbs up: into the queue where asked) or declined (a thumbs down: gone). No page of
 // its own: the Play On sheet's foot (lib/OutputSheet) and the queue sheet's rows (lib/QueueSheet). A server before it

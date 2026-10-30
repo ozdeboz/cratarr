@@ -86,7 +86,7 @@ export type Upcoming = {
   /** `next`: added by hand, ahead of the album or playlist (decision 0033's two lanes); `radio`: Radio's inserts;
    *  `autoplay`: Autoplay's, after everything (decision 0036, amended). */
   lane?: 'next' | 'radio' | 'autoplay';
-  /** Who asked for it, a queue request accepted (0.9.19: a follower's name, or a guest's). */
+  /** Who asked for it, a queue request accepted (0.10: a follower's name, or a guest's). */
   asked_by?: string;
 };
 
@@ -201,7 +201,7 @@ const follow = (source?: string) => (source ? `?source=${encodeURIComponent(sour
 
 export const getState = (source?: string) => quietly<State>(`/api/state${follow(source)}`);
 
-// Cratarr's players' messages (Play On, decision 0031), as the server's own types say them (0.9.19: one protocol,
+// Cratarr's players' messages (Play On, decision 0031), as the server's own types say them (0.10: one protocol,
 // generated from the Rust by ts-rs into lib/generated): a track as they hold it, a player's view, a device's audio
 // output, a queue in its list and its link (decision 0045); what can be asked of one and what one reports.
 export type { QueueTrack } from './generated/QueueTrack';
@@ -276,7 +276,7 @@ export const playerCommand = (name: string, command: PlayerCommand) =>
     body: JSON.stringify(command),
   });
 
-// Following and queue requests (0.9.19; the owner, 2026-10-30: "This is a queue matter"): another user's playing,
+// Following and queue requests (0.10; the owner, 2026-10-30: "This is a queue matter"): another user's playing,
 // listened along to on one's own player, its leader asked for tracks, who accepts or declines each (some people at
 // once); and a guest's, on the home network (lib/guest).
 const json = (method: string, body?: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -288,7 +288,7 @@ export type Follower = { user: string; players: string[] };
 export type Asker = { user: string } | { guest: string };
 /** A track asked for, played next or at the end of `player`'s queue once accepted. */
 export type QueueRequest = { id: string; from: Asker; track: QueueTrack; how: 'next' | 'last'; at: number; player: string; state?: 'pending' | 'accepted' | 'declined' };
-/** How following and asking stand on a player (a server before 0.9.19 says none of it). */
+/** How following and asking stand on a player (a server before 0.10 says none of it). */
 export type FollowView = { following?: { user: string; player: string } | null; followers?: string[]; queue_requests?: number };
 export const getLeaders = () => quietly<FollowLeader[]>('/api/follow/leaders');
 export const getFollowers = () => quietly<Follower[]>('/api/follow/followers');
@@ -719,7 +719,7 @@ export type ExportWhat =
   | { kind: 'playlists'; names: string[] }
   | { kind: 'tracks'; name: string; tracks: { source: string; id: string }[] };
 /** The files as they are; hi-res ones at CD quality (16-bit FLAC, 44.1 kHz); lossless ones as Opus, or as MP3 at 320
- *  kb/s or V0 (0.9.19; lossy ones always stay as they are). */
+ *  kb/s or V0 (0.10; lossy ones always stay as they are). */
 export type ExportFormat = 'original' | 'flac-cd' | 'opus' | 'mp3-320' | 'mp3-v0';
 /** One folder, or Artist/Album folders. */
 export type ExportLayout = 'flat' | 'folders';
@@ -741,7 +741,7 @@ export type ExportPreview = { tracks: number; missing: number; bytes: number | n
 export const exportPreview = (c: ExportChoice | ExportRequest) =>
   quietly<ExportPreview>('/api/export/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) });
 /** Readies an export on the server for a few minutes; its download is then a plain link (`exportDownloadUrl`): one
- *  file as itself, several as one zip (0.9.19; the owner, 2026-10-30: "Multiple files should always be a zip. A single
+ *  file as itself, several as one zip (0.10; the owner, 2026-10-30: "Multiple files should always be a zip. A single
  *  file, always a single file, not a zip"), `name` its name either way. */
 export const prepareExport = (r: ExportRequest) =>
   request<{ token: string; name: string }>('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(r) });
@@ -1075,7 +1075,7 @@ export type UserSession = { id: string; device: string; created: number; last_us
  *  may do, whether they have set a password for OpenSubsonic apps, their devices and sign-ins. */
 export type Me = {
   name: string | null;
-  /** The directory's display name (LDAP's displayName, 0.9.19); none for a local account or a server before it. */
+  /** The directory's display name (LDAP's displayName, 0.10); none for a local account or a server before it. */
   display_name?: string | null;
   admin: boolean;
   /** Deactivated: left the directory's music group (their data kept). */
@@ -1377,7 +1377,7 @@ export type ListedAlbum = {
   library?: string;
   /** Its artists one by one, when the source credits several; absent: `artist` alone. */
   artists?: string[];
-  /** Its length (s), its tracks' together; null where one of them is not known (0.9.19; a server before it gives none). */
+  /** Its length (s), its tracks' together; null where one of them is not known (0.10; a server before it gives none). */
   duration_secs?: number | null;
 };
 

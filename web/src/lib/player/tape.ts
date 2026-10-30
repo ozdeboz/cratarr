@@ -1,4 +1,4 @@
-// The tape's state, said once (0.9.19; the architecture audit, 2026-10-29: the tape was two dozen flags and a check
+// The tape's state, said once (0.10; the architecture audit, 2026-10-29: the tape was two dozen flags and a check
 // that put stray ones right). What the tape is doing is one of a few phases, read from what the player holds: its ramp
 // (lib/player/rampSlot), its motion (lib/player/motionSlot), its hold. Its passing states and their deadlines are
 // lib/player/graces. Pure.

@@ -68,7 +68,7 @@ export const globalSearch = $state({
  *  answer kept, so typing back and forth asks nothing again. */
 const BEYOND_MS = 500;
 const beyondKept = new Map<string, BeyondAlbum[]>();
-/** The server's answers kept by their words, and Show all's as far as it came (0.9.19; the owner, 2026-10-30: back to
+/** The server's answers kept by their words, and Show all's as far as it came (0.10; the owner, 2026-10-30: back to
  *  a search, everywhere's results came back only after a while): back shows them at once, asked again behind them. */
 const foundKept = new Map<string, ServerSearch>();
 const allKept = new Map<string, NonNullable<typeof globalSearch.allFound>>();

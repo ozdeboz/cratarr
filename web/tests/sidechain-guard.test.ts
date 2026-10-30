@@ -1,6 +1,6 @@
 // The Screen's flash guard (0057 §7e; WCAG 2.3.1): a strobe held to a tenth at once and for 8 s after it stops, no
 // knob in it. (Kept from the sidechain proofs, which held the sidechains to the governor over the old engine: retired
-// with it in 0.9.19, the golden frames' closed loop guarding the sidechains since.)
+// with it in 0.10, the golden frames' closed loop guarding the sidechains since.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 (globalThis as Record<string, unknown>).$state = <T>(v: T) => v;

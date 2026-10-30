@@ -195,7 +195,7 @@ const faceKeys = (id: string): FaceKeys => ({ input: `${id}.in`, reduction: `${i
 /** A step whose Next fired this frame (0057 §7e), and the step it moves on to (past its last, its first). */
 export type NextRequest = { module: string; knob: string; to: number };
 
-/** What the Cratarr device gives the light's stages this frame (0.9.19, the architecture audit's visuals step 3: no
+/** What the Cratarr device gives the light's stages this frame (0.10, the architecture audit's visuals step 3: no
  *  summary between the modules and the renderer): each stage's values as the device's modules make them, those a
  *  stage's own module does not give its device's defaults (Trails' keep, the Curve's haze, Tone map's flash, the
  *  Fluid's share, Tunnel and Dive at their settings); the effects as their slots, levels and routes set them; the
@@ -653,7 +653,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   if (clockModule) for (const k of ['beat', 'bar', 'phrase'] as const) outputs[`${clockModule.id}.${k}`] = ticks[k];
   // Each Grid laid out by its knobs as set and as their macros set them (seeded by its id: the same every frame and on
   // every device). Its macros at their value as last frame left them (the macros are worked out after the Grids, whose
-  // channels the modulators read): a macro on Count or Spacing lays it out anew (0.9.19: they did nothing; the
+  // channels the modulators read): a macro on Count or Spacing lays it out anew (0.10: they did nothing; the
   // owner, 2026-10-29: continuous over discrete).
   const points: Record<string, GridPoint[]> = {};
   const gridType = types.grid ?? ENGINE_TYPES.grid;
@@ -1262,7 +1262,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     if (seeds) points[id] = seeds;
   }
   // The stages' values (the renderer's), from the device's: the light loop and the camera at the levers' pace, the effects
-  // as their slots set them (the frame loop's chainNow until 0.9.19).
+  // as their slots set them (the frame loop's chainNow until 0.10).
   let device: DeviceFrame | null = null;
   if (dev && flameModule) {
     const first = (type: string) => given.modules.find((x) => x.type === type);

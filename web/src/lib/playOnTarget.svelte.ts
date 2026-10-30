@@ -27,7 +27,7 @@ import { setOwnSleep, sleep } from './sleep.svelte';
 const HEARTBEAT_MS = 5_000;
 /** After a connection that failed: again after this long, doubled each time, up to a minute. */
 const RETRY_MS = 5_000;
-/** Back from a sleep or a lost network (0.9.19; the owner, 2026-10-30: the ThinkPad came back a minute after its
+/** Back from a sleep or a lost network (0.10; the owner, 2026-10-30: the ThinkPad came back a minute after its
  *  Wi-Fi did, and a cast to it failed meanwhile): this long it tries again often, at most this far apart. */
 const WAKE_MS = 30_000;
 const WAKE_RETRY_MS = 1_500;
@@ -127,7 +127,7 @@ function uuid(): string {
 }
 
 /** This page's own id (one per tab, kept over a reload): Cratarr lets no other page take its name while it holds it.
- *  In the desktop app, one window, kept over a restart too, so a restarted app takes its own name back at once (0.9.19,
+ *  In the desktop app, one window, kept over a restart too, so a restarted app takes its own name back at once (0.10,
  *  2026-10-30). */
 const PAGE = (() => {
   try {
@@ -298,7 +298,7 @@ function connect() {
       return;
     }
     if (typeof m.version === 'number') version = m.version;
-    // What starts or stops the sound, in the device's log, as it came (0.9.19, 2026-10-30: a restarted ThinkPad played on
+    // What starts or stops the sound, in the device's log, as it came (0.10, 2026-10-30: a restarted ThinkPad played on
     // by itself, and only the server's log could say why).
     if (m.command === 'play' || m.command === 'resume' || m.command === 'pause' || m.command === 'stop' || m.command === 'toggle')
       note('info', 'command', { command: m.command, ...(m.command === 'play' ? { paused: m.paused === true, index: m.index, position_ms: m.position_ms } : {}) });
@@ -325,7 +325,7 @@ function connect() {
       setOwnSleep(atMs === null && m.end_of_track !== true ? null : { atMs, endOfTrack: m.end_of_track === true });
     } else if (m.command === 'stop' && typeof m.moved_to === 'string' && m.moved_to !== player) {
       // The music moved to another player (a handover there): this one stops, and its screen follows the music
-      // (0.9.19; the owner, 2026-10-30: the ThinkPad stayed on its own empty player when the tablet took it over).
+      // (0.10; the owner, 2026-10-30: the ThinkPad stayed on its own empty player when the tablet took it over).
       playOnCommand(m);
       followTo(m.moved_to);
     } else if (playOnCommand(m)) {

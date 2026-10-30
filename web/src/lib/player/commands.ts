@@ -1,4 +1,4 @@
-// What this page asks of the player that plays, as a command (0.9.19: one protocol). The app this page runs in takes its
+// What this page asks of the player that plays, as a command (0.10: one protocol). The app this page runs in takes its
 // ops (`{type: 'player', op, ...}`, every app version); a player of Cratarr's the page drives takes the server's
 // PlayerCommand (lib/generated), made here from the same op. Pure, so the tests take it as it is.
 import type { PlayerCommand } from '../generated/PlayerCommand';

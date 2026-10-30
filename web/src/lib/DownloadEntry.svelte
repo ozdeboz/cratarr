@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Download… to this device (the owner, 2026-10-24; in Download…'s step since 0.9.19, lib/DownloadStep): a one-time
+  // Download… to this device (the owner, 2026-10-24; in Download…'s step since 0.10, lib/DownloadStep): a one-time
   // copy on this device, as against Sync to this device (decision 0038), which follows the item. The step stays open
   // and the row itself fills as the tracks come in, its
   // label counting them ("Downloading 3 of 12"); opened again later, it shows the same. Some tracks failed: Retry; some

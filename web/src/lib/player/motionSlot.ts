@@ -1,4 +1,4 @@
-// The tape's motion as one value (0.9.19; the architecture audit, 2026-10-29): at most one of a wind sounding on this
+// The tape's motion as one value (0.10; the architecture audit, 2026-10-29): at most one of a wind sounding on this
 // page's player, a hold on a track that cannot be wound (it plays faster on its own player), or a wind on the player
 // driven, whose counter glides between its reports. They never ran together: a wind is the page's own player's, a glide
 // the app's or a driven player's, a plain hold only where nothing winds; one value says so. lib/localPlayer's

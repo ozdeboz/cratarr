@@ -1,4 +1,4 @@
-// The tape's passing states and their deadlines (0.9.19; the architecture audit, 2026-10-29: no check that finds a
+// The tape's passing states and their deadlines (0.10; the architecture audit, 2026-10-29: no check that finds a
 // stray state and puts it right). Some of what the tape does is meant to last moments: a ramp the button shows while
 // the app's word for it is on its way, a turn of the direction knob, a hold whose wind has not begun (a flight arms
 // within a second or two), the tape's own quiet rest between two of its actions. Each is a state with a deadline, set

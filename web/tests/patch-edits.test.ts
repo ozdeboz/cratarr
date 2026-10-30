@@ -35,7 +35,7 @@ test('Reroute moves one end', () => {
   assert.deepEqual(p.cables[0].to, { module: 'flame', port: 'twist' });
 });
 
-test("a module removed takes its cables, its pins and its macro targets, as the graph removes one (a cable's depth from it let go, the cable kept: 0.9.19, one reducer)", () => {
+test("a module removed takes its cables, its pins and its macro targets, as the graph removes one (a cable's depth from it let go, the cable kept: 0.10, one reducer)", () => {
   const p = applyEdit(patch(), { kind: 'removeModule', scope: [], id: 'lfo-1' });
   assert.deepEqual(p.modules.map((m) => m.id), ['flame', 'env']);
   assert.deepEqual(p.cables.map((c) => [c.id, c.depth ?? null]), [['c2', null]]);

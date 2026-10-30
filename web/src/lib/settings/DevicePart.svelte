@@ -80,7 +80,7 @@
   {/if}
 </Group>
 
-<!-- The visuals by themselves (0.9.19): this device's, not in local mode (no visuals there, decision 0052). -->
+<!-- The visuals by themselves (0.10): this device's, not in local mode (no visuals there, decision 0052). -->
 {#if !localMode()}<VisualsAutoGroup />{/if}
 
 {#if inApp}

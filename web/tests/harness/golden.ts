@@ -1,4 +1,4 @@
-// Golden frames (0.9.19, the architecture audit's visuals step 1): what the frame loop (visuals-loop.ts) hands the
+// Golden frames (0.10, the architecture audit's visuals step 1): what the frame loop (visuals-loop.ts) hands the
 // renderer, frame by frame, for a rack over a recorded track: the chain's values (chainNow) and the Flame's camera where
 // the rack has the Cratarr device, and for every module its knobs as the engine moves them, its node's values, its
 // Field's flow and its Grid's points; every output and macro. Kept as references (tests/golden), so the engine's
@@ -43,7 +43,7 @@ const settingsRack = (s: object) => () => toV2(structuredClone({ ...DEFAULTS, ..
 /** The racks the references cover: the Cratarr device at its defaults (the standard rack: over the groove, over the
  *  ambient track, with reduced motion, with every column's scale off 1, its sidechains closed through the meters), the
  *  preset chains' settings as an old snapshot converts them, and every example rack of the library (Fire among them).
- *  What the proofs on today's summary covered (the equivalence and sidechain tests, retired with it, 0.9.19). */
+ *  What the proofs on today's summary covered (the equivalence and sidechain tests, retired with it, 0.10). */
 export const RACKS: { id: string; patch: () => PatchV2; run?: RunOptions }[] = [
   { id: 'standard', patch: settingsRack({}) },
   { id: 'standard-ambient', patch: settingsRack({}), run: { track: 'tr-8934' } },

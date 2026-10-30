@@ -6,10 +6,10 @@
 
 export type ServerRuntime = {
   proxies: string[];
-  /** Addresses that count as home besides the local ones (0.9.19, fencing: other users reach someone's shared
+  /** Addresses that count as home besides the local ones (0.10, fencing: other users reach someone's shared
    *  devices from home only); a server before it gives none, and the row stays away. */
   home_networks?: string[];
-  /** The guest page (0.9.19): open on the home network or not, and whose player its guests' tracks are asked of (a
+  /** The guest page (0.10): open on the home network or not, and whose player its guests' tracks are asked of (a
    *  user's, or one player's); a server before it gives none, and its rows stay away. */
   guest?: { on: boolean; host: { user: string } | { player: string } | null };
   analysis: 'keep' | 'all' | 'off';

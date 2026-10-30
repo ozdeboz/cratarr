@@ -99,7 +99,7 @@
     share(n, n, linkTo('crates', CRATE + c));
   }
 
-  // Download… (0.9.19): its tracks as it lists them, read when the step opens, a page at a time.
+  // Download… (0.10): its tracks as it lists them, read when the step opens, a page at a time.
   let step = $state<'menu' | 'download'>('menu');
   let all = $state<Downloadable[] | null>(null);
   /** The most a crate's Download… takes. */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The guest page (0.9.19; the owner, 2026-10-30): on the home network, without an account, a guest gives a name,
+  // The guest page (0.10; the owner, 2026-10-30): on the home network, without an account, a guest gives a name,
   // sees what plays, searches the library and asks for a track, next or later; the host accepts or declines it in their
   // queue (lib/QueueSheet). Their own asked show here, waiting, then what became of them. Off, or away from home, the
   // server answers nothing of it: the page says it is not open.

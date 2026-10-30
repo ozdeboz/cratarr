@@ -1,7 +1,7 @@
 // The recorded tracks (tests/fixtures/tracks: four of the library's, their signals and beats as the server sends them)
 // and a recorder of the one engine over them, frame by frame, each frame's numbers flattened: what the device gives
 // its stages and its meters, and every module's node values. For the tests that hold the engine to itself (a chain in
-// a device, cables merged or converted); the golden frames (golden.ts) hold it to its references. (0.9.19: today's
+// a device, cables merged or converted); the golden frames (golden.ts) hold it to its references. (0.10: today's
 // summary and the old engine it came from are gone, and the equivalence proofs against them with them.)
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

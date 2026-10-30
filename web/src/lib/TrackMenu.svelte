@@ -11,7 +11,7 @@
   // heart), Play next, Add to queue and Start radio as the large actions, then in the album menu's order: Go to album,
   // Go to its artist and genres, the favourite, Add to playlist (the playlists as toggle cards, a tap adds or removes),
   // Download…, Share, Info, Web search, Adjust BPM (administrators: lib/TempoStep), in the table's order (lib/menuTable).
-  // A Bandcamp preview queues as any track (0.9.19) and is never downloaded (decision 0071).
+  // A Bandcamp preview queues as any track (0.10) and is never downloaded (decision 0071).
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
@@ -76,10 +76,10 @@
     /** Opened on a list one can take it out of: Remove from a playlist, Exclude from a crate (the track, its album), as
      *  a swipe left does there (the owner, 2026-10-19). */
     outs?: { label: string; icon: IconName; run: () => void }[];
-    /** A track asked for of one's own player (0.9.19): the user who asked, whose tracks may be accepted at once. */
+    /** A track asked for of one's own player (0.10): the user who asked, whose tracks may be accepted at once. */
     asker?: string | null;
   } = $props();
-  /** Following someone (0.9.19): Play next and Add to queue ask them instead. */
+  /** Following someone (0.10): Play next and Add to queue ask them instead. */
   const followed = $derived(followingNow());
   async function ask(how: 'next' | 'last') {
     const tr = t;

@@ -383,7 +383,7 @@
     const list = h >= 5 && h < 12 ? greet.morningGreetings : h >= 12 && h < 18 ? greet.dayGreetings : greet.eveningGreetings;
     return day ?? list[Math.floor(pick * list.length)];
   });
-  /** The account's name as greeted: its display name where the directory has one (0.9.19; the owner, 2026-10-30: "we
+  /** The account's name as greeted: its display name where the directory has one (0.10; the owner, 2026-10-30: "we
    *  should simply use the display name"), else the account's name as it is. */
   const greetName = $derived(me.display_name || me.name);
   const greeting = $derived(greetName ? `${greetWords}, ${greetName}!` : `${greetWords}!`);

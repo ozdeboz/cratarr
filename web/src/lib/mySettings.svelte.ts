@@ -21,7 +21,7 @@ export type Choices = {
   tracking?: boolean;
   /** Discover's picks of the day moved on from (the owner, 2026-10-25: rotated from its menu), the latest last. */
   discover_pick_skip?: string[];
-  /** Others may follow this account's playing (0.9.19; off unless switched on), and whose tracks asked for go into
+  /** Others may follow this account's playing (0.10; off unless switched on), and whose tracks asked for go into
    *  the queue at once. */
   followable?: boolean;
   auto_accept?: string[];
@@ -79,7 +79,7 @@ export function setDefaults(part: { radio?: Partial<Defaults['radio']>; autoplay
 
 /** The Personal parts' own (Radio and Autoplay, Tracking), as kept. */
 export const mine = $state({ moreFrom: { libraries: null, bandcamp: false } as MoreFrom, tracking: true, pickSkip: [] as string[], followable: false, autoAccept: [] as string[], known: false });
-/** Others may follow this account or not (0.9.19, the Play On sheet's foot). */
+/** Others may follow this account or not (0.10, the Play On sheet's foot). */
 export function setFollowable(on: boolean): Promise<void> {
   mine.followable = on;
   keep({ followable: on });

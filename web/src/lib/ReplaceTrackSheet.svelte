@@ -3,7 +3,7 @@
   // the missing tracks first; one tapped is looked for on Soulseek (one search, never in bulk), its candidates listed
   // lossless first, then free slots, then speed; one tapped is fetched and checked (decoded whole, its length, AcoustID
   // naming that recording), and once it passes, Add to album puts it in the album's folder, tagged from MusicBrainz, with
-  // Undo. Or a file already on the server (0.9.19, its download folder: one found on an old drive, put there), checked the
+  // Undo. Or a file already on the server (0.10, its download folder: one found on an old drive, put there), checked the
   // same way and added the same way. `replace`: a track already there, swapped for a better copy (its old file to the trash).
   import { untrack } from 'svelte';
   import { undo } from './api';

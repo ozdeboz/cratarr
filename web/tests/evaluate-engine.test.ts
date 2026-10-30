@@ -1,6 +1,6 @@
 // The one engine against the evaluator it replaced for the extras (decision 0057, step 4): modulators, macros, a
 // layer's knobs, an engine on a layer and its step moved on by its Gate's Next, frame by frame over a recorded track.
-// (Moved out of the equivalence tests, which held the one engine to today's summary: retired with it in 0.9.19.)
+// (Moved out of the equivalence tests, which held the one engine to today's summary: retired with it in 0.10.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TRACKS, track } from './harness/recorded.ts';
