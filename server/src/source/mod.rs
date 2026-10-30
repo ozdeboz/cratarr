@@ -187,12 +187,15 @@ pub struct AlbumUse {
     pub rating: u8,
 }
 
-/// An album's track count, format ("FLAC"; `None` when mixed or unknown) and lowest bitrate.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+/// An album's track count, format ("FLAC"; `None` when mixed or unknown), lowest bitrate and length.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
 pub struct AlbumDetails {
     pub tracks: u32,
     pub format: Option<String>,
     pub bitrate_kbps: Option<u32>,
+    /// Its tracks' lengths summed, in seconds (see `total_secs`); details kept from before it read as none.
+    #[serde(default)]
+    pub duration_secs: Option<f64>,
 }
 
 /// One of an album's tracks, in play order, with what it says of its album. `path` is the source's own.
@@ -236,6 +239,10 @@ pub struct Album {
     pub format: Option<String>,
     /// The lowest track bitrate, so a weak track is not hidden by an average.
     pub bitrate_kbps: Option<u32>,
+    /// Its tracks' lengths summed, in seconds; `None` where unknown (see `total_secs`). Albums kept from before it
+    /// read as none.
+    #[serde(default)]
+    pub duration_secs: Option<f64>,
     /// The source's own tags or labels on the album, as they are.
     pub tags: Vec<String>,
     /// The library it was listed from (the album pages' library switches filter by it); none outside a listing.
@@ -746,6 +753,17 @@ pub struct Kind {
 
 pub static KINDS: &[Kind] = &[cratarr::KIND, jellyfin::KIND, subsonic::KIND];
 
+/// An album's length from its tracks' lengths, in seconds: their sum, or `None` when it has no tracks or any track's
+/// length is unknown (a sum of some would put the album too short in a sort by length).
+pub fn total_secs(lengths: impl IntoIterator<Item = Option<f64>>) -> Option<f64> {
+    let mut n = 0;
+    let sum = lengths.into_iter().try_fold(0.0, |sum, l| {
+        n += 1;
+        l.filter(|s| *s > 0.0).map(|s| sum + s)
+    })?;
+    (n > 0).then_some(sum)
+}
+
 pub fn kind(id: &str) -> Option<&'static Kind> {
     KINDS.iter().find(|k| k.id == id)
 }
@@ -767,6 +785,29 @@ pub fn list(values: &Values, key: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_albums_length_is_its_tracks_summed_and_unknown_when_one_is() {
+        assert_eq!(total_secs([Some(200.5), Some(99.5)]), Some(300.0));
+        assert_eq!(total_secs([Some(200.0), None]), None, "one unknown: the whole is unknown");
+        assert_eq!(total_secs([Some(200.0), Some(0.0)]), None, "a length of nothing is not known");
+        assert_eq!(total_secs(Vec::new()), None, "no tracks");
+    }
+
+    #[test]
+    fn an_album_kept_from_before_its_length_still_reads() {
+        let old = r#"{"id":"a1","title":"Homogenic","artist":"Björk","year":1997,"added":null,"path":null,"tracks":10,
+            "format":"FLAC","bitrate_kbps":900,"tags":[],"type":"album"}"#;
+        let a: Album = serde_json::from_str(old).unwrap();
+        assert_eq!((a.title.as_str(), a.tracks, a.duration_secs), ("Homogenic", 10, None));
+        assert_eq!(a.release.kind.as_deref(), Some("album"));
+        let json = serde_json::to_value(&a).unwrap();
+        assert!(json["duration_secs"].is_null(), "always sent, null where unknown");
+        let timed = Album { duration_secs: Some(2640.5), ..a };
+        assert_eq!(serde_json::to_value(&timed).unwrap()["duration_secs"], 2640.5);
+        let d: AlbumDetails = serde_json::from_str(r#"{"tracks":10,"format":"FLAC","bitrate_kbps":900}"#).unwrap();
+        assert_eq!((d.tracks, d.duration_secs), (10, None));
+    }
 
     /// The contract every plugin must keep; a new plugin gets these checks for free.
     #[test]

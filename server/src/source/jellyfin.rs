@@ -894,7 +894,7 @@ impl Source for JellyfinSource {
     fn album_summary<'a>(&'a self, album: &'a str) -> Fut<'a, Option<super::AlbumDetails>> {
         Box::pin(async move {
             let s = self.jf.album_summary(album).await?;
-            Ok(Some(super::AlbumDetails { tracks: s.tracks, format: s.format, bitrate_kbps: s.bitrate_kbps }))
+            Ok(Some(super::AlbumDetails { tracks: s.tracks, format: s.format, bitrate_kbps: s.bitrate_kbps, duration_secs: s.duration_secs }))
         })
     }
 

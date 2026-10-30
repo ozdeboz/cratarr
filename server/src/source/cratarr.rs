@@ -439,7 +439,7 @@ impl Source for CratarrSource {
             let root = library_id.trim_end_matches('/').to_string();
             blocking(move || {
                 let mut out = Vec::new();
-                for (a, dir, format, kbps) in lib.albums_in(folder, limit)? {
+                for (a, dir, format, kbps, secs) in lib.albums_in(folder, limit)? {
                     let base = lib.album_base(&a.id)?.unwrap_or_else(|| a.id.clone());
                     let stamp = format!("{} {} {}", a.song_count, a.created.as_deref().unwrap_or(""), dir);
                     out.push(Listed {
@@ -452,6 +452,7 @@ impl Source for CratarrSource {
                             tracks: a.song_count,
                             format,
                             bitrate_kbps: kbps,
+                            duration_secs: secs,
                             tags: ud.tags_of(&base)?,
                             library: None,
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
@@ -472,7 +473,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let (lib, id) = (s.library.clone(), album.to_string());
             let facts = blocking(move || lib.album_facts(&id)).await?;
-            Ok(facts.map(|(tracks, format, bitrate_kbps)| AlbumDetails { tracks, format, bitrate_kbps }))
+            Ok(facts.map(|(tracks, format, bitrate_kbps, duration_secs)| AlbumDetails { tracks, format, bitrate_kbps, duration_secs }))
         })
     }
 
@@ -512,6 +513,7 @@ impl Source for CratarrSource {
                 tracks: a.song_count,
                 format: None,
                 bitrate_kbps: None,
+                duration_secs: None,
                 tags: Vec::new(),
                 library: None,
                 artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },

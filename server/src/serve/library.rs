@@ -1552,6 +1552,25 @@ mod tests {
     }
 
     #[test]
+    fn an_albums_length_is_its_songs_summed_and_unknown_when_one_is() {
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        let listed = lib.albums_in(0, 10).unwrap();
+        let (homogenic, _, _, _, secs) = listed.iter().find(|(a, ..)| a.name == "Homogenic").unwrap();
+        assert_eq!(*secs, Some(400.0), "two songs of 200 s");
+        assert_eq!(lib.album_facts(&homogenic.id).unwrap().unwrap().3, Some(400.0));
+        let untimed = with(sample(), |rows| rows[1].duration_ms = None);
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&untimed, &Rules::default()).unwrap();
+        let listed = lib.albums_in(0, 10).unwrap();
+        let (homogenic, _, _, _, secs) = listed.iter().find(|(a, ..)| a.name == "Homogenic").unwrap();
+        assert_eq!(*secs, None, "one song's length unknown: the album's is");
+        assert_eq!(lib.album_facts(&homogenic.id).unwrap().unwrap().3, None);
+        let (_, _, _, _, orb) = listed.iter().find(|(a, ..)| a.name == "Adventures Beyond the Ultraworld").unwrap();
+        assert_eq!(*orb, Some(200.0), "another album's is its own");
+    }
+
+    #[test]
     fn a_songs_album_is_found_by_the_songs_id() {
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();

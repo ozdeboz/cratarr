@@ -16,6 +16,11 @@ const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.art
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
   a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary";
 
+/// An album's length in milliseconds, for a query over `albums a`: its songs' lengths summed, NULL when any song's is
+/// unknown or nothing (`albums.duration_ms` counts those as nothing), as `source::total_secs`. Over the songs' album
+/// index, in the query that reads the album's format and bitrate.
+const ALBUM_LENGTH: &str = "(SELECT CASE WHEN count(*) = count(nullif(s.duration_ms, 0)) THEN sum(s.duration_ms) END FROM songs s WHERE s.album_id = a.id)";
+
 /// A song in Cratarr's ids, with its album's name and album artist (see `Library::song_ids`).
 #[allow(dead_code)] // for the pushed player state (decision 0031), which comes next
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -897,26 +902,32 @@ impl Library {
     }
 
     /// The albums of one catalogue folder, newest first, at most `limit`, with what a source's album listing needs:
-    /// (album, its folder relative to the catalogue folder, format, lowest bitrate).
-    pub fn albums_in(&self, folder: i64, limit: usize) -> Result<Vec<(Album, String, Option<String>, Option<u32>)>> {
+    /// (album, its folder relative to the catalogue folder, format, lowest bitrate, length in seconds).
+    #[allow(clippy::type_complexity)]
+    pub fn albums_in(&self, folder: i64, limit: usize) -> Result<Vec<(Album, String, Option<String>, Option<u32>, Option<f64>)>> {
         let db = self.db();
         let ns = numbers(&db, "SELECT n FROM albums WHERE folder = ?1 ORDER BY created DESC, n LIMIT ?2", &[&folder, &(limit as i64)])?;
         let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
         self.album_artists(&db, &mut albums)?;
-        let mut st = db.prepare_cached("SELECT dir, format, min_kbps FROM albums WHERE id = ?1")?;
+        let mut st = db.prepare_cached(&format!("SELECT dir, format, min_kbps, {ALBUM_LENGTH} FROM albums a WHERE a.id = ?1"))?;
         let mut out = Vec::with_capacity(albums.len());
         for a in albums {
-            let (dir, format, kbps) = st.query_row([&a.id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<u32>>(2)?)))?;
-            out.push((a, dir, format, kbps));
+            let (dir, format, kbps, ms) = st.query_row([&a.id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<u32>>(2)?, r.get::<_, Option<i64>>(3)?))
+            })?;
+            out.push((a, dir, format, kbps, ms.map(|ms| ms as f64 / 1000.0)));
         }
         Ok(out)
     }
 
-    /// One album's format and lowest bitrate: (songs, format, lowest bitrate).
-    pub fn album_facts(&self, album: &str) -> Result<Option<(u32, Option<String>, Option<u32>)>> {
+    /// One album's format, lowest bitrate and length: (songs, format, lowest bitrate, length in seconds).
+    pub fn album_facts(&self, album: &str) -> Result<Option<(u32, Option<String>, Option<u32>, Option<f64>)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT song_count, format, min_kbps FROM albums WHERE id = ?1")?;
-        Ok(st.query_map([album], |r| Ok((r.get::<_, i64>(0)?.max(0) as u32, r.get(1)?, r.get(2)?)))?.next().transpose()?)
+        let mut st = db.prepare_cached(&format!("SELECT song_count, format, min_kbps, {ALBUM_LENGTH} FROM albums a WHERE a.id = ?1"))?;
+        let mut facts = st.query_map([album], |r| {
+            Ok((r.get::<_, i64>(0)?.max(0) as u32, r.get(1)?, r.get(2)?, r.get::<_, Option<i64>>(3)?.map(|ms| ms as f64 / 1000.0)))
+        })?;
+        Ok(facts.next().transpose()?)
     }
 
     /// A page of one catalogue folder's songs: (song id, path), in a stable order.
