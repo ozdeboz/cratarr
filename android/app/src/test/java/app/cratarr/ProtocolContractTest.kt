@@ -15,9 +15,9 @@ import java.io.File
 class ProtocolContractTest {
     /** Each command's name and its fields, as the generated type says (comments left out). */
     private val wire: Map<String, Set<String>> = run {
-        val text = File("../../web/src/lib/generated/PlayerCommand.ts").readText().replace(Regex("/\*\*.*?\*/", RegexOption.DOT_MATCHES_ALL), "")
-        Regex("\{ \"command\": \"([a-z_]+)\"([^}]*)\}").findAll(text).associate { m ->
-            m.groupValues[1] to Regex("([a-z_]+)\??:").findAll(m.groupValues[2]).map { it.groupValues[1] }.toSet()
+        val text = File("../../web/src/lib/generated/PlayerCommand.ts").readText().replace(Regex("""/\*\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+        Regex("""\{ "command": "([a-z_]+)"([^}]*)\}""").findAll(text).associate { m ->
+            m.groupValues[1] to Regex("""([a-z_]+)\??:""").findAll(m.groupValues[2]).map { it.groupValues[1] }.toSet()
         }
     }
 
@@ -63,7 +63,7 @@ class ProtocolContractTest {
     fun everyCommandAPlayerIsSentIsHandled() {
         val cases = listOf("PlayerCommands.kt", "PlayOnLink.kt")
             .map { File("src/main/java/app/cratarr/$it").readText() }
-            .flatMap { Regex("^\s+((?:\"[a-z_]+\"(?:, )?)+) ->", RegexOption.MULTILINE).findAll(it).flatMap { m -> Regex("\"([a-z_]+)\"").findAll(m.groupValues[1]).map { q -> q.groupValues[1] } }.toList() }
+            .flatMap { Regex("""^\s+((?:"[a-z_]+"(?:, )?)+) ->""", RegexOption.MULTILINE).findAll(it).flatMap { m -> Regex("\"([a-z_]+)\"").findAll(m.groupValues[1]).map { q -> q.groupValues[1] } }.toList() }
             .toSet() + "sample"
         val unhandled = wire.keys - serversOwn - cases
         assertTrue("sent to players but not handled in the app: $unhandled", unhandled.isEmpty())
