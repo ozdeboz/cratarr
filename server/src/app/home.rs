@@ -2,7 +2,8 @@
 //! for you, Jump back in and Sounds like your week not server assembled then?"), so every section keeps the same rules:
 //! no album without a cover (the owner the same day), and a queue that is an album's tracks shown as that album.
 //!
-//! - **New for you**: every used library's newest albums, those the account heard 5% or more of left out.
+//! - **New for you**: Cratarr's own library's newest albums (every folder in use), those the account heard 5% or more
+//!   of left out, three at most of one album artist; one rule with its crate (`PlaylistService::new_for_you`).
 //! - **Jump back in**: the albums played last (14 days, four at most), the playlists played last (30 days, three), and
 //!   the asking player's queues left last (3 days, two), purely by when; a queue holding an album's tracks (nine in ten
 //!   of them or more, nothing else) is that album.
@@ -16,9 +17,6 @@ use serde::Serialize;
 use super::{App, ToggleError};
 use crate::source;
 
-/// How many New for you shows, and how many of the newest it looks at.
-const NEWEST: usize = 12;
-const CANDIDATES: usize = 60;
 /// Jump back in, by kind: how far back (days) and how many at most.
 const ALBUMS_BACK: (i64, usize) = (14, 4);
 const PLAYLISTS_BACK: (i64, usize) = (30, 3);
@@ -81,6 +79,12 @@ async fn coverless(served: Option<&crate::serve::Serve>) -> HashSet<String> {
     tokio::task::spawn_blocking(move || lib.coverless()).await.ok().and_then(Result::ok).unwrap_or_default()
 }
 
+/// New for you's albums (`picks`, by id) from `albums`, in the picks' order; one `albums` lacks is left out.
+fn shelf_of(picks: &[String], albums: impl IntoIterator<Item = source::Album>) -> Vec<source::Album> {
+    let mut by_id: HashMap<String, source::Album> = albums.into_iter().map(|a| (a.id.clone(), a)).collect();
+    picks.iter().filter_map(|id| by_id.remove(id)).collect()
+}
+
 /// The newest `most` within `days`, the latest first.
 fn latest(mut list: Vec<Back>, (days, most): (i64, usize), now: i64) -> Vec<Back> {
     list.retain(|b| b.at() > now - days * 86_400);
@@ -107,26 +111,25 @@ fn album_of_queue(tracks: &[(String, String)], albums_of: &HashMap<String, Strin
 }
 
 impl App {
-    /// Home's New for you.
+    /// Home's New for you: its crate's albums (`PlaylistService::new_for_you`), in its order, as Cratarr's own album
+    /// lists have them; one the lists have not read yet, as the library has it.
     pub async fn home_new(&self) -> Result<Vec<NewAlbum>, ToggleError> {
-        let view = self.albums(None).await;
-        let mut candidates: Vec<NewAlbum> = view
-            .sources
-            .into_iter()
-            .flat_map(|s| {
-                let source = s.id;
-                s.albums.into_iter().filter(|a| a.added.is_some()).map(move |album| NewAlbum { source: source.clone(), album })
-            })
-            .collect();
-        candidates.sort_by_key(|c| std::cmp::Reverse(c.album.added));
-        candidates.truncate(CANDIDATES);
+        let picks = self.playlists.new_for_you().await?;
+        if picks.is_empty() {
+            return Ok(Vec::new());
+        }
         let own = crate::source::cratarr::KIND.id;
-        let ids: Vec<String> = candidates.iter().filter(|c| c.source == own).map(|c| c.album.id.clone()).collect();
-        let heard: HashSet<String> = if ids.is_empty() { HashSet::new() } else { self.playlists.heard_albums(ids).await?.into_iter().collect() };
-        let coverless = coverless(self.served.as_deref()).await;
-        candidates.retain(|c| c.source != own || (!heard.contains(&c.album.id) && !coverless.contains(&c.album.id)));
-        candidates.truncate(NEWEST);
-        Ok(candidates)
+        let listed: Vec<source::Album> = self.albums(Some(own)).await.sources.into_iter().flat_map(|s| s.albums).collect();
+        let unlisted: Vec<String> = picks.iter().filter(|id| !listed.iter().any(|a| &a.id == *id)).cloned().collect();
+        let late: Vec<source::Album> = match (&self.served, unlisted.is_empty()) {
+            (Some(served), false) => {
+                let lib = served.library.clone();
+                let found = tokio::task::spawn_blocking(move || lib.albums_by_id(&unlisted)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+                found.into_iter().map(crate::source::cratarr::card).collect()
+            }
+            _ => Vec::new(),
+        };
+        Ok(shelf_of(&picks, listed.into_iter().chain(late)).into_iter().map(|album| NewAlbum { source: own.to_string(), album }).collect())
     }
 
     /// Home's Jump back in, for the asking `player` (its queues).
@@ -265,5 +268,18 @@ mod tests {
         let got = latest(vec![a(now - 100, "x"), a(now - 15 * 86_400, "old"), a(now - 50, "y"), a(now - 10, "z"), a(now - 20, "w"), a(now - 30, "v")], ALBUMS_BACK, now);
         let ids: Vec<String> = got.iter().map(|b| if let Back::Album { id, .. } = b { id.clone() } else { String::new() }).collect();
         assert_eq!(ids, ["z", "w", "v", "y"], "the latest four within 14 days");
+    }
+
+    /// The shelf and its crate are one rule (`PlaylistService::new_for_you`): the shelf shows the crate's albums in the
+    /// crate's order, whatever order the lists hold them in and whatever else they hold; one the lists have not read yet
+    /// comes from the library.
+    #[test]
+    fn the_shelf_shows_its_crates_albums_in_the_crates_order() {
+        let picks = vec!["c".to_string(), "a".to_string(), "late".to_string()];
+        let listed = ["a", "b", "c", "d"].map(|id| crate::source::cratarr::card(album(id, 3)));
+        let late = [crate::source::cratarr::card(album("late", 2))];
+        let ids: Vec<String> = shelf_of(&picks, listed.into_iter().chain(late)).into_iter().map(|a| a.id).collect();
+        assert_eq!(ids, picks);
+        assert!(shelf_of(&picks, Vec::<source::Album>::new()).is_empty(), "none the lists or the library have");
     }
 }

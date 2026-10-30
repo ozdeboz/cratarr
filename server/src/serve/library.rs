@@ -302,6 +302,9 @@ struct Song<'a> {
     genres: Vec<String>,
 }
 
+/// The album artist of a file that credits none, not even an artist of its own.
+pub const UNKNOWN_ARTIST: &str = "[Unknown Artist]";
+
 fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
     let file_name = row.rel.rsplit('/').next().unwrap_or(&row.rel);
     let stem = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s);
@@ -313,7 +316,7 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
     let artists = list("artists", "artist");
     let artist_credit = row.first("artist").map(str::to_string).or_else(|| (!artists.is_empty()).then(|| artists.join(", ")));
     // The album artist as the file credits it, else the song's artist.
-    let album_artist = row.first("albumartist").map(str::to_string).or_else(|| artist_credit.clone()).unwrap_or_else(|| "[Unknown Artist]".into());
+    let album_artist = row.first("albumartist").map(str::to_string).or_else(|| artist_credit.clone()).unwrap_or_else(|| UNKNOWN_ARTIST.into());
     let mut album_artists = list("albumartists", "albumartist");
     if album_artists.is_empty() {
         album_artists = if artists.is_empty() { vec![album_artist.clone()] } else { artists.clone() };

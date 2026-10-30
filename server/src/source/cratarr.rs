@@ -179,6 +179,27 @@ fn folder_of(s: &Serve, library: &str) -> Option<i64> {
     s.library.roots().into_iter().find(|(_, r)| Path::new(r) == Path::new(library)).map(|(f, _)| f)
 }
 
+/// One of the library's albums as an album card, without what only a listing reads (its folder, format, bitrate,
+/// length and tags): an artist's albums, Home's New for you before the lists were read again.
+pub fn card(a: crate::serve::api::Album) -> Album {
+    Album {
+        added: a.created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
+        title: a.name,
+        artist: Some(a.artist),
+        year: a.year,
+        path: None,
+        tracks: a.song_count,
+        format: None,
+        bitrate_kbps: None,
+        duration_secs: None,
+        tags: Vec::new(),
+        library: None,
+        artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+        release: a.release,
+        id: a.id,
+    }
+}
+
 /// A catalogue folder's path, as the library was last built.
 fn root_of(s: &Serve, folder: i64) -> Option<String> {
     s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r)
@@ -517,22 +538,6 @@ impl Source for CratarrSource {
             let ids: Vec<String> = songs.iter().map(|t| t.id.clone()).collect();
             let seen = s.userdata.get(&o, Item::Song, &ids)?;
             let favorite = s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some());
-            let card = |a: crate::serve::api::Album| Album {
-                added: a.created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
-                title: a.name,
-                artist: Some(a.artist),
-                year: a.year,
-                path: None,
-                tracks: a.song_count,
-                format: None,
-                bitrate_kbps: None,
-                duration_secs: None,
-                tags: Vec::new(),
-                library: None,
-                artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
-                release: a.release,
-                id: a.id,
-            };
             let tracks = songs
                 .into_iter()
                 .map(|t| {

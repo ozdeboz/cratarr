@@ -132,10 +132,68 @@ const HEARD_SHARE: f64 = 0.05;
 /// How many each of Home's looks back shows; and after how many days unplayed an album is half as far from the listening
 /// as one never played (Grave digging).
 const DIG: usize = 12;
-/// New for you as a crate (`home_crate`): the newest albums it looks at, and how many it keeps, as Home's shelf.
-const HOME_NEW_LOOK: usize = 60;
-const HOME_NEW_ALBUMS: usize = 12;
+/// New for you (`new_for_you`), Home's shelf and its crate alike: how many albums it keeps, at most how many of one album
+/// artist (the owner, 2026-10-30: "only show the top 3 albums for each album artist"), how many of the newest it reads
+/// at a time, and how far down the newest it reads at most.
+const NEW_ALBUMS: usize = 12;
+const NEW_PER_ARTIST: usize = 3;
+const NEW_PAGE: usize = 60;
+const NEW_FURTHEST: usize = 300;
 const UNPLAYED_HALF_DAYS: f64 = 180.0;
+
+/// Whether tracks, each its length and how often it was heard, were heard `HEARD_SHARE` of their length.
+fn heard_share(tracks: impl IntoIterator<Item = (u64, u32)>) -> bool {
+    let (length, played) = tracks.into_iter().fold((0u64, 0u64), |(l, p), (secs, plays)| (l + secs, p + secs * u64::from(plays)));
+    length > 0 && played as f64 >= HEARD_SHARE * length as f64
+}
+
+/// Whether one of Cratarr's own albums was heard (`heard_share`), by these plays (a song's own count first); `None`
+/// for an album the library does not have. Blocking.
+fn album_heard(serve: &crate::serve::Serve, plays: &HashMap<String, (u32, Option<i64>)>, id: &str) -> Result<Option<bool>, ToggleError> {
+    let Some(album) = serve.library.album(id)? else { return Ok(None) };
+    let songs = album.song.unwrap_or_default();
+    Ok(Some(heard_share(songs.iter().map(|s| (s.duration, plays.get(&s.id).map_or(0, |p| p.0))))))
+}
+
+/// New for you's walk down the newest albums (`new_for_you`): `page` gives `NEW_PAGE` of them from an offset, newest
+/// first, each its id and album artist; `out` says which to leave out. At most `NEW_PER_ARTIST` of one album artist,
+/// matched loosely (`import::loose`: case, spacing, a leading "the"; an album without one counts toward none), and
+/// `NEW_ALBUMS` in all, read on page by page until those are found, a page comes back short, or `NEW_FURTHEST` are read.
+fn new_picks(
+    mut page: impl FnMut(usize) -> Result<Vec<(String, String)>, ToggleError>,
+    mut out: impl FnMut(&str) -> Result<bool, ToggleError>,
+) -> Result<Vec<String>, ToggleError> {
+    let mut picks = Vec::new();
+    let mut of: HashMap<String, usize> = HashMap::new();
+    let mut offset = 0;
+    while offset < NEW_FURTHEST {
+        let albums = page(offset)?;
+        let read = albums.len();
+        for (id, artist) in albums {
+            let artist = artist.trim();
+            let key = if artist.is_empty() || artist == crate::serve::library::UNKNOWN_ARTIST { String::new() } else { super::import::loose(artist) };
+            // An artist with their share already: the walk does not ask whether this one was heard.
+            if !key.is_empty() && of.get(&key).is_some_and(|&n| n >= NEW_PER_ARTIST) {
+                continue;
+            }
+            if out(&id)? {
+                continue;
+            }
+            if !key.is_empty() {
+                *of.entry(key).or_default() += 1;
+            }
+            picks.push(id);
+            if picks.len() == NEW_ALBUMS {
+                return Ok(picks);
+            }
+        }
+        if read < NEW_PAGE {
+            break;
+        }
+        offset += read;
+    }
+    Ok(picks)
+}
 
 /// An account's taste as Insights' Profile has it, every source (`taste::profiles`): its favourites, playlists, plays
 /// and skips, and what it excluded, on `lib`'s libraries switched on. Blocking.
@@ -2166,22 +2224,12 @@ impl PlaylistService {
         self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
     }
 
-    /// Home's shelf as a crate (`crates::HOME_NEW`): New for you, Cratarr's newest albums the asking account
-    /// has not heard much of yet (as Home leaves them out, `heard_albums`); Grave digging, `digging`'s albums. Their
-    /// tracks album by album, in the shelf's order.
+    /// Home's shelf as a crate (`crates::HOME_NEW`): New for you, the shelf's albums (`new_for_you`); Grave digging,
+    /// `digging`'s albums. Their tracks album by album, in the shelf's order.
     async fn home_crate(&self, id: &str) -> Result<CrateDef, ToggleError> {
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let (name, albums) = if id == crates::HOME_NEW {
-            let s = serve.clone();
-            let newest: Vec<String> = tokio::task::spawn_blocking(move || s.library.album_list(&crate::serve::read::AlbumOrder::Newest, HOME_NEW_LOOK, 0, None))
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))??
-                .into_iter()
-                .map(|a| a.id)
-                .collect();
-            // Without an account to ask about (sign-in off), none heard, as Home has it.
-            let heard: HashSet<String> = self.heard_albums(newest.clone()).await.unwrap_or_default().into_iter().collect();
-            ("New for you", newest.into_iter().filter(|a| !heard.contains(a)).take(HOME_NEW_ALBUMS).collect::<Vec<_>>())
+            ("New for you", self.new_for_you().await?)
         } else {
             ("Grave digging", self.digging(None, &[]).await?.graves.into_iter().map(|g| g.id).collect())
         };
@@ -2997,8 +3045,8 @@ impl PlaylistService {
     }
 
     /// Of these albums (Cratarr's own), those the asking account has heard a good part of (`HEARD_SHARE` of their length,
-    /// by their tracks' own plays times their lengths, none heard while following): Home's New for you leaves them out
-    /// (the owner, 2026-10-23).
+    /// by their tracks' own plays times their lengths, none heard while following, `album_heard`): what New for you
+    /// leaves out (the owner, 2026-10-23).
     pub async fn heard_albums(&self, ids: Vec<String>) -> Result<Vec<String>, ToggleError> {
         let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("What was heard is an account's own: sign in.".into()))?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -3006,15 +3054,38 @@ impl PlaylistService {
             let plays = serve.userdata.own_song_plays(&user)?;
             let mut heard = Vec::new();
             for id in ids {
-                let Some(album) = serve.library.album(&id)? else { continue };
-                let songs = album.song.unwrap_or_default();
-                let length: u64 = songs.iter().map(|s| s.duration).sum();
-                let played: u64 = songs.iter().map(|s| u64::from(plays.get(&s.id).map_or(0, |p| p.0)) * s.duration).sum();
-                if length > 0 && played as f64 >= HEARD_SHARE * length as f64 {
+                if album_heard(&serve, &plays, &id)? == Some(true) {
                     heard.push(id);
                 }
             }
             Ok(heard)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
+    /// New for you, Home's shelf and its crate alike (the owner, 2026-10-23 and 2026-10-30): of Cratarr's own library
+    /// (every folder in use, Music's and the Incoming ones', as the crates are), the newest albums by when the library
+    /// added them, less those without a cover and those the asking account heard `HEARD_SHARE` of (one's own plays, none
+    /// heard while following), at most `NEW_PER_ARTIST` of one album artist (`new_picks`). Their ids, newest first.
+    /// Without an account to ask about (sign-in off), none is heard.
+    pub async fn new_for_you(&self) -> Result<Vec<String>, ToggleError> {
+        let user = asking_user(self.served.as_deref());
+        let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
+            let plays = match &user {
+                Some(user) => serve.userdata.own_song_plays(user)?,
+                None => HashMap::new(),
+            };
+            let coverless = serve.library.coverless()?;
+            new_picks(
+                |offset| {
+                    let page = serve.library.album_list(&crate::serve::read::AlbumOrder::Newest, NEW_PAGE, offset, None)?;
+                    // Those the library has no date for come last, and none of them is new: the walk ends at the first.
+                    Ok(page.into_iter().take_while(|a| a.created.is_some()).map(|a| (a.id, a.artist)).collect())
+                },
+                |id| Ok(coverless.contains(id) || album_heard(&serve, &plays, id)? != Some(false)),
+            )
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
@@ -3518,5 +3589,73 @@ mod order_tests {
         let look: CrateLook = serde_json::from_value(serde_json::json!({ "order": "lastPlayed" })).unwrap();
         assert_eq!((look.order, look.down), (CrateOrder::LastPlayed, false));
         assert_eq!(CrateLook::default().order, CrateOrder::Own);
+    }
+}
+
+#[cfg(test)]
+mod new_for_you_tests {
+    use super::*;
+
+    /// Albums newest first, by these album artists: `al-0` the newest.
+    fn newest(artists: &[&str]) -> Vec<(String, String)> {
+        artists.iter().enumerate().map(|(i, a)| (format!("al-{i}"), a.to_string())).collect()
+    }
+
+    /// New for you's picks of `albums`, read a page at a time as from the library, `heard` left out.
+    fn walk(albums: &[(String, String)], heard: &[&str]) -> Vec<String> {
+        new_picks(|offset| Ok(albums.iter().skip(offset).take(NEW_PAGE).cloned().collect()), |id| Ok(heard.contains(&id))).unwrap()
+    }
+
+    #[test]
+    fn one_artists_ten_newest_give_three_of_theirs_then_the_next_artists() {
+        let mut artists = vec!["The Avalanches"; 10];
+        artists.extend(["Bonobo", "Caribou", "Bonobo"]);
+        assert_eq!(walk(&newest(&artists), &[]), ["al-0", "al-1", "al-2", "al-10", "al-11", "al-12"]);
+    }
+
+    #[test]
+    fn an_album_heard_five_percent_or_more_is_left_out() {
+        // A 50-minute album: 2½ minutes heard is 5%; a second less is not.
+        assert!(heard_share([(150, 1), (2850, 0)]));
+        assert!(!heard_share([(149, 1), (2851, 0)]));
+        assert!(heard_share([(75, 2), (2925, 0)]), "a track heard twice counts twice");
+        assert!(!heard_share(Vec::<(u64, u32)>::new()) && !heard_share([(0, 3)]), "nothing to hear is not heard");
+        // Left out, and not counted toward its artist's three.
+        let artists = ["Air", "Air", "Air", "Air", "Air", "Moby"];
+        assert_eq!(walk(&newest(&artists), &["al-0", "al-1"]), ["al-2", "al-3", "al-4", "al-5"]);
+    }
+
+    #[test]
+    fn no_more_than_twelve() {
+        let artists: Vec<String> = (0..30).map(|i| format!("Artist {i}")).collect();
+        let picks = walk(&newest(&artists.iter().map(String::as_str).collect::<Vec<_>>()), &[]);
+        assert_eq!(picks.len(), NEW_ALBUMS);
+        assert_eq!(picks.last().map(String::as_str), Some("al-11"), "the twelve newest");
+    }
+
+    #[test]
+    fn an_album_without_an_album_artist_counts_toward_no_one() {
+        let artists = ["", "", "", "", " ", crate::serve::library::UNKNOWN_ARTIST, crate::serve::library::UNKNOWN_ARTIST, ""];
+        assert_eq!(walk(&newest(&artists), &[]).len(), artists.len());
+    }
+
+    #[test]
+    fn the_album_artist_is_matched_loosely() {
+        let artists = ["The Avalanches", "the avalanches ", "THE AVALANCHES", "Avalanches", "Bonobo"];
+        assert_eq!(walk(&newest(&artists), &[]), ["al-0", "al-1", "al-2", "al-4"]);
+    }
+
+    #[test]
+    fn the_walk_reads_on_past_the_first_page_and_no_further_than_its_bound() {
+        // The 90 newest by three artists: their nine, then three from the second page.
+        let mut artists: Vec<String> = (0..90).map(|i| ["Air", "Bonobo", "Caribou"][i % 3].to_string()).collect();
+        artists.extend((0..10).map(|i| format!("Artist {i}")));
+        let picks = walk(&newest(&artists.iter().map(String::as_str).collect::<Vec<_>>()), &[]);
+        assert_eq!(picks.len(), NEW_ALBUMS);
+        assert_eq!(picks[9..].to_vec(), ["al-90", "al-91", "al-92"]);
+        // One artist's newest further down than it reads: theirs alone.
+        let mut artists = vec!["Air".to_string(); NEW_FURTHEST + 20];
+        artists.extend((0..10).map(|i| format!("Artist {i}")));
+        assert_eq!(walk(&newest(&artists.iter().map(String::as_str).collect::<Vec<_>>()), &[]), ["al-0", "al-1", "al-2"]);
     }
 }
