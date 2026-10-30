@@ -46,7 +46,8 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 
 ## How the repository is kept
 
-- `main` is what was released, and moves only at a release.
+- `main` is what was released, and moves only at a release. GitHub's `main` gets one commit per release, its tree the
+  release's, made with `git commit-tree`; no development branch is published.
 - `trunk` is the development branch: the next feature release (0.11 while 0.10 is out). It holds all of Cratarr: the
   server, the web app, the Android and desktop apps and the docs.
 - `release/X.Y` holds a released version and its fixes only (`release/0.10`: 0.10.0, 0.10.1, …). It is cut from `trunk`
@@ -61,7 +62,7 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
   takes its own base (`trunk` or its release branch) back in whenever it needs what landed there. A pull request
   against `main` is brought onto `trunk` (a feature) or the release branch (a fix) the same way.
 - A release is its branch checked as a whole, with the version raised in one commit (`scripts/version.sh`: plain
-  `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and brought onto `main`.
+  `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and put on `main` as one commit.
   - A new version (X.Y.0) is made on `trunk`, and `release/X.Y` is cut there.
   - A fix (X.Y.Z) is made on `release/X.Y`.
   - The tag builds the image for amd64 and arm64 and makes the GitHub release
