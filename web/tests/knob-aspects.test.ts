@@ -50,6 +50,8 @@ test('a knob means what its own module says, not what its name means elsewhere',
   assert.ok(motion(moduleOf('random'), knobOf('random', 'rate')), 'a Random’s Rate is motion');
   assert.ok(motion(moduleOf('clock'), knobOf('clock', 'speed')), 'the Clock’s Speed is motion');
   assert.ok(lightness(moduleOf('fold'), knobOf('fold', 'lift')), 'a Fold’s Lift is lightness');
+  // The Flame's Colours (its hue family) is a colour, as its label always made it.
+  assert.ok(scopeNamed('colours', types)!(moduleOf('flame'), knobOf('flame', 'family')), 'the Flame’s Colours is a colour');
 });
 
 test('an effect’s knobs carry its effect’s declared aspects', () => {

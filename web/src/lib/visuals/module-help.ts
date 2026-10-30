@@ -389,7 +389,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     scope: 'What it rolls: everything, one category, the cables, the response, the macros, the colours, space or lightness.',
     done: 'A trigger as it randomizes.',
     reach: 'How far each knob moves toward its roll: all the way at 100 %, not at all at 0.',
-    glide: 'How many seconds each roll morphs in, as the music plays (no undo step); 0: as a new track’s look. Triggered each phrase with a glide as long, the picture never stands still.',
+    glide: 'Seconds each roll morphs in as the music plays, with no undo step; 0, as a new track’s look does.',
   },
   sequencer: {
     clock: 'Moves on a step; the Clock’s beat unless unplugged.',

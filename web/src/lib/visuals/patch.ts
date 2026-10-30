@@ -291,7 +291,7 @@ const CHAIN_ASPECTS: Record<string, Record<string, KnobAspect | null>> = {
   },
   flame: {
     form: null, detail: 'spatial', twist: 'spatial', warp: null, symmetry: 'spatial', mirror: 'spatial', final: null, lensSides: 'spatial',
-    lensDepth: 'spatial', family: null, hue: 'colour', lightness: 'light', vividness: 'colour', spread: 'spatial', purity: 'colour', shape: null,
+    lensDepth: 'spatial', family: 'colour', hue: 'colour', lightness: 'light', vividness: 'colour', spread: 'spatial', purity: 'colour', shape: null,
     rotation: 'spatial', lights: 'light', presence: 'light', zoom: 'spatial', lighting: 'light', evolution: 'motion', continuity: 'motion', fit: 'spatial',
   },
   show: { glow: 'light', saturation: 'colour', smoothing: null, haze: 'light', waves: 'spatial' },
