@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Where music plays (decisions 0019, 0022, 0031): this browser (or the app it runs in), one of Cratarr's own players
-  // (the Android app elsewhere: Play On), or the media server's player. Choosing another moves the music there (queue
+  // Where music plays (decisions 0022, 0031): this browser (or the app it runs in), or one of Cratarr's own players (the
+  // Android app elsewhere: Play On); the media server's player went in 0.12 (a Jellyfin mode lists its own, 0.13). Choosing another moves the music there (queue
   // and position) and stops the side that played; one of Cratarr's players that plays already is asked about first:
   // take it over (the music moves there), or not (it plays on, and what played here pauses).
   // Sync play (decision 0037): while one of Cratarr's players is played on, another's + adds it to its group and its
@@ -23,7 +23,6 @@
   import SwipeBehind from './SwipeBehind.svelte';
   import GroupVolume from './GroupVolume.svelte';
   import { hold } from './hold';
-  import { live } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { canPlayHere } from './localPlayer.svelte';
@@ -41,11 +40,10 @@
   /** A long press, as the rest of the page's (a track's menu). */
   const HOLD_MS = 500;
 
-  // The server's player as the page last saw it ("Finamp on Lenovo Tab"); a plain name when nothing plays there.
-  const remoteName = $derived(live.view?.now_playing?.player ?? 'The server’s player');
   const src = $derived(shownCover());
   const here = $derived(prefs.output === 'local' && canPlayHere);
-  const shown = $derived(here || drivenName() !== null ? outputName() : remoteName);
+  // A browser that cannot play here, with no player chosen: nowhere yet (lib/player/port).
+  const shown = $derived(here || drivenName() !== null ? outputName() : 'Choose a player');
   const group = $derived(groupOf(head()));
   // Holding groups: offered while one of Cratarr's players is played on (in the app, this device is one).
   // A group's leader is one of the app's players: a Kodi follows, never leads.
@@ -246,10 +244,6 @@
           />
         </div>
       {/each}
-      <!-- The server's own player; not when what plays there is one of Cratarr's players listed above (the same one twice). -->
-      {#if !playOn.players.some((p) => p.name === remoteName)}
-        <MenuEntry label={remoteName} checked={!here && drivenName() === null} plus={false} onclick={() => pick('remote')} />
-      {/if}
       <!-- Others' players, to follow on this device's (who let others follow them; the one followed ticked). -->
       {#if followOffered() && me}
         {#each follow.leaders as l (l.user)}

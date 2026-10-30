@@ -5,7 +5,9 @@
   // in the app Sync to this device (decision 0038), Share, and their picture on this device (one chosen here, or their
   // newest album's cover again). No Instant mix (the owner: "a confusing thing"), no rating (the server keeps none for
   // artists).
-  import { albumCoverUrl } from './api';
+  import { albumCoverUrl, search } from './api';
+  import { likeChip } from './quickCrate';
+  import { grabCrate, openQuickCrate } from './quickCrates.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { artistPictureId } from './albums.svelte';
   import { coverKey, localCovers, removeLocalCover, setLocalCover } from './localCovers.svelte';
@@ -107,6 +109,20 @@
 
   /** Bandcamp's previews (an artist found there): never downloaded or kept (decision 0071). */
   const previews = $derived(tracks.some((t) => t.source === BANDCAMP));
+  /** Sounds like them (0.12; one way to make a crate): the crate search's sentence with the artist as its "like" term,
+   *  by the library's id search gives them; where search does not name them, their name read as a line. */
+  function soundsLike() {
+    const n = name;
+    onclose();
+    search(n, ['artist'], 5).then(
+      (r) => {
+        const id = r.groups.artist?.items.find((x) => x.title.toLowerCase() === n.toLowerCase())?.id;
+        if (id) grabCrate([likeChip('artist', id, n)]);
+        else openQuickCrate(n);
+      },
+      () => openQuickCrate(n),
+    );
+  }
   /** Their tracks kept on this device (the app's downloads): Remove from this device. */
   const kept = $derived(inApp ? downloads.tracks.filter((t) => t.source === source && ids.includes(t.id)) : []);
 
@@ -145,7 +161,9 @@
 </script>
 
 {#snippet entry(e: EntryId)}
-  {#if e === 'favourite'}
+  {#if e === 'soundsLike'}
+    {#if source === 'cratarr' && !previews}<MenuEntry icon="music" label="Sounds like this" onclick={soundsLike} />{/if}
+  {:else if e === 'favourite'}
     {#if favorite !== undefined}<MenuEntry icon="heart" label="Favourite" switched={favorite} onclick={ontogglefavorite} />{/if}
   {:else if e === 'excludeArtist'}
     {#if excludedArtists.everywhere !== null}

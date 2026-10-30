@@ -27,12 +27,27 @@ export function holdWalls(dir: WaveDir, through: boolean, start: number, end: nu
   return { lo: start, hi: end };
 }
 
+/** Where a wall lets the window go gradually (a share of its width): it leaves the wall gathering speed, not at once at
+ *  the tape's (0.11.1, the owner: "we need everything a whole lot more stable, window included"; it went from standing
+ *  to the full speed in a frame). Short of it, exactly against the wall. */
+export const WALL_SOFT = 0.02;
+/** `x` kept above `lo`: exactly `lo` below lo - z, exactly `x` above lo + z, a smooth bend between (its slope from 0 to
+ *  1 without a step). */
+function above(x: number, lo: number, z: number): number {
+  if (!(z > 0) || x - lo >= z) return Math.max(x, lo);
+  if (x - lo <= -z) return lo;
+  return lo + (x - lo + z) ** 2 / (4 * z);
+}
+
 /** The window `width` wide on `focus`: in the middle, unless that passes a wall, then against it (the low one first:
- *  a window wider than the walls stands from the low one). */
+ *  a window wider than the walls stands from the low one), leaving it smoothly (WALL_SOFT). */
 export function place(focus: number, width: number, walls: Walls): { from: number; to: number } {
+  // No softer than the room between the walls allows (a window nearly as wide as they are apart stands exactly in them).
+  const z = Math.max(0, Math.min(WALL_SOFT * width, (walls.hi - walls.lo - width) / 2));
   let from = focus - width / 2;
-  if (from + width > walls.hi) from = walls.hi - width;
-  if (from < walls.lo) from = walls.lo;
+  if (Number.isFinite(walls.hi)) from = -above(-(from + width), -walls.hi, z) - width;
+  if (Number.isFinite(walls.lo)) from = above(from, walls.lo, z);
+  if (walls.hi - walls.lo <= width) from = Number.isFinite(walls.lo) ? walls.lo : walls.hi - width;
   return { from, to: from + width };
 }
 
@@ -41,6 +56,23 @@ export function place(focus: number, width: number, walls: Walls): { from: numbe
 export function ease(cur: number, target: number, dt: number, tau: number, eps: number): number {
   const next = target + (cur - target) * Math.exp(-Math.max(0, dt) / tau);
   return Math.abs(next - target) <= eps ? target : next;
+}
+
+/**
+ * `x` moving at `v` (per ms) carried toward `target` over `dt` ms, critically damped with time constant `tau` ms: it
+ * keeps its speed as it begins (a hand-over moves on as it moved, no lurch: 0.11.1; an easing that begins at its fastest
+ * moved the window a track's length in a few frames), never oscillates, and is exactly on the target, at rest, once
+ * within `eps`.
+ */
+export function spring(x: number, v: number, target: number, dt: number, tau: number, eps: number): [number, number] {
+  const w = 2 / tau;
+  const t = Math.max(0, dt);
+  const e = x - target;
+  const k = Math.exp(-w * t);
+  const c = v + w * e;
+  const nx = target + (e + c * t) * k;
+  const nv = (v - w * c * t) * k;
+  return Math.abs(nx - target) <= eps && Math.abs(nv) * tau <= eps ? [target, 0] : [nx, nv];
 }
 
 /** How close counts as there: a fraction of a pixel on a window `width` wide (512 bars at the most, lib/Waveform). */
@@ -62,10 +94,12 @@ export function shownOf(placed: { from: number; to: number }, o: Offset | null, 
 }
 
 /** A wide view's colours, track by track (lib/Waveform's `wide.colours`; the owner, 2026-10-30: "The color should be
- *  stable"): null, the player's own colour as the waveform has it anyway, for the track the player shows and for all
- *  where the player does not take its colours from the covers; each other track its cover's, else the theme's. */
+ *  stable"; 0.12: "Colour or brightness flips" during a hold): each track its cover's, the same whichever track the
+ *  player shows (the player's own colour follows its cover a moment after a track change, and the track turning shown
+ *  took that colour on for those frames); null, the player's own, for the shown track while its cover's is not known
+ *  and for all where the player does not take its colours from the covers; else the theme's. */
 export function waveColours(keys: (string | null)[], shown: string | null, own: boolean, accentOf: (key: string) => string | null): (string | null)[] {
-  return keys.map((k) => (!own || !k || k === shown ? null : (accentOf(k) ?? 'var(--accent)')));
+  return keys.map((k) => (!own || !k ? null : (accentOf(k) ?? (k === shown ? null : 'var(--accent)'))));
 }
 
 // The hold's window frame by frame (lib/SeekWave runs it; the tests drive it): where it stands in s from the playing
@@ -107,6 +141,14 @@ export type HoldWindow = {
   span: number;
   rel: number;
   off: Offset | null;
+  /** How fast the width, the lead and the offset move (per ms): each eased on as it moved (lib/waveView's spring). */
+  wv: number;
+  relv: number;
+  offv: Offset;
+  /** How fast what shows moved last frame (per ms), each edge: a hand-over goes on from where it was heading, at that
+   *  speed. Its focus (the playhead plus the lead), for where it would have been placed by the new rules. */
+  sv: Offset;
+  focus: number;
   walls: Walls;
   held: boolean;
   /** How long ago it was let go (ms; null: held). */
@@ -126,7 +168,8 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   let walls: Walls = { lo: 0, hi: i.len };
   let rebase = false;
   if (s && i.moved !== null) {
-    last = { from: s.shown.from + i.moved, to: s.shown.to + i.moved };
+    // Where it was heading: a hand-over does not stand still a frame (0.11.1).
+    last = { from: s.shown.from + i.moved + s.sv.a * dt, to: s.shown.to + i.moved + s.sv.b * dt };
     walls = { lo: s.walls.lo + i.moved, hi: s.walls.hi + i.moved };
     // Let go and on into another track: that one's own view, from what shows.
     if (i.moved !== 0 && !i.holding) rebase = true;
@@ -149,18 +192,40 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   // Held, the speed's own width, no easing behind it (the speed itself runs up smoothly; the change from what showed as
   // the hold begins is the offset's): at the top speed it stands at once. Let go, eased.
   const w0 = s?.w ?? i.len;
-  const w = i.holding ? target : ease(w0, target, dt, target > w0 ? ZOOM_OUT_MS : ZOOM_EASE_MS, settleOf(target));
+  // Let go, the width springs back from rest (held, it is the speed's at once; its change as a hold begins is the
+  // offset's), the lead toward the crosshair's as it moved, the offset away from rest: each change begins without a
+  // lurch (0.11.1).
+  let w = target;
+  let wv = 0;
+  if (!i.holding) [w, wv] = spring(w0, s && !s.held ? s.wv : 0, target, dt, target > w0 ? ZOOM_OUT_MS : ZOOM_EASE_MS, settleOf(target));
   const lead = i.holding ? (i.aim !== null ? i.aim - i.pos : (s?.rel ?? 0)) : 0;
-  const rel = starting || !s ? lead : ease(s.rel, lead, dt, FOCUS_MS, settleOf(w));
+  let rel = lead;
+  let relv = 0;
+  if (!starting && s) [rel, relv] = spring(s.rel, s.relv, lead, dt, FOCUS_MS, settleOf(w));
   const placed = place(i.pos + rel, w, walls);
-  let off: Offset | null;
+  let off: Offset | null = null;
+  let offv: Offset = { a: 0, b: 0 };
   if (rebase) {
     const o = offsetOf(last, placed);
     off = o.a === 0 && o.b === 0 ? null : o;
-  } else off = s?.off ? easeOffset(s.off, dt, OFFSET_MS, settleOf(w)) : null;
+    // On at the speed it showed: the offset takes the difference from how fast the window placed by the new rules
+    // moves (against a wall, standing), and springs away from there.
+    if (off && s && i.moved !== null && dt > 0) {
+      const before = place(s.focus + i.moved, w, walls);
+      offv = { a: s.sv.a - (placed.from - before.from) / dt, b: s.sv.b - (placed.to - before.to) / dt };
+    }
+  } else if (s?.off) {
+    const eps = settleOf(w);
+    const [a, va] = spring(s.off.a, s.offv.a, 0, dt, OFFSET_MS, eps);
+    const [b, vb] = spring(s.off.b, s.offv.b, 0, dt, OFFSET_MS, eps);
+    off = a === 0 && b === 0 && va === 0 && vb === 0 ? null : { a, b };
+    offv = { a: va, b: vb };
+  }
   // Handing over, what shows may be beyond the new walls (a let go after the next track showed): through the queue it
   // eases in from there; on one track never past its edges.
   const shown = shownOf(placed, off, i.through ? { lo: -Infinity, hi: Infinity } : { lo: 0, hi: i.len });
   if (!i.holding && since! >= ZOOM_KEEP_MS && !off && rel === 0 && w === i.len && shown.from === 0 && shown.to === i.len) return null;
-  return { w, span, rel, off, walls, held: i.holding, since, shown };
+  const sv =
+    s && i.moved !== null && dt > 0 ? { a: (shown.from - (s.shown.from + i.moved)) / dt, b: (shown.to - (s.shown.to + i.moved)) / dt } : { a: 0, b: 0 };
+  return { w, span, rel, off, wv, relv, offv, sv, focus: i.pos + rel, walls, held: i.holding, since, shown };
 }

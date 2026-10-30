@@ -56,7 +56,7 @@ Once, before the first release:
 
 ## Building
 
-Node 22 and npm (not pnpm: pnpm 10 skips Electron's download).
+Node 24 and npm (not pnpm: pnpm 10 skips Electron's download).
 
 ```sh
 cd desktop

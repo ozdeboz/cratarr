@@ -73,6 +73,14 @@ object Net {
         return ours(Prefs(context), url) && refusedSession == session(url) && SystemClock.elapsedRealtime() - at < REFUSED_MS
     }
 
+    /** The app wrote another session to this address ([Sessions], 0.12: one sign-in for both addresses, the owner
+     *  2026-10-30): its requests go again at once rather than after the wait, and the ask to sign in goes. Refused
+     *  again, the wait and the ask come back. */
+    fun forgive(context: Context, url: String) {
+        val origin = Prefs.originOf(url) ?: return
+        if (refusals.remove(origin) != null) signedIn(context)
+    }
+
     /** Until when (epoch ms, the device's clock) requests to this address of Cratarr's wait after a refusal; null: they
      *  do not. */
     fun heldUntil(context: Context, url: String): Long? {

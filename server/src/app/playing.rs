@@ -695,13 +695,19 @@ impl PlayingService {
                 }
             })
             .collect();
-        // Other versions (0.10): the tracks whose work the library holds another recording of.
+        // Other versions (0.10): the tracks whose work the library holds another recording of. Works and movements
+        // (0.12, decision 0086): each track's work, with the work that holds it, so the page sets a work's heading over
+        // its movements.
         if source_id == crate::source::cratarr::KIND.id
             && let Some(served) = crate::serve::instance()
             && let Ok(Ok(ix)) = tokio::task::spawn_blocking(move || super::classical::index(&served)).await
         {
-            for r in rows.iter_mut().filter(|r| r.id.as_deref().is_some_and(|id| ix.has_versions(id))) {
-                r.has_versions = Some(true);
+            for r in rows.iter_mut() {
+                let Some(id) = r.id.as_deref() else { continue };
+                if ix.has_versions(id) {
+                    r.has_versions = Some(true);
+                }
+                r.work = ix.row_work(id);
             }
         }
         let listening = s.album_listening(album_id).await.unwrap_or_default();

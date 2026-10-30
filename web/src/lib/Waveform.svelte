@@ -17,8 +17,7 @@
   // One path per layer, redrawn per frame only while something moves (hundreds of animated shapes ran poorly).
   import { untrack } from 'svelte';
   import { reducedMotion } from './motion';
-  import { bars } from './waveforms.svelte';
-  import { coverOf, gridBars, placeOf, serves, STRIP_SPAN, type Drawn } from './waveStrip';
+  import { barTracks, gridBars, placeOf, planStrip, trackBars, type GridStrip, type StripTrack } from './waveStrip';
 
   let {
     bins,
@@ -69,10 +68,11 @@
     /** Playing backwards (the knob, a hold back): a track change's colours run from the right instead (the owner,
      *  2026-10-28: the colouring goes the way it plays; the pieces' own fronts still from the left). */
     back?: boolean;
-    /** The tracks around this one end to end (lib/SeekWave's wide view: a hold's look-ahead in another track): their
-     *  bars (0..255 each), the stretch shown (`from`..`to`), this track's place in it (`cur0`..`cur1`) and the
-     *  boundaries between them (`marks`), all 0..1 of the whole. Places given in this track are drawn where it stands. */
-    wide?: { bins: Uint8Array; from: number; to: number; cur0: number; cur1: number; marks: number[]; colours?: (string | null)[] } | null;
+    /** The tracks around this one (lib/SeekWave's wide view: a hold's look-ahead in another track), each with its own
+     *  bins (lib/waveStrip), the stretch shown (`from`..`to`), this track's place in it (`cur0`..`cur1`) and the
+     *  boundaries between them (`marks`), all in s of the hold's frame; each track's colour (`colours`, by its place in
+     *  `tracks`). Places given in this track are drawn where it stands. */
+    wide?: { tracks: StripTrack[]; from: number; to: number; cur0: number; cur1: number; marks: number[]; colours?: (string | null)[] } | null;
     onflat?: () => void;
   } = $props();
 
@@ -142,35 +142,39 @@
   });
   /** The plain bar's line (4 px), in the drawing's units. */
   const line = $derived((100 * 4) / Math.max(4, height));
-  /** Each bar's rise above the quietest, for the waveform shown. */
-  const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
+  /** Each bar's rise above the quietest, for the waveform shown: by the same rule as a hold's strip (lib/waveStrip's
+   *  trackBars), so a hold ending on the track's own view hands over to it without a step (0.12). */
+  const heights = $derived(bins ? trackBars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
 
-  // A hold's zoom (`view`) or wide view (`wide`) as one strip three times the stretch shown: its bars drawn once, slid and
-  // scaled by the compositor as the stretch moves, drawn anew only once the stretch leaves it or its scale is a quarter
-  // off (the owner, 2026-10-29: a held wind went in strides; the tablet redrew every bar of four layers each frame). The
-  // pieces' own motion has no part in it: a zoom's bars stand where the stretch puts them (the zoom's easing is its
-  // motion, the playhead its focal point). Its range is its own from a quarter zoomed in on (the owner, 2026-10-28: its
-  // lows lower and its highs higher; none as it comes back to the whole).
-  /** The stretch shown, 0..1 of its source's bins: the track's (a zoom) or the queue's around it (a wide view). */
+  // A hold's zoom (`view`) or wide view (`wide`) as strips three times the stretch shown (lib/waveStrip): their bars
+  // drawn once, slid and scaled by the compositor as the stretch moves, drawn anew only once the stretch leaves them
+  // (the owner, 2026-10-29: a held wind went in strides; the tablet redrew every bar of four layers each frame). The
+  // pieces' own motion has no part in it: a hold's bars stand where the stretch puts them (its window's easing is its
+  // motion, the playhead its focal point).
+  // The same number of bars across it at every moment, each the music's under it (0.12, the owner: "the waveform is no
+  // longer pure through zoom!!! Not the same number of sections in the viewport permanently"; 0.11.1's power-of-two
+  // levels showed between n and 2n, blended as the zoom went): one strip on one grid (lib/waveStrip's planStrip), each
+  // track against its own loudest, the level as heard kept from the hold's start (each track's own came in as the tape
+  // reached it and rescaled them all), drawn in place (never a strip swapped for another, nor one shown blank).
+  /** The stretch shown, in its frame: a track's share of itself (a zoom), or s of the hold's frame through the queue (a
+   *  wide view); the tracks in it, and the playing track's own view there (`home`: its grid the zoom comes back to). */
   const stretch = $derived(
     want !== 'wave'
       ? null
       : wide
-        ? { bins: wide.bins, from: wide.from, to: wide.to, contrasted: false, marks: wide.marks }
+        ? { tracks: wide.tracks, from: wide.from, to: wide.to, marks: wide.marks, home: { from: wide.cur0, to: wide.cur1 } }
         : bins && view
-          ? { bins, from: view.from, to: view.to, contrasted: true, marks: [] as number[] }
+          ? { tracks: [{ key: '', start: 0, d: 1, bins }], from: view.from, to: view.to, marks: [] as number[], home: { from: 0, to: 1 } }
           : null,
   );
-  /** The strip as drawn: the stretch of the source it covers (`e0`..`e1`), the stretch shown's width then (`w0`), its
-   *  pieces (`count`), its paths as made and as heard (at `level`), the boundaries in it, and its heard path track by
-   *  track (`played`, the `k`th track's pieces: each its own colour, none crossing a boundary). */
-  type Strip = Drawn & { id: number; fade: boolean; bins: Uint8Array; count: number; level: number; made: string; heard: string; marks: number[]; played: { k: number; d: string }[] };
-  let strip = $state<Strip | null>(null);
-  /** The strip before, under a new one of another scale or source as that fades in (0.10.1: its bars are others, the
-   *  same scale's are the same where both have them). */
-  let gone = $state<Strip | null>(null);
-  const FADE_MS = 180;
-  let goneTimer = 0;
+  /** A strip as drawn (lib/waveStrip's GridStrip): what it was drawn from (`src`), its paths as made and as heard (at
+   *  `level`), the boundaries in it, and its heard path track by track (`played`: each its own colour, by the track's
+   *  key, none crossing a boundary). */
+  type Strip = GridStrip & { id: number; src: string; level: number; made: string; heard: string; marks: number[]; played: { key: string; d: string }[] };
+  /** The strip shown (null: none, the plain waveform). */
+  let shownStrip = $state<Strip | null>(null);
+  /** The level as heard while a hold's strips show: the one it began with (null: none showing). */
+  let holdLevel: number | null = null;
   let strips = 0;
   /** A strip's piece, open and risen to its height (the plain draw's at gap 1), at `level`. */
   const piece = (i: number, rise: number, level: number) => {
@@ -179,49 +183,49 @@
   };
   const stripPath = (hs: number[], level: number) => hs.map((h, i) => piece(i, h, level)).join('');
   /** The heard pieces track by track: a piece belongs to the track its middle is in. */
-  function byTrack(hs: number[], level: number, d: Drawn, marks: number[]): { k: number; d: string }[] {
-    const out: { k: number; d: string }[] = [];
-    const per = (d.e1 - d.e0) / hs.length;
+  function byTrack(hs: number[], level: number, owners: number[], tracks: readonly StripTrack[]): { key: string; d: string }[] {
+    const out: { key: string; d: string }[] = [];
     for (let i = 0; i < hs.length; i++) {
-      const x = d.e0 + (i + 0.5) * per;
-      let k = 0;
-      while (k < marks.length && x >= marks[k]) k++;
-      if (out.at(-1)?.k !== k) out.push({ k, d: '' });
+      const key = tracks[owners[i]]?.key ?? '';
+      if (out.at(-1)?.key !== key) out.push({ key, d: '' });
       out.at(-1)!.d += piece(i, hs[i], level);
     }
     return out;
   }
-  /** The `k`th track's colour in a wide view (lib/waveView's waveColours): another track's own; none for the track the
-   *  player shows and in a zoom on one track, which have the player's, as the waveform has it anyway (0.10.1). */
-  const colourOf = (k: number) => wide?.colours?.[k] ?? undefined;
+  /** A track's colour in a wide view (lib/waveView's waveColours): another track's own; none for the track the player
+   *  shows and in a zoom on one track, which have the player's, as the waveform has it anyway (0.10.1). */
+  const colourOf = (key: string) => {
+    const k = wide ? wide.tracks.findIndex((t) => t.key === key) : -1;
+    return (k >= 0 ? wide?.colours?.[k] : null) ?? undefined;
+  };
+  function drawStrip(c: GridStrip & { src: string }, tracks: readonly StripTrack[], marks: number[], level: number): Strip {
+    const hs = gridBars(tracks, c).map((v) => Math.max(LOW, v * 100) - LOW);
+    return { ...c, id: ++strips, level, made: stripPath(hs, 1), heard: stripPath(hs, level), marks, played: byTrack(hs, level, barTracks(tracks, c), tracks) };
+  }
   $effect.pre(() => {
     const s = stretch;
-    const count = n * STRIP_SPAN;
+    const pieces = n;
     const level = heard;
     untrack(() => {
-      if (!s) return void (strip = null);
-      if (strip && strip.bins === s.bins && strip.count === count && strip.level === level && serves(strip, s.from, s.to)) return;
-      const cover = coverOf(s.from, s.to, count);
-      // Its range its own from a quarter zoomed in on, by the scale's step (not the width this frame: the same step's
-      // bars the same).
-      const contrast = s.contrasted ? Math.max(0, Math.min(1, (1 - cover.w0) * 4)) : 0;
-      const hs = gridBars(s.bins, cover, count, contrast, count / STRIP_SPAN / 2).map((v) => Math.max(LOW, v * 100) - LOW);
-      const was = strip;
-      const fade = !!was && !reducedMotion() && (was.w0 !== cover.w0 || was.bins !== s.bins);
-      clearTimeout(goneTimer);
-      gone = fade ? was : null;
-      if (fade) goneTimer = window.setTimeout(() => (gone = null), FADE_MS);
-      strip = { ...cover, id: ++strips, fade, bins: s.bins, count, level, made: stripPath(hs, 1), heard: stripPath(hs, level), marks: s.marks, played: byTrack(hs, level, cover, s.marks) };
+      if (!s) {
+        // The hold over: the plain waveform takes over where the strip was, at once (its pieces had stood still under
+        // the strip since it began, on the track it began on).
+        if (shownStrip) settlePlain(holdLevel ?? level);
+        holdLevel = null;
+        shownStrip = null;
+        return;
+      }
+      holdLevel ??= level;
+      const plan = planStrip(shownStrip, s.tracks, s.from, s.to, pieces, s.home);
+      if (plan !== shownStrip) shownStrip = drawStrip(plan, s.tracks, s.marks, holdLevel!);
     });
   });
   /** Where a strip stands now: slid and scaled so that the stretch shown fills the waveform. */
-  const atOf = (d: Drawn | null) => {
+  const atOf = (d: GridStrip | null) => {
     if (!d || !stretch) return null;
     const { x, k } = placeOf(d, stretch.from, stretch.to, width);
-    return `translateX(${f(x)}px) scaleX(${k.toFixed(4)})`;
+    return `translateX(${f(x)}px) scaleX(${k.toFixed(6)})`;
   };
-  const stripAt = $derived(atOf(strip));
-  const goneAt = $derived(atOf(gone));
 
   // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);
@@ -233,6 +237,27 @@
    *  2026-10-27: levelling switched is another goal of the waveform's, not a jump of the whole). */
   let scale = new Float32Array(0);
   let frame = $state(0);
+
+  /** The plain pieces where the strip left them: the track's own bars at the hold's level, at once; then on to the level
+   *  as heard now, as any goal goes (only where the hold ended in a track of another level). */
+  function settlePlain(level: number) {
+    clearTimeout(pending);
+    changed = false;
+    oldFrontAt = -Infinity;
+    goals = [{ at: -Infinity, w: want, heights, heard: level }];
+    scale.fill(level);
+    for (let i = 0; i < n; i++) {
+      gap[i] = gapWanted(i, want);
+      rise[i] = riseWanted(i, goals[0]);
+      aim[i] = rise[i];
+      span[i] = 0;
+    }
+    frame++;
+    if (Math.abs(level - heard) > 0.01 && !reducedMotion()) {
+      goals = [...goals, { at: performance.now(), w: want, heights, heard }];
+      run();
+    }
+  }
 
   // Every goal runs from left to right on its own (the owner, 2026-10-26: "every new intention should run from left to
   // right purely"): a front that reaches each piece SPREAD_MS / n after the one to its left; a piece goes for the goal
@@ -372,7 +397,6 @@
   $effect(() => () => {
     cancelAnimationFrame(raf);
     clearTimeout(pending);
-    clearTimeout(goneTimer);
   });
 
   const f = (x: number) => Math.round(x * 100) / 100;
@@ -417,7 +441,7 @@
     <div class="layer"><svg class="strip" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}><path d={output ? s.heard : s.made} /></svg></div>
     <div class="layer" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
       <svg class="strip played" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}>
-        {#each s.played as p (p.k)}<path d={p.d} style:--seg={colourOf(p.k)} />{/each}
+        {#each s.played as p, i (i)}<path d={p.d} style:--seg={colourOf(p.key)} />{/each}
       </svg>
     </div>
     {#if band && band[1] > band[0]}
@@ -436,11 +460,11 @@
       </div>
     {/if}
   {/snippet}
-  {#if strip && stripAt}
-    <!-- A hold's zoom or wide view: the strip slides and scales under clips that stand still (the played colour to the
-         playhead, the landing's tint), its boundaries going with it; one of another scale fades in over the one before. -->
-    {#if gone && goneAt}<div class="strips">{@render layers(gone, goneAt)}</div>{/if}
-    {#key strip.id}<div class="strips" class:fade={strip.fade}>{@render layers(strip, stripAt)}</div>{/key}
+  {#if shownStrip && stretch}
+    <!-- A hold's zoom or wide view: its strip slides and scales under clips that stand still (the played colour to the
+         playhead, the landing's tint), its boundaries going with it; drawn anew in place, never swapped. -->
+    {@const at = atOf(shownStrip)}
+    {#if at}<div class="strips">{@render layers(shownStrip, at)}</div>{/if}
   {:else}
   <!-- The track as made, in the unplayed tint; over it, as far as it has played, the track as heard in the playing
        colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
@@ -526,19 +550,8 @@
     inset: 0;
   }
 
-  /* FADE_MS. */
-  .strips.fade {
-    animation: strip-in 180ms linear both;
-  }
-
-  @keyframes strip-in {
-    from {
-      opacity: 0;
-    }
-  }
-
   svg.strip {
-    width: 300%;
+    width: 100%;
     transform-origin: 0 0;
     will-change: transform;
   }
@@ -561,7 +574,7 @@
   .strip-marks {
     position: absolute;
     inset: 0 auto 8px 0;
-    width: 300%;
+    width: 100%;
     transform-origin: 0 0;
     will-change: transform;
   }

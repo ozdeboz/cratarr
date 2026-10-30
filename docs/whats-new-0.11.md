@@ -17,8 +17,7 @@ Since 0.10.0; 0.10.1's fixes are in it too. The notes for each part are in [deci
 - **Kept until saved.** The last five unsaved quick crates stay on the device, offered while no words are typed.
 - Quick crates show only when the server makes them.
 
-Coming: the closeness curve counted among the tracks the crate's other words let through, so its numbers match the
-crate's.
+The closeness curve counts among the tracks the crate's other words let through, so its numbers match the crate's.
 
 ## Search and the library
 

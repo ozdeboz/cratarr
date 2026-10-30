@@ -19,6 +19,8 @@ pub const CODE: &[&str] = &[
     // Several playlists, albums or tracks in one call (0.9.4).
     "batches",
     "beyond_search",
+    // What changed since a rev (0.12, decision 0087): `/api/changes`.
+    "changes",
     "classical",
     "cover_look",
     "cover_stamps",
@@ -33,7 +35,12 @@ pub const CODE: &[&str] = &[
     "intake_check",
     "musicbrainz_settings",
     "offline",
+    // A change's own time (`X-Cratarr-At`) honoured, the last change winning, and `Idempotency-Key`s kept 30 days
+    // (0.12, decision 0087).
+    "offline_writes",
     "other_versions",
+    // A playlist's edits as operations on entry ids, merged (0.12, decision 0087): `/api/playlists/{id}/ops`.
+    "playlist_ops",
     "queue_requests",
     // Quick crates (0.11): Sounds like an artist, the closeness cutoff, the label and album axes.
     "quick_crates",
@@ -43,6 +50,8 @@ pub const CODE: &[&str] = &[
     "slskd_settings",
     "spectrum",
     "track_files",
+    // Works and movements (0.12, decision 0086): a composer's works, a work's recordings, an album's rows' works.
+    "works",
 ];
 
 /// What is set up and switched on here, as `read` finds it.

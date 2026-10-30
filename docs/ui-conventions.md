@@ -96,8 +96,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     menu about its place in the queue: Play now and Play next (moving it there on this device; "Play again next", a
     copy, on the server's player), then Add to playlist, the favourite and Remove from queue (this device).
   - **Output** (`lib/OutputSheet.svelte`, decisions 0019 and 0022): the speaker button in the actions row (menu,
-    heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
-    current one checked; the players of those one may follow, to listen along; at its foot "Let others follow me" and
+    heart, count, output, queue) opens a "Play on" sheet: This device and Cratarr's players (Play On; the media
+    server's player went in 0.12, decision 0019 amended), the current one checked; the players of those one may follow, to listen along; at its foot "Let others follow me" and
     each follower's "Always accept" (decision 0079). Choosing the other one moves the music there (the queue and the
     position) and stops the side that played; nothing asks first, the player simply carries on there. **The screen
     follows the music** (the owner, 0.10): when another device takes the music over, the one it left and every screen
@@ -168,6 +168,22 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   Know, Change, Remove last) with the same names everywhere. The table is code since 2026-10-30
   (`lib/menuTable.ts`, drawn by `lib/MenuTable.svelte`, held to by `tests/menu-table.test.ts`): a new entry goes in the
   table first. The visuals' menus follow this; the rack's long-press selects.
+- **A track's menu plays its snippet** (0.12, the owner's mockup A2; `lib/snippet.ts`, `lib/snippetPlayer.svelte.ts`,
+  `lib/SnippetStrip.svelte`): 300 ms after it opens (a quick ⋮ and away plays nothing), the track's liveliest 20 s
+  (the stored waveform's loudest stretch, past the first and last 8 %, moved onto a stored beat), with the track's
+  waveform under the head, that stretch lit and a playhead running, and "Play from 1:52". Music playing on this
+  device ducks to 20 % (fades of 300 ms) and comes back; a driven player is left alone; the queue and Play On are
+  never touched; in the Android app the app plays it (`{type:'snippet'}` over the bridge). Not for the track that
+  plays, nor the device's own music. Only what the server has stored is read (`/waveform`, `/beats?stored=1`):
+  without a waveform no strip and a start at 35 %. One at a time; a newer menu cuts the last. Settings → This device
+  → Snippets in menus turns the menus' off. **The crate search's rows** have a round button for the same (a ring
+  filling as it plays), opening the row on the strip; one row open at a time; always there.
+- **Away, a menu offers only what works** (0.12, decision 0085's rule): `WORKS_AWAY` in `lib/menuTable.ts` lists the
+  entries that work with Cratarr out of reach (going to what the service worker keeps, the outbox's writes, what is
+  on the device, other sites); every other entry, and any new one until it is listed, is left out, and the menu ends
+  with one line, "The rest needs Cratarr." Large actions the same (`ACTIONS_NEED_SERVER`). Pages say it in one line
+  where a whole thing steps aside ("Grabbing a crate needs Cratarr.", "New playlists need Cratarr."); never a refusal
+  after a tap.
 - **A menu's head and actions** (`lib/MenuSheet.svelte`, decided 2026-10-16, as Symfonium's): a small cover (64 px),
   the title large beside it and what it is under that in one muted line, on the sheet itself (no card); a track's,
   an album's heart at the end. The large actions are icons only (their words on a long-press, as every icon
@@ -234,6 +250,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   album ("3 of 10 tracks"), in the crate's order of each album's first track, or the album orders; a record opens to
   its crate tracks, its menu acting on them. New for you and Grave digging open as Records, the others as Tracks; the
   view never switches by itself, and Play and Shuffle play the crate's tracks in its order either way.
+- **Grab a crate** (0.12, the owner's picks: the sentence, B with A's curve; the field a line, 3a; `lib/QuickCrate.svelte`,
+  `lib/quickCrate.ts`): at the top of Crates a field with no box, the sentence's 22 px type on a 2 px accent line
+  (3 px with focus); until a word is typed Crates is its usual page and nothing else shows. The line is read whole
+  (years and decades by rule, then the longest names that fit), and the crate reads as a sentence: terms in full
+  weight underlined (a "like" term in the accent), the words between them muted ("from the 1990s", "that sounds
+  like", "on", "by"), "or" within a kind; typing goes on after "and…". A term's tap opens its sheet (Sounds like / By,
+  their own tracks, other readings, Another word for this, Remove); Backspace in the empty field opens the last.
+  Under it the closeness curve (a "like" term), the count, Save, Shuffle and Play, ⋮ (Edit, Start over), and the first
+  tracks. Unsaved crates matching the words show under the line once typing starts. Reached also from global
+  search (its crate card, when the words read as two kinds or more; else the Grab a crate row), "Sounds like this" in
+  a track's, album's or artist's menu, and "Grab a crate" in a genre's or label's.
 - **Excluding an artist** (decision 0083): from the artist's menu (and a track's, for its artist), "Exclude
   everywhere" (out of every crate, Radio, Autoplay, Discover and Home's shelves, for this account) and, opened from a
   crate, "Not in this crate" (an "Artist is not" condition of that crate's own). Any credit counts. Both are listed in
@@ -391,7 +418,6 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 Every list of things is built from one row (decision 0027, `lib/Row.svelte`), so a playlist, a crate, a file, a track
 or a sync target looks and behaves as one kind of thing wherever it is listed.
-
 - **One layout, three sizes.** Left to right: an optional lead (a track's cover, a checkbox), the title (two lines at
   most) with its marks after it and an optional muted line under it, its count and flags at the end of the text, and
   the action on the right. **Medium** on the pages (Playlists, Crates) and **small** in the panel's Export tab are
@@ -427,6 +453,10 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   over a tile's corner), and the select bar plays, puts next, queues, favours (in the app downloads) the ticked ones,
   one album after another, or opens the menu of one (a tile's menu is this way). Layout and
   size are one choice for every album list, remembered by the browser.
+- **One table head** (0.12, `lib/columnHead.ts`): every list with columns has the same head row (Row's head, the same
+  height, cover and end space as its rows). A tap on a column's name orders by it, a second turns it round; an arrow
+  shows the order, before a number's name and after a word's. Names that are no order stay plain. The list's head
+  above (ListHead) keeps the orders that are no column, the count and Select.
 - **Tiles** (`lib/Tile.svelte`): Row's sibling for things shown by their picture: the square picture on top, as wide
   as the column the page's Size makes, the title and muted lines under it (an album: its artist only, and the page's
   own lines), what sits over the picture (`over`: an album's Play in its upper right corner, the wait of its
@@ -483,6 +513,9 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 
 ## Feedback
 
+- **Writes wait on the device** (0.12, the outbox, `lib/later.svelte.ts`): a favourite, a rating, a playlist change, an
+  exclusion or a play is shown at once and kept on the device before it is sent; while Cratarr is out of reach the
+  connection line says "N to send", and they go in order when it answers. No notice when they arrive.
 - **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
   mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
   warnings, red for errors. Done and warnings go after a few seconds; errors stay until dismissed, replaced, or the

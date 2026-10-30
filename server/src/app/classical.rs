@@ -14,6 +14,9 @@
 //!   MusicBrainz works, its album artist is its composer, under (b) or (c) only, keyed `name:<loose name>`. Keys stay:
 //!   a `name:` key later found to be a MusicBrainz artist leads there (`composer_keys`).
 //! - **Other versions**: a track's work (MusicBrainz's), and the library's other tracks of the same work.
+//! - **Works and movements** (0.12, decision 0086): a composer's works first (the most recorded first), a work's
+//!   recordings each with its movements in the work's order, and an album's tracks under the work they are parts of.
+//!   A work's parent is MusicBrainz's ("parts"); a work is top-level with no parent, or none known yet.
 //!
 //! Made here, in memory, from the library and the user data (`index`): kept until the library is built again or a
 //! mark changes, and at most a minute behind the passes.
@@ -24,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::Serialize;
+use ts_rs::TS;
 
 use super::import::loose;
 use super::works::{Person, Stored};
@@ -129,6 +133,8 @@ pub struct Inputs {
     pub releases: HashMap<String, Stored>,
     /// By MusicBrainz work: its title and composers.
     pub works: HashMap<String, (String, Vec<Person>)>,
+    /// By MusicBrainz work: the work it is a part of, that work's title, and its number there (0.12).
+    pub parents: HashMap<String, (String, String, Option<u32>)>,
     /// A performance name's person: alias → (person, the person's name).
     pub persons: HashMap<String, (String, String)>,
     /// An artist's Discogs artist, and a Discogs artist's other names (real name, aliases).
@@ -153,6 +159,7 @@ impl Inputs {
             songs: serve.library.work_songs()?,
             releases,
             works,
+            parents: ud.mb_work_parents()?,
             persons: ud.persons()?,
             artist_discogs: ud.artist_discogs()?,
             discogs_names: ud.discogs_names()?,
@@ -193,7 +200,7 @@ pub struct Composer {
     pub albums: Vec<String>,
 }
 
-/// A track of a work, as Other versions shows it.
+/// A track of a work, as Other versions and a work's recordings show it.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Line {
     title: String,
@@ -201,10 +208,15 @@ struct Line {
     album: String,
     album_id: String,
     year: Option<u32>,
+    /// Its place on its album (0.12: a track whose movement's number is not known keeps it), and its length.
+    disc: u32,
+    track: u32,
+    duration_secs: Option<f64>,
 }
 
 /// A work as Other versions names it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
 pub struct WorkRef {
     pub mbid: String,
     pub title: String,
@@ -233,6 +245,152 @@ pub struct Versions {
     pub versions: Vec<Version>,
 }
 
+/// A work as a composer's page lists it (0.12, decision 0086; `GET /api/classical/composers/{key}/works`): its MusicBrainz id
+/// and title, its musical key and catalogue number where its title says them, how many parts the library knows of it,
+/// and how many of its recordings the library holds (an album each).
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct ComposerWork {
+    pub work: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub catalogue: Option<String>,
+    pub parts: usize,
+    pub recordings: usize,
+}
+
+/// A part of a work (a movement), in the work's order: its number there where MusicBrainz gives one.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct WorkPart {
+    pub mbid: String,
+    pub title: String,
+    pub number: Option<u32>,
+}
+
+/// A track of a work's recording: the part of the work it is (none: the whole work, or not known) and its length.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct WorkTrack {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub part: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub duration_secs: Option<f64>,
+}
+
+/// One recording of a work: an album's tracks of it, in the work's order (by their part's number; a track whose
+/// number is not known after those, in the album's order), with the album's performers and year.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct WorkRecording {
+    pub album_id: String,
+    pub album: String,
+    pub performers: Vec<String>,
+    pub year: Option<u32>,
+    pub tracks: Vec<WorkTrack>,
+}
+
+/// A work (0.12, decision 0086; `GET /api/works/{mbid}`): its composers, the work it is a part of, its parts in order,
+/// and the library's recordings of it (the oldest first).
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct WorkView {
+    pub title: String,
+    pub composers: Vec<ComposerRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<WorkRef>,
+    pub parts: Vec<WorkPart>,
+    pub recordings: Vec<WorkRecording>,
+}
+
+/// The work an album's track performs (0.12, decision 0086; an album's rows' `work`): the work that holds it and its
+/// number there, where MusicBrainz says.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct RowWork {
+    pub mbid: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<WorkRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub part_number: Option<u32>,
+}
+
+/// A top-level work as search finds it (0.12, decision 0086: works reachable): its MusicBrainz id, title, catalogue
+/// number where its title says one, composers, how many of its recordings the library holds (an album each), and the
+/// oldest one's album (as `Index::work` orders them).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopWork {
+    pub mbid: String,
+    pub title: String,
+    pub catalogue: Option<String>,
+    pub composers: Vec<ComposerRef>,
+    pub recordings: usize,
+    pub oldest: Option<String>,
+}
+
+/// How far up a work's parents are followed (MusicBrainz's are a few deep at most: an aria, its act, its opera).
+const DEPTH: usize = 16;
+
+/// The catalogue numbers' names a work's title may end with ("op. 67", "BWV 1007", "K. 466", "Hob. XVI:52", "D 960").
+const CATALOGUES: [&str; 31] = [
+    "op", "opus", "bwv", "k", "kv", "d", "hob", "hwv", "rv", "woo", "s", "wwv", "trv", "bb", "sz", "l", "fp", "twv", "buxwv", "swv", "wq", "h", "wab",
+    "mwv", "av", "b", "z", "jb", "kk", "m", "lwv",
+];
+
+/// A work's catalogue number, from its title as MusicBrainz writes classical works' ("Symphony no. 5 in C minor,
+/// op. 67"): the first part after a comma that is a catalogue's name and a number; a nickname after it left out.
+pub fn catalogue_of(title: &str) -> Option<String> {
+    let head = title.split(": ").next().unwrap_or(title);
+    head.split(", ").skip(1).find_map(|seg| {
+        let seg = seg.split(|c: char| c == '"' || c == '\u{201c}' || c == '(').next().unwrap_or(seg).trim();
+        let letters: String = seg.chars().take_while(|c| c.is_alphabetic()).collect();
+        if letters.is_empty() || !CATALOGUES.contains(&letters.to_lowercase().as_str()) {
+            return None;
+        }
+        let rest = seg[letters.len()..].trim_start_matches('.').trim_start();
+        let first = rest.chars().next()?;
+        (first.is_ascii_digit() || (letters.eq_ignore_ascii_case("hob") && first.is_ascii_uppercase())).then(|| seg.to_string())
+    })
+}
+
+/// A work's musical key, from its title ("Symphony no. 5 in C minor" is in "C minor"; "in E-flat major" and "in E flat
+/// major" as written); none where it names none.
+pub fn musical_key(title: &str) -> Option<String> {
+    let head = title.split(": ").next().unwrap_or(title);
+    let words: Vec<&str> = head.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).collect();
+    for (n, w) in words.iter().enumerate() {
+        if !w.eq_ignore_ascii_case("in") {
+            continue;
+        }
+        let rest = &words[n + 1..];
+        let Some(note) = rest.first() else { continue };
+        let Some(letter) = note.chars().next() else { continue };
+        let tail = &note[letter.len_utf8()..];
+        if !('A'..='G').contains(&letter) || !matches!(tail, "" | "-flat" | "-sharp" | "\u{266d}" | "\u{266f}" | "#" | "b") {
+            continue;
+        }
+        let mut said = vec![note.to_string()];
+        if let Some(a) = rest.get(1).filter(|a| tail.is_empty() && (a.eq_ignore_ascii_case("flat") || a.eq_ignore_ascii_case("sharp"))) {
+            said.push(a.to_lowercase());
+        }
+        let Some(mode) = rest.get(said.len()).filter(|m| m.eq_ignore_ascii_case("major") || m.eq_ignore_ascii_case("minor")) else { continue };
+        said.push(mode.to_lowercase());
+        return Some(said.join(" "));
+    }
+    None
+}
+
 /// Classical and Other versions over the whole library.
 #[derive(Debug, Default)]
 pub struct Index {
@@ -250,6 +408,13 @@ pub struct Index {
     lines: HashMap<String, Line>,
     /// Each album's performers as MusicBrainz names them (any record's, for Other versions).
     performers: HashMap<String, Vec<String>>,
+    /// Works and movements (0.12, decision 0086): a work's parent with its number there, a work's parts in order, and
+    /// each composer's top-level works (by key), the most recorded first. `works` names the parents too.
+    parent: HashMap<String, (String, Option<u32>)>,
+    parts: HashMap<String, Vec<String>>,
+    composer_works: HashMap<String, Vec<String>>,
+    /// Every composer's top-level works once, for search (0.12, decision 0086: works reachable; `top_works`).
+    top_works: Vec<TopWork>,
     /// To keep (`composer_keys`): the keys given out now (key, name) not kept yet, and keys found to lead to another.
     noted: (Vec<(String, String)>, Vec<(String, String)>),
 }
@@ -321,6 +486,169 @@ impl Index {
             })
             .collect();
         Some(Versions { work: WorkRef { mbid: w.clone(), title: title.clone() }, composers: composers.clone(), versions })
+    }
+
+    /// The work at the top of a work's parents as far as they are known (itself, with none).
+    fn top<'a>(&'a self, work: &'a str) -> &'a str {
+        let mut at = work;
+        for _ in 0..DEPTH {
+            match self.parent.get(at) {
+                Some((p, _)) => at = p.as_str(),
+                None => break,
+            }
+        }
+        at
+    }
+
+    /// A work and every work below it (its parts, theirs…).
+    fn below(&self, work: &str) -> Vec<String> {
+        let mut out: Vec<String> = vec![work.to_string()];
+        let mut at = 0;
+        while at < out.len() {
+            for p in self.parts.get(&out[at]).into_iter().flatten() {
+                if !out.contains(p) {
+                    out.push(p.clone());
+                }
+            }
+            at += 1;
+        }
+        out
+    }
+
+    /// The part of `work` that `of` is or is under (its movement); none where `of` is the work itself or not under it.
+    fn part_under<'a>(&'a self, of: &'a str, work: &str) -> Option<&'a str> {
+        let mut at = of;
+        for _ in 0..DEPTH {
+            let (p, _) = self.parent.get(at)?;
+            if p == work {
+                return Some(at);
+            }
+            at = p.as_str();
+        }
+        None
+    }
+
+    /// A work's tracks in the library, by album (each album once, the library's order): its own and its parts'.
+    fn albums_of(&self, work: &str) -> Vec<(String, Vec<String>)> {
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        for w in self.below(work) {
+            for s in self.work_songs.get(&w).into_iter().flatten() {
+                let Some(l) = self.lines.get(s) else { continue };
+                match out.iter_mut().find(|(a, _)| *a == l.album_id) {
+                    Some((_, songs)) => songs.push(s.clone()),
+                    None => out.push((l.album_id.clone(), vec![s.clone()])),
+                }
+            }
+        }
+        out
+    }
+
+    /// A composer's top-level works (0.12, decision 0086), by their key or one that leads to them, the most recorded
+    /// first, then by title (numbers by their value); none where no classical record has that composer.
+    pub fn composer_works(&self, key: &str) -> Option<Vec<ComposerWork>> {
+        let c = self.composer(key)?;
+        let works = self.composer_works.get(&c.key).into_iter().flatten().filter_map(|w| {
+            let (title, _) = self.works.get(w)?;
+            Some(ComposerWork {
+                work: w.clone(),
+                title: title.clone(),
+                key: musical_key(title),
+                catalogue: catalogue_of(title),
+                parts: self.parts.get(w).map_or(0, Vec::len),
+                recordings: self.albums_of(w).len(),
+            })
+        });
+        Some(works.collect())
+    }
+
+    /// The top-level works search finds (0.12, decision 0086: works reachable): every composer's (`composer_works`),
+    /// each once, only those the library holds a recording of; the most recorded first, then by title.
+    pub fn top_works(&self) -> &[TopWork] {
+        &self.top_works
+    }
+
+    /// `top_works` made (at the build's end).
+    fn list_top_works(&self) -> Vec<TopWork> {
+        let mut ids: Vec<&String> = self.composer_works.values().flatten().collect();
+        ids.sort();
+        ids.dedup();
+        let mut out: Vec<TopWork> = ids
+            .into_iter()
+            .filter_map(|w| {
+                let (title, composers) = self.works.get(w)?;
+                let (recordings, oldest) = self.recorded(w);
+                (recordings > 0).then(|| TopWork { mbid: w.clone(), title: title.clone(), catalogue: catalogue_of(title), composers: composers.clone(), recordings, oldest })
+            })
+            .collect();
+        out.sort_by(|a, b| b.recordings.cmp(&a.recordings).then_with(|| super::playlists::natural(&a.title, &b.title)).then_with(|| a.mbid.cmp(&b.mbid)));
+        out
+    }
+
+    /// How many recordings of a work the library holds (an album each, its parts' tracks too), and the oldest one's
+    /// album, as `work` orders them (by year, one without last, then by the album's name).
+    fn recorded(&self, work: &str) -> (usize, Option<String>) {
+        let albums = self.albums_of(work);
+        let first = |songs: &[String]| songs.first().and_then(|s| self.lines.get(s));
+        let year = |album: &str, songs: &[String]| self.records.get(album).and_then(|r| r.year).or_else(|| first(songs).and_then(|l| l.year));
+        let name = |songs: &[String]| first(songs).map(|l| l.album.clone()).unwrap_or_default();
+        let oldest = albums
+            .iter()
+            .min_by(|a, b| {
+                let (ya, yb) = (year(a.0.as_str(), a.1.as_slice()), year(b.0.as_str(), b.1.as_slice()));
+                (ya.is_none(), ya).cmp(&(yb.is_none(), yb)).then_with(|| super::playlists::natural(&name(a.1.as_slice()), &name(b.1.as_slice())))
+            })
+            .map(|a| a.0.clone());
+        (albums.len(), oldest)
+    }
+
+    /// A work (0.12, decision 0086): its composers, its parent, its parts in order, and the library's recordings of it,
+    /// the oldest first, each one's tracks in the work's order; none where the library holds no track of it or of its
+    /// parts.
+    pub fn work(&self, mbid: &str) -> Option<WorkView> {
+        let (title, composers) = self.works.get(mbid)?;
+        let parent = self.parent.get(mbid).and_then(|(p, _)| Some(WorkRef { mbid: p.clone(), title: self.works.get(p)?.0.clone() }));
+        let parts: Vec<WorkPart> = self
+            .parts
+            .get(mbid)
+            .into_iter()
+            .flatten()
+            .filter_map(|p| Some(WorkPart { mbid: p.clone(), title: self.works.get(p)?.0.clone(), number: self.parent.get(p).and_then(|x| x.1) }))
+            .collect();
+        let mut recordings: Vec<WorkRecording> = self
+            .albums_of(mbid)
+            .into_iter()
+            .filter_map(|(album, songs)| {
+                let first = self.lines.get(songs.first()?)?;
+                let mut tracks: Vec<(Option<u32>, u32, u32, WorkTrack)> = songs
+                    .iter()
+                    .filter_map(|s| {
+                        let l = self.lines.get(s)?;
+                        let part = self.part_under(self.song_work.get(s)?, mbid);
+                        let number = part.and_then(|p| self.parent.get(p)).and_then(|x| x.1);
+                        Some((number, l.disc, l.track, WorkTrack { id: s.clone(), part: part.map(str::to_string), duration_secs: l.duration_secs }))
+                    })
+                    .collect();
+                tracks.sort_by(|a, b| (a.0.is_none(), a.0, a.1, a.2).cmp(&(b.0.is_none(), b.0, b.1, b.2)));
+                Some(WorkRecording {
+                    album: first.album.clone(),
+                    performers: self.performers.get(&album).cloned().unwrap_or_default(),
+                    year: self.records.get(&album).and_then(|r| r.year).or(first.year),
+                    tracks: tracks.into_iter().map(|t| t.3).collect(),
+                    album_id: album,
+                })
+            })
+            .collect();
+        recordings.sort_by(|a, b| (a.year.is_none(), a.year).cmp(&(b.year.is_none(), b.year)).then_with(|| super::playlists::natural(&a.album, &b.album)));
+        Some(WorkView { title: title.clone(), composers: composers.clone(), parent, parts, recordings })
+    }
+
+    /// The work a track performs, with the work that holds it and its number there (0.12; an album's rows' `work`);
+    /// none where it has no work linked.
+    pub fn row_work(&self, song: &str) -> Option<RowWork> {
+        let w = self.song_work.get(song)?;
+        let (title, _) = self.works.get(w)?;
+        let parent = self.parent.get(w).and_then(|(p, n)| Some((WorkRef { mbid: p.clone(), title: self.works.get(p)?.0.clone() }, *n)));
+        Some(RowWork { mbid: w.clone(), title: title.clone(), part_number: parent.as_ref().and_then(|p| p.1), parent: parent.map(|p| p.0) })
     }
 }
 
@@ -551,7 +879,19 @@ pub fn build(i: &Inputs) -> Index {
         let Some(work) = track.and_then(|t| t.works.iter().find(|x| i.works.contains_key(*x))) else { continue };
         index.song_work.insert(s.id.clone(), work.clone());
         index.work_songs.entry(work.clone()).or_default().push(s.id.clone());
-        index.lines.insert(s.id.clone(), Line { title: s.title.clone(), artist: s.artist.clone(), album: w.album.name.clone(), album_id: w.album.id.clone(), year: s.year.or(w.album.year) });
+        index.lines.insert(
+            s.id.clone(),
+            Line {
+                title: s.title.clone(),
+                artist: s.artist.clone(),
+                album: w.album.name.clone(),
+                album_id: w.album.id.clone(),
+                year: s.year.or(w.album.year),
+                disc: s.disc.unwrap_or(1),
+                track: s.track.unwrap_or(0),
+                duration_secs: s.duration_secs,
+            },
+        );
     }
     let linked: Vec<String> = index.work_songs.keys().cloned().collect();
     for w in &linked {
@@ -566,6 +906,88 @@ pub fn build(i: &Inputs) -> Index {
         }
         index.works.insert(w.clone(), (title.clone(), refs));
     }
+
+    // Works and movements (0.12, decision 0086): each linked work's parent, and the parent's own, as far as MusicBrainz
+    // names them (never round in a circle).
+    let mut parent_titles: HashMap<String, String> = HashMap::new();
+    // Level by level from the works that are recorded (in a fixed order): the parents nearer to what the library holds
+    // are taken first, so a circle (which MusicBrainz should never hold) breaks at its far end, the same on every build.
+    let mut first: Vec<String> = linked.clone();
+    first.sort_unstable();
+    let mut queue: std::collections::VecDeque<String> = first.into();
+    while let Some(w) = queue.pop_front() {
+        let Some((p, title, number)) = i.parents.get(&w) else { continue };
+        if *p == w || title.trim().is_empty() || index.parent.contains_key(&w) {
+            continue;
+        }
+        let mut up = p.as_str();
+        let mut round = false;
+        for _ in 0..DEPTH {
+            if up == w {
+                round = true;
+                break;
+            }
+            match index.parent.get(up) {
+                Some((q, _)) => up = q.as_str(),
+                None => break,
+            }
+        }
+        if round {
+            continue;
+        }
+        index.parent.insert(w.clone(), (p.clone(), *number));
+        index.parts.entry(p.clone()).or_default().push(w.clone());
+        parent_titles.entry(p.clone()).or_insert_with(|| title.clone());
+        queue.push_back(p.clone());
+    }
+    // A parent the library holds no track of itself: named by its title, its composers its parts'.
+    let unnamed: Vec<String> = index.parts.keys().filter(|p| !index.works.contains_key(*p)).cloned().collect();
+    for p in unnamed {
+        let mut refs: Vec<ComposerRef> = Vec::new();
+        for d in index.below(&p) {
+            for c in index.works.get(&d).map(|w| w.1.as_slice()).unwrap_or_default() {
+                if !refs.iter().any(|r| r.key == c.key) {
+                    refs.push(c.clone());
+                }
+            }
+        }
+        let title = parent_titles.get(&p).cloned().unwrap_or_default();
+        index.works.insert(p, (title, refs));
+    }
+    // A work's parts by their number (one without after), then by title.
+    let mut parts = std::mem::take(&mut index.parts);
+    for list in parts.values_mut() {
+        list.sort_by(|a, b| {
+            let n = |w: &String| index.parent.get(w).and_then(|p| p.1);
+            let t = |w: &String| index.works.get(w).map_or("", |x| x.0.as_str());
+            (n(a).is_none(), n(a)).cmp(&(n(b).is_none(), n(b))).then_with(|| super::playlists::natural(t(a), t(b))).then_with(|| a.cmp(b))
+        });
+    }
+    index.parts = parts;
+    // Each composer's top-level works: the top of each linked work's parents, under each of its composers that a
+    // classical record has; the most recorded first, then by title.
+    let mut tops: Vec<String> = index.work_songs.keys().map(|w| index.top(w).to_string()).collect();
+    tops.sort();
+    tops.dedup();
+    let recorded: HashMap<String, usize> = tops.iter().map(|t| (t.clone(), index.albums_of(t).len())).collect();
+    let mut by_composer: HashMap<String, Vec<String>> = HashMap::new();
+    for t in &tops {
+        for c in index.works.get(t).map(|w| w.1.as_slice()).unwrap_or_default() {
+            if index.by_key.contains_key(&c.key) {
+                let list = by_composer.entry(c.key.clone()).or_default();
+                if !list.contains(t) {
+                    list.push(t.clone());
+                }
+            }
+        }
+    }
+    for list in by_composer.values_mut() {
+        let t = |w: &String| index.works.get(w).map_or("", |x| x.0.as_str());
+        list.sort_by(|a, b| recorded.get(b).cmp(&recorded.get(a)).then_with(|| super::playlists::natural(t(a), t(b))).then_with(|| a.cmp(b)));
+    }
+    index.composer_works = by_composer;
+    // Search's works (0.12, decision 0086: works reachable).
+    index.top_works = index.list_top_works();
     index
 }
 
@@ -861,6 +1283,7 @@ mod tests {
             title: format!("{id} title"),
             artist: "Someone".into(),
             year: None,
+            duration_secs: None,
         };
         i.songs = vec![song("so-arrau-1", "al-arrau", Some("rec-w-sonata-0"), 1), song("so-zim-1", "al-zimerman", None, 1), song("so-arrau-9", "al-arrau", Some("rec-other"), 9)];
         let ix = build(&i);
@@ -875,6 +1298,131 @@ mod tests {
         assert!(ix.versions("so-arrau-9", "cratarr").is_none());
         assert!(!ix.has_versions("so-arrau-9"));
         assert_eq!(ix.song_composers("so-arrau-1")[0].key, "a-brahms");
+    }
+
+    /// The library of the works' tests (0.12): Arrau's record holds Brahms' first piano concerto as its three movements
+    /// and the third sonata whole; Zimerman's the concerto's first two movements, the second first, and the sonata.
+    fn works_library() -> Inputs {
+        let mut i = library();
+        i.albums.push(album("al-zimerman", "Krystian Zimerman", None, &["Classical"], Some("r-zimerman")));
+        i.releases.insert("r-arrau".into(), release(&["w-pc1-1", "w-pc1-2", "w-pc1-3", "w-sonata"], &["Claudio Arrau"]));
+        i.releases.insert("r-zimerman".into(), release(&["w-pc1-2", "w-pc1-1", "w-sonata"], &["Krystian Zimerman"]));
+        let brahms = person("a-brahms", "Johannes Brahms", "Brahms, Johannes");
+        let concerto = "Piano Concerto no. 1 in D minor, op. 15";
+        for (n, name) in [(1, "I. Maestoso"), (2, "II. Adagio"), (3, "III. Rondo. Allegro non troppo")] {
+            let id = format!("w-pc1-{n}");
+            i.works.insert(id.clone(), (format!("{concerto}: {name}"), vec![brahms.clone()]));
+            i.parents.insert(id, ("w-pc1".into(), concerto.into(), Some(n)));
+        }
+        let song = |id: &str, album: &str, recording: Option<&str>, track: u32| WorkSong {
+            id: id.into(),
+            album: album.into(),
+            recording: recording.map(str::to_string),
+            disc: None,
+            track: Some(track),
+            title: format!("{id} title"),
+            artist: "Someone".into(),
+            year: None,
+            duration_secs: None,
+        };
+        i.songs = vec![
+            song("so-a1", "al-arrau", Some("rec-w-pc1-1-0"), 1),
+            song("so-a2", "al-arrau", Some("rec-w-pc1-2-1"), 2),
+            song("so-a3", "al-arrau", Some("rec-w-pc1-3-2"), 3),
+            song("so-a4", "al-arrau", Some("rec-w-sonata-3"), 4),
+            song("so-z1", "al-zimerman", None, 1),
+            song("so-z2", "al-zimerman", None, 2),
+            song("so-z3", "al-zimerman", None, 3),
+        ];
+        i.songs[0].duration_secs = Some(1312.5);
+        i
+    }
+
+    #[test]
+    fn a_composer_s_works_are_their_top_level_works_the_most_recorded_first() {
+        let ix = build(&works_library());
+        let works = ix.composer_works("a-brahms").unwrap();
+        let listed: Vec<(&str, usize, usize)> = works.iter().map(|w| (w.work.as_str(), w.parts, w.recordings)).collect();
+        // Both on two records: by title. The concerto's movements are no works of their own on his page.
+        assert_eq!(listed, [("w-pc1", 3, 2), ("w-sonata", 0, 2)]);
+        assert_eq!((works[0].title.as_str(), works[0].key.as_deref(), works[0].catalogue.as_deref()), ("Piano Concerto no. 1 in D minor, op. 15", Some("D minor"), Some("op. 15")));
+        assert_eq!((works[1].key.as_deref(), works[1].catalogue.as_deref()), (None, None));
+        assert_eq!(ix.composer_works("a-nobody"), None);
+        // One more recording of the sonata puts it first.
+        let mut i = works_library();
+        i.albums.push(album("al-gilels", "Emil Gilels", None, &["Classical"], Some("r-gilels")));
+        i.releases.insert("r-gilels".into(), release(&["w-sonata"], &["Emil Gilels"]));
+        i.songs.push(WorkSong { id: "so-g1".into(), album: "al-gilels".into(), track: Some(1), ..WorkSong::default() });
+        let first = build(&i).composer_works("a-brahms").unwrap()[0].clone();
+        assert_eq!((first.work.as_str(), first.recordings), ("w-sonata", 3));
+    }
+
+    #[test]
+    fn a_work_s_recordings_play_their_movements_in_the_work_s_order() {
+        let ix = build(&works_library());
+        let w = ix.work("w-pc1").unwrap();
+        assert_eq!(w.title, "Piano Concerto no. 1 in D minor, op. 15");
+        assert_eq!(w.composers, [ComposerRef { key: "a-brahms".into(), name: "Johannes Brahms".into() }], "its movements' composer");
+        assert_eq!(w.parent, None);
+        let parts: Vec<(&str, Option<u32>)> = w.parts.iter().map(|p| (p.mbid.as_str(), p.number)).collect();
+        assert_eq!(parts, [("w-pc1-1", Some(1)), ("w-pc1-2", Some(2)), ("w-pc1-3", Some(3))]);
+        assert_eq!(w.parts[0].title, "Piano Concerto no. 1 in D minor, op. 15: I. Maestoso");
+        let recordings: Vec<(&str, Vec<&str>)> = w.recordings.iter().map(|r| (r.album_id.as_str(), r.tracks.iter().map(|t| t.id.as_str()).collect())).collect();
+        // Zimerman's second track is the first movement: played first.
+        assert_eq!(recordings, [("al-arrau", vec!["so-a1", "so-a2", "so-a3"]), ("al-zimerman", vec!["so-z2", "so-z1"])]);
+        assert_eq!(w.recordings[0].performers, ["Claudio Arrau"]);
+        assert_eq!((w.recordings[0].album.as_str(), w.recordings[0].year), ("al-arrau record", Some(1990)));
+        assert_eq!(w.recordings[1].tracks[0].part.as_deref(), Some("w-pc1-1"));
+        // As the page reads it: a part's number always said, a track's part and length only where known.
+        let v = serde_json::to_value(&w).unwrap();
+        assert!(v.get("parent").is_none());
+        assert_eq!(v["parts"][0]["number"], 1);
+        assert_eq!(v["recordings"][0]["tracks"][0], serde_json::json!({ "id": "so-a1", "part": "w-pc1-1", "duration_secs": 1312.5 }));
+        assert_eq!(v["recordings"][0]["tracks"][1], serde_json::json!({ "id": "so-a2", "part": "w-pc1-2" }));
+        // A movement opened on its own: its symphony above it, its recordings.
+        let m = ix.work("w-pc1-2").unwrap();
+        assert_eq!(m.parent, Some(WorkRef { mbid: "w-pc1".into(), title: "Piano Concerto no. 1 in D minor, op. 15".into() }));
+        assert!(m.parts.is_empty());
+        assert_eq!(m.recordings.iter().map(|r| r.tracks[0].id.as_str()).collect::<Vec<_>>(), ["so-a2", "so-z1"]);
+        assert_eq!(m.recordings[0].tracks[0].part, None, "the work itself");
+        assert_eq!(ix.work("w-nothing"), None);
+    }
+
+    #[test]
+    fn an_album_s_rows_name_their_work_and_the_work_that_holds_it() {
+        let ix = build(&works_library());
+        let row = ix.row_work("so-a2").unwrap();
+        assert_eq!((row.mbid.as_str(), row.part_number), ("w-pc1-2", Some(2)));
+        assert_eq!(row.parent.as_ref().map(|p| p.mbid.as_str()), Some("w-pc1"));
+        let whole = serde_json::to_value(ix.row_work("so-a4").unwrap()).unwrap();
+        assert_eq!(whole, serde_json::json!({ "mbid": "w-sonata", "title": "Piano Sonata no. 3" }), "a whole work: no parent, no number");
+        assert_eq!(ix.row_work("so-nothing"), None);
+    }
+
+    #[test]
+    fn parents_that_go_round_in_a_circle_end() {
+        let mut i = works_library();
+        i.parents.insert("w-pc1".into(), ("w-pc1-1".into(), "Round".into(), None));
+        let ix = build(&i);
+        assert_eq!(ix.top("w-pc1-2"), "w-pc1");
+        assert_eq!(ix.composer_works("a-brahms").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_title_says_its_catalogue_number_and_its_key() {
+        assert_eq!(catalogue_of("Symphony no. 5 in C minor, op. 67").as_deref(), Some("op. 67"));
+        assert_eq!(catalogue_of("Cello Suite no. 1 in G major, BWV 1007: I. Prélude").as_deref(), Some("BWV 1007"));
+        assert_eq!(catalogue_of("Piano Sonata in E-flat major, Hob. XVI:52").as_deref(), Some("Hob. XVI:52"));
+        assert_eq!(catalogue_of("Symphony no. 41 in C major, K. 551 \"Jupiter\"").as_deref(), Some("K. 551"));
+        assert_eq!(catalogue_of("Piano Sonata no. 21 in B-flat major, D. 960").as_deref(), Some("D. 960"));
+        assert_eq!(catalogue_of("Requiem, Op. posth."), None);
+        assert_eq!(catalogue_of("Porcelain"), None);
+        assert_eq!(musical_key("Symphony no. 5 in C minor, op. 67").as_deref(), Some("C minor"));
+        assert_eq!(musical_key("Piano Sonata in E-flat major, Hob. XVI:52").as_deref(), Some("E-flat major"));
+        assert_eq!(musical_key("Symphony in E flat Major").as_deref(), Some("E flat major"));
+        assert_eq!(musical_key("Mass in B Minor, BWV 232").as_deref(), Some("B minor"));
+        assert_eq!(musical_key("Concerto in D"), None);
+        assert_eq!(musical_key("Born in the USA"), None);
     }
 
     #[test]

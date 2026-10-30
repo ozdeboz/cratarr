@@ -37,6 +37,8 @@
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
   import { downloadedSize } from './settings/editor.svelte';
+  import { reach } from './reach.svelte';
+  import { shelf, shelfCover } from './shelfStore.svelte';
 
   let { list, beside = false }: { list: DownloadsList; beside?: boolean } = $props();
   const L = $derived(DOWNLOADS_LISTS.find((x) => x.id === list) ?? DOWNLOADS_LISTS[0]);
@@ -72,13 +74,16 @@
     return i.state === 'done' || i.state === 'error' || want <= 0 ? null : Math.min(1, i.done / want);
   };
   // Its picture: an album's cover, a crate's image; a playlist's and an artist's (kept by name) the stand-in.
-  const keptPicture = (i: KeptItem) => (i.kind === 'album' ? albumCoverUrl(i.source, i.id) : i.kind === 'crate' ? crateImageUrl(i.id) : null);
+  // An album's the shelf's small copy first (decision 0085, step 2: Downloads with no network).
+  const keptPicture = (i: KeptItem) =>
+    i.kind === 'album' ? (shelfCover(i.source, i.id) ?? albumCoverUrl(i.source, i.id)) : i.kind === 'crate' ? crateImageUrl(i.id) : null;
   const keptSubject = (i: KeptItem) =>
     i.kind === 'album' ? albumSubject(i.source, i.id) : i.kind === 'artist' ? artistSubject(i.source, i.id) : i.kind === 'crate' ? `crate:${i.id}` : i.id;
   const synced = $derived(kept.items.filter((i) => matchesSearch(i.name, KINDS[i.kind])));
 
   // --- A row's menu ---
-  type Menu = { kind: KeptItem['kind']; source: string; id: string; subject: string; name: string; artist: string | null; cover: string | null; synced: boolean };
+  /** `album`: a one-time copy's album, its tracks here (for the menu offline: play them, take them off). */
+  type Menu = { kind: KeptItem['kind']; source: string; id: string; subject: string; name: string; artist: string | null; cover: string | null; synced: boolean; album?: OnceAlbum };
   let menu = $state<Menu | null>(null);
   const keptMenu = (i: KeptItem): Menu => ({
     kind: i.kind,
@@ -97,8 +102,19 @@
 
   // --- Downloaded once ---
   const listedOf = (g: OnceAlbum) => library.view?.sources.find((s) => s.id === g.source)?.albums.find((a) => a.id === g.id) ?? null;
+  /** What the shelf keeps of an album's tracks here (lib/shelfStore): with no network, all there is. */
+  const shelvedOf = (g: OnceAlbum) => g.tracks.map((t) => shelf.tracks[`app:${t.source}/${t.id}`]).filter((r) => !!r);
   const titleOf = (g: OnceAlbum) => listedOf(g)?.title ?? g.tracks[0].album ?? '';
-  const once = $derived(onceAlbums().filter((g) => matchesSearch(titleOf(g), listedOf(g)?.artist ?? g.tracks[0].artist)));
+  const artistOf = (g: OnceAlbum) => listedOf(g)?.artist ?? shelvedOf(g).find((r) => r.album_artist)?.album_artist ?? g.tracks[0].artist;
+  const yearOf = (g: OnceAlbum) => listedOf(g)?.year ?? shelvedOf(g).find((r) => r.year)?.year ?? null;
+  const onceCover = (g: OnceAlbum) => shelfCover(g.source, g.id) ?? albumCoverUrl(g.source, g.id);
+  // The pill's search reads the album and, from the shelf, its tracks, genres and year (so it works with no network).
+  const once = $derived(
+    onceAlbums().filter((g) => {
+      const s = shelvedOf(g);
+      return matchesSearch(titleOf(g), artistOf(g), yearOf(g) ? String(yearOf(g)) : null, [...new Set(s.flatMap((r) => r.genres))].join(' '), s.map((r) => r.name).join(' '));
+    }),
+  );
   function albumLine(g: OnceAlbum): { text: string; fill: number | null; bad: boolean } {
     const listed = listedOf(g);
     const done = g.tracks.filter((t) => t.download.state === 'done').length;
@@ -109,7 +125,8 @@
     }
     if (bad) return { text: `${bad} ${bad === 1 ? 'track' : 'tracks'} failed`, fill: null, bad: true };
     const of = listed?.tracks;
-    const parts = [listed?.artist ?? g.tracks[0].artist, listed?.year ? String(listed.year) : null, listed?.format, of && of > g.tracks.length ? `${g.tracks.length} of ${of}` : null];
+    const year = yearOf(g);
+    const parts = [artistOf(g), year ? String(year) : null, listed?.format, of && of > g.tracks.length ? `${g.tracks.length} of ${of}` : null];
     return { text: parts.filter(Boolean).join(' · '), fill: null, bad: false };
   }
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
@@ -166,6 +183,23 @@
     }
   }
 
+  /** A row's menu out of reach: its album's tracks here, or the synced item, played or queued from this device. */
+  async function playMenu(m: Menu, how: 'play' | 'last') {
+    menu = null;
+    const what: Collection = m.album
+      ? { kind: 'tracks', source: m.source, ids: m.album.tracks.map((t) => t.id) }
+      : m.kind === 'album'
+        ? { kind: 'album', source: m.source, id: m.id }
+        : m.kind === 'artist'
+          ? { kind: 'artist', source: m.source, name: m.id }
+          : { kind: m.kind, id: m.id };
+    try {
+      await playCollection(what, how, m.name);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
+
   const handed = $derived(glass.one && !beside);
   const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'downloads' } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
@@ -215,7 +249,8 @@
         <Item name="Sync settings" onclick={() => viewPlaylist(`${SETTINGS}sync`)} />
         {#if waiting}<Item lead="warn" name={kept.waiting ? WAITS[kept.waiting] : `${waiting} waiting`} />{/if}
         {#if failed.length}
-          <Item lead="bad" name={`${failed.length} failed`}><button class="retry" onclick={retry}>Retry</button></Item>
+          <!-- Retry asks Cratarr: not offered out of its reach (decision 0085: never offer what cannot be upheld). -->
+          <Item lead="bad" name={`${failed.length} failed`}>{#if !reach.away}<button class="retry" onclick={retry}>Retry</button>{/if}</Item>
         {/if}
       </Group>
     {:else if list === 'synced'}
@@ -244,12 +279,12 @@
         {#each once as g (`${g.source}/${g.id}`)}
           {@const l = albumLine(g)}
           {#if selecting}
-            <ReleaseRow cover={albumCoverUrl(g.source, g.id)} title={titleOf(g)} line={l.text} tone={l.bad ? 'bad' : null}
+            <ReleaseRow cover={onceCover(g)} title={titleOf(g)} line={l.text} tone={l.bad ? 'bad' : null}
               >{@render tickOf(onceKey(g), titleOf(g))}</ReleaseRow
             >
           {:else}
           <ReleaseRow
-            cover={albumCoverUrl(g.source, g.id)}
+            cover={onceCover(g)}
             title={titleOf(g)}
             line={l.text}
             tone={l.bad ? 'bad' : null}
@@ -261,9 +296,10 @@
                 id: g.id,
                 subject: albumSubject(g.source, g.id),
                 name: titleOf(g),
-                artist: listedOf(g)?.artist ?? g.tracks[0].artist,
-                cover: albumCoverUrl(g.source, g.id),
+                artist: artistOf(g),
+                cover: onceCover(g),
                 synced: false,
+                album: g,
               })}
           />
           {/if}
@@ -296,7 +332,20 @@
 
 {#if menu}
   {@const m = menu}
-  {#if ownMenu(m) && m.kind === 'album'}
+  {#if reach.away}
+    <!-- Out of Cratarr's reach (decision 0085): only what this device can do itself. -->
+    <MenuSheet label={m.name} title={m.name} images={m.cover ? [m.cover] : []} onclose={() => (menu = null)}>
+      <div role="menu">
+        <MenuEntry icon="play" label="Play" onclick={() => playMenu(m, 'play')} />
+        <MenuEntry icon="listAdd" label="Add to queue" onclick={() => playMenu(m, 'last')} />
+        {#if m.album}
+          <MenuEntry icon="trash" label="Remove from this device" danger onclick={() => (removeDownloads(m.album!.tracks.map((t) => t.download.id)), (menu = null))} />
+        {:else if m.synced}
+          <MenuEntry icon="close" label="Stop syncing" danger onclick={() => (setKept(m.kind, m.source, m.id, false, m.name), (menu = null))} />
+        {/if}
+      </div>
+    </MenuSheet>
+  {:else if ownMenu(m) && m.kind === 'album'}
     <AlbumMenu source={m.source} album={{ id: m.id, title: m.name, artist: m.artist ?? '' }} cover={m.cover} onclose={() => (menu = null)} />
   {:else if ownMenu(m)}
     <SubjectMenu subject={m.subject} onclose={() => (menu = null)} />

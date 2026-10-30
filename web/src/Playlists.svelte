@@ -28,9 +28,12 @@
   import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
   import SelectSheet from './lib/SelectSheet.svelte';
   import Row, { type Cell } from './lib/Row.svelte';
+  import { headCells, headSort, type Order } from './lib/columnHead';
+  import type { PlaylistOrder } from './lib/prefs.svelte';
   import { fit } from './lib/columns.svelte';
   import { playlistStats, type PlaylistStats } from './lib/api';
   import { addedOn } from './lib/albums.svelte';
+  import { reach } from './lib/reach.svelte';
   import { clockText } from './lib/remote.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
@@ -130,6 +133,10 @@
   /** As chosen in View, as it can be here (lib/layouts: chips on a phone's screen). */
   const table = $derived(playlistLayout() === 'table');
   const cols = $derived(table ? fit('playlists', gridWidth) : []);
+  // Its head orders by Name and Tracks on a tap, as every table's (lib/columnHead); its other columns are not orders.
+  const now = $derived<Order<PlaylistOrder>>({ key: prefs.playlistOrder, down: prefs.playlistDown });
+  const setOrder = (o: Order<PlaylistOrder>) => ((prefs.playlistOrder = o.key), (prefs.playlistDown = o.down));
+  const heads = $derived({ title: headSort<PlaylistOrder>('name', now, PLAYLIST_ORDERS, setOrder), count: headSort<PlaylistOrder>('tracks', now, PLAYLIST_ORDERS, setOrder) });
   let stats = $state<Record<string, PlaylistStats>>({});
   const listsKey = $derived(shownPlaylists().map((p) => `${p.id}:${p.count}`).join('|'));
   $effect(() => {
@@ -152,7 +159,8 @@
 
   // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
-  usePageAction(() => ({ icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
+  // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change; one line says so.
+  usePageAction(() => (reach.away ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
   // Its two modes (0.9.18; the owner, 2026-10-29): Normal, the playlists only open; Quick add, each one's circle adds or
   // takes out the playing track. The mode's button is left of New playlist, a double check (the plus is New playlist's).
   const quick = $derived(prefs.playlistQuickAdd);
@@ -194,6 +202,7 @@
   {#if error}
     <Notice text={error} />
   {/if}
+  {#if reach.away}<p class="away">New playlists need Cratarr.</p>{/if}
 
   {#if (!view || waiting) && !error}
     <PageLoading />
@@ -215,7 +224,7 @@
       <!-- The table's column names, a row of the same shape so they line up. -->
       <div class="table-head">
         {#snippet room()}<span></span>{/snippet}
-        <Row size="large" as="div" head title="Name" count="Tracks" cells={cols.map((c) => ({ ...c, text: c.label }))} action={quick ? room : undefined} />
+        <Row size="large" as="div" head title="Name" count="Tracks" cells={headCells(cols, () => undefined, now, PLAYLIST_ORDERS, setOrder)} sorts={heads} action={quick ? room : undefined} />
       </div>
     {/if}
     <ul class="grid" class:table class:pending={quick && pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
@@ -292,6 +301,12 @@
 {/if}
 
 <style>
+  .away {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
   /* The page answers to its own width (beside the player or not), not the window's: a container. */
   main {
     position: relative;
@@ -314,13 +329,8 @@
     display: block;
   }
 
-  .grid.table :global(.row.large),
-  .table-head :global(.row.large) {
+  .grid.table :global(.row.large) {
     min-height: 48px;
-  }
-
-  .table-head :global(.row.head) {
-    min-height: 32px;
   }
 
   /* The chips are medium rows (lib/Row.svelte, Finamp's add-to-playlist tile); what is the page's own is how adding

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { RACKS, departures, goldenFrames, readReference } = await import('./harness/golden.ts');
+const { RACKS, departures, goldenFrames, readReference } = await import('../harness/golden.ts');
 
 /** Rounding to 7 digits, and an engine's sums done in another order. */
 const CLOSE = 1e-6;

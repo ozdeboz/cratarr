@@ -95,6 +95,8 @@ class PlayerService : MediaSessionService() {
     private lateinit var remote: RemotePlayer
     /** The player's commands: Play On's and the page's, one way in. */
     private lateinit var commands: PlayerCommands
+    /** A track's snippet beside the music, which it ducks by volume (0.12, snippets: the owner chose them, 2026-10-30). */
+    private lateinit var snippets: Snippets
 
     /** The server's address or the player's name changed: Play On connects again with them. A sleep timer set: kept. */
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -243,6 +245,7 @@ class PlayerService : MediaSessionService() {
             override fun getShuffleModeEnabled() = false
         }
         commands = PlayerCommands(this, player, sessionPlayer, prefs, startStop) { link }
+        snippets = Snippets(this, prefs) { link?.applyVolume() }
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -305,13 +308,13 @@ class PlayerService : MediaSessionService() {
     }
 
     /**
-     * Where this device's controls point (decision 0062), changed here only: `self`, `player:<name>` or `server`. Asked by
+     * Where this device's controls point (decision 0062), changed here only: `self` or `player:<name>` (0.12: the media
+     * server's player is gone from Cratarr's mode, the owner 2026-10-30; a page still asking for it gets `self`). Asked by
      * the page, or by the rule: *sounding here means controls here* (its own player started, whatever started it). To
      * point away it pauses its own player first, if it still plays. The page hears every change (MainActivity).
      */
     fun pointAt(to: String, why: String) {
         val target = when {
-            to == Prefs.TARGET_SERVER -> Prefs.TARGET_SERVER
             to.startsWith("player:") && to.length > 7 && to.removePrefix("player:") != prefs.playerName -> to
             else -> Prefs.TARGET_SELF
         }
@@ -655,6 +658,7 @@ class PlayerService : MediaSessionService() {
         link?.stop()
         link = null
         session?.release()
+        snippets.release()
         startStop.release()
         player.release()
         remote.release()
@@ -678,6 +682,7 @@ class PlayerService : MediaSessionService() {
                 .add(SessionCommand(COMMAND_MODE, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_TARGET, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_RUN, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_SNIPPET, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
@@ -733,6 +738,7 @@ class PlayerService : MediaSessionService() {
                 COMMAND_TARGET -> pointAt(args.getString("to").orEmpty(), "the page asked")
                 // The page's player commands, as Play On's (the page's own way where the two differ).
                 COMMAND_RUN -> runFromPage(args.getString("command"))
+                COMMAND_SNIPPET -> snippets.handle(args.getString("message"))
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -849,6 +855,8 @@ class PlayerService : MediaSessionService() {
         const val COMMAND_TARGET = "cratarr.TARGET"
         /** The page's player commands (PagePlayer): `command`, one of Cratarr's player commands as JSON ([PlayerCommands]). */
         const val COMMAND_RUN = "cratarr.RUN"
+        /** The page's track snippets (0.12, [Snippets]): `message`, the page's `{"type": "snippet", …}` as JSON. */
+        const val COMMAND_SNIPPET = "cratarr.SNIPPET"
         /** A previous or next key held this long is a hold: it winds. */
         private const val HOLD_MS = 400L
 

@@ -37,6 +37,7 @@ mod placement;
 mod playlist_rewrite;
 #[allow(dead_code)] // the playlist sync uses it (decision 0012)
 mod playlist_merge;
+mod playlist_ops;
 mod ports;
 mod playlists;
 mod retag;
@@ -84,13 +85,15 @@ fn healthcheck() -> i32 {
 /// too (decision 0045). The whole router, as `main` serves it and the tests sweep it (`whole_router`).
 fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -> axum::Router {
     let on = app.play_on.clone();
+    let kept = Some(served.userdata.clone());
     api::router(app)
         .merge(serve::routes::router(served.clone()))
         // Listening along and the guest portal (decision 0079).
         .merge(serve::along::router(on.clone(), served.clone()))
         .merge(serve::guest::router(on, served.clone()))
-        // A change sent again with its key (a page's offline changes) made once, inside the access check (whose it is).
-        .layer(axum::middleware::from_fn(idempotent::once))
+        // A change sent again with its key (a page's offline changes) made once, inside the access check (whose it is);
+        // the answers kept 30 days in the user data (decision 0087).
+        .layer(axum::middleware::from_fn_with_state(kept, idempotent::once))
         .layer(axum::middleware::from_fn_with_state(served, serve::access::require))
         .layer(axum::middleware::from_fn(api::request_ids))
 }

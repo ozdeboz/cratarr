@@ -1,5 +1,6 @@
 // Quick crates' state (0.11, lib/quickCrate): whether this server makes them (its capabilities name `quick_crates`,
-// lib/capabilities; one before 0.11 has no list: none then), the sheet (lib/QuickCrateSheet) open with the words it was opened with,
+// lib/capabilities; one before 0.11 has no list: none then), the crate being made at the top of Crates (0.12, the
+// owner's mockup B: lib/QuickCrate reads it as a sentence), words handed to it from elsewhere (a search's "Grab a crate"),
 // and the last few made here and not saved, kept in this browser to come back to.
 import { can } from './capabilities.svelte';
 import { CLOSE, type Chip } from './quickCrate';
@@ -10,24 +11,37 @@ export type KeptQuick = { chips: Chip[]; min: number };
 /** How many not saved are kept. */
 const KEPT_MOST = 5;
 const KEY = 'cratarr-quick-crates';
+const CRATES = '#/crates';
 
 /** The server makes them: everything about them shows only then (a server with no list, before 0.11, makes none). */
 export const quickOn = () => can('quick_crates') === true;
 
 export const quickCrates = $state({
-  /** The sheet shows (App renders it), with these words read into chips at once (a search's, the Crates page's). */
-  open: false,
+  /** The crate being made: its chips and its cut (kept while the page is left and come back to). */
+  chips: [] as Chip[],
+  min: CLOSE,
+  /** Words to read into it (a search's), taken by lib/QuickCrate as it shows. */
   words: '',
-  /** One not saved opened again. */
-  from: null as KeptQuick | null,
   recent: readKept(),
 });
 
-/** The sheet opened on `words` (none: empty, or the Crates page's field), or on one not saved. */
-export function openQuickCrate(words = '', from: KeptQuick | null = null) {
+/** Crates opened on `words` read into a new crate (the one being made, unsaved, kept among the last few first). */
+export function openQuickCrate(words = '') {
+  if (quickCrates.chips.length) keepQuick({ chips: quickCrates.chips, min: quickCrates.min });
+  quickCrates.chips = [];
+  quickCrates.min = CLOSE;
   quickCrates.words = words;
-  quickCrates.from = from;
-  quickCrates.open = true;
+  if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
+}
+
+/** Crates opened on a crate already read (0.12): a menu's "Sounds like this" or "Grab a crate", global search's crate
+ *  card. The one being made is kept among the last few first, as for words. */
+export function grabCrate(chips: Chip[]) {
+  if (quickCrates.chips.length) keepQuick({ chips: quickCrates.chips, min: quickCrates.min });
+  quickCrates.chips = chips.map((c) => ({ ...c }));
+  quickCrates.min = CLOSE;
+  quickCrates.words = '';
+  if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
 }
 
 function readKept(): KeptQuick[] {

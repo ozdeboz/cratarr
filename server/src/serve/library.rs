@@ -4,7 +4,8 @@
 //!
 //! - an album's aggregates live on its row (songs, length, size, years, discs, genres, added = its oldest song);
 //! - search through contentless FTS5 tables (`unicode61 remove_diacritics 2`), each word as `(word OR word*)`, ranked
-//!   by bm25 with column weights (`persistence/sql_search_fts.go`);
+//!   by bm25 with column weights (`persistence/sql_search_fts.go`); beside them (0.12: one matcher, search in general)
+//!   trigram tables over each name's letters run together (`TRIGRAMS`), for the candidates the matcher judges;
 //! - paging in two phases, the page's row ids first and their details after, over covering indexes
 //!   (`persistence/sql_search.go`);
 //! - WAL, `synchronous=NORMAL`, a busy timeout, and `ANALYZE` after a rebuild (`db/optimize.go`).
@@ -70,6 +71,49 @@ CREATE VIRTUAL TABLE IF NOT EXISTS songs_vocab USING fts5vocab(songs_fts, 'row')
 CREATE VIRTUAL TABLE IF NOT EXISTS albums_vocab USING fts5vocab(albums_fts, 'row');
 CREATE VIRTUAL TABLE IF NOT EXISTS artists_vocab USING fts5vocab(artists_fts, 'row');
 ";
+
+/// The trigram tables (0.12: one matcher, search in general), beside the FTS tables: (table, the table it indexes, the
+/// name it holds). Each holds a name's letters run together as the matcher reads them (`cratarr_letters`, the rules
+/// crate's `matcher::letters`: separators gone, folded), `tokenize='trigram'` (SQLite 3.34 on; case folded, its
+/// default), contentless as the FTS tables, the same row numbers. Search asks them for candidates however a name is
+/// spelled or spaced ("hiphop" for Hip Hop Orchestra, "radiohed" for Radiohead) and the matcher judges them
+/// (`read::trigram_extras`). Kept in step where the FTS tables' rows are written and deleted, in the same transaction
+/// (`build_with`, `rebuild_dirs`, `write_albums`, `artists_again`); made and filled on open where missing
+/// (`add_trigrams`). Named `*_tri_fts` so a library of another layout drops them as the FTS tables (their shadow
+/// tables, `*_fts_*`, go with them).
+const TRIGRAMS: [(&str, &str, &str); 3] = [("songs_tri_fts", "songs", "title"), ("albums_tri_fts", "albums", "name"), ("artists_tri_fts", "artists", "name")];
+
+/// `cratarr_letters(text)` (0.12): a name's letters run together as the matcher reads them (`matcher::letters`: NFKD,
+/// marks dropped, case folded, everything but letters and digits gone), for SQL: what the trigram tables are filled
+/// with, on open as in every write. Deterministic; NULL stays NULL.
+pub(crate) fn register_letters(conn: &Connection) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "cratarr_letters",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| Ok(ctx.get::<Option<String>>(0)?.map(|t| cratarr_rules::matcher::letters(&t))),
+    )?;
+    Ok(())
+}
+
+/// Libraries from before the trigram tables (0.12) get them, filled from the names they hold: one INSERT … SELECT each,
+/// in one transaction (the songs' a few seconds on a large library at most). Safe to repeat.
+fn add_trigrams(conn: &Connection) -> Result<()> {
+    for (tri, table, column) in TRIGRAMS {
+        let has: bool = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?.exists([tri])?;
+        if !has {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(&format!(
+                "CREATE VIRTUAL TABLE {tri} USING fts5(letters, content='', contentless_delete=1, tokenize='trigram');
+                 INSERT INTO {tri} (rowid, letters) SELECT n, cratarr_letters({column}) FROM {table};"
+            ))
+            .with_context(|| format!("making {tri}"))?;
+            tx.commit()?;
+        }
+    }
+    Ok(())
+}
 
 /// A release's types as kept (0.9.6): its primary type ("album", "ep", "single", "other") and its secondary ones
 /// ("compilation", "live", "remix", "soundtrack"…), lower case, from MusicBrainz's names ("Album", "EP",
@@ -351,6 +395,7 @@ impl Library {
     pub fn open(file: Option<&Path>) -> Result<Self> {
         let conn = crate::db::open(file)?;
         conn.busy_timeout(Duration::from_secs(15))?;
+        register_letters(&conn)?;
         // Derived data: a library from an older layout is simply built again.
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != LAYOUT {
@@ -363,6 +408,7 @@ impl Library {
             }
         }
         conn.execute_batch(SCHEMA).context("creating the library tables")?;
+        add_trigrams(&conn)?;
         conn.execute_batch(&format!("PRAGMA user_version = {LAYOUT}"))?;
         Ok(Self {
             db: Mutex::new(conn),
@@ -546,7 +592,8 @@ impl Library {
         let tx = db.transaction()?;
         tx.execute_batch(
             "DELETE FROM songs; DELETE FROM song_artists; DELETE FROM albums; DELETE FROM album_artists; DELETE FROM artists;
-             DELETE FROM genres; DELETE FROM songs_fts; DELETE FROM albums_fts; DELETE FROM artists_fts;",
+             DELETE FROM genres; DELETE FROM songs_fts; DELETE FROM albums_fts; DELETE FROM artists_fts;
+             DELETE FROM songs_tri_fts; DELETE FROM albums_tri_fts; DELETE FROM artists_tri_fts;",
         )?;
         write_albums(&tx, &rows, &roots, rules, &facts, covers)?;
         artists_again(&tx, None)?;
@@ -641,6 +688,7 @@ impl Library {
             let mut songs = tx.prepare("SELECT n, id, album_id FROM songs WHERE folder = ?1 AND dir = ?2")?;
             let mut credits = tx.prepare("SELECT artist_id FROM song_artists WHERE song_id = ?1")?;
             let mut del_fts = tx.prepare("DELETE FROM songs_fts WHERE rowid = ?1")?;
+            let mut del_tri = tx.prepare("DELETE FROM songs_tri_fts WHERE rowid = ?1")?;
             let mut del_credits = tx.prepare("DELETE FROM song_artists WHERE song_id = ?1")?;
             let mut del_song = tx.prepare("DELETE FROM songs WHERE n = ?1")?;
             for (folder, dir) in &dirs {
@@ -651,6 +699,7 @@ impl Library {
                         touched.insert(a?);
                     }
                     del_fts.execute([n])?;
+                    del_tri.execute([n])?;
                     del_credits.execute([&id])?;
                     del_song.execute([n])?;
                     gone_albums.insert(album);
@@ -659,6 +708,7 @@ impl Library {
             let mut album_n = tx.prepare("SELECT n FROM albums WHERE id = ?1")?;
             let mut album_credits = tx.prepare("SELECT artist_id FROM album_artists WHERE album_id = ?1")?;
             let mut del_album_fts = tx.prepare("DELETE FROM albums_fts WHERE rowid = ?1")?;
+            let mut del_album_tri = tx.prepare("DELETE FROM albums_tri_fts WHERE rowid = ?1")?;
             let mut del_album_credits = tx.prepare("DELETE FROM album_artists WHERE album_id = ?1")?;
             let mut del_album = tx.prepare("DELETE FROM albums WHERE id = ?1")?;
             for album in &gone_albums {
@@ -667,6 +717,7 @@ impl Library {
                 }
                 if let Some(n) = album_n.query_row([album], |r| r.get::<_, i64>(0)).optional()? {
                     del_album_fts.execute([n])?;
+                    del_album_tri.execute([n])?;
                 }
                 del_album_credits.execute([album])?;
                 del_album.execute([album])?;
@@ -831,6 +882,13 @@ impl Library {
             }
         }
         Ok(out)
+    }
+
+    /// An artist's name by their id (a Subsonic app's star or rating, logged by name: decision 0087).
+    pub fn artist_name(&self, id: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT name FROM artists WHERE id = ?1 LIMIT 1")?;
+        Ok(st.query_row([id], |r| r.get(0)).optional()?)
     }
 
     /// An artist by name, as the library writes it (any case): their id and MusicBrainz id.
@@ -1016,6 +1074,7 @@ fn write_albums(
                ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
         )?;
         let mut ins_fts = tx.prepare_cached("INSERT INTO songs_fts (rowid, title, artist, album) VALUES (?1, ?2, ?3, ?4)")?;
+        let mut ins_tri = tx.prepare_cached("INSERT INTO songs_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
         let mut ins_artist = tx.prepare_cached("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
         for s in &songs {
             let r = s.row;
@@ -1055,6 +1114,7 @@ fn write_albums(
             ])?;
             let n = tx.last_insert_rowid();
             ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
+            ins_tri.execute(params![n, s.title])?;
             for (i, name) in s.artists.iter().enumerate() {
                 let aid = ids::artist(name);
                 ins_artist.execute(params![id, aid, name, i as i64])?;
@@ -1071,6 +1131,7 @@ fn write_albums(
            ?23, ?24, ?25, ?26)",
     )?;
     let mut ins_fts = tx.prepare_cached("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
+    let mut ins_tri = tx.prepare_cached("INSERT INTO albums_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
     let mut ins_aa = tx.prepare_cached("INSERT INTO album_artists (album_id, artist_id, name, position, mbid) VALUES (?1, ?2, ?3, ?4, ?5)")?;
     for (album_id, songs) in &albums {
         let first = songs[0];
@@ -1148,7 +1209,9 @@ fn write_albums(
             secondary.join("\u{1f}"),
             album_src(album_id, first.folder, &dir, first.row, facts, covers),
         ])?;
-        ins_fts.execute(params![tx.last_insert_rowid(), first.album, first.album_artist])?;
+        let n = tx.last_insert_rowid();
+        ins_fts.execute(params![n, first.album, first.album_artist])?;
+        ins_tri.execute(params![n, first.album])?;
         for (i, name) in first.album_artists.iter().enumerate() {
             let aid = ids::artist(name);
             let mbid = if i == 0 { first.row.first("musicbrainz_albumartistid") } else { None };
@@ -1208,11 +1271,14 @@ fn artists_again(tx: &Connection, only: Option<&BTreeSet<String>>) -> Result<()>
     let mut del = tx.prepare_cached("DELETE FROM artists WHERE id = ?1")?;
     let mut ins_fts = tx.prepare_cached("INSERT INTO artists_fts (rowid, name) VALUES (?1, ?2)")?;
     let mut del_fts = tx.prepare_cached("DELETE FROM artists_fts WHERE rowid = ?1")?;
+    let mut ins_tri = tx.prepare_cached("INSERT INTO artists_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
+    let mut del_tri = tx.prepare_cached("DELETE FROM artists_tri_fts WHERE rowid = ?1")?;
     for aid in ids {
         let had = existing.get(aid).copied();
         let Some((name, _)) = names.get(aid) else {
             if let Some(n) = had {
                 del_fts.execute([n])?;
+                del_tri.execute([n])?;
                 del.execute([aid])?;
             }
             continue;
@@ -1222,6 +1288,7 @@ fn artists_again(tx: &Connection, only: Option<&BTreeSet<String>>) -> Result<()>
             Some(n) => {
                 upd.execute(values)?;
                 del_fts.execute([n])?;
+                del_tri.execute([n])?;
                 n
             }
             None => {
@@ -1230,6 +1297,7 @@ fn artists_again(tx: &Connection, only: Option<&BTreeSet<String>>) -> Result<()>
             }
         };
         ins_fts.execute(params![n, name])?;
+        ins_tri.execute(params![n, name])?;
     }
     Ok(())
 }
@@ -1364,6 +1432,18 @@ mod tests {
                 let mut ids: Vec<String> = st.query_map([format!("\"{word}\"*")], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
                 ids.sort();
                 out.push(format!("{fts} {word}: {ids:?}"));
+            }
+        }
+        // The trigram tables (0.12) as well: what each finds by letters, and how many rows in all it finds (a row left
+        // behind would count where the join hides it).
+        for letters in ["bjork", "orb", "hunter", "fluffyclouds", "homogenic", "orbital", "joga", "triphop"] {
+            for (tri, table, _) in TRIGRAMS {
+                let q = format!("\"{letters}\"");
+                let mut st = db.prepare(&format!("SELECT t.id FROM {tri} f JOIN {table} t ON t.n = f.rowid WHERE {tri} MATCH ?1")).unwrap();
+                let mut ids: Vec<String> = st.query_map([&q], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+                ids.sort();
+                let all: i64 = db.query_row(&format!("SELECT count(*) FROM {tri} WHERE {tri} MATCH ?1"), [&q], |r| r.get(0)).unwrap();
+                out.push(format!("{tri} {letters}: {ids:?} of {all}"));
             }
         }
         out
@@ -1736,6 +1816,19 @@ mod tests {
     }
 
     #[test]
+    fn a_genre_is_found_by_its_aliases_in_search() {
+        // 0.12: one matcher, genre aliases (the rules crate's hand-kept list).
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.db().execute("INSERT INTO genres (name, song_count, album_count) VALUES ('Drum and Bass', 4, 1), ('Dub', 9, 2), ('R&B', 2, 1)", []).unwrap();
+        let words = |q: &str| crate::search::words(q);
+        let f = lib.find(&words("dnb"), 10).unwrap();
+        assert_eq!((f.genres, f.totals.genres), (vec![("Drum and Bass".to_string(), 4)], 1), "by its alias, Dub not by its letters");
+        assert_eq!(lib.find(&words("rnb"), 10).unwrap().genres, [("R&B".to_string(), 2)]);
+        assert!(lib.find(&words("jungle"), 10).unwrap().genres.is_empty());
+    }
+
+    #[test]
     fn new_analyses_alone_are_told_apart_from_changed_songs() {
         let (first, print) = change_between(None, "catalogue 1 2 a rules f files 10/5", "3/99");
         assert_eq!(first, Change::Songs, "never built");
@@ -1790,6 +1883,157 @@ mod tests {
         let songs = lib.songs_of_albums(&[orb.clone(), homogenic.clone(), "nothing".into(), orb]).unwrap();
         assert_eq!(songs.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Little Fluffy Clouds", "Hunter", "Jóga"]);
         assert_eq!(fts_query("a OR b").as_deref(), Some("(\"a\" OR \"a\"*) AND (\"OR\" OR \"OR\"*) AND (\"b\" OR \"b\"*)"), "quoted: a word, not an operator");
+    }
+
+    // ---- The trigram tables (0.12: one matcher, search in general).
+
+    /// How many rows of a trigram table hold these letters.
+    fn tri_found(lib: &Library, tri: &str, letters: &str) -> i64 {
+        lib.db().query_row(&format!("SELECT count(*) FROM {tri} WHERE {tri} MATCH ?1"), [format!("\"{letters}\"")], |r| r.get(0)).unwrap()
+    }
+
+    /// Every name of the library found in its trigram table by its own letters, at its own row.
+    fn tri_in_step(lib: &Library) {
+        let db = lib.db();
+        for (tri, table, column) in TRIGRAMS {
+            let rows: Vec<(i64, String)> =
+                db.prepare(&format!("SELECT n, {column} FROM {table}")).unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+            assert!(!rows.is_empty(), "{table}");
+            for (n, name) in rows {
+                let letters = cratarr_rules::matcher::letters(&name);
+                if letters.chars().count() < 3 {
+                    continue;
+                }
+                let at: i64 = db
+                    .query_row(&format!("SELECT count(*) FROM {tri} WHERE {tri} MATCH ?1 AND rowid = ?2"), params![format!("\"{letters}\""), n], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(at, 1, "{table} {name:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn cratarr_letters_is_the_matchers_letters() {
+        let lib = Library::open(None).unwrap();
+        let db = lib.db();
+        for t in ["Hip-Hop", "Björk", "Sigur Rós", "ﬁre Ⅳ", "ＡＢＣ", "Lo-Fi Beats", "AC/DC", "Motörhead", "", "  "] {
+            let got: String = db.query_row("SELECT cratarr_letters(?1)", [t], |r| r.get(0)).unwrap();
+            assert_eq!(got, cratarr_rules::matcher::letters(t), "{t:?}");
+        }
+        let hip: String = db.query_row("SELECT cratarr_letters('Hip-Hop')", [], |r| r.get(0)).unwrap();
+        assert_eq!(hip, "hiphop");
+        let none: Option<String> = db.query_row("SELECT cratarr_letters(NULL)", [], |r| r.get(0)).unwrap();
+        assert_eq!(none, None);
+    }
+
+    #[test]
+    fn the_trigram_tables_keep_in_step_with_the_names() {
+        let rules = Rules::default();
+        let lib = Library::open(None).unwrap();
+        lib.build(&sample(), &rules).unwrap();
+        tri_in_step(&lib);
+        assert_eq!(tri_found(&lib, "songs_tri_fts", "littlefluffyclouds"), 1);
+        assert_eq!(tri_found(&lib, "albums_tri_fts", "adventuresbeyondtheultraworld"), 1);
+        assert_eq!(tri_found(&lib, "artists_tri_fts", "theorb"), 1);
+        // A title and an artist changed: the new letters in, the old out.
+        let changed = with(sample(), |rows| {
+            tag(&mut rows[2], "title", "Perpetual Dawn");
+            tag(&mut rows[2], "artist", "Orbital");
+        });
+        lib.update_rows(&changed, &rules, &Covers::new()).unwrap();
+        tri_in_step(&lib);
+        assert_eq!((tri_found(&lib, "songs_tri_fts", "littlefluffyclouds"), tri_found(&lib, "songs_tri_fts", "perpetualdawn")), (0, 1));
+        assert_eq!((tri_found(&lib, "artists_tri_fts", "theorb"), tri_found(&lib, "artists_tri_fts", "orbital")), (0, 1));
+        assert_eq!(tri_found(&lib, "albums_tri_fts", "adventuresbeyondtheultraworld"), 1, "built again, once");
+        // The file gone: its song, album and artist out.
+        let gone = with(changed, |rows| {
+            rows.remove(2);
+        });
+        lib.update_rows(&gone, &rules, &Covers::new()).unwrap();
+        tri_in_step(&lib);
+        assert_eq!(tri_found(&lib, "songs_tri_fts", "perpetualdawn"), 0);
+        assert_eq!(tri_found(&lib, "albums_tri_fts", "adventuresbeyondtheultraworld"), 0);
+        assert_eq!(tri_found(&lib, "artists_tri_fts", "orbital"), 0);
+        assert_eq!(tri_found(&lib, "artists_tri_fts", "bjork"), 1);
+        // Built whole again: nothing left over.
+        lib.build(&sample(), &rules).unwrap();
+        tri_in_step(&lib);
+        assert_eq!((tri_found(&lib, "songs_tri_fts", "littlefluffyclouds"), tri_found(&lib, "songs_tri_fts", "perpetualdawn")), (1, 0));
+    }
+
+    #[test]
+    fn a_library_from_before_the_trigram_tables_gets_them_on_open() {
+        let dir = std::env::temp_dir().join(format!("cratarr-trigram-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        let _ = std::fs::remove_file(&file);
+        {
+            let lib = Library::open(Some(file.as_path())).unwrap();
+            assert!(lib.refresh(&sample(), &Rules::default()).unwrap());
+            lib.db().execute_batch("DROP TABLE songs_tri_fts; DROP TABLE albums_tri_fts; DROP TABLE artists_tri_fts;").unwrap();
+        }
+        let lib = Library::open(Some(file.as_path())).unwrap();
+        assert!(!lib.refresh(&sample(), &Rules::default()).unwrap(), "filled where it stood, not built again");
+        tri_in_step(&lib);
+        assert_eq!(tri_found(&lib, "songs_tri_fts", "littlefluffyclouds"), 1);
+        assert_eq!(tri_found(&lib, "albums_tri_fts", "homogenic"), 1);
+        assert_eq!(tri_found(&lib, "artists_tri_fts", "bjork"), 1);
+        drop(lib);
+        // Opened again: made once, left as they are.
+        let lib = Library::open(Some(file.as_path())).unwrap();
+        assert_eq!(tri_found(&lib, "artists_tri_fts", "bjork"), 1);
+        drop(lib);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_finds_names_however_spelled_or_spaced() {
+        let t = |n: i64, artist: &str, album: &str, title: &str| {
+            row(n, &format!("{artist}/{album}/{n:02} {title}.flac"), &[("title", title), ("artist", artist), ("albumartist", artist), ("album", album), ("tracknumber", "1")])
+        };
+        let folders = vec![FolderRows {
+            folder: 0,
+            root: "/music".into(),
+            rows: vec![
+                t(1, "Hip Hop Orchestra", "Big Band Nights", "Opening"),
+                t(2, "Trip Hop Express", "Downtempo Sessions", "Night Train"),
+                t(3, "Radiohead", "OK Computer", "Airbag"),
+                t(4, "Night Owls", "Lo-Fi Beats", "Rainy Window"),
+            ],
+        }];
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&folders, &Rules::default()).unwrap();
+        let words = |q: &str| crate::search::words(q);
+        let artists = |q: &str| lib.find(&words(q), 10).unwrap().artists.into_iter().map(|(a, _)| a.name).collect::<Vec<_>>();
+        let albums = |q: &str| lib.find(&words(q), 10).unwrap().albums.into_iter().map(|(a, h)| (a.name, h.on)).collect::<Vec<_>>();
+        // Separators don't count: the words run together find the name (no FTS term holds "hiphop").
+        assert_eq!(artists("hiphop"), ["Hip Hop Orchestra"]);
+        assert_eq!(lib.find(&words("hiphop"), 10).unwrap().totals.artists, 1);
+        // Trip Hop Express is a candidate (it shares hip hop's trigrams) the matcher keeps out: below its floor.
+        let tq = crate::search::trigram_query(&words("hiphop")).unwrap();
+        let candidates: Vec<String> = lib
+            .db()
+            .prepare("SELECT a.name FROM artists_tri_fts f JOIN artists a ON a.n = f.rowid WHERE artists_tri_fts MATCH ?1")
+            .unwrap()
+            .query_map([&tq], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(candidates.iter().any(|c| c == "Trip Hop Express"), "{candidates:?}");
+        assert_eq!(cratarr_rules::matcher::score("hiphop", "Trip Hop Express"), None);
+        // A typo: the FTS's typo terms find it already, once; a wrong first letter only the trigrams.
+        assert_eq!(artists("radiohed"), ["Radiohead"]);
+        assert_eq!(artists("xadiohead"), ["Radiohead"]);
+        // Spaced or run together, the album by its name.
+        assert_eq!(albums("lo fi"), [("Lo-Fi Beats".to_string(), "name")]);
+        assert_eq!(albums("lofi"), [("Lo-Fi Beats".to_string(), "name")]);
+        let f = lib.find(&words("lofi"), 10).unwrap();
+        assert_eq!((f.totals.albums, f.totals.artists, f.totals.tracks), (1, 0, 0));
+        // A track by its title, run together.
+        let f = lib.find(&words("rainywindow"), 10).unwrap();
+        assert_eq!((f.tracks.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), f.totals.tracks), (vec!["Rainy Window"], 1));
+        // Under three letters the trigram tables are not asked: what the FTS finds only.
+        assert!(lib.find(&words("lf"), 10).unwrap().albums.is_empty());
     }
 
     /// A real catalogue, built into a library: `CRATARR_REAL_CATALOGUE=<copy of catalogue.sqlite> cargo test

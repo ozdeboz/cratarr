@@ -25,14 +25,14 @@
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
   import { later } from './lib/later.svelte';
+  // What changed elsewhere while away, read again (decision 0087).
+  import './lib/changes.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
   import Visuals from './lib/visuals/Visuals.svelte';
   import { visuals } from './lib/visuals/shown.svelte';
   import Crates from './Crates.svelte';
   import AboutSheet, { about } from './lib/AboutSheet.svelte';
-  import QuickCrateSheet from './lib/QuickCrateSheet.svelte';
-  import { quickCrates } from './lib/quickCrates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
   import { listening, resumeGroup } from './lib/groupListen.svelte';
@@ -84,6 +84,13 @@
   import { jobs } from './lib/jobs.svelte';
   import { loadMe, me } from './lib/me.svelte';
   import { loadMine } from './lib/mySettings.svelte';
+  // The Downloads shelf (decision 0085, step 2): it follows the downloads from the start, so Downloads works offline.
+  import './lib/shelfStore.svelte';
+  // The search's matcher (0.12): fetched once the page is idle, so it is on the device before the network may go; the
+  // pill's lists read again when it is in.
+  import { loadMatcherWhenIdle } from './lib/matcherLoad';
+  import { matcherLoaded } from './lib/pageView.svelte';
+  loadMatcherWhenIdle(matcherLoaded);
 
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
@@ -1183,7 +1190,6 @@
   {/if}
 
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
-  {#if quickCrates.open}<QuickCrateSheet onclose={() => (quickCrates.open = false)} />{/if}
 
   {#if moreOpen}
     <!-- The page under the bar grown with the other pages dims; a tap there closes it. -->

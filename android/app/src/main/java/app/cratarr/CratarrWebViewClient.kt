@@ -28,6 +28,8 @@ class CratarrWebViewClient(
     private val onGone: () -> Unit,
     /** An album's cover of the device's own music, as JPEG (null: none); asked for off the main thread. */
     private val deviceCover: (String) -> ByteArray?,
+    /** A page of Cratarr's finished loading (its URL): the session follows it ([Sessions.loaded]). */
+    private val onLoaded: (WebView, String) -> Unit = { _, _ -> },
 ) : WebViewClientCompat() {
 
     /** Local mode's covers (decision 0052): `/__device/cover/{album_id}` on Cratarr's pages, from Android; the page's
@@ -35,6 +37,10 @@ class CratarrWebViewClient(
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         val url = request.url
         if (Prefs.originOf(url.toString()) !in origins) return null
+        // The page's Sign out (a form posted to /signout, which its service worker leaves alone): both addresses' session
+        // ends once it has loaded (0.12: one sign-in for both addresses, the owner 2026-10-30). Not cleared here: the
+        // request still carries the session, so Cratarr ends it.
+        if (request.isForMainFrame && url.path == Sessions.SIGN_OUT) Sessions.signOutAsked()
         val album = url.path?.takeIf { it.startsWith(DEVICE_COVER) }?.removePrefix(DEVICE_COVER)
             ?: return BundledPage.answer(view.context, request.method, url)
         val jpeg = deviceCover(album) ?: return WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
@@ -56,6 +62,11 @@ class CratarrWebViewClient(
             Log.w(TAG, "nothing opens ${request.url}")
         }
         return true
+    }
+
+    override fun onPageFinished(view: WebView, url: String) {
+        super.onPageFinished(view, url)
+        if (Prefs.originOf(url) in origins) onLoaded(view, url)
     }
 
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceErrorCompat) {

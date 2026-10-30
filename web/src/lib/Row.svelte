@@ -1,9 +1,9 @@
 <script module lang="ts">
   /** One column's value in a row (decision 0042); in a list's head, its name, a tap to order by it. */
   /** `warn`: a value that is a problem (a lossy album's bitrate), in the danger colour. */
-  /** A head's name that orders the list: on while it does. */
-  export type HeadSort = { on: boolean; onclick: () => void };
-  export type Cell = { id: string; text: string; width: number; end?: boolean; grow?: boolean; warn?: boolean; onclick?: () => void; on?: boolean };
+  /** A head's name that orders the list: on while it does, `down` its way then (its arrow, as the list's header has). */
+  export type HeadSort = { on: boolean; onclick: () => void; down?: boolean };
+  export type Cell = { id: string; text: string; width: number; end?: boolean; grow?: boolean; warn?: boolean; onclick?: () => void; on?: boolean; down?: boolean };
 </script>
 
 <script lang="ts">
@@ -24,6 +24,7 @@
   import type { Snippet } from 'svelte';
   import type { Attachment } from 'svelte/attachments';
   import { COLUMN_GAP } from './columns.svelte';
+  import Icon from './Icon.svelte';
 
   let {
     size,
@@ -140,7 +141,7 @@
   {#if lead}<span class="lead">{@render lead()}</span>{/if}
   <span class="text">
     <span class="line"
-      >{#if head && sorts?.title}<button type="button" class="title cell" class:on={sorts.title.on} onclick={sorts.title.onclick}>{title}</button
+      >{#if head && sorts?.title}<button type="button" class="title cell" class:on={sorts.title.on} onclick={sorts.title.onclick}>{title}{@render way(sorts.title.on, sorts.title.down)}</button
         >{:else}<span class="title">{title}</span>{/if}{@render badges?.()}</span
     >
     {#if typeof sub === 'string'}<span class="sub">{sub}</span>{:else if sub}<span class="sub">{@render sub()}</span>{/if}
@@ -149,7 +150,9 @@
     <span class="cells" style:flex={cellsFlex} style:gap="{COLUMN_GAP}px">
       {#each cells as c (c.id)}
         {#if c.onclick}
-          <button type="button" class="cell" class:end={c.end} class:on={c.on} style:flex={basis(c)} onclick={c.onclick}>{c.text}</button>
+          <button type="button" class="cell" class:end={c.end} class:on={c.on} style:flex={basis(c)} onclick={c.onclick}
+            >{#if c.end}{@render way(c.on, c.down)}{c.text}{:else}{c.text}{@render way(c.on, c.down)}{/if}</button
+          >
         {:else}
           <span class="cell" class:end={c.end} class:warn={c.warn} style:flex={basis(c)}>{c.text}</span>
         {/if}
@@ -157,10 +160,14 @@
     </span>
   {/if}
   {#if count !== undefined || meta}<span class="meta"
-      >{#if count !== undefined}{#if head && sorts?.count}<button type="button" class="n cell end" class:on={sorts.count.on} onclick={sorts.count.onclick}>{count}</button
+      >{#if count !== undefined}{#if head && sorts?.count}<button type="button" class="n cell end" class:on={sorts.count.on} onclick={sorts.count.onclick}>{@render way(sorts.count.on, sorts.count.down)}{count}</button
           >{:else}<span class="n">{count}</span>{/if}{/if}{@render meta?.()}</span
     >{/if}
 {/snippet}
+
+<!-- The order's way on the name that orders a head (decision 0060's arrow, as lib/ListHead shows it); before a number's
+     name, so the name stays over its numbers' edge. -->
+{#snippet way(on: boolean | undefined, down: boolean | undefined)}{#if on && down !== undefined}<span class="way"><Icon name={down ? 'arrowDown' : 'arrowUp'} size={12} /></span>{/if}{/snippet}
 
 <style>
   /* The columns (decision 0042): each from its width, so they line up from row to row; the room left over goes to the
@@ -212,6 +219,11 @@
 
   button.cell.end {
     text-align: right;
+  }
+  .way {
+    display: inline-flex;
+    margin: 0 2px;
+    vertical-align: -1px;
   }
 
   button.cell:hover,

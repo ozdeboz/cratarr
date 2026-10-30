@@ -107,10 +107,11 @@ class Prefs(context: Context) {
         }
 
     /** Kept awake and listening while idle too: for a device that is always on its charger. */
-    /** Where this device's controls point (decision 0062): [TARGET_SELF], `player:<name>` (one of Cratarr's players,
-     *  driven), or [TARGET_SERVER] (the media server's player). Changed only by the player service. */
+    /** Where this device's controls point (decision 0062): [TARGET_SELF] or `player:<name>` (one of Cratarr's players,
+     *  driven); a `server` kept from before 0.12 (the media server's player, gone) reads as this device. Changed only by
+     *  the player service. */
     var target: String
-        get() = p.getString(TARGET, null)?.takeIf { it == TARGET_SELF || it == TARGET_SERVER || (it.startsWith("player:") && it.length > 7) } ?: TARGET_SELF
+        get() = p.getString(TARGET, null)?.takeIf { it == TARGET_SELF || (it.startsWith("player:") && it.length > 7) } ?: TARGET_SELF
         set(value) {
             p.edit().putString(TARGET, value).apply()
         }
@@ -570,7 +571,6 @@ class Prefs(context: Context) {
         const val TARGET = "target"
         const val TARGET_WHY = "target_why"
         const val TARGET_SELF = "self"
-        const val TARGET_SERVER = "server"
         const val DOWNLOAD_QUALITY = "download_quality"
         const val DOWNLOAD_MOBILE = "download_mobile"
         const val SYNC_BUDGET_GB = "sync_budget_gb"

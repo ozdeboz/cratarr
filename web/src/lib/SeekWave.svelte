@@ -23,6 +23,7 @@
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { stepWindow, waveColours, type HoldWindow } from './waveView';
+  import { STRIP_SPAN, type StripTrack } from './waveStrip';
   import { playback } from './deviceLog';
 
   let {
@@ -136,10 +137,22 @@
   // speed; let go, back to the track's own view. In s from the playing track's start. Through the queue it is the wide
   // view (the tracks around drawn with their own waveforms, their boundaries marked); on one track, its zoom.
   let win = $state<HoldWindow | null>(null);
+  /** The track a hold's window began in: its start is where the wide view's places count from while the window lasts,
+   *  so they stand still as the tape goes on into other tracks (0.11.1: counted from the playing track, every track
+   *  change moved them all, and the bars drawn on them with it). */
+  let holdBase = $state<number | null>(null);
+  /** What shows, in s of the hold's frame (from holdBase's start), as the window's frame put it: the same place in the
+   *  music whichever track plays when it is drawn (0.12, the owner: "bars jump sideways"; drawn from the window in the
+   *  playing track's s, a track change showed a frame of the last track's window over the new track's places, a
+   *  track's length off). */
+  // The playhead too (`pos`), from the same frame: read as the page draws, it was a frame on from the window at times
+  // and jittered against the bars.
+  let holdShown = $state<{ from: number; to: number; pos: number } | null>(null);
   $effect(() => {
     const on = zoomOn && holdNow.held;
     return untrack(() => {
       if (!on && !win) return;
+      if (!win) holdBase = local.index;
       let raf = 0;
       let last = performance.now();
       let idx = local.index;
@@ -166,27 +179,35 @@
           },
           dt,
         );
+        const fa = win && holdBase !== null && holdBase !== local.index ? (along(holdBase, 0) ?? 0) : 0;
+        holdShown = win ? { from: win.shown.from - fa, to: win.shown.to - fa, pos: herePos - fa } : null;
         if (win) raf = requestAnimationFrame(step);
       };
       raf = requestAnimationFrame(step);
       return () => cancelAnimationFrame(raf);
     });
   });
+  /** Where the hold's frame counts from: the start of the track it began in, from this track's start (lib/waveStrip). */
+  const frameAt = $derived(holdBase !== null && holdBase !== local.index ? (along(holdBase, 0) ?? 0) : 0);
+  /** What shows in s from this track's start, from the hold's frame as it is drawn (holdShown). */
+  const shownHere = $derived(win && holdShown ? { a: holdShown.from + frameAt, b: holdShown.to + frameAt } : null);
   /** The wide view: the window through the queue, in s from this track's start. */
-  const wide = $derived(win && throughQueue ? { a: win.shown.from, b: win.shown.to } : null);
-  /** The tracks the wide view covers, by queue place, each from where along the queue. */
+  const wide = $derived(throughQueue ? shownHere : null);
+  /** The tracks the wide view's strips cover (the window and as much again either side, lib/waveStrip's STRIP_SPAN), by
+   *  queue place, each from where along the queue. */
   const wideTracks = $derived.by(() => {
     if (!wide || !hereLen) return null;
     const out: { i: number; start: number; d: number }[] = [{ i: local.index, start: 0, d: hereLen }];
     // Not along the queue: this track alone.
     if (!throughQueue) return out;
-    for (let i = local.index - 1, s = 0; i >= 0 && s > wide.a; i--) {
+    const reach = ((STRIP_SPAN - 1) / 2) * (wide.b - wide.a);
+    for (let i = local.index - 1, s = 0; i >= 0 && s > wide.a - reach; i--) {
       const d = local.queue[i]?.duration_secs;
       if (!d) break;
       s -= d;
       out.unshift({ i, start: s, d });
     }
-    for (let i = local.index + 1, s = hereLen; i < local.queue.length && s < wide.b; i++) {
+    for (let i = local.index + 1, s = hereLen; i < local.queue.length && s < wide.b + reach; i++) {
       const d = local.queue[i]?.duration_secs;
       if (!d) break;
       out.push({ i, start: s, d });
@@ -200,46 +221,15 @@
       if (q) loadWaveform(q.source, q.id);
     }
   });
-  /** Which tracks those are: the strip is made again only when they change (not each frame the view eases). */
-  const wideSet = $derived(wideTracks ? wideTracks.map((t) => `${t.i}:${t.start}:${t.d}`).join(',') : null);
-  /** The tracks' waveforms end to end (each against its own loudest, at one resolution along the queue). */
-  const wideBins = $derived.by(() => {
-    const key = wideSet;
-    if (!key || !hereLen) return null;
-    const ts = key.split(',').map((k) => {
-      const [i, start, d] = k.split(':').map(Number);
-      return { i, start, d };
-    });
-    const lo = ts[0].start;
-    const hi = ts[ts.length - 1].start + ts[ts.length - 1].d;
-    const total = hi - lo;
-    // One resolution along the queue (each track's bars the same whatever else the window covers).
-    const per = 8;
-    const parts = ts.map((t) => {
+  /** The tracks the wide view covers, each in the hold's frame with its own bins (each against its own loudest,
+   *  lib/waveStrip): a track's bars the same whatever else the window covers, wherever the tape is. */
+  const wideBins = $derived.by((): { tracks: StripTrack[]; queue: number[] } | null => {
+    if (!wideTracks || !hereLen) return null;
+    const tracks = wideTracks.map((t) => {
       const q = local.queue[t.i];
-      const own = q ? waveformOf(q.source, q.id) : null;
-      const m = Math.max(1, Math.round(t.d * per));
-      const out = new Uint8Array(m);
-      if (own && own.length) {
-        let top = 1;
-        for (const v of own) top = Math.max(top, v);
-        for (let j = 0; j < m; j++) {
-          const from = Math.floor((j * own.length) / m);
-          const to = Math.max(from + 1, Math.floor(((j + 1) * own.length) / m));
-          let v = 0;
-          for (let k = from; k < to; k++) v = Math.max(v, own[k]);
-          out[j] = Math.round((v / top) * 255);
-        }
-      }
-      return out;
+      return { key: q ? `${q.source}/${q.id}` : `#${t.i}`, start: t.start - frameAt, d: t.d, bins: q ? (waveformOf(q.source, q.id) ?? null) : null };
     });
-    const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let o = 0;
-    for (const p of parts) {
-      all.set(p, o);
-      o += p.length;
-    }
-    return { bins: all, lo, total, marks: ts.slice(1).map((t) => t.start), tracks: ts.map((t) => t.i) };
+    return { tracks, queue: wideTracks.map((t) => t.i) };
   });
   // Each track's colour in a wide view, its own (the owner, 2026-10-29: "colors should stay true to their waveform"):
   // the playing one's as the player has it, kept once it is the track before; the next ones' covers fetched ahead, so
@@ -257,26 +247,26 @@
       if (t) untrack(() => accentFor(t));
     }
   });
-  /** The wide view for lib/Waveform: the strip, the stretch shown, this track's place in it and the boundaries. */
+  /** The wide view for lib/Waveform, in s of the hold's frame: its tracks, the stretch shown, this track's place in it
+   *  and the boundaries. */
   const wideStrip = $derived.by(() => {
     const s = wideBins;
     if (!wide || !s || !hereLen) return null;
-    const at = (x: number) => (x - s.lo) / s.total;
     return {
-      bins: s.bins,
-      from: Math.max(0, at(wide.a)),
-      to: Math.min(1, at(wide.b)),
-      cur0: at(0),
-      cur1: at(hereLen),
-      marks: s.marks.map(at),
+      tracks: s.tracks,
+      from: holdShown!.from,
+      to: holdShown!.to,
+      cur0: -frameAt,
+      cur1: hereLen - frameAt,
+      marks: s.tracks.slice(1).map((t) => t.start),
       // One colour for the track the player shows, in every state (the owner, 2026-10-30: "The color should be
       // stable"; it was its cover's here and the player's elsewhere, yellow while winding, green let go).
       colours: waveColours(
-        s.tracks.map((i) => (local.queue[i] ? `${local.queue[i].source}/${local.queue[i].id}` : null)),
+        s.queue.map((i) => (local.queue[i] ? `${local.queue[i].source}/${local.queue[i].id}` : null)),
         playingKey(shownPlaying()),
         ownColours,
         (k) => {
-          const q = s.tracks.map((i) => local.queue[i]).find((q) => q && `${q.source}/${q.id}` === k);
+          const q = s.queue.map((i) => local.queue[i]).find((q) => q && `${q.source}/${q.id}` === k);
           return q ? accentFor(q) : null;
         },
       ),
@@ -301,7 +291,7 @@
     wideLost = lost;
   });
   /** The zoom on one track (0..1 of it). */
-  const view = $derived(win && !throughQueue && hereLen ? { from: win.shown.from / hereLen, to: win.shown.to / hereLen } : null);
+  const view = $derived(shownHere && !throughQueue && hereLen ? { from: shownHere.a / hereLen, to: shownHere.b / hereLen } : null);
   /** The look-ahead shown (0..1 of the track): a hold's landing, ahead of the playhead the way it goes; in a track
    *  further on through the queue, at this one's edge that way, until the tape is in that track (the owner, 2026-10-28:
    *  the line stood at the end, and on the next track at the last one's place). */
@@ -421,7 +411,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} want={shownWant} {loading} progress={win && hereLen ? herePos / hereLen : dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} want={shownWant} {loading} progress={shownHere && holdShown && hereLen ? (holdShown.pos + frameAt) / hereLen : dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

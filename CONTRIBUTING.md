@@ -5,7 +5,7 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 
 ## Building and running
 
-- **Web app** (`web/`): Node 22 and pnpm. `pnpm install`, then `pnpm build` (the server and the Android app serve
+- **Web app** (`web/`): Node 24 and pnpm. `pnpm install`, then `pnpm build` (the server and the Android app serve
   `web/dist`, so build it before them), or `pnpm dev` for Vite's dev server on port 5173, which sends `/api` to a running server
   (`CRATARR_URL`, by default `http://127.0.0.1:8080`).
 - **Server** (`server/`): stable Rust. `cargo run` serves on port 8080. Set `CRATARR_DATA_DIR` to keep settings and
@@ -15,7 +15,7 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
   page beside it in an otherwise empty image.
 - **Android app** (`android/`): see [android/README.md](android/README.md#building) (Android Studio's JDK and the
   Android SDK, then `./gradlew assembleDebug`).
-- **Desktop app** (`desktop/`): see [desktop/README.md](desktop/README.md) (Node 22, `npm ci`, then `npm run dist`).
+- **Desktop app** (`desktop/`): see [desktop/README.md](desktop/README.md) (Node 24, `npm ci`, then `npm run dist`).
 
 ## Before a change goes in
 

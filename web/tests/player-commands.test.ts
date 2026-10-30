@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { commandOf, holdsQueue } = await import('../src/lib/player/commands.ts');
+const { commandOf, holdsQueue, savedOutput, outputOfTarget, targetOfOutput } = await import('../src/lib/player/commands.ts');
 const t = { source: 'cratarr', id: 'tr-1', name: 'A', artist: null, album: null, album_id: null };
 
 test('the ops that are named otherwise', () => {
@@ -51,6 +51,19 @@ test('the ops that are the command by name, with their fields as given', () => {
 test('which player the page drives', () => {
   assert.equal(holdsQueue('local', true, null), true, 'here');
   assert.equal(holdsQueue('local', false, null), false, 'a browser that cannot play here');
-  assert.equal(holdsQueue('remote', true, null), false, "the media server's player");
-  assert.equal(holdsQueue('remote', false, 'Tablet'), true, "a player of Cratarr's it drives");
+  assert.equal(holdsQueue('player:Tablet', false, 'Tablet'), true, "a player of Cratarr's it drives");
+});
+
+test("the media server's player is gone (0.12): a kept one plays here, an app pointed there is pointed here", () => {
+  assert.equal(savedOutput('remote'), 'local', 'kept from before 0.12');
+  assert.equal(savedOutput('local'), 'local');
+  assert.equal(savedOutput('player:Salon tablet'), 'player:Salon tablet');
+  assert.equal(savedOutput('player:'), null, 'no name');
+  assert.equal(savedOutput(42), null);
+  assert.equal(savedOutput(undefined), null);
+  assert.equal(outputOfTarget('server'), 'local', 'an app still pointed at the server');
+  assert.equal(outputOfTarget('self'), 'local');
+  assert.equal(outputOfTarget('player:Tablet'), 'player:Tablet');
+  assert.equal(targetOfOutput('local'), 'self');
+  assert.equal(targetOfOutput('player:Tablet'), 'player:Tablet');
 });

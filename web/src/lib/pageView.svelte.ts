@@ -243,10 +243,15 @@ export function usePageMode(get: () => PageMode | null) {
   });
 }
 
+/** The search's matcher in (0.12, lib/matcherLoad): what the pill lets through is read again then. */
+const matching = $state({ ready: false });
+export const matcherLoaded = () => (matching.ready = true);
+
 /** The pill's search field's words on a page that has one. */
-/** Whether the pill's search lets these texts through: every word of it a word's start in one of them. */
+/** Whether the pill's search lets these texts through, as every search matches (lib/search; 0.12: the server's
+ *  matcher, separators aside, an alias as good as the name, a few typos forgiven). */
 export function matchesSearch(...texts: (string | null | undefined)[]): boolean {
-  // Read as every search reads (lib/search, decision 0072): accents and case aside, each word a word's start.
+  void matching.ready;
   return matches(words(pageView.query), ...texts);
 }
 

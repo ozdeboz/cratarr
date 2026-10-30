@@ -367,6 +367,9 @@ class MainActivity : AppCompatActivity() {
             onError = { cannotReach(url, it) },
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
+            // One sign-in for both addresses (0.12, the owner 2026-10-30): the session a page loaded with goes to the
+            // other address too; a sign-in page with the other's session at hand takes it and loads again.
+            onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
         )
         // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
@@ -399,13 +402,16 @@ class MainActivity : AppCompatActivity() {
         webView = view
         keepPagePrefs(view)
         shown = url
+        // The other address's session, when this one has none: no sign-in page for a moment as the address changes.
+        Sessions.toward(app, url)
         view.loadUrl(openAt?.let { "${url.trimEnd('/')}/$it" } ?: url)
         openAt = null
     }
 
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
-     *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file). */
+     *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file), `snippet` (a
+     *  track's snippet, 0.12). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -431,6 +437,9 @@ class MainActivity : AppCompatActivity() {
             "network" -> reply.postMessage(NetState.now(this).toString())
             "device-plays" -> reply.postMessage(Plays.playedHere(this).toString())
             "player" -> player?.handle(message) ?: waiting.add(message)
+            // A track's snippet (0.12): played beside the music by the player service. Before the player is connected
+            // it is let go: a snippet asked then would sound late, after its menu.
+            "snippet" -> player?.snippet(message)
             // Where this device's controls point (decision 0062): asked of the player service, which decides and
             // tells the page (modeChanged). Started for it while the app is in front.
             "target" -> {

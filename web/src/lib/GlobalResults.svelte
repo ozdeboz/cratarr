@@ -5,8 +5,14 @@
   // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
-  // the server makes them (0.11), Make a crate of this: the words read into a quick crate (lib/QuickCrateSheet).
+  // the server makes them (0.11), Grab a crate (the owner, 2026-10-30; was Make a crate of this): Crates, the words read into a quick crate's sentence (lib/QuickCrate);
+  // where the words read as a crate of two kinds or more, that crate as a card (lib/SearchCrateCard, mockup 1a). A
+  // result's long-press, right-click or ⋮ opens its own menu, as the same thing's does in any list (decision 0058).
+  import { fromAction } from 'svelte/attachments';
   import { includeArtist, takeBackExcluded } from './api';
+  import { longpress } from './longpress';
+  import WorkMenu from './WorkMenu.svelte';
+  import WorkSheet from './WorkSheet.svelte';
   import { loadExcludedArtists } from './excludedArtists.svelte';
   const EVERYWHERE = 'excluded-everywhere:';
   import Cover from './Cover.svelte';
@@ -26,6 +32,11 @@
   import { leaveOnArrival } from './navStep.svelte';
   import type { SearchResult } from './search';
   import { toast } from './toast.svelte';
+  import AlbumMenu from './AlbumMenu.svelte';
+  import ArtistRowMenu from './ArtistRowMenu.svelte';
+  import SearchCrateCard from './SearchCrateCard.svelte';
+  import SubjectMenu from './SubjectMenu.svelte';
+  import TrackMenu from './TrackMenu.svelte';
 
   /** The kinds the page already shows: left out here (the browser's, Settings' parts, by their `kind` too). */
   let { except = [] }: { except?: string[] } = $props();
@@ -56,7 +67,12 @@
   const DEEP_KINDS = ['album', 'artist', 'playlist', 'crate'];
   const KNOWN = ['spotify', 'suggested', 'requested'];
   const deep = (it: SearchResult) => DEEP_KINDS.includes(it.kind) && it.matched.some((m) => m.on !== 'name');
+  /** A work found (0.12): its sheet over the results, which stay; its menu (a long-press, a right-click or ⋮). */
+  let workOpen = $state<{ mbid: string; title: string } | null>(null);
+  let workMenu = $state<{ mbid: string; title: string } | null>(null);
+  const workOf = (it: SearchResult) => ({ mbid: it.subject.slice('work:'.length), title: it.title });
   function open(it: SearchResult) {
+    if (it.kind === 'work') return void (workOpen = workOf(it));
     leaveSearch(deep(it));
     if (it.subject.startsWith('#')) location.hash = it.subject;
     else if (it.kind === 'missing')
@@ -85,6 +101,32 @@
     }
   }
 
+  // A result's own menu (decision 0058): a track's, an album's, an artist's, a crate's, a genre's or another word's, a
+  // playlist's; the rest (a page, Settings' parts, an album not in the library, Beyond's) have none.
+  type Menu =
+    | { kind: 'track'; track: import('./TrackMenu.svelte').MenuTrack }
+    | { kind: 'album'; source: string; id: string; title: string; artist: string | null }
+    | { kind: 'artist'; source: string; name: string; cover: string | null }
+    | { kind: 'subject'; subject: string };
+  let menu = $state<Menu | null>(null);
+  function menuOf(it: SearchResult & { track?: string }): Menu | null {
+    const album = /^album:([^/]+)\/(.+)$/.exec(it.subject);
+    // A track's artist, album and length as the server gives them apart from its line (0.12).
+    if (it.kind === 'track' && it.track && album) {
+      return {
+        kind: 'track',
+        track: { source: album[1], id: it.track, name: it.title, artist: it.artist ?? null, album: it.album ?? null, album_id: it.album_id ?? album[2], duration_secs: it.duration_secs ?? null },
+      };
+    }
+    if (it.kind === 'album' && album) return { kind: 'album', source: album[1], id: album[2], title: it.title, artist: (it.sub ?? '').split(' · ')[0] || null };
+    const artist = /^artist:([^/]+)\/(.+)$/.exec(it.subject);
+    if (it.kind === 'artist' && artist) return { kind: 'artist', source: artist[1], name: artist[2], cover: it.cover ?? null };
+    if (it.subject.startsWith('crate:')) return { kind: 'subject', subject: it.subject };
+    if (it.subject.startsWith('playlist:')) return { kind: 'subject', subject: it.subject.slice('playlist:'.length) };
+    return null;
+  }
+  const press = (it: SearchResult & { track?: string }) => fromAction(longpress, () => () => (menu = menuOf(it)));
+
   /** Show all's end in sight: its next page. */
   function nearEnd(more: () => void) {
     return (el: Element) => {
@@ -103,13 +145,27 @@
 </script>
 
 {#snippet found(it: SearchResult & { track?: string })}
+  {@const has = menuOf(it) !== null}
   <li>
-    <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
+    {#if it.kind === 'work'}{@render work(it)}{:else}
+    <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
       {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
+      {#snippet action()}{#if has}<button class="icon" aria-label={`Menu of ${it.title}`} title="More" onclick={() => (menu = menuOf(it))}><Icon name="moreVert" size={22} /></button>{/if}{/snippet}
     </Row>
+    {/if}
   </li>
+{/snippet}
+
+<!-- A work found (0.12): its composers as its second line, then its catalogue and recordings; a tap opens it, a
+     long-press, a right-click or ⋮ its menu (lib/WorkMenu). -->
+{#snippet work(it: SearchResult)}
+  <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={fromAction(longpress, () => () => (workMenu = workOf(it)))}>
+    {#snippet front()}<span class="art"><Cover src={it.cover ?? null} /></span>{/snippet}
+    {#snippet sub()}{(it.composers ?? []).map((c) => c.name).join(', ')}{#if it.sub}<span class="why">{it.composers?.length ? ' · ' : ''}{it.sub}</span>{/if}{/snippet}
+    {#snippet action()}<button class="tool" aria-label="{it.title}: its menu" onclick={() => (workMenu = workOf(it))}><Icon name="moreVert" size={22} /></button>{/snippet}
+  </Row>
 {/snippet}
 
 {#if q && globalSearch.all}
@@ -127,13 +183,17 @@
 {:else if q && (groups.length || asked)}
   <section class="global" aria-label="Everywhere">
     {#if quickOn()}
-      <ul class="rows">
-        <li>
-          <Row size="large" title="Make a crate of this" sub={q} label={`Make a crate of ${q}`} onclick={() => openQuickCrate(q)}>
-            {#snippet front()}<span class="art made"><Icon name="crates" size={24} /></span>{/snippet}
-          </Row>
-        </li>
-      </ul>
+      <SearchCrateCard {q}>
+        {#snippet plain()}
+          <ul class="rows">
+            <li>
+              <Row size="large" title="Grab a crate" sub={q} label={`Grab a crate of ${q}`} onclick={() => openQuickCrate(q)}>
+                {#snippet front()}<span class="art made"><Icon name="crates" size={24} /></span>{/snippet}
+              </Row>
+            </li>
+          </ul>
+        {/snippet}
+      </SearchCrateCard>
     {/if}
     {#if groups.length}
       {#each groups as g (g.kind)}
@@ -156,6 +216,15 @@
   </section>
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding />
+{#if menu?.kind === 'track'}
+  <TrackMenu track={menu.track} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'album'}
+  <AlbumMenu source={menu.source} album={{ id: menu.id, title: menu.title, artist: menu.artist }} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'artist'}
+  <ArtistRowMenu source={menu.source} name={menu.name} cover={menu.cover} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'subject'}
+  <SubjectMenu subject={menu.subject} onclose={() => (menu = null)} />
+{/if}
 {#if leftOut}
   {@const it = leftOut}
   <MenuSheet label={it.title} title={it.title} images={it.cover ? [it.cover] : []} chips={[it.sub ?? '']} onclose={() => (leftOut = null)}>
@@ -163,6 +232,9 @@
   </MenuSheet>
 {/if}
 <!-- A server that cannot search (before 0.9.3) or did not answer: nothing more than the page's own. -->
+
+{#if workMenu}{@const w = workMenu}<WorkMenu mbid={w.mbid} title={w.title} onopen={() => (workOpen = w)} onclose={() => (workMenu = null)} />{/if}
+{#if workOpen}<WorkSheet mbid={workOpen.mbid} title={workOpen.title} onclose={() => (workOpen = null)} />{/if}
 
 <style>
   /* The pages' own side gutter (the owner: too little room on the left), outside any page's <main>. */
@@ -175,6 +247,19 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* A work's ⋮ (0.12), as WorkSheet's. */
+  .tool {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
   }
 
   .art {
@@ -190,12 +275,26 @@
     border-radius: 50%;
   }
 
-  /* Make a crate of this: the crates' icon where a cover would be. */
+  /* Grab a crate: the crates' icon where a cover would be. */
   .art.made {
     display: grid;
     place-items: center;
     background: color-mix(in srgb, var(--accent) 18%, transparent);
     color: var(--accent-ink);
+  }
+
+  /* A result's ⋮ (its menu), as a list row's. */
+  .icon {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
   }
 
   /* The library's dot, as the Library's lists have it. */

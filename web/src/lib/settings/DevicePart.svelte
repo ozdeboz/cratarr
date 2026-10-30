@@ -53,6 +53,12 @@
        own page (lib/StartStopSheet, as the play button's long press opens it). -->
   {@const tape = startStopNow()}
   <Item name="Tape" value={[tape.mode === 'off' ? 'No effect' : tape.mode === 'vinyl' ? 'Vinyl' : 'Fade', tape.rewind ? 'winding' : null].filter(Boolean).join(' · ')} onclick={() => (tapeOpen = true)} />
+  <!-- Snippets (0.12, lib/snippetPlayer): a track's menu plays its liveliest 20 s; off, menus stay silent. -->
+  <Item
+    name="Snippets in menus"
+    more="Opening a track's menu plays its liveliest 20 seconds, with what plays here quieter meanwhile."
+    toggle={{ checked: prefs.snippetsInMenus, onchange: (on) => (prefs.snippetsInMenus = on) }}
+  />
   {#if !inApp && isPhone}
     <Item
       name="Lossless"

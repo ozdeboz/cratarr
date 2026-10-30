@@ -28,6 +28,7 @@ export type EntryId =
   | 'copyToMine'
   | 'saveAsPlaylist'
   | 'startCrate'
+  | 'grabCrate'
   | 'download'
   | 'keep'
   | 'removeFromDevice'
@@ -106,6 +107,8 @@ export const MENUS: Record<MenuKind, Kind> = {
   artist: {
     actions: ['Play', 'Shuffle', 'Play next', 'Add to queue', 'Start radio'],
     cards: [
+      // Sounds like them: the crate search's sentence with the artist as its "like" term (0.12, one way to make a crate).
+      { group: 'go', entries: ['soundsLike'] },
       // Out everywhere, or out of the crate it is opened from (0.10, decision 0083).
       { group: 'feel', entries: ['favourite', 'excludeArtist', 'notInCrate'] },
       { group: 'collect', entries: ['addToPlaylist'] },
@@ -131,8 +134,9 @@ export const MENUS: Record<MenuKind, Kind> = {
     actions: ['Play', 'Shuffle', 'Start radio'],
     cards: [
       { group: 'go', entries: ['view'] },
-      // A crate of one's own is saved as a playlist; what sounds like something starts a crate of its own.
-      { group: 'collect', entries: ['saveAsPlaylist', 'startCrate'] },
+      // A crate of one's own is saved as a playlist; what sounds like something starts a crate of its own; a word's crate
+      // (a style, a mood, a tag, a label) grabs a crate of that word to refine (0.12).
+      { group: 'collect', entries: ['saveAsPlaylist', 'startCrate', 'grabCrate'] },
       { group: 'take', entries: ['download', 'keep', 'share'] },
       { group: 'change', entries: ['edit'] },
       { group: 'remove', entries: ['deleteCrate'] },
@@ -142,7 +146,8 @@ export const MENUS: Record<MenuKind, Kind> = {
     actions: ['Play', 'Shuffle', 'Start radio'],
     cards: [
       { group: 'go', entries: ['view'] },
-      { group: 'collect', entries: ['startCrate'] },
+      // The genre as a crate search's term to refine (0.12; one way to make a crate: the sentence, its Edit the builder).
+      { group: 'collect', entries: ['grabCrate'] },
       { group: 'take', entries: ['download', 'share'] },
     ],
   },
@@ -196,6 +201,7 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   copyToMine: 'Copy to my playlists',
   saveAsPlaylist: 'Save as playlist',
   startCrate: 'Start a crate from it',
+  grabCrate: 'Grab a crate',
   download: 'Download…',
   keep: 'Sync to this device',
   removeFromDevice: 'Remove from this device',
@@ -230,6 +236,45 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
 
 /** Names no menu uses any more: what 0058 and its amendment renamed. */
 export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…'];
+
+/** What a menu offers out of reach (decision 0085: don't offer what can't be upheld; the owner, 2026-10-30): the entries
+ *  that work with Cratarr away. A navigation reads the service worker's last copy (lib/away), a heart, a rating, a
+ *  playlist's membership or name and an exclusion are kept on the device and sent later (lib/later), the queue and what
+ *  is on this device are the device's own, and a web search needs the internet, not Cratarr. Every other entry needs
+ *  Cratarr and is left out while it is away; one not named here is too, so a new entry is offline only once listed. */
+export const WORKS_AWAY: ReadonlySet<EntryId> = new Set<EntryId>([
+  'view',
+  'goAlbum',
+  'goArtist',
+  'goGenre',
+  'favourite',
+  'rating',
+  'excludeEverywhere',
+  'excludeArtist',
+  'notInCrate',
+  'addToPlaylist',
+  'rename',
+  'removeFromDevice',
+  'webSearch',
+  'geniusSearch',
+  'openOnBandcamp',
+  'artistOnBandcamp',
+  'queues',
+  'removeFromQueue',
+  'removeFromList',
+  'removeResume',
+  'clearQueue',
+  'extra',
+]);
+
+/** The large actions that need Cratarr itself (Play and the queue's play what is on this device out of reach, lib/play). */
+export const ACTIONS_NEED_SERVER: ReadonlySet<string> = new Set(['Start radio', 'Ask to play next', 'Ask to add to queue']);
+
+/** Whether a menu shows entry `e` (`away`: Cratarr out of reach). */
+export const offeredAway = (e: EntryId, away: boolean) => !away || WORKS_AWAY.has(e);
+
+/** Whether a menu shows the large action named `label`. */
+export const actionAway = (label: string, away: boolean) => !away || !ACTIONS_NEED_SERVER.has(label);
 
 /** A kind's cards, in the table's order. */
 export const cardsOf = (kind: MenuKind): readonly MenuCard[] => MENUS[kind].cards;

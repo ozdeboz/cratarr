@@ -55,6 +55,8 @@ pub struct WorkSong {
     pub title: String,
     pub artist: String,
     pub year: Option<u32>,
+    /// Its length in seconds, where known (0.12, decision 0086: a work's recording shows its length).
+    pub duration_secs: Option<f64>,
 }
 
 /// A song in Cratarr's ids, with its album's name and album artist (see `Library::song_ids`).
@@ -299,6 +301,48 @@ fn typo_fts_query(db: &Connection, words: &[String]) -> Result<Option<String>> {
         typo.push(crate::search::typo_terms(w, terms.iter().map(String::as_str)));
     }
     Ok(crate::search::fts_with(words, &typo))
+}
+
+/// Most candidates a kind's trigram table gives search (0.12), for the matcher to judge.
+const TRIGRAM_CANDIDATES: i64 = 200;
+
+/// What a kind's trigram table adds to its FTS hits (0.12: one matcher, search in general; `library::TRIGRAMS`): the
+/// names sharing trigrams with the words' letters (`search::trigram_query`), the most alike first by the table's bm25,
+/// at most `TRIGRAM_CANDIDATES`; of those, the ones the matcher finds (`matcher::score_name`: exact, a start, or alike
+/// at its `FLOOR` or above) that the FTS query `fq` does not (none of `have`, the FTS hits taken; none `fts` matches
+/// at all, asked only when one is left). By row number and id, the most alike first. None under three letters.
+#[allow(clippy::too_many_arguments)]
+fn trigram_extras(db: &Connection, tri: &str, table: &str, column: &str, fts: &str, fq: &str, words: &[String], have: &[i64]) -> Result<Vec<(i64, String)>> {
+    let Some(tq) = crate::search::trigram_query(words) else { return Ok(Vec::new()) };
+    let q = words.join(" ");
+    let mut st = db.prepare_cached(&format!(
+        "SELECT f.rowid, t.id, t.{column} FROM {tri} f JOIN {table} t ON t.n = f.rowid WHERE {tri} MATCH ?1 ORDER BY bm25({tri}) LIMIT ?2"
+    ))?;
+    let candidates: Vec<(i64, String, String)> =
+        st.query_map(rusqlite::params![tq, TRIGRAM_CANDIDATES], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut found: Vec<(i64, String)> = candidates
+        .into_iter()
+        .filter(|(n, _, _)| !have.contains(n))
+        .filter(|(_, _, name)| cratarr_rules::matcher::score_name(&q, &cratarr_rules::matcher::Name::new(name.as_str())).is_some())
+        .map(|(n, id, _)| (n, id))
+        .collect();
+    if !found.is_empty() {
+        // Hits of the FTS query beyond those taken are its own (found, ranked, counted there): not added again.
+        let all: std::collections::HashSet<i64> = numbers(db, &format!("SELECT rowid FROM {fts} WHERE {fts} MATCH ?1"), &[&fq])?.into_iter().collect();
+        found.retain(|(n, _)| !all.contains(n));
+    }
+    Ok(found)
+}
+
+/// How many of a kind's trigram extras (`trigram_extras`, by id) the ids `sql` gives for `q` leave out: what they add to
+/// the kind's count. Not asked without any.
+fn beyond(db: &Connection, sql: &str, q: &str, extras: &[(i64, String)]) -> Result<usize> {
+    if extras.is_empty() {
+        return Ok(0);
+    }
+    let mut st = db.prepare_cached(sql)?;
+    let ids: std::collections::HashSet<String> = st.query_map([q], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(extras.iter().filter(|(_, id)| !ids.contains(id)).count())
 }
 
 /// Search asks the index for this many times what it shows (0.9.7), at most `WIDEST`, and ranks them before the cut.
@@ -589,8 +633,11 @@ impl Library {
         fn pick<T: Clone>(list: &[T], order: &[usize]) -> Vec<T> {
             order.iter().map(|&i| list[i].clone()).collect()
         }
-        // Albums by themselves, the name counting most; then those found only by a track's title.
-        let own = numbers(&db, "SELECT rowid FROM albums_fts WHERE albums_fts MATCH ?1 ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2", &[&fq, &wide])?;
+        // Albums by themselves, the name counting most, with those only the trigram table finds by their name (0.12);
+        // then those found only by a track's title.
+        let mut own = numbers(&db, "SELECT rowid FROM albums_fts WHERE albums_fts MATCH ?1 ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2", &[&fq, &wide])?;
+        let album_extras = trigram_extras(&db, "albums_tri_fts", "albums", "name", "albums_fts", &fq, words, &own)?;
+        own.extend(album_extras.iter().map(|(n, _)| *n));
         let listed = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?;
         let listed = pick(&listed, &ranked(listed.iter().map(|a| a.name.as_str()).collect()));
         let mut albums: Vec<(Album, Hit)> = listed
@@ -611,6 +658,8 @@ impl Library {
             )?,
             ..Totals::default()
         };
+        // The trigram table's, none of the albums' FTS hits: those not found by a track's title either (0.12).
+        totals.albums += beyond(&db, "SELECT DISTINCT s.album_id FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1", &title_q, &album_extras)?;
         let mut st = db.prepare_cached(
             "SELECT s.album_id, count(*), min(s.title) FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1
              GROUP BY s.album_id ORDER BY count(*) DESC LIMIT ?2",
@@ -630,8 +679,10 @@ impl Library {
         let (mut list, hits): (Vec<Album>, Vec<Hit>) = albums.into_iter().unzip();
         self.album_artists(&db, &mut list)?;
         let albums: Vec<(Album, Hit)> = list.into_iter().zip(hits).collect();
-        // Artists by their name; then those found only by an album's name.
-        let own = numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2", &[&fq, &wide])?;
+        // Artists by their name, with those only the trigram table finds (0.12); then those found only by an album's name.
+        let mut own = numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2", &[&fq, &wide])?;
+        let artist_extras = trigram_extras(&db, "artists_tri_fts", "artists", "name", "artists_fts", &fq, words, &own)?;
+        own.extend(artist_extras.iter().map(|(n, _)| *n));
         let mut artists: Vec<(Artist, Hit)> = Vec::new();
         {
             let mut st = db.prepare_cached("SELECT id, name, mbid, album_count, order_name FROM artists WHERE n = ?1")?;
@@ -652,6 +703,13 @@ impl Library {
              UNION SELECT aa.artist_id FROM albums_fts f JOIN albums a ON a.n = f.rowid JOIN album_artists aa ON aa.album_id = a.id WHERE albums_fts MATCH ?2)",
             &[&fq, &name_q],
         )?;
+        // The trigram table's, none of the artists' FTS hits: those not found by an album's name either (0.12).
+        totals.artists += beyond(
+            &db,
+            "SELECT DISTINCT aa.artist_id FROM albums_fts f JOIN albums a ON a.n = f.rowid JOIN album_artists aa ON aa.album_id = a.id WHERE albums_fts MATCH ?1",
+            &name_q,
+            &artist_extras,
+        )?;
         let mut st = db.prepare_cached(
             "SELECT aa.artist_id, count(*), min(a.name) FROM albums_fts f JOIN albums a ON a.n = f.rowid JOIN album_artists aa ON aa.album_id = a.id
              WHERE albums_fts MATCH ?1 GROUP BY aa.artist_id ORDER BY count(*) DESC LIMIT ?2",
@@ -669,23 +727,31 @@ impl Library {
                 }
             }
         }
-        // Tracks, the title counting most.
-        totals.tracks = count("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH ?1", &[&fq])?;
-        let ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &wide])?;
+        // Tracks, the title counting most, with those only the trigram table finds by their title (0.12: none of the
+        // FTS hits, so counted on top).
+        let mut ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &wide])?;
+        let track_extras = trigram_extras(&db, "songs_tri_fts", "songs", "title", "songs_fts", &fq, words, &ns)?;
+        ns.extend(track_extras.iter().map(|(n, _)| *n));
+        totals.tracks = count("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH ?1", &[&fq])? + track_extras.len();
         let listed = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
         let mut tracks = pick(&listed, &ranked(listed.iter().map(|t| t.title.as_str()).collect()));
         self.song_artists(&db, &mut tracks)?;
-        // Genres, by their name.
+        // Genres, by their name or one of its aliases (0.12: one matcher, genre aliases: "dnb" finds
+        // Drum and Bass; `search::genre_name`).
         let mut st = db.prepare_cached("SELECT name, song_count FROM genres")?;
-        let mut genres: Vec<(String, u32)> = st
+        let mut genres: Vec<(f32, String, u32)> = st
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u32)))?
             .filter_map(Result::ok)
-            .filter(|(g, _)| crate::search::matches(g, words))
+            .filter_map(|(g, n)| {
+                let name = crate::search::genre_name(&g);
+                crate::search::matches_name(&name, words).then(|| (crate::search::rank_name(&name, words, 0, 1), g, n))
+            })
             .collect();
-        // Ranked as the rest (a direct hit, closeness, then how much of the name), the most played among equals.
-        genres.sort_by(|a, b| crate::search::rank(&b.0, words, 0, 1).total_cmp(&crate::search::rank(&a.0, words, 0, 1)).then(b.1.cmp(&a.1)));
+        // Ranked as the rest (a direct hit, closeness, then how much of the name; an alias below the name itself), the
+        // most played among equals.
+        genres.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.2.cmp(&a.2)));
         totals.genres = genres.len();
-        genres.truncate(limit);
+        let genres: Vec<(String, u32)> = genres.into_iter().take(limit).map(|(_, g, n)| (g, n)).collect();
         Ok(Found { albums, artists, tracks, genres, totals })
     }
 
@@ -873,7 +939,7 @@ impl Library {
     /// artist and year.
     pub fn work_songs(&self) -> Result<Vec<WorkSong>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, album_id, mbid, disc_no, track_no, title, coalesce(artist, ''), year FROM songs ORDER BY n")?;
+        let mut st = db.prepare("SELECT id, album_id, mbid, disc_no, track_no, title, coalesce(artist, ''), year, duration_ms FROM songs ORDER BY n")?;
         let number = |v: Option<i64>| v.and_then(|n| u32::try_from(n).ok());
         let rows = st.query_map([], |r| {
             Ok(WorkSong {
@@ -885,6 +951,7 @@ impl Library {
                 title: r.get(5)?,
                 artist: r.get(6)?,
                 year: number(r.get(7)?),
+                duration_secs: r.get::<_, Option<i64>>(8)?.filter(|ms| *ms > 0).map(|ms| ms as f64 / 1000.0),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

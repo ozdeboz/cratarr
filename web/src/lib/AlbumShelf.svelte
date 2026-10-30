@@ -45,6 +45,7 @@
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
+  import { headCells as headCellsOf, headSort, type Order } from './columnHead';
   import { fit } from './columns.svelte';
 
   let {
@@ -269,15 +270,10 @@
   const tableCols = $derived(table ? fit('albums', width) : []);
   // The ones that order the list, by the order they stand for; Plays, dates and Rating start most and newest first.
   const ORDER_OF: Partial<Record<string, CollectionOrder>> = { year: 'year', tracks: 'tracks', length: 'length', added: 'added', plays: 'plays', lastPlayed: 'played', rating: 'rating', format: 'quality' };
-  /** A tap on a name: ordered by it; again, the other way round. All but Year and Title start most and newest first. */
-  function orderBy(o: CollectionOrder) {
-    if (order === o) down = !down;
-    else {
-      order = o;
-      down = o !== 'year' && o !== 'title';
-    }
-  }
-  const headSorts = $derived({ title: { on: order === 'title', onclick: () => orderBy('title') } });
+  // A tap on a name orders by it, again the other way round, as every table's head does (lib/columnHead).
+  const now = $derived<Order<CollectionOrder>>({ key: order, down });
+  const setOrder = (o: Order<CollectionOrder>) => ((order = o.key), (down = o.down));
+  const headSorts = $derived({ title: headSort<CollectionOrder>('title', now, ALBUM_ORDERS, setOrder) });
   /** A long press on the column names: the View sheet, where the columns are chosen and ordered (the owner,
    *  2026-10-26). */
   let columnsOpen = $state(false);
@@ -301,17 +297,7 @@
   }
   const cellsOf = (s: ShelfSource, a: ListedAlbum): Cell[] =>
     tableCols.map((c) => ({ ...c, text: cellText(s, a, c.id), warn: c.id === 'format' && weak(a) }));
-  const headCells = $derived<Cell[]>(
-    tableCols.map((c) => {
-      const o = ORDER_OF[c.id];
-      return {
-        ...c,
-        text: c.label,
-        on: !!o && o === order,
-        onclick: o ? () => orderBy(o) : undefined,
-      };
-    }),
-  );
+  const headCells = $derived<Cell[]>(headCellsOf(tableCols, (id) => ORDER_OF[id], now, ALBUM_ORDERS, setOrder));
 
   // Select: the ticked albums by `source/id`; null while not selecting.
   let selecting = $state<Set<string> | null>(null);

@@ -6,6 +6,10 @@
 //! is, and their Discogs page; and from Discogs, only through those links, the artists' real names and aliases and the
 //! releases' genres. In MusicBrainz's background asker after the release types (`originals`), at its pace; Discogs' in
 //! Discogs' own rounds. Each answer is kept as it comes, so a pass stopped goes on where it was.
+//!
+//! Works and movements (0.12, decision 0086): the same question carries each work's parent ("parts", backward: the
+//! movement is a part of the symphony) with its number there (the relation's ordering key) and the parent's title, so
+//! no question is added; a release kept before they were read is asked again first (`releases_pass`).
 
 use std::time::Duration;
 
@@ -87,14 +91,27 @@ pub struct Stored {
     pub performed: bool,
     #[serde(default)]
     pub tracks: Vec<TrackWorks>,
+    /// Its works' parents were read (0.12, decision 0086): a release kept before is asked again first.
+    #[serde(default)]
+    pub with_parents: bool,
 }
 
-/// A work: its MusicBrainz id, title and composers.
+/// A work: its MusicBrainz id, title and composers, and the work it is a part of where MusicBrainz says (0.12).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Work {
     pub mbid: String,
     pub title: String,
     pub composers: Vec<Person>,
+    pub parent: Option<Parent>,
+}
+
+/// The work a work is a part of (0.12, decision 0086: a movement's symphony, an aria's act): its MusicBrainz id and
+/// title, and the part's number in it (the relation's ordering key; none where MusicBrainz gives none).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Parent {
+    pub mbid: String,
+    pub title: String,
+    pub number: Option<u32>,
 }
 
 /// What one answer about a release gives: the release as kept, and its works.
@@ -164,14 +181,30 @@ fn composers_of(relations: &Value) -> Vec<Person> {
     out
 }
 
+/// The work a work is a part of, from its relations (0.12): the first "parts" relation pointing backward (MusicBrainz:
+/// the parent has the part), with its ordering key. A work's own parts (forward) are not its parent.
+fn parent_of(work: &str, relations: &Value) -> Option<Parent> {
+    relations
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["type"].as_str() == Some("parts") && r["direction"].as_str() == Some("backward"))
+        .find_map(|r| {
+            let w = &r["work"];
+            let id = w["id"].as_str().filter(|id| !id.is_empty() && *id != work)?;
+            let number = r["ordering-key"].as_u64().and_then(|n| u32::try_from(n).ok());
+            Some(Parent { mbid: id.to_string(), title: w["title"].as_str().unwrap_or_default().to_string(), number })
+        })
+}
+
 /// The links among relations (their URLs).
 fn urls_of(relations: &Value) -> Vec<String> {
     relations.as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect()
 }
 
 /// A release as MusicBrainz answers the works' question (`INC`): its genres and links, its tracks' works with their
-/// composers, and its performers (the performing relations of the release and its recordings, then the artists
-/// credited who composed none of its works). Someone is credited as performing (`performed`) where there is such a
+/// composers and parents (0.12), and its performers (the performing relations of the release and its recordings, then
+/// the artists credited who composed none of its works). Someone is credited as performing (`performed`) where there is such a
 /// relation, or a credited artist who is not one of the works' composers: a composer credited alone performs nothing
 /// by that.
 pub fn release_of(v: &Value) -> Release {
@@ -210,7 +243,12 @@ pub fn release_of(v: &Value) -> Release {
                     here.push(id.to_string());
                 }
                 if !works.iter().any(|x| x.mbid == id) {
-                    works.push(Work { mbid: id.to_string(), title: w["title"].as_str().unwrap_or_default().to_string(), composers: composers_of(&w["relations"]) });
+                    works.push(Work {
+                        mbid: id.to_string(),
+                        title: w["title"].as_str().unwrap_or_default().to_string(),
+                        composers: composers_of(&w["relations"]),
+                        parent: parent_of(id, &w["relations"]),
+                    });
                 }
             }
             if !here.is_empty() {
@@ -230,6 +268,7 @@ pub fn release_of(v: &Value) -> Release {
     performers.sort_by_key(|p| p.role);
     stored.performers = performers;
     stored.performed = performed;
+    stored.with_parents = true;
     Release { stored, works }
 }
 
@@ -308,14 +347,21 @@ pub async fn pass() -> Result<usize> {
     artists_pass().await
 }
 
-/// Up to `BATCH` releases of the library's albums not asked about yet (or due again), each kept as it comes.
+/// Up to `BATCH` releases of the library's albums not asked about yet (or due again), then those kept before their
+/// works' parents were read (0.12, decision 0086: asked again first, at the same pace, so they fill in within hours
+/// rather than at their next asking), each kept as it comes.
 async fn releases_pass() -> Result<usize> {
     let Some(served) = crate::serve::instance() else { return Ok(0) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
     let due: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
         let asked = ud.mb_releases_asked(now - AGAIN_SECS, now - NONE_AGAIN_SECS)?;
-        Ok(lib.album_releases()?.into_iter().filter(|r| !asked.contains(r)).take(BATCH).collect())
+        let without_parents = ud.mb_releases_without_parents()?;
+        let all = lib.album_releases()?;
+        let mut due: Vec<String> = all.iter().filter(|r| !asked.contains(*r)).take(BATCH).cloned().collect();
+        let room = BATCH - due.len();
+        due.extend(all.iter().filter(|r| asked.contains(*r) && without_parents.contains(*r)).take(room).cloned());
+        Ok(due)
     })
     .await??;
     if due.is_empty() {
@@ -336,9 +382,10 @@ async fn releases_pass() -> Result<usize> {
             Some(f) => Some(serde_json::to_string(&f.stored)?),
             None => None,
         };
-        let mut works: Vec<(String, String, String)> = Vec::new();
+        let mut works: Vec<crate::userdata::works::ReadWork> = Vec::new();
         for w in found.iter().flat_map(|f| f.works.iter()) {
-            works.push((w.mbid.clone(), w.title.clone(), serde_json::to_string(&w.composers)?));
+            let parent = w.parent.as_ref().map(|p| (p.mbid.clone(), p.title.clone(), p.number));
+            works.push((w.mbid.clone(), w.title.clone(), serde_json::to_string(&w.composers)?, parent));
         }
         let (ud, key) = (served.userdata.clone(), r.clone());
         tokio::task::spawn_blocking(move || ud.set_mb_release(&key, facts.as_deref(), &works, super::moment::now_secs())).await??;
@@ -496,8 +543,10 @@ mod tests {
         let sonata = &r.works[0];
         assert_eq!((sonata.mbid.as_str(), sonata.title.as_str()), ("w-sonata-3", "Piano Sonata no. 3 in F minor, op. 5"));
         assert_eq!(sonata.composers, [Person { mbid: "a-brahms".into(), name: "Johannes Brahms".into(), sort_name: Some("Brahms, Johannes".into()) }]);
-        // Two tracks perform works, the encore none: only those kept.
+        // Two tracks perform works, the encore none: only those kept. The fixture's are whole works: no parent.
         assert_eq!(r.stored.tracks.len(), 2);
+        assert!(r.works.iter().all(|w| w.parent.is_none()));
+        assert!(r.stored.with_parents);
         assert_eq!(r.stored.tracks[0], TrackWorks { recording: Some("rec-1".into()), disc: 1, position: 1, works: vec!["w-sonata-3".into()] });
         assert_eq!((r.stored.tracks[1].disc, r.stored.tracks[1].position), (2, 1));
         // The conductor first, then the orchestra, then the soloist; Brahms, credited, composed the works: no performer.
@@ -535,6 +584,32 @@ mod tests {
         let back: Stored = serde_json::from_str(&serde_json::to_string(&r.stored).unwrap()).unwrap();
         assert_eq!(back, r.stored);
         assert_eq!(serde_json::from_str::<Stored>("{}").unwrap(), Stored::default(), "an empty row reads as nothing found");
+    }
+
+    #[test]
+    fn a_movement_knows_its_work_and_its_number_there() {
+        // As MusicBrainz answers the works' question (cut down from Kleiber's Fifth): two movements, the first also
+        // arranged by another (a work relation forward), the second's parent without an ordering key.
+        let v = serde_json::json!({ "media": [{ "position": 1, "tracks": [
+            { "position": 1, "recording": { "id": "r1", "relations": [
+                { "type": "performance", "target-type": "work", "direction": "forward", "work": { "id": "w-5-1", "title": "Symphony no. 5 in C minor, op. 67: I. Allegro con brio", "relations": [
+                    { "type": "composer", "target-type": "artist", "direction": "backward", "artist": { "id": "a-lvb", "name": "Ludwig van Beethoven", "sort-name": "Beethoven, Ludwig van" } },
+                    { "type": "arrangement", "target-type": "work", "direction": "forward", "work": { "id": "w-liszt", "title": "Symphony no. 5, S. 464 no. 5: I." } },
+                    { "type": "parts", "target-type": "work", "direction": "backward", "ordering-key": 1, "attributes": ["movement"], "work": { "id": "w-5", "title": "Symphony no. 5 in C minor, op. 67" } }
+                ] } }
+            ] } },
+            { "position": 2, "recording": { "id": "r2", "relations": [
+                { "type": "performance", "target-type": "work", "direction": "forward", "work": { "id": "w-5-2", "title": "Symphony no. 5 in C minor, op. 67: II. Andante con moto", "relations": [
+                    { "type": "parts", "target-type": "work", "direction": "backward", "work": { "id": "w-5", "title": "Symphony no. 5 in C minor, op. 67" } }
+                ] } }
+            ] } }
+        ] }] });
+        let r = release_of(&v);
+        assert_eq!(r.works[0].parent, Some(Parent { mbid: "w-5".into(), title: "Symphony no. 5 in C minor, op. 67".into(), number: Some(1) }));
+        assert_eq!(r.works[1].parent.as_ref().map(|p| (p.mbid.as_str(), p.number)), Some(("w-5", None)));
+        // A whole work's own parts (forward) are not its parent.
+        let whole = serde_json::json!([{ "type": "parts", "direction": "forward", "ordering-key": 1, "work": { "id": "w-5-1", "title": "I." } }]);
+        assert_eq!(parent_of("w-5", &whole), None);
     }
 
     #[test]

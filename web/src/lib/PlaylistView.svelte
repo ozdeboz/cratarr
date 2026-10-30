@@ -47,6 +47,7 @@
     albumCoverUrl,
     playlistCovers,
     playlistRows,
+    playlistOps,
     queueTrack,
     setTrackFavorite,
     setAlbumFavorite,
@@ -103,7 +104,10 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
-  import { offers } from './capabilities.svelte';
+  import { can, offers } from './capabilities.svelte';
+  import { later, laterKey } from './later.svelte';
+  import { applyOps, opsFor, type PlaylistOp } from './playlistOps';
+  import { reach } from './reach.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
@@ -129,7 +133,7 @@
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
@@ -153,6 +157,7 @@
   import LikeCurve from './LikeCurve.svelte';
   import type { Cell } from './Row.svelte';
   import { fit } from './columns.svelte';
+  import { headCells as headCellsOf, headSort, type Order } from './columnHead';
   import { fromAction } from 'svelte/attachments';
   import RepairTab from './RepairTab.svelte';
   import SyncTab from './SyncTab.svelte';
@@ -171,8 +176,11 @@
   import SwipeBehind from './SwipeBehind.svelte';
   import ExcludedSheet from './ExcludedSheet.svelte';
   import { toast } from './toast.svelte';
+  import { groupByWork } from './works';
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
+  import WorkMenu from './WorkMenu.svelte';
+  import WorkSheet from './WorkSheet.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -386,7 +394,10 @@
               }
               return { ...r, total: r.rows.length, genres: null };
             })
-          : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length, genres: null }));
+          : playlistRows(want, prefs.source || undefined).then((r) => {
+              const shown = withWaiting(want, r.rows);
+              return { ...r, rows: shown, total: shown.length, genres: null };
+            });
     asked.then(
       (r) => {
         if (want !== id || shownFav() !== fav) return;
@@ -647,16 +658,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
   const cellsOf = (r: PlaylistRow): Cell[] | undefined =>
     cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, r) })) : undefined;
-  /** The list's head: its column names, a tap orders by one, a second turns it round. Plays and dates start most and
-   *  newest first. */
-  const headCells = $derived<Cell[]>(
-    cols.map((c) => ({
-      ...c,
-      text: c.label,
-      on: sortKey === c.id,
-      onclick: () => setSort(c.id, sortKey === c.id ? !sortDown : !!sortFields.find((f) => f.value === c.id)?.most),
-    })),
-  );
+  /** The list's head: its column names, Title and Length among them, a tap orders by one, a second turns it round,
+   *  as every table's head (lib/columnHead). */
+  const trackNow = $derived<Order<TrackOrder>>({ key: sortKey, down: sortDown });
+  const setTrackOrder = (o: Order<TrackOrder>) => setSort(o.key, o.down);
+  const headCells = $derived<Cell[]>(headCellsOf(cols, (id) => id as TrackOrder, trackNow, sortFields, setTrackOrder));
+  const trackHeads = $derived({ title: headSort<TrackOrder>('title', trackNow, sortFields, setTrackOrder), count: headSort<TrackOrder>('length', trackNow, sortFields, setTrackOrder) });
   // The same order in the pill's View (lib/ViewSheet).
   const listOrder = $derived({
     fields: sortFields,
@@ -716,6 +723,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // tracks, a step of the history. Playing the crate is as ever: its tracks in its order, whichever way it shows.
   const recordsView = $derived(!!crate && !crateEditing && crateViewOf(crate, prefs.crateViews) === 'records');
   const records = $derived(recordsView && shown ? orderRecords(recordsOf(shown), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : []);
+  // As a table (the owner, 2026-10-30: one table head): the Library's records' columns as far as a record has them,
+  // where the list has room (a crate's row is wider in front: its cover's 60 px and the rows' sides), and its head.
+  const recordCols = $derived(recordsView ? fit('albums', listWidth - 28, (id) => id in RECORD_COLUMNS) : []);
+  const recordNow = $derived<Order<RecordOrder>>(prefs.crateRecordSort);
+  const setRecordOrder = (o: Order<RecordOrder>) => (prefs.crateRecordSort = o);
+  const recordHeadCells = $derived<Cell[]>(headCellsOf(recordCols, (id) => RECORD_COLUMNS[id], recordNow, RECORD_ORDERS, setRecordOrder));
+  const recordHeads = $derived({ title: headSort<RecordOrder>('title', recordNow, RECORD_ORDERS, setRecordOrder) });
+  const recordCells = (rec: CrateRecord): Cell[] => recordCols.map((c) => ({ ...c, text: recordCell(rec, c.id, albumTotal(rec), clockText, addedOn) }));
   // An album's own count, from the Library's list (Cratarr's own albums: a row of another source has no album id).
   $effect(() => {
     if (recordsView && !library.view) untrack(() => void readLibrary(false));
@@ -759,6 +774,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const sorted = $derived(sortKey !== 'own' || sortDown);
   /** What shows is not the subject as it is: ordered otherwise, or filtered; it plays as it shows. */
   const reshaped = $derived(sorted || (filterable && filtersOn(kind) > 0));
+  // Works and movements (0.12, decision 0086; the owner, 2026-10-30): an album in its own order shows its movements under
+  // their work's heading, where the server knows works; sorted or filtered, as before.
+  const workLines = $derived(album && !reshaped && can('works') === true && shown ? groupByWork(shownRows) : null);
 
   // Select mode (Symfonium's): a long-press on a track or the header's icon starts it, a tap ticks a track, and a bar
   // over the list acts on the ticked ones. A tick is a row (its place), so a track that is there twice is ticked once.
@@ -979,6 +997,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let menuStart = $state<'menu' | 'delete'>('menu');
   /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
   let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' | 'versions'; outs?: { label: string; icon: IconName; run: () => void }[] } | null>(null);
+  /** A work's heading's menu (its movements here, in the album's order), and the work opened from it (0.12). */
+  let workMenu = $state<{ mbid: string; title: string; ids: string[] } | null>(null);
+  let workOpen = $state<{ mbid: string; title: string } | null>(null);
+  const workIds = (list: PlaylistRow[]) => list.filter((x) => x.id && !x.missing).map((x) => x.id!);
   const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null, has_versions: r.has_versions });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
@@ -1262,6 +1284,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
 
   /** A tap on a row: its playlist (`name`, these rows) plays from it. */
+  /** A work's heading's Play (0.12): its movements, in the album's order. */
+  async function playWork(title: string, list: PlaylistRow[]) {
+    const ok = list.filter((x) => x.id && !x.missing);
+    if (!ok.length) return;
+    navigator.vibrate?.(8);
+    try {
+      await playCollection({ kind: 'tracks', source, ids: ok.map((x) => x.id!) }, 'play', title, ok[0].id!);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
+
   async function playFrom(name: string, src: string, list: PlaylistRow[], r: PlaylistRow) {
     if (!r.id || r.missing) return;
     navigator.vibrate?.(8);
@@ -1311,6 +1345,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (album || artist) return null;
     const pl = shownPlaylists().find((x) => x.id === list);
     if (!pl || pl.mine === false || (multi ? !(list in sections) : list !== id)) return null;
+    const s = sections[list];
+    if (reach.away && !opsReady(multi ? (s && 'rows' in s ? s.rows : null) : rows)) return null;
     return () => outOfPlaylist(list, [r]);
   }
   /** How many tracks and albums the crate viewed excludes, and their sheet. */
@@ -1413,6 +1449,36 @@ ${r.album_artist ?? r.artist ?? ''}`;
       saved++;
     });
   }
+  // A playlist's edits with no network (decision 0087, 0.12): as operations through the outbox, where Cratarr takes them
+  // (its `playlist_ops`, and an id on every line); its rows shown as the operations still waiting leave them. Online
+  // the whole-list save stays, with its Undo. Where Cratarr cannot take them, editing is not offered while away, and a
+  // line says so (decision 0085: never offered and then refused).
+  const opsReady = (rs: readonly PlaylistRow[] | null | undefined) => can('playlist_ops') === true && !!rs?.length && rs.every((r) => !!r.entry_id);
+  const opsPath = (list: string) => `/api/playlists/${encodeURIComponent(list)}/ops`;
+  function withWaiting(list: string, rs: PlaylistRow[]): PlaylistRow[] {
+    const ops = later.list
+      .filter((c) => c.path === opsPath(list) && c.body)
+      .flatMap((c): PlaylistOp[] => {
+        try {
+          return (JSON.parse(c.body ?? '') as { ops: PlaylistOp[] }).ops.filter((o) => o.op !== 'add');
+        } catch {
+          return [];
+        }
+      });
+    if (!ops.length || !rs.every((r) => !!r.entry_id)) return rs;
+    return applyOps(rs, ops, (r) => r.entry_id ?? '', () => {
+      throw new Error('a line added here is not shown before Cratarr has it');
+    });
+  }
+  const editWaits = $derived(reach.away && !!p && p.mine !== false && !!rows && !opsReady(rows));
+  // Changed elsewhere while this page was away (lib/changes): the list, and this one's rows unless being edited.
+  $effect(() =>
+    on<{ area: string; ids?: string[] | null }>('changed', ({ area, ids }) => {
+      if (area !== 'playlists') return;
+      refresh();
+      if (!editing && (!ids || ids.includes(id))) saved++;
+    }),
+  );
   // A playlist's line out of its file. Swipes in a row wait for each other: each save names the lines as the one before
   // left them (the server refuses a save over lines that changed), and the list is read again once they are all done.
   const leaving: Record<string, PlaylistRow[]> = {};
@@ -1424,6 +1490,22 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const before = leaving[list] ?? (multi ? (s && 'rows' in s ? s.rows : null) : rows);
     if (!before) return 'away' as const;
     const after = before.filter((x) => !rs.includes(x));
+    if (reach.away && opsReady(before)) {
+      for (const r of rs) dropShown(list, r);
+      playlistOps(
+        list,
+        opsFor(
+          before.map((x) => x.entry_id ?? ''),
+          after.map((x) => x.entry_id ?? ''),
+          Date.now(),
+          laterKey,
+        ),
+      ).then(
+        () => saved++,
+        (e) => toast.fail(e, "It wasn't taken out"),
+      );
+      return 'away' as const;
+    }
     leaving[list] = after;
     outs++;
     for (const r of rs) dropShown(list, r);
@@ -1642,7 +1724,17 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const [from, to, renamed] = [id, newName, nameChanged];
     const tokens: (string | null)[] = [];
     try {
-      if (tracksChanged)
+      if (tracksChanged && reach.away && opsReady(rows))
+        await playlistOps(
+          id,
+          opsFor(
+            rows.map((r) => r.entry_id ?? ''),
+            editing.rows.map((x) => x.r.entry_id ?? ''),
+            Date.now(),
+            laterKey,
+          ),
+        );
+      else if (tracksChanged)
         tokens.push(
           (
             await editPlaylist(
@@ -1896,7 +1988,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else}
-          {#if p && p.mine !== false}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+          {#if p && p.mine !== false}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
           <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
             ><Icon name="heart" size={24} /></button
           >
@@ -1904,6 +1996,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {/if}
       </div>
       {/if}
+      {#if editWaits}<p class="note">Editing this playlist needs Cratarr.</p>{/if}
       <header class="meta">
         <!-- What it is, and beside it on a wide panel its tempo spread (decision 0041). -->
         <div class="meta-main">
@@ -2130,6 +2223,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           selecting={!!selecting}
           onselect={() => (selecting ? (selecting = null) : startSelect())}
         />
+        {#if recordCols.length}{@render recordHead()}{/if}
         <ol class="rows" class:selecting={!!selecting} bind:clientWidth={listWidth}>
           {#each records as rec (rec.key)}{@render recordRow(rec)}{/each}
         </ol>
@@ -2145,7 +2239,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
       />
       {#if cols.length}{@render columnHead()}{/if}
       <ol class="rows" class:numbered={!!album} class:selecting={!!selecting} bind:clientWidth={listWidth}>
+        {#if workLines && shown}
+          {@const at = shown}
+          {#each workLines as l (l.kind === 'work' ? `work ${l.at[0]}` : at[l.at].i)}{#if l.kind === 'work'}{@render workHead(l.work, l.rows)}{:else}{@render albumRow(l.row, at[l.at].i, shownRows, l.movement)}{/if}{/each}
+        {:else}
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
+        {/if}
       </ol>
       {/if}
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
@@ -2244,8 +2343,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
   <div class="column-head">
     <!-- Its end as wide as its rows' (rowEnd: the heart and the menu, the tick while selecting, nothing for the
          device's own music), so the columns share out the same room and line up (the owner, 2026-10-23). -->
-    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} action={onDevice ? undefined : endSpace}>
+    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} sorts={sorts ? trackHeads : undefined} action={onDevice ? undefined : endSpace}>
       {#snippet lead()}<span class="cover-space"></span>{/snippet}
+    </Row>
+  </div>
+{/snippet}
+
+<!-- A crate's records as a table: their column names, as the Library's records table and every list's head. -->
+{#snippet recordHead()}
+  <div class="column-head">
+    <Row size="large" as="div" head title="Title" cells={recordHeadCells} sorts={recordHeads}>
+      {#snippet lead()}<span class="cover-space"></span>{/snippet}
+      {#snippet action()}<span></span>{/snippet}
     </Row>
   </div>
 {/snippet}
@@ -2314,14 +2423,25 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
 <!-- An album's track (Symfonium's album screen): its number (the playing one's dots instead), the title, and the artist
      only when it is not the album's; the cover is the header's. -->
-{#snippet albumRow(r: PlaylistRow, i: number, list: PlaylistRow[])}
+<!-- A work's heading over its movements (0.12, decision 0086): its name, Play for the whole work, and its menu (a
+     long-press, a right-click or ⋮: Play, Play next, Add to queue, Go to the work; the owner, 2026-10-30). -->
+{#snippet workHead(work: { mbid: string; title: string }, list: PlaylistRow[])}
+  <li class="work-head" use:longpress={() => (workMenu = { ...work, ids: workIds(list) })}>
+    <span class="work-title">{work.title}</span>
+    <button class="tool" aria-label="Play {work.title}" onclick={() => playWork(work.title, list)}><Icon name="play" size={22} /></button>
+    <button class="tool" aria-label="{work.title}: its menu" onclick={() => (workMenu = { ...work, ids: workIds(list) })}><Icon name="moreVert" size={22} /></button>
+  </li>
+{/snippet}
+
+<!-- `movement`: the track is a movement under its work's heading, named by its movement only. -->
+{#snippet albumRow(r: PlaylistRow, i: number, list: PlaylistRow[], movement: string | null = null)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
-  <li class:now={here} class:ticked={!!selecting && selecting.has(i)}>
+  <li class:now={here} class:ticked={!!selecting && selecting.has(i)} class:movement={movement !== null}>
     <SwipeBehind right={PLAY_NEXT} />
     <Row
       size="large"
-      title={r.name ?? r.file}
+      title={movement ?? r.name ?? r.file}
       sub={r.missing ? 'Missing file' : r.artist && r.artist !== albumHead?.artist ? r.artist : undefined}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}
@@ -2347,12 +2467,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <Row
       size="large"
       title={rec.title || 'Unknown album'}
+      cells={recordCols.length ? recordCells(rec) : undefined}
       label={selecting ? `${all ? 'Untick' : 'Tick'} ${rec.title}` : `Open ${rec.title}`}
       onclick={() => (selecting ? tickRecord(rec) : showRecord(rec.key))}
       attachMain={fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (recordMenu = rec)))}
     >
       {#snippet lead()}{#if first}{@render cover(first, source)}{/if}{/snippet}
-      {#snippet sub()}<span class="artist">{rec.artist ?? ''}</span><span class="album">{holdsLine(rec.at.length, albumTotal(rec))}</span>{/snippet}
+      {#snippet sub()}<span class="artist">{rec.artist ?? ''}</span>{#if !recordCols.some((c) => c.id === 'tracks')}<span class="album">{holdsLine(rec.at.length, albumTotal(rec))}</span>{/if}{/snippet}
       {#snippet action()}
         {#if selecting}
           <button class="tool tick" class:on={all} role="checkbox" aria-checked={all} aria-label={`Select ${rec.title}`} onclick={() => tickRecord(rec)}
@@ -2474,6 +2595,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} outs={trackMenu.outs} crate={crateEditing ? null : crate} onclose={() => (trackMenu = null)} />
 {/if}
+{#if workMenu}{@const w = workMenu}<WorkMenu mbid={w.mbid} title={w.title} ids={w.ids} onopen={() => (workOpen = { mbid: w.mbid, title: w.title })} onclose={() => (workMenu = null)} />{/if}
+{#if workOpen}<WorkSheet mbid={workOpen.mbid} title={workOpen.title} onclose={() => (workOpen = null)} />{/if}
 {#if leftOutOpen && crate}
   <ExcludedSheet {crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
 {/if}
@@ -3271,6 +3394,29 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   .rows.numbered :global(.row.large) {
     min-height: 52px;
+  }
+
+  /* A work's heading over its movements (0.12, decision 0086), its movements set in under it. */
+  .rows li.work-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    contain-intrinsic-size: auto 44px;
+    padding: 8px 0 0 12px;
+  }
+
+  .work-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rows li.movement {
+    padding-left: 32px;
   }
 
   .num {

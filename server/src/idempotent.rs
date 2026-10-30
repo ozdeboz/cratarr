@@ -3,17 +3,21 @@
 //! them when Cratarr answers again; one whose answer got lost on the way is sent once more. With an `Idempotency-Key`
 //! header (as Stripe's and the IETF draft's), Cratarr makes each change once: the same key again, from the same account,
 //! for the same method and path, gets the first answer back (`Idempotent-Replayed: true`) without doing it again.
-//! Kept a day, in memory: a restart forgets them, as it forgets what was half done.
+//! Kept a day in memory, and since 0.12 (decision 0087: an outbox may send a change days later, across a restart) 30
+//! days in the user data too, where the answer is small enough; a change still being made is known in memory only.
 
 use axum::body::{Body, HttpBody};
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
+
+use crate::userdata::UserData;
+use crate::userdata::offline::KeptAnswer;
 
 /// How long an answer is kept for a key sent again.
 const KEEP: Duration = Duration::from_secs(24 * 3600);
@@ -21,6 +25,8 @@ const KEEP: Duration = Duration::from_secs(24 * 3600);
 const MOST: usize = 10_000;
 /// An answer kept only up to this size (a change's answers are small); a bigger one is not kept, and the key with it.
 const BIGGEST: u64 = 256 << 10;
+/// An answer kept in the user data (30 days) only up to this size; a bigger one is kept in memory alone.
+const BIGGEST_KEPT: usize = 64 << 10;
 
 /// What a key gave: still being made, or its answer.
 enum Kept {
@@ -54,8 +60,24 @@ fn changes(method: &Method) -> bool {
     matches!(*method, Method::POST | Method::PUT | Method::PATCH | Method::DELETE)
 }
 
-/// The layer, inside the access check (who asks is known there). A change without a key goes as always.
-pub async fn once(request: Request, next: Next) -> Response {
+/// A kept answer as the first time, saying it is one.
+fn replayed(status: StatusCode, kind: Option<&HeaderValue>, body: axum::body::Bytes) -> Response {
+    let mut r = Response::new(Body::from(body));
+    *r.status_mut() = status;
+    if let Some(kind) = kind {
+        r.headers_mut().insert(header::CONTENT_TYPE, kind.clone());
+    }
+    r.headers_mut().insert("idempotent-replayed", HeaderValue::from_static("true"));
+    r
+}
+
+fn sent_with_another() -> Response {
+    (StatusCode::UNPROCESSABLE_ENTITY, axum::Json(json!({ "error": "This key was sent with another change." }))).into_response()
+}
+
+/// The layer, inside the access check (who asks is known there). A change without a key goes as always. `kept`: the
+/// user data the answers are kept in for 30 days (decision 0087); none: in memory only.
+pub async fn once(State(kept): State<Option<Arc<UserData>>>, request: Request, next: Next) -> Response {
     if !changes(request.method()) {
         return next.run(request).await;
     }
@@ -71,7 +93,7 @@ pub async fn once(request: Request, next: Next) -> Response {
         keys.retain(|_, k| now.duration_since(k.at()) < KEEP);
         if let Some(k) = keys.get(&id) {
             if k.asked() != asked {
-                return (StatusCode::UNPROCESSABLE_ENTITY, axum::Json(json!({ "error": "This key was sent with another change." }))).into_response();
+                return sent_with_another();
             }
             return match k {
                 Kept::Making { .. } => {
@@ -79,15 +101,7 @@ pub async fn once(request: Request, next: Next) -> Response {
                     r.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(1));
                     r
                 }
-                Kept::Done { status, kind, body, .. } => {
-                    let mut r = Response::new(Body::from(body.clone()));
-                    *r.status_mut() = *status;
-                    if let Some(kind) = kind {
-                        r.headers_mut().insert(header::CONTENT_TYPE, kind.clone());
-                    }
-                    r.headers_mut().insert("idempotent-replayed", HeaderValue::from_static("true"));
-                    r
-                }
+                Kept::Done { status, kind, body, .. } => replayed(*status, kind.as_ref(), body.clone()),
             };
         }
         if keys.len() >= MOST {
@@ -95,7 +109,23 @@ pub async fn once(request: Request, next: Next) -> Response {
                 keys.remove(&oldest);
             }
         }
+        // Being made from here: the same key at once waits for it, while the user data is asked below.
         keys.insert(id.clone(), Kept::Making { at: now, asked: asked.clone() });
+    }
+    // Made before the memory forgot it (a restart, a day since): its first answer, from the user data.
+    if let Some(ud) = kept.clone() {
+        let (user, key) = id.clone();
+        if let Ok(Ok(Some(k))) = tokio::task::spawn_blocking(move || ud.kept_answer(&user, &key)).await {
+            if k.asked != asked {
+                KEYS.lock().unwrap().remove(&id);
+                return sent_with_another();
+            }
+            let status = StatusCode::from_u16(k.status).unwrap_or(StatusCode::OK);
+            let kind = k.kind.as_deref().and_then(|v| HeaderValue::from_str(v).ok());
+            let body = axum::body::Bytes::from(k.body);
+            KEYS.lock().unwrap().insert(id, Kept::Done { at: now, asked, status, kind: kind.clone(), body: body.clone() });
+            return replayed(status, kind.as_ref(), body);
+        }
     }
     let response = next.run(request).await;
     // A server's failure is not kept: sent again, the change is tried again. Nor is an answer too big, or streamed.
@@ -110,10 +140,21 @@ pub async fn once(request: Request, next: Next) -> Response {
         KEYS.lock().unwrap().remove(&id);
         return (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": "The answer could not be read." }))).into_response();
     };
-    KEYS.lock().unwrap().insert(
-        id,
-        Kept::Done { at: now, asked, status: parts.status, kind: parts.headers.get(header::CONTENT_TYPE).cloned(), body: body.clone() },
-    );
+    let kind = parts.headers.get(header::CONTENT_TYPE).cloned();
+    if let Some(ud) = kept.filter(|_| body.len() <= BIGGEST_KEPT) {
+        let (user, key) = id.clone();
+        let a = KeptAnswer {
+            asked: asked.clone(),
+            status: parts.status.as_u16(),
+            kind: kind.as_ref().and_then(|k| k.to_str().ok()).map(str::to_string),
+            body: body.to_vec(),
+        };
+        match tokio::task::spawn_blocking(move || ud.keep_answer(&user, &key, &a)).await {
+            Ok(Ok(())) => {}
+            failed => tracing::warn!("a change's answer not kept past a restart: {failed:?}"),
+        }
+    }
+    KEYS.lock().unwrap().insert(id, Kept::Done { at: now, asked, status: parts.status, kind, body: body.clone() });
     Response::from_parts(parts, Body::from(body))
 }
 
@@ -121,7 +162,6 @@ pub async fn once(request: Request, next: Next) -> Response {
 mod tests {
     use super::*;
     use axum::routing::post;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
@@ -135,7 +175,19 @@ mod tests {
                 }),
             )
             .route("/api/broken", post(|| async { StatusCode::BAD_GATEWAY }))
-            .layer(axum::middleware::from_fn(once))
+            .layer(axum::middleware::from_fn_with_state(None::<Arc<UserData>>, once))
+    }
+
+    fn app_keeping(made: Arc<AtomicUsize>, kept: Arc<UserData>) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/x",
+                post(move || {
+                    let made = made.clone();
+                    async move { axum::Json(json!({ "made": made.fetch_add(1, Ordering::SeqCst) + 1 })) }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(Some(kept), once))
     }
 
     fn ask(path: &str, key: Option<&str>) -> Request {
@@ -187,5 +239,22 @@ mod tests {
         let r = app(made.clone()).oneshot(ask("/api/broken", Some("k-broken-1"))).await.unwrap();
         assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
         assert!(!KEYS.lock().unwrap().contains_key(&(String::new(), "k-broken-1".to_string())));
+    }
+
+    #[tokio::test]
+    async fn a_change_sent_again_after_a_restart_is_answered_from_the_user_data() {
+        let made = Arc::new(AtomicUsize::new(0));
+        let kept = Arc::new(UserData::open(None).unwrap());
+        let first = app_keeping(made.clone(), kept.clone()).oneshot(ask("/api/x", Some("k-kept-1"))).await.unwrap();
+        assert_eq!(text(first).await, r#"{"made":1}"#);
+        // The memory forgets (a restart); the user data does not.
+        KEYS.lock().unwrap().remove(&(String::new(), "k-kept-1".to_string()));
+        let again = app_keeping(made.clone(), kept.clone()).oneshot(ask("/api/x", Some("k-kept-1"))).await.unwrap();
+        assert_eq!(again.headers().get("idempotent-replayed").unwrap(), "true");
+        assert_eq!(text(again).await, r#"{"made":1}"#);
+        assert_eq!(made.load(Ordering::SeqCst), 1);
+        KEYS.lock().unwrap().remove(&(String::new(), "k-kept-1".to_string()));
+        let moved = app_keeping(made.clone(), kept).oneshot(ask("/api/x?y=1", Some("k-kept-1"))).await.unwrap();
+        assert_eq!(moved.status(), StatusCode::UNPROCESSABLE_ENTITY, "kept with its change");
     }
 }

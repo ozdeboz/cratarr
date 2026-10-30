@@ -12,10 +12,13 @@
 //!   ([`add_place`]), a shuffle once ([`shuffle_order`]), clearing ([`upcoming_start`]) and Undo of both
 //!   ([`restore_order`]).
 //! - **A let-go's brake** ([`brake`], decision 0075): its length, speed and way, for the page through WebAssembly too.
+//! - **Finding a name** ([`matcher`], 0.12): how a query meets a name (exact, alias, prefix, fuzzy), for the server's
+//!   search and the page's through WebAssembly alike.
 
 use serde::{Deserialize, Serialize};
 
 pub mod brake;
+pub mod matcher;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 

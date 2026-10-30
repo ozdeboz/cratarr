@@ -5,7 +5,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 
-const { ENTRY_NAME, GROUP_ORDER, MENUS, OWN_CARD, RETIRED_NAMES, inOrder } = await import('../src/lib/menuTable.ts');
+const { ACTIONS_NEED_SERVER, ENTRY_NAME, GROUP_ORDER, MENUS, OWN_CARD, RETIRED_NAMES, WORKS_AWAY, actionAway, inOrder, offeredAway } = await import(
+  '../src/lib/menuTable.ts'
+);
 type Kind = keyof typeof MENUS;
 
 const LIB = new URL('../src/lib/', import.meta.url);
@@ -89,4 +91,28 @@ test("the large actions in the table's order, equals as given, one it does not n
     if (file === 'QueueMenu.svelte') continue;
     assert.match(read(file), /inOrder\(/, `${file}: its large actions not in the table's order`);
   }
+});
+
+// Out of reach (decision 0085; the owner, 2026-10-30): what works without Cratarr shows, what needs it is left out.
+test('out of reach: what works offline shows, what needs Cratarr is left out, and in reach everything shows', () => {
+  const used = new Set(Object.values(MENUS).flatMap((k) => k.cards.flatMap((c) => c.entries)));
+  for (const e of WORKS_AWAY) assert.ok(used.has(e), `${e} is in no menu`);
+  for (const e of used) assert.equal(offeredAway(e, false), true, `${e} in reach`);
+  // Kept on the device and sent later, the device's own, or another site's.
+  for (const e of ['favourite', 'rating', 'excludeEverywhere', 'excludeArtist', 'notInCrate', 'addToPlaylist', 'rename', 'removeFromDevice', 'queues', 'clearQueue', 'webSearch'] as const)
+    assert.equal(offeredAway(e, true), true, e);
+  // Cratarr's: it streams, finds, makes, deletes or shares them.
+  for (const e of ['soundsLike', 'otherVersions', 'discover', 'download', 'keep', 'share', 'info', 'saveAsPlaylist', 'startCrate', 'edit', 'deletePlaylist', 'deleteCrate', 'deleteAlbum', 'sync'] as const)
+    assert.equal(offeredAway(e, true), false, e);
+  // A track's menu out of reach keeps its feelings and its playlists, not its Go to Sounds like.
+  const track = MENUS.track.cards.flatMap((c) => c.entries).filter((e) => offeredAway(e, true));
+  assert.deepEqual(track, ['goAlbum', 'goArtist', 'goGenre', 'favourite', 'excludeEverywhere', 'excludeArtist', 'notInCrate', 'addToPlaylist', 'webSearch', 'geniusSearch', 'removeFromQueue', 'removeFromList']);
+});
+
+test('out of reach the large actions that need Cratarr go; playing and queueing stay (what is on this device)', () => {
+  for (const a of ACTIONS_NEED_SERVER) {
+    assert.equal(actionAway(a, true), false, a);
+    assert.equal(actionAway(a, false), true, a);
+  }
+  for (const a of ['Play', 'Shuffle', 'Play next', 'Add to queue', 'Resume']) assert.equal(actionAway(a, true), true, a);
 });

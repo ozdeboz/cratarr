@@ -44,6 +44,11 @@ function listen(es: EventSource, name: string) {
   });
 }
 
+/** Hands `data` to the `name` handlers as though the server had sent it (lib/changes: what changed while away). */
+export function emit(name: string, data: unknown) {
+  for (const h of handlers.get(name) ?? []) h(data);
+}
+
 /** Call `handler` with each `name` event's data; returns the function that stops it. */
 export function on<T = unknown>(name: string, handler: (data: T) => void): () => void {
   let set = handlers.get(name);

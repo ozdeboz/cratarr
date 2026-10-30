@@ -86,6 +86,22 @@ the parts are and how they talk.
 - `src/lib/deviceSettings.ts`: this device's settings, each with one owner (the app, the browser or the server), and
   `device.svelte.ts`, the one way to read and change the ones both kinds of device have.
 - `src/lib/app.svelte.ts`: the message port to the Android app (`window.CratarrApp`).
+- Search (0.12): `src/lib/matcher.ts` and `matcherLoad.ts` run the rules crate's matcher as its own WebAssembly file
+  (`src/lib/wasm/matcher.wasm`, built with `scripts/rules-wasm.sh`; the brake stays in `rules.wasm`, inlined): every
+  text is folded first (`normalize('NFKD')`, marks dropped, lower case) as the server folds it, and the file is fetched
+  at the page's first idle moment and precached for offline. `src/lib/search.ts` keeps its API over it; the server
+  runs the same crate, so both find alike (the shared cases in `server/rules/tests/vectors/matcher.json`).
+- Offline writes (0.12, decision 0087): `src/lib/later.svelte.ts` is the outbox: a write is kept on the device first
+  (`keptStore.ts`: IndexedDB, else localStorage), then sent in order with its `Idempotency-Key` and the change's time
+  (`X-Cratarr-At`); `changes.svelte.ts` reads the server's change log (`GET /api/changes?since=`) and asks again what
+  changed; `playlistOps.ts` turns playlist edits into operations (`POST /api/playlists/{id}/ops`).
+- `src/lib/shelf.ts` and `shelfStore.svelte.ts` (0.12, decision 0085 step 2): Downloads' details and small covers in
+  the page's IndexedDB, filled from the album views while Cratarr answers; it moves into the Rust core's store with
+  the whole library's index (0.13).
+- `src/lib/snippet.ts` and `snippetPlayer.svelte.ts` (0.12): a track's snippet, picked from its stored waveform and
+  beats, played in its own audio element with this device's music ducked; in the Android app handed to the app
+  (`{type:'snippet'}`), which plays it beside its own player.
+- `src/lib/columnHead.ts`: what a tap on a column's name orders, for every table.
 - `src/lib/settings/`: Settings' parts, one file each.
 - `src/lib/visuals/`: the visuals' engine and its modules: one engine, each module's own values handed to the renderer,
   one macro resolver (`macro-map.ts`), one way to change a rack (`applyEdit` in `patch-edits.ts`).

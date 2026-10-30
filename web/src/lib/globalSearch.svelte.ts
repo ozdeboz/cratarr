@@ -18,6 +18,8 @@ const LIBRARY: { kind: SearchKind; label: string }[] = [
   { kind: 'artist', label: 'Artists' },
   { kind: 'album', label: 'Albums' },
   { kind: 'track', label: 'Tracks' },
+  // Classical's works (0.12, decision 0086; the owner, 2026-10-30: works reachable), each opening its sheet (lib/WorkSheet).
+  { kind: 'work', label: 'Works' },
   { kind: 'playlist', label: 'Playlists' },
   { kind: 'crate', label: 'Crates' },
   { kind: 'genre', label: 'Genres' },

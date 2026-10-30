@@ -16,6 +16,7 @@ pub mod artists;
 pub mod audiomuse;
 pub mod beat_this;
 pub mod capabilities;
+pub mod changes;
 pub mod analysis_pass;
 pub mod analysis_import;
 mod collection;
@@ -98,7 +99,7 @@ pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobVi
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
-pub use playlists::{ByName, CrateLook, CrateOrder, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, PlayResult, PlaylistRow, PlaylistService, PlaylistStats};
+pub use playlists::{ByName, CrateLook, CrateOrder, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};
 pub use playon::{Command as PlayOnCommand, FollowTarget, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, Report as PlayerReport, whose as whose_players};
 pub use plays::{PlayEvent, Plays};
 pub use sync::TargetChoice;
@@ -197,7 +198,11 @@ impl App {
         );
         let insights = InsightsService::new(library.clone(), playlists.clone());
         let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
-        let plays = Plays::new(cfg.data_dir.as_deref());
+        let plays = Plays::new(cfg.data_dir.as_deref(), served.as_ref().map(|s| s.userdata.clone()));
+        // What offline writes keep (decision 0087) forgotten after its 30 days, hourly.
+        if let Some(served) = &served {
+            crate::userdata::offline::prune_in_background(served.userdata.clone());
+        }
         let artists = artists::ArtistInfo::open(cfg.data_dir.as_deref());
         if let Some(a) = &artists {
             a.build_slowly();

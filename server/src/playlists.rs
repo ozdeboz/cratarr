@@ -286,6 +286,15 @@ pub fn on_write(told: OnWrite) {
     let _ = ON_WRITE.set(told);
 }
 
+/// Told when a playlist comes (`true`: made, renamed to, brought back) or goes (deleted, renamed away), by its key: the
+/// change log (decision 0087). Its writes are told `on_write`. Set once at start.
+pub type OnNamed = Box<dyn Fn(&str, bool) + Send + Sync>;
+static ON_NAMED: std::sync::OnceLock<OnNamed> = std::sync::OnceLock::new();
+
+pub fn on_named(told: OnNamed) {
+    let _ = ON_NAMED.set(told);
+}
+
 pub fn usable_name(wanted: &str) -> String {
     let mut s: String = wanted.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c }).collect();
     s = s.trim_start_matches(['.', ' ']).to_string();
@@ -561,6 +570,13 @@ impl Store {
         Ok(new_text.to_string())
     }
 
+    /// Tells `on_named` that playlist `id` came (`true`) or went.
+    fn named(&self, id: &str, there: bool) {
+        if let Some(told) = ON_NAMED.get() {
+            told(&self.key(id), there);
+        }
+    }
+
     /// Make the playlist exactly `entries`, in order. Backed up like every edit. Returns false when it already was.
     /// Tests only: the sync uses `set_entries_if`, which never overwrites an edit it has not seen.
     #[cfg(test)]
@@ -619,6 +635,7 @@ impl Store {
         self.backup(id, &path).await?;
         tokio::fs::remove_file(&path).await.with_context(|| format!("deleting {id}.m3u"))?;
         self.cache.write().await.remove(id);
+        self.named(id, false);
         Ok(true)
     }
 
@@ -833,6 +850,7 @@ impl Store {
                     use std::os::unix::fs::PermissionsExt;
                     let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).await;
                 }
+                self.named(name, true);
                 Ok(())
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(StoreError::Exists),
@@ -860,6 +878,8 @@ impl Store {
         tokio::fs::rename(&src, &dst).await.with_context(|| format!("renaming {from}.m3u"))?;
         let mut cache = self.cache.write().await;
         cache.remove(from);
+        self.named(from, false);
+        self.named(to, true);
         Ok(())
     }
 
@@ -870,6 +890,7 @@ impl Store {
         self.backup(id, &path).await?;
         tokio::fs::remove_file(&path).await.with_context(|| format!("deleting {id}.m3u"))?;
         self.cache.write().await.remove(id);
+        self.named(id, false);
         Ok(())
     }
 
@@ -892,6 +913,7 @@ impl Store {
             use std::os::unix::fs::PermissionsExt;
             let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).await;
         }
+        self.named(id, true);
         Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
     }
 

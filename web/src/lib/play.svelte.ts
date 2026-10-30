@@ -6,8 +6,7 @@ import { ApiError, UNREACHED, pickCollection, type Collection, type CrateLook, t
 import { away, pickHere } from './away.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
 import { crates } from './crates.svelte';
-import { refresh, untilNewTrack } from './live.svelte';
-import { port } from './player/port.svelte';
+import { choosePlayer, port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 
 /** A crate as its panel and card show it: its two toggles as set here (a tap may be on its way), a crate not listed
@@ -42,15 +41,10 @@ export const pickOf = (what: Collection, how: PlayHow, source = prefs.source || 
  *  Excludes find their crate by it). `from`: the track (its id) to play first. */
 export async function playCollection(what: Collection, how: PlayHow, name: string, from?: string, look?: CrateLook): Promise<void> {
   const source = prefs.source || undefined;
-  // Who picks differs, not how it plays: where the page holds the queue it queues the server's pick (or, out of reach,
-  // its own of what is on this device); the server's player is given the collection and picks for itself.
-  if (port().holdsQueue) {
-    const got = await pickHereOr(shown(what, look), how, from, source);
-    // The server's shuffle is in its pick already: played as it comes, not shuffled again.
-    return port().playTracks(got.tracks, how === 'shuffle' ? 'play' : how, name, got.source, got.index);
-  }
-  await pickCollection(shown(what, look), how, { from, source, on: 'server' });
-  // Show the new track once it plays, not the states on the way.
-  if (how === 'play' || how === 'shuffle') await untilNewTrack();
-  else setTimeout(refresh, 700);
+  // The page queues the server's pick (or, out of reach, its own of what is on this device); with no player to play
+  // on, it says so (0.12: no longer handed to the media server's player).
+  if (!port().holdsQueue) return choosePlayer();
+  const got = await pickHereOr(shown(what, look), how, from, source);
+  // The server's shuffle is in its pick already: played as it comes, not shuffled again.
+  return port().playTracks(got.tracks, how === 'shuffle' ? 'play' : how, name, got.source, got.index);
 }

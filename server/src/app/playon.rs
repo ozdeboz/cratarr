@@ -1020,7 +1020,8 @@ struct Entry {
     shared: bool,
     /// What it shows the sync server it is (decision 0051), told it with its group; new with each start of Cratarr.
     secret: String,
-    /// Its queues left behind, newest first (decision 0033, amended: queue history); a browser keeps its own.
+    /// Its queues left behind, newest first (decision 0033, amended: queue history); a browser's too (0.12, the owner:
+    /// a desktop app driven from the tablet showed none to switch back to).
     kept: Vec<Kept>,
     /// While it plays the device's own music (decision 0052, local mode): its last report then, and when it came.
     device: Option<(Report, Instant)>,
@@ -1104,10 +1105,11 @@ impl Entry {
         self.moved_to.as_ref().filter(|(_, since)| since.elapsed() < MOVED_SHOWN).map(|(m, _)| m)
     }
 
-    /// The queue that plays, as it stands now, to be kept as it is left behind; none when there is none, nor for a
-    /// browser (it keeps its own, decision 0033 amended).
+    /// The queue that plays, as it stands now, to be kept as it is left behind; none when there is none. A browser's
+    /// too, as its reports gave it (0.12, amending decision 0033: its own list in the page stays, for when it is
+    /// offline).
     fn standing(&self) -> Option<Kept> {
-        if self.queue.tracks.is_empty() || self.kind == PlayerKind::Browser {
+        if self.queue.tracks.is_empty() {
             return None;
         }
         let index = usize::try_from(self.index()).ok();
@@ -3966,11 +3968,12 @@ mod tests {
         assert_eq!((play["queue_id"].as_str(), play["queue_name"].as_str()), (Some(id.as_str()), Some("Car")));
         let phone = p.get("phone").unwrap().queues.unwrap();
         assert_eq!(phone.iter().map(|q| (q.id.as_str(), q.playing)).collect::<Vec<_>>(), vec![(id.as_str(), false)]);
-        // A browser keeps its own list (in the page), none here.
+        // A browser's are kept here too (0.12), so a device driving it can switch back.
         let _page = p.connect_browser("Chrome on Android", Some("tab-1")).unwrap();
         p.command("Chrome on Android", Command::play(vec![t("tr-1")], 0, 0)).await.unwrap();
         p.command("Chrome on Android", Command::play(vec![t("tr-2")], 0, 0)).await.unwrap();
-        assert_eq!(p.get("Chrome on Android").unwrap().queues.unwrap().len(), 1);
+        let page = p.get("Chrome on Android").unwrap().queues.unwrap();
+        assert_eq!(page.iter().map(|q| q.playing).collect::<Vec<_>>(), vec![true, false], "the playing one and the one left");
     }
 
     #[test]

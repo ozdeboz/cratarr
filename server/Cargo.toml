@@ -1,6 +1,6 @@
 [package]
 name = "cratarr-server"
-version = "0.11.1"
+version = "0.12.0"
 edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
 license = "AGPL-3.0-or-later"
@@ -13,7 +13,6 @@ members = [".", "rules"]
 exclude = ["rules-ffi"]
 
 [dependencies]
-unicode-normalization = "0.1"
 anyhow = "1"
 cratarr-rules = { path = "rules" }
 axum = "0.8"
@@ -37,7 +36,8 @@ ldap3 = { version = "=0.12.1", default-features = false, features = ["tls-rustls
 argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "password-hash"] }
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+# functions (0.12): `cratarr_letters`, the library's trigram tables' folding (serve::library), no further crates.
+rusqlite = { version = "0.40.2", features = ["bundled", "functions"] }
 rubato = { version = "=5.0.0", default-features = false, features = ["fft_resampler"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -76,6 +76,13 @@ flate2 = "1"
 [dev-dependencies]
 # Calls the routers as a client would, in tests (decision 0030).
 tower = { version = "0.5", default-features = false, features = ["util"] }
+
+# The page's rules.wasm (scripts/rules-wasm.sh, 0.12): as small as it gets, the page loads it with its first view.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
 
 [profile.release]
 opt-level = "s"

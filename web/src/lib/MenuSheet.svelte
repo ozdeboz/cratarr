@@ -21,6 +21,8 @@
   import { sheetDrag } from './sheetDrag';
   import { toast } from './toast.svelte';
   import { copyText } from './clipboard';
+  import { actionAway } from './menuTable';
+  import { reach } from './reach.svelte';
 
   let {
     label,
@@ -221,7 +223,7 @@
         </div>
       {:else if actions.length}
         <div class="actions">
-          {#each actions as a (a.label)}
+          {#each actions.filter((a) => actionAway(a.label, reach.away)) as a (a.label)}
             <button class:play={a.icon === 'play'} aria-label={a.label} title={a.label} disabled={a.disabled} onclick={a.onclick}><Icon name={a.icon} size={28} /></button>
           {/each}
         </div>

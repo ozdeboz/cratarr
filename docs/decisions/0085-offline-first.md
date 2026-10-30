@@ -33,13 +33,17 @@ Five steps, each useful on its own, so offline use improves with every release r
 4. **The whole library's index on the device** (beside 0.13). Every album's, track's and artist's metadata (a few MB,
    no audio), kept current by what changed since the last sync; what is not downloaded shows dimmed. Offline the whole
    library browses, searches and filters; online the pages read the device first, so they are instant. Modes per
-   server (0.12) decide what each mode mirrors, so this comes after them.
+   server (0.13) decide what each mode mirrors, so this comes after them.
 5. **Crates and the queue on the device** (0.14). Crate rules run over the local index through the rules crate (0075's
    one engine, the shared Rust core: in the app through UniFFI, in the desktop app natively), and the queue is held on
    the device, synced with Play On. Crates, radio and handovers work without the server in between.
 
 The local store and its sync are one piece of the shared Rust core (SQLite and the sync), built once for the Android
 app and the desktop app; the generated protocol types (lib/generated) are its messages.
+
+*Amended 2026-10-30 (the owner, "Page store now, Rust in 0.13"):* step 2's store is the page's own IndexedDB in 0.12
+(lib/shelfStore: the downloaded tracks' details and small covers, in the app's WebView, the desktop app and an installed
+page alike); it moves into the Rust core's store once, with step 4 in 0.13, rather than being built twice.
 
 ## Graceful degradation, first
 
@@ -63,14 +67,15 @@ them. Each step brings only as much of the mechanism as it needs, and what it ca
   (can edit, can delete). A degradation says so in one line where it happens, never as a refusal after a tap.
 - **Beside 0.12: Downloads wholly offline, and no play lost.** Downloads is the offline shelf (step 2): its metadata and
   small covers on the device, searched, filtered and ordered offline. Plays and scrobbles made offline are kept with an
-  id and a time each, sent once they can be, never twice and never collapsed (step 3's first part). Favourites and
-  ratings work offline, the last change by time winning. Editing a playlist offline is not offered yet, one line
-  saying why.
-- **Beside 0.13: playlists edited offline, and the whole library browsable.** The server keeps a change log. A playlist's
-  edits become operations with ids (add a track, remove entry 7, move entry 7 after 3), replayed on the server and
-  merged: additions and removals as a set, the order as the last move made it; so one's own playlists can be edited
-  offline (step 3 whole). The whole library's index syncs by that log (step 4): "Available offline" shows what plays,
-  the rest is dimmed; small covers for the index, full ones for what is downloaded.
+  id and a time each, sent once they can be, never twice and never collapsed. Favourites and ratings work offline, the
+  last change by time winning. The server keeps a change log, and a playlist's edits become operations with ids (add a
+  track, remove entry 7, move entry 7 after 3), replayed on the server and merged: additions and removals as a set,
+  the order as the last move made it; so one's own playlists can be edited offline (step 3 whole).
+- **Beside 0.13: the whole library browsable.** After modes per server, which decide what each mode mirrors, the whole
+  library's index syncs by the change log (step 4): "Available offline" shows what plays, the rest is dimmed; small
+  covers for the index, full ones for what is downloaded.
+- *Amended 2026-10-30 (the owner):* modes per server moved from 0.12 to 0.13, and the change log with playlist edits
+  as operations came forward from 0.13 into 0.12.
 - **0.14: crates and the queue on the device.** Crate rules run on the device through the rules crate (the shared Rust
   core, step 5). A queue played offline stays that device's own; Play On takes it up on the way back. A crate's rules
   are edited online only, until the change log covers crates too.
