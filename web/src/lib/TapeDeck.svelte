@@ -21,7 +21,8 @@
   const TURN = 2.4 * Math.PI * 12;
   /** The fastest the picture turns, whatever the tape does (past it the spokes would strobe). */
   const MOST = 16;
-  /** The drawing's own size (its viewBox): drawn at this size, scaled down only where the row is narrower. */
+  /** The drawing's own size (its viewBox): drawn at this size, scaled down where the row is narrower, and up on a large
+   *  landscape screen (the owner, 2026-10-30: "the tape deck could probably be 300% size on landscape 1080p"). */
   const W = 320;
   const H = 43;
   /** A turn's length at rate 1 (ms): a part's rate is then its turns a second. */
@@ -38,8 +39,20 @@
   /** The head's box around its two hills. */
   const HEAD_BOX = { x: HEAD.x - HEAD.half - 1, y: HEAD.y - HEAD.gap - HEAD.height - 1, w: 2 * HEAD.half + 2, h: 2 * (HEAD.gap + HEAD.height) + 2 };
 
+  /** How far it may grow: up to three times on a landscape screen at least as tall as 1080p's (a full HD window), its own
+   *  size elsewhere. */
+  const BIG = '(orientation: landscape) and (min-height: 900px)';
+  const MOST_SCALE = 3;
+  let big = $state(typeof window !== 'undefined' && matchMedia(BIG).matches);
+  $effect(() => {
+    const m = matchMedia(BIG);
+    const on = () => (big = m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  });
+  const most = $derived(big ? MOST_SCALE : 1);
   let width = $state(W);
-  const scale = $derived(Math.min(1, width / W));
+  const scale = $derived(Math.min(most, width / W));
 
   let tape: SVGPathElement;
   let packL: SVGCircleElement;
@@ -154,7 +167,7 @@
   const box = (x: number, y: number, half: number) => `left:${x - half}px;top:${y - half}px;width:${2 * half}px;height:${2 * half}px`;
 </script>
 
-<div class="deck" bind:clientWidth={width} {@attach run}>
+<div class="deck" bind:clientWidth={width} style:max-width="{Math.round(380 * most)}px" style:height="{Math.round(H * scale)}px" {@attach run}>
   <div class="stage" style:transform="translate(-50%, -50%) scale({scale})">
     <svg class="still" viewBox="0 0 {W} {H}" width={W} height={H} aria-hidden="true">
       <path class="tape" bind:this={tape} />
