@@ -100,6 +100,14 @@ pub struct Item {
     /// An album's artist where the panel needs it apart from `sub`: one not in the library, to look for on Bandcamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artist: Option<String>,
+    /// A track's album and its id, and its length (0.12: the page opens a track's own menu from a search hit, and
+    /// no longer reads them out of `sub`, which a name holding " · " broke).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u64>,
     /// A missing album's page on Bandcamp where an open of it found one lately (0.9.5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
@@ -211,6 +219,9 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
             let (close, matched) = album_match(&m.title, &m.artist, w)?;
             Some(Item {
                 kind: "missing",
+                album: None,
+                album_id: None,
+                duration_secs: None,
                 subject: format!("missing:{}", m.release_group),
                 known: vec![format!("Missing from {}", m.artist)],
                 composers: Vec::new(),
@@ -249,6 +260,9 @@ fn excluded_items(
             let (close, matched) = album_match(&x.album, &x.artist, w)?;
             Some(Item {
                 kind: "excluded",
+                album: None,
+                album_id: None,
+                duration_secs: None,
                 subject: format!("excluded:{}", x.key),
                 title: x.album.clone(),
                 sub: if x.how == "hidden" { "Hidden" } else { "Not interested" }.to_string(),
@@ -266,6 +280,9 @@ fn excluded_items(
         })
         .chain(artists.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.artist, w)).map(|(i, a)| Item {
             kind: "excluded",
+            album: None,
+            album_id: None,
+            duration_secs: None,
             subject: format!("excluded-artist:{}", a.key),
             title: a.artist.clone(),
             sub: "Artist left out".to_string(),
@@ -282,6 +299,9 @@ fn excluded_items(
         }))
         .chain(everywhere.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.name, w)).map(|(i, a)| Item {
             kind: "excluded",
+            album: None,
+            album_id: None,
+            duration_secs: None,
             subject: format!("excluded-everywhere:{}", a.key),
             title: a.name.clone(),
             sub: "Excluded everywhere".to_string(),
@@ -306,6 +326,9 @@ fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: O
     let (close, matched) = album_match(title, artist, w)?;
     Some(Item {
         kind,
+        album: None,
+        album_id: None,
+        duration_secs: None,
         subject: format!("{kind}:{id}"),
         title: title.to_string(),
         sub: [Some(artist.to_string()), year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
@@ -345,6 +368,9 @@ fn by_composer(c: &super::classical::Index, w: &[String], have: &std::collection
             }
             out.push(Item {
                 kind: "album",
+                album: None,
+                album_id: None,
+                duration_secs: None,
                 subject: format!("album:cratarr/{id}"),
                 title: r.title.clone(),
                 sub: [Some(r.artist.clone()), r.year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
@@ -397,6 +423,9 @@ fn work_items(c: &super::classical::Index, w: &[String]) -> Vec<Item> {
             };
             Some(Item {
                 kind: "work",
+                album: None,
+                album_id: None,
+                duration_secs: None,
                 subject: format!("work:{}", x.mbid),
                 title: x.title.clone(),
                 sub: match &x.catalogue {
@@ -493,6 +522,9 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             .enumerate()
             .map(|(i, (a, h))| Item {
                 kind: "album",
+                album: None,
+                album_id: None,
+                duration_secs: None,
                 subject: format!("album:cratarr/{}", a.id),
                 title: a.name.clone(),
                 sub: [Some(a.artist.clone()), a.year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
@@ -525,6 +557,9 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .enumerate()
                 .map(|(i, (a, h))| Item {
                     kind: "artist",
+                    album: None,
+                    album_id: None,
+                    duration_secs: None,
                     subject: format!("artist:cratarr/{}", a.name),
                     title: a.name.clone(),
                     sub: match a.album_count {
@@ -553,12 +588,15 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .enumerate()
                 .map(|(i, t)| Item {
                     kind: "track",
+                    album: (!t.album.is_empty()).then(|| t.album.clone()),
+                    album_id: Some(t.album_id.clone()),
+                    duration_secs: Some(t.duration),
                     subject: format!("album:cratarr/{}", t.album_id),
                     title: t.title.clone(),
                     sub: [t.artist.clone(), t.album.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
                     cover: Some(format!("/api/albums/cratarr/{}/cover", t.album_id)),
                     track: Some(t.id.clone()),
-                    artist: None,
+                    artist: (!t.artist.is_empty()).then(|| t.artist.clone()),
                     bandcamp: None,
                     known: Vec::new(),
                     composers: classical.as_ref().map(|c| c.song_composers(&t.id)).unwrap_or_default(),
@@ -578,6 +616,9 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 .enumerate()
                 .map(|(i, (g, count))| Item {
                     kind: "genre",
+                    album: None,
+                    album_id: None,
+                    duration_secs: None,
                     subject: format!("crate:{}{g}", crate::crates::GENRE),
                     title: g.clone(),
                     sub: match count {
@@ -617,6 +658,9 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                             .enumerate()
                             .map(|(i, (_, word, albums))| Item {
                                 kind,
+                                album: None,
+                                album_id: None,
+                                duration_secs: None,
                                 subject: format!("crate:{kind}:{word}"),
                                 title: word.clone(),
                                 sub: match albums {
@@ -657,6 +701,9 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             };
             lists.push(Item {
                 kind: "playlist",
+                album: None,
+                album_id: None,
+                duration_secs: None,
                 subject: format!("playlist:{}", p.id),
                 sub: match p.count {
                     1 => "1 track".to_string(),
@@ -694,7 +741,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             } else {
                 continue;
             };
-            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
+            found.push(Item { kind: "crate", album: None, album_id: None, duration_secs: None, subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);
