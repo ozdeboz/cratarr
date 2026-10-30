@@ -47,6 +47,10 @@ export JAVA_HOME="<Android Studio>/jbr" ANDROID_HOME="<Android SDK>"
 ./gradlew assembleDebug   # app/build/outputs/apk/debug/cratarr-android-debug.apk
 ```
 
+The app carries its own copy of the page (decision 0085): build it first (`pnpm build` in `web/`), so `web/dist` is this
+release's. Without it the app is built anyway and goes to the server's page, with a warning;
+`./gradlew -Pcratarr.page=required assembleRelease` refuses instead, for an app that is handed out.
+
 A release build is signed when `keystore.file`, `keystore.password`, `signing.key.alias` and `signing.key.password`
 are given (Gradle properties or environment variables).
 
