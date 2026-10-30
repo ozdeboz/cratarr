@@ -88,4 +88,6 @@ Since 0.11.0; 0.11.1's fixes are in it too. The notes for each part are in [deci
 
 ## Not yet
 
-- **Genre aliases** ("dnb" for Drum and Bass): MusicBrainz's genre list comes next.
+- **MusicBrainz's genre list.** Genre aliases are a hand-kept list for now (DnB, R&B, EDM and the like): search's
+  genres and a crate's words know them, so "dnb" finds Drum and Bass. Reading MusicBrainz's whole genre list waits for
+  later, and a page's own filter (the pill on a genre list) doesn't use the aliases yet.
