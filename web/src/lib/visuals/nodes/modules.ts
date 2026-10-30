@@ -13,6 +13,8 @@ import { FIELD_GLSL, GIANT_GLSL } from '../field';
 import { keptPerSecond, WARP_GLSL, WarpClock, warpFrame, warpUniforms } from '../loopmods';
 import { inverse, toScreen, transformOf } from '../transform';
 import { none } from './shared';
+import { lensWarpOf } from '../flame';
+import { WARPS } from '../warps';
 
 /** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`; the points
  *  cabled into it (Instance's, Fold's grid: points-pictures.ts), where it reads them. */
@@ -139,6 +141,41 @@ void main() {
 }`,
     uniforms: (k) => ({ uAmount: k.amount ?? 0, uScale: k.scale ?? 0.5, uMode: k.mode ?? 0, uZoomTurn: [k.zoom ?? 0, k.turn ?? 0] }),
   },
+  // Lens on a picture (0057 §4f; 0.9.19: it had no pass, and drew black): each pixel read where the lens's warp takes
+  // it (flam3's variations, warps.ts warpOf, in the frame centred, its short side -1..1), as far as Amount; a shape's
+  // lens (Cratarr's, Polygon, Star and the set's) sends points into its shape, which a picture has no pixels for: it
+  // passes the picture as it is.
+  lens: {
+    glsl: `uniform float uWarp;
+uniform float uAmount;
+vec2 lensWarp(vec2 p) {
+  float r2 = max(dot(p, p), 1e-6);
+  float r = sqrt(r2);
+  float th = atan(p.x, p.y);
+  int v = int(uWarp + 0.5);
+  if (v == ${WARPS.sinusoidal}) return sin(p);
+  if (v == ${WARPS.spherical}) return p / r2;
+  if (v == ${WARPS.swirl}) { float s = sin(r2); float c = cos(r2); return vec2(p.x * s - p.y * c, p.x * c + p.y * s); }
+  if (v == ${WARPS.horseshoe}) return vec2((p.x - p.y) * (p.x + p.y), 2.0 * p.x * p.y) / r;
+  if (v == ${WARPS.polar}) return vec2(th / 3.14159265, r - 1.0);
+  if (v == ${WARPS.handkerchief}) return r * vec2(sin(th + r), cos(th - r));
+  if (v == ${WARPS.heart}) return r * vec2(sin(th * r), -cos(th * r));
+  if (v == ${WARPS.disc}) return (th / 3.14159265) * vec2(sin(3.14159265 * r), cos(3.14159265 * r));
+  if (v == ${WARPS.julia}) return sqrt(r) * vec2(cos(th * 0.5), sin(th * 0.5));
+  if (v == ${WARPS.fisheye}) return (2.0 / (r + 1.0)) * p.yx;
+  if (v == ${WARPS.eyefish}) return (2.0 / (r + 1.0)) * p;
+  if (v == ${WARPS.bubble}) return (4.0 / (r2 + 4.0)) * p;
+  return p;
+}
+void main() {
+  float aspect = uAspect.y / uAspect.x;
+  vec2 k = vec2(aspect, 1.0) / min(aspect, 1.0);
+  vec2 p = (vUv - 0.5) * 2.0 * k;
+  vec2 q = mix(p, lensWarp(p), uAmount);
+  o = textureLod(uIn, q / k * 0.5 + 0.5, 0.0);
+}`,
+    uniforms: (k) => ({ uWarp: lensWarpOf(k.kind ?? 1), uAmount: Math.min(1, Math.max(0, k.amount ?? 1)) }),
+  },
   threshold: {
     glsl: `uniform float uThreshold;
 uniform float uSoftness;
@@ -230,6 +267,8 @@ void main() { o = texture(uIn, vUv) * uKeep; }`,
 
 /** The module types drawn here. */
 export const PICTURE_NODES: ReadonlySet<string> = new Set(Object.keys(PASSES));
+/** A module's shaders as drawn (its vertex's, its fragment's), for a check that they link (tests, a GPU's lab). */
+export const passShaders = (type: string): [string, string] | null => (PASSES[type] ? [VERTEX, HEAD + PASSES[type].glsl] : null);
 
 /** A running module of `type`, drawn here. */
 export function createNode(type: string, gl: WebGL2RenderingContext): ModuleNode {

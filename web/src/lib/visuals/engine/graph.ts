@@ -635,16 +635,24 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const clockModule = ofType('clock');
   const ticks: ClockTriggers = clockModule ? stepClockTriggers(st.clockTriggers, m, clockModule.knobs, step) : { beat: 0, bar: 0, phrase: 0 };
   if (clockModule) for (const k of ['beat', 'bar', 'phrase'] as const) outputs[`${clockModule.id}.${k}`] = ticks[k];
-  // Each Grid laid out by its knobs as set (seeded by its id: the same every frame and on every device).
+  // Each Grid laid out by its knobs as set and as their macros set them (seeded by its id: the same every frame and on
+  // every device). Its macros at their value as last frame left them (the macros are worked out after the Grids, whose
+  // channels the modulators read): a macro on Count or Spacing lays it out anew (0.9.19: they did nothing; the
+  // owner, 2026-10-29: continuous over discrete).
   const points: Record<string, GridPoint[]> = {};
+  const gridType = types.grid ?? ENGINE_TYPES.grid;
   for (const x of plan.grids) {
-    const key = JSON.stringify(x.knobs);
-    if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(x.knobs, seedOf(x.id)) };
+    const laid: Record<string, number> = { ...x.knobs };
+    for (const k of gridType?.knobs ?? [])
+      if (k.kind !== 'step' && plan.targetsOf.get(x.id)?.has(k.id))
+        laid[k.id] = throughMacros(finite(x.knobs[k.id], k.default), plan.targetsOf.get(x.id)!.get(k.id)!, (g) => finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1)), k.taper === 'exp');
+    const key = JSON.stringify(laid);
+    if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(laid, seedOf(x.id)) };
     points[x.id] = st.grids[x.id].grid.points;
     // Points cabled into At (a Flame's parts, where they are on the screen): the lattice shared out, a part laid round each.
     const at = gridAt(plan.intoOf.get(x.id)?.get('at')?.[0]?.from);
     if (at?.length) {
-      const local = gridOf({ ...x.knobs, count: Math.max(1, Math.round(points[x.id].length / at.length)) }, seedOf(x.id)).points;
+      const local = gridOf({ ...laid, count: Math.max(1, Math.round(points[x.id].length / at.length)) }, seedOf(x.id)).points;
       points[x.id] = at.flatMap((s) => local.map((q) => ({ x: s.x + q.x, y: s.y + q.y }))).slice(0, MOST_POINTS);
     }
   }
