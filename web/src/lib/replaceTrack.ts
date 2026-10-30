@@ -51,7 +51,7 @@ export const searchTrack = (album: { source: string; id: string }, recording: st
   call<{ id: string }>('/api/track-search', 'POST', { album, recording, ...(replace ? { replace } : {}) });
 export const getSearch = (id: string) => call<Search>(`/api/track-search/${enc(id)}`);
 /** An audio file in Cratarr's own download folder (0.10; administrators'): what its tags say, where they say it. */
-export type TrackFile = { path: string; name: string; bytes: number; duration_secs?: number | null; artist?: string | null; album?: string | null; title?: string | null; track_no?: number | null };
+export type TrackFile = { path: string; name: string; bytes: number; durationSecs?: number; artist?: string; album?: string; title?: string; trackNo?: number };
 /** The files there, the best match for `q` first. */
 export const getTrackFiles = (q: string) => call<TrackFile[]>(`/api/track-files?${new URLSearchParams({ q })}`);
 /** A file taken for a missing track: copied (never moved) and checked as a Soulseek copy is, the same fetch from then on. */
