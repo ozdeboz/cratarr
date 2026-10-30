@@ -5,7 +5,7 @@
   // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
-  // the server makes them (0.11), Make a crate of this: the words read into a quick crate (lib/QuickCrateSheet).
+  // the server makes them (0.11), Make a crate of this: Crates, the words read into a quick crate's sentence (lib/QuickCrate).
   import { includeArtist, takeBackExcluded } from './api';
   import { loadExcludedArtists } from './excludedArtists.svelte';
   const EVERYWHERE = 'excluded-everywhere:';

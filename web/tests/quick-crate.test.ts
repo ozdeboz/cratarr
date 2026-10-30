@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, CLOSE, LIKE_MOST } = await import(
+const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, CLOSE, LIKE_MOST } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -193,3 +193,42 @@ test('a search that fails reads as nothing found, the rest of the line still rea
     ],
   );
 });
+
+// The crate as a sentence (0.12, the crate search's mockup B): what it says is what the conditions do.
+const said = (parts: { text: string; chip?: number; tight?: boolean }[]) => parts.map((p, k) => (k && !p.tight ? ' ' : '') + (p.chip !== undefined ? `[${p.text}]` : p.text)).join('');
+const c = (kind: string, label: string, more: Record<string, unknown> = {}) => ({
+  term: label.toLowerCase(),
+  reading: { kind, value: kind === 'year' ? (more.value as string) : label, label, ...(more.id ? { id: more.id } : {}) },
+  others: [],
+  ...(kind === 'artist' ? { how: more.how ?? 'like', own: false } : {}),
+});
+const decade = (d: number) => c('year', `${d}s`, { value: `${d}-${d + 9}` });
+const year = (y: number) => c('year', String(y), { value: `${y}-${y}` });
+
+test("the sentence: the mockup's crate; each term its chip's place", () => {
+  const chips = [c('genre', 'Hip Hop'), decade(1990), c('artist', 'Miles Davis', { id: 'ar-1' })];
+  const parts = sentenceOf(chips);
+  assert.equal(said(parts), '[Hip Hop] from the [1990s] that sounds like [Miles Davis]');
+  assert.deepEqual(parts.filter((p) => p.chip !== undefined).map((p) => p.chip), [0, 1, 2]);
+});
+
+test("the sentence: each kind's terms any of them (or), likes all of them (and), no genre: Tracks with plural verbs", () => {
+  assert.equal(said(sentenceOf([c('genre', 'Jazz'), c('genre', 'Soul'), c('genre', 'Funk')])), '[Jazz], [Soul] or [Funk]');
+  assert.equal(
+    said(sentenceOf([c('artist', 'Bonobo', { id: 'ar-2' }), c('artist', 'Floating Points', { id: 'ar-3' }), c('mood', 'Calm')])),
+    'Tracks that feel [Calm] and sound like [Bonobo] and [Floating Points]',
+  );
+  assert.equal(said(sentenceOf([c('artist', 'Nina Simone', { how: 'by' })])), 'Tracks by [Nina Simone]');
+});
+
+test('the sentence: style beside a genre, tags, label, album; the years one span', () => {
+  assert.equal(
+    said(sentenceOf([c('genre', 'Hip Hop'), c('style', 'Boom Bap'), c('tag', 'Sampled'), c('label', 'Blue Note'), c('album', 'Kind of Blue')])),
+    '[Hip Hop], style [Boom Bap] tagged [Sampled] on [Blue Note] from the album [Kind of Blue]',
+  );
+  assert.equal(said(sentenceOf([c('style', 'Jazz-Funk'), year(1975)])), '[Jazz-Funk] from [1975]');
+  assert.equal(said(sentenceOf([c('genre', 'Soul'), year(1985), decade(1970)])), '[Soul] from the [1970s] to [1985]');
+  assert.equal(said(sentenceOf([c('genre', 'Soul'), c('year', '1970–1985', { value: '1970-1985' })])), '[Soul] from [1970 to 1985]');
+  assert.equal(said(sentenceOf([decade(1960), year(1975), decade(1980)])), 'Tracks from the [1960s], [1975] to the [1980s]');
+});
+
