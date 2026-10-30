@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 const { blankExport, exportLine, exportReady, exportRequest, keptExport, suggestedName } = await import('../src/lib/exportChoices.ts');
 
 const tracks = { kind: 'tracks' as const, name: 'Kind of Blue', tracks: [{ source: 'cratarr', id: 'tr-1' }] };
-const two = { kind: 'playlists' as const, names: ['Chill', 'oskar/Jazz'] };
+const two = { kind: 'playlists' as const, names: ['Chill', 'robin/Jazz'] };
 
 test('a list of tracks always carries them, its playlist file only when asked; a combined name only for several playlists', () => {
   const o = { ...blankExport(), tracks: false, combine: true, name: ' Both ', m3u: true, format: 'opus' as const, bitrate: 128, layout: 'flat' as const };

@@ -117,7 +117,7 @@ export async function loadMine() {
   }
 }
 
-/** One's own still waiting, for the queue sheet ("Waiting for Oskar"). */
+/** One's own still waiting, for the queue sheet ("Waiting for Ann"). */
 export const waiting = () => follow.mine.filter((r) => (r.state ?? 'pending') === 'pending');
 
 if (typeof window !== 'undefined') {

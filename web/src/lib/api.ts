@@ -1088,7 +1088,7 @@ export type Permissions = {
   auto_approve: boolean;
   manage_requests: boolean;
 };
-/** A device that belongs to an account (it plays only on its own, decision 0051): uid=197609(Oskar) gid=197121 groups=197121 its player's name. One that is
+/** A device that belongs to an account (it plays only on its own, decision 0051): `id` is its player's name. One that is
  *  connected, or a Kodi (removed under Players), is not taken away. */
 export type OwnDevice = { id: string; name: string; kind: string; online?: boolean; last_seen: number | null };
 /** Whether a device can be taken away now. */

@@ -157,7 +157,7 @@ export type Prefs = {
   profileRows: ProfileRow[];
   /** Home's sections switched on, in the user's order (Settings › Home; the owner, 2026-10-24). */
   homeParts: HomePart[];
-  /** Home's header greets by name ("Good evening, Oskar", then "Best for now") in place of the moment's own name. */
+  /** Home's header greets by name ("Good evening, Ann", then "Best for now") in place of the moment's own name. */
   homeGreeting: boolean;
   /** The greeting's name with a capital first letter, for an account named in lower case (the owner, 2026-10-25). */
   /** One's own header picture (Appearance) replaces Home's weather sky too, besides being every flow's backdrop. */
