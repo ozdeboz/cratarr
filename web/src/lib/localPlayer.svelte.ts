@@ -27,7 +27,7 @@ import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
-import { brakeLengthMs, FLIGHT_TOP, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
+import { brakeLengthMs, brakeSpeed, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 import { shuffled } from './shuffle';
 import { toast } from './toast.svelte';
@@ -133,9 +133,7 @@ const LEAD = 60;
 const SLICE = 256 * 1024;
 /** Drop played audio older than this behind the playing position (s). */
 const BEHIND = 30;
-/** Previous restarts the track after this many seconds (Finamp: 5): every player's rule, the app's and Kodi's (the
- *  server's) too, so the remote predicts with it as well. */
-export const RESTART_AFTER = 5;
+export { RESTART_AFTER } from './startStop';
 
 // The stream this browser offers: MediaSource, or on iPhone and iPad (Safari 17.1 on) only ManagedMediaSource, which
 // works the same but lets the browser say when to fetch (startstreaming, endstreaming) and drop buffered audio itself
@@ -2608,14 +2606,7 @@ function planSpeed(c: LetGo, now: number, place: Place): number {
   const want = brakeTravel(c.v0, c.ms, Math.min(c.ms / 1000, Math.max(0, (now - c.b0) / 1000)), c.to);
   return Math.max(0, v + (want - got) / PLAN_CATCH_S);
 }
-const curveSpeed = (c: { v0: number; to: number; b0: number }, now: number, ms: number) =>
-  c.to + ((c.v0 - c.to) * (1 + Math.cos(Math.PI * Math.min(1, Math.max(0, (now - c.b0) / ms))))) / 2;
-/** How far such a brake from `v`× to `to`× over `ms` has gone after `s` seconds (track s). */
-function brakeTravel(v: number, ms: number, s: number, to = 1): number {
-  const T = ms / 1000;
-  const u = Math.min(s, T);
-  return to * u + ((v - to) / 2) * (u + (T / Math.PI) * Math.sin((Math.PI * u) / T)) + to * Math.max(0, s - T);
-}
+const curveSpeed = (c: { v0: number; to: number; b0: number }, now: number, ms: number) => brakeSpeed(c.v0, c.to, ms, now - c.b0);
 /** When such a brake is down to the fastest a track plays (s into it; 0 where it starts within it). */
 function withinReach(v: number, ms: number, to = 1): number {
   if (v <= TRACK_TOP) return 0;
