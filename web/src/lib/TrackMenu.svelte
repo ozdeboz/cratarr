@@ -16,6 +16,7 @@
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
+  import { port } from './player/port.svelte';
   import {
     coverUrl,
     albumCoverUrl,
@@ -45,7 +46,7 @@
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
   import { enqueue, jump as localJump, moveUpcoming, removeUpcoming, startRadio } from './localPlayer.svelte';
   import { playUpcoming } from './remote.svelte';
-  import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
+  import { setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
   import { albumSubject, artistOf, panel, viewOver } from './panel.svelte';
@@ -274,7 +275,8 @@
   }
 
   // A queue row's actions.
-  const here = $derived(isLocal());
+  // The queue's own rows move where the page holds it.
+  const here = $derived(port().queue() !== null);
   // Each action reads what it is for before closing: the opener drops the menu's track and place on close.
   async function playNow() {
     const at = place;
@@ -307,7 +309,7 @@
   const movesHere = $derived(!!place && here && place.list === 'upcoming');
 
   /** Radio from this track (decision 0036): tracks like it play, and the radio goes on. Cratarr's own tracks only. */
-  const radioFrom = $derived(isLocal() && t?.source === 'cratarr');
+  const radioFrom = $derived(port().radio && t?.source === 'cratarr');
   async function radio() {
     const tr = t;
     if (!tr) return;
@@ -328,8 +330,7 @@
     working = true;
     onclose();
     try {
-      if (isLocal()) enqueue([{ source: tr.source, id: tr.id, name: tr.name, artist: tr.artist, album: tr.album, album_id: tr.album_id }], how);
-      else await queueTrack(tr.id, how, tr.source);
+      await port().enqueueOne({ source: tr.source, id: tr.id, name: tr.name, artist: tr.artist, album: tr.album, album_id: tr.album_id }, how);
       toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
       setTimeout(refresh, 700);
     } catch (e) {

@@ -5,10 +5,9 @@
   import { playlistFromQueue } from './api';
   import { followCreate, followDelete } from './follow.svelte';
   import { refresh } from './live.svelte';
-  import { local } from './localPlayer.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { isLocal } from './output.svelte';
+  import { port } from './player/port.svelte';
   import { playing } from './remote.svelte';
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
@@ -16,9 +15,10 @@
   let { onclose }: { onclose: () => void } = $props();
 
   const np = $derived(playing());
+  const held = $derived(port().queue());
   // The queue from the playing track on: this device's own, or what the server's player said.
   const ids = $derived(
-    isLocal() ? local.queue.slice(Math.max(0, local.index)).map((x) => x.id) : np ? [np.id, ...np.upcoming.map((u) => u.id)] : [],
+    held ? held.tracks.slice(Math.max(0, held.index)).map((x) => x.id) : np ? [np.id, ...np.upcoming.map((u) => u.id)] : [],
   );
   const repeated = $derived(new Set(ids).size < ids.length);
 
@@ -31,7 +31,7 @@
     if (!n || working) return;
     working = true;
     try {
-      const own = isLocal() ? local.queue.slice(Math.max(0, local.index)).map((t) => t.id) : undefined;
+      const own = held ? held.tracks.slice(Math.max(0, held.index)).map((t) => t.id) : undefined;
       const made = await playlistFromQueue(n, np?.source, own, repeats);
       const left = made.left_out ? `, ${made.left_out} not in the library left out` : '';
       withUndo(`Made ${made.playlist}: ${made.added} ${made.added === 1 ? 'track' : 'tracks'}${left}.`, [made.undo], {

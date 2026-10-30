@@ -1,28 +1,17 @@
-// Where the playing track is now, to the frame: the one clock what moves with the music draws by (the visuals' Music,
-// the player's band glass; the owner, 2026-10-29: "engine purity", where the glass ran a clock of its own at plain
-// speed). This device's player says it to the frame (lib/localPlayer positionNow), through a wind, a brake and a
-// rewind as it goes. Another player reports it now and then, through the server: between reports it moves on with the
-// frame clock, and it is eased toward each report rather than set to it, since a jump back or forth would be a beat
-// played twice or skipped; a report far off (a seek) is taken as it is.
+// Where the playing track is now, to the frame: what moves with the music draws by it (the visuals' Music, the player's
+// band glass; the owner, 2026-10-29: "engine purity", where the glass ran a clock of its own at plain speed). This
+// device's player says it to the frame (lib/localPlayer positionNow), through a wind, a brake and a rewind as it goes;
+// another player's place is the one clock's (lib/player/clock), the same anchor the player's bar reads.
 import { positionNow } from './localPlayer.svelte';
-import { isLocal } from './output.svelte';
-import { paused, playing } from './remote.svelte';
+import { clock, duration, paused, playing } from './remote.svelte';
+import { placeOf } from './player/clock';
+import { port } from './player/port.svelte';
 
-let clock = { key: '', pos: 0, at: 0, heard: Number.NaN };
-
-/** The place of track `key` at `at` (performance.now()), `on` while it plays. */
-export function placeAt(key: string, on: boolean, at: number): number {
-  if (isLocal()) return positionNow();
-  const heard = playing()?.progress?.position_secs ?? 0;
-  if (clock.key !== key) clock = { key, pos: heard, at, heard };
-  if (on) clock.pos += (at - clock.at) / 1000;
-  clock.at = at;
-  if (heard !== clock.heard) {
-    const off = heard - clock.pos;
-    clock.pos += Math.abs(off) > 0.3 ? off : off / 2;
-    clock.heard = heard;
-  }
-  return clock.pos;
+/** The playing track's place at `at` (performance.now()). `key` and `on` are the caller's view of it; the clock's
+ *  anchor knows the track and whether it plays. */
+export function placeAt(_key: string, _on: boolean, at: number): number {
+  if (port().holdsQueue) return positionNow();
+  return placeOf(clock.anchor, at, duration());
 }
 
 /** The playing track's place now (s); 0 with none. */

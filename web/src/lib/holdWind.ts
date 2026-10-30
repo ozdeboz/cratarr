@@ -9,7 +9,7 @@
 
 import { startStopNow } from './device.svelte';
 import { playback } from './deviceLog';
-import { isLocal } from './output.svelte';
+import { port } from './player/port.svelte';
 import { windsBy } from './startStop';
 
 const HOLD_MS = 350;
@@ -17,7 +17,7 @@ const HOLD_MS = 350;
 /** Whether holding Previous (`back`) or Next (`forward`) winds where the music plays: this device's that hold not off
  *  (the owner, 2026-10-28: each motion on its own), another of Cratarr's players deciding for itself (`player`). */
 export function holdsHere(dir: 'back' | 'forward', player: unknown): boolean {
-  if (!isLocal()) return !!player;
+  if (!port().holdsQueue) return !!player;
   return windsBy(startStopNow(), dir === 'back' ? 'holdBack' : 'holdFwd');
 }
 

@@ -6,7 +6,7 @@ import { ApiError, previewBandcamp, previewBandcampArtist } from './api';
 import { albumIdOf } from './bandcampPreview';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playQueue } from './localPlayer.svelte';
-import { isLocal } from './output.svelte';
+import { port } from './player/port.svelte';
 import { toast } from './toast.svelte';
 
 const pages = $state<Record<string, string>>({});
@@ -25,7 +25,7 @@ export const bandcampFailed = $state<Record<string, string>>({});
 /** Heard in Cratarr's own player, here or on the player this page drives, as a queue of its own; never a play. Not
  *  on the server's own outputs (they play the library's files). */
 export async function playOnBandcamp(key: string, page: string, title: string) {
-  if (!isLocal()) return toast.show({ text: 'A preview plays on this device or on a Cratarr player.', tone: 'error' });
+  if (!port().previews) return toast.show({ text: 'A preview plays on this device or on a Cratarr player.', tone: 'error' });
   bandcampPlay.key = key;
   try {
     const p = await previewBandcamp(page);
@@ -46,7 +46,7 @@ export async function playOnBandcamp(key: string, page: string, title: string) {
  *  2026-10-27), from their own page where known (`own`); where the server cannot list an artist's (an older one), the
  *  album shown (`page`) alone. */
 export async function playArtistOnBandcamp(key: string, artist: string, own: string | null, page: string | null) {
-  if (!isLocal()) return toast.show({ text: 'A preview plays on this device or on a Cratarr player.', tone: 'error' });
+  if (!port().previews) return toast.show({ text: 'A preview plays on this device or on a Cratarr player.', tone: 'error' });
   bandcampPlay.key = key;
   try {
     let tracks: LocalTrack[] = [];

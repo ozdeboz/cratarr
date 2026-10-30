@@ -28,6 +28,7 @@ import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
+import { tapeRules, type Since } from './player/tape';
 import { brakeLengthMs, brakeSpeed, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 import { shuffled } from './shuffle';
@@ -299,55 +300,35 @@ function resetTape() {
  *  CHECK_EVERY_MS a rule) and, where that is safe, put right, so no stray part of the state lingers unseen. */
 const CHECK_EVERY_MS = 10_000;
 const checked = new Map<string, number>();
-let rampSince = 0;
-let turnSince = 0;
-let holdSince = 0;
+let since: Since = { shownRamp: 0, knobTurn: 0, idleHold: 0 };
+/** The tape's rules (lib/player/tape, pure and tested) applied: each broken one logged, and put right where it says. */
 function checkTape() {
   const now = performance.now();
-  const broke = (rule: string, fields: Record<string, unknown> = {}) => {
-    if (now - (checked.get(rule) ?? -Infinity) < CHECK_EVERY_MS) return;
-    checked.set(rule, now);
-    playback('warn', `tape broke: ${rule}`, fields);
-  };
-  // A wind runs only committed to playing; a ramp's committed state never outlives it.
-  if (tape.rewinding && tape.committed === null) broke('a wind without its commitment');
-  // The counter held for a ramp only while one runs.
-  if (tape.heldAt !== null && tape.committed === null) {
-    broke('the counter held with no ramp');
-    tape.heldAt = null;
+  const r = tapeRules(
+    {
+      committed: tape.committed,
+      heldAt: tape.heldAt,
+      rewinding: tape.rewinding,
+      holding: tape.holding,
+      plainHold: tape.plainHold,
+      glide: tape.glide,
+      shownRamp: ramping.dir,
+      knob: tapeDir.state,
+    },
+    since,
+    now,
+  );
+  since = r.since;
+  for (const b of r.broken) {
+    if (now - (checked.get(b.rule) ?? -Infinity) >= CHECK_EVERY_MS) {
+      checked.set(b.rule, now);
+      playback('warn', `tape broke: ${b.rule}`, b.fix === 'endShownRamp' ? { dir: ramping.dir } : b.rule.startsWith('a turn') ? { state: tapeDir.state } : {});
+    }
+    if (b.fix === 'unholdCounter') tape.heldAt = null;
+    else if (b.fix === 'endShownRamp') rampEnds();
+    else if (b.fix === 'knobForward') tapeDir.state = 'forward';
+    else if (b.fix === 'dropHold') tape.holding = null;
   }
-  // The button's and the waveform's ramp shown only while a ramp or a wind runs (a second's grace for an app's word).
-  if (ramping.dir !== null && tape.committed === null && !tape.rewinding) {
-    if (!rampSince) rampSince = now;
-    else if (now - rampSince > 1000) {
-      broke('a ramp shown with none running', { dir: ramping.dir });
-      rampEnds();
-      rampSince = 0;
-    }
-  } else rampSince = 0;
-  // The knob's state and what sounds agree: backwards only while the tape plays backwards; a turn lasts moments.
-  if (tapeDir.state === 'backward' && !tape.rewinding?.reverse) {
-    broke('the knob backwards with nothing playing backwards');
-    tapeDir.state = 'forward';
-  }
-  if (tapeDir.state === 'stopping' || tapeDir.state === 'returning') {
-    if (!turnSince) turnSince = now;
-    else if (now - turnSince > 5000) {
-      broke('a turn of the knob stuck', { state: tapeDir.state });
-      tapeDir.state = 'forward';
-      turnSince = 0;
-    }
-  } else turnSince = 0;
-  // A hold with neither its stop nor its wind under way for a while (its wind ended without it; a flight arms within a
-  // second or two): over.
-  if (tape.holding && !tape.rewinding && tape.committed === null) {
-    if (!holdSince) holdSince = now;
-    else if (now - holdSince > 4000) {
-      broke('a hold with nothing under way');
-      tape.holding = null;
-      holdSince = 0;
-    }
-  } else holdSince = 0;
 }
 
 // --- MP3: the LAME/Xing header (the measured rule: only the encoder delay precedes the first real sample) ---

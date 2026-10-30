@@ -1,8 +1,9 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { port } from './player/port.svelte';
 import { dropFromQueue, local, startRadio } from './localPlayer.svelte';
-import { isLocal, shownPlaylists } from './output.svelte';
+import { shownPlaylists } from './output.svelte';
 import { pickOf, playCollection } from './play.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
@@ -287,7 +288,7 @@ export function playingCrateOuts(): ExcludeEntry[] {
 
 /** The crate the queue playing here came from, by the queue's name (a playlist of the same name wins): the Queue
  *  sheet's chip, and Remove from it in the full player's menu. */
-export function queueCrate(from: string | null = isLocal() ? local.from : null): string | null {
+export function queueCrate(from: string | null = port().queue()?.from ?? null): string | null {
   if (!from || shownPlaylists().some((p) => p.id === from)) return null;
   return crates.list?.find((c) => c.name === from)?.id ?? null;
 }
