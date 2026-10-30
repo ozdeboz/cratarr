@@ -20,7 +20,9 @@ is prepared (`npm run dist:win`, the release workflow's Windows job) but has not
 
 ## Installing
 
-Ubuntu, Linux Mint, Debian: from the APT repository, so the Update Manager (or `apt upgrade`) brings each release.
+Ubuntu, Linux Mint, Debian: from the APT repository, so the Update Manager (or `apt upgrade`) brings each release. The
+repository is made by the first published release; until then, build the `.deb` as below and install it with `apt
+install ./dist/cratarr-desktop_<version>_amd64.deb`.
 
 ```sh
 sudo install -d -m 0755 /etc/apt/keyrings

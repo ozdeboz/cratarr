@@ -9,14 +9,14 @@ playlists stay plain `.m3u` files beside your music.
 
 ## Try it
 
-Each release on GitHub has a ready image (amd64 and arm64), the Android app, the desktop app for Linux, and
-`SHA256SUMS` of them all.
+There is no published release yet: the image, the apps and their downloads come with the first one. Until then,
+build it from this repository (Docker is all it needs):
 
 ```sh
+git clone https://github.com/ozdeboz/cratarr && cd cratarr
+docker build -t cratarr .
 mkdir -p ~/cratarr
-docker run -d --name cratarr -p 8080:8080 --user "$(id -u):$(id -g)" \
-  -v /path/to/your/music:/music -v ~/cratarr:/data \
-  ghcr.io/ozdeboz/cratarr:latest
+docker run -d --name cratarr -p 8080:8080 --user "$(id -u):$(id -g)"   -v /path/to/your/music:/music -v ~/cratarr:/data   cratarr
 ```
 
 Open `http://localhost:8080`, make the first account, and in Settings → Libraries choose your music folder. Cratarr
@@ -25,9 +25,10 @@ reads it once (covers, waveforms, tempo, loudness), and plays while it does.
 Until that first account exists, anyone who reaches the server can make it, and act as its owner (as Navidrome's first
 run). Make it before the server can be reached from outside your home.
 
-For the Android app, install the APK from the latest [release](https://github.com/ozdeboz/cratarr/releases) and give
-it your server's address. For the desktop app, add its APT repository on Ubuntu, Linux Mint or Debian, and give it the
-address too ([desktop/README.md](desktop/README.md)).
+The Android app and the desktop app are built from [android/](android) and [desktop/](desktop) (each folder says how);
+give them your server's address. Once releases are published, each will carry a ready image (amd64 and arm64,
+`ghcr.io/ozdeboz/cratarr`), the Android app, the desktop app for Linux (also from an APT repository) and
+`SHA256SUMS` of them all.
 
 ## What it does
 
@@ -100,7 +101,7 @@ With Docker Compose:
 ```yaml
 services:
   cratarr:
-    image: ghcr.io/ozdeboz/cratarr:latest
+    image: cratarr                 # built as in Try it; ghcr.io/ozdeboz/cratarr:latest once releases are published
     user: "1000:1000"              # the user and group that own your music files
     ports:
       - "8080:8080"                # the web app, Cratarr's API and OpenSubsonic (/rest)
@@ -165,10 +166,10 @@ few settings Settings can change later (what Settings saves wins):
 ### Apps
 
 - **Web**: every page of Cratarr. It plays by itself, and over HTTPS it installs as an app.
-- **Android**: [android/](android), a thin app around Cratarr's pages that plays the music itself (the APK is in each
-  release). It also plays the phone's own music (Local mode, [0052](docs/decisions/0052-local-library.md)).
-- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own, for Linux from an APT repository. A
-  Windows installer is prepared but not yet built or tried.
+- **Android**: [android/](android), a thin app around Cratarr's pages that plays the music itself (built from its folder;
+  its APK will come with each release). It also plays the phone's own music (Local mode, [0052](docs/decisions/0052-local-library.md)).
+- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own, for Linux (an APT repository once releases
+  are published). A Windows installer is prepared but not yet built or tried.
 - **Subsonic apps**: point them at Cratarr's address and sign in with your Cratarr account.
 - **Kodi**: added in Settings → Players, it becomes one of Cratarr's players over Kodi's own remote control ("Allow
   remote control via HTTP"), with nothing installed on Kodi.
