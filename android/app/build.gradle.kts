@@ -127,19 +127,35 @@ abstract class FetchSnapclient : DefaultTask() {
 
 /**
  * The app's own copy of the page (decision 0085, step 1): the web app's build (web/dist, as `pnpm build` leaves it) packed
- * under the assets' `page/`, answered in place of the server's (BundledPage.kt). Without a build there, the app goes to
- * the server's page as before.
+ * under the assets' `page/`, answered in place of the server's (BundledPage.kt). Only a build of this very release: an
+ * app without one, or with an older one, goes to the server's page as before, and says so as it is built;
+ * `-Pcratarr.page=required` makes that a failure, for an app that is handed out.
  */
 abstract class BundlePage : DefaultTask() {
     @get:InputFiles @get:Optional abstract val dist: DirectoryProperty
+    @get:Input abstract val version: Property<String>
+    @get:Input abstract val required: Property<Boolean>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun bundle() {
         val out = outputDir.get().asFile.resolve("page")
         out.deleteRecursively()
-        val from = dist.orNull?.asFile?.takeIf { it.resolve("build.json").isFile } ?: return
-        from.copyRecursively(out, overwrite = true)
+        val from = dist.orNull?.asFile
+        val built = from?.resolve("build.json")?.takeIf { it.isFile }?.readText()
+        val release = built?.let { Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(it)?.groupValues?.get(1) }
+        val missing = when {
+            built == null -> "web/dist holds no built page"
+            release != version.get() -> "web/dist is ${release ?: "an unnumbered"} page, not ${version.get()}'s"
+            else -> null
+        }
+        if (missing != null) {
+            val said = "This app carries no page of its own: $missing. Run `pnpm build` in web/ first."
+            if (required.get()) throw GradleException(said)
+            logger.warn(said)
+            return
+        }
+        from!!.copyRecursively(out, overwrite = true)
         // The backdrops' and skies' pictures (17 MB of the page's 21) stay the server's: asked for there, then kept by
         // the page's service worker, so only an app that never reached its server goes without them.
         for (heavy in listOf("backdrops", "skies")) out.resolve(heavy).deleteRecursively()
@@ -148,6 +164,8 @@ abstract class BundlePage : DefaultTask() {
 
 val bundlePage = tasks.register<BundlePage>("bundlePage") {
     dist.set(rootProject.layout.projectDirectory.dir("../web/dist"))
+    version.set(cratarrVersion)
+    required.set(providers.gradleProperty("cratarr.page").map { it == "required" }.orElse(false))
     outputDir.set(layout.buildDirectory.dir("page"))
 }
 
