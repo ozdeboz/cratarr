@@ -82,7 +82,7 @@ impl App {
         }
         let live = self.library.connected();
         let music_deletable = self.incoming.music_deletable().await;
-        let sources = ids
+        let mut sources: Vec<AlbumsSourceView> = ids
             .into_iter()
             .map(|id| {
                 let c = collection.sources.iter().find(|s| s.id == id);
@@ -128,6 +128,10 @@ impl App {
                 }
             })
             .collect();
+        // Classical (0.10): Cratarr's own albums say whether they are, their composers and performers.
+        for s in &mut sources {
+            super::classical::tell(&s.id, &mut s.albums).await;
+        }
         AlbumsView { sources, trash_days: incoming.trash_days, music: incoming.music }
     }
 }

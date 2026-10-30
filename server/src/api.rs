@@ -3252,7 +3252,12 @@ async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<
 }
 
 async fn collection(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::CollectionView> {
-    Json(app.collection.list(f.source.as_deref()).await)
+    let mut v = app.collection.list(f.source.as_deref()).await;
+    // Classical (0.10), as the Library's albums say it.
+    for s in &mut v.sources {
+        crate::app::classical::tell(&s.id, &mut s.albums).await;
+    }
+    Json(v)
 }
 
 /// Play an album of a connected server on its player; answers with the player's label.

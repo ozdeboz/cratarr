@@ -150,7 +150,12 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
 
 /// An album's release type as kept (0.9.6).
 fn release_of(kind: Option<String>, from: Option<String>, secondary: Option<&str>) -> crate::source::ReleaseType {
-    crate::source::ReleaseType { kind, type_from: from, secondary: secondary.unwrap_or_default().split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect() }
+    crate::source::ReleaseType {
+        kind,
+        type_from: from,
+        secondary: secondary.unwrap_or_default().split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect(),
+        ..Default::default()
+    }
 }
 
 /// Rows by number, in the order given (the second phase).

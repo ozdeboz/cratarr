@@ -763,7 +763,11 @@ impl PlayingService {
             }
             _ => None,
         };
-        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums: w.albums, appears_on: w.appears_on, rows, favorite: w.favorite, mbid })
+        // Classical (0.10), as the Library's albums say it.
+        let (mut albums, mut appears_on) = (w.albums, w.appears_on);
+        super::classical::tell(source_id, &mut albums).await;
+        super::classical::tell(source_id, &mut appears_on).await;
+        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums, appears_on, rows, favorite: w.favorite, mbid })
     }
 
     /// Makes an artist a favourite or not (the artist panel's heart).

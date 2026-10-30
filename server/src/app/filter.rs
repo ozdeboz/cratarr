@@ -56,7 +56,9 @@ pub struct Request {
 /// The switches each list has, as the page's SWITCHES (lib/pageView) has them, each with one meaning (the filter API,
 /// 2026-10-29: worked out here per list, beside its conditions, not by the page):
 /// - the albums: Favourites only, the album hearted; Unplayed only, no track of it played; 4 stars and up, the album's
-///   own stars;
+///   own stars; All kinds (`all-kinds`, 0.10): each record under every kind it has, where by default (the owner,
+///   2026-10-30: on unless switched off) each is in its primary view only, Classical > Compilation > Album, EP or
+///   Single > Other (`classical::primary_kinds`);
 /// - the artists: Favourites only, the artist hearted; Unplayed only, no track of theirs played; 4 stars and up, as
 ///   their conditions, one of their albums;
 /// - the playlists: Favourites only, the playlist hearted; Mine only, the account's own;
@@ -66,7 +68,8 @@ pub struct Request {
 /// Played is the plays log's, the asking account's (`uses_of`), everywhere.
 pub fn switches_of(list: &List) -> &'static [&'static str] {
     match list {
-        List::Library | List::Artists => &["favourites", "unplayed", "topRated"],
+        List::Library => &["favourites", "unplayed", "topRated", "all-kinds"],
+        List::Artists => &["favourites", "unplayed", "topRated"],
         List::Playlists => &["favourites", "mine"],
         List::Playlist { .. } => &["favourites", "unplayed", "missing"],
         List::Crate { .. } | List::Album { .. } | List::Artist { .. } => &[],
@@ -144,6 +147,14 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
     // A heart's switch is its condition (read above): the album's for an album, the track's for a track.
     let w = lib.world();
     let conditions: Vec<Condition> = lib.resolved(&asked).into_iter().chain(hearts.clone()).collect();
+    // The Library's records are weighed on their kinds by the record (0.10): its Type rows apart, on each record's
+    // kinds as listed (Classical among them), in its primary view unless All kinds is on.
+    let (kind_rows, conditions): (Vec<Condition>, Vec<Condition>) = match r.list {
+        List::Library => conditions.into_iter().partition(|c| c.axis == "type"),
+        _ => (Vec::new(), conditions),
+    };
+    let primary = !on("all-kinds");
+    let mut record_kinds: Option<Vec<Vec<String>>> = None;
     let (items, grouped): (Items, Vec<Item>) = match &r.list {
         List::Crate { .. } => (Items::Tracks, lib.select(&shown).iter().map(|l| one(String::new(), Some(l.as_str()))).collect()),
         List::Playlist { id } => {
@@ -203,7 +214,14 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
             let albums: Vec<AlbumItem> = listed.iter().map(|a| AlbumItem { id: a.id.clone(), artists: a.artists.clone(), tracks: tracks_of(a), rated: rated(&a.id) }).collect();
             if matches!(r.list, List::Library) {
                 let unplayed = on("unplayed");
-                (Items::Albums, albums.iter().map(|a| Item::of(a.id.clone(), a.tracks.clone(), a.rated && (!unplayed || a.tracks.iter().all(|f| never_played(f, uses))))).collect())
+                let kinds: Vec<Vec<String>> = listed.iter().map(|a| if primary { super::classical::primary_kinds(&a.kinds) } else { a.kinds.clone() }).collect();
+                let items = albums
+                    .iter()
+                    .zip(&kinds)
+                    .map(|(a, k)| Item::of(a.id.clone(), a.tracks.clone(), a.rated && (!unplayed || a.tracks.iter().all(|f| never_played(f, uses))) && kinds_pass(&kind_rows, k)))
+                    .collect();
+                record_kinds = Some(kinds);
+                (Items::Albums, items)
             } else {
                 let hearted: Option<std::collections::HashSet<String>> = match on("favourites") {
                     true => Some(app.playing.favorite_artists(&lib.source).await?.iter().map(|n| n.to_lowercase()).collect()),
@@ -217,7 +235,13 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
     let keys: Vec<String> = grouped.iter().filter(|i| i.passes(&conditions, &w)).flat_map(|i| i.keys.iter().cloned()).collect();
     let passed = grouped.iter().filter(|i| i.passes(&conditions, &w)).count();
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|i| i.tracks.as_slice()).collect();
-    let axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
+    let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
+    // The Library's Type axis counts records by their kinds as weighed (in the primary view, they add up to all).
+    if let Some(kinds) = &record_kinds
+        && let Some(axis) = axes.iter_mut().find(|a| a.key == "type")
+    {
+        kind_axis(axis, kinds);
+    }
     let tempo = crates::tempo_bands(tracks.iter().flat_map(|t| t.iter().map(|f| f.bpm)));
     let profile = (items == Items::Tracks).then(|| {
         let mine: Vec<&Facts> = tracks.iter().flat_map(|t| t.iter().copied()).filter(|f| !f.rel.is_empty()).collect();
@@ -265,11 +289,13 @@ async fn row_lines(app: &Arc<App>, source: &str, rows: Vec<super::playlists::Pla
 }
 
 /// An album of the Library as listed: its id, its folder's line (none where the server's path for it is not known),
-/// its album artists (as the page's Artists view takes them: its artists, else its artist).
+/// its album artists (as the page's Artists view takes them: its artists, else its artist), its kinds (its release
+/// type's and Classical, `classical::kinds_of`).
 struct Listed {
     id: String,
     dir: Option<String>,
     artists: Vec<String>,
+    kinds: Vec<String>,
 }
 
 /// The Library's albums on a server, of the libraries not switched off (as the Library page shows them), each with
@@ -285,14 +311,50 @@ async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> Vec
         .filter(|a| a.library.as_ref().is_none_or(|l| !without.contains(&format!("{source}/{l}"))))
         .map(|a| {
             let dir = a.path.as_deref().and_then(|p| folder_of(&roots, &folders, p)).and_then(|(i, rel)| cat.line_of(i, &rel));
+            let kinds = super::classical::kinds_of(&a.release);
             let artists = if a.artists.is_empty() { a.artist.into_iter().collect() } else { a.artists };
-            Listed { id: a.id, dir, artists }
+            Listed { id: a.id, dir, artists, kinds }
         })
         .collect()
 }
 
 /// 4 stars and up.
 const TOP_RATED: u8 = 4;
+
+/// Whether a record's kinds (as weighed: its primary view, or all) pass the Type rows, as a condition on a value axis
+/// holds (`crates::holds`): any of the values, or none of them negated; a value the axis does not take never holds.
+fn kinds_pass(rows: &[Condition], kinds: &[String]) -> bool {
+    rows.iter().filter(|c| c.enabled && c.complete()).all(|c| {
+        let matched = match &c.value {
+            Value::AnyOf { values } => values.iter().any(|v| kinds.iter().any(|k| k.eq_ignore_ascii_case(v))),
+            _ => false,
+        };
+        matched != c.not
+    })
+}
+
+/// The Type axis over records by their kinds as weighed: each kind with how many records have it, most first.
+fn kind_axis(axis: &mut crates::AxisView, kinds: &[Vec<String>]) {
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    for ks in kinds {
+        let mut here: Vec<String> = Vec::new();
+        for k in ks {
+            let low = k.to_lowercase();
+            if here.contains(&low) {
+                continue;
+            }
+            here.push(low.clone());
+            match seen.iter_mut().find(|(n, _)| n.to_lowercase() == low) {
+                Some(e) => e.1 += 1,
+                None => seen.push((k.clone(), 1)),
+            }
+        }
+    }
+    seen.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    (axis.values, axis.counts) = seen.into_iter().unzip();
+    axis.known = kinds.iter().filter(|k| !k.is_empty()).count();
+    axis.varies = false;
+}
 
 /// An item of a list: the keys it is answered by (an artist by every spelling of their name), its tracks (what its
 /// axes count), whether its switches hold, and whether that is its whole answer (an artist, judged by their albums).
@@ -394,13 +456,59 @@ mod tests {
 
     #[test]
     fn a_list_takes_only_its_own_switches() {
-        assert_eq!(switches_of(&List::Library), ["favourites", "unplayed", "topRated"]);
+        assert_eq!(switches_of(&List::Library), ["favourites", "unplayed", "topRated", "all-kinds"]);
         assert_eq!(switches_of(&List::Artists), ["favourites", "unplayed", "topRated"]);
         assert_eq!(switches_of(&List::Playlists), ["favourites", "mine"]);
         assert_eq!(switches_of(&List::Playlist { id: "x".into() }), ["favourites", "unplayed", "missing"]);
         assert!(switches_of(&List::Crate { id: "c".into(), favourites: None, favourite_albums: None }).is_empty());
         let r: Request = serde_json::from_value(serde_json::json!({ "list": { "kind": "artists" }, "switches": ["unplayed"] })).unwrap();
         assert_eq!((r.list, r.switches), (List::Artists, vec!["unplayed".to_string()]));
+    }
+
+    #[test]
+    fn the_library_s_kinds_are_its_type_rows_classical_among_them() {
+        use super::super::classical::primary_kinds;
+        let k = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let records = [k(&["Album"]), k(&["Album", "Classical"]), k(&["Album", "Compilation"]), k(&["EP", "Live"]), k(&["Live"])];
+        let row = |not: bool, values: &[&str]| Condition::new("type", not, Value::AnyOf { values: values.iter().map(|v| v.to_string()).collect() });
+        let named = ["Album", "EP", "Single", "Compilation", "Classical"];
+        let passing = |rows: &[Condition], primary: bool| -> Vec<usize> {
+            records.iter().enumerate().filter(|(_, r)| kinds_pass(rows, &if primary { primary_kinds(r) } else { r.to_vec() })).map(|(n, _)| n).collect()
+        };
+        // Classical, any of and not.
+        assert_eq!(passing(&[row(false, &["Classical"])], true), [1]);
+        assert_eq!(passing(&[row(true, &["Classical"])], true), [0, 2, 3, 4]);
+        // In the primary view, the classical album is no Album, the compilation none either; with All kinds it is.
+        assert_eq!(passing(&[row(false, &["Album"])], true), [0]);
+        assert_eq!(passing(&[row(false, &["Album"])], false), [0, 1, 2]);
+        // Other, as the page sends it: none of the named kinds.
+        assert_eq!(passing(&[row(true, &named)], true), [4]);
+        // Every record in one kind or Other: the counts add up.
+        let each: usize = named.iter().map(|n| passing(&[row(false, &[*n])], true).len()).sum();
+        assert_eq!(each + passing(&[row(true, &named)], true).len(), records.len());
+        // The Type axis counts the records as weighed.
+        let mut axis = crates::list_axes(&[], &[], None, None).into_iter().find(|a| a.key == "type").unwrap();
+        let primary: Vec<Vec<String>> = records.iter().map(|r| primary_kinds(r)).collect();
+        kind_axis(&mut axis, &primary);
+        let at = |v: &str| axis.values.iter().position(|x| x == v).map(|i| axis.counts[i]);
+        assert_eq!((at("Classical"), at("Album"), at("Compilation"), at("Live")), (Some(1), Some(1), Some(1), Some(2)));
+        assert_eq!(axis.known, 5);
+    }
+
+    #[test]
+    fn an_artist_is_found_by_the_classical_kind_of_their_records() {
+        let t = |rel: &str, types: &[&str]| Facts { rel: rel.into(), release_types: types.iter().map(|x| x.to_string()).collect(), ..Facts::default() };
+        let (arrau, moby) = (t("x/1", &["Album", "Classical"]), t("y/1", &["Album"]));
+        let albums = [
+            AlbumItem { id: "al-1".into(), artists: vec!["Claudio Arrau".into()], tracks: vec![&arrau], rated: true },
+            AlbumItem { id: "al-2".into(), artists: vec!["Moby".into()], tracks: vec![&moby], rated: true },
+        ];
+        let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
+        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let not_classical = [Condition::new("type", true, Value::AnyOf { values: vec!["Classical".into()] })];
+        let look = ArtistLook { conditions: &not_classical, world: &w, uses: None, hearted: None, unplayed: false };
+        let keys: Vec<String> = artists_of("cratarr", &albums, &look).iter().filter(|i| i.passes(&not_classical, &w)).flat_map(|i| i.keys.clone()).collect();
+        assert_eq!(keys, ["cratarr\u{0}moby"]);
     }
 
     #[test]

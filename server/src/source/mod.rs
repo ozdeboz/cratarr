@@ -224,6 +224,26 @@ pub struct ReleaseType {
     pub type_from: Option<String>,
     #[serde(default)]
     pub secondary: Vec<String>,
+    /// Classical (0.10, the owner, 2026-10-30), a kind beside the release type: Cratarr's own library's records say
+    /// whether they are (`app::classical`), other servers' say nothing; the mark where someone marked it (`classical`,
+    /// `not`); a classical record's composers (keyed by MusicBrainz artist, else `name:<loose name>`) and performers,
+    /// conductor, orchestra and soloists first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classical: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classical_mark: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub composers: Vec<ComposerRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub performers: Vec<String>,
+}
+
+/// A composer as a record, a track or a search result names them (0.10): the key the page addresses them by, and
+/// their name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct ComposerRef {
+    pub key: String,
+    pub name: String,
 }
 
 /// An album as a source sees it. Paths are the source's own (see `placement`).
