@@ -15,6 +15,8 @@ import { drivenName, follow, playOn, pointAt } from './playOn.svelte';
 import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
+import { keep, readKept } from './keptStore';
+import { reach, whenReached } from './reach.svelte';
 
 // Which player the page drives, and what this device's queue shows of what plays: the port's (lib/player/port).
 export { isLocal, localNowPlaying, localState, tookLocal } from './player/port.svelte';
@@ -85,8 +87,41 @@ const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
 /** The queue place being heard (index and track), from when, how far it got, and whether it was told as counted. */
 type Hearing = { at: string; track: LocalTrack; started: number; heard: number; length: number | null; counted: boolean };
 let hearing: Hearing | null = null;
-/** Reports not yet taken (the server away): sent again with the next one; the latest 500 kept. */
+/** Reports not yet taken (the server away): kept on this device (lib/keptStore; 0.12, decision 0085 step 3: no play
+ *  lost when the page is closed meanwhile) and sent again with the next one or when Cratarr answers again; the latest
+ *  500 kept. Each has its id: Cratarr counts a report sent twice once. `telling`: those on their way. */
 let unsent: HeardEvent[] = [];
+let telling: HeardEvent[] = [];
+const PLAYS = 'plays';
+const keepPlays = () => void keep(PLAYS, [...telling, ...unsent].slice(-500));
+function tellNow() {
+  if (telling.length || !unsent.length) return;
+  telling = unsent.slice(-500);
+  unsent = [];
+  let taken = false;
+  reportPlays(telling)
+    .then(
+      (r) => {
+        taken = true;
+        unsent = [...telling.filter((e) => !r.done.includes(e.id)), ...unsent];
+      },
+      () => (unsent = [...telling, ...unsent]),
+    )
+    .finally(() => {
+      telling = [];
+      keepPlays();
+      if (taken && unsent.length) tellNow();
+    });
+}
+if (typeof window !== 'undefined') {
+  readKept<HeardEvent[]>(PLAYS).then((v) => {
+    if (!Array.isArray(v) || !v.length) return;
+    const have = new Set([...telling, ...unsent].map((e) => e.id));
+    unsent = [...v.filter((e) => !have.has(e.id)), ...unsent];
+    if (!reach.away) tellNow();
+  });
+  whenReached.add(tellNow);
+}
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
@@ -102,12 +137,8 @@ function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
     player: prefs.browserName || null,
     context: keptHere.id ? `queue:${keptHere.id}` : null,
   });
-  const batch = unsent.slice(-500);
-  unsent = [];
-  reportPlays(batch).then(
-    (r) => unsent.push(...batch.filter((e) => !r.done.includes(e.id))),
-    () => unsent.push(...batch),
-  );
+  keepPlays();
+  tellNow();
 }
 $effect.root(() => {
   $effect(() => {

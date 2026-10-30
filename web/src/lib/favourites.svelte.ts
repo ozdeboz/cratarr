@@ -3,6 +3,7 @@
 import { batchFavorite, missingCall } from './api';
 import { trackSteps } from './progress.svelte';
 import { getFavoriteAlbums, getFavoriteArtists, getFavorites, setArtistFavorite, getPlaylistFavorites, setPlaylistFavorite, setTrackFavorite } from './api';
+import { favouriteOf } from './changeLog';
 import { on } from './events.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -182,3 +183,27 @@ export async function flipFavorite(source: string, id: string) {
     toast.fail(e, "The favourite didn't change");
   }
 }
+
+// Hearts changed elsewhere while this page was away (decision 0087, lib/changes): those the log names asked for again;
+// every list known where it says all.
+on<{ area: string; ids?: string[] | null }>('changed', ({ area, ids }) => {
+  if (area !== 'favourites') return;
+  const named = ids ? ids.map(favouriteOf).filter((x) => x !== null) : null;
+  const all = named === null;
+  const some = (what: string) => all || named.some((x) => x.what === what);
+  const tracks: Record<string, string[]> = {};
+  if (all) {
+    for (const key of Object.keys(favs)) {
+      const slash = key.indexOf('/');
+      const [source, id] = [key.slice(0, slash), key.slice(slash + 1)];
+      if (!albumLists[source]?.has(id)) (tracks[source] ??= []).push(id);
+    }
+  } else for (const x of named) if (x.what === 'track') (tracks[x.source] ??= []).push(x.id);
+  for (const [source, list] of Object.entries(tracks)) void loadFavorites(source, list);
+  if (some('album')) for (const source of Object.keys(albumLists)) void loadAlbumFavorites(source);
+  if (some('artist')) for (const source of Object.keys(artistLists)) void loadArtistFavorites(source);
+  if (some('playlist') && playlistFavsAsked) {
+    playlistFavsAsked = false;
+    void loadPlaylistFavorites();
+  }
+});

@@ -1,5 +1,7 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
 import { trackSteps } from './progress.svelte';
+import { favouriteOf } from './changeLog';
+import { on } from './events.svelte';
 import { leavePlayer } from './navStep.svelte';
 import {
   albumView,
@@ -205,6 +207,19 @@ export function loadAlbumRating(source: string, id: string) {
     () => {},
   );
 }
+// Ratings changed elsewhere while this page was away (decision 0087, lib/changes): those shown here asked for again.
+on<{ area: string; ids?: string[] | null }>('changed', ({ area, ids }) => {
+  if (area !== 'ratings') return;
+  const named = ids?.flatMap((i) => {
+    const x = favouriteOf(i);
+    return x && x.what === 'album' ? [`${x.source}/${x.id}`] : [];
+  });
+  for (const key of named ?? Object.keys(albumRatings)) {
+    if (!(key in albumRatings)) continue;
+    const slash = key.indexOf('/');
+    loadAlbumRating(key.slice(0, slash), key.slice(slash + 1));
+  }
+});
 /** A tap on a star: that rating, or none when it is the one it has; shown at once, back as it was when refused. */
 export async function rateAlbum(source: string, id: string, stars: number) {
   const key = `${source}/${id}`;
