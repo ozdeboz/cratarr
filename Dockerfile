@@ -10,6 +10,8 @@ RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
+# The release the page's build.json names (decision 0085), as vite.config.ts reads it: ../VERSION.
+COPY VERSION /app/VERSION
 RUN pnpm build
 
 # The source and its toolchain, which the release build and the tests each start from (a test run no longer waits
