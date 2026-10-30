@@ -5,103 +5,59 @@
 //! (as the library's FTS tables' `remove_diacritics 2`), case folded, everything but letters and digits a space between
 //! words. No operators: quotes and FTS syntax are words like any other.
 
-use unicode_normalization::UnicodeNormalization;
-use unicode_normalization::char::is_combining_mark;
+use cratarr_rules::matcher;
 
-/// The words of a query, as every search reads them.
+/// The words of a query, as every search reads them (the rules crate's `matcher::words`, 0.12).
 pub fn words(q: &str) -> Vec<String> {
-    let plain: String = q.nfkd().filter(|c| !is_combining_mark(*c)).flat_map(char::to_lowercase).collect();
-    plain.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+    matcher::words(q)
 }
 
 /// Whether a text holds every word, each as a word or a word's start, or with the typos it may have (0.9.7, `typos`),
-/// read as the query is (for what the FTS tables do not hold: playlists' and crates' names, genres).
+/// read as the query is (for what the FTS tables do not hold: playlists' and crates' names, genres); or (0.12: one
+/// matcher, the owner 2026-10-30) whether the rules crate's matcher finds it at all: separators don't count ("hiphop"
+/// finds Hip Hop), aliases, trigrams for what is alike beyond the typos (`matcher::score`, its floor keeping nonsense
+/// out).
 pub fn matches(text: &str, words: &[String]) -> bool {
-    typos(text, words).is_some()
+    !words.is_empty() && (typos(text, words).is_some() || matcher::score(&words.join(" "), text).is_some())
 }
 
 /// How many typos a query's word may have (0.9.7, the owner: "make it great"; Meilisearch's measure): none under five
-/// letters, one from five, two from nine; none in a word with a figure (a year, a catalogue number). As the web's
-/// lib/search.ts (the shared examples, web/tests/fixtures/search-typos.json).
+/// letters, one from five, two from nine; none in a word with a figure (a year, a catalogue number). The rules crate's
+/// (0.12), as the web's lib/search.ts (the shared examples, web/tests/fixtures/search-typos.json).
 pub fn typo_budget(w: &str) -> usize {
-    if w.chars().any(char::is_numeric) {
-        return 0;
-    }
-    match w.chars().count() {
-        n if n >= 9 => 2,
-        n if n >= 5 => 1,
-        _ => 0,
-    }
+    matcher::typo_budget(w)
 }
 
-/// The edits from `a` to `b` (a letter added, dropped or changed, or two side by side swapped: Damerau's, as optimal
-/// string alignment), or `most` + 1 as soon as there are more than `most`.
-fn edits(a: &[char], b: &[char], most: usize) -> usize {
-    if a.len().abs_diff(b.len()) > most {
-        return most + 1;
-    }
-    let mut before: Vec<usize> = Vec::new();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    for i in 1..=a.len() {
-        let mut row = vec![i];
-        let mut least = i;
-        for j in 1..=b.len() {
-            let mut d = (prev[j] + 1).min(row[j - 1] + 1).min(prev[j - 1] + usize::from(a[i - 1] != b[j - 1]));
-            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                d = d.min(before[j - 2] + 1);
-            }
-            row.push(d);
-            least = least.min(d);
-        }
-        if least > most {
-            return most + 1;
-        }
-        before = std::mem::replace(&mut prev, row);
-    }
-    prev[b.len()]
-}
-
-/// How a query's word meets a text's word: whole or as its start, no typos; else, within its typos and its first
-/// letter right, the word or its start (as long as the query's word, give or take a letter: a word still being
-/// typed) with that many; none where it does not.
+/// How a query's word meets a text's word (the rules crate's `matcher::meet`): whole or as its start, no typos; else,
+/// within its typos and its first letter right, the word or its start with that many; none where it does not.
 pub fn meet(w: &str, h: &str) -> Option<usize> {
-    if h.starts_with(w) {
-        return Some(0);
-    }
-    let most = typo_budget(w);
-    let (w, h): (Vec<char>, Vec<char>) = (w.chars().collect(), h.chars().collect());
-    if most == 0 || w.first() != h.first() {
-        return None;
-    }
-    let mut lengths = [h.len(), w.len().saturating_sub(1), w.len(), w.len() + 1];
-    lengths.sort_unstable();
-    let best = lengths.iter().filter(|&&k| k > 1 && k <= h.len()).map(|&k| edits(&w, &h[..k], most)).min().unwrap_or(most + 1);
-    (best <= most).then_some(best)
+    matcher::meet(w, h)
 }
 
-/// The typos a text needs to hold every word (each word by its best meeting with the text's words), none where one
-/// meets none.
+/// The typos a text needs to hold every word (the rules crate's `matcher::typos`): each word by its best meeting with
+/// the text's words, or (0.12) the words run together meeting the text's letters from one of its words on; none where
+/// neither meets.
 pub fn typos(text: &str, words: &[String]) -> Option<usize> {
-    if words.is_empty() {
-        return None;
-    }
-    let have = self::words(text);
-    words.iter().map(|w| have.iter().filter_map(|h| meet(w, h)).min()).sum()
+    matcher::typos(text, words)
 }
 
 /// How well a text matches the words, for ranking (higher is better): the whole text the query, 3; every word whole,
-/// 2; some words only as a start, 1 (Navidrome's lesson: a whole name above a prefix); not at all, 0.
+/// 2; some words only as a start, 1 (Navidrome's lesson: a whole name above a prefix); not at all, 0. Separators don't
+/// count (0.12): "hiphop" is all of Hip Hop (3); the query's letters beginning the text's from one of its words on
+/// ("hiph"), 1.
 pub fn closeness(text: &str, words: &[String]) -> u8 {
     let have = self::words(text);
-    if words.is_empty() || !words.iter().all(|w| have.iter().any(|h| h.starts_with(w.as_str()))) {
-        0
-    } else if have == words {
-        3
-    } else if words.iter().all(|w| have.contains(w)) {
-        2
-    } else {
-        1
+    if words.is_empty() {
+        return 0;
     }
+    if have == words || have.concat() == words.concat() {
+        return 3;
+    }
+    if words.iter().all(|w| have.iter().any(|h| h.starts_with(w.as_str()))) {
+        return if words.iter().all(|w| have.contains(w)) { 2 } else { 1 };
+    }
+    let q = words.concat();
+    u8::from((0..have.len()).any(|k| have[k..].concat().starts_with(&q)))
 }
 
 /// How much of a name the words make up (0.9.7, the owner: "player" is all of a setting called Player, a small part
@@ -116,8 +72,18 @@ pub fn coverage(text: &str, words: &[String]) -> f32 {
 /// whose name holds them with typos (the fewer first), and both before any found through what it holds; among direct
 /// hits the closer (`closeness`), then the more of its name the words make up (`coverage`); then the place its source
 /// gave it (`at` of `of`).
+///
+/// What only the matcher's trigrams find (0.12, `matches`) ranks between the two: from 0.5, by its score, below every
+/// hit within its typos and above every one found through what it holds.
 pub fn rank(text: &str, words: &[String], at: usize, of: usize) -> f32 {
-    ranked(closeness(text, words), typos(text, words), coverage(text, words), at, of)
+    let r = ranked(closeness(text, words), typos(text, words), coverage(text, words), at, of);
+    if r >= 1.0 {
+        return r;
+    }
+    match matcher::score(&words.join(" "), text) {
+        Some((s, _)) => r.max(0.5 + 0.4 * s + 0.09 * (1.0 - at as f32 / of.max(1) as f32)),
+        None => r,
+    }
 }
 
 /// `rank` from its parts: direct hits from 3, those with typos from 1 to 2, the rest below 1 (as a playlist found by
@@ -133,6 +99,13 @@ pub fn ranked(close: u8, typos: Option<usize>, covered: f32, at: usize, of: usiz
 
 /// Every index term a query's word meets with typos (`meet`), the fewest first, at most `TYPO_TERMS`: what the FTS
 /// query adds for it (`fts_with`). `terms` are the index's terms beginning with the word's first letter.
+///
+/// Where the FTS path still differs from the matcher (0.12): the library's FTS tables hold words, so a word is found
+/// as a word, a word's start or one of its typo terms only. Separators (a query "hiphop" for an artist "Hip Hop
+/// Orchestra", "lo fi" for "Lofi Girl"), aliases and trigram likeness reach only what is matched here in memory
+/// (`matches`, `rank`: names the FTS tables do not hold, and the FTS's own hits as they are ranked). The next step: a
+/// second FTS5 table with `tokenize = 'trigram'` over each name's letters run together (`matcher::letters`), asked
+/// for candidates by the query's letters, which the matcher then judges (`matcher::Index` or `matcher::score`).
 pub fn typo_terms<'a>(w: &str, terms: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     if typo_budget(w) == 0 {
         return Vec::new();
@@ -241,5 +214,23 @@ mod tests {
         assert_eq!(closeness("Airbag", &q), 1);
         assert_eq!(closeness("Hair", &q), 0, "a word's start only, never inside it");
         assert!(matches("Sigur Rós", &words("ros sig")) && !matches("Sigur Rós", &words("rosa")));
+    }
+
+    #[test]
+    fn separators_dont_count_and_the_matcher_finds_what_typos_miss() {
+        // 0.12: one matcher (the rules crate's). "hiphop" is all of Hip Hop, a direct hit; Trip Hop is not found.
+        let q = words("hiphop");
+        assert!(matches("Hip Hop", &q) && matches("Hip-Hop", &q) && !matches("Trip Hop", &q));
+        assert_eq!(closeness("Hip Hop", &q), 3);
+        assert_eq!(closeness("Hip Hop Classics", &words("hiph")), 1);
+        assert!(rank("Hip Hop", &q, 0, 1) > 3.0);
+        assert!(matches("Lofi", &words("lo fi")) && matches("Drum and Bass", &words("drumandbass")));
+        // A wrong first letter is beyond the typos but within the trigrams: found, ranked below every typo hit and
+        // above what is found through what it holds.
+        let x = words("xadiohead");
+        assert_eq!(typos("Radiohead", &x), None);
+        assert!(matches("Radiohead", &x));
+        let r = rank("Radiohead", &x, 0, 1);
+        assert!(r > 0.5 && r < 1.0 && r < rank("Radiohead", &words("radiohed"), 0, 1) && r > rank("Thom Yorke", &x, 0, 1), "{r}");
     }
 }

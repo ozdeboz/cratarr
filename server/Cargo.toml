@@ -13,7 +13,6 @@ members = [".", "rules"]
 exclude = ["rules-ffi"]
 
 [dependencies]
-unicode-normalization = "0.1"
 anyhow = "1"
 cratarr-rules = { path = "rules" }
 axum = "0.8"
@@ -76,6 +75,13 @@ flate2 = "1"
 [dev-dependencies]
 # Calls the routers as a client would, in tests (decision 0030).
 tower = { version = "0.5", default-features = false, features = ["util"] }
+
+# The page's rules.wasm (scripts/rules-wasm.sh, 0.12): as small as it gets, the page loads it with its first view.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
 
 [profile.release]
 opt-level = "s"
