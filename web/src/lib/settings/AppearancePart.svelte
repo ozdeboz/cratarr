@@ -22,7 +22,6 @@
       prefs.theme = 'auto';
       prefs.animations = true;
       prefs.homeGreeting = true;
-      prefs.homeGreetingCapital = false;
       void removeLocalPicture(HOME_HEADER);
       prefs.flowBackdrop = DEFAULT_BACKDROP;
       prefs.flowPictureOnHome = false;
@@ -84,12 +83,6 @@
     name="Personal greeting"
     toggle={{ checked: prefs.homeGreeting, onchange: (on) => (prefs.homeGreeting = on) }}
   />
-  <!-- Out from under the greeting while it is on (the owner, 2026-10-25): for an account named in lower case. -->
-  {#if prefs.homeGreeting}
-    <div transition:slide={{ duration: 160 }}>
-      <Item name="Capital first letter" line="Of your name, in the greeting" toggle={{ checked: prefs.homeGreetingCapital, onchange: (on) => (prefs.homeGreetingCapital = on) }} />
-    </div>
-  {/if}
 </Group>
 
 <!-- The playing cover's colour, each place apart (the owner, 2026-10-27): off, Cratarr's own there. -->

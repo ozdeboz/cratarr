@@ -383,8 +383,9 @@
     const list = h >= 5 && h < 12 ? greet.morningGreetings : h >= 12 && h < 18 ? greet.dayGreetings : greet.eveningGreetings;
     return day ?? list[Math.floor(pick * list.length)];
   });
-  /** The account's name as greeted: with a capital first letter where Settings says (an account named in lower case). */
-  const greetName = $derived(me.name && prefs.homeGreetingCapital ? me.name[0].toLocaleUpperCase() + me.name.slice(1) : me.name);
+  /** The account's name as greeted: its display name where the directory has one (0.9.19; the owner, 2026-10-30: "we
+   *  should simply use the display name"), else the account's name as it is. */
+  const greetName = $derived(me.display_name || me.name);
   const greeting = $derived(greetName ? `${greetWords}, ${greetName}!` : `${greetWords}!`);
   /** A word worth repeating: not "a", "the", "for". */
   const wordsOf = (s: string) => new Set(s.toLowerCase().match(/[a-z]+/g)?.filter((w) => w.length > 3) ?? []);
