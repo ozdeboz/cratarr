@@ -21,6 +21,8 @@ export type EntryId =
   | 'favourite'
   | 'rating'
   | 'excludeEverywhere'
+  | 'excludeArtist'
+  | 'notInCrate'
   | 'addToPlaylist'
   | 'pin'
   | 'copyToMine'
@@ -77,7 +79,8 @@ export const MENUS: Record<MenuKind, Kind> = {
     cards: [
       { group: 'go', entries: ['goAlbum', 'goArtist', 'goGenre', 'soundsLike', 'otherVersions'] },
       { group: 'discover', entries: ['discover'] },
-      { group: 'feel', entries: ['favourite', 'excludeEverywhere'] },
+      // Its artists too (0.10, decision 0083): each credited one out everywhere, or out of the crate it is opened in.
+      { group: 'feel', entries: ['favourite', 'excludeEverywhere', 'excludeArtist', 'notInCrate'] },
       { group: 'collect', entries: ['addToPlaylist'] },
       { group: 'take', entries: ['download', 'share'] },
       { group: 'know', entries: ['info', 'webSearch', 'geniusSearch'] },
@@ -103,7 +106,8 @@ export const MENUS: Record<MenuKind, Kind> = {
   artist: {
     actions: ['Play', 'Shuffle', 'Play next', 'Add to queue', 'Start radio'],
     cards: [
-      { group: 'feel', entries: ['favourite'] },
+      // Out everywhere, or out of the crate it is opened from (0.10, decision 0083).
+      { group: 'feel', entries: ['favourite', 'excludeArtist', 'notInCrate'] },
       { group: 'collect', entries: ['addToPlaylist'] },
       { group: 'take', entries: ['download', 'keep', 'removeFromDevice', 'share'] },
       { group: 'know', entries: ['webSearch'] },

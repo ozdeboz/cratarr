@@ -122,6 +122,7 @@
   import SimilarLists from './SimilarLists.svelte';
   import SuggestedTracks from './SuggestedTracks.svelte';
   import { glass, handGlass } from './glass.svelte';
+  import { excludedArtists, loadCrateArtists, setNotInCrate } from './excludedArtists.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import AvoidLine from './AvoidLine.svelte';
@@ -189,6 +190,10 @@
   let crateImage = $state<{ file: Blob; url: string } | 'remove' | null>(null);
   /** The viewed crate's id, when a crate is viewed (not a playlist), or changed. */
   const crate = $derived(crateOf(panel.viewed) ?? builder?.id ?? null);
+  // The artists left out of it by hand (0.10, decision 0083), read as it shows.
+  $effect(() => {
+    if (crate && !crateEditing) untrack(() => loadCrateArtists(crate));
+  });
   // Its name comes from the crates' list, read on the Crates page: opened by a link or after a reload, it is read here
   // (or the title would be the crate's id).
   $effect(() => {
@@ -334,6 +339,8 @@
     void p?.count;
     void p?.dead;
     void saved;
+    // An artist left out of this crate or taken back (0.10, decision 0083): its rows again.
+    void excludedArtists.version;
     void undos.n;
     void listsKey;
     void incomingChanged;
@@ -712,7 +719,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   $effect(() => {
     if (recordsView && !library.view) untrack(() => void readLibrary(false));
   });
-  const albumTotal = (id: string | null) => (id ? (library.view?.sources.find((s) => s.id === source)?.albums.find((a) => a.id === id)?.tracks ?? null) : null);
+  // As its rows say (album_tracks), else as the Library's list has the album.
+  const albumTotal = (rec: { of: number | null; albumId: string | null }) =>
+    rec.of ?? (rec.albumId ? (library.view?.sources.find((s) => s.id === source)?.albums.find((a) => a.id === rec.albumId)?.tracks ?? null) : null);
   let recordOpen = $state<string | null>(null);
   const openRecord = $derived(recordsView && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
   const recordShown = $derived(openRecord && shown ? shown.filter((x) => openRecord.at.includes(x.i)) : []);
@@ -1975,6 +1984,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
+          <!-- The artists left out of it by hand (0.10, decision 0083: Not in this crate), each a tap to take back. -->
+          {#if crate && !crateEditing && excludedArtists.crates[crate]?.length}<p class="genres"><span class="row-head">Not in this crate</span>{#each excludedArtists.crates[crate] as a (a.key)}<button aria-label="Take {a.name} back into this crate" title="Take back" onclick={() => setNotInCrate(crate, a.name, false)}>{a.name}</button>{/each}</p>{/if}
         </div>
         <!-- A ranked crate's fit (the owner, 2026-10-23): what it learned not to suggest; a tap corrects it. -->
         {#if crate && like && !multi}<AvoidLine {crate} name={suggestsFor?.name ?? title} round={saved} seed={like.item} onchange={() => saved++} />{/if}
@@ -2105,7 +2116,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {:else if rows && shown}
       {#if openRecord}
         <!-- A record opened: its crate tracks, back to the records (a step of the history). -->
-        <SectionHead title={`${openRecord.title || 'Unknown album'} · ${holdsLine(openRecord.at.length, albumTotal(openRecord.albumId))}`} onback={() => history.back()} />
+        <SectionHead title={`${openRecord.title || 'Unknown album'} · ${holdsLine(openRecord.at.length, albumTotal(openRecord))}`} onback={() => history.back()} />
         <ol class="rows" class:selecting={!!selecting} bind:clientWidth={listWidth}>
           {#each recordShown as x (x.i)}{@render trackRow(x.r, source, title, recordShown.map((y) => y.r), x.i, false)}{/each}
         </ol>
@@ -2339,7 +2350,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       attachMain={fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (recordMenu = rec)))}
     >
       {#snippet lead()}{#if first}{@render cover(first, source)}{/if}{/snippet}
-      {#snippet sub()}<span class="artist">{rec.artist ?? ''}</span><span class="album">{holdsLine(rec.at.length, albumTotal(rec.albumId))}</span>{/snippet}
+      {#snippet sub()}<span class="artist">{rec.artist ?? ''}</span><span class="album">{holdsLine(rec.at.length, albumTotal(rec))}</span>{/snippet}
       {#snippet action()}
         {#if selecting}
           <button class="tool tick" class:on={all} role="checkbox" aria-checked={all} aria-label={`Select ${rec.title}`} onclick={() => tickRecord(rec)}
@@ -2401,7 +2412,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   {@const away = tickedOuts(rs)}
   <SelectionMenu
     title={rec.title || 'Unknown album'}
-    chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec.albumId))].filter(Boolean)}
+    chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec))].filter(Boolean)}
     tracks={tracksOf(rs.filter((r) => r.id && !r.missing))}
     onclose={() => (recordMenu = null)}
   >
@@ -2443,7 +2454,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   <CrateMenu id={crate} onclose={() => (crateMenuOpen = false)} onsave={() => (making = { name: '', saving: false })} />
 {/if}
 {#if trackMenu}
-  <TrackMenu track={trackMenu.track} start={trackMenu.start} outs={trackMenu.outs} onclose={() => (trackMenu = null)} />
+  <TrackMenu track={trackMenu.track} start={trackMenu.start} outs={trackMenu.outs} crate={crateEditing ? null : crate} onclose={() => (trackMenu = null)} />
 {/if}
 {#if leftOutOpen && crate}
   <ExcludedSheet {crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />

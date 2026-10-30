@@ -22,6 +22,7 @@
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
+  import { excludedArtists, excludedEverywhere, loadCrateArtists, loadExcludedArtists, notInThisCrate, setExcludedEverywhere, setNotInCrate } from './excludedArtists.svelte';
 
   type Act = 'play' | 'shuffle' | 'next' | 'last';
   let {
@@ -34,6 +35,7 @@
     ontogglefavorite,
     onact,
     onradio,
+    crate = null,
     onclose,
   }: {
     source: string;
@@ -50,8 +52,15 @@
     onact: (mode: Act) => void;
     /** Start radio, where it can (Cratarr's own player). */
     onradio?: () => void;
+    /** Opened from a crate (its id): Not in this crate (0.10, decision 0083). */
+    crate?: string | null;
     onclose: () => void;
   } = $props();
+  // Left out everywhere or of the crate it is opened from (0.10, decision 0083): read as the menu opens.
+  loadExcludedArtists();
+  $effect(() => {
+    if (crate) loadCrateArtists(crate);
+  });
 
   const ids = $derived(tracks.map((t) => t.id));
   const actions = $derived.by<SheetAction[]>(() => {
@@ -138,6 +147,16 @@
 {#snippet entry(e: EntryId)}
   {#if e === 'favourite'}
     {#if favorite !== undefined}<MenuEntry icon="heart" label="Favourite" switched={favorite} onclick={ontogglefavorite} />{/if}
+  {:else if e === 'excludeArtist'}
+    {#if excludedArtists.everywhere !== null}
+      {@const on = excludedEverywhere(name)}
+      <MenuEntry icon="ban" label="Exclude everywhere" switched={on} onclick={() => setExcludedEverywhere(name, !on)} />
+    {/if}
+  {:else if e === 'notInCrate'}
+    {#if crate && excludedArtists.crates[crate]}
+      {@const out = notInThisCrate(crate, name)}
+      <MenuEntry icon="crateOut" label="Not in this crate" switched={out} onclick={() => setNotInCrate(crate, name, !out)} />
+    {/if}
   {:else if e === 'addToPlaylist'}
     {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
   {:else if e === 'download'}

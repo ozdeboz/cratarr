@@ -16,6 +16,8 @@
   import ExcludedList from '../ExcludedList.svelte';
   import ExcludedSheet from '../ExcludedSheet.svelte';
   import { excluded, loadExcluded } from '../exclusions.svelte';
+  import { excludedArtists, loadExcludedArtists, setExcludedEverywhere } from '../excludedArtists.svelte';
+  import { when } from './when';
   import { backFromThing, openThing } from '../panel.svelte';
   import NotForSheet from '../NotForSheet.svelte';
   import PageLoading from '../PageLoading.svelte';
@@ -79,17 +81,21 @@
 
   const EVERYWHERE = 'everywhere';
   const DISCOVER = 'discover';
+  // The artists excluded everywhere (0.10, decision 0083): their own page, each to take back.
+  const ARTISTS = 'artists';
+  loadExcludedArtists(true);
   const CRATE = 'crate:';
   /** The crates that leave tracks out by hand, the most first. */
   const leaving = $derived((crates.list ?? []).filter((c) => (c.left_out ?? 0) > 0).sort((a, b) => (b.left_out ?? 0) - (a.left_out ?? 0)));
   const crateAt = $derived(thing?.startsWith(CRATE) ? thing.slice(CRATE.length) : null);
   const known = $derived((crates.list !== null || crates.error !== null) && fits !== null);
   // Titled as what the list is (the owner, 2026-10-23): Taste › Exclusions: Unlisted.
-  nameThing(() => (thing === EVERYWHERE ? 'Exclusions: Everywhere' : thing === DISCOVER ? 'Exclusions: Discover' : crateAt ? `Exclusions: ${crateName(crateAt)}` : null));
+  nameThing(() => (thing === EVERYWHERE ? 'Exclusions: Everywhere' : thing === DISCOVER ? 'Exclusions: Discover' : thing === ARTISTS ? 'Exclusions: Artists' : crateAt ? `Exclusions: ${crateName(crateAt)}` : null));
   // A page whose list is all put back, or a thing there is no page for: back to the part.
   const done = () => backFromThing('taste');
   $effect(() => {
-    if (thing && thing !== EVERYWHERE && thing !== DISCOVER && !crateAt) done();
+    if (thing && thing !== EVERYWHERE && thing !== DISCOVER && thing !== ARTISTS && !crateAt) done();
+    if (thing === ARTISTS && excludedArtists.everywhere?.length === 0) done();
   });
 
   const count = (n: number) => n.toLocaleString();
@@ -99,6 +105,12 @@
   <ExcludedList onchange={loadExcluded} onempty={done} />
 {:else if thing === DISCOVER}
   <DiscoveryList kind="excluded" />
+{:else if thing === ARTISTS}
+  <Group>
+    {#each [...(excludedArtists.everywhere ?? [])].sort((a, b) => a.name.localeCompare(b.name)) as a (a.key)}
+      <Item name={a.name} line={a.at ? `Since ${when(a.at)}` : null}><button onclick={() => setExcludedEverywhere(a.name, false)}>Take back</button></Item>
+    {/each}
+  </Group>
 {:else if crateAt}
   <ExcludedList crate={crateAt} onchange={() => loadCrates()} onempty={done} />
 {:else if !known}
@@ -119,6 +131,7 @@
   <!-- Headed as what they are (the owner, 2026-10-24): Exclusions, everywhere and each crate's. -->
   <Group title="Exclusions" more="Everywhere: out of every crate, and never picked by Radio, Autoplay or a shuffle of the library or the favourites; it still plays when you choose it. A crate's: left out of that crate only.">
     <Item name="Everywhere" value={excluded.n === null ? null : count(excluded.n)} onclick={excluded.n ? () => (excludedOf = EVERYWHERE) : null} />
+    {#if excludedArtists.everywhere?.length}<Item name="Artists" line="Out of every crate, radio, Autoplay and Discover" value={count(excludedArtists.everywhere.length)} onclick={() => openThing('taste', ARTISTS)} />{/if}
     {#if discoverOut}<Item name="Discover" value={count(discoverOut)} onclick={() => openThing('taste', DISCOVER)} />{/if}
     {#each leaving as c (c.id)}
       <Item name={c.name} value={count(c.left_out ?? 0)} onclick={() => (excludedOf = c.id)} />
