@@ -566,10 +566,10 @@ class PlayOnLink(
         }
     }
 
-    /** Ducked or not, levelled (decision 0035), faded (0.9.6, `StartStop`): what the player plays at, under Android's
-     *  media volume. */
+    /** Ducked or not, levelled (decision 0035), faded (0.9.6, `StartStop`), under a track's snippet (0.12, `Snippets`):
+     *  what the player plays at, under Android's media volume. */
     fun applyVolume() {
-        player.volume = (if (ducked) DUCKED else 1f) * Levelling.factor * StartStop.gain
+        player.volume = (if (ducked) DUCKED else 1f) * Levelling.factor * StartStop.gain * Snippets.duck
     }
 
     /** Android's media volume, 0 to 100. */

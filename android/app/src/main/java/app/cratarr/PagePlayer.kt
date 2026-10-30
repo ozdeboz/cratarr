@@ -53,11 +53,20 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     }
 
     fun release() {
+        // The page gone: its snippet with it.
+        snippet(JSONObject().put("type", "snippet").put("stop", true))
+        Snippets.listener = null
         StartStop.rampListener = null
         previewer?.release()
         previewer = null
         controller.removeListener(this)
         Prefs.shared(context).unregisterOnSharedPreferenceChangeListener(sleepChanged)
+    }
+
+    /** A track's snippet asked or stopped (0.12, snippets: the owner chose them, 2026-10-30): the service plays it beside
+     *  the music ([Snippets]). */
+    fun snippet(m: JSONObject) {
+        controller.sendCustomCommand(SessionCommand(PlayerService.COMMAND_SNIPPET, Bundle.EMPTY), Bundle().apply { putString("message", m.toString()) })
     }
 
     /** A command (Cratarr's shape) to the service, which runs it as the page's ([PlayerCommands]). */
@@ -79,6 +88,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         }
         // The deck as it moves (0075): told each step of a wind or the tape's own ramp, and once more as it stops.
         StartStop.deckListener = { report() }
+        // A snippet's place for the page's playhead, a few times a second; null as it ends (0.12).
+        Snippets.listener = { at -> send(JSONObject().put("type", "snippet").put("at_ms", at ?: JSONObject.NULL).toString()) }
     }
 
     fun handle(m: JSONObject) {
