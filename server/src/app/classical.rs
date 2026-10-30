@@ -855,10 +855,12 @@ pub fn build(i: &Inputs) -> Index {
     // Works and movements (0.12, decision 0086): each linked work's parent, and the parent's own, as far as MusicBrainz
     // names them (never round in a circle).
     let mut parent_titles: HashMap<String, String> = HashMap::new();
-    let mut queue: Vec<String> = linked.clone();
-    // In a fixed order: a circle (which MusicBrainz should never hold) then breaks the same way on every build.
-    queue.sort_unstable();
-    while let Some(w) = queue.pop() {
+    // Level by level from the works that are recorded (in a fixed order): the parents nearer to what the library holds
+    // are taken first, so a circle (which MusicBrainz should never hold) breaks at its far end, the same on every build.
+    let mut first: Vec<String> = linked.clone();
+    first.sort_unstable();
+    let mut queue: std::collections::VecDeque<String> = first.into();
+    while let Some(w) = queue.pop_front() {
         let Some((p, title, number)) = i.parents.get(&w) else { continue };
         if *p == w || title.trim().is_empty() || index.parent.contains_key(&w) {
             continue;
@@ -881,7 +883,7 @@ pub fn build(i: &Inputs) -> Index {
         index.parent.insert(w.clone(), (p.clone(), *number));
         index.parts.entry(p.clone()).or_default().push(w.clone());
         parent_titles.entry(p.clone()).or_insert_with(|| title.clone());
-        queue.push(p.clone());
+        queue.push_back(p.clone());
     }
     // A parent the library holds no track of itself: named by its title, its composers its parts'.
     let unnamed: Vec<String> = index.parts.keys().filter(|p| !index.works.contains_key(*p)).cloned().collect();
