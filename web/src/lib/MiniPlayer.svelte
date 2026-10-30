@@ -205,7 +205,7 @@
       {#if grabbing}
         <!-- The waveform alone while it is held (lib/SeekWave), the rest of the bar back once let go. -->
         <div class="grab">
-          <SeekWave bind:this={seekWave} {seek} bins={wave} loading={waveLoading(np.source, np.id)} {dur} {canSeek} paused={waveStill()} room={el} track={playingKey(playing())} onend={() => (grabbing = false)} />
+          <SeekWave bind:this={seekWave} {seek} bins={wave} loading={waveLoading(np.source, np.id)} {dur} {canSeek} paused={waveStill()} room={el} track={playingKey(playing())} ownColours={prefs.coverColourMini} onend={() => (grabbing = false)} />
         </div>
       {:else}
       <div class="fill" aria-hidden="true"></div>

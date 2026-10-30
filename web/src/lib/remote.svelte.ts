@@ -394,8 +394,9 @@ export async function toggleFavorite() {
 
 // The colour taken from the cover (decision 0018, as Finamp's player): its most vivid colour, made readable against
 // the player's background (the cover under a dark veil, or a light one in the light theme). null: a grey cover, or
-// not known yet; the theme's accent applies then.
-export const art = $state<{ accent: string | null }>({ accent: null });
+// not known yet; the theme's accent applies then. `of`: the cover it was taken from (a new cover's comes a moment after
+// the cover shows: until then the accent is still the one before's).
+export const art = $state<{ accent: string | null; of: string | null }>({ accent: null, of: null });
 let artFor: string | null = null;
 
 $effect.root(() => {
@@ -405,6 +406,7 @@ $effect.root(() => {
     artFor = src;
     if (!src) {
       art.accent = null;
+      art.of = null;
       return;
     }
     const img = new Image();
@@ -416,8 +418,9 @@ $effect.root(() => {
       } catch {
         art.accent = null; // an image the page may not read
       }
+      art.of = src;
     };
-    img.onerror = () => artFor === src && (art.accent = null);
+    img.onerror = () => artFor === src && ((art.accent = null), (art.of = src));
     img.src = src;
   });
 });

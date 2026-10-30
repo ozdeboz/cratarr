@@ -17,11 +17,12 @@
   import { aimPainted, holdNow, ramping, tapeDir } from './ramping.svelte';
   import { reducedMotion } from './motion';
   import { portal } from './portal';
-  import { art, clockText } from './remote.svelte';
+  import { art, clockText, playingKey, shownCover, shownPlaying } from './remote.svelte';
   import type { Seek } from './seekState.svelte';
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
+  import { stepWindow, waveColours, type HoldWindow } from './waveView';
   import { playback } from './deviceLog';
 
   let {
@@ -35,6 +36,7 @@
     room,
     track = null,
     onend,
+    ownColours = true,
   }: {
     seek: Seek;
     /** The waveform: undefined while it loads, null where the track has none. */
@@ -51,6 +53,9 @@
     track?: string | null;
     /** Let go (sought or not). */
     onend?: () => void;
+    /** Whether the player's colour is its cover's (the mini player's Cover colour): a wide view's other tracks then
+     *  theirs; else all one. */
+    ownColours?: boolean;
   } = $props();
 
   let el = $state<HTMLElement>();
@@ -94,60 +99,11 @@
   });
   // Only an effect that stops the music greys it (the owner, 2026-10-27), not the tape's own stops (lib/ramping).
   const grey = $derived(port().ramps && ramping.dir && ramping.effect ? ramping.dir === 'out' : after ? after === 'out' : paused);
-  // A hold's zoom on the playhead (the owner, 2026-10-28): the stretch the tape covers in ZOOM_S at its speed, at least
-  // ZOOM_MIN_S, at most the whole: in as it winds up, out again as it gets faster, back to the whole when it ends; eased.
-  // The playhead keeps the place it had on the bar when the hold began, the track sliding under it.
-  const ZOOM_S = 15;
-  const ZOOM_MIN_S = 20;
-  const ZOOM_EASE_MS = 250;
-  /** Out (back toward the whole) slower, for the eye to follow where it is (the owner, 2026-10-28). */
-  const ZOOM_OUT_MS = 700;
-  /** At its top speed this long, the whole track shows (the owner, 2026-10-28). */
-  const ZOOM_TOP_MS = 1500;
-  /** Let go, the zoom stays this long before it eases back to the whole (the owner, 2026-10-28). */
-  const ZOOM_KEEP_MS = 2000;
-  let zoomShare = $state(1);
-  let zoomAnchor = $state<number | null>(null);
-  const zoomOn = $derived(holdNow.on && port().holdsQueue && !reducedMotion());
-  // Started and stopped by the hold alone (its frames move it, never restart it).
-  $effect(() => {
-    const on = zoomOn;
-    return untrack(() => {
-      if (!on && zoomShare >= 0.999) return;
-      // A hold's start: the playhead's place on the bar as it is now (in the zoom still shown, if one is), held there.
-      if (on && dur) {
-        const p = Math.min(1, Math.max(0, pos / dur));
-        zoomAnchor = view ? Math.min(1, Math.max(0, (p - view.from) / Math.max(1e-6, view.to - view.from))) : p;
-      }
-      let raf = 0;
-      let last = performance.now();
-      const offAt = on ? null : last;
-      let topSince: number | null = null;
-      const step = (t: number) => {
-        // At its top speed a while: out to the whole.
-        topSince = zoomOn && holdNow.speed >= holdNow.top * 0.97 ? (topSince ?? t) : null;
-        const atTop = topSince !== null && t - topSince >= ZOOM_TOP_MS;
-        const target = zoomOn && dur ? (atTop ? 1 : Math.min(1, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S) / dur)) : offAt !== null && t - offAt < ZOOM_KEEP_MS ? zoomShare : 1;
-        zoomShare += (target - zoomShare) * (1 - Math.exp(-(t - last) / (target > zoomShare ? ZOOM_OUT_MS : ZOOM_EASE_MS)));
-        last = t;
-        if (!zoomOn && zoomShare > 0.999) {
-          zoomShare = 1;
-          zoomAnchor = null;
-          return;
-        }
-        raf = requestAnimationFrame(step);
-      };
-      raf = requestAnimationFrame(step);
-      return () => cancelAnimationFrame(raf);
-    });
-  });
   // The playing track's place and length as the player has them, in the same moment as which track it is (the props
   // follow a frame later: crossing a boundary, the strip was made a frame with the last track's, the owner 2026-10-28).
+  // One source for the window, the playhead and the crosshair alike (0.10.1).
   const hereLen = $derived(local.queue[local.index]?.duration_secs ?? dur);
   const herePos = $derived(port().position() ?? pos);
-  // Continuous (the owner, 2026-10-28): a hold's look-ahead in another track zooms out past the track's edge until it
-  // shows, with as much again beyond it as it is ahead of the playhead; the tracks there drawn with their own waveforms,
-  // their boundaries marked below. In s along the queue from this track's start (`a` to `b`).
   /** Where queue track `index`, `secs` into it, is along the queue from this track's start (null: a length unknown). */
   function along(index: number, secs: number): number | null {
     const cur = local.index;
@@ -171,76 +127,53 @@
     const d = local.queue[index]?.duration_secs;
     return d ? x - (d - secs) : null;
   }
-  // A continuous hold runs on the strip throughout (the owner, 2026-10-28: its zoom moves on through a track change, no
-  // track change of its own; only the cover and the background change as the next track plays): its window in s along
-  // the queue. The playhead its focal point (the owner, 2026-10-28): where it was on the bar as the hold began, the queue
-  // sliding under it; only the window's width goes with the speed, wide enough for the look-ahead in another track and
-  // as much again beyond it.
-  /** The playhead's place in the window (0..1). */
-  const anchorOf = () => Math.min(0.9, Math.max(0.1, zoomAnchor ?? 0.5));
   /** Whether a hold winds on through the queue: Start and stop's as the player that winds has it, the app's in the app
    *  (the owner, 2026-10-29: the zoom's other tracks and their boundaries never showed there). */
   const throughQueue = $derived(startStopNow().edges === 'queue');
-  const wideTarget = $derived.by((): { W: number } | null => {
-    // Until it is let go (the owner, 2026-10-28): then back to this track's own view.
-    if (!zoomOn || !holdNow.held || !throughQueue || !hereLen) return null;
-    let W = Math.min(hereLen, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S));
-    const li = holdNow.landingIndex;
-    const l = holdNow.landing;
-    const A = li !== null && l !== null && li !== local.index ? along(li, l) : null;
-    if (A !== null) {
-      const G = Math.abs(A - herePos);
-      W = Math.max(W, A > herePos ? (2 * G) / (1 - anchorOf()) : (2 * G) / anchorOf());
-    }
-    return { W };
-  });
-  /** The wide view as shown, eased toward its target and back to the track's own view; null: none. */
-  let wide = $state<{ a: number; b: number } | null>(null);
-  const WIDE_EASE_MS = 400;
+  const zoomOn = $derived(holdNow.on && port().holdsQueue && !reducedMotion());
+  // A hold's window (lib/waveView's stepWindow; 0.10.1, the owner: "So pure continuous transitions"): centred on the
+  // crosshair, against the edge a direction does not need, as wide as the speed asks and standing once at the top
+  // speed; let go, back to the track's own view. In s from the playing track's start. Through the queue it is the wide
+  // view (the tracks around drawn with their own waveforms, their boundaries marked); on one track, its zoom.
+  let win = $state<HoldWindow | null>(null);
   $effect(() => {
-    const on = wideTarget !== null;
+    const on = zoomOn && holdNow.held;
     return untrack(() => {
-      if (!on && !wide) return;
+      if (!on && !win) return;
       let raf = 0;
       let last = performance.now();
       let idx = local.index;
-      let len = hereLen ?? 0;
       const step = (t: number) => {
-        const before = len;
-        len = hereLen ?? 0;
-        const own = view ? { a: view.from * len, b: view.to * len } : { a: 0, b: len };
-        const e = 1 - Math.exp(-(t - last) / WIDE_EASE_MS);
+        const dt = Math.max(0, Math.min(64, t - last));
         last = t;
-        // Held: the width eased, the window placed on the playhead each frame (no lag behind it, however fast).
-        if (wideTarget) {
-          const was = wide ? wide.b - wide.a : own.b - own.a;
-          const W = was + (wideTarget.W - was) * e;
-          const a = herePos - anchorOf() * W;
-          wide = { a, b: a + W };
-          idx = local.index;
-          raf = requestAnimationFrame(step);
-          return;
-        }
-        // Let go, back to the track's own view: the tape into the next track or the one before keeps it where it was.
-        if (wide && local.index !== idx) {
-          if (local.index === idx + 1) wide = { a: wide.a - before, b: wide.b - before };
-          else if (local.index === idx - 1 && hereLen) wide = { a: wide.a + hereLen, b: wide.b + hereLen };
-          else wide = null;
-          idx = local.index;
-        }
-        const w = wide ?? own;
-        const next = { a: w.a + (own.a - w.a) * e, b: w.b + (own.b - w.b) * e };
-        if (Math.abs(next.a - own.a) + Math.abs(next.b - own.b) < 0.005 * Math.max(1, own.b - own.a)) {
-          wide = null;
-          return;
-        }
-        wide = next;
-        raf = requestAnimationFrame(step);
+        // Where the last frame's track's start is from this one's.
+        const moved = local.index === idx ? 0 : along(idx, 0);
+        idx = local.index;
+        const li = holdNow.landingIndex ?? local.index;
+        const l = holdNow.landing;
+        win = stepWindow(
+          win,
+          {
+            len: hereLen ?? 0,
+            pos: herePos,
+            moved,
+            holding: zoomOn && holdNow.held,
+            through: throughQueue,
+            dir: holdNow.dir,
+            speed: holdNow.speed,
+            top: holdNow.top,
+            aim: l === null ? null : along(li, l),
+          },
+          dt,
+        );
+        if (win) raf = requestAnimationFrame(step);
       };
       raf = requestAnimationFrame(step);
       return () => cancelAnimationFrame(raf);
     });
   });
+  /** The wide view: the window through the queue, in s from this track's start. */
+  const wide = $derived(win && throughQueue ? { a: win.shown.from, b: win.shown.to } : null);
   /** The tracks the wide view covers, by queue place, each from where along the queue. */
   const wideTracks = $derived.by(() => {
     if (!wide || !hereLen) return null;
@@ -311,9 +244,12 @@
   // Each track's colour in a wide view, its own (the owner, 2026-10-29: "colors should stay true to their waveform"):
   // the playing one's as the player has it, kept once it is the track before; the next ones' covers fetched ahead, so
   // their colours are there before a hold reaches them.
+  // Only while the accent is the shown track's own: after a track change the cover before (and its accent) shows a
+  // moment longer, and was kept as the new track's (0.10.1).
   $effect(() => {
     const t = local.queue[local.index];
-    if (t) keepAccent(t, art.accent);
+    const np = shownPlaying();
+    if (t && np && np.source === t.source && np.id === t.id && art.of === shownCover()) keepAccent(t, art.accent);
   });
   $effect(() => {
     for (let i = Math.max(0, local.index - 1); i <= local.index + 3; i++) {
@@ -333,7 +269,17 @@
       cur0: at(0),
       cur1: at(hereLen),
       marks: s.marks.map(at),
-      colours: s.tracks.map((i) => (local.queue[i] ? accentFor(local.queue[i]) : null)),
+      // One colour for the track the player shows, in every state (the owner, 2026-10-30: "The color should be
+      // stable"; it was its cover's here and the player's elsewhere, yellow while winding, green let go).
+      colours: waveColours(
+        s.tracks.map((i) => (local.queue[i] ? `${local.queue[i].source}/${local.queue[i].id}` : null)),
+        playingKey(shownPlaying()),
+        ownColours,
+        (k) => {
+          const q = s.tracks.map((i) => local.queue[i]).find((q) => q && `${q.source}/${q.id}` === k);
+          return q ? accentFor(q) : null;
+        },
+      ),
     };
   });
   /** What it shows: a continuous hold's strip a waveform throughout, whatever the playing track's own is doing. */
@@ -348,19 +294,14 @@
       playback('warn', 'hold window lost', {
         index: local.index,
         dur,
-        target: !!wideTarget,
-        wide: !!wide,
+        win: !!win,
         tracks: wideTracks?.length ?? null,
         strip: !!wideBins,
       });
     wideLost = lost;
   });
-  const view = $derived.by(() => {
-    if (zoomShare >= 0.999 || zoomAnchor === null || !dur) return null;
-    const p = Math.min(1, Math.max(0, pos / dur));
-    const from = Math.min(1 - zoomShare, Math.max(0, p - zoomAnchor * zoomShare));
-    return { from, to: from + zoomShare };
-  });
+  /** The zoom on one track (0..1 of it). */
+  const view = $derived(win && !throughQueue && hereLen ? { from: win.shown.from / hereLen, to: win.shown.to / hereLen } : null);
   /** The look-ahead shown (0..1 of the track): a hold's landing, ahead of the playhead the way it goes; in a track
    *  further on through the queue, at this one's edge that way, until the tape is in that track (the owner, 2026-10-28:
    *  the line stood at the end, and on the next track at the last one's place). */
@@ -374,7 +315,9 @@
       if (A !== null && hereLen) return A / hereLen;
       return (holdNow.dir > 0 ? at > local.index : at < local.index) ? (holdNow.dir > 0 ? 1 : 0) : null;
     }
-    return (holdNow.dir > 0 ? pos < l : pos > l) ? l / dur : null;
+    const p = win ? herePos : pos;
+    const len = (win && hereLen) || dur;
+    return (holdNow.dir > 0 ? p < l : p > l) ? l / len : null;
   });
   // Its place as painted (after the frame's update), for lib/localPlayer's check against where the tape plays on.
   $effect(() => {
@@ -478,7 +421,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} want={shownWant} {loading} progress={wideStrip && hereLen ? herePos / hereLen : dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} want={shownWant} {loading} progress={win && hereLen ? herePos / hereLen : dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}
