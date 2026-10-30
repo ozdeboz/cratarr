@@ -140,7 +140,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/classical/composers/{key}", get(classical_composer))
         .route("/api/tracks/{source}/{id}/versions", get(track_versions))
         // Works and movements (0.12, decision 0086): a composer's works, a work with its recordings; everyone's.
-        .route("/api/composers/{key}/works", get(composer_works))
+        .route("/api/classical/composers/{key}/works", get(composer_works))
         .route("/api/works/{mbid}", get(work_view))
         .route("/api/status", get(status))
         // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.

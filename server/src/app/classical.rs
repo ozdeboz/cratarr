@@ -245,7 +245,7 @@ pub struct Versions {
     pub versions: Vec<Version>,
 }
 
-/// A work as a composer's page lists it (0.12, decision 0086; `GET /api/composers/{key}/works`): its MusicBrainz id
+/// A work as a composer's page lists it (0.12, decision 0086; `GET /api/classical/composers/{key}/works`): its MusicBrainz id
 /// and title, its musical key and catalogue number where its title says them, how many parts the library knows of it,
 /// and how many of its recordings the library holds (an album each).
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
