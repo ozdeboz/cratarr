@@ -22,6 +22,8 @@
   import QuickTermSheet from './QuickTermSheet.svelte';
   import { clockText } from './remote.svelte';
   import Row from './Row.svelte';
+  import SnippetStrip from './SnippetStrip.svelte';
+  import { endSnippet, playFromHere, snippet, startSnippet, stretchOf, type SnippetTrack } from './snippetPlayer.svelte';
   import { toast } from './toast.svelte';
   import TrackCover from './TrackCover.svelte';
   import { withUndo } from './undo.svelte';
@@ -193,6 +195,37 @@
     return () => removeEventListener('pagehide', keep);
   });
   onDestroy(keep);
+  // A row's snippet (0.12, the owner: "as buttons which when pressed expand a waveform as A2"): its round button plays
+  // the track's liveliest 20 s and opens the row on its waveform (lib/SnippetStrip), with Play from here; again, it stops
+  // and folds. One row open at a time; leaving the page ends it.
+  let openRow = $state<number | null>(null);
+  const snipOf = (src: string, r: PlaylistRow): SnippetTrack | null =>
+    r.id && !r.missing ? { source: src, id: r.id, name: r.name ?? r.file, duration_secs: r.duration_secs ?? null } : null;
+  const isOn = (t: SnippetTrack | null) => !!t && snippet.key === `${t.source}/${t.id}`;
+  function snipTap(i: number, t: SnippetTrack) {
+    if (openRow === i) {
+      openRow = null;
+      return endSnippet();
+    }
+    openRow = i;
+    startSnippet(t);
+  }
+  /** How far its snippet has sounded, 0..1 (its button's ring). */
+  const heardShare = $derived(snippet.sounding && snippet.to > snippet.from ? Math.min(1, Math.max(0, (snippet.at - snippet.from) / (snippet.to - snippet.from))) : 0);
+  // New rows (other words): nothing open.
+  $effect(() => {
+    void preview;
+    untrack(() => {
+      if (openRow !== null) endSnippet();
+      openRow = null;
+    });
+  });
+  onDestroy(() => openRow !== null && endSnippet());
+  function fromHere(t: SnippetTrack) {
+    const at = isOn(t) && snippet.to > snippet.from ? snippet.from : (stretchOf(t)?.from ?? 0);
+    openRow = null;
+    playFromHere(t, at).catch((e) => toast.fail(e, "It didn't play"));
+  }
 </script>
 
 <section class="quick" aria-label="Make a crate">
@@ -233,10 +266,29 @@
       <ol class="preview" aria-label="The crate's first tracks">
         {#each preview.rows as r, i (i)}
           {@const src = preview.source}
+          {@const st = snipOf(src, r)}
           <li>
             <Row size="large" title={r.name ?? r.file} sub={r.artist ?? ''} count={r.duration_secs ? clockText(r.duration_secs) : undefined} off={!r.id || !!r.missing}>
               {#snippet lead()}<TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} />{/snippet}
+              {#snippet action()}
+                {#if st}
+                  {@const on = openRow === i && isOn(st) && snippet.sounding}
+                  <button class="snip" aria-label={openRow === i ? 'Stop its snippet' : 'Hear a snippet'} aria-pressed={openRow === i} onclick={() => snipTap(i, st)}>
+                    <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
+                      <circle class="ring" cx="18" cy="18" r="16" />
+                      {#if on}<circle class="fill" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{heardShare * 100} 100" transform="rotate(-90 18 18)" />{/if}
+                      {#if openRow === i}<rect x="13" y="12" width="3.5" height="12" /><rect x="19.5" y="12" width="3.5" height="12" />{:else}<path d="M14 11v14l11-7z" />{/if}
+                    </svg>
+                  </button>
+                {/if}
+              {/snippet}
             </Row>
+            {#if openRow === i && st}
+              <div class="snipped">
+                <SnippetStrip track={st} />
+                <button class="from" onclick={() => fromHere(st)}>Play from here</button>
+              </div>
+            {/if}
           </li>
         {/each}
       </ol>
@@ -409,6 +461,50 @@
   .icon:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  /* A row's snippet button (the owner's mockup C2) and its open row (A2's strip). */
+  .snip {
+    display: grid;
+    place-items: center;
+    padding: 4px;
+    border: 0;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .snip svg {
+    fill: currentColor;
+  }
+
+  .snip .ring {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 3;
+  }
+
+  .snip .fill {
+    fill: none;
+    stroke: var(--art-accent, var(--accent));
+    stroke-width: 3;
+  }
+
+  .snipped {
+    display: grid;
+    padding: 0 16px 8px;
+  }
+
+  .from {
+    justify-self: start;
+    padding: 6px 0;
+    border: 0;
+    background: none;
+    color: var(--accent-ink);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .preview,

@@ -2299,8 +2299,15 @@ export function deleteLocal(id: string) {
 /** Its volume as Cratarr sets it (0 to 100), and whether it is ducked (an announcement): the element's, times a duck. */
 export const pageVolume = $state({ level: 100, ducked: false });
 const DUCKED = 0.25;
+/** A snippet's duck (lib/snippetPlayer, 0.12): what plays here eased under a snippet heard from a menu or the crate
+ *  search, and back; 1 otherwise. On the same one volume as the page's and an announcement's. */
+let snippetDuck = 1;
+export function setSnippetDuck(v: number) {
+  snippetDuck = v;
+  applyVolume();
+}
 function applyVolume() {
-  if (audio) audio.volume = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * rampGain;
+  if (audio) audio.volume = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * snippetDuck * rampGain;
   clipVolume();
 }
 
@@ -2810,7 +2817,7 @@ const PLAIN_TOP = 4;
 function clipVolume() {
   if (!tape.rewinding || !audio) return;
   // The page's volume and the track's level (not the track's own ramp, which stands still meanwhile), times its own fade.
-  const page = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1);
+  const page = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * snippetDuck;
   tape.rewinding.clip.volume = Math.max(0, Math.min(1, page * (level ? (told?.level ?? 1) : 1) * tape.rewinding.fade));
 }
 /** A wind's sound faded in from silence over DECLICK_MS (no plop as it starts). */

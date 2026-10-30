@@ -1,7 +1,7 @@
 <script lang="ts" module>
   /** A track the menu is for, when it is not the playing one (a queue row, a playlist row; decision 0023). */
   /** `has_versions`: the library holds other recordings of its work (0.10); absent where the list does not say. */
-  export type MenuTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null; has_versions?: boolean };
+  export type MenuTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null; has_versions?: boolean; duration_secs?: number | null };
   /** Where a queue row's track is: `upcoming` (what comes next, 0 = the next) or `previous` (this device's played ones). */
   export type QueuePlace = { list: 'upcoming' | 'previous'; at: number };
 </script>
@@ -49,6 +49,10 @@
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
+  import SnippetStrip from './SnippetStrip.svelte';
+  import { endSnippet, playFromHere, snippet, snippetable, startSnippet, stretchOf, type SnippetTrack } from './snippetPlayer.svelte';
+  import { prefs } from './prefs.svelte';
+  import { untrack } from 'svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
@@ -265,6 +269,26 @@
       },
     );
   });
+  // Its snippet as the menu opens (0.12, lib/snippetPlayer; Settings › This device › Snippets in menus): not the playing
+  // track's, nor the device's own music; its length as listed, else as its file says.
+  const snip = $derived.by((): SnippetTrack | null => {
+    if (!t || forPlaying || !prefs.snippetsInMenus || !snippetable(t)) return null;
+    const duration_secs = t.duration_secs ?? (details?.duration_ms ? details.duration_ms / 1000 : null);
+    return { source: t.source, id: t.id, name: t.name, duration_secs };
+  });
+  const snipKey = $derived(snip ? `${snip.source}/${snip.id}/${snip.duration_secs ?? ''}` : null);
+  $effect(() => {
+    if (!snipKey) return;
+    untrack(() => snip && startSnippet(snip));
+    return () => endSnippet();
+  });
+  function fromHere() {
+    const s = snip;
+    if (!s) return;
+    const at = snippet.key === `${s.source}/${s.id}` && snippet.to > snippet.from ? snippet.from : (stretchOf(s)?.from ?? 0);
+    onclose();
+    playFromHere(s, at).catch((e) => toast.fail(e, "It didn't play"));
+  }
   function showDetails() {
     step = 'details';
   }
@@ -527,6 +551,11 @@
     {step}
   >
     {#if step === 'menu'}
+      {#if snip}
+        <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and the track from there. -->
+        <SnippetStrip track={snip} />
+        <MenuEntry icon="play" label="Play from here" onclick={fromHere} />
+      {/if}
       <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
       <MenuTable kind="track" {entry} />
     {:else if step === 'download'}
