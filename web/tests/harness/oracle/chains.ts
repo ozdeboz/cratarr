@@ -1,4 +1,4 @@
-// The visuals' preset chains (decision 0056: "chains are presets"). The owner, after 70: "we should also have some
+// FROZEN (0.9.19: the app reaches none of it; the tests' and scripts/check-migration's fixture): the visuals' preset chains (decision 0056: "chains are presets"). The owner, after 70: "we should also have some
 // sensible presets, but nothing extreme the way we now have. Currently we have way too many lines. So we need a few
 // sensible chains as presets, the ability to start from scratch"; asked which: Calm, Pulse and Flow; and from scratch,
 // nothing at all (an empty patch: no source, so nothing is drawn until one is added).
@@ -7,11 +7,11 @@
 // band (today's default chain has seven a band, 54 in all), and the few settings that make it what it is. The look
 // (form, colours …) stays the track's own, as a preset leaves it.
 
-import type { RouteValue } from './curves';
-import { emptyExtra, type Cable, type Module, type PatchExtra } from './patch';
-import { extraType } from './registry';
-import { defaultRoutes, routeKey } from './routes';
-import type { VisualSettings } from './settings.svelte';
+import type { RouteValue } from '../../../src/lib/visuals/curves.ts';
+import { emptyExtra, type Cable, type Module, type PatchExtra } from '../../../src/lib/visuals/patch.ts';
+import { extraType } from '../../../src/lib/visuals/registry.ts';
+import { defaultRoutes, routeKey } from '../../../src/lib/visuals/routes.ts';
+import type { VisualSettings } from '../../../src/lib/visuals/settings.svelte.ts';
 
 /** The settings a chain may set: how the frame behaves, the loop's and finish's levels, and whether the flame is drawn
  *  (`flameLayer`, its layer's amount, 0 from scratch); never the look. */

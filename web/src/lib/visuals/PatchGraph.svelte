@@ -65,8 +65,8 @@
   import Preview from './face/Preview.svelte';
   import { MUSIC_SIGNALS, musicModuleFor, SIGNAL_OUT } from './music-signals';
   import { fits } from './ports';
+  import { applyEdit } from './patch-edits';
   import {
-    applyV2,
     CABLE_OPACITY_MIN,
     cableOpacity,
     drawnOpacity,
@@ -276,7 +276,7 @@
     if (!list.length) return;
     const base = ahead && ahead.from === patch ? ahead.next : patch;
     let next = $state.snapshot(base) as PatchV2;
-    for (const e of list) next = applyV2(next, e, types);
+    for (const e of list) next = applyEdit(next, e, types);
     const from = patch;
     ahead = { from, next };
     queueMicrotask(() => {

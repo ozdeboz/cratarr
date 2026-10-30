@@ -4,6 +4,8 @@
 // It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (Back closes
 // it, a reload brings it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
 
+import { leaveOnArrival } from './navStep.svelte';
+
 export type Tab = 'tracks' | 'info' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
   { tab: 'tracks', label: 'Tracks' },
@@ -272,6 +274,8 @@ export function closePlaylist(then?: () => void) {
 /** A breadcrumb's page (lib/Crumbs, 0.9.3): the panel closed, as its ✕ closes it, and that page shown, wherever the
  *  panel was opened from (the owner, 2026-10-25: breadcrumbs as what global search needs, its results opening anywhere). */
 export function upToPage(href: string) {
+  // Its layer stays over the page until the page gone to shows (lib/navStep), never the page before for a moment.
+  if (!location.hash.startsWith(href)) leaveOnArrival({ layer: true }, false, href);
   closePlaylist(() => {
     if (!location.hash.startsWith(href)) location.hash = href;
   });

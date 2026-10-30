@@ -1,20 +1,24 @@
-// The panel's edits of a v2 patch (decision 0057, the switch, S3), beside the graph's (patchgraph.ts `applyV2`: a
-// knob, a connection, cables removed, a category pinned, a module added, a device made or unmade), which it hands on.
-// Its own: a cable's amount, depth and channel; a cable's end moved (Reroute); a module removed with its cables, pins
-// and macro targets; a pin of a knob, a module or a cable. Each at a level: `scope`, the devices it is inside. Pure: on
-// a store's draft, in place.
+// The rack's edits, all of them through one reducer (0.9.19, the architecture audit: "one edit reducer"): the
+// graph's (patchgraph.ts `applyV2`: a knob, a connection, cables removed, a cable's end moved, a pin, modules removed,
+// a category pinned, a module added, a device made or unmade), the panel's (a cable's amount, depth and channel; a
+// module removed; a device added; a level's macros: decision 0077) and the visuals' own (the values a roll or a step's
+// Next moves). One way per kind: a module removed by the panel goes as the graph removes them. Each at a level:
+// `scope`, the devices it is inside. Pure: on a store's draft, in place.
 
 import { applyV2, patchAt, type V2Edit } from './patchgraph';
 import { isDevice, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import type { ModuleType } from './patch';
+import { mapped } from './macro-map';
+import { applyKnobs, applyMacros } from './v2';
 
-export type PanelEdit =
+export type RackEdit =
   | V2Edit
   | { kind: 'cable'; scope: string[]; id: string; value?: CableV2['value']; depth?: PortRef | null; channel?: number | null }
-  | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef }
   | { kind: 'removeModule'; scope: string[]; id: string }
-  | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean }
   | { kind: 'addDevice'; scope: string[]; device: Device }
+  // The values the visuals move as they play or roll (a roll, a new track's look, a step's Next), by module id as the
+  // engine runs them (a device's inner ones `<device>/<module>`), cables by id, macros by their node's id.
+  | { kind: 'values'; knobs: Record<string, Record<string, number>>; cables?: Record<string, CableV2['value']>; macros?: Record<string, number> }
   | { kind: 'macro'; scope: string[]; id: string; value: number }
   // A level's macros (0077: its face; the rack's at the top, a device's own inside it): one made, removed, a knob of the
   // level's (or a device's macro, `macro:<id>`) mapped, let go, its range changed.
@@ -40,11 +44,11 @@ export function freeMacro(macros: readonly { id: string }[]): { id: string; labe
   return { id: `macro-${n}`, label: `Macro ${n}` };
 }
 
-/** What a target of a macro is set to at the macro's value (along the knob's taper). */
-const setTo = (t: { from: number; to: number }, value: number, exp: boolean) => (exp && t.from > 0 && t.to > 0 ? t.from * (t.to / t.from) ** value : t.from + (t.to - t.from) * value);
+/** What a target of a macro is set to at the macro's value (along the knob's taper: the one rule, macro-map.ts). */
+const setTo = mapped;
 
 /** The store's key for an edit: a knob's turns, a cable's curve drawn, one undo step each. */
-export function panelKey(e: PanelEdit): string | null {
+export function panelKey(e: RackEdit): string | null {
   if (e.kind === 'knob') return `knob:${e.module.join('/')}.${e.knob}`;
   if (e.kind === 'macro') return `macro:${[...e.scope, e.id].join('/')}`;
   if (e.kind === 'macroRange') return `range:${[...e.scope, e.id].join('/')}.${e.module}.${e.knob}`;
@@ -55,7 +59,7 @@ export function panelKey(e: PanelEdit): string | null {
 /** A macro edit (0077) applied to `p` in place, and `p`. One macro a knob: a knob mapped is taken from the macro that had
  *  it. Nothing jumps: a knob mapped has its range through where it is at the macro's value (its whole range wide); a
  *  knob let go, or a macro removed, leaves each knob where the macro had set it. */
-function applyFace(p: PatchV2, e: Extract<PanelEdit, { kind: 'macro' | 'newMacro' | 'removeMacro' | 'mapKnob' | 'unmapKnob' | 'macroRange' }>, types?: Record<string, ModuleType>): PatchV2 {
+function applyFace(p: PatchV2, e: Extract<RackEdit, { kind: 'macro' | 'newMacro' | 'removeMacro' | 'mapKnob' | 'unmapKnob' | 'macroRange' }>, types?: Record<string, ModuleType>): PatchV2 {
   const face = faceAt(p, e.scope);
   if (!face) return p;
   const { macros, level } = face;
@@ -124,10 +128,19 @@ function applyFace(p: PatchV2, e: Extract<PanelEdit, { kind: 'macro' | 'newMacro
   return p;
 }
 
-/** An edit applied to `p` in place, and `p`. */
-export function applyPanel(p: PatchV2, e: PanelEdit, types?: Record<string, ModuleType>): PatchV2 {
+/** An edit applied to `p` in place, and `p`: the one way the rack is changed. */
+export function applyEdit(p: PatchV2, e: RackEdit, types?: Record<string, ModuleType>): PatchV2 {
   if (e.kind === 'macro' || e.kind === 'newMacro' || e.kind === 'removeMacro' || e.kind === 'mapKnob' || e.kind === 'unmapKnob' || e.kind === 'macroRange') return applyFace(p, e, types);
-  if (e.kind !== 'cable' && e.kind !== 'reroute' && e.kind !== 'removeModule' && e.kind !== 'pinOne' && e.kind !== 'addDevice') return applyV2(p, e, types);
+  if (e.kind === 'values') {
+    applyKnobs(p, e.knobs);
+    for (const c of p.cables) if (e.cables && c.id in e.cables) c.value = e.cables[c.id];
+    applyMacros(p, e.macros ?? {});
+    return p;
+  }
+  // A module removed as the graph removes them (its cables, its pins, its macros' targets, a device's ports to it);
+  // never the Screen (its flash guard: 0057 §7e).
+  if (e.kind === 'removeModule') return patchAt(p, e.scope)?.modules.find((m) => m.id === e.id)?.type === 'screen' ? p : applyV2(p, { kind: 'removeModules', scope: e.scope, modules: [e.id] }, types);
+  if (e.kind !== 'cable' && e.kind !== 'addDevice') return applyV2(p, e, types);
   const inside = patchAt(p, e.scope);
   if (!inside) return p;
   if (e.kind === 'addDevice') {
@@ -138,27 +151,8 @@ export function applyPanel(p: PatchV2, e: PanelEdit, types?: Record<string, Modu
     inside.modules.push({ ...structuredClone(e.device), id });
     return p;
   }
-  if (e.kind === 'pinOne') {
-    inside.pins = inside.pins.filter((x) => x !== e.pin);
-    if (e.on) inside.pins.push(e.pin);
-    return p;
-  }
-  if (e.kind === 'removeModule') {
-    // The Screen stays (its flash guard: 0057 §7e).
-    if (inside.modules.find((m) => m.id === e.id)?.type === 'screen') return p;
-    inside.modules = inside.modules.filter((m) => m.id !== e.id);
-    const gone = inside.cables.filter((c) => c.from.module === e.id || c.to.module === e.id || c.depth?.module === e.id).map((c) => c.id);
-    inside.cables = inside.cables.filter((c) => !gone.includes(c.id));
-    inside.pins = inside.pins.filter((x) => !x.startsWith(`${e.id}.`) && x !== `module:${e.id}` && !gone.some((id) => x === `cable:${id}`));
-    inside.macros = inside.macros.map((m) => ({ ...m, targets: m.targets.filter((t) => t.module !== e.id) }));
-    return p;
-  }
   const c = inside.cables.find((x) => x.id === e.id);
   if (!c) return p;
-  if (e.kind === 'reroute') {
-    c[e.end] = { ...e.to };
-    return p;
-  }
   if (e.value !== undefined) c.value = e.value;
   if (e.depth !== undefined) c.depth = e.depth;
   if (e.channel !== undefined) {

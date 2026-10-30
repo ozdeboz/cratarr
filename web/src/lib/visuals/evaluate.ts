@@ -27,6 +27,7 @@
 
 import { curveFrom, heightAt, isStraight, tableOf, type Curve, type RouteValue } from './curves';
 import { seedOf } from './flame';
+import { throughMacros } from './macro-map';
 import { BANDS, modulatorOf, type ModulatorType } from './modulators/modulators';
 import { modulesOf, type Cable, type FrameInfo, type Knob, type Macro, type Module, type ModuleType, type Modulator, type Patch, type SignalRef } from './patch';
 
@@ -279,7 +280,7 @@ export function evaluate(patch: Patch, types: Record<string, ModuleType>, signal
     const out: Record<string, number> = { ...m.knobs };
     for (const k of t?.knobs ?? []) {
       let base = finite(m.knobs[k.id], k.default);
-      if (k.kind !== 'step') for (const x of targets.get(at(m.id, k.id)) ?? []) base = x.from + (x.to - x.from) * macroOf(x.macro);
+      if (k.kind !== 'step') base = throughMacros(base, targets.get(at(m.id, k.id)) ?? [], (x) => macroOf(x.macro));
       out[k.id] = moved(m.id, k, base);
     }
     for (const p of ports) out[p] = portOf(m.id, p);

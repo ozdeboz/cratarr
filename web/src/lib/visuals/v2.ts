@@ -20,6 +20,7 @@
 // Mixes) is the picture graph's (step 3): `pictureWiring`, none until it lands.
 
 import { effectOfType, slotsAsEffects } from './effect-modules';
+import { macroAt, mapped } from './macro-map';
 import { endOf, type RouteValue } from './curves';
 import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, routeKey, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
@@ -146,12 +147,7 @@ export function asSet(p: PatchV2, m: Module | undefined, knob: string, types?: R
   if (!m) return undefined;
   let v = m.knobs[knob];
   const exp = types?.[m.type]?.knobs.find((k) => k.id === knob)?.taper === 'exp';
-  for (const x of p.macros)
-    for (const t of x.targets)
-      if (t.module === m.id && t.knob === knob) {
-        const at = Math.min(1, Math.max(0, macroAsSet(p, x)));
-        v = exp && t.from > 0 && t.to > 0 ? t.from * (t.to / t.from) ** at : t.from + (t.to - t.from) * at;
-      }
+  for (const x of p.macros) for (const t of x.targets) if (t.module === m.id && t.knob === knob) v = mapped(t, macroAt(macroAsSet(p, x)), exp);
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
@@ -174,7 +170,7 @@ export function macroAsSet(p: PatchV2, x: Macro, seen: Set<string> = new Set([x.
     for (const t of y.targets)
       if (t.module === x.id && t.knob === 'value' && !seen.has(y.id)) {
         seen.add(y.id);
-        return t.from + (t.to - t.from) * Math.min(1, Math.max(0, macroAsSet(p, y, seen)));
+        return mapped(t, macroAt(macroAsSet(p, y, seen)));
       }
   return x.value;
 }

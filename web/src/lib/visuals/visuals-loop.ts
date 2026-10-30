@@ -31,7 +31,8 @@ import { FlameRenderer, type PictureInputs } from './render';
 import { A, T } from './routes';
 import { BANDS, FLUID_FULL, type VisualSettings } from './settings.svelte';
 import type { EffectSettings } from './effects';
-import { applyKnobs, applyMacros, asSet } from './v2';
+import { asSet } from './v2';
+import { applyEdit } from './patch-edits';
 
 /** A new track's look blends in over this long; one the dice made, quicker (Visuals.svelte's). */
 const BLEND_MS = 6000;
@@ -216,11 +217,7 @@ export class VisualsLoop {
         macrosFrom[id] = x.value;
         macrosTo[id] = v;
       }
-      const f = (p: PatchV2) => {
-        applyKnobs(p, values);
-        for (const c of p.cables) if (c.id in cables) c.value = cables[c.id];
-        applyMacros(p, macros);
-      };
+      const f = (p: PatchV2) => applyEdit(p, { kind: 'values', knobs: values, cables, macros }, host.types);
       // A roll (the dice's, a reset) is one undo step of its own: never merged with the one before, however soon after.
       if (edit) host.store.change(f, null);
       else host.store.perform(f);

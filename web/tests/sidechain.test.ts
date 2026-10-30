@@ -8,13 +8,13 @@ import assert from 'node:assert/strict';
 import { TRACKS, track } from './harness/aspects-record.ts';
 
 const { DEFAULTS, FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
-const { newEngineV1, stepEngineV1 } = await import('../src/lib/visuals/engine/v1.ts');
+const { newEngineV1, stepEngineV1 } = await import('./harness/oracle/engine-v1.ts');
 const { newSidechain, stepSidechain, FLASH_GUARD } = await import('../src/lib/visuals/engine/sidechain.ts');
 // The governor these replaced (the old sidechaining, kept as the proofs' reference).
 const { newGovernor, stepGovernor } = await import('./harness/governor.ts');
 const { STANDING } = await import('../src/lib/visuals/engine/sidechain.ts');
 const { Meters } = await import('../src/lib/visuals/meters.ts');
-const { measure } = await import('../src/lib/visuals/precheck.ts');
+const { measure } = await import('./harness/oracle/measure.ts');
 const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');
 const { BUDGETED, budgetOf } = await import('../src/lib/visuals/budget.ts');
 const { routeKey } = await import('../src/lib/visuals/routes.ts');

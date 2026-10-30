@@ -6,20 +6,19 @@
 //      the port has;
 //   3. the types fit (ports.ts `fits`);
 //   4. every picture cycle passes through a Feedback (ports.ts `cyclesClosed`);
-// and, with --picture, the picture side: each one recorded in today's renderer and replayed through the v2 picture
-// graph (picture-lab.html, the harness of scripts/check-picture.mjs), frame by frame (`pictureCheck`).
+// (The picture side's replay against v1's renderer, --picture, went with that renderer in 0.9.19: the golden frames,
+// tests/golden-frames.test.ts, guard the picture since.)
 //
 //   node --experimental-strip-types --import ./tests/ts-resolve.mjs scripts/check-migration.mjs <file>… [--chains]
-//        [--picture] [--base http://localhost:5173] [--frames 150] [--bits 32] [--only name,name] [--json out.json]
+//        [--json out.json]
 //
 // A file is a device's kept settings (`{"cratarr-visuals": "<json>"}`, as localStorage holds them), the server's
 // snapshots (a JSON list of rows with `name` and `settings`, as `sqlite3 -json` gives them from visual_snapshot or
 // /api/visuals/snapshots answers), or one settings object. Each is read as the app reads it (settings.svelte.ts
-// `load`, Visuals.svelte `recall`). --chains adds the built-in chains and examples (chains.ts). The data stays where
+// `load`, Visuals.svelte `recall`). --chains adds the built-in chains and examples (tests/harness/oracle/chains.ts). The data stays where
 // it is: nothing here writes anywhere but --json's file. Exits 1 when a check fails.
 import { writeFileSync } from 'node:fs';
-import { gzipSync } from 'node:zlib';
-import { copy, openBrowser, readInputs } from './visuals-inputs.mjs';
+import { copy, readInputs } from './visuals-inputs.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -33,13 +32,8 @@ const flag = (name) => {
   if (i >= 0) args.splice(i, 1);
   return i >= 0;
 };
-const base = option('base', 'http://localhost:5173').replace(/\/$/, '');
-const frames = Number(option('frames', 150));
-const bits = option('bits', '32').split(',').map(Number);
-const only = option('only', '');
 const jsonOut = option('json', '');
 const withChains = flag('chains');
-const withPicture = flag('picture');
 const files = args;
 
 const src = '../src/lib/visuals/';
@@ -49,7 +43,7 @@ const { isRoute, keyNow, COLUMN_SCALES } = await import(`${src}routes.ts`);
 const { PRESET_KEYS } = await import(`${src}flame.ts`);
 const { EXTRA_TYPES } = await import(`${src}registry.ts`);
 const { ENGINE_MODULES, GRAPH_MODULES, showPartTypes, portsOf, fits, cyclesClosed, isDevice, SHOW_PARTS } = await import(`${src}ports.ts`);
-// The picture side's wiring (claude-632's, step 3), where this version has it: it installs itself into v2.ts.
+// The picture side's wiring (step 3), where this version has it: it installs itself into v2.ts.
 const wiring = await import(`${src}picture-wiring.ts`).catch(() => null);
 const { toV2, flatten } = await import(`${src}v2.ts`);
 
@@ -213,71 +207,6 @@ function check(input) {
   return { v2, f, fails, notes, reading: readingLosses(input.raw, v1), counts: { modules: f.modules.length, cables: f.cables.length, pictureCables: f.cables.filter((c) => c.id.startsWith('picture:')).length } };
 }
 
-// ---- The picture side (decision 0057 step 3): v1's renderer against the v2 picture graph -----------------------
-
-/** The picture lab's `current` pipeline draws the v2 patch of today's chain with the recording's extras and effects
- *  (picture-lab.ts); its values come from the recording. A replay stands for `v2` where the picture side of `v2` is
- *  that patch's: its picture modules and cables, their knobs. */
-function labStandsFor(v1, v2) {
-  const pictureSide = (patch) => {
-    const fp = flatten(patch);
-    const ids = new Set(fp.cables.filter((c) => c.id.startsWith('picture:')).flatMap((c) => [c.from.module, c.to.module]));
-    return { cables: fp.cables.filter((c) => c.id.startsWith('picture:')).map((c) => c.id).sort(), knobs: fp.modules.filter((m) => ['mix', 'feedback', 'screen'].includes(m.type) && ids.has(m.id)).map((m) => [m.id, m.knobs]) };
-  };
-  const lab = toV2({ ...copy(DEFAULTS), fx1: v1.fx1, fx2: v1.fx2, fx3: v1.fx3, extra: copy(v1.extra ?? emptyExtra()) });
-  const a = pictureSide(v2);
-  const b = pictureSide(lab);
-  const differs = [];
-  if (!same(a.cables, b.cables)) differs.push(`picture cables: ${a.cables.filter((x) => !b.cables.includes(x)).join(', ') || '-'} not in the lab's; ${b.cables.filter((x) => !a.cables.includes(x)).join(', ') || '-'} only in the lab's`);
-  if (!same(a.knobs, b.knobs)) differs.push(`picture modules' knobs: ${JSON.stringify(a.knobs)} vs the lab's ${JSON.stringify(b.knobs)}`);
-  return differs;
-}
-
-let browser = null;
-async function openLab() {
-  if (browser) return browser;
-  const b = await openBrowser(base);
-  // Recordings are served from here, not from the repo's tests/pictures (saved data stays out of the repo).
-  const recordings = new Map();
-  await b.serve('*/tests/pictures/migration-*', (url) => recordings.get(/migration-[^/?]+(?=\.json\.gz)/.exec(url)?.[0]));
-  browser = { ...b, served: recordings, lab: (query, ready) => b.open(`picture-lab.html?${query}`, 'pictureLab', ready) };
-  return browser;
-}
-
-/** The picture side of one conversion: `v1` recorded in today's renderer (the lab's `plain` scene with `v1`'s settings
- *  in its place) and replayed through the frozen v1 renderer (`legacy`) and the v2 picture graph (`current`), at each
- *  precision; their screens compared frame by frame. Needs a version with the picture graph (632/picture-graph's C5
- *  and after) and its dev server at --base. */
-async function pictureCheck(v1, v2, name) {
-  const differs = labStandsFor(v1, v2);
-  if (differs.length) return { ok: false, error: `the lab's v2 patch is not this one's: ${differs.join('; ')}` };
-  const b = await openLab();
-  const tag = `migration-${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`.slice(0, 60);
-  // The settings as a recall leaves them, the fewest points (SwiftShader draws on the CPU), thirty frames a second.
-  const kept = { ...copy(v1), quality: 0, fps: 30, keptForm: 3, pins: [...new Set([...v1.pins, ...PRESET_KEYS, ...BEHAVIOUR_PINS, ...BAND_PINS])].filter(isPinnable) };
-  const { identifier } = (await b.send('Page.addScriptToEvaluateOnNewDocument', {
-    source: `(() => { const set = Storage.prototype.setItem; const kept = ${JSON.stringify(JSON.stringify(kept))};
-      Storage.prototype.setItem = function (k, v) { return set.call(this, k, k === 'cratarr-visuals' && /record=/.test(location.search) && !window.__migrationSet ? (window.__migrationSet = true, kept) : v); }; })();`,
-  })).result;
-  try {
-    await b.lab(`record=plain&frames=${frames}`, 'l.request?.done');
-    const text = await b.js('JSON.stringify(window.pictureLab.request.recording)');
-    b.served.set(tag, gzipSync(text));
-    // The recording drew these settings, not the scene's: the page keeps what it shows.
-    const shown = JSON.parse((await b.js("localStorage.getItem('cratarr-visuals')")) ?? '{}');
-    const wrong = ['form', 'symmetry', 'final', 'intensity', 'speed', 'tunnel', 'fx1'].filter((k) => shown[k] !== v1[k]);
-    if (wrong.length) return { ok: false, error: `the recording did not draw these settings (${wrong.map((k) => `${k} ${shown[k]}, not ${v1[k]}`).join('; ')})` };
-  } finally {
-    await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
-  }
-  const results = [];
-  for (const precision of bits) {
-    await b.lab(`replay=${tag}&a=legacy&b=current&bits=${precision}`, 'l.result');
-    results.push(await b.js('window.pictureLab.result'));
-  }
-  return { ok: results.every((r) => r.max === 0), results };
-}
-
 // ---- Run ------------------------------------------------------------------------------------------------------
 
 const CHECKS = { dropped: 'nothing dropped', dangling: 'no dangling cable ends', fit: 'types fit', cycles: 'cycles closed' };
@@ -293,25 +222,8 @@ for (const input of inputs) {
   for (const x of r.reading) console.log(`    · read before the conversion: ${x}`);
   if (Object.values(r.fails).some((x) => x.length)) bad++;
   const entry = { name: input.name, kind: input.kind, counts: r.counts, fails: r.fails, notes: r.notes, reading: r.reading };
-  if (withPicture && (!only || only.split(',').some((o) => input.name.toLowerCase().includes(o.toLowerCase())))) {
-    if (!wiring) entry.picture = { ok: false, error: 'this version has no picture graph' };
-    else
-      try {
-        entry.picture = await pictureCheck(input.v1, r.v2, input.name);
-      } catch (e) {
-        entry.picture = { ok: false, error: String(e?.message ?? e) };
-      }
-    const pc = entry.picture;
-    if (pc.error) console.log(`  ✗ picture: ${pc.error}`);
-    for (const x of pc.results ?? []) {
-      const psnr = Number.isFinite(x.psnr) ? `${x.psnr.toFixed(1)} dB` : '∞';
-      console.log(`  ${x.max === 0 ? '✓' : '✗'} picture at ${x.precision.join('/')}: legacy vs current, ${x.frames} frames: max ${x.max}/255${x.max ? ` (frame ${x.worstFrame}, ${x.framesDiffering} differ)` : ''}, mean ${x.mean.toFixed(4)}, PSNR ${psnr}; lit ${x.lit.toFixed(1)}; tiles ${x.tiles.matched} matched, max ${x.tiles.max.toFixed(4)}; ${x.seconds.toFixed(0)} s`);
-    }
-    if (!pc.ok) bad++;
-  }
   report.push(entry);
 }
-browser?.close();
 if (jsonOut) writeFileSync(jsonOut, JSON.stringify(report, null, 2));
 console.log(`\n${bad ? `${bad} failing` : 'all passing'}`);
 process.exit(bad ? 1 : 0);

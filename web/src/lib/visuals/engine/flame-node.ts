@@ -109,7 +109,11 @@ export function stepFlameNode(st: FlameNodeState, o: FlameInputs): FlameView {
     // The cover's colours coming in for the same look: they blend over the look's time already running.
     const coverCame = !changed.length && st.madeColours.startsWith('cover/') && colours.startsWith('cover/') && st.from;
     const blend = o.glide ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === st.madeColours ? 0 : coverCame ? null : LOOK_MS);
-    if (blend && st.shown) {
+    // A change while an untimed blend is under way (a macro turning a choice, frame after frame) only moves where it is
+    // going: begun anew each frame from what shows, the look stood still until the knob did (0.9.19; the owner,
+    // 2026-10-29: continuous over discrete). A timed one (a new track's, the dice's, a step's) begins anew.
+    const blending = st.from !== null && o.at - st.blendStart < st.blendMs;
+    if (blend && st.shown && !(blending && o.glide === null)) {
       st.from = st.shown;
       st.blendStart = o.at;
       st.blendMs = blend;

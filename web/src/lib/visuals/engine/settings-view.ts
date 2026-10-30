@@ -13,6 +13,7 @@ import { SHOW_PARTS, type PatchV2 } from '../ports';
 import type { EffectSettings } from '../effects';
 import { COLUMN_SCALES } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
+import { asSet } from '../v2';
 
 /** Settings toV2 moved onto the engine's own modules (v2.ts MOVED): their module's type and knob. */
 const MOVED: Readonly<Record<string, [string, string]>> = { intensity: ['envelope', 'intensity'], flash: ['accent', 'accent'], speed: ['clock', 'speed'] };
@@ -24,11 +25,8 @@ const SHOW_PART = new Map(SHOW_PARTS.map((p) => [p.knob, p.type]));
  *  Amount and controls from the effect module standing for it (0057 §3, its macros in); a slot with none, none of it. */
 export function effectSlotsOf(p: PatchV2): EffectSettings {
   const out: Record<string, number> = {};
-  const read = (m: Module, knob: string) => {
-    let v = m.knobs[knob];
-    for (const x of p.macros) for (const t of x.targets) if (t.module === m.id && t.knob === knob) v = t.from + (t.to - t.from) * Math.min(1, Math.max(0, x.value));
-    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-  };
+  // As set: its macros' through the one rule (v2.ts asSet, macro-map.ts).
+  const read = (m: Module, knob: string) => asSet(p, m, knob);
   const effects = slotModules(p.modules);
   for (const slot of SLOT_IDS) {
     const names = SLOT_SETTINGS[slot];
@@ -52,11 +50,7 @@ export function settingsOfPatch(p: PatchV2, base: VisualSettings): VisualSetting
   const at = flame ? flame.id.slice(0, flame.id.lastIndexOf('/') + 1) : '';
   const inChain = (rel: string) => byId.get(at + rel);
   const out = { ...base } as unknown as Record<string, unknown>;
-  const read = (m: Module | undefined, knob: string) => {
-    let v = m?.knobs[knob];
-    for (const x of p.macros) for (const t of x.targets) if (m && t.module === m.id && t.knob === knob) v = t.from + (t.to - t.from) * Math.min(1, Math.max(0, x.value));
-    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-  };
+  const read = (m: Module | undefined, knob: string) => asSet(p, m, knob);
   for (const [setting, [module, knob]] of Object.entries(SETTING_KNOB)) {
     if (FOLDED.has(setting)) {
       out[setting] = 1;

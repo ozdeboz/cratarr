@@ -28,7 +28,7 @@
   import PatchGraph from './PatchGraph.svelte';
   import { LiveFaces } from './faces.svelte';
   import { helpFor } from './module-help';
-  import { applyPanel, type PanelEdit } from './patch-edits';
+  import { applyEdit, type RackEdit } from './patch-edits';
   import { cratarrTypes } from './patch';
   import { v2Types } from './picture-graph';
   import { exampleOf } from './examples';
@@ -176,8 +176,8 @@
   let preset = $state<string | null>(null);
   let presetPatch = $state.raw(visualsPatch.patch);
   const presetNow = $derived(visualsPatch.patch === presetPatch ? preset : null);
-  function panelEdit(e: PanelEdit, key: string | null) {
-    visualsPatch.change((p) => applyPanel(p, e, TYPES), key);
+  function panelEdit(e: RackEdit, key: string | null) {
+    visualsPatch.change((p) => applyEdit(p, e, TYPES), key);
     showChrome();
   }
   // The presets are the snapshot library's (the server's, every device's: the owner, "that snapshot library needs to
@@ -220,9 +220,7 @@
   const scopePinned = (s: Scope) => visualsPatch.patch.pins.includes(`scope:${s}`);
   function pinScope(s: Scope) {
     const id = `scope:${s}`;
-    visualsPatch.change((p) => {
-      p.pins = p.pins.includes(id) ? p.pins.filter((x) => x !== id) : [...p.pins, id];
-    }, null);
+    visualsPatch.change((p) => applyEdit(p, { kind: 'pinOne', scope: [], pin: id, on: !p.pins.includes(id) }, TYPES), null);
     showChrome();
   }
   const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables', response: 'Response', macros: 'Macros', colours: 'Colours', spatial: 'Spatial', lightness: 'Lightness' };

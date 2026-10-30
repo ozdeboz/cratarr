@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 const { DEFAULTS } = await import('../src/lib/visuals/settings.svelte.ts');
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { routeKey } = await import('../src/lib/visuals/routes.ts');
-const { CHAINS } = await import('../src/lib/visuals/chains.ts');
+const { CHAINS } = await import('./harness/oracle/chains.ts');
 type VisualSettings = typeof DEFAULTS;
 const copy = (s: VisualSettings): VisualSettings => JSON.parse(JSON.stringify(s));
 

@@ -247,6 +247,8 @@ const FINALS: Variation[] = [
  *  Cratarr lens is one to pick). */
 /** The lenses a track's look draws (the shapes' after them are chosen by hand). */
 export const DRAWN_FINALS = FINALS.indexOf(VARIATIONS.cratarr);
+/** The Lens module's lens (its Kind, 1 the first) as the variation it is (0.9.19: a picture through it). */
+export const lensWarpOf = (kind: number): Variation => FINALS[(((Math.round(kind) - 1) % FINALS.length) + FINALS.length) % FINALS.length];
 
 /** The finals' names, for the Lens setting (1 is the first). */
 export const LENSES = FINALS.map((v) => {
