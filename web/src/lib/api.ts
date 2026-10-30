@@ -405,8 +405,9 @@ export type CrateValue =
   | { kind: 'yes' }
   | { kind: 'any_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
-  // Sounds like its seeds (song ids): the `count` tracks that sound most like them.
-  | { kind: 'like'; of: string[]; count: number; fresh?: boolean; weights?: number[] };
+  // Sounds like its seeds (song ids; 0.11 albums' and artists', `al-…`, `ar-…`): the `count` tracks that sound most
+  // like them, at least `min` alike (0–100, the curve's scale), an artist seed's own tracks out unless `own`.
+  | { kind: 'like'; of: string[]; count: number; min?: number; own?: boolean; fresh?: boolean; weights?: number[] };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 /** `not_artists`: the artists left out of it by hand (0.10, decision 0083: "Not in this crate", an Artist-is-not row of
@@ -570,13 +571,14 @@ export type TempoBands = { bands: number[]; with_tempo: number; total: number };
 /** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve), and the profile
  *  of the closest `count` at every step its handle can stop at (the profile follows a drag). */
 export type LikeCurveData = { alike: number[]; profiles: { count: number; profile: ListProfileData }[] };
-export const likeCurve = (of: string[], source?: string, without?: string[], fresh = false, weights?: number[]) =>
+export const likeCurve = (of: string[], source?: string, without?: string[], fresh = false, weights?: number[], own = false) =>
   quietly<LikeCurveData>(
     `/api/like-curve?${new URLSearchParams({
       of: of.join(','),
       ...(source ? { source } : {}),
       ...(without?.length ? { without: without.join(',') } : {}),
       ...(fresh ? { fresh: 'true' } : {}),
+      ...(own ? { own: 'true' } : {}),
       ...(weights?.length ? { weights: weights.map((w) => +w.toFixed(3)).join(',') } : {}),
     })}`,
   );
@@ -2036,11 +2038,12 @@ export type AlbumView = {
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
-export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
+export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
+/** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed). */
 export type ServerSearch = {
   q: string;
-  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string })[] }>>;
-  top: (SearchResult & { track?: string })[];
+  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string; id?: string })[] }>>;
+  top: (SearchResult & { track?: string; id?: string })[];
 };
 /** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most), from `offset` on (a Show all's
  *  next page, decision 0076; a server before 0.9.13 answers from the start again). */

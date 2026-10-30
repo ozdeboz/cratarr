@@ -31,6 +31,8 @@
   import { visuals } from './lib/visuals/shown.svelte';
   import Crates from './Crates.svelte';
   import AboutSheet, { about } from './lib/AboutSheet.svelte';
+  import QuickCrateSheet from './lib/QuickCrateSheet.svelte';
+  import { quickCrates } from './lib/quickCrates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
   import { listening, resumeGroup } from './lib/groupListen.svelte';
@@ -1178,6 +1180,7 @@
   {/if}
 
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
+  {#if quickCrates.open}<QuickCrateSheet onclose={() => (quickCrates.open = false)} />{/if}
 
   {#if moreOpen}
     <!-- The page under the bar grown with the other pages dims; a tap there closes it. -->
