@@ -15,6 +15,9 @@ default = ["nfkd"]
 # The matcher reads names as search reads them (NFKD, marks dropped): in the crate for the server; the page's
 # WebAssembly leaves it to the browser (`--no-default-features`: its tables would be 100 KB of the page's first load).
 nfkd = ["dep:unicode-normalization"]
+# The WebAssembly modules (scripts/rules-wasm.sh): the brake for the page's first view, the matcher fetched later.
+wasm-brake = []
+wasm-matcher = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
