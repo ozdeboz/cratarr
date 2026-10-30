@@ -31,9 +31,10 @@ class CratarrDownloadService : DownloadService(
     override fun getForegroundNotification(downloads: MutableList<Download>, notMetRequirements: Int): Notification =
         notifications.buildProgressNotification(this, R.drawable.media3_notification_small_icon, null, null, downloads, notMetRequirements)
 
-    private companion object {
-        const val NOTIFICATION = 8
+    companion object {
+        private const val NOTIFICATION = 8
+        /** The downloads' notification channel; an export written as files (ExportFiles) shows on it too. */
         const val CHANNEL = "downloads"
-        const val JOB = 1
+        private const val JOB = 1
     }
 }
