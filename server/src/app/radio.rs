@@ -32,6 +32,7 @@ pub const LANE_AUTOPLAY: &str = "autoplay";
 /// Reshuffle are the modes from before the amendment, still taken from apps not yet updated.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename = "RadioMode")]
 pub enum Mode {
     /// Close to the seed on playlists, artist, genre, era and tags, weighed equally; drifts as the closest are played.
     #[default]
