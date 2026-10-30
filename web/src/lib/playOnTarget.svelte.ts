@@ -13,8 +13,9 @@ import { desktop } from './desktop';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
-import { canPlayHere, local, pageVolume, playOnCommand, rewindNow, stop } from './localPlayer.svelte';
-import { tapeDir } from './ramping.svelte';
+import { canPlayHere, local, pageVolume, playOnCommand, rewindNow, sought, stop } from './localPlayer.svelte';
+import { holdNow, tapeDir } from './ramping.svelte';
+import { measure, type Measured } from './drivenCourse';
 import { followGroup, leaveGroup, listening } from './groupListen.svelte';
 import { playOn, drivenName, hereAgain } from './playOn.svelte';
 import { followTo } from './output.svelte';
@@ -26,6 +27,9 @@ import { oneInFlight } from './oneInFlight';
 
 /** Every so often a report, even with nothing changed: the position, and that the page is still there. */
 const HEARTBEAT_MS = 5_000;
+/** While the tape winds or a hold runs: a report this often (one on its way at a time), as the app reports its deck, so
+ *  a device driving this one follows the wind as it goes, not only its start and its end (the owner, 2026-10-30). */
+const WIND_REPORT_MS = 250;
 /** After a connection that failed: again after this long, doubled each time, up to a minute. */
 const RETRY_MS = 5_000;
 /** Back from a sleep or a lost network (0.10; the owner, 2026-10-30: the ThinkPad came back a minute after its
@@ -184,6 +188,9 @@ let wakeUntil = 0;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let reportTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** This page's own place as last reported, and its speed measured from it (lib/drivenCourse). */
+let ownMeasured: Measured | null = null;
+
 /** The lines Cratarr has not had yet, one sending at a time (lib/oneInFlight). */
 const sendLog = oneInFlight(sendLogNow, (_was: string, now: string) => now);
 
@@ -202,7 +209,14 @@ async function sendReport(withQueue = false) {
   const t = index >= 0 ? own[index] : undefined;
   const s = sleep();
   const a = local.autoplay;
+  // Its speed while the tape winds or a hold runs, measured between its reports (lib/drivenCourse), and the hold's
+  // landing: what a device driving it counts on and zooms by (the owner, 2026-10-30: the tablet "doesn't show reality").
+  ownMeasured = measure(ownMeasured, { index: local.index, pos: local.position, at: performance.now() });
+  const moving = !idle && (rewindNow.on || holdNow.on);
+  const landing = !idle && holdNow.on && holdNow.landing !== null && holdNow.landingIndex !== null ? { index: holdNow.landingIndex, position_ms: Math.round(holdNow.landing * 1000), top_x: holdNow.top } : null;
   const body = {
+    ...(moving && ownMeasured.v !== null ? { speed_x: Math.round(ownMeasured.v * 1000) / 1000 } : {}),
+    ...(idle ? {} : { landing }),
     index,
     ...(t?.entry ? { entry: t.entry } : {}),
     ...(version !== undefined ? { version } : {}),
@@ -425,8 +439,16 @@ if (typeof window !== 'undefined' && !inApp) {
     // Every change reported at once: each of the report's fields but the position, which the heartbeat carries (the
     // architecture audit, 2026-10-29: winding, a ramp's start, Radio's by and count and the group's leader waited for it).
     $effect(() => {
-      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.radioBy, local.radioCount, local.autoplay, local.skipFavourites, local.starting, rewindNow.on, pageVolume.level, pageVolume.ducked, sleep(), prefs.output, listening.playing, listening.leader, tapeDir.want, prefs.levelling, prefs.levelUnknown, local.levelDb];
+      // A seek's jump too (`sought`, 2026-10-30: a seek's new place waited for the heartbeat, up to five seconds).
+      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.radioBy, local.radioCount, local.autoplay, local.skipFavourites, local.starting, rewindNow.on, holdNow.on, sought.n, pageVolume.level, pageVolume.ducked, sleep(), prefs.output, listening.playing, listening.leader, tapeDir.want, prefs.levelling, prefs.levelUnknown, local.levelDb];
       if (target.connected) reportSoon();
+    });
+    // Winding or holding: its place as it goes (WIND_REPORT_MS).
+    $effect(() => {
+      // Its own tape only: driving another, these are that one's (lib/localPlayer reportedBy), which reports itself.
+      if (!target.connected || elsewhere() || !(rewindNow.on || holdNow.on)) return;
+      const t = setInterval(() => report(), WIND_REPORT_MS);
+      return () => clearInterval(t);
     });
     // Sound has started: no need to ask for the tap any more.
     $effect(() => {
