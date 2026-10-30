@@ -304,7 +304,8 @@ pub fn keep_panics() {
     }));
 }
 
-/// The server's log, once opened.
+/// The server's log, once opened. Process-wide as the tracing layer that writes it is: it opens before anything else
+/// and outlives every request.
 pub fn get() -> Option<Arc<Diagnostics>> {
     LOG.get().cloned()
 }

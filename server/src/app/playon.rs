@@ -1602,7 +1602,9 @@ impl PlayOn {
         Ok(())
     }
 
-    /// The PlayOn of this Cratarr, once it is open.
+    /// The PlayOn of this Cratarr, once it is open. The app holds it (`App::play_on`) and the server is handed it
+    /// (`Serve::set_play_on`); this stays for the built-in Cratarr source, which plugins' rules leave without a handle,
+    /// and Playing, which is made before it.
     pub fn instance() -> Option<Arc<Self>> {
         INSTANCE.get().cloned()
     }

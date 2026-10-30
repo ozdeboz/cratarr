@@ -786,6 +786,11 @@ mod undo_tests {
 
     /// The service over an empty Music folder of its own, no servers, the journal and the crates in memory.
     async fn service() -> (PathBuf, PlaylistService) {
+        service_with(None).await
+    }
+
+    /// `service`, with Cratarr's own library as `main` hands it.
+    async fn service_with(served: Option<Arc<crate::serve::Serve>>) -> (PathBuf, PlaylistService) {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let d = std::env::temp_dir().join(format!("cratarr-undo-{}-{n}", std::process::id()));
@@ -795,7 +800,7 @@ mod undo_tests {
         let journal = Arc::new(Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
-        (d.join(crate::playlists::PLAYLIST_DIR), PlaylistService::new(lib, sync, journal, None))
+        (d.join(crate::playlists::PLAYLIST_DIR), PlaylistService::new(lib, sync, journal, served))
     }
 
     fn refused(r: Result<Option<String>, ToggleError>) -> String {
@@ -816,6 +821,24 @@ mod undo_tests {
         let like = crates::like_crate("like", "Like it", vec![preview], crates::LIKE_COUNT).conditions;
         assert!(matches!(s.crate_save(None, "Like it", like).await, Err(ToggleError::Refused(m)) if m == crate::bandcamp::NOT_KEPT));
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A service reads the library it was made with, not a global one (the audit, 0.9.19): two in one process, each
+    /// with its own, do not see each other's.
+    #[tokio::test]
+    async fn a_service_reads_its_own_library_and_not_another() {
+        let open = || crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        let (one, other) = (open(), open());
+        one.userdata.set_playlist_shared("Chill", true).unwrap();
+        let (d1, s1) = service_with(Some(one)).await;
+        let (d2, s2) = service_with(Some(other)).await;
+        let (d3, none) = service().await;
+        assert!(s1.shared_keys().contains("Chill"), "shared in its own library");
+        assert!(s2.shared_keys().is_empty(), "the other library shares nothing");
+        assert!(none.shared_keys().is_empty(), "nor does a service without one");
+        for d in [d1, d2, d3] {
+            std::fs::remove_dir_all(&d).ok();
+        }
     }
 
     #[tokio::test]

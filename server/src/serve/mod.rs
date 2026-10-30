@@ -62,6 +62,12 @@ pub fn set_instance(serve: Arc<Serve>) {
     }));
 }
 
+/// The server, for what has no handle to it. A request's code takes it from its `Ctx` (api.rs) or the service it holds
+/// (the app's `served`, `PlaylistService::served`); this stays for what is not handed one: the built-in Cratarr source
+/// (sources are made from their settings alone), work of its own started at boot (the passes that read the web, the
+/// artist store's), the playlist write hook above, and free functions reached from many places, where a parameter
+/// would run through dozens of signatures (the album edits run as tasks, Radio, the feature switches, signed links,
+/// the cover cache).
 pub fn instance() -> Option<Arc<Serve>> {
     INSTANCE.get().cloned()
 }
