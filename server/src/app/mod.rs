@@ -16,6 +16,7 @@ pub mod artists;
 pub mod audiomuse;
 pub mod beat_this;
 pub mod capabilities;
+pub mod changes;
 pub mod analysis_pass;
 pub mod analysis_import;
 mod collection;

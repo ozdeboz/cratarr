@@ -143,6 +143,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/status", get(status))
         // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.
         .route("/api/capabilities", get(capabilities))
+        .route("/api/changes", get(changes))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
         // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
@@ -3984,6 +3985,17 @@ async fn status(State(app): State<Arc<App>>) -> Json<StatusView> {
 /// switched on, names only (`app::capabilities`).
 async fn capabilities(ctx: Ctx) -> Result<Json<crate::app::capabilities::Capabilities>, ApiError> {
     Ok(Json(crate::app::capabilities::read(&ctx.app, ctx.served.clone()).await.map_err(ToggleError::from)?))
+}
+
+/// What changed since a device last looked (decision 0087): `?since=<rev>&kinds=playlist,favourite,rating,excluded`.
+#[derive(Deserialize)]
+struct ChangesQuery {
+    since: Option<i64>,
+    kinds: Option<String>,
+}
+
+async fn changes(ctx: Ctx, Query(q): Query<ChangesQuery>) -> Result<Json<crate::app::changes::Changes>, ApiError> {
+    Ok(Json(crate::app::changes::read(&ctx.app, ctx.serve()?, q.since, q.kinds.as_deref()).await?))
 }
 
 #[derive(Deserialize)]

@@ -52,12 +52,23 @@ static INSTANCE: std::sync::OnceLock<Arc<Serve>> = std::sync::OnceLock::new();
 
 pub fn set_instance(serve: Arc<Serve>) {
     let _ = INSTANCE.set(serve);
-    // Every playlist write: when its entries came is kept (the panel's Added order).
+    // Every playlist write: when its entries came is kept (the panel's Added order), and the change logged (decision
+    // 0087).
     crate::playlists::on_write(Box::new(|id, before, after| {
-        if let Some(s) = instance()
-            && let Err(e) = s.userdata.entries_written(id, before, after)
-        {
+        let Some(s) = instance() else { return };
+        if let Err(e) = s.userdata.entries_written(id, before, after) {
             tracing::warn!("playlist {id}: when its entries came not kept: {e:#}");
+        }
+        if let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::Changed) {
+            tracing::warn!("playlist {id}: its change not logged: {e:#}");
+        }
+    }));
+    // A playlist made, renamed, deleted or brought back: logged (decision 0087).
+    crate::playlists::on_named(Box::new(|id, there| {
+        if let Some(s) = instance()
+            && let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::of(there))
+        {
+            tracing::warn!("playlist {id}: its change not logged: {e:#}");
         }
     }));
 }

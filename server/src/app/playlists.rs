@@ -1703,6 +1703,7 @@ impl PlaylistService {
                     return Err(changed());
                 }
                 crates.set_excluded(before.clone()).await?;
+                self.excluded_tracks_changed();
                 Ok(Change::Excluded { before: after, after: before })
             }
             Change::Added { crate_id, before, after } => {
@@ -1847,6 +1848,22 @@ impl PlaylistService {
             }
         }
         Ok(out)
+    }
+
+    /// The asking account's playlists' folder as the change log keeps it (decision 0087): its name, '' the first
+    /// administrator's.
+    pub fn own_folder(&self) -> String {
+        asking_account(self.served.as_deref()).unwrap_or_default()
+    }
+
+    /// The asking account's tracks excluded everywhere changed: logged (decision 0087).
+    fn excluded_tracks_changed(&self) {
+        if let Some(serve) = self.served.as_deref()
+            && let Some(me) = serve.current_user()
+            && let Err(e) = serve.userdata.excluded_changed(&me, "tracks")
+        {
+            tracing::warn!("the tracks excluded: their change not logged: {e:#}");
+        }
     }
 
     /// Shares one's own playlist with everyone, or stops (decision 0051): they see it, play it and copy it.
@@ -2776,6 +2793,7 @@ impl PlaylistService {
             return Ok((after.len(), None));
         }
         store.set_excluded(after.clone()).await?;
+        self.excluded_tracks_changed();
         let undo = self.keep(Change::Excluded { before, after: after.clone() });
         Ok((after.len(), undo))
     }

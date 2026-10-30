@@ -1342,12 +1342,18 @@ impl UserData {
              ON CONFLICT (user, key) DO UPDATE SET name = excluded.name",
             params![user, key, name, now()],
         )?;
+        offline::log(&db, user, offline::ChangeKind::Excluded, "artists", offline::Op::Changed, false)?;
         Ok(!had)
     }
 
     /// An artist taken back off `user`'s list: picked again. Whether they were on it.
     pub fn include_artist(&self, user: &str, key: &str) -> Result<bool> {
-        Ok(self.db().execute("DELETE FROM excluded_artist WHERE user = ?1 AND key = ?2", params![user, key])? > 0)
+        let db = self.db();
+        let gone = db.execute("DELETE FROM excluded_artist WHERE user = ?1 AND key = ?2", params![user, key])? > 0;
+        if gone {
+            offline::log(&db, user, offline::ChangeKind::Excluded, "artists", offline::Op::Changed, false)?;
+        }
+        Ok(gone)
     }
 
     /// The artists `user` excluded everywhere, the newest first.
@@ -1705,6 +1711,8 @@ impl UserData {
         tx.execute("UPDATE playlist_entry SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         tx.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [to])?;
         tx.execute("UPDATE playlist_shared SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        // Logged again now its sharing moved with it (the store logged it before), so those it is shared with see it.
+        offline::log_playlist(&tx, to, offline::Op::Changed, false)?;
         tx.commit()?;
         Ok(())
     }
@@ -1736,10 +1744,18 @@ impl UserData {
     }
 
     pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<()> {
-        if on {
-            self.db().execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?;
+        let db = self.db();
+        let n = if on {
+            db.execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?
         } else {
-            self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?;
+            db.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?
+        };
+        // Others see it come or go (decision 0087); a playlist deleted (unshared as it goes) is not logged back.
+        let deleted = db
+            .prepare_cached("SELECT 1 FROM change_log WHERE kind = 'playlist' AND item = ?1 AND op = 'deleted'")?
+            .exists([playlist])?;
+        if n > 0 && !deleted {
+            offline::log_playlist(&db, playlist, offline::Op::Changed, true)?;
         }
         Ok(())
     }

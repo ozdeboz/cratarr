@@ -1,12 +1,13 @@
 //! What offline writes need kept (0.12, decision 0087): the plays counted, and the first answer to each change sent
 //! with a key, each for 30 days, so a play or a change a device sends again (late, after a restart) is counted or made
-//! once; and when each favourite and rating last changed, so an older change sent late does not undo a newer one.
+//! once; when each favourite and rating last changed, so an older change sent late does not undo a newer one; and the
+//! change log, so a device asks what changed since it last looked instead of reading everything again.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::UserData;
 
@@ -25,7 +26,20 @@ CREATE INDEX IF NOT EXISTS kept_answer_at ON kept_answer (at);
 CREATE TABLE IF NOT EXISTS change_at (
   account TEXT NOT NULL, kind TEXT NOT NULL, item TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (account, kind, item)) WITHOUT ROWID;
+-- The change log: one counter per server, never handed out again (AUTOINCREMENT: not even once its newest rows are
+-- pruned), and an item's latest change only (its earlier row goes). `account`: whose (a playlist's: its owner's
+-- folder, '' the first administrator's); `shared`: a playlist others see (shared then, or its sharing changed); `at`:
+-- when it was logged (epoch ms).
+CREATE TABLE IF NOT EXISTS change_log (
+  rev INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL, kind TEXT NOT NULL, item TEXT NOT NULL, op TEXT NOT NULL,
+  at INTEGER NOT NULL, shared INTEGER NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX IF NOT EXISTS change_log_item ON change_log (account, kind, item);
+-- The highest rev pruned: asked for changes since before it, a device reads everything again.
+CREATE TABLE IF NOT EXISTS change_log_floor (one INTEGER PRIMARY KEY CHECK (one = 1), rev INTEGER NOT NULL);
 ";
+
+/// The most rows the change log keeps; past them the oldest go, as do those older than `KEEP_SECS`.
+pub const LOG_MOST: i64 = 50_000;
 
 /// How long what is kept here is kept (s): a device gives a play or a change up after 30 days.
 pub const KEEP_SECS: i64 = 30 * 24 * 3600;
@@ -97,11 +111,100 @@ pub fn item_id(what: &str, source: &str, id: &str) -> String {
     format!("{what}:{source}/{id}")
 }
 
+/// One change as the log has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Logged {
+    pub rev: i64,
+    pub kind: ChangeKind,
+    /// As the log keeps it (a playlist's: its key, `Store::key`).
+    pub item: String,
+    pub op: Op,
+}
+
+/// What changed since a device last looked (`changes_since`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Since {
+    /// Not known from there (asked without a rev, from before what is kept, or from ahead of this server's counter):
+    /// read everything again, and go on from `rev`.
+    Reset { rev: i64 },
+    /// The changes after it, oldest first; `more`: ask again from `rev` (the last one's).
+    Changes { rev: i64, changes: Vec<Logged>, more: bool },
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// Whose a playlist key is (`Store::key`): its account's folder, '' the first administrator's.
+fn owner_of_key(key: &str) -> &str {
+    key.split_once('/').map_or("", |(account, _)| account)
+}
+
+/// A change logged in `conn` (inside the caller's transaction, where it has one): the item's earlier row replaced, a
+/// new rev handed out.
+pub(super) fn log(conn: &Connection, account: &str, kind: ChangeKind, item: &str, op: Op, shared: bool) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO change_log (account, kind, item, op, at, shared) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![account, kind.as_str(), item, op.as_str(), super::now_ms(), shared],
+    )?;
+    Ok(())
+}
+
+/// A playlist's change logged, seen by others while it is shared (`shared`: its sharing changed, so others see that).
+pub(super) fn log_playlist(conn: &Connection, key: &str, op: Op, shared: bool) -> Result<()> {
+    let shared = shared || conn.prepare_cached("SELECT 1 FROM playlist_shared WHERE playlist = ?1")?.exists([key])?;
+    log(conn, owner_of_key(key), ChangeKind::Playlist, key, op, shared)
+}
+
 impl UserData {
+    /// A playlist came (`Op::Changed`: made, written, renamed to it) or went (deleted, renamed away), by its key.
+    pub fn playlist_changed(&self, key: &str, op: Op) -> Result<()> {
+        log_playlist(&self.db(), key, op, false)
+    }
+
+    /// What `user` excluded everywhere changed: `tracks` or `artists`.
+    pub fn excluded_changed(&self, user: &str, what: &str) -> Result<()> {
+        log(&self.db(), user, ChangeKind::Excluded, what, Op::Changed, false)
+    }
+
+    /// The changes after `since` (none: `Reset`) that `user` may see, of these kinds, at most `most`: their own, and
+    /// the playlists of `folder` (their playlists' folder, '' the first administrator's) and those shared.
+    pub fn changes_since(&self, since: Option<i64>, user: &str, folder: &str, kinds: &[ChangeKind], most: usize) -> Result<Since> {
+        let db = self.db();
+        let rev: i64 = db
+            .query_row("SELECT seq FROM sqlite_sequence WHERE name = 'change_log'", [], |r| r.get(0))
+            .optional()?
+            .unwrap_or(0);
+        let floor: i64 = db.query_row("SELECT rev FROM change_log_floor WHERE one = 1", [], |r| r.get(0)).optional()?.unwrap_or(0);
+        let Some(since) = since.filter(|&s| s >= floor && s <= rev) else { return Ok(Since::Reset { rev }) };
+        if kinds.is_empty() {
+            return Ok(Since::Changes { rev, changes: Vec::new(), more: false });
+        }
+        // The kinds' names are this module's own, never what was asked: safe in the statement.
+        let kinds = kinds.iter().map(|k| format!("'{}'", k.as_str())).collect::<Vec<_>>().join(", ");
+        let mut st = db.prepare(&format!(
+            "SELECT rev, kind, item, op FROM change_log WHERE rev > ?1 AND kind IN ({kinds})
+               AND ((kind = 'playlist' AND (account = ?3 OR shared = 1)) OR (kind <> 'playlist' AND account = ?2))
+             ORDER BY rev LIMIT ?4"
+        ))?;
+        let rows = st.query_map(params![since, user, folder, most as i64 + 1], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+        })?;
+        let mut changes = Vec::new();
+        for row in rows {
+            let (rev, kind, item, op) = row?;
+            let Some(kind) = ChangeKind::of(&kind) else { continue };
+            changes.push(Logged { rev, kind, item, op: if op == Op::Deleted.as_str() { Op::Deleted } else { Op::Changed } });
+        }
+        let more = changes.len() > most;
+        changes.truncate(most);
+        let rev = match (more, changes.last()) {
+            (true, Some(last)) => last.rev,
+            _ => rev,
+        };
+        Ok(Since::Changes { rev, changes, more })
+    }
+
     /// Whether `account`'s `item` changed later than `at` (epoch ms) already: a write made at `at` then changes
     /// nothing. One at the same time is not older (the same write sent again).
     pub fn change_is_older(&self, account: &str, kind: ChangeKind, item: &str, at: i64) -> Result<bool> {
@@ -112,14 +215,17 @@ impl UserData {
     }
 
     /// `account`'s `item` changed (`op`) at `at` (epoch ms; the device's time, or now): kept as its last change unless
-    /// a later one is.
+    /// a later one is, and logged.
     pub fn mark_changed(&self, account: &str, kind: ChangeKind, item: &str, op: Op, at: i64) -> Result<()> {
-        let _ = op;
-        self.db().execute(
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute(
             "INSERT INTO change_at (account, kind, item, at) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (account, kind, item) DO UPDATE SET at = max(change_at.at, excluded.at)",
             params![account, kind.as_str(), item, at],
         )?;
+        log(&tx, account, kind, item, op, false)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -170,12 +276,26 @@ impl UserData {
         Ok(())
     }
 
-    /// Forgets what is kept here past its time (as of `now`, epoch s). Returns how many rows went.
+    /// Forgets what is kept here past its time (as of `now`, epoch s): older than `KEEP_SECS`, and the change log
+    /// past `LOG_MOST` rows, its floor raised to the last rev gone. Returns how many rows went.
     pub fn forget_old_offline(&self, now: i64) -> Result<usize> {
         let cut = now - KEEP_SECS;
-        let db = self.db();
-        let mut n = db.execute("DELETE FROM play_seen WHERE at < ?1", [cut])?;
-        n += db.execute("DELETE FROM kept_answer WHERE at < ?1", [cut])?;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut n = tx.execute("DELETE FROM play_seen WHERE at < ?1", [cut])?;
+        n += tx.execute("DELETE FROM kept_answer WHERE at < ?1", [cut])?;
+        n += tx.execute("DELETE FROM change_at WHERE at < ?1", [cut * 1000])?;
+        let old: Option<i64> = tx.query_row("SELECT max(rev) FROM change_log WHERE at < ?1", [cut * 1000], |r| r.get(0))?;
+        let many: Option<i64> =
+            tx.query_row("SELECT rev FROM change_log ORDER BY rev DESC LIMIT 1 OFFSET ?1", [LOG_MOST], |r| r.get(0)).optional()?;
+        if let Some(upto) = old.max(many) {
+            n += tx.execute("DELETE FROM change_log WHERE rev <= ?1", [upto])?;
+            tx.execute(
+                "INSERT INTO change_log_floor (one, rev) VALUES (1, ?1) ON CONFLICT (one) DO UPDATE SET rev = max(rev, excluded.rev)",
+                [upto],
+            )?;
+        }
+        tx.commit()?;
         Ok(n)
     }
 }
@@ -230,6 +350,63 @@ mod tests {
         assert!(!u.change_is_older("me", ChangeKind::Rating, &item, 150).unwrap(), "per kind");
         assert_eq!(ChangeKind::of("rating"), Some(ChangeKind::Rating));
         assert_eq!(ChangeKind::of("crate"), None);
+    }
+
+    fn changes(s: Since) -> (i64, Vec<(i64, &'static str, String, &'static str)>, bool) {
+        match s {
+            Since::Changes { rev, changes, more } => (rev, changes.into_iter().map(|c| (c.rev, c.kind.as_str(), c.item, c.op.as_str())).collect(), more),
+            Since::Reset { rev } => panic!("reset at {rev}"),
+        }
+    }
+
+    #[test]
+    fn the_change_log_gives_each_account_its_own_changes_and_the_playlists_it_sees() {
+        let u = UserData::open(None).unwrap();
+        let all = ChangeKind::ALL;
+        assert_eq!(u.changes_since(None, "me", "", &all, 10).unwrap(), Since::Reset { rev: 0 }, "asked without a rev: read everything");
+        let fav = item_id("track", "cratarr", "tr-1");
+        u.mark_changed("me", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 1
+        u.mark_changed("you", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 2
+        u.playlist_changed("Evening", Op::Changed).unwrap(); // 3: the first administrator's
+        u.playlist_changed("you/Morning", Op::Changed).unwrap(); // 4
+        u.excluded_changed("me", "tracks").unwrap(); // 5
+        let (rev, got, more) = changes(u.changes_since(Some(0), "me", "", &all, 10).unwrap());
+        assert_eq!(rev, 5);
+        assert!(!more);
+        assert_eq!(
+            got,
+            vec![(1, "favourite", fav.clone(), "changed"), (3, "playlist", "Evening".into(), "changed"), (5, "excluded", "tracks".into(), "changed")]
+        );
+        // Shared, another's playlist is seen; its sharing taken back is seen too, once.
+        u.set_playlist_shared("you/Morning", true).unwrap(); // 6
+        let (_, got, _) = changes(u.changes_since(Some(5), "me", "", &all, 10).unwrap());
+        assert_eq!(got, vec![(6, "playlist", "you/Morning".into(), "changed")]);
+        // Only the latest change of an item is kept: unstarred, the star's row goes.
+        u.mark_changed("me", ChangeKind::Favourite, &fav, Op::Deleted, 200).unwrap(); // 7
+        let (rev, got, _) = changes(u.changes_since(Some(0), "me", "", &[ChangeKind::Favourite], 10).unwrap());
+        assert_eq!((rev, got), (7, vec![(7, "favourite", fav.clone(), "deleted")]));
+        // At most `most` at once; the rest from the last one's rev.
+        let (rev, got, more) = changes(u.changes_since(Some(0), "me", "", &all, 2).unwrap());
+        assert_eq!((rev, got.len(), more), (5, 2, true));
+        let (rev, got, more) = changes(u.changes_since(Some(rev), "me", "", &all, 2).unwrap());
+        assert_eq!((rev, got.iter().map(|c| c.0).collect::<Vec<_>>(), more), (7, vec![6, 7], false));
+        // From ahead of the counter: read everything again.
+        assert_eq!(u.changes_since(Some(99), "me", "", &all, 10).unwrap(), Since::Reset { rev: 7 });
+    }
+
+    #[test]
+    fn the_change_log_is_pruned_by_age_and_a_rev_from_before_it_reads_everything_again() {
+        let u = UserData::open(None).unwrap();
+        u.excluded_changed("me", "tracks").unwrap(); // 1
+        u.excluded_changed("me", "artists").unwrap(); // 2
+        // Thirty days and a minute on, both are past their time.
+        let later = now() + KEEP_SECS + 60;
+        assert!(u.forget_old_offline(later).unwrap() >= 2);
+        assert_eq!(u.changes_since(Some(1), "me", "", &ChangeKind::ALL, 10).unwrap(), Since::Reset { rev: 2 });
+        assert_eq!(changes(u.changes_since(Some(2), "me", "", &ChangeKind::ALL, 10).unwrap()), (2, Vec::new(), false));
+        // The counter goes on, never handing out a rev again.
+        u.excluded_changed("me", "tracks").unwrap();
+        assert_eq!(changes(u.changes_since(Some(2), "me", "", &ChangeKind::ALL, 10).unwrap()).1[0].0, 3);
     }
 
     #[test]

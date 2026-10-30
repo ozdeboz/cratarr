@@ -19,6 +19,8 @@ pub const CODE: &[&str] = &[
     // Several playlists, albums or tracks in one call (0.9.4).
     "batches",
     "beyond_search",
+    // What changed since a rev (0.12, decision 0087): `/api/changes`.
+    "changes",
     "classical",
     "cover_look",
     "cover_stamps",
