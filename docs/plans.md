@@ -19,17 +19,20 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   *On trunk:* quick crates (the closeness curve counted among the crate's other words still to come), labels in
   search, the other-versions mark, the spike (done: one crossing per frame for 0075), the server's capabilities, the
   page served from a folder, and the apps' own pages ([whats-new-0.11](whats-new-0.11.md)).
-- **0.12: modes per server** (the External library below, taken up). Cratarr's mode is Cratarr's own library, its
-  libraries (Music, Incoming, each user's own) still switched on and off within it; each other server (a Jellyfin, a
-  Subsonic server) is a mode of its own, with its library and playlists, search and Cratarr's players, but no crates,
-  Discover, Insights or Requests. With it: Classical's works and movements (a composer, their works, each work's
-  recordings, movements grouped under their work).
-- **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)).
+- **0.12: Classical's works and movements** (a composer, their works, each work's recordings, movements grouped under
+  their work), with offline first's steps 2 and 3 whole beside it: Downloads an offline shelf, and nothing done offline
+  lost, playlist edits included (the server's change log; below). Modes per server moved to 0.13 (the owner,
+  2026-10-30: deferred, the change log pulled forward instead).
+- **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and modes per server** (the External
+  library below, taken up). Cratarr's mode is Cratarr's own library, its libraries (Music, Incoming, each user's own)
+  still switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
+  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
-  apps carry their own pages (beside 0.11); Downloads an offline shelf, and nothing done offline lost (beside 0.12);
-  the whole library's index on the device (beside 0.13); crates and the queue on the device (0.14).
+  apps carry their own pages (beside 0.11); Downloads an offline shelf, and nothing done offline lost,
+  playlist edits included (beside 0.12); the whole library's index on the device (beside 0.13, after modes); crates and
+  the queue on the device (0.14).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
 
 ## External library
