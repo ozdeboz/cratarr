@@ -79,6 +79,9 @@ The `.deb` depends on electron-builder's list plus what Electron needs that it l
 - `copy-icons.js`: the web app's icons, copied in at 0644 (a copy keeps its checkout's mode).
 - `after-pack.js`: before packing, the app's files writable by their owner alone. Electron's own come out of its archive
   writable by anyone, and a package installs them as they are.
+- `after-install.tpl`: the `.deb`'s after-install, electron-builder's own with one step more: a copy still running
+  from the replaced files is told to quit (killed if it does not) and started again from the new ones, in its user's
+  session and as hidden as it was.
 - `check-deb.js`: after the packages are made, each `.deb`'s list read; any entry writable by group or others stops
   the build. `npm run dist` builds under `umask 022`.
 - `check-no-house.js`: the check before each build; a house's own names come from `CRATARR_HOUSE_PATTERNS`, so they

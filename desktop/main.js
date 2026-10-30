@@ -66,6 +66,29 @@ let win = null;
 let tray = null;
 let quitting = false;
 
+/** How long a quit may take to close its window before the app ends anyway (ms). */
+const QUIT_GRACE = 3_000;
+let quitTimer = null;
+/** Quitting, however asked (the tray, the menu, a signal, the system), ends the app, never hangs it (0.10.1: while apt
+ *  replaced the app's files, the running copy's Quit did nothing and it ignored SIGTERM until killed). The window's
+ *  close is let through (`quitting`), its place kept now rather than in a close that may never come; a window whose
+ *  page does not answer (its renderer gone or stuck, its files replaced under it) cannot hold the quit: after
+ *  QUIT_GRACE the app exits. Nothing here is loaded at quit time. */
+function beginQuit() {
+  quitting = true;
+  if (quitTimer) return;
+  quitTimer = setTimeout(() => app.exit(0), QUIT_GRACE);
+  try {
+    if (win && !win.isDestroyed()) writeSettings({ bounds: win.getNormalBounds() });
+  } catch {
+    /* the place is not worth a hang */
+  }
+}
+function quitNow() {
+  beginQuit();
+  app.quit();
+}
+
 const sameOrigin = (url) => {
   try {
     return !!origin && new URL(url).origin === origin;
@@ -120,11 +143,11 @@ function menus() {
   const server = { label: 'Change server…', click: changeServer };
   // The tray's Quit without a shortcut: a tray's menu has none on Linux (GTK complains of each).
   tray?.setContextMenu(
-    Menu.buildFromTemplate([{ label: 'Show Cratarr', click: show }, server, login, { type: 'separator' }, { label: 'Quit Cratarr', click: () => app.quit() }]),
+    Menu.buildFromTemplate([{ label: 'Show Cratarr', click: show }, server, login, { type: 'separator' }, { label: 'Quit Cratarr', click: quitNow }]),
   );
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { label: 'Cratarr', submenu: [server, login, { type: 'separator' }, { role: 'quit' }] },
+      { label: 'Cratarr', submenu: [server, login, { type: 'separator' }, { label: 'Quit Cratarr', accelerator: 'CmdOrCtrl+Q', click: quitNow }] },
       {
         label: 'View',
         submenu: [
@@ -181,10 +204,14 @@ function createWindow() {
     if (!HIDDEN) win.show();
   });
   win.on('close', (event) => {
-    writeSettings({ bounds: win.getNormalBounds() });
-    // Closed, it keeps playing and stays a player, in the tray; Quit (there or in the menu) ends it.
+    // Closed, it keeps playing and stays a player, in the tray; Quit (there, in the menu, a signal) ends it.
     if (!quitting && tray) {
       event.preventDefault();
+      try {
+        writeSettings({ bounds: win.getNormalBounds() });
+      } catch {
+        /* kept the next time */
+      }
       win.hide();
     }
   });
@@ -207,7 +234,7 @@ function createWindow() {
   });
   win.webContents.on('did-finish-load', () => (retry = 5_000));
   win.webContents.on('render-process-gone', (_event, details) => {
-    if (details.reason !== 'clean-exit') win?.webContents.reload();
+    if (details.reason !== 'clean-exit' && !quitting) win?.webContents.reload();
   });
   if (origin) win.loadURL(origin + '/');
   else win.loadFile(path.join(__dirname, 'setup.html'));
@@ -248,7 +275,11 @@ ipcMain.handle('connect', async (event, address) => {
 
 if (first) {
   app.on('second-instance', show);
-  app.on('before-quit', () => (quitting = true));
+  // Every quit, the system's too (a log-out, an updater), with the same bound on how long it may take.
+  app.on('before-quit', beginQuit);
+  // A signal (the package's after-install, a log-out, `kill`): a quit like the tray's, never a close that goes to the
+  // tray and is lost.
+  for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(s, quitNow);
   app.whenReady().then(() => {
     // Woken or unlocked (0.10; the owner, 2026-10-30: the ThinkPad's player came back a minute after its Wi-Fi): the
     // page reconnects at once instead of waiting out a dead connection or its retry.

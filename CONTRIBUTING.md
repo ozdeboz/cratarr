@@ -35,7 +35,8 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 ## Proposing a change
 
 - For anything beyond a fix, open an issue first, so the decision behind it can be talked through before the work.
-- Send a pull request against `main`, one task each, with `main` brought in and the checks above run.
+- Send a pull request against `main`, one task each, with the checks above run. `main` is the last release, so a
+  change made on it fits the release it names.
 - **Commits**: one subject line that says what changed for the person using Cratarr, then why, and anything a reader
   of the code later needs: what was measured, what was tried and dropped, which decision it follows. Tests that pin
   the behaviour come in the same commit as the change.
@@ -46,7 +47,8 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 
 ## How the repository is kept
 
-- `main` is what was released, and moves only at a release.
+- `main` is what was released, and moves only at a release. GitHub's `main` gets one commit per release, its tree the
+  release's, made with `git commit-tree`; no development branch is published.
 - `trunk` is the development branch: the next feature release (0.11 while 0.10 is out). It holds all of Cratarr: the
   server, the web app, the Android and desktop apps and the docs.
 - `release/X.Y` holds a released version and its fixes only (`release/0.10`: 0.10.0, 0.10.1, …). It is cut from `trunk`
@@ -58,10 +60,18 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 
   A branch comes back with a merge, never as a copy of its files (no cherry-picks either), so the history tells what is
   where. There the pieces are checked together and run on a real install before they are released. A working branch
-  takes its own base (`trunk` or its release branch) back in whenever it needs what landed there. A pull request
-  against `main` is brought onto `trunk` (a feature) or the release branch (a fix) the same way.
+  takes its own base (`trunk` or its release branch) back in whenever it needs what landed there.
+- A pull request: GitHub's `main` shares no history with `trunk` (it is one commit per release), so its change is taken
+  onto `trunk` (a feature) or the release branch (a fix) as a commit of its own, its author kept, and comes back to
+  `main` with the next release.
+- What makes a fix and what a new version is not which part it touches, but whether stepping back undoes it:
+  - a fix (X.Y.Z+1), in any part (the server, the web app, the apps), mends what is there: no change to the data
+    kept on disk (no migration), nothing an app or page of the same X.Y would misread in what the API sends or expects,
+    no new feature. The release before it can always be gone back to without losing anything;
+  - a new version (X.Y+1.0) is everything else: new features, changed behaviour, migrations, changes between the
+    server and its apps. A fix that would need a migration goes there, or is made without one.
 - A release is its branch checked as a whole, with the version raised in one commit (`scripts/version.sh`: plain
-  `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and brought onto `main`.
+  `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and put on `main` as one commit.
   - A new version (X.Y.0) is made on `trunk`, and `release/X.Y` is cut there.
   - A fix (X.Y.Z) is made on `release/X.Y`.
   - The tag builds the image for amd64 and arm64 and makes the GitHub release

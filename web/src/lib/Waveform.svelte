@@ -17,8 +17,8 @@
   // One path per layer, redrawn per frame only while something moves (hundreds of animated shapes ran poorly).
   import { untrack } from 'svelte';
   import { reducedMotion } from './motion';
-  import { bars, barsIn } from './waveforms.svelte';
-  import { coverOf, placeOf, serves, STRIP_SPAN, type Drawn } from './waveStrip';
+  import { bars } from './waveforms.svelte';
+  import { coverOf, gridBars, placeOf, serves, STRIP_SPAN, type Drawn } from './waveStrip';
 
   let {
     bins,
@@ -156,16 +156,22 @@
     want !== 'wave'
       ? null
       : wide
-        ? { bins: wide.bins, from: wide.from, to: wide.to, contrast: 0, marks: wide.marks }
+        ? { bins: wide.bins, from: wide.from, to: wide.to, contrasted: false, marks: wide.marks }
         : bins && view
-          ? { bins, from: view.from, to: view.to, contrast: Math.min(1, (1 - (view.to - view.from)) * 4), marks: [] as number[] }
+          ? { bins, from: view.from, to: view.to, contrasted: true, marks: [] as number[] }
           : null,
   );
   /** The strip as drawn: the stretch of the source it covers (`e0`..`e1`), the stretch shown's width then (`w0`), its
    *  pieces (`count`), its paths as made and as heard (at `level`), the boundaries in it, and its heard path track by
    *  track (`played`, the `k`th track's pieces: each its own colour, none crossing a boundary). */
-  type Strip = Drawn & { bins: Uint8Array; count: number; level: number; made: string; heard: string; marks: number[]; played: { k: number; d: string }[] };
+  type Strip = Drawn & { id: number; fade: boolean; bins: Uint8Array; count: number; level: number; made: string; heard: string; marks: number[]; played: { k: number; d: string }[] };
   let strip = $state<Strip | null>(null);
+  /** The strip before, under a new one of another scale or source as that fades in (0.10.1: its bars are others, the
+   *  same scale's are the same where both have them). */
+  let gone = $state<Strip | null>(null);
+  const FADE_MS = 180;
+  let goneTimer = 0;
+  let strips = 0;
   /** A strip's piece, open and risen to its height (the plain draw's at gap 1), at `level`. */
   const piece = (i: number, rise: number, level: number) => {
     const h = LOW + rise * level;
@@ -185,9 +191,9 @@
     }
     return out;
   }
-  /** The `k`th track's colour in a wide view: its cover's (lib/accents), else the app's accent; none in a zoom on one
-   *  track, which has the player's. */
-  const colourOf = (k: number) => (wide?.colours ? (wide.colours[k] ?? 'var(--accent)') : undefined);
+  /** The `k`th track's colour in a wide view (lib/waveView's waveColours): another track's own; none for the track the
+   *  player shows and in a zoom on one track, which have the player's, as the waveform has it anyway (0.10.1). */
+  const colourOf = (k: number) => wide?.colours?.[k] ?? undefined;
   $effect.pre(() => {
     const s = stretch;
     const count = n * STRIP_SPAN;
@@ -195,17 +201,27 @@
     untrack(() => {
       if (!s) return void (strip = null);
       if (strip && strip.bins === s.bins && strip.count === count && strip.level === level && serves(strip, s.from, s.to)) return;
-      const cover = coverOf(s.from, s.to);
-      const hs = barsIn(s.bins, count, cover.e0, cover.e1, s.contrast).map((v) => Math.max(LOW, v * 100) - LOW);
-      strip = { ...cover, bins: s.bins, count, level, made: stripPath(hs, 1), heard: stripPath(hs, level), marks: s.marks, played: byTrack(hs, level, cover, s.marks) };
+      const cover = coverOf(s.from, s.to, count);
+      // Its range its own from a quarter zoomed in on, by the scale's step (not the width this frame: the same step's
+      // bars the same).
+      const contrast = s.contrasted ? Math.max(0, Math.min(1, (1 - cover.w0) * 4)) : 0;
+      const hs = gridBars(s.bins, cover, count, contrast, count / STRIP_SPAN / 2).map((v) => Math.max(LOW, v * 100) - LOW);
+      const was = strip;
+      const fade = !!was && !reducedMotion() && (was.w0 !== cover.w0 || was.bins !== s.bins);
+      clearTimeout(goneTimer);
+      gone = fade ? was : null;
+      if (fade) goneTimer = window.setTimeout(() => (gone = null), FADE_MS);
+      strip = { ...cover, id: ++strips, fade, bins: s.bins, count, level, made: stripPath(hs, 1), heard: stripPath(hs, level), marks: s.marks, played: byTrack(hs, level, cover, s.marks) };
     });
   });
-  /** Where the strip stands now: slid and scaled so that the stretch shown fills the waveform. */
-  const stripAt = $derived.by(() => {
-    if (!strip || !stretch) return null;
-    const { x, k } = placeOf(strip, stretch.from, stretch.to, width);
+  /** Where a strip stands now: slid and scaled so that the stretch shown fills the waveform. */
+  const atOf = (d: Drawn | null) => {
+    if (!d || !stretch) return null;
+    const { x, k } = placeOf(d, stretch.from, stretch.to, width);
     return `translateX(${f(x)}px) scaleX(${k.toFixed(4)})`;
-  });
+  };
+  const stripAt = $derived(atOf(strip));
+  const goneAt = $derived(atOf(gone));
 
   // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);
@@ -356,6 +372,7 @@
   $effect(() => () => {
     cancelAnimationFrame(raf);
     clearTimeout(pending);
+    clearTimeout(goneTimer);
   });
 
   const f = (x: number) => Math.round(x * 100) / 100;
@@ -396,24 +413,21 @@
 </script>
 
 <div class="wave" class:paused bind:clientWidth={width} bind:clientHeight={height} aria-hidden="true">
-  {#if strip && stripAt}
-    <!-- A hold's zoom or wide view: the strip slides and scales under clips that stand still (the played colour to the
-         playhead, the landing's tint), its boundaries going with it. -->
-    <div class="layer"><svg class="strip" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}><path d={output ? strip.heard : strip.made} /></svg></div>
+  {#snippet layers(s: Strip, at: string)}
+    <div class="layer"><svg class="strip" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}><path d={output ? s.heard : s.made} /></svg></div>
     <div class="layer" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
-      <svg class="strip played" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}>
-        {#each strip.played as p (p.k)}<path d={p.d} style:--seg={colourOf(p.k)} />{/each}
+      <svg class="strip played" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}>
+        {#each s.played as p (p.k)}<path d={p.d} style:--seg={colourOf(p.k)} />{/each}
       </svg>
     </div>
     {#if band && band[1] > band[0]}
       <div class="layer" style:clip-path={`inset(0 ${(1 - band[1]) * 100}% 0 ${band[0] * 100}%)`}>
-        <svg class="strip ahead" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}><path d={strip.heard} /></svg>
+        <svg class="strip ahead" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}><path d={s.heard} /></svg>
       </div>
     {/if}
-    {#if strip.marks.length}
-      {@const s = strip}
+    {#if s.marks.length}
       <div class="layer marks">
-        <div class="strip-marks" style:transform={stripAt}>
+        <div class="strip-marks" style:transform={at}>
           {#each s.marks as m (m)}
             {@const x = (m - s.e0) / (s.e1 - s.e0)}
             {#if x > 0 && x < 1}<span class="edge" style:left="{x * 100}%"></span>{/if}
@@ -421,6 +435,12 @@
         </div>
       </div>
     {/if}
+  {/snippet}
+  {#if strip && stripAt}
+    <!-- A hold's zoom or wide view: the strip slides and scales under clips that stand still (the played colour to the
+         playhead, the landing's tint), its boundaries going with it; one of another scale fades in over the one before. -->
+    {#if gone && goneAt}<div class="strips">{@render layers(gone, goneAt)}</div>{/if}
+    {#key strip.id}<div class="strips" class:fade={strip.fade}>{@render layers(strip, stripAt)}</div>{/key}
   {:else}
   <!-- The track as made, in the unplayed tint; over it, as far as it has played, the track as heard in the playing
        colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
@@ -499,6 +519,22 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
+  }
+
+  .strips {
+    position: absolute;
+    inset: 0;
+  }
+
+  /* FADE_MS. */
+  .strips.fade {
+    animation: strip-in 180ms linear both;
+  }
+
+  @keyframes strip-in {
+    from {
+      opacity: 0;
+    }
   }
 
   svg.strip {

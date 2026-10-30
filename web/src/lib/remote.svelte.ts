@@ -27,15 +27,44 @@ export const moving = () => port().moving();
 // Cover: the library's cover file for a library track; otherwise (or when there is none) the album's image from the
 // server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped.
 const failed = $state<Record<string, boolean>>({});
-export function coverSrc(): string | null {
-  const np = playing();
-  if (!np) return null;
-  const library = coverUrl(np);
-  const album = np.album_id ? albumCoverUrl(np.source, np.album_id) : null;
-  const candidates = (np.addable ? [library, album] : [album, library]).filter((u): u is string => !!u);
+function coverFor(t: { source: string; id: string; album_id: string | null; addable: boolean }): string | null {
+  const library = coverUrl(t);
+  const album = t.album_id ? albumCoverUrl(t.source, t.album_id) : null;
+  const candidates = (t.addable ? [library, album] : [album, library]).filter((u): u is string => !!u);
   return candidates.find((u) => !failed[u]) ?? null;
 }
+export function coverSrc(): string | null {
+  const np = playing();
+  return np ? coverFor(np) : null;
+}
 export const coverFailed = (src: string) => (failed[src] = true);
+
+// Covers ready ahead (the owner, 2026-10-30: Next within an album darkened the cover and turned the ring, though what
+// comes next and what came before are known): the next track's cover and the one before are loaded and decoded while
+// this one plays, and the last few shown are kept, so Next and Previous show theirs at once. Held here, so the browser
+// keeps them decoded.
+const WARM_KEEP = 4;
+const warm = new Map<string, HTMLImageElement>();
+const warming = new Set<string>();
+function keepWarm(src: string, img: HTMLImageElement) {
+  warm.delete(src);
+  warm.set(src, img);
+  while (warm.size > WARM_KEEP) warm.delete(warm.keys().next().value!);
+}
+$effect.root(() => {
+  $effect(() => {
+    const np = playing();
+    const next = np?.upcoming[0];
+    const before = live.before;
+    for (const want of [next && coverFor({ ...next, source: np!.source }), before && coverFor(before)]) {
+      if (!want || warm.has(want) || warming.has(want)) continue;
+      warming.add(want);
+      const img = new Image();
+      img.src = want;
+      img.decode().then(() => keepWarm(want, img), () => coverFailed(want)).finally(() => warming.delete(want));
+    }
+  });
+});
 
 // The cover shown: a new one takes the old one's place only once it is loaded and decoded, so a track change never
 // shows a frame without a cover, and the same picture at another track's address shows no change at all. A cover
@@ -53,12 +82,20 @@ $effect.root(() => {
       return;
     }
     if (want === untrack(() => shown.src)) return void (shown.coming = null);
+    const ready = warm.get(want);
+    if (ready) {
+      keepWarm(want, ready);
+      shown.src = want;
+      shown.coming = null;
+      shown.late = false;
+      return;
+    }
     let current = true;
     shown.coming = want;
     const img = new Image();
     img.src = want;
     img.decode().then(
-      () => current && ((shown.src = want), (shown.coming = null), (shown.late = false)),
+      () => current && (keepWarm(want, img), (shown.src = want), (shown.coming = null), (shown.late = false)),
       () => current && ((shown.coming = null), coverFailed(want)),
     );
     const late = setTimeout(() => current && shown.coming === want && ((shown.src = null), (shown.coming = null), (shown.late = true)), COVER_GIVE_UP_MS);
@@ -357,8 +394,9 @@ export async function toggleFavorite() {
 
 // The colour taken from the cover (decision 0018, as Finamp's player): its most vivid colour, made readable against
 // the player's background (the cover under a dark veil, or a light one in the light theme). null: a grey cover, or
-// not known yet; the theme's accent applies then.
-export const art = $state<{ accent: string | null }>({ accent: null });
+// not known yet; the theme's accent applies then. `of`: the cover it was taken from (a new cover's comes a moment after
+// the cover shows: until then the accent is still the one before's).
+export const art = $state<{ accent: string | null; of: string | null }>({ accent: null, of: null });
 let artFor: string | null = null;
 
 $effect.root(() => {
@@ -368,6 +406,7 @@ $effect.root(() => {
     artFor = src;
     if (!src) {
       art.accent = null;
+      art.of = null;
       return;
     }
     const img = new Image();
@@ -379,8 +418,9 @@ $effect.root(() => {
       } catch {
         art.accent = null; // an image the page may not read
       }
+      art.of = src;
     };
-    img.onerror = () => artFor === src && (art.accent = null);
+    img.onerror = () => artFor === src && ((art.accent = null), (art.of = src));
     img.src = src;
   });
 });
