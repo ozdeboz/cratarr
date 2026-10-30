@@ -271,8 +271,8 @@
           {#each files as f (f.path)}
             <MenuEntry
               icon="intoBox"
-              label={f.title ? `${f.track_no ? `${f.track_no}. ` : ''}${f.title}` : f.name}
-              sub={[f.artist, f.album, f.duration_secs ? clock(f.duration_secs * 1000) : null, mb(f.bytes)].filter(Boolean).join(' · ')}
+              label={f.title ? `${f.trackNo ? `${f.trackNo}. ` : ''}${f.title}` : f.name}
+              sub={[f.artist, f.album, f.durationSecs ? clock(f.durationSecs * 1000) : null, mb(f.bytes)].filter(Boolean).join(' · ')}
               onclick={() => void take(f)}
             />
           {:else}
