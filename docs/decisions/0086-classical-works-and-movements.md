@@ -43,17 +43,23 @@ Design choices made here:
 - **The capability `works`** (0085): the server lists it once it serves the endpoints below. Without it the composer's
   page is its records alone and albums are plain lists, as in 0.11; nothing is offered that the server cannot answer.
 
-## The API (a5's draft)
+## The API (a5's, written 2026-10-30)
 
-- `GET /api/composers/{key}/works` → `[{work, title, key?, catalogue?, parts, recordings}]`: the composer's top-level
-  works (`work` its MusicBrainz id; `key` its musical key; `catalogue` its catalogue number), with how many parts it
-  has and how many recordings the library holds.
+- `GET /api/classical/composers/{key}/works` → `[{work, title, key?, catalogue?, parts, recordings}]`, beside 0.10's
+  composer routes: the composer's top-level works (`work` its MusicBrainz id; `key` its musical key; `catalogue` its
+  catalogue number), with how many parts it has and how many recordings the library holds; most recorded first, then
+  by title (numbers by value); 404 when no classical record has that composer.
 - `GET /api/works/{mbid}` → `{title, composers: [{key, name}], parent?: {mbid, title}, parts: [{mbid, title,
   number}], recordings: [{album_id, album, performers: [..], year, tracks: [{id, part?, duration_secs?}]}]}`; 404 for a
-  work the library does not hold. `duration_secs` is the page's ask, for a recording's length.
-- An album's rows (`GET` of an album's tracks) gain `work?: {mbid, title, parent?: {mbid, title}, part_number?}`.
-- The data: the MusicBrainz work lookup gains `work-rels`, so a movement's parent is kept with the work (asked at
-  MusicBrainz's pace: parts fill in over days, which the grouping above copes with).
+  work the library does not hold. `duration_secs` is the page's ask, for a recording's length. Recordings oldest first, tracks in
+  movement order; a movement's mbid opens its parent.
+- An album's rows (`GET` of an album's tracks) gain `work?: {mbid, title, parent?: {mbid, title}, part_number?}`, on
+  every album of Cratarr's library where a work is known, not only Classical ones (the grouping rule holds the same).
+- The data: MusicBrainz's per-release question already carries each work's parent (its "parts" relation, with its
+  ordering), so no new question is asked; releases stored before are asked again at the normal pace, about 2 to 4
+  hours for the library, which the grouping above copes with. One level of parent only: an opera aria's parent is its
+  act, so an opera's acts show as works of their own on the composer's page until a per-work question adds the level
+  above.
 
 ## Consequences
 
