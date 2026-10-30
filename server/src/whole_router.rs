@@ -20,7 +20,7 @@ fn named_routes() -> Vec<(String, Vec<Method>)> {
             let p = e.path();
             if p.is_dir() {
                 dirs.push(p);
-            } else if p.extension().is_some_and(|x| x == "rs") {
+            } else if p.extension().is_some_and(|x| x == "rs") && p.file_name().is_some_and(|n| n != "whole_router.rs") {
                 files.push(p);
             }
         }
@@ -35,6 +35,9 @@ fn named_routes() -> Vec<(String, Vec<Method>)> {
             rest = &rest[at + 8..];
             let Some(end) = rest.find('"') else { break };
             let path = rest[..end].to_string();
+            if !path.starts_with('/') {
+                continue;
+            }
             let call = &rest[end..rest[end..].find(".route(\"").map_or(rest.len(), |n| end + n)];
             let methods: Vec<Method> = [("get(", Method::GET), ("post(", Method::POST), ("put(", Method::PUT), ("delete(", Method::DELETE), ("patch(", Method::PATCH)]
                 .into_iter()
