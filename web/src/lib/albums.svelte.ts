@@ -1,12 +1,13 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
 import { trackSteps } from './progress.svelte';
+import { favouriteOf } from './changeLog';
+import { on } from './events.svelte';
 import { leavePlayer } from './navStep.svelte';
 import {
   albumView,
   getAlbumRating,
   getAlbums,
   getAlbumUses,
-  playAlbum,
   setAlbumRating,
   type AlbumsView,
   type AlbumUse,
@@ -15,10 +16,10 @@ import {
   ApiError,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
-import { player, untilNewTrack } from './live.svelte';
+import { player } from './live.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playAlbumHere, playPlaylistFrom } from './output.svelte';
-import { port } from './player/port.svelte';
+import { choosePlayer, port } from './player/port.svelte';
 import { artistSubject, viewOver } from './panel.svelte';
 import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
@@ -88,15 +89,12 @@ export function albumOfDownload(t: DownloadedTrack): string | null {
 /** The album being started (its Play buttons wait meanwhile). */
 export const albumPlay = $state({ starting: null as string | null });
 
-/** Plays an album: here when the output is this browser (decision 0022), else on the server's player. */
+/** Plays an album where the page plays (decision 0022); with no player to play on, it says so (0.12). */
 export async function playListedAlbum(source: string, a: Pick<ListedAlbum, 'id' | 'title'>) {
   if (albumPlay.starting) return;
   albumPlay.starting = a.id;
   try {
-    if (await playAlbumHere(source, a.id, a.title)) return;
-    await playAlbum(source, a.id);
-    // Show the album's track once it plays, not the states on the way.
-    await untilNewTrack();
+    if (!(await playAlbumHere(source, a.id, a.title))) choosePlayer();
   } catch (e) {
     toast.fail(e, 'Could not start playing');
   } finally {
@@ -205,6 +203,19 @@ export function loadAlbumRating(source: string, id: string) {
     () => {},
   );
 }
+// Ratings changed elsewhere while this page was away (decision 0087, lib/changes): those shown here asked for again.
+on<{ area: string; ids?: string[] | null }>('changed', ({ area, ids }) => {
+  if (area !== 'ratings') return;
+  const named = ids?.flatMap((i) => {
+    const x = favouriteOf(i);
+    return x && x.what === 'album' ? [`${x.source}/${x.id}`] : [];
+  });
+  for (const key of named ?? Object.keys(albumRatings)) {
+    if (!(key in albumRatings)) continue;
+    const slash = key.indexOf('/');
+    loadAlbumRating(key.slice(0, slash), key.slice(slash + 1));
+  }
+});
 /** A tap on a star: that rating, or none when it is the one it has; shown at once, back as it was when refused. */
 export async function rateAlbum(source: string, id: string, stars: number) {
   const key = `${source}/${id}`;

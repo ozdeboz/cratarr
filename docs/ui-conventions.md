@@ -96,8 +96,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     menu about its place in the queue: Play now and Play next (moving it there on this device; "Play again next", a
     copy, on the server's player), then Add to playlist, the favourite and Remove from queue (this device).
   - **Output** (`lib/OutputSheet.svelte`, decisions 0019 and 0022): the speaker button in the actions row (menu,
-    heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
-    current one checked; the players of those one may follow, to listen along; at its foot "Let others follow me" and
+    heart, count, output, queue) opens a "Play on" sheet: This device and Cratarr's players (Play On; the media
+    server's player went in 0.12, decision 0019 amended), the current one checked; the players of those one may follow, to listen along; at its foot "Let others follow me" and
     each follower's "Always accept" (decision 0079). Choosing the other one moves the music there (the queue and the
     position) and stops the side that played; nothing asks first, the player simply carries on there. **The screen
     follows the music** (the owner, 0.10): when another device takes the music over, the one it left and every screen

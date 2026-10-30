@@ -1,5 +1,5 @@
 import { track } from './progress.svelte';
-import { keepForLater, later as laterWaits, laterKey, sendLater } from './later.svelte';
+import { keepAndTry, laterKey } from './later.svelte';
 import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
@@ -7,6 +7,8 @@ import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
+import type { PlaylistOp } from './playlistOps';
+import type { ChangesAnswer } from './changeLog';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -171,28 +173,18 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** A change that waits for Cratarr while it is out of reach (lib/later): tried now with its replay key; not reached,
- *  kept in order and sent when Cratarr answers again, `answer` standing for Cratarr's meanwhile. While others wait, it
- *  waits behind them. */
+/** A change through the outbox (lib/later, decision 0085 step 3): kept on this device first, then tried with its op id
+ *  and its time; not reached, it waits in order and is sent when Cratarr answers again, `answer` standing for Cratarr's
+ *  meanwhile. While others wait, it waits behind them. */
 async function later<T>(path: string, init: RequestInit, answer: () => T): Promise<T> {
-  const key = laterKey();
-  const headers = new Headers(init.headers);
-  headers.set('Idempotency-Key', key);
-  const keep = () => {
-    keepForLater({ key, method: init.method ?? 'POST', path, body: typeof init.body === 'string' ? init.body : null, type: headers.get('Content-Type') });
-    return answer();
-  };
-  if (laterWaits.list.length) {
-    const kept = keep();
-    void sendLater();
-    return kept;
-  }
-  try {
-    return await fetchJson<T>(path, { ...init, headers });
-  } catch (e) {
-    if (e instanceof ApiError && e.message === UNREACHED) return keep();
-    throw e;
-  }
+  const type = new Headers(init.headers).get('Content-Type');
+  const op = { key: laterKey(), method: init.method ?? 'POST', path, body: typeof init.body === 'string' ? init.body : null, type, at: Date.now() };
+  const r = await keepAndTry(
+    op,
+    (headers) => fetchJson<T>(path, { ...init, headers }),
+    (e) => e instanceof ApiError && e.message === UNREACHED,
+  );
+  return r ? r.value : answer();
 }
 const laterJson = <T>(path: string, body: unknown, answer: () => T, method = 'POST') =>
   later<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, answer);
@@ -791,6 +783,9 @@ export function exportUrl(c: ExportChoice): string {
  *  to the server, `missing` when the file is not in the Music folder. */
 export type PlaylistRow = {
   entry: string;
+  /** The line's own id (decision 0087, 0.12: kept beside the .m3u), what a playlist's operations name; absent from a
+   *  server without them. */
+  entry_id?: string;
   file: string;
   id: string | null;
   name: string | null;
@@ -816,6 +811,9 @@ export type PlaylistRow = {
   album_tracks?: number;
   /** An album's row on Cratarr's own library: the library holds other recordings of its work (0.10, Other versions). */
   has_versions?: boolean;
+  /** An album's row on Cratarr's own library: its MusicBrainz work, and the work that holds it where that is known (0.12,
+   *  decision 0086: movements under their work's heading). */
+  work?: import('./works').TrackWork | null;
 };
 
 /** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */
@@ -843,6 +841,19 @@ export const editPlaylist = (id: string, expected: string[], entries: string[]) 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ expected, entries }),
   });
+
+/** A playlist's edits as operations (decision 0087, lib/playlistOps): through the outbox, so they are made with no
+ *  network too; Cratarr merges them and answers with the entries as they now stand (null meanwhile). */
+export const playlistOps = (id: string, ops: PlaylistOp[]) =>
+  laterJson<{ rev: number | null; entries: { entry: string; track: { source: string; id: string } }[] | null }>(
+    `/api/playlists/${encodeURIComponent(id)}/ops`,
+    { ops },
+    () => ({ rev: null, entries: null }),
+  );
+
+/** What changed since `since` (decision 0087, lib/changes), of these kinds. */
+export const getChanges = (since: number, kinds: readonly string[]) =>
+  quietly<ChangesAnswer>(`/api/changes?${new URLSearchParams({ since: String(since), kinds: kinds.join(',') })}`);
 
 /** Lists like a list, of its kind (the one similarity): the closest first, each with how alike (0 to 100). */
 export type Alike = { id: string; alike: number };
@@ -1467,6 +1478,26 @@ export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>
 // recordings of the same work, by MusicBrainz's work links).
 export const getClassicalComposers = () => quietly<import('./recordKindRules').Composer[]>('/api/classical/composers');
 export const getClassicalComposer = (key: string) => quietly<{ key: string; name: string; records: string[] }>(`/api/classical/composers/${encodeURIComponent(key)}`);
+// Works and movements (0.12, decision 0086, when the server says `works`): a composer's works, and a work with its
+// movements and the library's recordings of it (Cratarr's own library).
+export const getComposerWorks = (key: string) => quietly<import('./works').WorkListed[]>(`/api/classical/composers/${encodeURIComponent(key)}/works`);
+/** One recording of a work: its album, performers (conductor, ensemble, soloists, as 0082 orders them), year, and its
+ *  tracks with the movement (`part`) each is, where known; `duration_secs` where the server gives it. */
+export type WorkRecording = {
+  album_id: string;
+  album: string;
+  performers: string[];
+  year: number | null;
+  tracks: { id: string; part?: string | null; duration_secs?: number | null }[];
+};
+export type WorkView = {
+  title: string;
+  composers: { key: string; name: string }[];
+  parent?: { mbid: string; title: string } | null;
+  parts: { mbid: string; title: string; number: number | null }[];
+  recordings: WorkRecording[];
+};
+export const getWork = (mbid: string) => quietly<WorkView>(`/api/works/${encodeURIComponent(mbid)}`);
 /** Marks a record classical or not, library-wide (administrators'); null: as Cratarr finds it. */
 export const markClassical = (source: string, id: string, mark: 'classical' | 'not' | null) =>
   request<{ classical: boolean; classical_mark?: 'classical' | 'not' | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(id)}/classical`, {

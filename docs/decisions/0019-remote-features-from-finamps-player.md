@@ -86,3 +86,12 @@ any different".
   waveform's middle, a stem from the point and a white line across the waveform there. Inside, the waveform under it
   three times as finely (the same 512 bins, a bar per 3 px), played in the accent left of the point, and a line at
   the point; its centre keeps 10 px inside the player. The time where it will land sits above it. Release seeks.
+
+## Amendment (2026-10-30): the remote output goes from Cratarr's mode
+
+The owner: in Cratarr's own mode the output sheet no longer offers the media server's player ("remote", a Jellyfin
+session followed by its now-playing). Play On's players and this device remain. An output kept as remote plays here
+again, without a word; an app pointed at it is pointed here. A browser that cannot play itself and has no player
+chosen has nowhere to play: asked to, it says in one line to choose a player in Where it plays; nothing is handed to
+the media server's player. The server keeps its endpoints for now (a5 audits them in 0.13). With modes per server
+(0.13) a Jellyfin mode lists that server's own players by name.

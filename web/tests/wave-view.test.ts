@@ -190,9 +190,13 @@ test("a let go hands over to the track's own view without a jump, settling on it
   assert.deepEqual(last, own(at));
 });
 
-test("the waveform's colours: the shown track the player's own, the others their covers', all one where the covers give none", () => {
+test("the waveform's colours: each track its cover's whichever is shown, the player's own while not known, all one where the covers give none", () => {
   const accent = (k: string) => ({ a: '#d4b020', b: '#3080e0' } as Record<string, string>)[k] ?? null;
-  assert.deepEqual(waveColours(['a', 'b', 'c'], 'a', true, accent), [null, '#3080e0', 'var(--accent)']);
+  assert.deepEqual(waveColours(['a', 'b', 'c'], 'a', true, accent), ['#d4b020', '#3080e0', 'var(--accent)']);
+  // A track change (0.12, "colour flips"): no track's colour changes with which one is shown.
+  assert.deepEqual(waveColours(['a', 'b', 'c'], 'b', true, accent), waveColours(['a', 'b', 'c'], 'a', true, accent));
+  // The shown track's cover's not known yet: the player's own, never the theme's for a moment.
+  assert.deepEqual(waveColours(['a', 'c'], 'c', true, accent), ['#d4b020', null]);
   // Not from the covers (the mini player's Cover colour off): one colour throughout.
   assert.deepEqual(waveColours(['a', 'b', 'c'], 'a', false, accent), [null, null, null]);
 });

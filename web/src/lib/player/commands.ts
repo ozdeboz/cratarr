@@ -65,6 +65,18 @@ export function commandOf(op: string, args: Args = {}): PlayerCommand | null {
   }
 }
 
-/** Which player the page drives (decisions 0022, 0031): its own queue (this browser's or app's player, or one of
- *  Cratarr's players it drives) or the media server's player. */
+/** Where this device plays, as kept (0.12: the media server's player, `remote`, went from Cratarr's mode; one kept
+ *  from before plays here again, without a word). Anything else: not an output. */
+export const savedOutput = (v: unknown): 'local' | `player:${string}` | null =>
+  v === 'local' || v === 'remote' ? 'local' : typeof v === 'string' && v.startsWith('player:') && v.length > 'player:'.length ? (v as `player:${string}`) : null;
+
+/** The page's output for an app's target (decision 0062), and back. An app still pointed at the media server's player
+ *  (`server`, before 0.12) plays here. */
+export const outputOfTarget = (target: string): 'local' | `player:${string}` =>
+  target.startsWith('player:') && target.length > 'player:'.length ? (target as `player:${string}`) : 'local';
+export const targetOfOutput = (output: 'local' | `player:${string}`) => (output.startsWith('player:') ? output : 'self');
+
+/** Whether the page drives a player (decisions 0022, 0031): its own queue (this browser's or app's player, or one of
+ *  Cratarr's players it drives). False: a browser that cannot play here with no player chosen, nowhere to play (0.12:
+ *  no longer the media server's player). */
 export const holdsQueue = (output: string, canPlayHere: boolean, driven: string | null) => (output === 'local' && canPlayHere) || driven !== null;

@@ -1,24 +1,16 @@
 // The player that plays, as the page drives it (0.10; the architecture audit, 2026-10-29: one Player port instead of
-// a fork at each use). Two sides: the page's own queue (this browser's or app's player, lib/localPlayer, which also
-// drives one of Cratarr's players, decision 0031) and the media server's player (live's state, its transport). Which
+// a fork at each use). The page's own queue (this browser's or app's player, lib/localPlayer, which also drives one of
+// Cratarr's players, decision 0031), or none where a browser cannot play and no player is chosen (0.12: the media
+// server's player, its other side, went from Cratarr's mode). Which
 // one is `port()`'s to say, here only (lib/player/commands' holdsQueue); everything else asks the port. What each side
 // does is as it was where it was asked: the readings, the commands, what is shown before a command is confirmed.
 import {
-  ApiError,
-  handover,
-  jumpTo,
-  queueTrack,
-  queueTracks,
-  playerCommand,
-  pickCollection,
-  playPlaylist,
   playlistRows,
   setFavorite,
   setMember,
   setTrackFavorite,
   setTrackMember,
   trackState,
-  transport,
   type NowPlaying,
   type PlayHow,
   type PlayMode,
@@ -26,7 +18,7 @@ import {
   type TrackState,
   type Transport,
 } from '../api';
-import { expectFailed, live, refresh, untilNewTrack } from '../live.svelte';
+import { live } from '../live.svelte';
 import {
   audioTap,
   canPlayHere,
@@ -46,8 +38,9 @@ import {
   type LocalTrack,
 } from '../localPlayer.svelte';
 import { rewindNow } from '../ramping.svelte';
-import { drivenName, outputName, playOn } from '../playOn.svelte';
+import { drivenName, outputName } from '../playOn.svelte';
 import { prefs } from '../prefs.svelte';
+import { toast } from '../toast.svelte';
 import { holdsQueue } from './commands';
 
 type Dir = 'back' | 'forward';
@@ -79,7 +72,7 @@ export type PlayerPort = {
   /** Level the volume runs on this side: what it turns the playing track down by (dB, 0 or less) and whether that is
    *  known yet; null where it does not. */
   level(): { db: number; known: boolean } | null;
-  /** Its position can be dragged and seeked from here (decision 0019: not the server's player). */
+  /** Its position can be dragged and seeked from here. */
   seekable: boolean;
   /** A Bandcamp preview plays on this side's own player (lib/bandcampFound). */
   previews: boolean;
@@ -135,7 +128,7 @@ export function isLocal() {
 
 /** The player the page drives now. */
 export function port(): PlayerPort {
-  return isLocal() ? here : server;
+  return isLocal() ? here : nowhere;
 }
 
 // ---- The page's own queue
@@ -292,22 +285,19 @@ const here: PlayerPort = {
   },
 };
 
-// ---- The media server's player
+// ---- No player (0.12; the owner: the media server's players belong only in its own mode, 0.13)
 
-const failedWith = (e: unknown) => expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
-/** The playing track's player, where it is one of Cratarr's: only those take a wind or a seek by. */
-const cratarrPlayer = () => {
-  const np = live.view?.now_playing ?? null;
-  return np?.player && playOn.players.some((p) => p.name === np.player) ? np.player : null;
-};
+/** A browser that cannot play here, with none of Cratarr's players chosen: nowhere to play until one is (Where it
+ *  plays, lib/OutputSheet, lists them). Asked to play, it says so in one line; nothing else does anything. */
+export const choosePlayer = () => toast.show({ text: "This browser can't play: choose a player in Where it plays." });
 
-const server: PlayerPort = {
+const nowhere: PlayerPort = {
   holdsQueue: false,
-  playing: () => live.view?.now_playing ?? null,
-  pending: () => live.pending,
-  moving: () => live.pending,
+  playing: () => null,
+  pending: () => false,
+  moving: () => false,
   position: () => null,
-  rewinding: () => !!live.view?.now_playing?.progress?.rewinding,
+  rewinding: () => false,
   ramps: false,
   queue: () => null,
   radio: false,
@@ -316,114 +306,23 @@ const server: PlayerPort = {
   seekable: false,
   previews: false,
   tap: () => null,
-  async send(command, predict) {
-    const np = live.view?.now_playing ?? null;
-    if (!np) return;
-    predict(command);
-    try {
-      await transport(command, np.source);
-      setTimeout(refresh, 700); // the player reports back within a moment
-    } catch (e) {
-      failedWith(e);
-    }
-  },
-  wind(dir, phase) {
-    const name = cratarrPlayer();
-    if (!name) return;
-    playerCommand(name, { command: 'wind', dir, phase }).catch(failedWith);
-  },
-  windTouch: () => false,
-  hasNext() {
-    const np = live.view?.now_playing ?? null;
-    return !np || (np.upcoming?.length ?? 1) > 0;
-  },
-  async playUpcoming(i) {
-    const np = live.view?.now_playing ?? null;
-    const t = np?.upcoming[i];
-    if (!np || !t) return;
-    await jumpTo(t.id, np.source);
-    setTimeout(refresh, 700);
-  },
-  seekTo: () => false,
-  async seekBy(secs) {
-    const name = cratarrPlayer();
-    if (!name) return;
-    try {
-      await playerCommand(name, { command: 'seek', by_ms: Math.round(secs * 1000) });
-      setTimeout(refresh, 700); // the player reports back within a moment
-    } catch (e) {
-      failedWith(e);
-    }
-  },
-  async setFavorite(np, on) {
-    live.view = await setFavorite(on, np.source);
-  },
-  playlists: () => live.view?.playlists ?? [],
-  playlistsKnown: () => !!live.view,
-  async setMember(playlistId, member) {
-    live.view = await setMember(playlistId, member, prefs.source || undefined);
-  },
-  async playPlaylist(id, mode) {
-    await playPlaylist(id, mode, prefs.source || undefined);
-    if (mode === 'play' || mode === 'shuffle') await untilNewTrack();
-    else refresh();
-  },
-  async enqueue(tracks, how, source) {
-    await queueTracks(
-      tracks.map((t) => t.id),
-      how,
-      source,
-    );
-    setTimeout(refresh, 700);
-  },
-  async enqueueOne(track, how) {
-    await queueTrack(track.id, how, track.source);
-  },
-  async playTracks(tracks, how, _name, source, index = 0) {
-    const ids = tracks.map((t) => t.id);
-    await pickCollection({ kind: 'tracks', source, ids }, how, { from: ids[index], source, on: 'server' });
-    // Show the new track once it plays, not the states on the way.
-    if (how === 'play' || how === 'shuffle') await untilNewTrack();
-    else setTimeout(refresh, 700);
-  },
-  async playFrom(_name, source, tracks, index, position) {
-    await handover(
-      tracks.map((t) => t.id),
-      index,
-      position,
-      source,
-    );
-    setTimeout(refresh, 700);
-  },
-  current() {
-    const np = live.view?.now_playing ?? null;
-    if (!np) return null;
-    const tracks: LocalTrack[] = [np, ...np.upcoming].map((t) => ({
-      source: np.source,
-      id: t.id,
-      name: t.name,
-      artist: t.artist,
-      album: t.album,
-      album_id: t.album_id,
-    }));
-    return { tracks, index: 0, position: np.progress?.position_secs ?? 0 };
-  },
-  async leave(was) {
-    if (!was) return;
-    try {
-      await transport('stop', was.tracks[0].source);
-    } catch {
-      /* it may have stopped already */
-    }
-  },
-  async pauseToJoin() {
-    const np = live.view?.now_playing ?? null;
-    if (np && !np.progress?.paused) {
-      try {
-        await transport('play-pause', np.source);
-      } catch {
-        /* it may have stopped already */
-      }
-    }
-  },
+  send: () => choosePlayer(),
+  wind() {},
+  windTouch: () => undefined,
+  hasNext: () => false,
+  playUpcoming() {},
+  seekTo: () => undefined,
+  seekBy() {},
+  setFavorite: async () => {},
+  playlists: () => [],
+  playlistsKnown: () => true,
+  setMember: async () => {},
+  playPlaylist: async () => choosePlayer(),
+  enqueue: () => choosePlayer(),
+  enqueueOne: () => choosePlayer(),
+  playTracks: () => choosePlayer(),
+  playFrom: () => choosePlayer(),
+  current: () => null,
+  leave() {},
+  pauseToJoin() {},
 };

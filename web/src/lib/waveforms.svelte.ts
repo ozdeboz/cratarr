@@ -169,13 +169,3 @@ function barsPlainIn(bins: Uint8Array, n: number, from: number, to: number): num
     return m / top;
   });
 }
-export function bars(bins: Uint8Array, n: number): number[] {
-  const top = Math.max(1, ...bins);
-  return Array.from({ length: n }, (_, i) => {
-    const from = Math.floor((i * bins.length) / n);
-    const to = Math.max(from + 1, Math.floor(((i + 1) * bins.length) / n));
-    let m = 0;
-    for (let j = from; j < to; j++) m = Math.max(m, bins[j]);
-    return m / top;
-  });
-}

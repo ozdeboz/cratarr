@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { crateViewOf, holdsLine, orderRecords, recordsOf } = await import('../src/lib/crateRecords.ts');
+const { crateViewOf, holdsLine, orderRecords, recordCell, recordsOf } = await import('../src/lib/crateRecords.ts');
 
 const row = (album_id: string | undefined, album: string, artist: string, year?: number, added?: number) => ({ album_id, album, artist, year, added });
 const rows = [
@@ -51,4 +51,25 @@ test("a record's album total as its rows say it (album_tracks), else not said", 
   assert.equal(recs[0].of, 10);
   assert.equal(recs[1].of, null);
   assert.equal(holdsLine(3, recs[0].of), '3 of 10 tracks');
+});
+
+test('as a table: ordered by how many of its tracks the crate holds and by their length; its cells', () => {
+  const timed = [
+    { r: { ...row('b', 'Blue', 'Miles', 1959, 10), duration_secs: 300 }, i: 0 },
+    { r: { ...row('a', 'Alpha', 'Zed', 2001, 30), duration_secs: 900 }, i: 1 },
+    { r: { ...row('b', 'Blue', 'Miles', 1959, 12), duration_secs: 200 }, i: 2 },
+  ];
+  const recs = recordsOf(timed);
+  assert.deepEqual(orderRecords(recs, 'tracks', true).map((r) => r.title), ['Blue', 'Alpha'], 'most tracks first');
+  assert.deepEqual(orderRecords(recs, 'length', true).map((r) => r.title), ['Alpha', 'Blue'], 'longest first');
+  const blue = recs[0];
+  assert.equal(blue.secs, 500);
+  const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const day = (t: number) => `day ${t}`;
+  assert.equal(recordCell(blue, 'tracks', 10, clock, day), '2/10');
+  assert.equal(recordCell(blue, 'tracks', null, clock, day), '2', 'the album\'s own count not known');
+  assert.equal(recordCell(blue, 'length', null, clock, day), '8:20');
+  assert.equal(recordCell(blue, 'year', null, clock, day), '1959');
+  assert.equal(recordCell(blue, 'added', null, clock, day), 'day 12');
+  assert.equal(recordCell(blue, 'rating', null, clock, day), '', 'a column a record has no value for');
 });

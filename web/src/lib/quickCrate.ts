@@ -228,6 +228,69 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE): Condition[] {
   return rows;
 }
 
+/** A part of a crate's sentence: a term (its chip's place, a tap reads it another way) or the words between; `tight`:
+ *  no space before it (a comma). */
+export type Part = { text: string; chip?: number; tight?: boolean };
+
+/** The crate read as a sentence (0.12; the owner, 2026-10-30: the crate search's mockup B): "Hip Hop from the 1990s that
+ *  sounds like Miles Davis". As `conditionsOf` combines them, so it says what the crate is: a kind's terms any of them
+ *  ("or"), the kinds all of them; the years one span from the earliest to the latest; the artists "like" one Sounds
+ *  like of them all ("and", as the server names it). Genres lead (else styles, else "Tracks"); then a style beside a
+ *  genre, tags, by, on a label, from an album, the years; last what it feels and sounds like. */
+export function sentenceOf(chips: readonly Chip[]): Part[] {
+  const all = chips.map((c, i) => ({ c, i }));
+  const of = (kind: ChipKind) => all.filter(({ c }) => c.reading.kind === kind && !(kind === 'artist' && likes(c)));
+  const out: Part[] = [];
+  const word = (text: string, tight = false) => out.push(tight ? { text, tight } : { text });
+  const term = (i: number, text = chips[i].reading.label) => out.push({ text, chip: i });
+  const list = (items: { i: number }[], join: 'or' | 'and' = 'or') =>
+    items.forEach(({ i }, k) => {
+      if (k) k === items.length - 1 ? word(join) : word(',', true);
+      term(i);
+    });
+
+  const genres = of('genre');
+  const styles = of('style');
+  const head = genres.length ? genres : styles;
+  if (head.length) list(head);
+  else word('Tracks');
+  if (genres.length && styles.length) (word(',', true), word('style'), list(styles));
+  const tags = of('tag');
+  if (tags.length) (word('tagged'), list(tags));
+  const by = of('artist');
+  if (by.length) (word('by'), list(by));
+  const labels = of('label');
+  if (labels.length) (word('on'), list(labels));
+  const albums = of('album');
+  if (albums.length) (word('from the album'), list(albums));
+
+  // The years: one span, from the earliest chip's start to the latest's end; a decade "the 1970s", a span "1970 to 1985".
+  const years = of('year')
+    .map(({ c, i }) => ({ i, span: c.reading.value.split('-').map(Number) as [number, number], decade: /^\d{3}0s$/.test(c.reading.label) }))
+    .sort((a, b) => a.span[0] - b.span[0] || a.span[1] - b.span[1]);
+  const yearTerm = (y: (typeof years)[number]) => {
+    if (y.decade) word('the');
+    term(y.i, y.span[0] === y.span[1] || y.decade ? chips[y.i].reading.label : `${y.span[0]} to ${y.span[1]}`);
+  };
+  if (years.length) {
+    word('from');
+    const last = years.reduce((a, b) => (b.span[1] > a.span[1] ? b : a));
+    yearTerm(years[0]);
+    for (const y of years.slice(1)) if (y !== last) (word(',', true), yearTerm(y));
+    if (last !== years[0]) (word('to'), yearTerm(last));
+  }
+
+  // What it feels and sounds like, one clause: "that feels Calm and sounds like Miles Davis" ("Tracks that feel…").
+  const plural = !head.length;
+  const moods = of('mood');
+  const like = all.filter(({ c }) => likes(c));
+  if (moods.length || like.length) word('that');
+  if (moods.length) (word(plural ? 'feel' : 'feels'), list(moods));
+  if (moods.length && like.length) word('and');
+  if (like.length) (word(plural ? 'sound like' : 'sounds like'), list(like, 'and'));
+  return out;
+}
+
 /** A name for it, from its chips: "Jazz · like Bonobo · 1970s". */
 export function nameOf(chips: readonly Chip[]): string {
   return chips.map((c) => (likes(c) ? `like ${c.reading.label}` : c.reading.label)).join(' · ');

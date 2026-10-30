@@ -1,13 +1,13 @@
-// Where music plays (decisions 0019, 0022, 0031): on a media server's player (remote: Finamp on the tablet), in this
-// browser or app (local, lib/localPlayer.svelte.ts), or on one of Cratarr's own players (Play On, lib/playOn.svelte.ts),
-// which the page drives as it drives the local player. The player shows each the same way: the queue the page holds is
+// Where music plays (decisions 0022, 0031): in this browser or app (local, lib/localPlayer.svelte.ts), or on one of
+// Cratarr's own players (Play On, lib/playOn.svelte.ts), which the page drives as it drives the local player. The media
+// server's player (remote, decision 0019) went from Cratarr's mode in 0.12; a Jellyfin mode lists that server's own
+// players by name (0.13). A browser that cannot play here with no player chosen has nowhere to play (lib/player/port). The player shows each the same way: the queue the page holds is
 // presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
 // other side, which plays from there, and the side that played stops.
 import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
-import { albumView, handover, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
+import { albumView, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
 import { untrack } from 'svelte';
-import { live, refresh } from './live.svelte';
 import { canPlayHere, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { rewindNow } from './ramping.svelte';
@@ -15,27 +15,11 @@ import { drivenName, follow, playOn, pointAt } from './playOn.svelte';
 import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
+import { keep, readKept } from './keptStore';
+import { reach, whenReached } from './reach.svelte';
 
 // Which player the page drives, and what this device's queue shows of what plays: the port's (lib/player/port).
 export { isLocal, localNowPlaying, localState, tookLocal } from './player/port.svelte';
-
-// "The server's player" while one of Cratarr's own players plays: that player, driven. Cratarr's own source has no
-// server-side player; such a page only showed what that player played, without seek or queue edits, while its output
-// read like the player's (2026-10-16).
-if (typeof window !== 'undefined') {
-  $effect.root(() => {
-    $effect(() => {
-      if (prefs.output !== 'remote') return;
-      const name = live.view?.now_playing?.player;
-      if (name && playOn.players.some((p) => p.name === name && p.online)) {
-        untrack(() => {
-          pointAt(`player:${name}`);
-          follow(name);
-        });
-      }
-    });
-  });
-}
 
 /** Whether the music plays in this page (its stream, or the app it runs in). */
 export const playsHere = () => prefs.output === 'local' && canPlayHere;
@@ -85,8 +69,41 @@ const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
 /** The queue place being heard (index and track), from when, how far it got, and whether it was told as counted. */
 type Hearing = { at: string; track: LocalTrack; started: number; heard: number; length: number | null; counted: boolean };
 let hearing: Hearing | null = null;
-/** Reports not yet taken (the server away): sent again with the next one; the latest 500 kept. */
+/** Reports not yet taken (the server away): kept on this device (lib/keptStore; 0.12, decision 0085 step 3: no play
+ *  lost when the page is closed meanwhile) and sent again with the next one or when Cratarr answers again; the latest
+ *  500 kept. Each has its id: Cratarr counts a report sent twice once. `telling`: those on their way. */
 let unsent: HeardEvent[] = [];
+let telling: HeardEvent[] = [];
+const PLAYS = 'plays';
+const keepPlays = () => void keep(PLAYS, [...telling, ...unsent].slice(-500));
+function tellNow() {
+  if (telling.length || !unsent.length) return;
+  telling = unsent.slice(-500);
+  unsent = [];
+  let taken = false;
+  reportPlays(telling)
+    .then(
+      (r) => {
+        taken = true;
+        unsent = [...telling.filter((e) => !r.done.includes(e.id)), ...unsent];
+      },
+      () => (unsent = [...telling, ...unsent]),
+    )
+    .finally(() => {
+      telling = [];
+      keepPlays();
+      if (taken && unsent.length) tellNow();
+    });
+}
+if (typeof window !== 'undefined') {
+  readKept<HeardEvent[]>(PLAYS).then((v) => {
+    if (!Array.isArray(v) || !v.length) return;
+    const have = new Set([...telling, ...unsent].map((e) => e.id));
+    unsent = [...v.filter((e) => !have.has(e.id)), ...unsent];
+    if (!reach.away) tellNow();
+  });
+  whenReached.add(tellNow);
+}
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
@@ -102,12 +119,8 @@ function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
     player: prefs.browserName || null,
     context: keptHere.id ? `queue:${keptHere.id}` : null,
   });
-  const batch = unsent.slice(-500);
-  unsent = [];
-  reportPlays(batch).then(
-    (r) => unsent.push(...batch.filter((e) => !r.done.includes(e.id))),
-    () => unsent.push(...batch),
-  );
+  keepPlays();
+  tellNow();
 }
 $effect.root(() => {
   $effect(() => {
@@ -163,7 +176,7 @@ $effect.root(() => {
   });
 });
 
-/** Plays a playlist where the output is: the server's player, or here (its tracks fetched, then the details). */
+/** Plays a playlist where the page plays (its tracks fetched, then the details); false with no player to play on. */
 export async function playPlaylistHere(id: string, mode: PlayMode): Promise<boolean> {
   const p = port();
   if (!p.holdsQueue) return false;
@@ -232,11 +245,6 @@ export async function moveTo(output: typeof prefs.output) {
   pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
   if (!was) return;
-  if (output === 'remote') {
-    await handover(was.tracks.map((t) => t.id), was.index, was.position, was.tracks[0].source);
-    setTimeout(refresh, 700);
-    return;
-  }
   playQueue(was.tracks, was.index, null, was.position > 1 ? was.position : 0, false, true);
 }
 
@@ -284,6 +292,3 @@ if (typeof window !== 'undefined') {
 
 /** Moves the music here. */
 export const toLocal = () => moveTo('local');
-
-/** Moves the music to the server's player. */
-export const toRemote = () => moveTo('remote');
