@@ -14,7 +14,6 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.Player
-import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -34,6 +33,8 @@ class PlayOnLink(
     private val player: Player,
     private val prefs: Prefs,
     private val sync: SyncPlay,
+    /** The player's commands (one way in, the page's too). */
+    private val commands: PlayerCommands,
 ) : Player.Listener {
     private val main = Handler(Looper.getMainLooper())
     private val reports = Executors.newSingleThreadExecutor()
@@ -343,7 +344,7 @@ class PlayOnLink(
         }
     }
 
-    /** One command from Cratarr, on the player (main thread). */
+    /** One command from Cratarr, on the player (main thread): the link's own here, the player's through [commands]. */
     private fun run(json: String) {
         val m = try {
             JSONObject(json)
@@ -351,158 +352,21 @@ class PlayOnLink(
             Log.w(TAG, "a command that cannot be read: $json")
             return
         }
-        val p = player
         // Sync play's measurement (decision 0037, step 1): what plays this moment, in Cratarr's time, at once.
         if (m.optString("command") == "sample") return sample(m.optLong("id"))
         m.optLong("version", -1L).takeIf { it >= 0 }?.let { version = it }
-        // Local mode (decision 0052): steered from outside, its queue not edited (Cratarr refuses such commands; one from
-        // a moment before is let go). A play is Cratarr's music again; a stop pauses, so that queue stays.
-        if (prefs.mode == Prefs.MODE_DEVICE) {
-            when (m.optString("command")) {
-                "play" -> service.switchMode(Prefs.MODE_CRATARR, "play from Cratarr")
-                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce", "wind", "direction", "level" -> {}
-                "group" -> if (!m.isNull("leader")) return report()
-                "stop" -> {
-                    release()
-                    p.pause()
-                    return report()
-                }
-                else -> {
-                    LinkLog.add(service, "info", "playon", "command not for local mode", "command" to m.optString("command"))
-                    return report()
-                }
-            }
-        }
         when (m.optString("command")) {
-            "play" -> {
-                val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
-                if (items.isEmpty()) return
-                p.setMediaItems(items, m.optInt("index", 0).coerceIn(0, items.size - 1), m.optLong("position_ms", 0))
-                p.prepare()
-                // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds; the radio
-                // stays on, its seed the new queue (unless these are its own tracks).
-                Repeat.newPlay(service, p)
-                Autoplay.newPlay(service, m.optJSONArray("tracks"))
-                Prefs(service).shuffled = m.optBoolean("shuffle")
-                // The queue as Cratarr names it (decision 0033, amended); a server from before names none: a new one.
-                if (m.has("queue_id")) {
-                    Prefs(service).queueId = m.optString("queue_id")
-                    Prefs(service).queueName = m.optString("queue_name")
-                } else {
-                    Prefs(service).newQueue("")
-                }
-                // A queue given back after the app came back without one waits for a play.
-                release()
-                // A play from Cratarr (a move's carry-on, a queue taken up) starts at once: switching devices bypasses every
-                // play effect (the owner, 2026-10-27): no wind-up, no wind under way.
-                service.startStop.forwards()
-                if (m.optBoolean("paused")) p.pause() else {
-                    asked()
-                    service.startStop.reset()
-                    p.play()
-                }
-            }
-            // Edits name entries (decision 0033); by place only when the entry is not found here.
-            "add" -> {
-                val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
-                val after = m.optString("after", null)?.let { if (it.isEmpty()) 0 else placeOf(p, it).takeIf { a -> a >= 0 }?.plus(1) }
-                val at = after ?: if (m.has("at")) m.optInt("at").coerceIn(0, p.mediaItemCount) else p.mediaItemCount
-                p.addMediaItems(at, items)
-                if (p.playbackState == Player.STATE_IDLE) p.prepare()
-            }
-            "move" -> {
-                val from = placed(m, "entry", "from")
-                val after = m.optString("after", null)?.let { if (it.isEmpty()) 0 else placeOf(p, it) }
-                // The place it ends up at, counted with it taken out.
-                val to = when {
-                    after == null || after < 0 -> m.optInt("to", -1)
-                    after == 0 && m.optString("after").isEmpty() -> 0
-                    after > from -> after
-                    else -> after + 1
-                }
-                if (from in 0 until p.mediaItemCount && to in 0 until p.mediaItemCount && from != to) p.moveMediaItem(from, to)
-            }
-            "remove" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let(p::removeMediaItem)
-            // Everything after the playing track replaced (a shuffle turned on or off); the playing track plays on.
-            "upcoming" -> {
-                if (m.has("shuffled")) Prefs(service).shuffled = m.optBoolean("shuffled")
-                val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
-                val from = (p.currentMediaItemIndex + 1).coerceAtMost(p.mediaItemCount)
-                p.replaceMediaItems(from, p.mediaItemCount, items)
-            }
-            "jump" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let {
-                service.startStop.forwards()
-                p.seekTo(it, 0)
-                play()
-            }
-            // Start and stop as the device says (0.9.6).
-            "pause" -> {
-                release()
-                service.startStop.pause { p.pause() }
-            }
-            "resume" -> play()
-            // `plain`: a page driving this player while it switches devices: at once, as a stop (the owner, 2026-10-27).
-            "toggle" -> {
-                val plain = m.optBoolean("plain")
-                if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) {
-                    if (plain) {
-                        service.startStop.reset()
-                        p.pause()
-                    } else {
-                        service.startStop.pause { p.pause() }
-                    }
-                } else {
-                    play(plain = plain)
-                }
-            }
-            // A move's hold: stopped at once, no wind-down (switching devices bypasses every play effect, the owner).
-            "stop" -> {
-                release()
-                service.startStop.reset()
-                p.stop()
-                p.clearMediaItems()
-            }
-            // Next as the app's own: fast-forward to the end where winding is on, else a skip.
-            "next" -> {
-                val jump = { p.seekToNextMediaItem() }
-                if (!service.startStop.fastForward(jump)) service.startStop.skip(jump)
-            }
-            "previous" -> {
-                val restart = { service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } }
-                if (!service.startStop.rewind(PlayerService.RESTART_AFTER_MS, restart)) restart()
-            }
-            "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
-            "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
-            // Sync play (decision 0037): the group this player plays in, by its leader (none: alone).
-            "group" -> sync.group(
-                if (m.isNull("leader")) null else m.optString("leader"),
-                if (m.isNull("host")) null else m.optString("host").ifEmpty { null },
-                m.optInt("port", 1704),
-                m.optLong("buffer_ms", 1000),
-                m.optString("secret"),
-            )
-            "radio" -> Radio.command(service, p, m)
-            "autoplay" -> Autoplay.command(service, p, m)
-            "skip_favourites" -> SkipFavourites.set(service, p, m.optBoolean("on"))
-            // `wind`: a page driving this player with its seek winding on; wound there whatever this device says.
-            "seek" -> m.optLong("position_ms", p.currentPosition).let { to -> service.startStop.seekTo(to, m.optBoolean("wind")) { p.seekTo(to) } }
-            // Level the volume set from a page driving this player (0.9.12), eased as its own switch is.
-            "level" -> {
-                if (m.has("on")) prefs.levelling = m.optBoolean("on")
-                m.optString("unknown").takeIf { it == Prefs.LEVEL_TYPICAL || it == Prefs.LEVEL_UNTOUCHED }?.let { prefs.levelUnknown = it }
-            }
-            // Previous or Next held (decision 0074): wound while held; where it cannot wind, a press as ever.
-            // The tape deck's direction knob (0.9.12).
-            "direction" -> service.startStop.setDirection(m.optString("dir") == "L")
-            "wind" -> {
-                val back = m.optString("dir") != "forward"
-                if (m.optString("phase") == "stop") {
-                    service.startStop.windStop()
-                } else {
-                    service.startStop.windStart(back) {
-                        if (back) service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } else service.startStop.skip { p.seekToNextMediaItem() }
-                    }
-                }
+            // Sync play (decision 0037): the group this player plays in, by its leader (none: alone). Local mode
+            // (decision 0052) plays alone.
+            "group" -> {
+                if (prefs.mode == Prefs.MODE_DEVICE && !m.isNull("leader")) return report()
+                sync.group(
+                    if (m.isNull("leader")) null else m.optString("leader"),
+                    if (m.isNull("host")) null else m.optString("host").ifEmpty { null },
+                    m.optInt("port", 1704),
+                    m.optLong("buffer_ms", 1000),
+                    m.optString("secret"),
+                )
             }
             "volume" -> setVolume(m.optInt("level", 100))
             "duck" -> {
@@ -529,7 +393,8 @@ class PlayOnLink(
                     report()
                 },
             )
-            else -> Log.w(TAG, "a command this app does not know: $json")
+            // The player's own, as the page's are (local mode's rules there too).
+            else -> if (!commands.run(m, PlayerCommands.From.PLAY_ON)) Log.w(TAG, "a command this app does not know: $json")
         }
         report()
     }
@@ -582,28 +447,10 @@ class PlayOnLink(
         false
     }
 
-    /** The place of the entry a command names, else the place it gives. */
-    private fun placed(m: JSONObject, entry: String, place: String): Int =
-        m.optString(entry, null)?.let { placeOf(player, it) }?.takeIf { it >= 0 } ?: m.optInt(place, -1)
-
-    /** Plays: wound up as the device's Start and stop says, or ([plain]) at once. */
-    private fun play(again: Boolean = false, plain: Boolean = false) {
-        val p = player
-        if (p.playbackState == Player.STATE_IDLE) p.prepare()
-        if (p.playbackState == Player.STATE_ENDED) p.seekTo(p.currentMediaItemIndex, 0)
-        asked(again)
-        if (plain) {
-            service.startStop.reset()
-            p.play()
-        } else {
-            service.startStop.play { p.play() }
-        }
-    }
-
     // --- a start Android refuses ---
 
     /** Cratarr asked it to play, now; [again]: the same ask once more, after a refusal. */
-    private fun asked(again: Boolean = false) {
+    internal fun asked(again: Boolean = false) {
         askedAt = SystemClock.elapsedRealtime()
         if (!again) retried = false
     }
@@ -638,7 +485,7 @@ class PlayOnLink(
                     return
                 }
                 again = null
-                play(again = true)
+                commands.resume(PlayerCommands.From.PLAY_ON, again = true)
             }
         }
         again = retry
@@ -653,7 +500,7 @@ class PlayOnLink(
     }
 
     /** Nothing held back any more: it plays, or it was paused or stopped, or another play came. */
-    private fun release() {
+    internal fun release() {
         again?.let(main::removeCallbacks)
         again = null
         if (heldBack == null) return
@@ -667,7 +514,7 @@ class PlayOnLink(
         if (heldBack == null) return
         if (SystemClock.elapsedRealtime() - heldAt > HELD_MS || player.mediaItemCount == 0) return release()
         LinkLog.add(service, "info", "playon", "playing what was held back")
-        play(again = true)
+        commands.resume(PlayerCommands.From.PLAY_ON, again = true)
     }
 
     /** A notification to start the music held back: it opens the app, which starts it (above). */
