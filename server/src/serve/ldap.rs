@@ -179,7 +179,7 @@ pub struct Said {
 }
 
 /// The one form a name's kept hash is filed under: directories match names regardless of case, so a refusal for
-/// "OSKAR" must delete what an earlier sign-in kept for "oskar".
+/// "ROBIN" must delete what an earlier sign-in kept for "robin".
 fn key(name: &str) -> String {
     name.to_lowercase()
 }
@@ -585,8 +585,8 @@ mod tests {
         // A name that tries to widen the search finds only itself.
         assert_eq!(filter("uid", "*)(uid=*", ""), r"(|(uid=\2a\29\28uid=\2a)(mail=\2a\29\28uid=\2a))");
         assert_eq!(
-            filter("uid", "oskar", "cn=music,ou=groups,dc=example,dc=com"),
-            "(&(|(uid=oskar)(mail=oskar))(memberOf=cn=music,ou=groups,dc=example,dc=com))"
+            filter("uid", "robin", "cn=music,ou=groups,dc=example,dc=com"),
+            "(&(|(uid=robin)(mail=robin))(memberOf=cn=music,ou=groups,dc=example,dc=com))"
         );
         // The address signs in as well; an attribute that is the address already is asked once.
         assert_eq!(filter("uid", "elva@example.com", ""), "(|(uid=elva@example.com)(mail=elva@example.com))");
@@ -595,12 +595,12 @@ mod tests {
 
     #[test]
     fn an_empty_password_or_a_name_with_control_characters_is_never_put_to_the_directory() {
-        assert!(!acceptable("oskar", ""), "an empty password binds anonymously");
+        assert!(!acceptable("robin", ""), "an empty password binds anonymously");
         assert!(!acceptable("", "secret"));
         assert!(!acceptable("osk\nar", "secret"));
-        assert!(!acceptable("oskar\0", "secret"));
+        assert!(!acceptable("robin\0", "secret"));
         assert!(!acceptable(&"x".repeat(300), "secret"));
-        assert!(acceptable("oskar", "secret"));
+        assert!(acceptable("robin", "secret"));
     }
 
     #[test]
@@ -660,13 +660,13 @@ mod tests {
         let dir = Directory::open(Some(&d)).unwrap();
         // Nothing listens on port 1: the directory cannot be reached.
         dir.set_config(Config { url: "ldap://127.0.0.1:1".into(), bind_password_file: pw.display().to_string(), ..config() }).unwrap();
-        let exists = |a: &str, _: Option<Said>| (a == "oskar").then(|| a.to_string());
-        assert_eq!(dir.sign_in("oskar", "secret", &exists, 1_000).await, None, "nothing kept yet");
+        let exists = |a: &str, _: Option<Said>| (a == "robin").then(|| a.to_string());
+        assert_eq!(dir.sign_in("robin", "secret", &exists, 1_000).await, None, "nothing kept yet");
         // As if the directory had accepted it at time 1000.
-        dir.remember("oskar", "secret", 1_000).await;
-        assert_eq!(dir.sign_in("oskar", "secret", &exists, 2_000).await.as_deref(), Some("oskar"));
-        assert_eq!(dir.sign_in("oskar", "wrong", &exists, 2_000).await, None);
-        assert_eq!(dir.sign_in("oskar", "", &exists, 2_000).await, None, "an empty password is refused first");
+        dir.remember("robin", "secret", 1_000).await;
+        assert_eq!(dir.sign_in("robin", "secret", &exists, 2_000).await.as_deref(), Some("robin"));
+        assert_eq!(dir.sign_in("robin", "wrong", &exists, 2_000).await, None);
+        assert_eq!(dir.sign_in("robin", "", &exists, 2_000).await, None, "an empty password is refused first");
         // The hash is kept in its file, owner-only, never the password.
         let kept = std::fs::read_to_string(d.join("ldap-verifiers.json")).unwrap();
         assert!(kept.contains("$argon2id$") && !kept.contains("secret"));
@@ -677,36 +677,36 @@ mod tests {
         }
         // Read back after a restart.
         let again = Directory::open(Some(&d)).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &exists, 3_000).await.as_deref(), Some("oskar"));
+        assert_eq!(again.sign_in("robin", "secret", &exists, 3_000).await.as_deref(), Some("robin"));
         // A mapped name signs in as its account; an account that does not exist is no sign-in.
         let mut mapped = again.config();
-        mapped.accounts.insert("oskar".into(), "owner".into());
+        mapped.accounts.insert("robin".into(), "owner".into());
         again.set_config(mapped).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
-        assert_eq!(again.sign_in("oskar", "secret", &|_: &str, _: Option<Said>| None, 3_000).await, None);
+        assert_eq!(again.sign_in("robin", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
+        assert_eq!(again.sign_in("robin", "secret", &|_: &str, _: Option<Said>| None, 3_000).await, None);
         // A refusal for the name in another case deletes it (directories match names regardless of case), and the
         // name typed in another case finds the directory's spelling for the mapping.
-        assert_eq!(again.sign_in("OSKAR", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
-        again.forget("OSKAR");
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "gone after a refusal");
-        again.remember("oskar", "secret", 1_000).await;
+        assert_eq!(again.sign_in("ROBIN", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
+        again.forget("ROBIN");
+        assert_eq!(again.sign_in("robin", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "gone after a refusal");
+        again.remember("robin", "secret", 1_000).await;
         // A misconfiguration (the service account's password file unreadable) fails closed: no kept hash stands in,
         // and none is deleted.
         let mut broken = again.config();
         broken.bind_password_file = d.join("missing").display().to_string();
         again.set_config(broken.clone()).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "fails closed");
+        assert_eq!(again.sign_in("robin", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "fails closed");
         broken.bind_password_file = pw.display().to_string();
         again.set_config(broken).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"), "kept, not deleted");
+        assert_eq!(again.sign_in("robin", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"), "kept, not deleted");
         // After 30 days it is gone.
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 1_000 + KEEP_SECS + 1).await, None);
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "and stays gone");
+        assert_eq!(again.sign_in("robin", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 1_000 + KEEP_SECS + 1).await, None);
+        assert_eq!(again.sign_in("robin", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "and stays gone");
         // Switched off, the directory is not asked at all.
         let mut off = again.config();
         off.enabled = false;
         again.set_config(off).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| Some(a.to_string()), 3_000).await, None);
+        assert_eq!(again.sign_in("robin", "secret", &|a: &str, _: Option<Said>| Some(a.to_string()), 3_000).await, None);
         std::fs::remove_dir_all(&d).ok();
     }
 

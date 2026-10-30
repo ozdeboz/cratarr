@@ -705,7 +705,7 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
   440 are refused (64.1: 47).
 - **Full screen leaves too** (the owner: "Our full screen mode has no exit mode, so it can become stuck"): the player's
   and the visuals' Full screen button stayed only until full screen, after which only the browser's Esc or back left
-  it; it now turns into Exit full screen. (The showcase on oskarolivier.nl, which hid Close, was stuck that way; it has
+  it; it now turns into Exit full screen. (The visuals showcase site, which hid Close, was stuck that way; it has
   its own way out now.) The Cratarr app's view offers no full screen (its WebView has none), so none of it shows there.
 
 ## Amendment, 2026-10-18: the dice roll the columns' sliders from three quarters (64.3)
