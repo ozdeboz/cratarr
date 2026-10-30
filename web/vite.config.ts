@@ -20,12 +20,15 @@ const buildInfo = (): Plugin => ({
   generateBundle(_, bundle) {
     const main = Object.values(bundle).find((c) => c.type === 'chunk' && c.isEntry && c.name === 'main');
     const build = main ? (/-([A-Za-z0-9_-]+)\.js$/.exec(main.fileName)?.[1] ?? main.fileName) : null;
+    // Without it the build stops (0.11.0: the image's page stage lacked it, and build.json said `version: null`
+    // unnoticed, so no app could tell the server's pages were newer).
     let version: string | null = null;
     try {
       version = readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim() || null;
     } catch {
-      /* a checkout without it */
+      /* told below */
     }
+    if (!version) this.error('VERSION (beside web/) is missing or empty: build.json must name the release');
     this.emitFile({ type: 'asset', fileName: 'build.json', source: JSON.stringify({ version, build }) });
   },
 });
