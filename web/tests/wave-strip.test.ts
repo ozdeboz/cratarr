@@ -1,82 +1,140 @@
-// A hold's waveform as one strip (lib/waveStrip): where a place of the source is drawn as the stretch shown slides and
-// scales over the strip as drawn; when the strip is drawn anew, and that drawn anew it shows no step.
+// A hold's waveform as strips (lib/waveStrip; 0.11.1, the owner: "the waveforms are entirely unstable … we need
+// everything a whole lot more stable"): each bar a function of its place in the hold's frame alone, each track against
+// its own loudest, two levels of a power-of-two pyramid shown by the zoom; where a strip stands as it slides and scales.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { coverOf, serves, placeOf, gridBars, stepOf, STRIP_SPAN, STRIP_SCALE } = await import('../src/lib/waveStrip.ts');
+const { loudness, levelCover, levelBars, levelsOf, mixOf, planStrips, placeOf, covers, barTracks, pitchOf } = await import('../src/lib/waveStrip.ts');
 
-const COUNT = 3 * 300;
-
-/** Where a place `p` of the source lands on the waveform (px): the strip is STRIP_SPAN waveforms wide, its left at e0. */
-function screenX(d: { e0: number; e1: number; w0: number }, p: number, from: number, to: number, width: number) {
-  const { x, k } = placeOf(d as never, from, to, width);
-  const local = ((p - d.e0) / (d.e1 - d.e0)) * STRIP_SPAN * width;
-  return k * local + x;
+/** A track's bins: a music-like envelope, its loudest `top` (its own scale). */
+function binsOf(seed: number, top = 255, n = 512): Uint8Array {
+  let s = seed;
+  const r = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  const b = new Uint8Array(n);
+  let sec = 0.6;
+  for (let j = 0; j < n; j++) {
+    if (r() < 0.03) sec = 0.3 + r() * 0.7;
+    b[j] = Math.round(top * sec * (0.5 + 0.5 * r()));
+  }
+  b[100] = top;
+  return b;
 }
+const UNIT = 1 / 64;
+const tracks = [
+  { key: 'a', start: -180, d: 180, bins: binsOf(1) },
+  { key: 'b', start: 0, d: 240, bins: binsOf(2, 90) },
+  { key: 'c', start: 240, d: 200, bins: binsOf(3, 200) },
+];
 
-test('the stretch shown fills the waveform, edge to edge, as it slides and scales', () => {
-  const d = coverOf(0.4, 0.5, COUNT);
-  const W = 1000;
-  for (const [from, to] of [
-    [0.4, 0.5],
-    [0.43, 0.53],
-    [0.36, 0.44],
-    [0.45, 0.57],
-  ]) {
-    assert.ok(Math.abs(screenX(d, from, from, to, W)) < 1e-6, `${from}..${to}: its start at the left`);
-    assert.ok(Math.abs(screenX(d, to, from, to, W) - W) < 1e-6, `${from}..${to}: its end at the right`);
-    const mid = (from + to) / 2;
-    assert.ok(Math.abs(screenX(d, mid, from, to, W) - W / 2) < 1e-6, `${from}..${to}: its middle in the middle`);
+test('each track against its own loudest: a quiet track reaches the top as a loud one does', () => {
+  for (const t of tracks) assert.equal(loudness([t], t.start, t.start + t.d), 1, t.key);
+  assert.equal(loudness(tracks, 1000, 1010), 0, 'none past the tracks');
+});
+
+test('a strip drawn anew elsewhere has the same bars where both cover: each bar its place alone', () => {
+  for (const L of [2, 4, 6, 9]) {
+    const a = levelCover(L, UNIT, -30, 60);
+    const b = levelCover(L, UNIT, 10, 130);
+    const ba = levelBars(tracks, a);
+    const bb = levelBars(tracks, b);
+    let shared = 0;
+    for (let g = Math.max(a.g0, b.g0); g < Math.min(a.g0 + a.count, b.g0 + b.count); g++) {
+      assert.equal(ba[g - a.g0], bb[g - b.g0], `level ${L}, bar ${g}`);
+      shared++;
+    }
+    assert.ok(shared > 10, `level ${L}: they overlap`);
   }
 });
 
-test('it covers the stretch drawn for, with a step of the ladder on either side, from a bar of its grid', () => {
-  const d = coverOf(0.4, 0.5, COUNT);
-  assert.equal(d.w0, stepOf(0.1));
-  assert.ok(d.w0 / 0.1 <= Math.sqrt(STRIP_SCALE) + 1e-9 && 0.1 / d.w0 <= Math.sqrt(STRIP_SCALE) + 1e-9, 'the nearest step');
-  assert.ok(d.e0 <= 0.4 - d.w0 && d.e0 > 0.4 - d.w0 - d.pitch);
-  assert.ok(Math.abs(d.e1 - d.e0 - STRIP_SPAN * d.w0) < 1e-12);
-  assert.ok(serves(d, 0.4, 0.5));
-});
-
-test('drawn anew only once the stretch leaves what it covers or its scale is a quarter off', () => {
-  const d = coverOf(0.4, 0.5, COUNT);
-  const w = d.w0;
-  assert.ok(serves(d, d.e0, d.e0 + w), 'at its left end');
-  assert.ok(serves(d, d.e1 - w, d.e1), 'at its right end');
-  assert.ok(!serves(d, d.e1 - w + 0.01, d.e1 + 0.01), 'past its right end');
-  assert.ok(!serves(d, d.e0 - 0.01, d.e0 + w - 0.01), 'past its left end');
-  assert.ok(serves(d, 0.4, 0.4 + w * STRIP_SCALE * 0.999), 'nearly a quarter wider');
-  assert.ok(!serves(d, 0.4, 0.4 + w * STRIP_SCALE * 1.01), 'more than a quarter wider');
-  assert.ok(!serves(d, 0.4, 0.4 + (w / STRIP_SCALE) * 0.99), 'more than a quarter narrower');
-});
-
-/** A track's bins: a made-up loudness, uneven enough to show any shift. */
-const BINS = Uint8Array.from({ length: 2000 }, (_, i) => Math.round(128 + 100 * Math.sin(i * 0.37) * Math.cos(i * 0.011)));
-
-test('drawn anew as the stretch slides on, the bars where both strips have them are the same', () => {
-  for (const contrast of [0, 1]) {
-    for (const w of [0.02, 0.1, 0.3]) {
-      const a = coverOf(0.3, 0.3 + w, COUNT);
-      const b = coverOf(0.3 + w * 0.8, 0.3 + w * 1.8, COUNT);
-      assert.equal(a.pitch, b.pitch, 'one grid');
-      const ha = gridBars(BINS, a, COUNT, contrast, COUNT / 6);
-      const hb = gridBars(BINS, b, COUNT, contrast, COUNT / 6);
-      const shift = b.g0 - a.g0;
-      assert.ok(shift > 0 && shift < COUNT);
-      for (let i = shift; i < COUNT; i++) assert.equal(hb[i - shift], ha[i], `w ${w}, contrast ${contrast}: bar ${i}`);
+test("the pyramid: a coarser bar is the loudest of the two finer ones in it, so the zoom's blend never flickers", () => {
+  // Where a bar is at least a bin (a 240 s track's 512 bins: about half a second).
+  for (const L of [6, 7, 8, 9]) {
+    const fine = levelCover(L, UNIT, -20, 80);
+    const coarse = levelCover(L + 1, UNIT, -20, 80);
+    const f = levelBars(tracks, fine);
+    const c = levelBars(tracks, coarse);
+    for (let i = 0; i < c.length; i++) {
+      const g = coarse.g0 + i;
+      const k = 2 * g - fine.g0;
+      if (k < 0 || k + 1 >= f.length) continue;
+      assert.ok(Math.abs(c[i] - Math.max(f[k], f[k + 1])) < 1e-6, `level ${L + 1}, bar ${g}`);
     }
   }
 });
 
-test('no bars beyond the source', () => {
-  const d = coverOf(-0.05, 0.05, COUNT);
-  const h = gridBars(BINS, d, COUNT);
-  for (let i = 0; i < COUNT; i++) {
-    const at = d.e0 + (i + 1) * d.pitch;
-    if (at <= 0) assert.equal(h[i], 0, `bar ${i}`);
+test('finer than a bin: between the two nearest bins at its middle, the same for the same place', () => {
+  const t = [tracks[1]];
+  const per = tracks[1].d / 512;
+  const x = 100 * per + per * 0.3;
+  assert.equal(loudness(t, x - 0.01, x + 0.01), loudness(t, x - 0.01, x + 0.01));
+  const v = loudness(t, x - 0.01, x + 0.01);
+  const lo = Math.min(tracks[1].bins[99], tracks[1].bins[100]) / 90;
+  const hi = Math.max(tracks[1].bins[99], tracks[1].bins[100]) / 90;
+  assert.ok(v >= lo - 1e-6 && v <= hi + 1e-6);
+});
+
+test("the zoom's two levels: about n pieces shown, the coarser's share continuous with the width, each alone near its end", () => {
+  const n = 300;
+  let last: { fine: number; t: number } | null = null;
+  for (let w = 20; w < 400; w *= 1.003) {
+    const l = levelsOf(w, n, UNIT);
+    const shown = w / pitchOf(l.fine, UNIT);
+    assert.ok(shown >= n - 1e-6 && shown < 2 * n + 1e-6, `${w}: ${shown} finer bars`);
+    if (last && last.fine === l.fine) assert.ok(Math.abs(mixOf(l.t) - mixOf(last.t)) < 0.02, `${w}: the share moved at once`);
+    // Across an octave the coarser becomes the finer, shown whole on either side.
+    if (last && last.fine !== l.fine) assert.ok(mixOf(last.t) > 0.99 && mixOf(l.t) < 0.01, `${w}: handed on whole`);
+    last = l;
   }
-  const e = coverOf(0.95, 1.05, COUNT);
-  const he = gridBars(BINS, e, COUNT);
-  for (let i = 0; i < COUNT; i++) if (e.e0 + i * e.pitch >= 1) assert.equal(he[i], 0, `bar ${i}`);
+  assert.equal(mixOf(0), 0);
+  assert.equal(mixOf(1), 1);
+});
+
+test('planned strips: kept while they cover the stretch, drawn anew on the same grid when it leaves them', () => {
+  type S = ReturnType<typeof planStrips>['strips'][number];
+  let had: S[] = [];
+  let drawn = 0;
+  for (let from = 0; from < 600; from += 0.5) {
+    const plan = planStrips(had, tracks, from - 300, from - 180, 300, UNIT);
+    for (const s of plan.strips) {
+      if (!had.includes(s)) drawn++;
+      assert.ok(covers(s, from - 300, from - 180));
+    }
+    had = plan.strips;
+  }
+  // 600 s slid with a 120 s window: drawn anew each 120 s or so, not each frame.
+  assert.ok(drawn > 2 && drawn < 12, `${drawn} drawn`);
+});
+
+test('a track whose waveform comes in later is drawn then', () => {
+  const late = tracks.map((t) => (t.key === 'c' ? { ...t, bins: null } : t));
+  const first = planStrips([], late, 150, 270, 300, UNIT);
+  const again = planStrips(first.strips, late, 151, 271, 300, UNIT);
+  assert.deepEqual(again.strips, first.strips, 'kept while nothing came');
+  const came = planStrips(again.strips, tracks, 152, 272, 300, UNIT);
+  assert.ok(came.strips.every((s) => !again.strips.includes(s)), 'drawn anew once it came');
+});
+
+test('the stretch shown fills the waveform, edge to edge, as it slides and scales', () => {
+  const s = levelCover(5, UNIT, 40, 100);
+  const W = 1000;
+  for (const [from, to] of [
+    [40, 100],
+    [55, 110],
+    [20, 75],
+  ]) {
+    const { x, k } = placeOf(s, from, to, W);
+    // The strip is drawn as wide as the waveform; a place p of it at ((p - e0) / (e1 - e0)) · W, scaled by k, slid by x.
+    const at = (p: number) => k * ((p - s.e0) / (s.e1 - s.e0)) * W + x;
+    assert.ok(Math.abs(at(from)) < 1e-6 && Math.abs(at(to) - W) < 1e-6, `${from}..${to}`);
+  }
+});
+
+test("each bar's track is the one its middle is in, for its colour", () => {
+  const s = levelCover(9, UNIT, -20, 20);
+  const owners = barTracks(tracks, s);
+  for (let i = 0; i < s.count; i++) {
+    const mid = (s.g0 + i + 0.5) * s.pitch;
+    const k = owners[i];
+    if (k >= 0) assert.ok(mid >= tracks[k].start && mid < tracks[k].start + tracks[k].d);
+  }
 });
