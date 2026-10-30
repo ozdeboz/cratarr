@@ -176,7 +176,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   everything with tracks, never Bandcamp's previews. In the app it asks where: to this device (a one-time copy,
   `lib/DownloadEntry`: the step stays open and the row fills as the tracks come in, "Downloading 3 of 12"; Retry for
   failed tracks, the rest when some are there) or as files (`lib/ExportStep`: the format, MP3 at 320 or V0 among them,
-  the layout, one zip or the files into a folder); in the browser files only.
+  the layout; one file as itself, several as one zip, saved where the app's user picks); in the browser files only.
 - **Add to playlist** (a track's, an album's, an artist's menu; `lib/PlaylistToggles`): the playlists as toggle cards
   with the size buttons beside the heading (decided 2026-10-16): two bare icons, dimmed when they would change
   nothing; one column by default, two when smaller, never three on a phone (three only on a wider sheet; a name wraps

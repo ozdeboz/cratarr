@@ -116,7 +116,8 @@ prepared and for what is sent; for a lone track it reads the file's header, so a
 its new extension before it is made. That track is converted in full first, then sent with its length and removed.
 If it cannot be converted the download is refused with a short error: the zip keeps such a file as it was and its
 report says why, but a file alone has no report, and its name already promised the format asked for. This replaces
-the loose files built earlier the same day (a folder picked in the app, filled file by file).
+the loose files built earlier the same day (a folder picked in the app, filled file by file). In the app the
+download is saved where its user picks (Android's save dialog); in a browser it is a link's download.
 
 ## Consequences
 

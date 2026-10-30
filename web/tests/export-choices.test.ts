@@ -10,16 +10,13 @@ const two = { kind: 'playlists' as const, names: ['Chill', 'oskar/Jazz'] };
 
 test('a list of tracks always carries them, its playlist file only when asked; a combined name only for several playlists', () => {
   const o = { ...blankExport(), tracks: false, combine: true, name: ' Both ', m3u: true, format: 'opus' as const, bitrate: 128, layout: 'flat' as const };
-  assert.deepEqual(exportRequest(tracks, o), { what: tracks, format: 'opus', bitrate: 128, layout: 'flat', tracks: true, combine: null, m3u: true, package: 'zip' });
-  assert.deepEqual(exportRequest(two, o), { what: two, format: 'opus', bitrate: 128, layout: 'flat', tracks: false, combine: 'Both', m3u: false, package: 'zip' });
+  assert.deepEqual(exportRequest(tracks, o), { what: tracks, format: 'opus', bitrate: 128, layout: 'flat', tracks: true, combine: null, m3u: true });
+  assert.deepEqual(exportRequest(two, o), { what: two, format: 'opus', bitrate: 128, layout: 'flat', tracks: false, combine: 'Both', m3u: false });
   assert.equal(exportRequest({ kind: 'playlists', names: ['Chill'] }, o).combine, null, 'one playlist: nothing to combine');
 });
 
-test('one zip unless the files one by one may be asked for (the app, 0.9.19)', () => {
-  const o = { ...blankExport(), packaging: 'files' as const };
-  assert.equal(exportRequest(tracks, o).package, 'zip', 'the browser: always a zip');
-  assert.equal(exportRequest(tracks, o, true).package, 'files');
-  assert.equal(exportRequest(tracks, blankExport(), true).package, 'zip', 'a zip by default');
+test('no packaging to choose: the server makes one file itself, several one zip (the owner, 2026-10-30)', () => {
+  assert.equal('package' in exportRequest(tracks, blankExport()), false);
 });
 
 test('ready with something to export and a combined playlist named', () => {
@@ -49,9 +46,9 @@ test("an older version's choices: one folder kept as the layout; anything not of
   assert.deepEqual(keptExport(null), blankExport());
 });
 
-test("0.9.19's choices kept: MP3 at 320 or V0, the files one by one, where Download… goes", () => {
-  assert.deepEqual(keptExport({ format: 'mp3-320', packaging: 'files', where: 'files' }), { ...blankExport(), format: 'mp3-320', packaging: 'files', where: 'files' });
+test("0.9.19's choices kept: MP3 at 320 or V0, where Download… goes; a packaging kept before is let go", () => {
+  assert.deepEqual(keptExport({ format: 'mp3-320', packaging: 'files', where: 'files' }), { ...blankExport(), format: 'mp3-320', where: 'files' });
   assert.equal(keptExport({ format: 'mp3-v0' }).format, 'mp3-v0');
-  assert.deepEqual(keptExport({ packaging: 'rar', where: 'cloud' }), blankExport(), 'nothing not offered');
+  assert.deepEqual(keptExport({ where: 'cloud' }), blankExport(), 'nothing not offered');
   assert.equal(blankExport().where, 'device', 'to this device first, as Download once was');
 });
