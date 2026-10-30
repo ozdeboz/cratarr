@@ -94,10 +94,12 @@ export function shownOf(placed: { from: number; to: number }, o: Offset | null, 
 }
 
 /** A wide view's colours, track by track (lib/Waveform's `wide.colours`; the owner, 2026-10-30: "The color should be
- *  stable"): null, the player's own colour as the waveform has it anyway, for the track the player shows and for all
- *  where the player does not take its colours from the covers; each other track its cover's, else the theme's. */
+ *  stable"; 0.12: "Colour or brightness flips" during a hold): each track its cover's, the same whichever track the
+ *  player shows (the player's own colour follows its cover a moment after a track change, and the track turning shown
+ *  took that colour on for those frames); null, the player's own, for the shown track while its cover's is not known
+ *  and for all where the player does not take its colours from the covers; else the theme's. */
 export function waveColours(keys: (string | null)[], shown: string | null, own: boolean, accentOf: (key: string) => string | null): (string | null)[] {
-  return keys.map((k) => (!own || !k || k === shown ? null : (accentOf(k) ?? 'var(--accent)')));
+  return keys.map((k) => (!own || !k ? null : (accentOf(k) ?? (k === shown ? null : 'var(--accent)'))));
 }
 
 // The hold's window frame by frame (lib/SeekWave runs it; the tests drive it): where it stands in s from the playing
