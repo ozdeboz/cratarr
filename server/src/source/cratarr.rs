@@ -307,7 +307,11 @@ impl Source for CratarrSource {
                 upcoming: queue[at + 1..]
                     .iter()
                     .zip(ours.iter().skip(1))
-                    .map(|(t, d)| super::Upcoming { track: track_of(t, d), duration_secs: d.as_ref().and_then(|d| d.duration_secs).or(t.duration_secs) })
+                    .map(|(t, d)| super::Upcoming {
+                        track: track_of(t, d),
+                        duration_secs: d.as_ref().and_then(|d| d.duration_secs).or(t.duration_secs),
+                        asked_by: t.asked_by.clone(),
+                    })
                     .collect(),
             }))
         })
