@@ -856,6 +856,8 @@ pub fn build(i: &Inputs) -> Index {
     // names them (never round in a circle).
     let mut parent_titles: HashMap<String, String> = HashMap::new();
     let mut queue: Vec<String> = linked.clone();
+    // In a fixed order: a circle (which MusicBrainz should never hold) then breaks the same way on every build.
+    queue.sort_unstable();
     while let Some(w) = queue.pop() {
         let Some((p, title, number)) = i.parents.get(&w) else { continue };
         if *p == w || title.trim().is_empty() || index.parent.contains_key(&w) {
