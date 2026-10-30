@@ -22,13 +22,21 @@
   let other = $state<{ asked: boolean; may: boolean } | null>(null);
   const open = (status: string) => status !== 'cancelled' && status !== 'declined';
   const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  // Asked again only when what it is about changes (the owner, 2026-10-30: Want and Not interested blinked in and out
+  // of the player's menu). The props are read through the playing track, a new object at each report of its player,
+  // so an effect on them alone ran, and cleared both, every few seconds. An answer for what it was about before is
+  // dropped.
+  const about = $derived(page ? JSON.stringify([page, artist, album]) : null);
   $effect(() => {
-    const [p, ar, al] = [page, artist, album];
+    const key = about;
     suggestion = null;
     other = null;
-    if (!p) return;
+    if (!key) return;
+    const [p, ar, al] = JSON.parse(key) as [string, string | null, string | null];
+    let current = true;
     getDiscover().then(
       (v) => {
+        if (!current) return;
         const found = v.found?.albums.find((a) => a.bandcamp && samePage(a.bandcamp, p));
         const r = found ? v.requests?.[found.key] : undefined;
         if (found) return (suggestion = { album: found, asked: !!r && open(r.status), may: !!v.may_request });
@@ -36,12 +44,13 @@
         const may = !!v.may_request;
         other = { asked: false, may };
         getRequests().then(
-          (q) => (other = { may, asked: q.mine.some((m) => open(m.status) && same(m.artist, ar) && same(m.album, al)) }),
+          (q) => current && (other = { may, asked: q.mine.some((m) => open(m.status) && same(m.artist, ar) && same(m.album, al)) }),
           () => {},
         );
       },
-      () => (suggestion = null),
+      () => current && (suggestion = null),
     );
+    return () => (current = false);
   });
   async function wantOther() {
     if (!artist || !album) return;

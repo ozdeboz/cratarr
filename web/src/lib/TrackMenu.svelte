@@ -165,13 +165,16 @@
   let versions = $state<TrackVersions | null>(null);
   // Answered (with none, or failed): what a sheet opened at its versions says then.
   let versionsAnswered = $state(false);
+  // Asked again only for another track, as `details` below (the playing track's view is new at every report).
+  const versionsOf = $derived(t && t.source === 'cratarr' && t.has_versions !== false && can('other_versions') !== false ? `${t.source}\n${t.id}` : null);
   $effect(() => {
-    const now = t;
+    const key = versionsOf;
     versions = null;
     versionsAnswered = false;
-    if (!now || now.source !== 'cratarr' || now.has_versions === false || can('other_versions') === false) return void (versionsAnswered = true);
+    if (!key) return void (versionsAnswered = true);
+    const [source, id] = key.split('\n');
     let gone = false;
-    getTrackVersions(now.source, now.id).then(
+    getTrackVersions(source, id).then(
       (v) => {
         if (gone) return;
         if (v?.versions?.length) versions = v;
