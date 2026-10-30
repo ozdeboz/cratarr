@@ -1148,7 +1148,7 @@ mod tests {
         assert_eq!(name_like("05 Euphoria.flac", t.position, &t.title, "flac"), "07 Bloom.flac");
         tag(&file, &neighbour, &t).unwrap();
         let got = super::super::fixes::values(&file, &["tracknumber", "title", "album", "musicbrainz_trackid"]).unwrap();
-        assert_eq!(got, [Some("07".to_string()), Some("Bloom".into()), Some("Delight".into()), Some("r7".into())]);
+        assert_eq!(got, [Some("7".to_string()), Some("Bloom".into()), Some("Delight".into()), Some("r7".into())], "the tag a plain number, as Cratarr tags; the name padded as its neighbours");
         std::fs::remove_dir_all(&d).ok();
     }
 
