@@ -55,6 +55,8 @@ pub struct WorkSong {
     pub title: String,
     pub artist: String,
     pub year: Option<u32>,
+    /// Its length in seconds, where known (0.12, decision 0086: a work's recording shows its length).
+    pub duration_secs: Option<f64>,
 }
 
 /// A song in Cratarr's ids, with its album's name and album artist (see `Library::song_ids`).
@@ -873,7 +875,7 @@ impl Library {
     /// artist and year.
     pub fn work_songs(&self) -> Result<Vec<WorkSong>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, album_id, mbid, disc_no, track_no, title, coalesce(artist, ''), year FROM songs ORDER BY n")?;
+        let mut st = db.prepare("SELECT id, album_id, mbid, disc_no, track_no, title, coalesce(artist, ''), year, duration_ms FROM songs ORDER BY n")?;
         let number = |v: Option<i64>| v.and_then(|n| u32::try_from(n).ok());
         let rows = st.query_map([], |r| {
             Ok(WorkSong {
@@ -885,6 +887,7 @@ impl Library {
                 title: r.get(5)?,
                 artist: r.get(6)?,
                 year: number(r.get(7)?),
+                duration_secs: r.get::<_, Option<i64>>(8)?.filter(|ms| *ms > 0).map(|ms| ms as f64 / 1000.0),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

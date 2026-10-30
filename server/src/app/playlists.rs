@@ -480,9 +480,8 @@ pub enum CrateOrder {
 }
 
 /// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
-/// aside (`name_key`), each run of digits as its number.
-#[cfg(test)]
-fn natural(a: &str, b: &str) -> std::cmp::Ordering {
+/// aside (`name_key`), each run of digits as its number. Classical's works are ordered by it too (0.12).
+pub(crate) fn natural(a: &str, b: &str) -> std::cmp::Ordering {
     natural_keys(&name_key(a), &name_key(b))
 }
 
@@ -767,6 +766,10 @@ pub struct PlaylistRow {
     /// library; absent where not, or not said.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_versions: Option<bool>,
+    /// The work it performs, with the work that holds it and its number there (0.12, decision 0086: an album's
+    /// movements under their work's heading): an album's rows on Cratarr's own library, where MusicBrainz says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<super::classical::RowWork>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2063,6 +2066,7 @@ impl PlaylistService {
                     last_played: None,
                     added: None,
                     has_versions: None,
+                    work: None,
                 })
                 .collect())
         })

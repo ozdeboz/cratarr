@@ -139,6 +139,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/classical/composers", get(classical_composers))
         .route("/api/classical/composers/{key}", get(classical_composer))
         .route("/api/tracks/{source}/{id}/versions", get(track_versions))
+        // Works and movements (0.12, decision 0086): a composer's works, a work with its recordings; everyone's.
+        .route("/api/classical/composers/{key}/works", get(composer_works))
+        .route("/api/works/{mbid}", get(work_view))
         .route("/api/status", get(status))
         // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.
         .route("/api/capabilities", get(capabilities))
@@ -922,6 +925,39 @@ async fn classical_composer(ctx: Ctx, Path(key): Path<String>) -> Response {
         Ok(ix) => match ix.composer(&key) {
             Some(c) => Json(json!({ "key": c.key, "name": c.name, "records": c.albums })).into_response(),
             None => (StatusCode::NOT_FOUND, Json(json!({ "error": "No such composer." }))).into_response(),
+        },
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// A composer's works (0.12, decision 0086): `[{work, title, key?, catalogue?, parts, recordings}]`, their top-level
+/// works (a work with no parent, or none known yet), the most recorded first, then by title; by their key or one given
+/// out before that leads to them; 404 for none.
+async fn composer_works(ctx: Ctx, Path(key): Path<String>) -> Response {
+    let found = match ctx.serve() {
+        Ok(s) => classical_index(s).await,
+        Err(e) => Err(e),
+    };
+    match found {
+        Ok(ix) => match ix.composer_works(&key) {
+            Some(w) => Json(w).into_response(),
+            None => (StatusCode::NOT_FOUND, Json(json!({ "error": "No such composer." }))).into_response(),
+        },
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// A work (0.12, decision 0086): `{title, composers, parent?, parts, recordings}`, each recording's tracks in the
+/// work's order (play them with `POST /api/play`, `kind: tracks`); 404 for a work the library holds no track of.
+async fn work_view(ctx: Ctx, Path(mbid): Path<String>) -> Response {
+    let found = match ctx.serve() {
+        Ok(s) => classical_index(s).await,
+        Err(e) => Err(e),
+    };
+    match found {
+        Ok(ix) => match ix.work(&mbid) {
+            Some(w) => Json(w).into_response(),
+            None => (StatusCode::NOT_FOUND, Json(json!({ "error": "No such work in the library." }))).into_response(),
         },
         Err(e) => ApiError::from(e).into_response(),
     }
