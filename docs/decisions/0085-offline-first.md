@@ -1,7 +1,7 @@
 # 0085: Offline first, in five steps
 
-- Status: accepted as a plan (the owner, 2026-10-30: "This sounds like a pretty good plan"), beside 0.11 to 0.14; not
-  built
+- Status: accepted as a plan (the owner, 2026-10-30: "This sounds like a pretty good plan"; its steps settled the same day:
+  "Yes. Write this in."), beside 0.11 to 0.14; not built
 - Date: 2026-10-30
 - Builds on: 0033 (Play On's queues), 0038 (kept on this device), 0052 (local library), 0057 and 0075 (one engine, the
   rules crate), 0062 (the app owns its controls), and the page's out-of-reach rules (lib/reach, lib/later)
@@ -47,16 +47,33 @@ The owner (2026-10-30): "graceful degradation is the way to go in first instance
 consume, and we don't offer what we cannot uphold." Wherever the apps meet a server that is older or newer, or none
 at all, they show only what they can read, and offer only what they can carry through: a field the pages do not know
 is left out, not half-shown; an action the server (or being offline) cannot complete is not offered, rather than
-offered and refused. The open points below are settled in that light, with what Symfonium and Finamp do as reference.
+offered and refused. What the steps below settle, they settle in that light, with what Symfonium and Finamp do as reference.
 
-## Open points (the owner's)
+## Settled, step by step (the owner, 2026-10-30)
 
-- How each change merges when it was made in two places: a playlist's tracks (as a set, each addition and removal
-  kept; or the last edit wins), its order, a favourite, a rating, a crate's rules, a queue.
-- How much the device mirrors: the whole library, or what a mode or a user's own music holds; covers at full size or
-  small.
-- What an app with pages older than the server's does when the server is out of reach: its own pages, with the newer
-  server's fields missing.
+Studied against Finamp (it blocks what it cannot merge, sends plays never, keeps only downloads, and goes by what each
+item says it allows) and Symfonium (offline-first playlists replaced whole one way or the other, plays sent later but
+collapsed per song, the whole library's index on the device, a version allowlist that turned a newer server away).
+Both are held back by servers without a change log, ids per entry or times; Cratarr's server is its own, so it gives
+them. Each step brings only as much of the mechanism as it needs, and what it cannot yet uphold is not offered.
+
+- **Beside 0.11: the app opens anywhere and never offers what it cannot do.** The apps carry their own pages (step 1).
+  The server says what it can do (a list of capabilities, not a version number: /api/health), the app keeps the last
+  answer for offline, and the pages leave out what it lacks; items carry their own allowances where they differ
+  (can edit, can delete). A degradation says so in one line where it happens, never as a refusal after a tap.
+- **Beside 0.12: Downloads wholly offline, and no play lost.** Downloads is the offline shelf (step 2): its metadata and
+  small covers on the device, searched, filtered and ordered offline. Plays and scrobbles made offline are kept with an
+  id and a time each, sent once they can be, never twice and never collapsed (step 3's first part). Favourites and
+  ratings work offline, the last change by time winning. Editing a playlist offline is not offered yet, one line
+  saying why.
+- **Beside 0.13: playlists edited offline, and the whole library browsable.** The server keeps a change log. A playlist's
+  edits become operations with ids (add a track, remove entry 7, move entry 7 after 3), replayed on the server and
+  merged: additions and removals as a set, the order as the last move made it; so one's own playlists can be edited
+  offline (step 3 whole). The whole library's index syncs by that log (step 4): "Available offline" shows what plays,
+  the rest is dimmed; small covers for the index, full ones for what is downloaded.
+- **0.14: crates and the queue on the device.** Crate rules run on the device through the rules crate (the shared Rust
+  core, step 5). A queue played offline stays that device's own; Play On takes it up on the way back. A crate's rules
+  are edited online only, until the change log covers crates too.
 
 ## Consequences
 
