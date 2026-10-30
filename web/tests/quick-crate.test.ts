@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST } = await import(
+const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -272,4 +272,21 @@ test("global search's crate card: two terms or more of two kinds or more; one th
   assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('soul', genre('Soul'))]), null, 'one kind');
   assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('qwzx')]), null, 'a word read as nothing leaves one term');
   assert.ok(crateOfLine([r('jazz', genre('Jazz')), r('qwzx'), r('1975', { kind: 'year', value: '1975-1975', label: '1975' })]), 'what reads still makes it');
+});
+
+test('the crates made here and not saved show only once typing starts, those the words may mean', () => {
+  const chip = (term: string, kind: string, more: Record<string, unknown> = {}) =>
+    ({ term, reading: { kind, value: term, label: term, ...(more.id ? { id: more.id } : {}) }, others: [], ...more }) as never;
+  const soul = { chips: [chip('Soul', 'genre'), chip('1971', 'year'), chip('Stax', 'label')], min: 0 };
+  const ambient = { chips: [chip('Ambient', 'genre'), chip('Warp', 'label')], min: 0 };
+  const like = { chips: [chip('Jazz', 'genre'), chip('Ann Quartet', 'artist', { how: 'like', id: 'ar-ann' })], min: 60 };
+  const recent = [soul, ambient, like];
+  assert.deepEqual(recentFor(recent, ''), [], 'nothing typed: the regular page, none shown');
+  assert.deepEqual(recentFor(recent, '   '), []);
+  assert.deepEqual(recentFor(recent, 's'), [soul], 'the last word as a beginning');
+  assert.deepEqual(recentFor(recent, 'wa'), [ambient]);
+  assert.deepEqual(recentFor(recent, 'ambient w'), [ambient], 'every word, the last a beginning');
+  assert.deepEqual(recentFor(recent, 'like ann'), [like], "a like's own word counts");
+  assert.deepEqual(recentFor(recent, 'zz'), [], 'a later word inside a name only when not the last');
+  assert.deepEqual(recentFor(recent, 'jazz, an'), [like], 'commas as typed in the field');
 });

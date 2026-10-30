@@ -50,7 +50,7 @@
   import { inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, playFromHere, snippet, snippetable, startSnippet, stretchOf, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, fromLabel, playFromHere, snippetable, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import { prefs } from './prefs.svelte';
   import { untrack } from 'svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
@@ -287,7 +287,7 @@
   function fromHere() {
     const s = snip;
     if (!s) return;
-    const at = snippet.key === `${s.source}/${s.id}` && snippet.to > snippet.from ? snippet.from : (stretchOf(s)?.from ?? 0);
+    const at = startOf(s);
     onclose();
     playFromHere(s, at).catch((e) => toast.fail(e, "It didn't play"));
   }
@@ -557,7 +557,7 @@
       {#if snip}
         <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and the track from there. -->
         <SnippetStrip track={snip} />
-        <MenuEntry icon="play" label="Play from here" onclick={fromHere} />
+        <MenuEntry icon="play" label={fromLabel(startOf(snip))} onclick={fromHere} />
       {/if}
       <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
       <MenuTable kind="track" {entry} />

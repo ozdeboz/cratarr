@@ -1,14 +1,18 @@
 <script lang="ts">
   // A work opened (0.12, decision 0086; the owner, 2026-10-30: "its recordings, each playable"): its recordings in the
   // library, one row each (its performers, album, year, length and cover); a tap plays that recording's movements in
-  // their work's order, ⋮ opens its album. The recording chosen (played, or the first) lists its movements under it, a
-  // tap on one playing the recording from there. Cratarr's own library only.
+  // their work's order, ⋮ opens its album's menu. The recording chosen (played, or the first) lists its movements under
+  // it, a tap on one playing the recording from there; a long-press, right-click or ⋮ on a movement is its track's menu
+  // (its snippet, Play next, Add to queue: the owner, 2026-10-30, works reachable). Cratarr's own library only.
+  import { fromAction } from 'svelte/attachments';
+  import AlbumMenu from './AlbumMenu.svelte';
   import { albumCoverUrl, getWork, type WorkRecording, type WorkView } from './api';
+  import { longpress } from './longpress';
+  import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { albumSubject, viewOver } from './panel.svelte';
   import { playCollection } from './play.svelte';
   import { clockText } from './remote.svelte';
   import Row from './Row.svelte';
@@ -22,6 +26,9 @@
   let failed = $state<string | null>(null);
   /** The recording whose movements show (its album). */
   let chosen = $state<string | null>(null);
+  /** A movement's menu, or a recording's album's. */
+  let trackMenu = $state<MenuTrack | null>(null);
+  let albumMenu = $state<WorkRecording | null>(null);
   $effect(() => {
     const id = mbid;
     let gone = false;
@@ -59,10 +66,18 @@
       toast.fail(e, 'Could not start playing');
     }
   }
-  function openAlbum(r: WorkRecording) {
-    onclose();
-    viewOver(albumSubject(SOURCE, r.album_id));
-  }
+  type WorkTrack = WorkRecording['tracks'][number];
+  /** A movement as a track's menu has it: named by its movement, the recording's performers as its artist. */
+  const asTrack = (r: WorkRecording, t: WorkTrack, label: string): MenuTrack => ({
+    source: SOURCE,
+    id: t.id,
+    name: label,
+    artist: r.performers.length ? r.performers.join(', ') : null,
+    album: r.album,
+    album_id: r.album_id,
+    duration_secs: t.duration_secs ?? null,
+  });
+  const press = (r: WorkRecording, t: WorkTrack, label: string) => fromAction(longpress, () => () => (trackMenu = asTrack(r, t, label)));
 </script>
 
 <MenuSheet
@@ -84,19 +99,23 @@
         <li class:chosen={chosen === r.album_id}>
           <Row size="large" title={who(r)} sub={[r.album, r.year ? String(r.year) : null].filter(Boolean).join(' · ')} count={length(r)} label="Play {name} · {who(r)}" onclick={() => play(r)}>
             {#snippet lead()}<span class="art"><Cover src={albumCoverUrl(SOURCE, r.album_id)} /></span>{/snippet}
-            {#snippet action()}<button class="tool" aria-label="Open {r.album}" onclick={() => openAlbum(r)}><Icon name="moreVert" size={22} /></button>{/snippet}
+            {#snippet action()}<button class="tool" aria-label="{r.album}: its menu" onclick={() => (albumMenu = r)}><Icon name="moreVert" size={22} /></button>{/snippet}
           </Row>
           {#if chosen === r.album_id}
             <ol class="movements" aria-label="Movements">
               {#each tracksOf(r) as t, k (t.id)}
                 {@const part = partTitle(t.part)}
+                {@const label = part ? movementLabel(part, name) : `Part ${k + 1}`}
                 <li>
                   <Row
                     size="medium"
-                    title={part ? movementLabel(part, name) : `Part ${k + 1}`}
+                    title={label}
                     count={t.duration_secs ? clockText(t.duration_secs) : undefined}
                     onclick={() => play(r, t.id)}
-                  />
+                    attach={press(r, t, label)}
+                  >
+                    {#snippet action()}<button class="tool" aria-label="{label}: its menu" onclick={() => (trackMenu = asTrack(r, t, label))}><Icon name="moreVert" size={22} /></button>{/snippet}
+                  </Row>
                 </li>
               {/each}
             </ol>
@@ -106,6 +125,8 @@
     </ul>
   {/if}
 </MenuSheet>
+{#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
+{#if albumMenu}{@const r = albumMenu}<AlbumMenu source={SOURCE} album={{ id: r.album_id, title: r.album, artist: r.performers.length ? r.performers.join(', ') : null }} onclose={() => (albumMenu = null)} />{/if}
 
 <style>
   .rows,

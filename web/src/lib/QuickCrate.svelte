@@ -17,16 +17,17 @@
   import { viewPlaylist } from './panel.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
-  import { CLOSE, TERM_KINDS, chipOf, conditionsOf, countAt, keepsOwn, minAt, nameOf, readLine, seedsOf, sentenceOf, type Chip, type Found } from './quickCrate';
+  import { CLOSE, TERM_KINDS, chipOf, conditionsOf, countAt, keepsOwn, minAt, nameOf, readLine, recentFor, seedsOf, sentenceOf, type Chip, type Found } from './quickCrate';
   import { forgetQuick, keepQuick, quickCrates } from './quickCrates.svelte';
   import QuickTermSheet from './QuickTermSheet.svelte';
   import { clockText } from './remote.svelte';
   import Row from './Row.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, playFromHere, snippet, startSnippet, stretchOf, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, fromLabel, playFromHere, snippet, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import { toast } from './toast.svelte';
   import TrackCover from './TrackCover.svelte';
   import { withUndo } from './undo.svelte';
+  import { reach } from './reach.svelte';
 
   const chips = $derived(quickCrates.chips);
   const min = $derived(quickCrates.min);
@@ -139,6 +140,9 @@
   });
 
   const none = $derived(!chips.length || preview?.total === 0);
+  // The empty page is the regular one (the owner, 2026-10-30): the crates made here and not saved show only once typing
+  // starts, those the words may mean.
+  const recentShown = $derived(chips.length ? [] : recentFor(quickCrates.recent, text));
   let starting = $state<'play' | 'shuffle' | null>(null);
   /** Played or shuffled as it is: the server's first 500 of it (a queue's most), here or where the output is. */
   async function play(how: 'play' | 'shuffle') {
@@ -222,13 +226,17 @@
   });
   onDestroy(() => openRow !== null && endSnippet());
   function fromHere(t: SnippetTrack) {
-    const at = isOn(t) && snippet.to > snippet.from ? snippet.from : (stretchOf(t)?.from ?? 0);
+    const at = startOf(t);
     openRow = null;
     playFromHere(t, at).catch((e) => toast.fail(e, "It didn't play"));
   }
 </script>
 
 <section class="quick" aria-label="Grab a crate">
+  <!-- Out of reach (decision 0085): reading words, the preview and Save are all Cratarr's, so one line instead. -->
+  {#if reach.away}
+  <p class="note">Grabbing a crate needs Cratarr.</p>
+  {:else}
   <p class="sentence" class:empty={!chips.length}>
     {#each parts as p, k (k)}{#if k && !p.tight}{' '}{/if}{#if p.chip !== undefined}{@const c = chips[p.chip]}<button
           class="term"
@@ -273,7 +281,7 @@
               {#snippet action()}
                 {#if st}
                   {@const on = openRow === i && isOn(st) && snippet.sounding}
-                  <button class="snip" aria-label={openRow === i ? 'Stop its snippet' : 'Hear a snippet'} aria-pressed={openRow === i} onclick={() => snipTap(i, st)}>
+                  <button class="snip" aria-label={openRow === i ? `Stop ${r.name ?? r.file}` : `Hear ${r.name ?? r.file}`} aria-pressed={openRow === i} onclick={() => snipTap(i, st)}>
                     <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
                       <circle class="ring" cx="18" cy="18" r="16" />
                       {#if on}<circle class="fill" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{heardShare * 100} 100" transform="rotate(-90 18 18)" />{/if}
@@ -286,16 +294,16 @@
             {#if openRow === i && st}
               <div class="snipped">
                 <SnippetStrip track={st} />
-                <button class="from" onclick={() => fromHere(st)}>Play from here</button>
+                <button class="from" onclick={() => fromHere(st)}>{fromLabel(startOf(st))}</button>
               </div>
             {/if}
           </li>
         {/each}
       </ol>
     {/if}
-  {:else if quickCrates.recent.length}
+  {:else if recentShown.length}
     <ul class="recent" aria-label="Made here, not saved">
-      {#each quickCrates.recent as k (nameOf(k.chips))}
+      {#each recentShown as k (nameOf(k.chips))}
         <li>
           <Row
             size="medium"
@@ -310,6 +318,7 @@
         </li>
       {/each}
     </ul>
+  {/if}
   {/if}
 </section>
 
@@ -339,13 +348,21 @@
   }
 
   /* The crate as a sentence (mockup B): its terms in the text's own weight, underlined, the words between muted. */
+  /* On an accent line, like writing (the owner's 3a, 2026-10-30): no box, before typing or after. */
   .sentence {
     margin: 0;
-    padding: 4px 4px 0;
+    padding: 4px 2px 8px;
+    border-bottom: 2px solid var(--accent);
     font-size: 22px;
     font-weight: 600;
     line-height: 1.55;
     text-wrap: pretty;
+  }
+
+  /* Keyboard focus shows on the line itself, the field having no box of its own. */
+  .sentence:focus-within {
+    border-bottom-width: 3px;
+    padding-bottom: 7px;
   }
 
   .w {
@@ -383,30 +400,24 @@
     background: none;
     color: var(--text);
     font: inherit;
-    font-size: 18px;
     font-weight: 400;
     caret-color: var(--accent);
+  }
+
+  input[type='search']::placeholder {
+    color: var(--muted);
+    opacity: 1;
   }
 
   input[type='search']:focus {
     outline: none;
   }
 
-  /* Nothing typed yet: a field of its own, the list's width. */
-  .empty {
-    padding: 0;
-  }
-
+  /* Nothing typed yet: the line alone, its field the list's width. */
   .empty input[type='search'] {
     box-sizing: border-box;
     width: 100%;
     field-sizing: fixed;
-    min-height: 40px;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg);
-    font-size: 15px;
   }
 
   .near {

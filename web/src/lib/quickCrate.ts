@@ -321,6 +321,19 @@ export function nameOf(chips: readonly Chip[]): string {
   return chips.map((c) => (likes(c) ? `like ${c.reading.label}` : c.reading.label)).join(' · ');
 }
 
+/** The crates made here and not saved that what is being typed may mean (the owner, 2026-10-30: the empty page stays the
+ *  regular one until typing starts): none for nothing typed; else those whose name holds every word typed so far, the
+ *  last word as a beginning. */
+export function recentFor<T extends { chips: readonly Chip[] }>(recent: readonly T[], typed: string): T[] {
+  const words = typed.toLowerCase().split(/[\s,;]+/).filter(Boolean);
+  if (!words.length) return [];
+  return recent.filter((k) => {
+    const name = nameOf(k.chips).toLowerCase();
+    const parts = name.split(/[\s·]+/).filter(Boolean);
+    return words.every((w, i) => (i === words.length - 1 ? parts.some((p) => p.startsWith(w)) : name.includes(w)));
+  });
+}
+
 /** Where a cut at closeness `min` falls on the closeness curve (how many are at least that alike), and back. */
 export const countAt = (curve: readonly number[], min: number) => curve.filter((a) => a >= min).length;
 export const minAt = (curve: readonly number[], count: number) => (count > 0 && count <= curve.length ? curve[count - 1] : 0);

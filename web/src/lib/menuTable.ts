@@ -237,6 +237,45 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
 /** Names no menu uses any more: what 0058 and its amendment renamed. */
 export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…'];
 
+/** What a menu offers out of reach (decision 0085: don't offer what can't be upheld; the owner, 2026-10-30): the entries
+ *  that work with Cratarr away. A navigation reads the service worker's last copy (lib/away), a heart, a rating, a
+ *  playlist's membership or name and an exclusion are kept on the device and sent later (lib/later), the queue and what
+ *  is on this device are the device's own, and a web search needs the internet, not Cratarr. Every other entry needs
+ *  Cratarr and is left out while it is away; one not named here is too, so a new entry is offline only once listed. */
+export const WORKS_AWAY: ReadonlySet<EntryId> = new Set<EntryId>([
+  'view',
+  'goAlbum',
+  'goArtist',
+  'goGenre',
+  'favourite',
+  'rating',
+  'excludeEverywhere',
+  'excludeArtist',
+  'notInCrate',
+  'addToPlaylist',
+  'rename',
+  'removeFromDevice',
+  'webSearch',
+  'geniusSearch',
+  'openOnBandcamp',
+  'artistOnBandcamp',
+  'queues',
+  'removeFromQueue',
+  'removeFromList',
+  'removeResume',
+  'clearQueue',
+  'extra',
+]);
+
+/** The large actions that need Cratarr itself (Play and the queue's play what is on this device out of reach, lib/play). */
+export const ACTIONS_NEED_SERVER: ReadonlySet<string> = new Set(['Start radio', 'Ask to play next', 'Ask to add to queue']);
+
+/** Whether a menu shows entry `e` (`away`: Cratarr out of reach). */
+export const offeredAway = (e: EntryId, away: boolean) => !away || WORKS_AWAY.has(e);
+
+/** Whether a menu shows the large action named `label`. */
+export const actionAway = (label: string, away: boolean) => !away || !ACTIONS_NEED_SERVER.has(label);
+
 /** A kind's cards, in the table's order. */
 export const cardsOf = (kind: MenuKind): readonly MenuCard[] => MENUS[kind].cards;
 

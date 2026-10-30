@@ -8,7 +8,8 @@ import { inApp, onAppSnippet, toApp } from './app.svelte';
 import { local, pageVolume, setSnippetDuck } from './localPlayer.svelte';
 import { playsHere } from './output.svelte';
 import { playCollection } from './play.svelte';
-import { playing, seekTo } from './remote.svelte';
+import { clockText, playing, seekTo } from './remote.svelte';
+import { reach } from './reach.svelte';
 import { DUCK, FADE_MS, SNIPPET_S, START_DELAY_MS, duckGain, snippetGain, snippetOf, type Stretch } from './snippet';
 import { decode } from './visuals/beats';
 import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
@@ -20,8 +21,9 @@ export type SnippetTrack = { source: string; id: string; name?: string | null; d
 export const snippet = $state({ key: null as string | null, from: 0, to: 0, at: 0, sounding: false });
 
 const keyOf = (t: SnippetTrack) => `${t.source}/${t.id}`;
-/** Whether a track can have a snippet: one Cratarr streams (not the device's own music). */
-export const snippetable = (t: SnippetTrack | null | undefined) => !!t && t.source !== 'device';
+/** Whether a track can have a snippet: one Cratarr streams (not the device's own music), and Cratarr in reach (decision
+ *  0085: out of reach the menu stays silent and shows no strip). */
+export const snippetable = (t: SnippetTrack | null | undefined) => !!t && t.source !== 'device' && !reach.away;
 
 /** Its length (s): as listed, else as a Bandcamp preview's analysis found it. */
 export const lengthOf = (t: SnippetTrack) => t.duration_secs ?? (t.source === BANDCAMP ? (heardOf(t.source, t.id)?.duration_secs ?? null) : null);
@@ -205,6 +207,15 @@ onAppSnippet((atMs) => {
 
 /** Plays `t` for real from `secs` in (the snippet's moment): the snippet ended, the track played as any track, then
  *  moved there once it plays. */
+/** Where Play from here starts the track (s): its snippet's start while it sounds, else its stretch's as known now; 0
+ *  when not known. */
+export function startOf(t: SnippetTrack): number {
+  return snippet.key === keyOf(t) && snippet.to > snippet.from ? snippet.from : (stretchOf(t)?.from ?? 0);
+}
+
+/** Play from here's words: from when (the owner's audit, 2026-10-30: say from when), else plainly. */
+export const fromLabel = (secs: number) => (secs > 0 ? `Play from ${clockText(secs)}` : 'Play from here');
+
 export async function playFromHere(t: SnippetTrack, secs: number) {
   endNow();
   await playCollection({ kind: 'tracks', source: t.source, ids: [t.id] }, 'play', t.name ?? '');

@@ -445,24 +445,20 @@ export const getCrateAxes = (source?: string, without?: string[]) => quietly<Axi
 export const getCrate = (id: string) => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`);
 /** An artist left out (0.10, decision 0083): by the server's key (the name loosely) and as named. */
 export type ExcludedArtist = { key: string; name: string; at?: number };
-/** An artist left out of one crate, or taken back: the crate's list after it, and the undo. */
-export const notInCrate = (id: string, name: string) =>
-  request<{ crate: string; not_artists: ExcludedArtist[]; undo: string | null }>(`/api/crates/${encodeURIComponent(id)}/not-artist`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-export const backInCrate = (id: string, key: string) =>
-  request<{ crate: string; not_artists: ExcludedArtist[]; undo: string | null }>(`/api/crates/${encodeURIComponent(id)}/not-artist/${encodeURIComponent(key)}`, { method: 'DELETE' });
-/** The artists the account excluded everywhere (every crate, radio, Autoplay, Discover), and the changes, each with its undo. */
+/** An artist left out of one crate, or taken back: the crate's list after it, and the undo. Through the outbox (lib/later,
+ *  decision 0085), as a track's exclusion: out of reach `meanwhile` stands for Cratarr's answer (the list as it will be). */
+type CrateArtists = { crate: string; not_artists: ExcludedArtist[]; undo: string | null };
+export const notInCrate = (id: string, name: string, meanwhile: () => CrateArtists) =>
+  laterJson<CrateArtists>(`/api/crates/${encodeURIComponent(id)}/not-artist`, { name }, meanwhile);
+export const backInCrate = (id: string, key: string, meanwhile: () => CrateArtists) =>
+  later<CrateArtists>(`/api/crates/${encodeURIComponent(id)}/not-artist/${encodeURIComponent(key)}`, { method: 'DELETE' }, meanwhile);
+/** The artists the account excluded everywhere (every crate, radio, Autoplay, Discover), and the changes, each with its
+ *  undo; a change through the outbox, as above. */
 export const getExcludedArtists = () => quietly<ExcludedArtist[]>('/api/me/excluded-artists');
 export const excludeArtist = (key: string, name: string) =>
-  request<ExcludedArtist & { undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-export const includeArtist = (key: string) => request<{ key: string; undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  laterJson<ExcludedArtist & { undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { name }, () => ({ key, name, at: Date.now(), undo: null }), 'PUT');
+export const includeArtist = (key: string) =>
+  later<{ key: string; undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { method: 'DELETE' }, () => ({ key, undo: null }));
 /** Every change answers with its undo token (`undo`, decision 0026), for `withUndo`. */
 type Undo = { undo: string | null };
 export const createCrate = (name: string, conditions: Condition[]) => post<{ id: string } & Undo>('/api/crates', { name, conditions });
@@ -2075,7 +2071,7 @@ export type AlbumView = {
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
-export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
+export type SearchKind = 'album' | 'artist' | 'track' | 'work' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
 /** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed). */
 export type ServerSearch = {
   q: string;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { groupByWork, inPartOrder, movementLabel, workLine, worksInOrder } from '../src/lib/works.ts';
+import { firstRecording, groupByWork, inPartOrder, movementLabel, workLine, worksInOrder } from '../src/lib/works.ts';
 
 const fifth = { mbid: 'w-5', title: 'Symphony No. 5 in C minor, Op. 67' };
 const row = (name: string, part?: string, parent: { mbid: string; title: string } | null = fifth, number?: number) => ({
@@ -63,4 +63,14 @@ test('a recording plays in its work\'s order, unknown parts keeping their place'
   const tracks = [{ id: 'c', part: 'p3' }, { id: 'x', part: null }, { id: 'a', part: 'p1' }, { id: 'b', part: 'p2' }];
   assert.deepEqual(inPartOrder(tracks, parts).map((t) => t.id), ['a', 'b', 'c', 'x']);
   assert.deepEqual(inPartOrder([{ id: 'y' }, { id: 'z' }], parts).map((t) => t.id), ['y', 'z']);
+});
+
+test("a work found plays its first recording, in the work's order; none without one", () => {
+  const parts = [
+    { mbid: 'p2', number: 2 },
+    { mbid: 'p1', number: 1 },
+  ];
+  const w = { parts, recordings: [{ tracks: [{ id: 'b', part: 'p2' }, { id: 'a', part: 'p1' }] }, { tracks: [{ id: 'z', part: 'p1' }] }] };
+  assert.deepEqual(firstRecording(w), ['a', 'b']);
+  assert.deepEqual(firstRecording({ parts, recordings: [] }), []);
 });
