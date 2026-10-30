@@ -1,6 +1,7 @@
 <script lang="ts" module>
   /** A track the menu is for, when it is not the playing one (a queue row, a playlist row; decision 0023). */
-  export type MenuTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null };
+  /** `has_versions`: the library holds other recordings of its work (0.10); absent where the list does not say. */
+  export type MenuTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null; has_versions?: boolean };
   /** Where a queue row's track is: `upcoming` (what comes next, 0 = the next) or `previous` (this device's played ones). */
   export type QueuePlace = { list: 'upcoming' | 'previous'; at: number };
 </script>
@@ -26,9 +27,14 @@
     setTrackMember,
     trackFile,
     trackState,
+    getTrackVersions,
     type TrackFile,
     type TrackState,
+    type TrackVersions,
   } from './api';
+  import { playCollection } from './play.svelte';
+  import MenuCards from './MenuCards.svelte';
+  import MenuGroup from './MenuGroup.svelte';
   import { BANDCAMP, previewPage } from './bandcampPreview';
   import DiscoverEntries from './DiscoverEntries.svelte';
   import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
@@ -141,7 +147,26 @@
 
   // The step it opens on; later steps are the sheet's own.
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists' | 'details' | 'download' | 'tempo'>(start);
+  let step = $state<'menu' | 'lists' | 'details' | 'download' | 'tempo' | 'versions'>(start);
+  // Other versions (0.10): the library's other recordings of its work (MusicBrainz's work links), asked as the menu
+  // opens where the list says there are some, or does not say (a server without them answers 404: none shown).
+  let versions = $state<TrackVersions | null>(null);
+  $effect(() => {
+    const now = t;
+    versions = null;
+    if (!now || now.source !== 'cratarr' || now.has_versions === false) return;
+    let gone = false;
+    getTrackVersions(now.source, now.id).then(
+      (v) => !gone && v?.versions?.length && (versions = v),
+      () => {},
+    );
+    return () => (gone = true);
+  });
+  /** A version tapped: it plays now. */
+  function playVersion(v: TrackVersions['versions'][number]) {
+    onclose();
+    playCollection({ kind: 'tracks', source: v.source, ids: [v.id] }, 'play', v.title).catch((e) => toast.fail(e, 'Could not start playing'));
+  }
 
   // Go to artist: the artist's panel (lib/albums goToArtist). A "feat." credit is left out: the albums are under the
   // main artist.
@@ -372,6 +397,8 @@
     {/each}
   {:else if e === 'soundsLike'}
     {#if t.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
+  {:else if e === 'otherVersions'}
+    {#if versions}<MenuEntry icon="music" label="Other versions" onclick={() => (step = 'versions')} />{/if}
   {:else if e === 'discover'}
     <DiscoverEntries page={bandcampPage} artist={t.artist} album={t.album} {onclose} />
   {:else if e === 'favourite'}
@@ -472,6 +499,21 @@
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}
       </PlaylistToggles>
+    {:else if step === 'versions' && versions}
+      {@const v = versions}
+      <p class="work">{v.work.title}{#if v.composers.length} · {v.composers.map((c) => c.name).join(', ')}{/if}</p>
+      <MenuCards>
+        <MenuGroup label="Other versions">
+          {#each v.versions as o (o.source + o.id)}
+            <MenuEntry
+              icon="play"
+              label={o.performers?.length ? o.performers.join(' · ') : (o.artist ?? o.title)}
+              sub={[o.title, o.album, o.year ? String(o.year) : null].filter(Boolean).join(' · ')}
+              onclick={() => playVersion(o)}
+            />
+          {/each}
+        </MenuGroup>
+      </MenuCards>
     {:else if step === 'details'}
       {#if details}
         <dl class="facts">
@@ -518,5 +560,10 @@
     display: grid;
     place-items: center;
     padding: 16px 0;
+  }
+  /* The work Other versions are of, and its composers, over them. */
+  .work {
+    margin: 0 4px 10px;
+    color: var(--muted);
   }
 </style>

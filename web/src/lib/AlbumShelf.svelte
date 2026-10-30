@@ -167,7 +167,10 @@
   });
   /** Why an album found only by a track is there: the track, and how many of its tracks match. */
   const deepOf = (s: ShelfSource, a: ListedAlbum) => (pageView.query.trim() ? deep.get(albumSubject(s.id, a.id)) : undefined);
-  const matches = (s: ShelfSource, a: ListedAlbum) => matchesSearch(a.artist, a.title) || !!deepOf(s, a);
+  // A classical record's composers found by the search too (0.10: "Brahms" finds Arrau's).
+  const matches = (s: ShelfSource, a: ListedAlbum) => matchesSearch(a.artist, a.title, ...(a.composers ?? []).map((c) => c.name)) || !!deepOf(s, a);
+  /** Its second line: a classical record's performers (0.10: conductor, orchestra, soloists), else its artist. */
+  const byline = (a: ListedAlbum) => (a.performers?.length ? a.performers.join(' · ') : (a.artist ?? 'Unknown artist'));
   // The libraries switched off in the filter leave their albums out; the pill's funnel says so while one is.
   $effect(() => {
     pageView.narrowed = sources.some((s) => (s.libraries ?? []).some((l) => !libraryShown(s.id, l)));
@@ -227,6 +230,8 @@
     const u = useOf(s.id, a.id);
     const lines = [
       { id: 'artist', label: 'Artist', full: a.artist ?? '' },
+      { id: 'composer', label: a.composers && a.composers.length > 1 ? 'Composers' : 'Composer', full: (a.composers ?? []).map((c) => c.name).join(', ') },
+      { id: 'performers', label: 'Performers', full: (a.performers ?? []).join(', ') },
       { id: 'year', label: 'Year', full: a.year ? String(a.year) : '' },
       { id: 'tracks', label: 'Tracks', full: a.tracks ? String(a.tracks) : '' },
       { id: 'length', label: 'Length', full: a.duration_secs ? clockText(a.duration_secs) : '' },
@@ -490,7 +495,7 @@
               >
                 {#snippet image()}{@render cover(s, a)}{/snippet}
                 {#snippet sub()}
-                  <span class="line">{a.artist ?? 'Unknown artist'}</span>
+                  <span class="line">{byline(a)}</span>
                   {@render why(s, a)}
                   {@render extra?.(s, a)}
                 {/snippet}
@@ -512,7 +517,7 @@
                   {@const dot = dotOf(s, a)}
                   {#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}
                 {/snippet}
-                {#snippet sub()}{a.artist ?? 'Unknown artist'}{#if here}<span class="now"> · playing</span>{/if}{@render why(s, a)}{/snippet}
+                {#snippet sub()}{byline(a)}{#if here}<span class="now"> · playing</span>{/if}{@render why(s, a)}{/snippet}
                 {#snippet action()}
                   {#if selecting}{@render tickOf(s, a)}{:else}
                     <button class="icon" aria-label="Menu of {a.title}" title="Menu" onclick={(e) => openMenu(s, a, e.currentTarget.getBoundingClientRect())}
@@ -537,7 +542,7 @@
                   {#if a.year}<span class="released">{a.year}</span>{/if}
                 {/snippet}
                 {#snippet sub()}
-                  <span class="artist">{a.artist ?? 'Unknown artist'}{#if here}<span class="now"> · playing</span>{/if}</span>
+                  <span class="artist">{byline(a)}{#if here}<span class="now"> · playing</span>{/if}</span>
                   {@render why(s, a)}
                   <span class="facts">
                     <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>

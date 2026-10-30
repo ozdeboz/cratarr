@@ -136,8 +136,24 @@ export const panel = $state({
 
 const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
 const base = () => location.hash.split('?')[0] || '#/';
+/** What of the address is the page's own, kept as the panel opens and closes over it (the Library's composer, 0.10). */
+const PAGE_KEYS = ['composer'];
+function pageQuery() {
+  const q = query();
+  const out = new URLSearchParams();
+  for (const k of PAGE_KEYS) {
+    const v = q.get(k);
+    if (v) out.set(k, v);
+  }
+  return out;
+}
+/** The page's address, its own part kept. */
+const pageAddress = () => {
+  const q = pageQuery().toString();
+  return q ? `${base()}?${q}` : base();
+};
 function address(names: string[], tab: Tab) {
-  const q = new URLSearchParams();
+  const q = pageQuery();
   for (const n of names) q.append('view', n);
   if (tab !== 'tracks') q.set('tab', tab);
   return `${base()}?${q}`;
@@ -265,7 +281,7 @@ export function closePlaylist(then?: () => void) {
     if (then) addEventListener('popstate', () => then(), { once: true });
     history.go(-d);
   } else {
-    replace(base());
+    replace(pageAddress());
     read();
     then?.();
   }

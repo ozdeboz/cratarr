@@ -39,7 +39,7 @@ export const activeConditions = (kind: string) => filterOf(kind).conditions.filt
 export const switchesOn = (kind: string) => filterOf(kind).on.filter((k) => (SWITCHES[kind] ?? []).some((w) => w.key === k));
 
 /** How many filters a kind of list has on (the funnel's count): its conditions that apply and its switches on. */
-export const filtersOn = (kind: string) => activeConditions(kind).length + switchesOn(kind).length;
+export const filtersOn = (kind: string) => activeConditions(kind).length + switchesOn(kind).filter((k) => !(SWITCHES[kind] ?? []).find((w) => w.key === k)?.quiet).length;
 
 /** The libraries switched off in the filter (`source/library`), for the server's crates (decision 0024, amended
  *  2026-10-23: a crate fills from every library switched on); none: undefined. */

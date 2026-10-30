@@ -21,6 +21,9 @@
   import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
+  import ComposerList from './lib/ComposerList.svelte';
+  import { classical, followAddress } from './lib/classical.svelte';
+  import { classicalListed, kindNow } from './lib/recordKinds';
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
@@ -123,12 +126,19 @@
   // conditions (the kind beside back is its Type row), remembered as the Library's; one left on from before goes by
   // nothing. One engine: the server, which holds what each switch means (the owner, 2026-10-29), says which records pass.
   const pass = passing(() => 'library', () => ({ list: { kind: 'library' }, source: prefs.source || undefined }));
+  // Classical (0.10): its composers first; a composer's records, the list narrowed to them (lib/classical).
+  const inClassical = $derived(kindNow() === 'Classical' && classicalListed());
+  $effect(() => {
+    if (inClassical) followAddress();
+  });
+  const composer = $derived(inClassical ? classical.composer : null);
   const shown = $derived.by<ShelfSource[] | null>(() => {
     const keys = pass.keys;
     // What a filter goes by not in yet: loading, not the albums unfiltered or none (the owner, 2026-10-23).
     if (pass.pending && !keys) return null;
-    if (!sources || !keys) return sources;
-    return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keys.has(a.id)) }));
+    const of = composer?.records;
+    if (!sources || (!keys && !of)) return sources;
+    return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => (!keys || keys.has(a.id)) && (!of || of.has(a.id))) }));
   });
   // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
@@ -146,7 +156,10 @@
     <PageLoading />
   {:else if shown.length === 0}
     <p class="empty">No server with a Music or Incoming library is connected.</p>
+  {:else if inClassical && !composer}
+    <ComposerList />
   {:else}
+    {#if composer}<h2 class="composer">{composer.name}</h2>{/if}
     <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
@@ -193,6 +206,12 @@
   .empty {
     color: var(--muted);
     font-size: 0.9rem;
+  }
+
+  /* A composer's records: their name over them. */
+  .composer {
+    margin: 4px 0 8px;
+    font-size: 1.1rem;
   }
 
   .error {
