@@ -1,6 +1,7 @@
 # 0086: Classical's works and movements
 
-- Status: proposed (the owner's three choices made 2026-10-30, for 0.12; the API is a5's draft)
+- Status: accepted (the owner's three choices, 2026-10-30, for 0.12; the server and the page on trunk, 2026-10-30).
+  Pending: works in global search (a `work` search kind on `/api/search`; the page's group is there).
 - Date: 2026-10-30
 - Builds on: 0082 (Classical as a kind of record, Other versions phase 1), 0085 (offline first: capabilities)
 
