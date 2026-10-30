@@ -54,7 +54,7 @@ impl InsightsService {
     pub async fn get(&self, want: Option<&str>, without: &[String], period: Period) -> Result<Arc<Insights>> {
         let mut off_keys = without.to_vec();
         off_keys.sort();
-        let key: Key = (super::playlists::asking_account(), want.map(str::to_string), off_keys, period);
+        let key: Key = (self.playlists.asking_account(), want.map(str::to_string), off_keys, period);
         let mut kept = self.kept.lock().await;
         kept.retain(|(at, _, _)| epoch_now() - at < KEEP_SECS);
         if let Some((_, _, report)) = kept.iter().find(|(_, k, _)| *k == key) {

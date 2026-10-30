@@ -305,7 +305,7 @@ async fn all_missing(app: &super::App, served: &Arc<crate::serve::Serve>) -> any
 /// The asking account's crates with their tracks, kept a minute (`CRATES_KEEP`).
 async fn crate_members(app: &super::App) -> anyhow::Result<Members> {
     static KEPT: OnceLock<Mutex<HashMap<Option<String>, (Instant, Members)>>> = OnceLock::new();
-    let account = super::playlists::asking_account();
+    let account = app.playlists.asking_account();
     let kept = KEPT.get_or_init(Default::default);
     if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned()
         && at.elapsed() < CRATES_KEEP

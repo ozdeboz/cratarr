@@ -166,7 +166,7 @@ impl App {
         let sync_state = crate::sync_state::SyncState::open(sync_file.as_deref())?;
         let sync = Arc::new(sync::SyncService::new(library.clone(), sync_state, journal.clone()));
         sync.listen();
-        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone()));
+        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone(), served.clone()));
         let files = crate::ports::disk();
         let shelves = Arc::new(shelf::Shelves::new(library.clone(), cfg.data_dir.as_deref()));
         let collection = Arc::new(CollectionService::new(library.clone(), shelves.clone()));

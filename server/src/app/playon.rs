@@ -3372,7 +3372,7 @@ mod tests {
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
-        PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal)), None)
+        PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal, None)), None)
     }
 
     #[tokio::test]
