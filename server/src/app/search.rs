@@ -279,6 +279,7 @@ fn excluded_items(
             artist: Some(a.name.clone()),
             bandcamp: None,
             known: Vec::new(),
+            composers: Vec::new(),
             request: None,
             score: score(&a.name, w, i, n),
             matched: matched_name(&a.name),
