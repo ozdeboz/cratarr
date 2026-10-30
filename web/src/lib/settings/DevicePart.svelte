@@ -8,6 +8,7 @@
   // sheet, lib/OutputSheet), and levelling (decision 0035: in the app its own player's, here this browser's). On a
   // phone's browser: Lossless, off by default (lossless tracks stream as Opus there, the owner 2026-10-24).
   import { allowBackground, appInfo, backgroundSettings, inApp, setDevice } from '../app.svelte';
+  import { startStopNow } from '../device.svelte';
   import { isPhone } from '../localPlayer.svelte';
   import LevelItems from './LevelItems.svelte';
   import OutputSheet from '../OutputSheet.svelte';
@@ -49,7 +50,7 @@
   <LevelItems />
   <!-- The tape (the owner, 2026-10-27: one page in order): Start and stop, the tape, its four motions, the deck, on its
        own page (lib/StartStopSheet, as the play button's long press opens it). -->
-  {@const tape = inApp ? appInfo.startStop : prefs.startStop}
+  {@const tape = startStopNow()}
   <Item name="Tape" value={[tape.mode === 'off' ? 'No effect' : tape.mode === 'vinyl' ? 'Vinyl' : 'Fade', tape.rewind ? 'winding' : null].filter(Boolean).join(' · ')} onclick={() => (tapeOpen = true)} />
   {#if !inApp && isPhone}
     <Item

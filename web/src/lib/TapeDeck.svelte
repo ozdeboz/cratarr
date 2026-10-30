@@ -7,6 +7,7 @@
   // still drawing, an endless turn whose rate alone is changed, and only when the speed has moved; the packs and the
   // tape four times a second; the head's light an opacity.
   import { appInfo, inApp } from './app.svelte';
+  import { startStopNow } from './device.svelte';
   import { isLocal } from './output.svelte';
   import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
@@ -56,7 +57,7 @@
   function speedNow(now: number, pos: number): number {
     const np = playing();
     const rewinding = port().rewinding();
-    const mode = (inApp ? appInfo.startStop : prefs.startStop).mode;
+    const mode = startStopNow().mode;
     const dt = Math.max(0.001, (now - lastAt) / 1000);
     const moved = lastPos === null ? 0 : (pos - lastPos) / dt;
     lastPos = pos;
@@ -143,7 +144,7 @@
     isLocal() &&
       playOn.players.find((p) => p.name === drivenName())?.kind !== 'kodi' &&
       // Part of the tape engine: only while Tape winding is on (the owner, 2026-10-27).
-      (inApp ? appInfo.startStop : prefs.startStop).rewind,
+      startStopNow().rewind,
   );
   /** Nothing to play backwards from (a Bandcamp preview, the device's own music): the knob dimmed, still. */
   const stuck = $derived(!windable(playing()));

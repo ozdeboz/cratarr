@@ -18,6 +18,7 @@
   import { getHomeAssistant, getImport, getLog, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
   import { appInfo, inApp } from './lib/app.svelte';
+  import { levelOn } from './lib/level.svelte';
   import Icon from './lib/Icon.svelte';
   import { panel, SETTINGS, settingsOf, viewPlaylist } from './lib/panel.svelte';
   import { playOn } from './lib/playOn.svelte';
@@ -87,7 +88,7 @@
         // Its name is the row's title; its line what of its own differs from the default, as every part of preferences
         // (the owner, 2026-10-25: what is downloaded is Sync's).
         return changed([
-          !(inApp ? appInfo.levelling : prefs.levelling) && 'No levelling',
+          !levelOn() && 'No levelling',
           !inApp && prefs.phoneLossless && 'Lossless',
           inApp && appInfo.stayReady && 'Stays ready',
           inApp && !appInfo.batteryAllowed && 'Android may stop it',
