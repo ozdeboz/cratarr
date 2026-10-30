@@ -3217,16 +3217,17 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     let Some((path, _, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    let located = since();
     // The tracks in the way Cratarr has the files of; the first it has not (a preview, another server's) ends the chain.
+    // All in one hold of the catalogue, not three takes of its lock for each of up to 64 (0.10.2: the slow answers of
+    // 2026-10-30); their lengths place the stream (`x-wind-map`), so they are known before its headers.
     let cat = app.library.catalogue();
-    let joins: Vec<(std::path::PathBuf, Option<u64>)> = tokio::task::spawn_blocking(move || {
-        through
-            .iter()
-            .map_while(|(s, i)| (s != crate::bandcamp::SOURCE).then(|| crate::stream::locate(&cat, s, i)).flatten().map(|(p, _, d)| (p, d)))
-            .collect()
-    })
-    .await
-    .unwrap_or_default();
+    let joins: Vec<(std::path::PathBuf, Option<u64>)> = if through.is_empty() {
+        Vec::new()
+    } else {
+        tokio::task::spawn_blocking(move || crate::stream::locate_through(&cat, &through)).await.unwrap_or_default()
+    };
+    let joined = since();
     // The plan alone (0.9.13, `map=1`): where each moment of the stream stands in the queue's tracks, its speed and length;
     // read from the files' headers, nothing decoded.
     if q.map == Some(1) {
@@ -3257,7 +3258,7 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
         };
     }
     let Some(turn) = crate::app::analysis_pass::wind_turn(REWIND_TURN).await else {
-        tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the wind's turn did not come");
+        tracing::warn!(target: "rewind", track = %what, located, through = joins.len(), joined, waited = since() - joined, "wind: the wind's turn did not come");
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Other winds hold the turns." }))).into_response();
     };
     // When its turn came, and when its first sound went (the app gives a wind 1.5 s to sound).
@@ -3276,6 +3277,7 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
                 return;
             }
         };
+        let opened = since();
         // The tracks it winds on into (0.9.14-2, up to [WIND_THROUGH]): planned at the stream's rate, each opened only as
         // the wind reaches it, at its own (`Wind::at_rate`); never all at once.
         let mut tracks = vec![(sound.rate(), sound.channels(), duration_ms)];
@@ -3293,6 +3295,10 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
         let data: u64 = winds.iter().map(Wind::data).sum();
         let (rate, channels) = winds[0].stream();
         let _ = said.send(Ok((44 + data, winds[0].speed(), serde_json::Value::Array(map).to_string())));
+        // Its headers on their way, and what each step before them took (0.10.2: the slow answers of 2026-10-30: a
+        // wind's slow start showed only as a slow "stream", and its own line only when it ended).
+        tracing::info!(target: "rewind", track = %what2, through = joins.len(), locate = located, locate_through = joined - located, turn_wait = turned - joined,
+            open = opened - turned, headers = since(), "wind: headers (ms; headers since the request)");
         let mut blocks = 0u32;
         let mut first: Option<u64> = None;
         let mut send = |b: Vec<u8>| {
