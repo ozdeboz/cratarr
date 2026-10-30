@@ -510,6 +510,11 @@ class MainActivity : AppCompatActivity() {
                 }
                 message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
                 if (message.has("levelling")) prefs.levelling = message.optBoolean("levelling")
+                // Spike B (0.11): the players' rules from Rust, off by default.
+                if (message.has("rustRules")) {
+                    prefs.rustRules = message.optBoolean("rustRules")
+                    RustRules.set(this, prefs.rustRules)
+                }
                 message.optString("levelUnknown").takeIf { it.isNotEmpty() }?.let { prefs.levelUnknown = it }
                 // Start and stop (0.9.6): the page's This device setting, kept here for the app's own player.
                 message.optJSONObject("startStop")?.let { s ->
@@ -684,6 +689,7 @@ class MainActivity : AppCompatActivity() {
         .put("syncBudgetGb", prefs.syncBudgetGb)
         .put("syncOnlyCharging", prefs.syncOnlyCharging)
         .put("levelling", prefs.levelling)
+        .put("rustRules", prefs.rustRules)
         .put("levelUnknown", prefs.levelUnknown)
         .put(
             "startStop",
