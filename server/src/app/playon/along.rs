@@ -264,7 +264,7 @@ impl PlayOn {
             e.follow_spans.retain(|(_, until)| until.is_none_or(|u| now - u < SPANS_KEPT_SECS));
             let extra = e.follow_spans.len().saturating_sub(SPANS);
             e.follow_spans.drain(..extra).for_each(drop);
-            (e.following, e.held, e.lined) = (Some(to.clone()), false, None);
+            (e.following, e.held, e.lined, e.follow_away) = (Some(to.clone()), false, None, away);
         }
         tracing::info!(target: "playon", player = mine, leader = to.player.as_str(), user = to.user.as_str(), "following");
         self.line_up(mine);
@@ -294,6 +294,48 @@ impl PlayOn {
         tracing::info!(target: "playon", player = name, leader = ended.player.as_str(), why, "following ended");
         self.changed();
         true
+    }
+
+    /// The music of player `from` was handed over to `to` (the owner, 2026-10-30: "if another user or guest is
+    /// following, then these also move when the music moves"): whoever followed `from` follows `to` now, put in line at
+    /// once with what plays there (`now`, as handed over). One who may not follow `to` (as following is judged: `to`'s
+    /// user open to followers, a shared device from home only) follows no one, and their apps are told.
+    pub(super) fn follow_moved(&self, from: &str, to: &str, now: Option<(QueueTrack, u64, bool)>) {
+        let first = first_owner();
+        for f in self.followers_of(from) {
+            let (asker, was, away, target) = {
+                let entries = self.entries();
+                let Some(e) = entries.get(&f) else { continue };
+                let Some(was) = e.following.clone() else { continue };
+                let Some(user) = entries.get(to).and_then(|y| account(y, first.as_deref())) else { continue };
+                (account(e, first.as_deref()).unwrap_or_default(), was, e.follow_away, FollowTarget { user, player: to.to_string() })
+            };
+            // The same user: open to followers, as they were to be followed at all (closing it ends every following).
+            let open = target.user == was.user || self.followable(&target.user);
+            let may = may_follow_in(&self.entries(), &asker, &target, away, open);
+            match may {
+                Ok(()) => {
+                    if let Some(e) = self.entries().get_mut(&f) {
+                        (e.following, e.lined) = (Some(target.clone()), None);
+                    }
+                    tracing::info!(target: "playon", player = f.as_str(), from, leader = to, "following moved with the music");
+                    self.line_up_at(&f, now.clone());
+                }
+                Err(why) => {
+                    tracing::info!(target: "playon", player = f.as_str(), from, to, "following ended where the music moved: {why}");
+                    self.end_follow(&f, "the music moved where it may not follow");
+                    self.notice(&asker, &format!("{}'s music moved to {to}", was.user));
+                }
+            }
+        }
+        self.changed();
+    }
+
+    /// Whether `user` opened their listening to others ("Others may follow me"), as their settings say; not where no
+    /// settings are kept.
+    fn followable(&self, user: &str) -> bool {
+        let Some(served) = self.playlists.served() else { return false };
+        served.userdata.settings_of(user).is_ok_and(|(_, s)| s["followable"].as_bool() == Some(true))
     }
 
     /// `leader` closed their listening to others (Others may follow me off): whoever followed them follows no one.
@@ -327,7 +369,8 @@ impl PlayOn {
 
     /// A command to a player that follows (decision 0079): Next, Previous and what edits the queue are refused (the
     /// leader's queue it is: ask for a track); its pause is its own, and its resume catches up with the leader; a play of
-    /// something else, or a stop, ends the following first. None: done here.
+    /// something else, or a stop, ends the following first. A handover takes the following along (the owner,
+    /// 2026-10-30). None: done here.
     pub(super) fn along(&self, name: &str, command: Command) -> Result<Option<Command>, ToggleError> {
         let Some(to) = self.following_of(name) else { return Ok(Some(command)) };
         self.reached(name)?;
@@ -353,7 +396,6 @@ impl PlayOn {
             | Command::Restore { .. }
             | Command::Jump { .. }
             | Command::Queue { .. }
-            | Command::Handover { .. }
             | Command::Join { .. }
             | Command::Wind { .. }
             | Command::Direction { .. } => Err(ask()),
@@ -366,7 +408,7 @@ impl PlayOn {
                 Ok(Some(Command::Pause))
             }
             Command::Resume | Command::Toggle => resume(self),
-            c @ (Command::Play { .. } | Command::Stop) => {
+            c @ (Command::Play { .. } | Command::Stop { .. }) => {
                 self.end_follow(name, "played something else");
                 Ok(Some(c))
             }
@@ -384,9 +426,15 @@ impl PlayOn {
     /// the leader is or as its own listener left it. The first time, its own queue is kept as it stood, and its Repeat,
     /// Radio and Autoplay are off while it follows (they come back with that queue).
     pub(super) fn line_up(&self, follower: &str) {
+        self.line_up_at(follower, None);
+    }
+
+    /// As [`PlayOn::line_up`], with what the leader plays given (`at`: its track, place and whether it plays) where it
+    /// has not reported it yet (music just handed over to it).
+    fn line_up_at(&self, follower: &str, at: Option<(QueueTrack, u64, bool)>) {
         let mut entries = self.entries();
         let Some(to) = entries.get(follower).and_then(|e| e.following.clone()) else { return };
-        let now = leader_now(&entries, &to.player);
+        let now = at.or_else(|| leader_now(&entries, &to.player));
         let Some(e) = entries.get_mut(follower) else { return };
         if !e.online() || e.device.is_some() {
             return;
@@ -619,14 +667,17 @@ impl PlayOn {
     }
 
     /// The player `user` listens on now (a guest's host, decision 0079): of their connected ones with something
-    /// loaded, the one playing, else the one heard from last.
+    /// loaded, the one playing, else the one heard from last; one whose music was just handed over (and has not said it
+    /// stopped yet): where it went.
     pub fn playing_of(&self, user: &str) -> Option<String> {
         let first = first_owner();
-        self.entries()
+        let found = self
+            .entries()
             .iter()
             .filter(|(_, e)| e.online() && e.index() >= 0 && belongs_to(e, user, first.as_deref()))
             .max_by_key(|(_, e)| (e.report.playing, std::cmp::Reverse(e.at.elapsed())))
-            .map(|(n, _)| n.clone())
+            .map(|(n, _)| n.clone())?;
+        Some(self.moved_on(&found))
     }
 
     /// Player `name` as no account sees it (a guest's view of what plays): none when there is none.

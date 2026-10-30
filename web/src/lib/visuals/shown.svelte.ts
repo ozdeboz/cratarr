@@ -24,7 +24,8 @@ const reopened = (() => {
   }
 })();
 
-export const visuals = $state({ open: reopened, side: keptSide() });
+/** `auto`: opened by themselves (lib/visualsAuto), a touch closing them. */
+export const visuals = $state({ open: reopened, side: keptSide(), auto: false });
 
 /** The visuals beside the page (true) or over it. */
 export function setVisualsSide(side: boolean) {

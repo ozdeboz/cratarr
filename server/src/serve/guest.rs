@@ -192,10 +192,12 @@ impl Portal {
     }
 
     /// The host's player now, and the account that answers its requests: the player named (its owner answers), or the
-    /// one the user named listens on.
+    /// one the user named listens on. A player named whose music was handed over: the one it went to (the owner,
+    /// 2026-10-30), while that is shown.
     fn host(&self) -> Option<(String, String)> {
         match (self.setting)().host? {
             GuestHost::Player(name) => {
+                let name = self.on.moved_on(&name);
                 self.on.view_of(&name)?;
                 let owner = self.on.owner_of(&name)?;
                 Some((name, owner))
@@ -475,6 +477,25 @@ mod tests {
             assert_eq!(send(&app, "GET", "/api/guest/search?q=so", HOME, me, None).await.0, StatusCode::OK);
         }
         assert_eq!(send(&app, "GET", "/api/guest/search?q=so", HOME, me, None).await.0, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn a_host_player_whose_music_was_handed_over_is_where_it_went() {
+        let on = PlayOn::for_tests().await;
+        let (_salon, _kitchen) = (on.connect("Salon").unwrap(), on.connect("Kitchen").unwrap());
+        on.own("Salon", "ann");
+        on.own("Kitchen", "ann");
+        let track = QueueTrack { source: "cratarr".into(), id: "tr-1".into(), name: "So What".into(), ..QueueTrack::default() };
+        on.command("Salon", crate::app::PlayOnCommand::play(vec![track], 0, 0)).await.unwrap();
+        let setting = Guest { on: true, host: Some(GuestHost::Player("Salon".into())) };
+        let p = Portal { on: on.clone(), serve: served(), guests: Arc::default(), setting: Arc::new(move || setting.clone()) };
+        assert_eq!(p.host(), Some(("Salon".to_string(), "ann".to_string())));
+        on.command("Salon", crate::app::PlayOnCommand::Handover { to: "Kitchen".into() }).await.unwrap();
+        assert_eq!(p.host(), Some(("Kitchen".to_string(), "ann".to_string())), "where the music went");
+        // A user host picks the player they listen on: the one the music went to, once it says it plays.
+        let version = on.get("Kitchen").unwrap().queue_version;
+        on.report("Kitchen", crate::app::PlayerReport { index: 0, version: Some(version), playing: true, ..Default::default() }).unwrap();
+        assert_eq!(on.playing_of("ann").as_deref(), Some("Kitchen"));
     }
 
     #[test]

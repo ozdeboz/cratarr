@@ -1,5 +1,6 @@
 <script lang="ts">
   import DetailsSheet from './DetailsSheet.svelte';
+  import VisualsAutoSheet from './VisualsAutoSheet.svelte';
   import { leavePlayer } from './navStep.svelte';
   import StartStopSheet from './StartStopSheet.svelte';
   import LevelSheet from './LevelSheet.svelte';
@@ -451,6 +452,8 @@
   let levelOpen = $state(false);
   /** A long press on the info button: the facts beside it (lib/DetailsSheet; the owner, 2026-10-26). */
   let detailsOpen = $state(false);
+  /** A long press on the visuals button: the visuals by themselves (lib/VisualsAutoSheet; the owner, 2026-10-30). */
+  let visualsSheet = $state(false);
   /** The Level button's long press: the waveform's three ways in turn, as its sheet lists them (the owner, 2026-10-28). */
   const WAVE_CYCLE = ['file', 'difference', 'output'] as const;
 </script>
@@ -495,7 +498,7 @@
       {/if}
       <!-- Not in local mode (decision 0052; the owner: "In local mode, the visuals feature is not supported"). -->
       {#if np && !localMode()}
-        <button class="corner" aria-label="Visuals" aria-haspopup="dialog" onclick={() => (visuals.open = true)}><Icon name="visuals" size={22} /></button>
+        <button class="corner" aria-label="Visuals" aria-haspopup="dialog" onclick={() => (visuals.open = true)} use:longpress={() => (visualsSheet = true)}><Icon name="visuals" size={22} /></button>
       {/if}
       {#if place === 'side'}
         <button class="corner" aria-label="Over the page" onclick={maximise}><Icon name="expand" size={20} /></button>
@@ -746,6 +749,7 @@
 {#if startStopOpen}<StartStopSheet onclose={() => (startStopOpen = false)} />{/if}
 {#if levelOpen}<LevelSheet onclose={() => (levelOpen = false)} />{/if}
 {#if detailsOpen}<DetailsSheet onclose={() => (detailsOpen = false)} />{/if}
+{#if visualsSheet}<VisualsAutoSheet onclose={() => (visualsSheet = false)} />{/if}
 
 <style>
   /* The player's own surface: the cover, heavily blurred, under a veil (dark, or light in the light theme), as

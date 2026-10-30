@@ -3,6 +3,8 @@ import './app.css';
 import App from './App.svelte';
 import { enterCloses } from './lib/enterCloses';
 import { markGpu } from './lib/gpu';
+// The visuals opening by themselves where this device says so (lib/visualsAuto).
+import './lib/visualsAuto.svelte';
 import { inputWay } from './lib/inputWay';
 import { watchForUpdates } from './lib/update.svelte';
 

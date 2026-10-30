@@ -29,7 +29,7 @@ FROM build AS test
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
 # Unoptimised (the owner, 2026-10-26): the tests are their own compile whatever is done, and this one is the quicker.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace
 
 # The binary alone, to take out (the test server runs on it).
 FROM scratch AS binary
