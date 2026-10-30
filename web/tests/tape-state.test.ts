@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 const { phaseOf, tapeRules, GRACE } = await import('../src/lib/player/tape.ts');
 type V = Parameters<typeof phaseOf>[0];
-const still: V = { committed: null, heldAt: null, rewinding: null, holding: null, plainHold: null, glide: null, shownRamp: null, knob: 'forward' };
+const still: V = { committed: null, rewinding: null, holding: null, plainHold: null, glide: null, shownRamp: null, knob: 'forward' };
 const none = { shownRamp: 0, knobTurn: 0, idleHold: 0 };
 
 test('a hold: pressed (arming), winding, let go (braking), landed (idle)', () => {
@@ -33,10 +33,10 @@ test('a ramp, a plain hold, a glide', () => {
 });
 
 test('what may not hold together is broken at once, with its mend', () => {
-  const r = tapeRules({ ...still, heldAt: 12, rewinding: { brake: null, reverse: false }, knob: 'backward' }, none, 0).broken;
+  const r = tapeRules({ ...still, rewinding: { brake: null, reverse: false }, knob: 'backward' }, none, 0).broken;
   assert.deepEqual(
     r.map((b) => b.fix),
-    ['none', 'unholdCounter', 'knobForward'],
+    ['none', 'knobForward'],
   );
 });
 

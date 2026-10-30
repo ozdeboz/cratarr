@@ -12,7 +12,6 @@ export type TapePhase = 'idle' | 'ramp' | 'arming' | 'winding' | 'braking' | 'pl
 /** What the phase and the rules read of the player's tape (lib/localPlayer's `tape`, and the knob's state). */
 export type TapeView = {
   committed: boolean | null;
-  heldAt: number | null;
   rewinding: { brake: number | null; reverse: boolean } | null;
   holding: { dir: 1 | -1; released: boolean } | null;
   plainHold: unknown;
@@ -39,7 +38,7 @@ export const GRACE = { shownRamp: 1000, knobTurn: 5000, idleHold: 4000 } as cons
 export type Since = { shownRamp: number; knobTurn: number; idleHold: number };
 
 /** A broken rule, and what puts it right (none: only logged). */
-export type Broken = { rule: string; fix: 'none' | 'unholdCounter' | 'endShownRamp' | 'knobForward' | 'dropHold' };
+export type Broken = { rule: string; fix: 'none' | 'endShownRamp' | 'knobForward' | 'dropHold' };
 
 /** The tape's rules at `now`: the ones broken, and since when each passing state stands (for the next check). */
 export function tapeRules(t: TapeView, since: Since, now: number): { broken: Broken[]; since: Since } {
@@ -56,8 +55,7 @@ export function tapeRules(t: TapeView, since: Since, now: number): { broken: Bro
   };
   // A wind runs only committed to playing; a ramp's committed state never outlives it.
   if (t.rewinding && t.committed === null) broken.push({ rule: 'a wind without its commitment', fix: 'none' });
-  // The counter held for a ramp only while one runs.
-  if (t.heldAt !== null && t.committed === null) broken.push({ rule: 'the counter held with no ramp', fix: 'unholdCounter' });
+  // (The counter held for a ramp only while one runs: it cannot be otherwise, lib/player/rampSlot.)
   // The button's and the waveform's ramp shown only while a ramp or a wind runs.
   if (over('shownRamp', t.shownRamp !== null && t.committed === null && !t.rewinding)) broken.push({ rule: 'a ramp shown with none running', fix: 'endShownRamp' });
   // The knob's state and what sounds agree: backwards only while the tape plays backwards; a turn lasts moments.

@@ -28,6 +28,7 @@ import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
+import { rampSlot } from './player/rampSlot';
 import { tapeRules, type Since } from './player/tape';
 import { brakeLengthMs, brakeSpeed, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
@@ -229,10 +230,17 @@ let errorIndex = -1;
 // and stop effect, a wind under way and where it stands, a hold, what waits for its moment. Its invariants are checked
 // four times a second (checkTape) and any broken one written to the playback log; resetTape clears every transient part
 // at once where something new begins (a jump, a new queue, a stop).
+/** The ramp under way, one value (lib/player/rampSlot): what it committed to, where it holds the counter. */
+const rampNow = rampSlot();
 const tape = {
   /** What a ramp under way has committed to (paused or playing), shown at once on every device. A press of play or pause
    *  during one turns it round from where it has got to (decision 0075's first step). Null: no ramp. */
-  committed: null as boolean | null,
+  get committed() {
+    return rampNow.committed;
+  },
+  set committed(v: boolean | null) {
+    rampNow.committed = v;
+  },
   /** How far up the ramp under way has got (0: still or silent, 1: full speed and volume), where a press turns it. */
   rampAt: 1,
   /** A turn of the tape's own ramp: a vinyl's, over the tape's spin-up and Brake, whatever Start and stop says. */
@@ -243,8 +251,13 @@ const tape = {
   quietPause: false,
   /** Until when that rest may stand (settle); past it, or with nothing of the tape's running, the tick shows what is. */
   quietUntil: 0,
-  /** Where the counter stays while an effect's ramp sounds (stream time); null: where it plays. */
-  heldAt: null as number | null,
+  /** Where the counter stays while an effect's ramp sounds (stream time); null: where it plays. Only a ramp holds it. */
+  get heldAt() {
+    return rampNow.heldAt;
+  },
+  set heldAt(v: number | null) {
+    rampNow.heldAt = v;
+  },
   /** The wind sounding, or about to; null: none. */
   rewinding: null as Winding | null,
   /** Where the counter stands while it sounds (s into the track). */
@@ -307,7 +320,6 @@ function checkTape() {
   const r = tapeRules(
     {
       committed: tape.committed,
-      heldAt: tape.heldAt,
       rewinding: tape.rewinding,
       holding: tape.holding,
       plainHold: tape.plainHold,
@@ -324,8 +336,7 @@ function checkTape() {
       checked.set(b.rule, now);
       playback('warn', `tape broke: ${b.rule}`, b.fix === 'endShownRamp' ? { dir: ramping.dir } : b.rule.startsWith('a turn') ? { state: tapeDir.state } : {});
     }
-    if (b.fix === 'unholdCounter') tape.heldAt = null;
-    else if (b.fix === 'endShownRamp') rampEnds();
+    if (b.fix === 'endShownRamp') rampEnds();
     else if (b.fix === 'knobForward') tapeDir.state = 'forward';
     else if (b.fix === 'dropHold') tape.holding = null;
   }
