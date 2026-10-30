@@ -159,8 +159,9 @@ fn album_heard(serve: &crate::serve::Serve, plays: &HashMap<String, (u32, Option
 /// first, each its id and album artist; `out` says which to leave out. At most `NEW_PER_ARTIST` of one album artist,
 /// matched loosely (`import::loose`: case, spacing, a leading "the"; an album without one counts toward none), and
 /// `NEW_ALBUMS` in all, read on page by page until those are found, a page comes back short, or `NEW_FURTHEST` are read.
+/// A compilation counts toward no artist's share (the owner, 2026-10-30: "No cap for compilations"): each on its own.
 fn new_picks(
-    mut page: impl FnMut(usize) -> Result<Vec<(String, String)>, ToggleError>,
+    mut page: impl FnMut(usize) -> Result<Vec<(String, String, bool)>, ToggleError>,
     mut out: impl FnMut(&str) -> Result<bool, ToggleError>,
 ) -> Result<Vec<String>, ToggleError> {
     let mut picks = Vec::new();
@@ -169,9 +170,9 @@ fn new_picks(
     while offset < NEW_FURTHEST {
         let albums = page(offset)?;
         let read = albums.len();
-        for (id, artist) in albums {
+        for (id, artist, compilation) in albums {
             let artist = artist.trim();
-            let key = if artist.is_empty() || artist == crate::serve::library::UNKNOWN_ARTIST { String::new() } else { super::import::loose(artist) };
+            let key = if compilation || artist.is_empty() || artist == crate::serve::library::UNKNOWN_ARTIST { String::new() } else { super::import::loose(artist) };
             // An artist with their share already: the walk does not ask whether this one was heard.
             if !key.is_empty() && of.get(&key).is_some_and(|&n| n >= NEW_PER_ARTIST) {
                 continue;
@@ -3082,7 +3083,14 @@ impl PlaylistService {
                 |offset| {
                     let page = serve.library.album_list(&crate::serve::read::AlbumOrder::Newest, NEW_PAGE, offset, None)?;
                     // Those the library has no date for come last, and none of them is new: the walk ends at the first.
-                    Ok(page.into_iter().take_while(|a| a.created.is_some()).map(|a| (a.id, a.artist)).collect())
+                    Ok(page
+                        .into_iter()
+                        .take_while(|a| a.created.is_some())
+                        .map(|a| {
+                            let compilation = a.is_compilation || a.release_types.iter().any(|t| t == "Compilation");
+                            (a.id, a.artist, compilation)
+                        })
+                        .collect())
                 },
                 |id| Ok(coverless.contains(id) || album_heard(&serve, &plays, id)? != Some(false)),
             )
@@ -3597,12 +3605,12 @@ mod new_for_you_tests {
     use super::*;
 
     /// Albums newest first, by these album artists: `al-0` the newest.
-    fn newest(artists: &[&str]) -> Vec<(String, String)> {
-        artists.iter().enumerate().map(|(i, a)| (format!("al-{i}"), a.to_string())).collect()
+    fn newest(artists: &[&str]) -> Vec<(String, String, bool)> {
+        artists.iter().enumerate().map(|(i, a)| (format!("al-{i}"), a.to_string(), false)).collect()
     }
 
     /// New for you's picks of `albums`, read a page at a time as from the library, `heard` left out.
-    fn walk(albums: &[(String, String)], heard: &[&str]) -> Vec<String> {
+    fn walk(albums: &[(String, String, bool)], heard: &[&str]) -> Vec<String> {
         new_picks(|offset| Ok(albums.iter().skip(offset).take(NEW_PAGE).cloned().collect()), |id| Ok(heard.contains(&id))).unwrap()
     }
 
@@ -3611,6 +3619,17 @@ mod new_for_you_tests {
         let mut artists = vec!["The Avalanches"; 10];
         artists.extend(["Bonobo", "Caribou", "Bonobo"]);
         assert_eq!(walk(&newest(&artists), &[]), ["al-0", "al-1", "al-2", "al-10", "al-11", "al-12"]);
+    }
+
+    #[test]
+    fn compilations_count_toward_no_artists_three() {
+        // Five Various Artists compilations among the newest: all of them, each on its own.
+        let mut albums = newest(&["Various Artists"; 5]);
+        for a in &mut albums {
+            a.2 = true;
+        }
+        albums.extend(newest(&["Bonobo"; 2]).into_iter().map(|(id, a, c)| (format!("{id}-b"), a, c)));
+        assert_eq!(walk(&albums, &[]), ["al-0", "al-1", "al-2", "al-3", "al-4", "al-0-b", "al-1-b"]);
     }
 
     #[test]
