@@ -408,7 +408,7 @@ mod tests {
         (status, cookie, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
-    const HOME: &str = "192.168.178.20";
+    const HOME: &str = "192.168.1.20";
     const AWAY: &str = "203.0.113.9";
 
     #[tokio::test]
