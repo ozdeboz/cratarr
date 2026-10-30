@@ -1054,6 +1054,7 @@ impl Catalogue {
                         }
                     }
                 }
+                let (credits, credit_names) = crate::app::excluded_artists::credited(&artists.iter().chain(&listed).collect::<Vec<_>>());
                 Some(crate::crates::Facts {
                     year: crate::crates::year_of(&first),
                     bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&place).map(|b| b.round())),
@@ -1067,7 +1068,8 @@ impl Catalogue {
                     styles,
                     track,
                     sound,
-                    credits: crate::app::excluded_artists::credits_keys(&artists.iter().chain(&listed).collect::<Vec<_>>()),
+                    credits,
+                    credit_names,
                     artists,
                     clap_moods,
                     length: duration_ms.filter(|d| *d > 0).map(|d| d as f64 / 1000.0),
@@ -3246,6 +3248,7 @@ mod tests {
         let f = facts.iter().find(|f| f.rel == one).unwrap();
         assert_eq!(f.artists, ["Air feat. Beck"], "shown as tagged");
         assert_eq!(f.credits, ["air", "beck", "jarviscocker"]);
+        assert_eq!(f.credit_names, ["Air", "Beck", "Jarvis Cocker"], "as the Artist filter offers them");
         std::fs::remove_dir_all(&d).ok();
     }
 

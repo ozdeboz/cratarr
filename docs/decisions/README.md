@@ -229,9 +229,10 @@ by a later record that says so in its header. A new decision takes the next numb
   A record is classical by a genre gate and one confirmation (MusicBrainz works with performers, a composer confirmed
   elsewhere, or a mark); composers by MusicBrainz artist; each record in its primary kind by default; a track's other
   recordings of its work.
-- [0083: Excluding an artist: not in this crate, or everywhere](0083-excluding-an-artist.md): accepted. Not in this
-  crate adds "Artist is not" to the crate's own filter (a fixed crate's added conditions, per account); Exclude
-  everywhere is one list per account that every pick reads, by any credit; Discover's Not interested stays Discover's.
+- [0083: Excluding an artist: not in this crate, or everywhere](0083-excluding-an-artist.md): accepted;
+  amended 2026-10-30. Not in this crate adds "Artist is not" to the crate's own filter (a fixed crate's added
+  conditions, per account); Exclude everywhere is one list per account that every pick reads, by any credit, as the
+  Artist filter itself now matches; Discover's Not interested stays Discover's.
 - [0084: Each user's own music](0084-each-users-own-music.md): accepted as a plan, for 0.13. Music, Lidarr's
   Incoming and each user's own music; wants and uploads go straight into one's own music within a GB allocation
   (shared-block copies free) and a disk floor; every library and Incoming switchable per user; export as a read-only

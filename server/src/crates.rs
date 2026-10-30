@@ -752,10 +752,12 @@ pub struct Facts {
     pub sound: Option<Arc<[f32]>>,
     /// Its artists and album artist (a compilation's left out), for a list's profile.
     pub artists: Vec<String>,
-    /// Every artist it credits, by their keys (`app::excluded_artists::credits_keys`: its artists, its artists list and
-    /// album artist, each credit split where it joins several, "feat." among them): what the artists excluded
-    /// everywhere are matched against (decision 0083).
+    /// Every artist it credits, by their keys (`app::excluded_artists::credited`: its artists, its artists list and
+    /// album artist, each credit split where it joins several, "feat." among them): what the Artist filter and the
+    /// artists excluded everywhere are matched against (decision 0083; the owner, 2026-10-30).
     pub credits: Vec<String>,
+    /// Each of `credits` as first written, in its order: what the Artist filter offers.
+    pub credit_names: Vec<String>,
     /// CLAP's score of each mood, in `similarity::MOODS`' order; none until CLAP heard it.
     pub clap_moods: Option<[f32; 5]>,
     /// Its length (s); lossless or its bitrate's class (`quality_of`); its key, as one spelling (`key_name`).
@@ -887,11 +889,21 @@ const AXES: [(&str, &str, Kind); 21] = [
 /// Names as the items have them, the most common first (a genre's or a style's, in any case), each with how many items
 /// have it among their tracks.
 fn by_count<'a>(items: &[&[&'a Facts]], names: fn(&'a Facts) -> &'a [String]) -> Vec<(String, usize)> {
+    keyed_count(items, |f| names(f).iter().map(|n| (n.to_lowercase(), n)))
+}
+
+/// Each credited artist (`Facts::credits`, by their key), the most common first, as first written, with how many items
+/// credit them among their tracks: "Air feat. Beck" counts for Air and for Beck.
+fn credits_by_count(items: &[&[&Facts]]) -> Vec<(String, usize)> {
+    keyed_count(items, |f| f.credits.iter().cloned().zip(&f.credit_names))
+}
+
+/// `by_count` by each name's key (`each`: a file's names, each with its key), each named as first met.
+fn keyed_count<'a, I: Iterator<Item = (String, &'a String)>>(items: &[&[&'a Facts]], each: impl Fn(&'a Facts) -> I) -> Vec<(String, usize)> {
     let mut seen: HashMap<String, (String, usize)> = HashMap::new();
     for tracks in items {
         let mut here = HashSet::new();
-        for n in tracks.iter().flat_map(|f| names(f)) {
-            let key = n.to_lowercase();
+        for (key, n) in tracks.iter().flat_map(|f| each(*f)) {
             if here.insert(key.clone()) {
                 seen.entry(key).or_insert_with(|| (n.clone(), 0)).1 += 1;
             }
@@ -956,7 +968,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "favourite_album" => f.rel.rsplit_once('/').map_or("", |(d, _)| d).to_string(),
                 "playlist" => membership.and_then(|m| m.get(&f.rel)).map(|l| l.join("|")).unwrap_or_default(),
                 "genre" => f.genres.iter().map(|g| g.to_lowercase()).collect::<Vec<_>>().join("|"),
-                "artist" => f.artists.iter().map(|a| a.to_lowercase()).collect::<Vec<_>>().join("|"),
+                "artist" => f.credits.join("|"),
                 "type" => f.release_types.join("|"),
                 "mood" => f.moods.join("|"),
                 "style" => f.styles.join("|"),
@@ -984,9 +996,10 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                     (a.values, a.counts) = counted(|f| &f.genres);
                     a.known = known(|f| !f.genres.is_empty());
                 }
+                // Every artist credited, featured and joint ones too (the owner, 2026-10-30), as the axis matches.
                 "artist" => {
-                    (a.values, a.counts) = counted(|f| &f.artists);
-                    a.known = known(|f| !f.artists.is_empty());
+                    (a.values, a.counts) = credits_by_count(items).into_iter().unzip();
+                    a.known = known(|f| !f.credits.is_empty());
                 }
                 "type" => {
                     (a.values, a.counts) = counted(|f| &f.release_types);
@@ -1069,7 +1082,9 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("played", Value::Range { min, max }) => within(used().map(|u| u.last.map_or(f64::INFINITY, |t| days_ago(w.now, t))), min, max),
         ("added", Value::Range { min, max }) => within(f.born.map(|b| days_ago(w.now, b)), min, max),
         ("rating", Value::Range { min, max }) => within(used().and_then(|u| u.rating).map(f64::from), min, max),
-        ("artist", Value::AnyOf { values }) => values.iter().any(|v| f.artists.iter().any(|a| a.eq_ignore_ascii_case(v))),
+        // Any credit, by its key (the owner, 2026-10-30): "Beck" is Air feat. Beck's, Beck & Air's, never Becky Hill's;
+        // as the artists excluded everywhere are matched (decision 0083).
+        ("artist", Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(&crate::app::excluded_artists::key(v))),
         ("type", Value::AnyOf { values }) => values.iter().any(|v| f.release_types.iter().any(|t| t.eq_ignore_ascii_case(v))),
         ("length", Value::Range { min, max }) => within(f.length.map(minutes), min, max),
         ("quality", Value::AnyOf { values }) => f.quality.as_ref().is_some_and(|q| values.contains(q)),
@@ -1111,7 +1126,7 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
         // Stars only where some were given: All goes by the rated tracks, as All on a genre goes by the tagged ones.
         "rating" => w.uses.is_some_and(|u| u.get(&f.rel).is_some_and(|u| u.rating.is_some())),
         "added" => f.born.is_some(),
-        "artist" => !f.artists.is_empty(),
+        "artist" => !f.credits.is_empty(),
         "length" => f.length.is_some(),
         "quality" => f.quality.is_some(),
         "key" => f.key.is_some(),
@@ -1954,7 +1969,7 @@ mod tests {
     fn the_listeners_conditions_test_plays_last_play_added_rating_and_the_tracks_facts() {
         let day = 86_400;
         let now = 1000 * day;
-        let f = |rel: &str, born: i64, artist: &str, secs: f64| Facts { rel: rel.into(), born: Some(born), artists: vec![artist.into()], length: Some(secs), ..Facts::default() };
+        let f = |rel: &str, born: i64, artist: &str, secs: f64| Facts { born: Some(born), length: Some(secs), ..by(rel, &[artist]) };
         let files = vec![f("old.flac", now - 400 * day, "Ana", 180.0), f("new.flac", now - 3 * day, "Bo", 420.0), f("never.flac", now - 50 * day, "Ana", 240.0)];
         let uses = HashMap::from([
             ("old.flac".to_string(), Use { plays: 12, last: Some(now - 200 * day), rating: Some(5) }),
@@ -2251,8 +2266,8 @@ mod tests {
 
     /// A file by these artists (its track's and its album's), credited as the catalogue credits it.
     fn by(rel: &str, artists: &[&str]) -> Facts {
-        let artists: Vec<String> = artists.iter().map(|a| a.to_string()).collect();
-        Facts { rel: rel.into(), genres: vec!["Electronic".into()], credits: crate::app::excluded_artists::credits_keys(&artists), artists, ..Facts::default() }
+        let (credits, credit_names) = crate::app::excluded_artists::credited(artists);
+        Facts { rel: rel.into(), genres: vec!["Electronic".into()], artists: artists.iter().map(|a| a.to_string()).collect(), credits, credit_names, ..Facts::default() }
     }
 
     #[test]
@@ -2275,6 +2290,60 @@ mod tests {
         assert_eq!(select(&files, &back, &w), vec!["a", "c"]);
         assert_eq!(without_not_artist(&back, "bonobo").unwrap(), electronic, "taken back, as it was");
         assert_eq!(without_not_artist(&electronic, "air"), None, "nothing to take back");
+    }
+
+    #[test]
+    fn the_artist_filter_counts_every_credit_by_whole_names() {
+        // The owner, 2026-10-30: featured and joint credits count, everywhere the Artist filter is used.
+        let files = [
+            by("feat", &["Air feat. Beck"]),
+            by("and", &["Beck & Air"]),
+            by("comma", &["Beck, Air"]),
+            by("becky", &["Becky Hill"]),
+            by("acdc", &["AC/DC"]),
+            by("air", &["Air"]),
+        ];
+        let (membership, favourites) = (HashMap::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let artist = |not: bool, name: &str| vec![Condition::new("artist", not, Value::AnyOf { values: vec![name.to_string()] })];
+        assert_eq!(select(&files, &artist(false, "Beck"), &w), vec!["feat", "and", "comma"], "a whole name, never Becky Hill");
+        assert_eq!(select(&files, &artist(true, "Beck"), &w), vec!["becky", "acdc", "air"], "is not: featured and joint ones out");
+        assert_eq!(select(&files, &artist(false, "AC/DC"), &w), vec!["acdc"]);
+        assert!(select(&files, &artist(false, "DC"), &w).is_empty(), "a slash inside a name is the name");
+        // Any and All over an album: a featured artist is a value its track has.
+        let album = [&files[0], &files[5]];
+        let all = Condition { quantifier: Quantifier::All, ..artist(false, "Air")[0].clone() };
+        assert!(passes(&album, &[all], &w), "Air on both tracks, one featuring Beck");
+        assert!(passes(&album, &artist(false, "Beck"), &w));
+        // The values offered, each credited artist once as first written, counted where credited.
+        let one: Vec<[&Facts; 1]> = files.iter().map(|f| [f]).collect();
+        let items: Vec<&[&Facts]> = one.iter().map(|f| f.as_slice()).collect();
+        let axes = list_axes(&items, &[], None, None);
+        let a = axes.iter().find(|a| a.key == "artist").unwrap();
+        let count = |name: &str| a.values.iter().position(|v| v == name).map(|i| a.counts[i]);
+        assert_eq!((count("Beck"), count("Air")), (Some(3), Some(4)), "Beck for his featured track too: {:?}", a.values);
+        assert_eq!((count("AC/DC"), count("Becky Hill"), count("Air feat. Beck")), (Some(1), Some(1), None));
+        assert!(count("AC").is_none() && count("DC").is_none());
+        assert_eq!(a.known, 6);
+    }
+
+    #[test]
+    fn a_saved_whole_name_artist_row_keeps_its_tracks_where_no_credit_is_joint() {
+        // The stored row is as it was; without featured or joint credits it picks what matching whole tags picked.
+        let files = [by("a", &["Air"]), by("b", &["air", "Moon Safari Band"]), by("c", &["The Avalanches"]), by("d", &["Bonobo"]), by("e", &["Various Artists"])];
+        let (membership, favourites) = (HashMap::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        for saved in [
+            r#"{"axis":"artist","not":true,"value":{"kind":"any_of","values":["Air"]}}"#,
+            r#"{"axis":"artist","not":false,"value":{"kind":"any_of","values":["AIR","The Avalanches"]}}"#,
+            r#"{"axis":"artist","not":false,"value":{"kind":"any_of","values":["Bonobo"]}}"#,
+        ] {
+            let c: Condition = serde_json::from_str(saved).unwrap();
+            let Value::AnyOf { values } = &c.value else { unreachable!() };
+            let whole = |f: &Facts| values.iter().any(|v| f.artists.iter().any(|a| a.eq_ignore_ascii_case(v))) != c.not;
+            let before: Vec<&str> = files.iter().filter(|&f| whole(f)).map(|f| f.rel.as_str()).collect();
+            assert_eq!(select(&files, std::slice::from_ref(&c), &w), before, "{saved}");
+        }
     }
 
     #[test]
@@ -2393,6 +2462,8 @@ mod tests {
             tags: vec!["tag".into()],
             sound: Some(Arc::from(vec![0.0_f32; 4].into_boxed_slice())),
             artists: vec!["X".into()],
+            credits: vec!["x".into()],
+            credit_names: vec!["X".into()],
             length: Some(240.0),
             quality: Some("lossless".into()),
             key: Some("C".into()),

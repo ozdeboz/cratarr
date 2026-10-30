@@ -1116,8 +1116,8 @@ mod undo_tests {
     fn radio_and_autoplay_leave_out_every_song_crediting_an_artist_excluded_everywhere() {
         // Decision 0083: the songs `excluded_songs_of` adds, which the radio marks excluded (`radio::ready`).
         let f = |track: i64, artists: &[&str]| {
-            let artists: Vec<String> = artists.iter().map(|a| a.to_string()).collect();
-            crates::Facts { rel: format!("{track}.flac"), track: Some(track), credits: crate::app::excluded_artists::credits_keys(&artists), artists, ..Default::default() }
+            let (credits, credit_names) = crate::app::excluded_artists::credited(artists);
+            crates::Facts { rel: format!("{track}.flac"), track: Some(track), artists: artists.iter().map(|a| a.to_string()).collect(), credits, credit_names, ..Default::default() }
         };
         let facts = [f(1, &["Air"]), f(2, &["Bonobo feat. Air"]), f(3, &["Bonobo"]), f(4, &["Various", "Air"])];
         let out = HashSet::from(["air".to_string()]);
