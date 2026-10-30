@@ -1,9 +1,10 @@
 //! A file's fingerprint and what AcoustID says it is (0.9.8, single-track replacement): the gate a downloaded track
 //! passes before it goes into an album. The fingerprint is Chromaprint's (rusty-chromaprint, MIT, on Symphonia's
-//! decode, so no fpcalc binary), over the first two minutes as fpcalc takes it; the whole file is decoded too, and a
-//! frame that will not decode is counted. AcoustID's lookup (an application key the owner types into Settings) names
-//! the MusicBrainz recordings the fingerprint is of; the file passes when one of them is the recording asked for, at a
-//! score of at least [`SURE`].
+//! decode, so no fpcalc binary), over the first two minutes as fpcalc takes it; the whole file is decoded too, a frame
+//! that will not decode is counted, and the same decode is heard for flaws (`analysis::flaws`: highs that stop at a
+//! lossy encoder's wall, clicks, a pop at the end, clipping). AcoustID's lookup (an application key the owner types
+//! into Settings) names the MusicBrainz recordings the fingerprint is of; the file passes when one of them is the
+//! recording asked for, at a score of at least [`SURE`].
 
 use std::path::Path;
 use std::time::Duration;
@@ -12,6 +13,8 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use rusty_chromaprint::{Configuration, FingerprintCompressor, Fingerprinter};
 use serde::Deserialize;
+
+use crate::analysis::flaws::{Findings, Flaws, Sold};
 
 /// How much of the sound the fingerprint hears (fpcalc's own length).
 const HEARD_SECS: u64 = 120;
@@ -26,9 +29,11 @@ pub struct Print {
     pub duration_secs: f64,
     /// Frames that would not decode.
     pub damaged: u32,
+    /// What its sound was heard to have wrong with it, if anything.
+    pub flaws: Findings,
 }
 
-/// Decodes the whole file and fingerprints its start. Blocking.
+/// Decodes the whole file, hears all of it for flaws and fingerprints its start. Blocking.
 pub fn print(path: &Path) -> Result<Print> {
     let config = Configuration::preset_test2();
     let mut printer = Fingerprinter::new(&config);
@@ -36,7 +41,9 @@ pub fn print(path: &Path) -> Result<Print> {
     let mut heard = 0u64;
     let mut interleaved: Vec<i16> = Vec::new();
     let mut failed = None;
+    let mut flaws: Option<Flaws> = None;
     let walked = crate::analysis::walk(path, |planes, rate, channels| {
+        flaws.get_or_insert_with(|| Flaws::new(rate)).hear(planes);
         if failed.is_some() || heard >= HEARD_SECS * u64::from(rate) {
             return;
         }
@@ -63,10 +70,13 @@ pub fn print(path: &Path) -> Result<Print> {
     }
     printer.finish();
     let compressed = FingerprintCompressor::from(&config).compress(printer.fingerprint());
+    let duration_secs = walked.frames as f64 / f64::from(walked.rate);
+    let sold = Sold::of(walked.codec, walked.bytes, duration_secs);
     Ok(Print {
         fingerprint: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(compressed),
-        duration_secs: walked.frames as f64 / f64::from(walked.rate),
+        duration_secs,
         damaged: walked.damaged,
+        flaws: flaws.map(|f| f.finish(sold)).unwrap_or_default(),
     })
 }
 

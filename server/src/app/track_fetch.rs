@@ -3,8 +3,9 @@
 //! 1. the album's release from MusicBrainz, each of its tracks with the file that holds it, or none (`release`);
 //! 2. one slskd search for one of them, from MusicBrainz's artist, title and length (`search`); the admin picks a file;
 //! 3. the file fetched into its own folder under slskd's, moved out to Cratarr's staging at once, and gated (`fetch`):
-//!    decoded whole without a damaged frame, within [`crate::slskd::LENGTH_SLACK_MS`] of the recording, and named that
-//!    recording by AcoustID at [`crate::acoustid::SURE`] or more;
+//!    decoded whole without a damaged frame, within [`crate::slskd::LENGTH_SLACK_MS`] of the recording, its sound
+//!    without flaws (`analysis::flaws`, 0.10: lossless or of its bitrate by where its highs stop, no clicks, no pop at
+//!    the end, not clipped), and named that recording by AcoustID at [`crate::acoustid::SURE`] or more;
 //! 4. "Add to album" (`add`): tagged from MusicBrainz and the album's own tags, named as its neighbours are, the cover
 //!    inside, into the album's folder; a track it replaces goes to the trash. Undo (`UNDO`) puts it all back.
 //!
@@ -496,7 +497,8 @@ fn tidy(staging: &Path) {
     }
 }
 
-/// The gate: decoded whole, of the recording's length, and the recording by AcoustID; its score.
+/// The gate: decoded whole, of the recording's length, its sound without flaws, and the recording by AcoustID; its
+/// score.
 async fn gate(file: &Path, track: &ReleaseTrack) -> Result<f32> {
     gate_with(file, track, looked_up).await
 }
@@ -521,7 +523,8 @@ where
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
 
-/// Why a file is refused before AcoustID is asked: a damaged frame, or a length not the recording's.
+/// Why a file is refused before AcoustID is asked: a damaged frame, a length not the recording's, or what its sound was
+/// heard to have wrong with it (highs that stop at a lossy encoder's wall, clicks, a pop at the end, clipping).
 fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result<()> {
     if print.damaged > 0 {
         bail!("{} frames would not decode", print.damaged);
@@ -531,6 +534,9 @@ fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result
         if off.abs() > crate::slskd::LENGTH_SLACK_MS {
             bail!("It is {:.0} s {} than the recording", off.abs() as f64 / 1000.0, if off > 0 { "longer" } else { "shorter" });
         }
+    }
+    if let Some(why) = print.flaws.why() {
+        bail!("{why}");
     }
     Ok(())
 }
@@ -979,7 +985,7 @@ mod tests {
 
     #[test]
     fn a_file_off_the_recordings_length_or_damaged_is_refused_before_acoustid() {
-        let p = |secs: f64, damaged: u32| crate::acoustid::Print { fingerprint: String::new(), duration_secs: secs, damaged };
+        let p = |secs: f64, damaged: u32| crate::acoustid::Print { fingerprint: String::new(), duration_secs: secs, damaged, flaws: Default::default() };
         assert!(refused_for(&p(240.0, 0), Some(241_500)).is_ok());
         assert_eq!(refused_for(&p(236.0, 0), Some(240_000)).unwrap_err().to_string(), "It is 4 s shorter than the recording");
         assert_eq!(refused_for(&p(240.0, 3), Some(240_000)).unwrap_err().to_string(), "3 frames would not decode");
@@ -1167,5 +1173,114 @@ mod tests {
         assert_eq!(err.to_string(), "It is 20 s shorter than the recording");
         assert_eq!(std::fs::read(&from).unwrap(), before, "and the original still there");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    // ---- What the gate hears (0.10): synthetic sound, a few seconds at 44.1 kHz
+
+    use std::f64::consts::TAU;
+
+    /// Noise, -1..1, the same for the same sample (a hash of its index, so `wav`'s `Fn` can make it).
+    fn noise(t: f64) -> f64 {
+        let mut z = ((t * 44_100.0).round() as u64).wrapping_add(1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        (z >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    }
+
+    /// A sine sweeping from 100 Hz up to `top` over `secs`.
+    fn sweep(t: f64, secs: f64, top: f64) -> f64 {
+        (TAU * (100.0 * t + (top - 100.0) * t * t / (2.0 * secs))).sin()
+    }
+
+    /// Tones every 100 Hz from 100 Hz to `top`, each at `level(hz)` and in a phase of its own: noise of that band.
+    fn tones(top: f64, level: impl Fn(f64) -> f64) -> impl Fn(f64) -> f64 {
+        let tones: Vec<(f64, f64, f64)> =
+            (1u32..).map(|i| f64::from(i) * 100.0).take_while(|&hz| hz <= top).map(|hz| (hz, level(hz), std::f64::consts::PI * noise(hz / 44_100.0))).collect();
+        move |t: f64| tones.iter().map(|&(hz, a, phase)| a * (TAU * hz * t + phase).sin()).sum::<f64>()
+    }
+
+    fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> PathBuf {
+        crate::analysis::tests::wav(name, secs, f)
+    }
+
+    /// The same sound as a FLAC.
+    fn flac(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> PathBuf {
+        let w = wav(name, secs, f);
+        let out = w.with_extension("flac");
+        crate::convert::to_cd_flac(&w, &out).unwrap();
+        std::fs::remove_file(&w).ok();
+        out
+    }
+
+    /// The gate on a file's sound alone (no recording's length to meet); the file taken away after.
+    fn heard(path: &Path) -> Result<()> {
+        let print = crate::acoustid::print(path).unwrap();
+        std::fs::remove_file(path).ok();
+        refused_for(&print, None)
+    }
+
+    #[test]
+    fn a_full_band_file_passes_and_the_same_walled_at_16_khz_in_a_flac_is_not_lossless() {
+        let secs = 3.0;
+        let clean = wav("gate-clean", secs, move |t| (0.3 * sweep(t, secs, 21_000.0) + 0.05 * noise(t)) as f32);
+        heard(&clean).unwrap();
+        let band = tones(15_900.0, |_| 0.004);
+        let walled = flac("gate-walled", secs, move |t| (0.3 * sweep(t, secs, 16_000.0) + band(t)) as f32);
+        assert_eq!(heard(&walled).unwrap_err().to_string(), "Not lossless: it stops at 16 kHz");
+    }
+
+    #[test]
+    fn a_gently_rolled_off_band_limited_master_passes() {
+        // Falling 12 dB an octave from 2 kHz, as an old recording's highs do: -34 dB at 14 kHz, -40 at 20.
+        let soft = tones(22_000.0, |hz| 0.02 / (1.0 + (hz / 2_000.0).powi(2)));
+        heard(&flac("gate-soft", 3.0, move |t| soft(t) as f32)).unwrap();
+    }
+
+    /// Whether `t` is the sample at `when` (s).
+    fn at(t: f64, when: f64) -> bool {
+        (t * 44_100.0).round() == (when * 44_100.0).round()
+    }
+
+    #[test]
+    fn a_click_out_of_silence_is_refused_with_its_time_but_not_in_the_first_second() {
+        let tone = |t: f64| (0.3 * (TAU * 440.0 * t).sin()) as f32;
+        // Music, then silence with one sample's spike in it at 1.5 s, then the music starting again out of it.
+        let click = wav("gate-click", 6.0, move |t| if at(t, 1.5) { 0.8 } else if t < 1.0 || t >= 2.5 { tone(t) } else { 0.0 });
+        assert_eq!(heard(&click).unwrap_err().to_string(), "A click at 0:01");
+        // The same spike in the first second: a track starting after silence looks just like it.
+        heard(&wav("gate-early", 4.0, |t| if at(t, 0.5) { 0.8 } else { 0.0 })).unwrap();
+    }
+
+    #[test]
+    fn a_burst_in_the_last_moment_after_near_silence_is_a_pop_at_the_very_end() {
+        // Music, then near-silence (about -90 dB) to the last 50 ms, which burst out loud: Cri D'Amour's ending.
+        let path = wav("gate-tail", 4.0, |t| {
+            let v = if t < 1.0 { 0.3 * (TAU * 440.0 * t).sin() } else if t >= 3.95 { 0.9 * noise(t) } else { 0.000_04 * noise(t) };
+            v as f32
+        });
+        assert_eq!(heard(&path).unwrap_err().to_string(), "A pop at the very end");
+    }
+
+    #[test]
+    fn loud_music_with_transients_and_the_odd_full_scale_sample_passes() {
+        // A chord, a drum's hit every quarter second (a sudden spike, decaying), and once a second one sample at full
+        // scale.
+        let path = wav("gate-loud", 4.0, |t| {
+            let chord = 0.15 * [220.0, 330.0, 440.0].iter().map(|hz| (TAU * hz * t).sin()).sum::<f64>();
+            let hit = 0.45 * noise(t) * (-(t % 0.25) / 0.01).exp();
+            if at(t, t.floor() + 0.6) { 1.0 } else { (chord + hit) as f32 }
+        });
+        heard(&path).unwrap();
+    }
+
+    #[test]
+    fn a_clipped_stretch_is_refused_with_when_it_starts() {
+        // A tone driven past full scale from 1.5 s to 2.5 s (`wav` cuts it flat at full scale).
+        let path = wav("gate-clipped", 4.0, |t| {
+            let gain = if (1.5..2.5).contains(&t) { 1.6 } else { 0.5 };
+            (gain * (TAU * 220.0 * t).sin()) as f32
+        });
+        assert_eq!(heard(&path).unwrap_err().to_string(), "Clipped at 0:01");
     }
 }
