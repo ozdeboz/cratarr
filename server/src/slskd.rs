@@ -210,6 +210,11 @@ fn uuid() -> String {
     format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
 }
 
+/// Whether a folder's name is a batch's id (a UUID): one of Cratarr's own fetches, under [`FOLDER`].
+pub fn is_batch(name: &str) -> bool {
+    name.len() == 36 && name.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
+}
+
 /// A user's name as one part of a path.
 fn segment(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
@@ -339,5 +344,12 @@ mod tests {
         let mut f = file(r"z\Song.flac", 0, false);
         f.length = None;
         assert_eq!(candidates(vec![answer("z", true, vec![f])], Some(240_000)).len(), 1);
+    }
+
+    #[test]
+    fn a_batchs_folder_is_known_by_its_id() {
+        assert!(is_batch(&uuid()));
+        assert!(!is_batch("Old drive"));
+        assert!(!is_batch("0b6f4bd4-2f0c-4b7e-9a51-6c1c0d8f7a1g"));
     }
 }
