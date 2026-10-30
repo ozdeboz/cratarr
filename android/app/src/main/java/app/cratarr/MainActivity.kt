@@ -149,19 +149,17 @@ class MainActivity : AppCompatActivity() {
         fileCallback = null
     }
 
-    /** "Download… as files" (0.9.19): the page's export while the user picks the folder it goes into, and the page that
-     *  asked. */
-    private var exportAsked: Pair<JSONObject, JavaScriptReplyProxy>? = null
-    private val exportFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
-        val (message, reply) = exportAsked ?: return@registerForActivityResult
-        exportAsked = null
-        val job = tree?.let { ExportFiles.jobOf(it, message) }
-        if (tree == null || job == null) {
-            reply.postMessage(JSONObject().put("type", "export-files").put("state", "cancelled").put("token", message.optString("token")).toString())
+    /** Download… (0.9.19): the page's export while the user says where it is saved, and the page that asked. */
+    private var saveAsked: Pair<JSONObject, JavaScriptReplyProxy>? = null
+    private val exportSave = registerForActivityResult(ExportSave.SaveAs()) { doc ->
+        val (message, reply) = saveAsked ?: return@registerForActivityResult
+        saveAsked = null
+        val token = message.optString("token")
+        if (doc == null) {
+            reply.postMessage(ExportSave.message(token, "cancelled").toString())
             return@registerForActivityResult
         }
-        ExportFiles.keepFolder(this, tree)
-        ExportFiles.start(this, job)
+        ExportSave.start(this, ExportSave.Job(doc, token, message.optString("name")))
     }
 
     /** Where the first page opens, past the server's address: Settings (the launcher's Settings shortcut), or a
@@ -258,8 +256,8 @@ class MainActivity : AppCompatActivity() {
         Kept.onChange = { runOnUiThread { tellKept() } }
         Kept.schedule(this)
         Kept.sync(this)
-        // An export written as files reports to the page in view, whichever page asked for it.
-        ExportFiles.onReport = { m -> runOnUiThread { page?.postMessage(m) } }
+        // A download being saved reports to the page in view, whichever page asked for it.
+        ExportSave.onReport = { m -> runOnUiThread { page?.postMessage(m) } }
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(modeChanged)
         Reach.watch(this)
@@ -318,7 +316,7 @@ class MainActivity : AppCompatActivity() {
         outputs?.stop()
         network?.stop()
         Plays.onPlayedHere = null
-        ExportFiles.onReport = null
+        ExportSave.onReport = null
         contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(modeChanged)
@@ -392,7 +390,7 @@ class MainActivity : AppCompatActivity() {
 
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
-     *  `address`, `open` (a link outside), `export-files` (Download… as files). */
+     *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -411,8 +409,8 @@ class MainActivity : AppCompatActivity() {
                 reply.postMessage(NetState.now(this).toString())
                 reply.postMessage(Plays.playedHere(this).toString())
                 player?.report(withQueue = true)
-                // An export being written as files: where it is.
-                ExportFiles.latest?.let { reply.postMessage(it) }
+                // A download being saved: where it is.
+                ExportSave.latest?.let { reply.postMessage(it) }
                 followSession()
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
@@ -588,19 +586,21 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "kept-sync" -> Kept.sync(this, retryFailed = true)
-            // "Download… as files" (0.9.19): Cratarr prepared the export; the user picks the folder it is written into,
-            // Android's picker opening at the one picked last.
-            "export-files" -> {
-                if (ExportFiles.jobOf(Uri.EMPTY, message) == null) {
-                    reply.postMessage(JSONObject().put("type", "export-files").put("state", "failed").put("token", message.optString("token")).put("error", "Nothing to export.").toString())
+            // Download… (0.9.19): Cratarr prepared the export and named its download (a zip, or the one file); the user
+            // says where it is saved, in Android's save dialog with that name.
+            "export-save" -> {
+                val token = message.optString("token")
+                val name = message.optString("name")
+                if (token.isEmpty() || name.isEmpty()) {
+                    reply.postMessage(ExportSave.message(token, "failed").put("error", "Nothing to save.").toString())
                     return
                 }
-                exportAsked = message to reply
+                saveAsked = message to reply
                 try {
-                    exportFolder.launch(ExportFiles.startAt(this))
+                    exportSave.launch(name)
                 } catch (e: ActivityNotFoundException) {
-                    exportAsked = null
-                    reply.postMessage(JSONObject().put("type", "export-files").put("state", "failed").put("token", message.optString("token")).put("error", "No app on this device picks a folder.").toString())
+                    saveAsked = null
+                    reply.postMessage(ExportSave.message(token, "failed").put("error", "No app on this device saves a file.").toString())
                 }
             }
             "download-remove" -> {

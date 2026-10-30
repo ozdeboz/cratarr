@@ -148,13 +148,6 @@ class Prefs(context: Context) {
             p.edit().putBoolean(SYNC_ONLY_CHARGING, value).apply()
         }
 
-    /** "Download… as files" (0.9.19): the folder last picked (its tree Uri), where the folder picker opens next time. */
-    var exportFolder: String?
-        get() = p.getString(EXPORT_FOLDER, null)
-        set(value) {
-            p.edit().putString(EXPORT_FOLDER, value).apply()
-        }
-
     /** Repeat: off, one or all (Repeat). */
     var repeat: String
         get() = p.getString(REPEAT, Repeat.OFF) ?: Repeat.OFF
@@ -566,7 +559,6 @@ class Prefs(context: Context) {
         const val DOWNLOAD_MOBILE = "download_mobile"
         const val SYNC_BUDGET_GB = "sync_budget_gb"
         const val SYNC_ONLY_CHARGING = "sync_only_charging"
-        const val EXPORT_FOLDER = "export_folder"
         const val QUALITY_ORIGINAL = "original"
         const val QUALITY_SMALLER = "smaller"
 

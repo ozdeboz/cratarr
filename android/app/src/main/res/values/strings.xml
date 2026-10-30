@@ -15,8 +15,6 @@
     <string name="downloads">Downloads</string>
     <string name="sign_in">Sign in to Cratarr</string>
     <string name="tap_to_play">Tap to play</string>
-    <string name="export_progress">%1$d of %2$d</string>
-    <string name="export_written">%1$d written</string>
-    <string name="export_written_failed">%1$d written, %2$d failed</string>
+    <string name="export_progress">%1$s of %2$s</string>
     <string name="export_expired">That export has expired. Start it again.</string>
 </resources>

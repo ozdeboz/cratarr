@@ -33,7 +33,7 @@ class CratarrDownloadService : DownloadService(
 
     companion object {
         private const val NOTIFICATION = 8
-        /** The downloads' notification channel; an export written as files (ExportFiles) shows on it too. */
+        /** The downloads' notification channel; an export being saved (ExportSave) shows on it too. */
         const val CHANNEL = "downloads"
         private const val JOB = 1
     }
