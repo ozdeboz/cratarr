@@ -41,6 +41,14 @@ Five steps, each useful on its own, so offline use improves with every release r
 The local store and its sync are one piece of the shared Rust core (SQLite and the sync), built once for the Android
 app and the desktop app; the generated protocol types (lib/generated) are its messages.
 
+## Graceful degradation, first
+
+The owner (2026-10-30): "graceful degradation is the way to go in first instance, so we don't show what we cannot
+consume, and we don't offer what we cannot uphold." Wherever the apps meet a server that is older or newer, or none
+at all, they show only what they can read, and offer only what they can carry through: a field the pages do not know
+is left out, not half-shown; an action the server (or being offline) cannot complete is not offered, rather than
+offered and refused. The open points below are settled in that light, with what Symfonium and Finamp do as reference.
+
 ## Open points (the owner's)
 
 - How each change merges when it was made in two places: a playlist's tracks (as a set, each addition and removal
