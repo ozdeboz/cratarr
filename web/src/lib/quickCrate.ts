@@ -336,4 +336,7 @@ export function recentFor<T extends { chips: readonly Chip[] }>(recent: readonly
 
 /** Where a cut at closeness `min` falls on the closeness curve (how many are at least that alike), and back. */
 export const countAt = (curve: readonly number[], min: number) => curve.filter((a) => a >= min).length;
-export const minAt = (curve: readonly number[], count: number) => (count > 0 && count <= curve.length ? curve[count - 1] : 0);
+/** The cutoff at `count`: the curve's closeness there, a whole number 0 to 100 as the server's Like `min` takes it
+ *  (0.12.1: the curve's own value, 25.37, was refused with 422), rounded down so the track at `count` stays in. */
+export const minAt = (curve: readonly number[], count: number) =>
+  count > 0 && count <= curve.length ? Math.max(0, Math.min(100, Math.floor(curve[count - 1]))) : 0;

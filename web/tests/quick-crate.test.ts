@@ -121,6 +121,14 @@ test('the cut on the closeness curve: how many at least that alike, and back', (
   assert.equal(minAt(curve, 99), 0);
 });
 
+test('the cut is a whole number, as the server takes it, rounded down so the track at the handle stays in', () => {
+  const curve = [97.6, 61.9, 25.37, 0.4];
+  assert.equal(minAt(curve, 3), 25);
+  assert.ok(Number.isInteger(minAt(curve, 2)));
+  assert.ok(countAt(curve, minAt(curve, 3)) >= 3);
+  assert.equal(minAt(curve, 4), 0);
+});
+
 // A line read whole (the owner, 2026-10-30: "Read the whole line"). A small library, searched as the server does for
 // a phrase: every word of it in a name (lib/search's `match`); `asked` what was asked, to count it.
 const LIBRARY = [
