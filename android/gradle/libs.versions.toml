@@ -1,0 +1,39 @@
+[versions]
+junit = "4.13.2"
+orgJson = "20240303"
+# Android
+android-compileSdk = "37"
+android-minSdk = "29"
+android-targetSdk = "36"
+
+# Plugins
+android-plugin = "9.4.1"
+
+# KotlinX
+coroutines = "1.11.0"
+
+# AndroidX
+androidx-core = "1.19.1"
+androidx-appcompat = "1.8.0"
+androidx-activity = "1.13.0"
+androidx-lifecycle = "2.11.0"
+androidx-webkit = "1.15.0"
+androidx-media3 = "1.11.1"
+androidx-work = "2.10.0"
+
+[plugins]
+android-app = { id = "com.android.application", version.ref = "android-plugin" }
+
+[libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+# The real org.json for the JVM tests (Android's own is a stub there): the shared rules table, the page's commands.
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
+coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+androidx-core = { group = "androidx.core", name = "core", version.ref = "androidx-core" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "androidx-appcompat" }
+androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "androidx-activity" }
+androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime", version.ref = "androidx-lifecycle" }
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "androidx-webkit" }
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "androidx-media3" }
+androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "androidx-media3" }
+androidx-work-runtime = { group = "androidx.work", name = "work-runtime", version.ref = "androidx-work" }

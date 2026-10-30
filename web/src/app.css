@@ -1,0 +1,233 @@
+/* The player's colour from the cover (decision 0018), registered so it can fade between tracks. */
+@property --art-accent {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #12a36a;
+}
+
+/* The playing cover's colour for the whole page (App sets it on the root from lib/remote's art), for the floating
+   controls; it fades between tracks as the mini-player's does. */
+@property --now-accent {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #12a36a;
+}
+
+/* Cratarr's colours (0.8, the owner 2026-10-24: Coral & honey): the accent, the red (errors, critical, what removes)
+   and the amber (warnings) are one value each for both themes, every one at least 3 : 1 on both pages and their
+   cards. Labels on them: dark on the green and the amber, white on the red. Text in them (an error line, a warning)
+   takes their ink, the same hue mixed toward the theme's text until it reads at 4.5 : 1 or more. */
+:root {
+  --bg: #0f1115;
+  --surface: #181b22;
+  --border: #2a2f3a;
+  --text: #e8eaf0;
+  --muted: #9097a5;
+  --accent: #12a36a;
+  --accent-text: #06281a;
+  --warn: #c1811c;
+  --danger: #c03e34;
+  /* The green reads as text on the dark page (5.3 : 1) but not on the light one (3.2 : 1): its ink differs in light only. */
+  --accent-ink: var(--accent);
+  --warn-ink: color-mix(in srgb, var(--warn) 70%, var(--text));
+  --danger-ink: color-mix(in srgb, var(--danger) 75%, var(--text));
+  /* A missing cover's tile (lib/Cover's stand-in): a step lighter than the page. */
+  --tile: #20242c;
+  /* The floating controls' surface (the pill, back, ✕, the mark, the select bars): the colour of the mini-player's
+     unplayed part (the playing cover's at 25 % over the page), a little see-through, what is under it blurred. */
+  --float-bg: color-mix(in srgb, color-mix(in srgb, var(--now-accent) 25%, var(--bg)) 70%, transparent);
+  /* Every glass island's 2 px band of the extensions' thinner glass (the owner, 2026-10-25: an island with an
+     extension (a title, the globe) has it, so one without has it too and all are the same size). A shadow: nothing
+     moves. Inside an extension an island has none of its own; the extension is its band. */
+  --island-ring: 0 0 0 2px color-mix(in srgb, var(--float-bg) 45%, transparent);
+  /* The floating glass's room from the edge it floats along (the window's, the bar's), smaller now that every island
+     has its band (the owner, 2026-10-25: by a third or a half, "whatever rounds well"): beside it 8 px (was 12), above
+     and below it 6 px (was 8; half would leave the band 2 px from the bar). */
+  --gutter-x: 8px;
+  --gutter-y: 6px;
+  --float-blur: blur(16px) saturate(1.4);
+  /* The room the floating glass row takes over a page's or a panel's top (App's .page-row): what is under it starts
+     there, the page and its panels alike (the owner, 2026-10-25). */
+  --glass-room: calc(var(--gutter-y) + 52px);
+  /* Where it is now (Display's Controls, set by App): over the top, or over the bottom just above the mini-player. */
+  --glass-top: var(--glass-room);
+  --glass-bottom: 0px;
+  transition: --now-accent 1s linear;
+  color-scheme: dark;
+}
+
+/* Light: when the system asks for it (unless the page is set to dark), or when the page is set to light. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --border: #d9dde5;
+    --text: #1a1d24;
+    --muted: #5d6573;
+    --tile: #e7eaef;
+    --accent-ink: color-mix(in srgb, var(--accent) 70%, var(--text));
+    color-scheme: light;
+  }
+}
+
+:root[data-theme='light'] {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --border: #d9dde5;
+  --text: #1a1d24;
+  --muted: #5d6573;
+  --tile: #e7eaef;
+  --accent-ink: color-mix(in srgb, var(--accent) 70%, var(--text));
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  /* No scroll bars (the owner, 2026-10-26: "I don't want these scroll bars at all"): a phone's never show, and a
+     desktop's drew two beside an open panel. Where a bar is meant (the queue's, the visuals' panel), its own rule draws
+     it. */
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  /* No pull-to-refresh (nor the bounce at the ends): a reload drops what plays in this browser and the open panel's
+     place, so a swipe down at the top must never reload the app. */
+  overscroll-behavior-y: none;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+/* A button whose action is under way (docs/ui-conventions.md → Feedback): its label gives way to a small spinner in
+   the same place, so nothing moves. Set aria-busy on the button that was tapped, with disabled. */
+button[aria-busy='true'] {
+  position: relative;
+  color: transparent !important;
+  cursor: progress;
+}
+
+button[aria-busy='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 1.1em;
+  height: 1.1em;
+  margin: auto;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: busy-spin 0.7s linear infinite;
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[aria-busy='true']::after {
+    animation-duration: 2s;
+  }
+}
+
+/* Animations off on this device (Display, the owner 2026-10-25): what the system's reduced motion stops (each part's
+   rules beside its own), every change of a style at once (no transitions), and a busy button's ring as slow. Svelte's
+   own transitions end at once too (lib/motion). */
+:root[data-motion='off'] *,
+:root[data-motion='off'] *::before,
+:root[data-motion='off'] *::after {
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+:root[data-motion='off'] button[aria-busy='true']::after {
+  animation-duration: 2s;
+}
+
+button[aria-busy='true']:disabled {
+  opacity: 1;
+}
+
+/* On a filled button the spinner takes the button's text colour. */
+button.primary[aria-busy='true']::after,
+button.solid[aria-busy='true']::after {
+  border-color: color-mix(in srgb, var(--accent-text) 30%, transparent);
+  border-top-color: var(--accent-text);
+}
+
+/* An edge's handle (decisions 0018 and 0042): the edge's line itself, 1 px, so what is on either side fills right up to
+   it; the handle in its middle that shows it can be dragged, and the room to grab it, reach over both sides. The edge
+   between page and panel (App's .grip) and the navigation's edge (App's .nav-grip) wear the same; each places it
+   (sticky, absolute). The handle's size is the page's (--grip-w, --grip-h): the panel cuts itself away around it. Its
+   width is odd, so it sits exactly centred on the 1 px line, the same whole pixels on each side. */
+:root {
+  --grip-w: 5px;
+  --grip-h: 44px;
+}
+
+.edge-grip {
+  z-index: 10;
+  width: 1px;
+  cursor: col-resize;
+  touch-action: none;
+  background: var(--border);
+}
+
+.edge-grip::before {
+  content: '';
+  position: absolute;
+  inset: 0 -6px;
+}
+
+.edge-grip::after {
+  content: '';
+  position: absolute;
+  /* Placed by arithmetic, not a translate: a translate lands it on half pixels. */
+  top: calc(50% - var(--grip-h) / 2);
+  left: calc(50% - var(--grip-w) / 2);
+  width: var(--grip-w);
+  height: var(--grip-h);
+  border-radius: calc(var(--grip-w) / 2);
+  background: var(--muted);
+  opacity: 0.6;
+}
+
+.edge-grip:hover::after,
+.edge-grip:focus-visible::after {
+  background: var(--accent);
+  opacity: 1;
+}
+
+/* Searching, Everywhere chosen (lib/SearchScope): the page's or the panel's own content is set aside (kept, not
+   remade), its tabs and everywhere's results shown in its place. */
+.away > :not(.search-scope, .global) {
+  display: none !important;
+}
+
+/* Focus rings for the keyboard only (lib/inputWay): after a touch or a click, none, whatever counted as focus. */
+:root[data-input='pointer'] :focus-visible {
+  outline: none !important;
+}
+
+/* A row that scrolls sideways runs out to the edge of what holds it (the screen, a panel), its first and last items in
+   line with the page's margin (the owner, 2026-10-26: some stopped short of the edge, with hard ends). --bleed: the
+   side padding of the box it sits in. */
+.bleed {
+  margin-inline: calc(-1 * var(--bleed, 16px));
+  padding-inline: var(--bleed, 16px);
+  scroll-padding-inline: var(--bleed, 16px);
+}

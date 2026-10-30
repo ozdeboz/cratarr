@@ -1,0 +1,27 @@
+The skies behind Home's moment ("Music for a Rainy Evening"), one per sky by day and after dark.
+
+These photos are not under Cratarr's licence (AGPL-3.0-or-later). They are from Unsplash, under the Unsplash License
+(https://unsplash.com/license): free to use, copy, modify and distribute, commercially too, without permission or
+credit; the photos may not be compiled to replicate a similar or competing service. Thank you to the photographers:
+
+sunny-day        engin akyurt         https://unsplash.com/photos/lvmrwCLfDUg
+clear-night      Nathan Anderson      https://unsplash.com/photos/L95xDkSSuWw
+fewclouds-day    Sam Schooler         https://unsplash.com/photos/E9aetBe2w40
+fewclouds-night  Ciocan Ciprian       https://unsplash.com/photos/i3SUvEFv0aA
+cloudy-day       Barry Simon          https://unsplash.com/photos/4C6Rp23RjnE
+cloudy-night     Andriyko Podilnyk    https://unsplash.com/photos/E6ne6IUNxZw
+foggy-day        Patrick Hendry       https://unsplash.com/photos/37ZuGYD3JOk
+foggy-night      Luca Bravo           https://unsplash.com/photos/cs6Omgsf0fU
+rainy-day        Joy Stamp            https://unsplash.com/photos/pGQbWXBC1dA
+rainy-night      Max van den Oetelaar https://unsplash.com/photos/1e60bqR1Ar0
+stormy-day       Daniel Lerman        https://unsplash.com/photos/GBkssTODNT0
+stormy-night     Raychel Sanner       https://unsplash.com/photos/1cJXplTxrmI
+snowy-day        Chandler Cruttenden  https://unsplash.com/photos/w8hWTFpGtpY
+snowy-night      Dillon Kydd          https://unsplash.com/photos/ffIIyc3EN58
+windy-day        Khamkéo              https://unsplash.com/photos/WtwSsqwYlA0
+windy-night      Lena Tolmacheva      https://unsplash.com/photos/bNeo5CMDOJc
+hot-day          James Day            https://unsplash.com/photos/5YWf-5hyZcw (www.jamesdayart.com)
+plain-day        Chris Linnett        https://unsplash.com/photos/hatFT0_uiEQ
+plain-night      Mahdi Soheili        https://unsplash.com/photos/Ojo0zSaCphU
+
+Taken at 2400 px wide (images.unsplash.com, w=2400, q=78).

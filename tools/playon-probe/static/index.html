@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cratarr probe</title>
+<link rel="manifest" href="/probe/manifest.webmanifest" />
+<style>
+  body { background: #0f1115; color: #e6e6e6; font: 16px/1.4 system-ui, sans-serif; margin: 0; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  #state { margin: 8px 0 12px; }
+  #log { font: 13px/1.35 ui-monospace, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Cratarr probe</h1>
+<div id="state"></div>
+<div id="log"></div>
+<audio id="a" src="/probe/tone.mp3" preload="auto"></audio>
+<script>
+const a = document.getElementById('a');
+a.volume = 0.3;
+const mode = matchMedia('(display-mode: standalone)').matches ? 'installed' : 'browser tab';
+const id = Math.random().toString(36).slice(2, 8);
+let tapped = false;
+const lines = [];
+function show() {
+  document.getElementById('state').textContent =
+    `${mode} · page ${id} · ${tapped ? 'tapped' : 'not tapped'} · ${a.paused ? 'paused' : 'playing'}`;
+  document.getElementById('log').textContent = lines.slice(-30).join('\n');
+}
+function report(what) {
+  const line = `${new Date().toLocaleTimeString()} ${what} [${document.visibilityState}${a.paused ? ', paused' : ', playing'}]`;
+  lines.push(line);
+  show();
+  fetch('/probe/report', { method: 'POST', body: JSON.stringify({ page: id, mode, tapped, line }) }).catch(() => {});
+}
+addEventListener('pointerdown', () => { if (!tapped) { tapped = true; report('first tap'); } });
+document.addEventListener('visibilitychange', () => report('visibility ' + document.visibilityState));
+// Chromium's page lifecycle: a hidden page can be frozen (no timers, no network events) and resumed later.
+document.addEventListener('freeze', () => lines.push(`${new Date().toLocaleTimeString()} frozen`));
+document.addEventListener('resume', () => report('resumed (' + (lines.filter((l) => l.endsWith('frozen')).pop() || 'not frozen before') + ')'));
+a.addEventListener('ended', () => report('ended'));
+async function run(cmd) {
+  report('got ' + cmd);
+  try {
+    if (cmd === 'play') { a.currentTime = 0; await a.play(); report('play ok'); }
+    else if (cmd === 'pause') { a.pause(); report('pause ok'); }
+    else if (cmd === 'resume') { await a.play(); report('resume ok'); }
+  } catch (e) { report(`${cmd} refused: ${e.name}`); }
+}
+let es;
+function connect() {
+  es = new EventSource('/probe/events?page=' + id);
+  es.addEventListener('open', () => report('connected'));
+  es.addEventListener('command', (e) => run(e.data));
+  es.addEventListener('error', () => report('connection lost'));
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/probe/sw.js', { scope: '/probe/' });
+report('loaded');
+connect();
+setInterval(() => fetch('/probe/report', { method: 'POST', body: JSON.stringify({ page: id, mode, tapped, beat: true, visible: document.visibilityState, paused: a.paused }) }).catch(() => {}), 30000);
+</script>
+</body>
+</html>

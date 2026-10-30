@@ -1,0 +1,109 @@
+[package]
+name = "cratarr-server"
+version = "0.10.0"
+edition = "2024"
+description = "Cratarr core: Jellyfin playlist index and API"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/ozdeboz/cratarr"
+
+# The rules for what plays and in what order (rules/), shared with players that play on their own.
+[workspace]
+members = [".", "rules"]
+
+[dependencies]
+unicode-normalization = "0.1"
+anyhow = "1"
+cratarr-rules = { path = "rules" }
+axum = "0.8"
+ipnet = "2"
+# Hi-res to CD conversion (decision 0013). Exact pins, minimal features: lossless decoders only.
+flacenc = { version = "=0.5.1", default-features = false }
+lofty = "0.25.4"
+# Smaller copies for the app's downloads (decision 0033, step 4): libopus, the reference encoder, built from its
+# bundled source (needs cmake at build time).
+opusic-sys = { version = "=0.7.5", default-features = false, features = ["bundled"] }
+# Covers resized for the OpenSubsonic API (decision 0030); decoders for the pictures albums carry.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+# The Subsonic login token (source::subsonic).
+md-5 = "0.10"
+# Sessions (decision 0039): tokens from the operating system's random source, kept only as their SHA-256.
+getrandom = "0.3"
+# A folder's free space (decision 0044): statvfs.
+libc = "0.2"
+# A directory asked first at sign-in (decision 0040); TLS through rustls as reqwest has it.
+ldap3 = { version = "=0.12.1", default-features = false, features = ["tls-rustls-ring"] }
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "password-hash"] }
+sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rubato = { version = "=5.0.0", default-features = false, features = ["fft_resampler"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The page's Play On types, generated from these (0.10: one protocol).
+ts-rs = "12.0.1"
+# The OpenSubsonic API's parameters, where a name may repeat (decision 0030).
+serde_urlencoded = "0.7"
+symphonia = { version = "=0.6.1", default-features = false, features = ["flac", "mp3", "wav", "aiff", "pcm", "isomp4", "alac", "aac", "ogg", "vorbis"] }
+# Decision 0035: loudness (EBU R128, ReplayGain 2.0) and tempo with a confidence (one file, no dependency, no unsafe).
+ebur128 = "0.1"
+taktus = "=0.1.0"
+# Decision 0046, amended: the visuals' signals, a short-time Fourier transform (already in the tree, through rubato).
+realfft = "3.5"
+# Decision 0049, amended: Beat this!'s small model on the NAS, pure Rust (the image is a static binary).
+tract-onnx = "=0.21.19"
+# Decision 0046: a track's beats in an analysis' JSON line (already in the tree, through reqwest).
+base64 = "0.22"
+thiserror = "2"
+# Single-track replacement's gate (0.9.8): Chromaprint's fingerprint in pure Rust (MIT), on Symphonia's decode, as
+# AcoustID takes it; no fpcalc binary.
+rusty-chromaprint = "=0.3.0"
+# Lossless and lossy forms for browsers whose media source refuses FLAC and Opus in MP4 (0.9.8, iOS): ALAC (Apple's
+# encoder ported to Rust, Apache-2.0 OR MIT) and MP3 (LAME, LGPL-3.0, built from its bundled source).
+alac-encoder = "=0.3.0"
+mp3lame-encoder = "=0.2.5"
+tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+# The page's live channel: an mpsc receiver as the SSE body.
+tokio-stream = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Reads a ListenBrainz export's zip (decision 0067; the exports' tests read back theirs, decision 0007): without its
+# own compression features, so a deflated file comes raw and flate2 inflates it.
+zip = { version = "2", default-features = false }
+flate2 = "1"
+
+[dev-dependencies]
+# Calls the routers as a client would, in tests (decision 0030).
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[profile.release]
+opt-level = "s"
+# Thin link-time optimisation over 16 units (2026-10-28, the owner: builds took 20 minutes): whole-program LTO in one
+# unit re-optimised everything on each release; this keeps most of its gain at a fraction of the time.
+lto = "thin"
+codegen-units = 16
+strip = true
+panic = "abort"
+
+# Beat this! on the NAS (decision 0049, amended): tract's and the spectrogram's arithmetic at full speed; the rest stays
+# built for size (all of it at full speed made the image 69 MB instead of 19).
+[profile.release.package.tract-core]
+opt-level = 3
+[profile.release.package.tract-linalg]
+opt-level = 3
+[profile.release.package.tract-data]
+opt-level = 3
+[profile.release.package.tract-hir]
+opt-level = 3
+[profile.release.package.tract-onnx]
+opt-level = 3
+[profile.release.package.tract-onnx-opl]
+opt-level = 3
+[profile.release.package.tract-nnef]
+opt-level = 3
+[profile.release.package.ndarray]
+opt-level = 3
+[profile.release.package.rustfft]
+opt-level = 3
+[profile.release.package.realfft]
+opt-level = 3

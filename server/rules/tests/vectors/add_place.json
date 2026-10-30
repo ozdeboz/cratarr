@@ -1,0 +1,53 @@
+[
+  {
+    "by": "next",
+    "current": 1,
+    "expected": 2,
+    "lanes": [
+      "own",
+      "own",
+      "next",
+      "next",
+      "own",
+      "autoplay"
+    ],
+    "name": "play next: right after the playing one"
+  },
+  {
+    "by": "last",
+    "current": 1,
+    "expected": 4,
+    "lanes": [
+      "own",
+      "own",
+      "next",
+      "next",
+      "own",
+      "autoplay"
+    ],
+    "name": "add to queue: after those added by hand"
+  },
+  {
+    "by": "last",
+    "current": 0,
+    "expected": 1,
+    "lanes": [
+      "own",
+      "own",
+      "own",
+      "autoplay"
+    ],
+    "name": "add to queue with none added"
+  },
+  {
+    "by": "next",
+    "current": null,
+    "expected": 3,
+    "lanes": [
+      "own",
+      "own",
+      "own"
+    ],
+    "name": "nothing plays: at the end"
+  }
+]

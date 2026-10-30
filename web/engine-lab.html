@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engine lab</title>
+<style>
+  body { margin: 0; padding: 16px; background: #0f1115; color: #e8eaf0; font: 15px system-ui, sans-serif; }
+  button { padding: 14px 20px; border: 0; border-radius: 10px; background: #3ddc97; color: #06281a; font: inherit; font-weight: 600; }
+  pre { white-space: pre-wrap; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<!-- Development only (Vite builds index.html alone). Plays lab playlists through the real local player engine
+     (lib/localPlayer.svelte.ts) and records its output silently for tools/gapless-lab/analyse.py.
+     Unattended on a PC: ?auto=lab-flac|lab-mp3|lab-mixed (headless browser with autoplay allowed).
+     On a device: open it, tap Start once, keep it in front; jobs {"id", "playlist"} then come from the lab server
+     (?lab=http://<host>:5180, default: this host on port 5180). -->
+<h1 style="font-size:1.1rem">Engine lab (decision 0022)</h1>
+<button id="start">Start</button>
+<pre id="log"></pre>
+<script type="module">
+  import { playQueue, local, engineAudio } from '/src/lib/localPlayer.svelte.ts';
+  const log = (s) => { const el = document.getElementById('log'); el.textContent = s + '\n' + el.textContent; };
+  window.addEventListener('error', (e) => log('error: ' + e.message));
+  window.addEventListener('unhandledrejection', (e) => log('error: ' + (e.reason?.message ?? e.reason)));
+  const q = new URLSearchParams(location.search);
+  const lab = q.get('lab') ?? `${location.protocol}//${location.hostname}:5180`;
+  const SR = 44100;
+  let ctx, chunks = [], recording = false, flush = () => {};
+
+  // Recording: on the audio thread where allowed (https, localhost), else a ScriptProcessor (plain http on the LAN).
+  async function setup() {
+    ctx = new AudioContext({ sampleRate: SR });
+    const src = ctx.createMediaElementSource(engineAudio());
+    if (ctx.audioWorklet) {
+      const code = `class C extends AudioWorkletProcessor { constructor() { super(); this.b = new Float32Array(8192); this.n = 0; this.on = false;
+        this.port.onmessage = (e) => { this.on = e.data === 'start'; if (!this.on && this.n) { this.port.postMessage(this.b.slice(0, this.n)); this.n = 0; } }; }
+        process(i, o) { const c = i[0] && i[0][0]; if (this.on && c) for (let k = 0; k < c.length; k++) { this.b[this.n++] = c[k];
+        if (this.n === this.b.length) { this.port.postMessage(this.b.slice()); this.n = 0; } } if (o[0] && o[0][0]) o[0][0].fill(0); return true; } }
+        registerProcessor('c', C);`;
+      await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+      const node = new AudioWorkletNode(ctx, 'c', { outputChannelCount: [1] });
+      node.port.onmessage = (e) => chunks.push(e.data);
+      src.connect(node);
+      node.connect(ctx.destination);
+      flush = (on) => node.port.postMessage(on ? 'start' : 'stop');
+      log(`recording on the audio thread at ${ctx.sampleRate} Hz`);
+    } else {
+      const sp = ctx.createScriptProcessor(16384, 1, 1);
+      sp.onaudioprocess = (e) => {
+        e.outputBuffer.getChannelData(0).fill(0);
+        if (recording) chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      src.connect(sp);
+      sp.connect(ctx.destination);
+      flush = (on) => (recording = on);
+      log(`recording with a ScriptProcessor at ${ctx.sampleRate} Hz (page is not https)`);
+    }
+  }
+
+  async function run(id, playlist) {
+    chunks = [];
+    const events = [];
+    const t0 = performance.now();
+    const note = (s) => events.push(`${((performance.now() - t0) / 1000).toFixed(2)} ${s}`);
+    const audio = engineAudio();
+    const handlers = ['playing', 'waiting', 'stalled', 'pause', 'ended', 'error'].map((ev) => {
+      const h = () => note(`${ev} ${audio.currentTime.toFixed(3)}`);
+      audio.addEventListener(ev, h);
+      return [ev, h];
+    });
+    flush(true);
+    const r = await (await fetch(`/api/playlists/${playlist}/tracks`)).json();
+    playQueue(r.ids.map((t) => ({ source: r.source, id: t, name: '', artist: null, album: null, album_id: null })), 0);
+    log(`${id}: playing ${playlist}`);
+    const why = await Promise.race([
+      new Promise((res) => audio.addEventListener('ended', () => res('ended'), { once: true })),
+      new Promise((res) => setTimeout(() => res('timeout'), 60000)),
+    ]);
+    await new Promise((res) => setTimeout(res, 300));
+    flush(false);
+    await new Promise((res) => setTimeout(res, 400));
+    for (const [ev, h] of handlers) audio.removeEventListener(ev, h);
+    const n = chunks.reduce((a, c) => a + c.length, 0), raw = new Float32Array(n);
+    let o = 0;
+    for (const c of chunks) { raw.set(c, o); o += c.length; }
+    await fetch(`${lab}/result?${id}`, { method: 'POST', body: JSON.stringify({ why, captured_s: n / SR, error: local.error, events, ua: navigator.userAgent }) });
+    await fetch(`${lab}/capture?${id}`, { method: 'POST', body: raw.buffer });
+    log(`${id}: ${why}, sent ${(n / SR).toFixed(2)} s`);
+  }
+
+  const done = new Set();
+  async function poll() {
+    try {
+      const r = await fetch(`${lab}/job?${Date.now()}`);
+      if (r.status === 200) {
+        const job = await r.json();
+        if (job.playlist && !done.has(job.id)) {
+          done.add(job.id);
+          await run(job.id, job.playlist);
+        }
+      }
+    } catch (e) { log('poll: ' + e); }
+    setTimeout(poll, 2000);
+  }
+
+  document.getElementById('start').addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try {
+      await setup();
+      await ctx.resume();
+      log('ready: waiting for tests');
+      poll();
+    } catch (err) {
+      log('setup failed: ' + (err?.message ?? err));
+      e.currentTarget.disabled = false;
+    }
+  });
+  const auto = q.get('auto');
+  if (auto) {
+    await setup();
+    await run(`engine-${auto}`, auto);
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+[
+  {
+    "before": [
+      "c",
+      "d",
+      "e"
+    ],
+    "current": 2,
+    "expected": [
+      0,
+      1,
+      2
+    ],
+    "name": "after a clear, Autoplay's in between: all back",
+    "queue": [
+      "a",
+      "b",
+      "x",
+      "y"
+    ]
+  },
+  {
+    "before": [
+      "c",
+      "d",
+      "e"
+    ],
+    "current": 3,
+    "expected": [
+      2
+    ],
+    "name": "after a shuffle, two played since: the rest back",
+    "queue": [
+      "a",
+      "b",
+      "d",
+      "c",
+      "e"
+    ]
+  },
+  {
+    "before": [
+      "c",
+      "d",
+      "e"
+    ],
+    "current": 1,
+    "expected": [
+      0,
+      1,
+      2
+    ],
+    "name": "nothing played since",
+    "queue": [
+      "a",
+      "b",
+      "e",
+      "c",
+      "d"
+    ]
+  }
+]

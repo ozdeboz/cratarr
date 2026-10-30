@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- One accent for both themes since 0.8 (the owner, 2026-10-24). -->
+    <color name="accent">#12A36A</color>
+    <color name="page">#121212</color>
+</resources>

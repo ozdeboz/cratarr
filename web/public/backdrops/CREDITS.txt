@@ -1,0 +1,22 @@
+The photos one can pick to stand behind every flow (Settings › Appearance › Behind the flows).
+
+These photos are not under Cratarr's licence (AGPL-3.0-or-later). They are from Unsplash, under the Unsplash License
+(https://unsplash.com/license): free to use, copy, modify and distribute, commercially too, without permission or
+credit; the photos may not be compiled to replicate a similar or competing service. Thank you to the photographers:
+
+wall        Tim Mossholder      https://unsplash.com/photos/opeF-ObCG0A
+flowers     Juli Kosolapova     https://unsplash.com/photos/COUZB0613Ns
+leaf        Yousef Espanioly    https://unsplash.com/photos/hbQeCpo-Cp0
+pastel      Andrew Ridley       https://unsplash.com/photos/jR4Zf-riEjI
+records     james chan          https://unsplash.com/photos/zk-a1QqWcjo
+checks      Simon Takatomi      https://unsplash.com/photos/6Tqg0wro_vI
+mosaic      Adrien Antal        https://unsplash.com/photos/zSAOhFU1hh4
+planks      Tim Mossholder      https://unsplash.com/photos/n9cuJ6N8etE
+amplifier   Goh Rhy Yan         https://unsplash.com/photos/6a3Ml_MGA5E
+agave       Chris Barbalis      https://unsplash.com/photos/Q_0l2J_dUkE
+rack        Jeremy Lanfranchi   https://unsplash.com/photos/2Lc5qrZdmxc
+speakers    SJ Objio            https://unsplash.com/photos/sIVI8tWLyGo
+radios      Mert Toker          https://unsplash.com/photos/AwhZiUwh_WM
+stickers    Max van den Oetelaar  https://unsplash.com/photos/uymG7UVPXpI
+textile     Annie Spratt        https://unsplash.com/photos/Z5VMR-7s4JY
+succulents  Maria Orlova        https://unsplash.com/photos/x3Z_YxnUh54

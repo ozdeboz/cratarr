@@ -1,0 +1,12 @@
+<!-- Cratarr's mark: a record with three rings, a 60-degree slice to the right where only the rings remain, inside the
+     adaptive icon's safe zone (66 of 108 dp). Green shapes only, every cut a real gap, so the same drawable serves as
+     the themed (monochrome) icon. Made by tools/brand/record.py; change it there. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#12A36A"
+        android:pathData="M54.0000,54.0000L56.5981,55.5000A3,3 0,1,1 56.5981,52.5000ZM64.7387,60.2000A12.4,12.4 0,1,1 64.7387,47.8000L60.9282,50.0000A8,8 0,1,0 60.9282,58.0000ZM68.2028,62.2000A16.4,16.4 0,1,1 68.2028,45.8000L65.7779,47.2000A13.6,13.6 0,1,0 65.7779,60.8000ZM71.6669,64.2000A20.4,20.4 0,1,1 71.6669,43.8000L69.2420,45.2000A17.6,17.6 0,1,0 69.2420,62.8000ZM74.7846,66.0000A24,24 0,1,1 74.7846,42.0000L72.7061,43.2000A21.6,21.6 0,1,0 72.7061,64.8000ZM65.7779,47.2000A13.6,13.6 0,0,1 65.7779,60.8000L64.7387,60.2000A12.4,12.4 0,0,0 64.7387,47.8000ZM69.2420,45.2000A17.6,17.6 0,0,1 69.2420,62.8000L68.2028,62.2000A16.4,16.4 0,0,0 68.2028,45.8000ZM72.7061,43.2000A21.6,21.6 0,0,1 72.7061,64.8000L71.6669,64.2000A20.4,20.4 0,0,0 71.6669,43.8000Z" />
+</vector>

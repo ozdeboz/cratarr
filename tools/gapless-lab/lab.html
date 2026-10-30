@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gapless lab</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #0f1115; color: #e8eaf0; font: 16px system-ui, sans-serif; }
+  button { padding: 14px 20px; border: 0; border-radius: 10px; background: #3ddc97; color: #06281a; font: inherit; font-weight: 600; }
+  pre { white-space: pre-wrap; background: #181b22; padding: 12px; border-radius: 10px; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<h1 style="font-size:1.2rem">Gapless lab (decision 0022)</h1>
+<p>Tap Start once and leave this page open in front. Tests then arrive from the ThinkBook, play silently and report
+back by themselves.</p>
+<button id="start">Start</button>
+<pre id="log"></pre>
+<audio id="a"></audio>
+<script>
+const log = (s) => { const el = document.getElementById('log'); el.textContent = (s + '\n' + el.textContent).slice(0, 6000); };
+const audio = document.getElementById('a');
+const SR = 44100;
+// The test signal: reproducible noise (xorshift32, the generator's seed), so no stretch resembles any other and every
+// sample's true value is known.
+const NOISE = (() => {
+  const a = new Float32Array(1323000);
+  let x = 2463534242;
+  for (let i = 0; i < a.length; i++) {
+    x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0;
+    a[i] = Math.round(((x / 4294967296) * 2 - 1) * 0.3 * 32767) / 32768;
+  }
+  return a;
+})();
+// A job may bring its own reference (raw mono float32 at 44.1 kHz): what a perfect player outputs, e.g. the MP3
+// tracks decoded and trimmed exactly by ffmpeg.
+let REF = NOISE;
+const expected = (s) => (s >= 0 && s < REF.length ? REF[s] : 0);
+const MIME = { flac: 'audio/mp4; codecs="flac"', mp3: 'audio/mpeg' };
+
+let ctx, node, chunks = [];
+// Recording: on the audio thread (AudioWorklet) where the page is a secure context (https, localhost); otherwise
+// (plain http on the LAN) with a ScriptProcessor, whose callbacks are checked for dropped blocks.
+let recording = false, nextTime = null, dropped = 0;
+async function setup() {
+  ctx = new AudioContext({ sampleRate: SR });
+  const src = ctx.createMediaElementSource(audio);
+  if (ctx.audioWorklet) {
+    await ctx.audioWorklet.addModule('capture.js?v=1');
+    node = new AudioWorkletNode(ctx, 'capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    node.port.onmessage = (e) => chunks.push(e.data);
+    src.connect(node);
+    node.connect(ctx.destination);
+    log(`audio context at ${ctx.sampleRate} Hz, recording on the audio thread`);
+  } else {
+    const sp = ctx.createScriptProcessor(16384, 1, 1);
+    sp.onaudioprocess = (e) => {
+      e.outputBuffer.getChannelData(0).fill(0); // silent
+      if (!recording) return;
+      if (nextTime !== null && Math.abs(e.playbackTime - nextTime) > 1e-3) dropped++;
+      nextTime = e.playbackTime + 16384 / ctx.sampleRate;
+      chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    node = { port: { postMessage: (m) => { recording = m === 'start'; if (recording) { nextTime = null; dropped = 0; } } } };
+    src.connect(sp);
+    sp.connect(ctx.destination);
+    log(`audio context at ${ctx.sampleRate} Hz, recording with a ScriptProcessor (page is not https)`);
+  }
+}
+
+// MP3: the LAME header's encoder delay and padding, and whether the first frame is the Info/Xing frame.
+function lame(buf) {
+  const b = new Uint8Array(buf);
+  let i = 0;
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) i = 10 + ((b[6] << 21) | (b[7] << 14) | (b[8] << 7) | b[9]);
+  while (i < b.length - 4 && !(b[i] === 0xff && (b[i + 1] & 0xe0) === 0xe0)) i++;
+  const mpeg1 = (b[i + 1] & 0x18) === 0x18, mono = (b[i + 3] & 0xc0) === 0xc0;
+  const x = i + 4 + (mpeg1 ? (mono ? 17 : 32) : (mono ? 9 : 17));
+  const tag = String.fromCharCode(...b.slice(x, x + 4));
+  if (tag !== 'Xing' && tag !== 'Info') return { info: false, delay: 0, padding: 0 };
+  const flags = (b[x + 4] << 24) | (b[x + 5] << 16) | (b[x + 6] << 8) | b[x + 7];
+  let p = x + 8;
+  if (flags & 1) p += 4;
+  if (flags & 2) p += 4;
+  if (flags & 4) p += 100;
+  if (flags & 8) p += 4;
+  const d = p + 21;
+  return { info: true, delay: (b[d] << 4) | (b[d + 1] >> 4), padding: ((b[d + 1] & 0x0f) << 8) | b[d + 2] };
+}
+
+// One job: append the tracks to one MSE stream (sequence mode), play it through the capture, analyse.
+// Telemetry for each run: the element's events, page visibility and the playback position over time, so a stall
+// or a silence in the recording can be explained afterwards.
+let events = [], t0 = 0;
+const note = (what) => events.push(`${((performance.now() - t0) / 1000).toFixed(2)} ${what}`);
+for (const ev of ['play', 'playing', 'pause', 'waiting', 'stalled', 'suspend', 'seeking', 'seeked', 'ended', 'error', 'emptied', 'ratechange'])
+  audio.addEventListener(ev, () => note(`${ev} at ${audio.currentTime.toFixed(3)}${ev === 'error' ? ' ' + (audio.error?.message || audio.error?.code) : ''}`));
+document.addEventListener('visibilitychange', () => note('visibility ' + document.visibilityState));
+let ticker = null;
+
+async function run(job) {
+  chunks = [];
+  events = [];
+  t0 = performance.now();
+  clearInterval(ticker);
+  ticker = setInterval(() => {
+    const b = audio.buffered.length ? `${audio.buffered.start(0).toFixed(2)}-${audio.buffered.end(audio.buffered.length - 1).toFixed(2)}` : '-';
+    note(`pos ${audio.currentTime.toFixed(3)} ready ${audio.readyState} buffered ${b}${ctx ? ' ctx ' + ctx.state : ''}`);
+  }, 500);
+  REF = job.ref ? new Float32Array(await (await fetch(job.ref)).arrayBuffer()) : NOISE;
+  const ms = new MediaSource();
+  audio.src = URL.createObjectURL(ms);
+  await new Promise((r) => ms.addEventListener('sourceopen', r, { once: true }));
+  node.port.postMessage('start');
+  const playing = audio.play();
+  let sb = null, kind = null, t = 0;
+  const boundaries = [];
+  for (const tr of job.tracks) {
+    const buf = await (await fetch(tr.url)).arrayBuffer();
+    if (!sb) { sb = ms.addSourceBuffer(MIME[tr.kind]); kind = tr.kind; sb.mode = 'sequence'; }
+    else if (kind !== tr.kind) { sb.changeType(MIME[tr.kind]); kind = tr.kind; if (sb.mode !== 'sequence') sb.mode = 'sequence'; }
+    let skip = 0;
+    if (tr.kind === 'mp3') {
+      const h = lame(buf);
+      // Measured 2026-10-14: Chrome's decoder drops the Info frame and adds no decoder delay; only LAME's encoder delay
+      // precedes the first real sample.
+      skip = tr.skip ?? h.delay;
+    }
+    sb.appendWindowEnd = Infinity;
+    sb.appendWindowStart = t;
+    sb.appendWindowEnd = t + tr.samples / SR;
+    sb.timestampOffset = t - skip / SR;
+    sb.appendBuffer(buf);
+    await new Promise((r) => sb.addEventListener('updateend', r, { once: true }));
+    if (t > 0) boundaries.push(Math.round(t * SR));
+    t += tr.samples / SR;
+  }
+  ms.endOfStream();
+  await playing.catch((e) => { throw new Error('play: ' + e); });
+  await new Promise((r) => (audio.onended = r));
+  await new Promise((r) => setTimeout(r, 300));
+  node.port.postMessage('stop');
+  await new Promise((r) => setTimeout(r, 300));
+  clearInterval(ticker);
+  const result = analyse(boundaries, Math.round(t * SR));
+  result.events = events;
+  return result;
+}
+
+function analyse(boundaries, total) {
+  const n = chunks.reduce((a, c) => a + c.length, 0);
+  const C = new Float32Array(n);
+  let o = 0;
+  for (const c of chunks) { C.set(c, o); o += c.length; }
+  // Normalised cross-correlation: 1 = the capture is exactly the true signal there.
+  const corr = (c, s, len) => {
+    let a = 0, e = 0, f = 0;
+    for (let k = 0; k < len; k++) { const x = expected(s + k), y = C[c + k] ?? 0; a += y * x; e += x * x; f += y * y; }
+    return e && f ? a / Math.sqrt(e * f) : 0;
+  };
+  const rms = (c, s, len) => { let e = 0; for (let k = 0; k < len; k++) e += (C[c + k] - expected(s + k)) ** 2; return Math.sqrt(e / len); };
+  // Where stream sample 0 sits in the capture: aligned on a stretch 2 s in (the sweep is unique there), searched widely.
+  const first = Math.max(0, C.findIndex((v) => Math.abs(v) > 0.01));
+  const A = 2 * SR;
+  let c0 = first, best = -Infinity;
+  for (let c = Math.max(0, first - 3000); c < first + 3000; c++) { const v = corr(c + A, A, 2048); if (v > best) { best = v; c0 = c; } }
+  // The shift of the capture against the true signal, every half second (0 = exactly where it should be).
+  const shiftAt = (s, range) => {
+    let d0 = 0, bv = -Infinity;
+    for (let d = -range; d <= range; d++) { const c = c0 + s + d; if (c < 0 || c + 512 > n) continue; const v = corr(c, s, 512); if (v > bv) { bv = v; d0 = d; } }
+    return { d: d0, fit: +bv.toFixed(3) };
+  };
+  const timeline = [];
+  for (let s = Math.round(0.25 * SR); s < total - SR / 4; s += SR / 2) {
+    const r = shiftAt(s, 600);
+    timeline.push(r.fit < 0.5 ? `${(s / SR).toFixed(2)}:?(${r.fit})` : r.d ? `${(s / SR).toFixed(2)}:${r.d}` : null);
+  }
+  const out = [];
+  for (const b of boundaries) {
+    const before = shiftAt(b - 1500, 3000), after = shiftAt(b + 300, 3000);
+    let silent = 0;
+    for (let k = c0 + b - 2000; k < c0 + b + 2000; k++) if (Math.abs(C[k]) < 1e-4) silent++;
+    out.push({ at_s: +(b / SR).toFixed(4), shift_before: before.d, shift_after: after.d, jump_samples: after.d - before.d, fit: [before.fit, after.fit],
+      silent_samples: silent, err_across: +rms(c0 + b - 64 + before.d, b - 64, 128).toFixed(4) });
+  }
+  return { sample_rate: ctx.sampleRate, captured_s: +(n / SR).toFixed(3), start_at: c0, dropped_blocks: dropped,
+    boundaries: out, shifts_off_zero: timeline.filter(Boolean) };
+}
+
+const done = new Set();
+async function poll() {
+  try {
+    const r = await fetch('/job?' + Date.now());
+    if (r.status === 200) {
+      const job = await r.json();
+      if (!done.has(job.id)) {
+        done.add(job.id);
+        log(`running ${job.id}`);
+        let result;
+        try { result = await run(job); } catch (e) { result = { error: String(e) }; }
+        result.ua = navigator.userAgent;
+        await fetch('/result?' + job.id, { method: 'POST', body: JSON.stringify(result) });
+        // The raw recording too (mono float32 at 44.1 kHz), for analysis on the ThinkBook.
+        const total = chunks.reduce((a, c) => a + c.length, 0), raw = new Float32Array(total);
+        let off = 0;
+        for (const c of chunks) { raw.set(c, off); off += c.length; }
+        await fetch('/capture?' + job.id, { method: 'POST', body: raw.buffer });
+        log(`${job.id}: ${JSON.stringify(result.boundaries ?? result.error)}`);
+      }
+    }
+  } catch (e) { log('poll: ' + e); }
+  setTimeout(poll, 2000);
+}
+
+window.addEventListener('error', (e) => log('error: ' + e.message));
+window.addEventListener('unhandledrejection', (e) => log('error: ' + (e.reason?.message ?? e.reason)));
+document.getElementById('start').addEventListener('click', async (e) => {
+  e.currentTarget.disabled = true;
+  try {
+    await setup();
+    await ctx.resume();
+    audio.play().catch(() => {}); // unlocks playback for this page
+    log('ready: waiting for tests');
+    poll();
+  } catch (err) {
+    log('setup failed: ' + (err?.message ?? err));
+    e.currentTarget.disabled = false;
+  }
+});
+if (new URLSearchParams(location.search).has('auto')) document.getElementById('start').click();
+</script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!doctype html>
+<!-- The desktop app's one page of its own (decision 0078): which Cratarr server it shows. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>Cratarr</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0f1115;
+        color: #e8e8ea;
+        font: 15px/1.4 system-ui, sans-serif;
+      }
+      form {
+        width: min(360px, calc(100vw - 32px));
+        display: grid;
+        gap: 12px;
+      }
+      img {
+        width: 72px;
+        height: 72px;
+        justify-self: center;
+        margin-bottom: 8px;
+      }
+      label {
+        font-size: 13px;
+        color: #9aa0a8;
+      }
+      input,
+      button {
+        font: inherit;
+        padding: 10px 12px;
+        border-radius: 8px;
+      }
+      input {
+        border: 1px solid #2a2e36;
+        background: #171a20;
+        color: inherit;
+      }
+      button {
+        border: 0;
+        background: #e8e8ea;
+        color: #0f1115;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      #error {
+        min-height: 1.4em;
+        font-size: 13px;
+        color: #ff8a80;
+      }
+    </style>
+  </head>
+  <body>
+    <form id="form">
+      <img src="icons/icon-192.png" alt="" />
+      <label for="address">Cratarr server</label>
+      <input id="address" autofocus spellcheck="false" autocomplete="url" placeholder="https://cratarr.example.org" />
+      <button id="connect">Connect</button>
+      <div id="error" role="alert"></div>
+    </form>
+    <script>
+      const form = document.getElementById('form');
+      const address = document.getElementById('address');
+      const connect = document.getElementById('connect');
+      const error = document.getElementById('error');
+      window.CratarrDesktop.server().then((s) => (address.value = s ?? ''));
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        connect.disabled = true;
+        error.textContent = '';
+        // On success the app starts again with the server; only a failure comes back here.
+        if (!(await window.CratarrDesktop.connect(address.value))) error.textContent = 'No Cratarr server at that address.';
+        connect.disabled = false;
+      });
+    </script>
+  </body>
+</html>

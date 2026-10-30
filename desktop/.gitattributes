@@ -1,0 +1,2 @@
+# Shell scripts keep LF wherever they are checked out (a CRLF script breaks bash).
+*.sh text eol=lf

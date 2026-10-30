@@ -1,0 +1,225 @@
+# A release: a version tag (v0.8.3) on main builds the image for amd64 and arm64, each on its own kind of machine
+# (no emulation: Rust under QEMU takes hours), pushes both under one name to ghcr.io, and makes the GitHub release.
+# The desktop app (decision 0078) joins it: its .deb, also as the APT repository on GitHub Pages, and its Windows
+# installer, from which it updates itself; then SHA256SUMS of all of the release's files. The Android app joins the
+# release once its release key is kept in the repository's secrets.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+      # Pushed by digest only; the next job names both platforms' images together.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - name: Keep the digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.runner }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # v0.8.3 → 0.8.3, 0.8 and latest.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - name: Name both platforms' images together
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+      - run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+
+  release:
+    needs: manifest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: The GitHub release, its notes from the commits since the last one
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "Cratarr ${GITHUB_REF_NAME#v}" --generate-notes
+
+  # The desktop app's files join the release made above; a failed build leaves the release as it is. Each build is at
+  # the release's version, so apt and the updater take every release as newer. A hotfix's tag (v0.9.15-1) is a semver
+  # prerelease, which the .deb would carry as 0.9.15~1, below 0.9.15: the app is built as 0.9.15 with the hotfix's
+  # number as its build number (the .deb's revision, 0.9.15-1, above 0.9.15; Windows' file version 0.9.15.1), its
+  # files named after the tag. CRATARR_HOUSE_PATTERNS (a secret) names the house's own hosts for the build's check
+  # (desktop/check-no-house.js).
+  desktop-linux:
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: The .deb, at the release's version
+        working-directory: desktop
+        env:
+          CRATARR_HOUSE_PATTERNS: ${{ secrets.CRATARR_HOUSE_PATTERNS }}
+        run: |
+          umask 022
+          npm ci
+          v="${GITHUB_REF_NAME#v}"
+          base="${v%%-*}"
+          npm version --no-git-tag-version --allow-same-version "$base"
+          args=()
+          if [ "$v" != "$base" ]; then args=(-c.buildNumber="${v#*-}" -c.deb.artifactName="cratarr-desktop_${v}_amd64.deb"); fi
+          npm run dist -- "${args[@]}"
+      - name: Added to the release
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" dist/*.deb
+
+  # The APT repository on GitHub Pages, made anew with the release's .deb and signed with APT_SIGNING_KEY (a secret,
+  # made with desktop/make-apt-key.sh). Pages' source is GitHub Actions, and its environment lets v* tags deploy.
+  apt:
+    needs: desktop-linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: The repository, signed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          sudo apt-get install -y dpkg-dev apt-utils
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir debs
+          bash desktop/apt-repo.sh debs/*.deb site "${{ steps.pages.outputs.base_url }}"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  desktop-windows:
+    needs: release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: The installer, at the release's version, and what the updater reads (latest.yml, the blockmap)
+        working-directory: desktop
+        env:
+          CRATARR_HOUSE_PATTERNS: ${{ secrets.CRATARR_HOUSE_PATTERNS }}
+        run: |
+          npm ci
+          v="${GITHUB_REF_NAME#v}"
+          base="${v%%-*}"
+          npm version --no-git-tag-version --allow-same-version "$base"
+          args=()
+          if [ "$v" != "$base" ]; then args=(-c.buildNumber="${v#*-}" -c.nsis.artifactName="Cratarr-Setup-$v.exe"); fi
+          npm run dist:win -- "${args[@]}"
+      - name: Added to the release
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" dist/*.exe dist/*.exe.blockmap dist/latest.yml
+
+  # SHA256SUMS of every file the release holds, added last. Also when a job before was skipped (the Android app's,
+  # without its key); not when one failed.
+  sums:
+    needs: [desktop-linux, desktop-windows]
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir files
+          rm -f files/SHA256SUMS
+          (cd files && sha256sum -- *) > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" SHA256SUMS --clobber

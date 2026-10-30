@@ -1,0 +1,33 @@
+{
+  "name": "cratarr-web",
+  "private": true,
+  "version": "0.10.0",
+  "type": "module",
+  "packageManager": "pnpm@11.17.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check:phone": "node scripts/check-phone.mjs",
+    "test": "node --experimental-strip-types --experimental-test-isolation=none --import ./tests/ts-resolve.mjs --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@types/d3-force": "3.0.10",
+    "@types/d3-selection": "3.0.11",
+    "@types/d3-zoom": "3.0.8",
+    "svelte": "^5.57.2",
+    "svelte-check": "^4.7.6",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.4"
+  },
+  "dependencies": {
+    "@xyflow/svelte": "1.7.0",
+    "d3-force": "3.0.0",
+    "d3-selection": "3.0.0",
+    "d3-zoom": "3.0.0",
+    "elkjs": "0.12.0",
+    "greet-by-time": "1.0.1"
+  }
+}
