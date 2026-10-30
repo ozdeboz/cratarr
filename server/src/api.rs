@@ -2374,7 +2374,7 @@ async fn player_command(State(app): State<Arc<App>>, Path(name): Path<String>, J
 }
 
 async fn player_state(State(app): State<Arc<App>>, Path(name): Path<String>, Json(r): Json<crate::app::PlayerReport>) -> Result<StatusCode, ApiError> {
-    app.play_on.report(&name, r)?;
+    app.play_on.report_off(name, r).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
