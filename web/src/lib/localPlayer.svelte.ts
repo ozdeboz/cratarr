@@ -26,6 +26,7 @@ import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './dec
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
+import { firstFrame } from './mp3Frames';
 import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
 import { rampSlot } from './player/rampSlot';
@@ -468,8 +469,10 @@ function mp3Head(b: Uint8Array): Mp3Head | null | 'invalid' {
   if (b.length < 10) return null;
   if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) i = 10 + ((b[6] << 21) | (b[7] << 14) | (b[8] << 7) | b[9]);
   const tagEnd = i; // the ID3 tag can be large (embedded covers of several MB): the limit below counts from its end
-  while (i + 4 <= b.length && !(b[i] === 0xff && (b[i + 1] & 0xe0) === 0xe0)) i++;
-  if (i + 200 > b.length) return b.length > tagEnd + (1 << 22) ? 'invalid' : null; // wait for the first frame and its header
+  // A frame whose next frame follows it (lib/mp3Frames' firstFrame): never a sync found by chance.
+  const at = firstFrame(b, i);
+  if (at === null || at + 200 > b.length) return b.length > tagEnd + (1 << 22) ? 'invalid' : null; // wait for the first frame and its header
+  i = at;
   const version = (b[i + 1] >> 3) & 3; // 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
   const rates = version === 3 ? [44100, 48000, 32000] : version === 2 ? [22050, 24000, 16000] : [11025, 12000, 8000];
   const rate = rates[(b[i + 2] >> 2) & 3] ?? 44100;
@@ -585,8 +588,9 @@ async function evict(keep = BEHIND) {
   }
 }
 
-/** Fetches queue track `index` and appends it to the stream, starting `from` seconds into it (a seek). */
-async function appendTrack(index: number, from: number, gen: number) {
+/** Fetches queue track `index` and appends it to the stream, starting `from` seconds into it (a seek). `whole`: asked
+ *  from its top all the same, placed so that `from` plays now (a stream from a moment that did not say where it began). */
+async function appendTrack(index: number, from: number, gen: number, whole = false) {
   const t = local.queue[index];
   if (!t) return;
   wantGain(index);
@@ -599,7 +603,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     const query = new URLSearchParams();
     // An MP3 asked from its frame there, not whole from its top (662527cb: mp3_from=1; the server says where it
     // starts, x-start-ms). A server before it ignores the flag and sends it whole, as before.
-    if (from > 0) {
+    if (from > 0 && !whole) {
       query.set('from_ms', String(Math.floor(from * 1000)));
       query.set('mp3_from', '1');
     }
@@ -618,6 +622,13 @@ async function appendTrack(index: number, from: number, gen: number) {
       }
       throw new Error(`${t.name || 'A track'}: ${text || 'it could not be loaded.'}`);
     }
+    // Part of a file from a moment that does not say where it begins (x-start-ms): never taken as its start (0.10: a
+    // Bandcamp preview's seek, so placed, came out short and was passed over). Asked again from its top instead.
+    if (from > 0 && !whole && res.status === 206 && !res.headers.has('x-start-ms')) {
+      playback('warn', 'stream from a moment without its start', { track: t.id, source: t.source, from });
+      ctl.abort();
+      return appendTrack(index, from, gen, true);
+    }
     const type = res.headers.get('content-type') ?? '';
     const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : type.includes('alac') ? ALAC : type.includes('mp4a') || type.includes('aac') ? AAC : MP4;
     playback('info', 'stream', { track: t.id, source: t.source, status: res.status, type, kind, supported: !!Source?.isTypeSupported(kind), from, managed: !!Managed });
@@ -625,7 +636,7 @@ async function appendTrack(index: number, from: number, gen: number) {
       // The next form down, where there is one: asked again at once.
       if (demote(t, `not taken: ${kind}`) && gen === generation) {
         ctl.abort();
-        return appendTrack(index, from, gen);
+        return appendTrack(index, from, gen, whole);
       }
       throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : kind === ALAC ? 'ALAC' : kind === AAC ? 'AAC' : 'MP3'} here.`);
     }
