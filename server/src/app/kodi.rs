@@ -655,7 +655,8 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
                             d.keep_sleep().await;
                             let report = d.report();
                             let Some(me) = play_on.upgrade() else { return };
-                            let _ = me.report(&d.name, report);
+                            // Off the async threads: a new track's ids are SQLite (0.10.2: the slow answers of 2026-10-30).
+                            let _ = me.report_off(d.name.clone(), report).await;
                         }
                         Err(e) => {
                             misses += 1;
