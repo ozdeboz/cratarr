@@ -6,7 +6,7 @@
 
 export type ServerRuntime = {
   proxies: string[];
-  /** Addresses that count as home besides the local ones (0.9.18-1, a5's fencing: other users reach someone's shared
+  /** Addresses that count as home besides the local ones (0.9.19, fencing: other users reach someone's shared
    *  devices from home only); a server before it gives none, and the row stays away. */
   home_networks?: string[];
   analysis: 'keep' | 'all' | 'off';
