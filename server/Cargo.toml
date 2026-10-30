@@ -36,7 +36,8 @@ ldap3 = { version = "=0.12.1", default-features = false, features = ["tls-rustls
 argon2 = { version = "=0.5.3", default-features = false, features = ["alloc", "password-hash"] }
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+# functions (0.12): `cratarr_letters`, the library's trigram tables' folding (serve::library), no further crates.
+rusqlite = { version = "0.40.2", features = ["bundled", "functions"] }
 rubato = { version = "=5.0.0", default-features = false, features = ["fft_resampler"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
