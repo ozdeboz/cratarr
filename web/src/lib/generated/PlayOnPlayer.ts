@@ -3,6 +3,7 @@ import type { Announcing } from "./Announcing";
 import type { AudioOutput } from "./AudioOutput";
 import type { AutoplayView } from "./AutoplayView";
 import type { FollowTarget } from "./FollowTarget";
+import type { Landing } from "./Landing";
 import type { MovedTo } from "./MovedTo";
 import type { PlayerLink } from "./PlayerLink";
 import type { QueueItem } from "./QueueItem";
@@ -32,11 +33,11 @@ state: "playing" | "paused" | "stopped",
  */
 seen: number, playing: boolean, index: number, 
 /**
- * Now: counted on from the last report while it plays.
+ * Now: counted on from the last report while it plays; while it winds, at the speed it says (0.11.1).
  */
 position_ms: number, 
 /**
- * When `position_ms` was so (epoch ms): from then on it moves with the music while `playing`.
+ * When `position_ms` was so (epoch ms): from then on it moves with the music while `playing`, or at `speed_x`.
  */
 position_at: number, duration_ms: number | null, volume: number, ducked: boolean, 
 /**
@@ -55,6 +56,16 @@ rewinding: boolean,
  * Asked to play from rest and not sounding yet, as the player says (0.9.14).
  */
 starting: boolean, 
+/**
+ * How it moves, as the player says (0075; 0.11.1: a driven player's wind shown as it is, 2026-10-30): track ms per
+ * ms, signed, and how fast that changes a second. Left out where it does not say (a page says it only while it
+ * winds or holds): then 1 playing, 0 paused.
+ */
+speed_x?: number, accel_x?: number, 
+/**
+ * Where its hold lands, as the player says (0.11.1): null once it holds no more; left out where it does not say.
+ */
+landing?: Landing | null, 
 /**
  * The direction knob as the player says (0.9.12): `L` or `R`.
  */
