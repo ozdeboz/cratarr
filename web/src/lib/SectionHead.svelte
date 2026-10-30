@@ -4,17 +4,24 @@
   // at its end (`onplay`: Home's sections that play as a whole, the owner 2026-10-23).
   import Icon from './Icon.svelte';
 
-  /** `onrefresh`: a refresh at its end (Discover's Around artists: other artists, the owner 2026-10-26). */
+  /** `onrefresh`: a refresh at its end (Discover's Around artists: other artists, the owner 2026-10-26). `onback`: back
+   *  before it, out of what it shows whole (the search's Show all: the owner, 2026-10-30, there was no way back). */
   let {
     title,
     onmore,
     onplay,
     onrefresh,
+    onback,
     busy = false,
-  }: { title: string; onmore?: () => void; onplay?: () => void; onrefresh?: () => void; busy?: boolean } = $props();
+  }: { title: string; onmore?: () => void; onplay?: () => void; onrefresh?: () => void; onback?: () => void; busy?: boolean } = $props();
 </script>
 
-{#if onplay}
+{#if onback}
+  <div class="head">
+    <button class="back" aria-label="Back" title="Back" onclick={onback}><Icon name="back" size={22} /></button>
+    <h2>{title}</h2>
+  </div>
+{:else if onplay}
   <div class="head">
     <h2>{title}</h2>
     <button class="play" aria-label={`Play ${title}`} title="Play" disabled={busy} onclick={onplay}><Icon name="play" size={20} /></button>
@@ -66,6 +73,24 @@
   .more {
     display: flex;
     color: var(--accent-ink);
+  }
+
+  /* Back, before the heading: a bare icon in the text's ink, the heading after it. */
+  .back {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: inherit;
+  }
+
+  .back + h2 {
+    flex: 1;
   }
 
   .play {

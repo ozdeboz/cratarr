@@ -7,6 +7,8 @@ import { pageView } from './pageView.svelte';
 import { isSpotifyView } from './discoverModes';
 import { prefs } from './prefs.svelte';
 import { byRelevance, provided, relevance, words, type SearchResult } from './search';
+import { leaveOnArrival, onArrival } from './navStep.svelte';
+import { keep } from './searchKept';
 
 export type Found = SearchResult & { track?: string };
 export type FoundGroup = { kind: string; label: string; items: Found[]; total: number };
@@ -66,6 +68,10 @@ export const globalSearch = $state({
  *  answer kept, so typing back and forth asks nothing again. */
 const BEYOND_MS = 500;
 const beyondKept = new Map<string, BeyondAlbum[]>();
+/** The server's answers kept by their words, and Show all's as far as it came (0.9.19; the owner, 2026-10-30: back to
+ *  a search, everywhere's results came back only after a while): back shows them at once, asked again behind them. */
+const foundKept = new Map<string, ServerSearch>();
+const allKept = new Map<string, NonNullable<typeof globalSearch.allFound>>();
 
 $effect.root(() => {
   // Asked a moment after the words stop changing; nothing for no words. No words: back to the page's own.
@@ -77,10 +83,15 @@ $effect.root(() => {
       globalSearch.scope = 'page';
       return;
     }
+    const kept = foundKept.get(q);
+    if (kept) globalSearch.found = { q, r: kept };
     let gone = false;
     const t = setTimeout(() => {
       search(q, [...LIBRARY, ...ELSEWHERE].map((k) => k.kind), EACH).then(
-        (r) => !gone && (globalSearch.found = { q, r }),
+        (r) => {
+          keep(foundKept, q, r);
+          if (!gone) globalSearch.found = { q, r };
+        },
         () => {},
       );
     }, 300);
@@ -114,6 +125,9 @@ $effect.root(() => {
     const kind = globalSearch.all;
     const q = pageView.query.trim();
     if (!kind || !q) return void (globalSearch.allFound = null);
+    const kept = allKept.get(`${q}
+${kind}`);
+    if (kept) return void (globalSearch.allFound = kept);
     void loadAll(q, kind, true);
   });
 });
@@ -129,6 +143,8 @@ export async function loadAll(q: string, kind: string, fresh = false) {
   if (provider) {
     const items = provider.find(words(q)).sort((a, b) => b.score - a.score) as Found[];
     globalSearch.allFound = { q, kind, items, total: items.length, done: true };
+    keep(allKept, `${q}
+${kind}`, globalSearch.allFound);
     return;
   }
   try {
@@ -142,6 +158,8 @@ export async function loadAll(q: string, kind: string, fresh = false) {
     const items = repeat ? have : [...have, ...page];
     const total = g?.total ?? items.length;
     globalSearch.allFound = { q, kind, items, total, done: repeat || !page.length || items.length >= total };
+    keep(allKept, `${q}
+${kind}`, globalSearch.allFound);
   } catch {
     if (globalSearch.allFound) globalSearch.allFound.done = true;
   }
@@ -226,20 +244,24 @@ export function rememberSearch() {
 }
 /** A found one opened (a result, a page's own list): kept for back, then the words gone (the owner, 2026-10-25: "When
  *  clicking on a search result, the search input field should always go back to zero"), but where it was found deep, in
- *  its contents: it opens narrowed to them (decision 0072). */
+ *  its contents: it opens narrowed to them (decision 0072). Gone once what it opened shows (lib/navStep; the owner,
+ *  2026-10-30: the results vanished and the page flashed before the panel came). */
 export function leaveSearch(deep: boolean) {
   rememberSearch();
-  if (deep) globalSearch.scope = 'page';
-  else pageView.query = '';
+  leaveOnArrival({ search: deep ? 'page' : 'clear' });
 }
+onArrival((l) => {
+  if (l.restore) {
+    pageView.query = l.restore.q;
+    globalSearch.scope = l.restore.scope;
+  } else if (l.search === 'clear') pageView.query = '';
+  else if (l.search === 'page') globalSearch.scope = 'page';
+});
 if (typeof window !== 'undefined') {
+  // Back to a search: its words and scope as they were, over the page's own emptying (App), once where back went
+  // shows; the server's answer for them kept, so they are there at once.
   addEventListener('popstate', () => {
     const kept = history.state?.search as { q: string; scope: 'page' | 'everywhere' } | undefined;
-    if (!kept) return;
-    // After the page's own change has emptied its search (App: each page starts with it empty).
-    setTimeout(() => {
-      pageView.query = kept.q;
-      globalSearch.scope = kept.scope;
-    }, 0);
+    if (kept) leaveOnArrival({ restore: kept }, true);
   });
 }

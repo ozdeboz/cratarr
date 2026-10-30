@@ -59,6 +59,7 @@
   import { chooseKind, kindNow, RECORD_KINDS } from './lib/recordKinds';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
   import { globalSearch, pageKinds } from './lib/globalSearch.svelte';
+  import { leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
@@ -140,7 +141,13 @@
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
   // otherwise the mini-player along the bottom (`mini`), which opens it over everything (`overlay`). The player over
   // everything closes when the page changes or the navigation is used, and the page behind it does not scroll.
-  const collapse = () => (player.full = false);
+  // A link in it: the player closes once the page gone to shows (lib/navStep: it covered it meanwhile); anything else
+  // there, at once.
+  const collapse = (e?: MouseEvent) => {
+    if ((e?.target as Element | null)?.closest?.('a[href]')) leavePlayer();
+    else player.full = false;
+  };
+  onArrival((l) => l.player && (player.full = false));
   // The navigation folds to a strip of icons on a wide window (decision 0042). Folded, it shows whole over the page,
   // never pushing it aside, while a mouse is on it or after a tap on the strip outside its icons; a tap elsewhere or
   // the mouse leaving folds it again.
@@ -422,10 +429,16 @@
     document.addEventListener('click', tapped, true);
     return () => document.removeEventListener('click', tapped, true);
   });
-  // Each page starts with its search empty (the pill's field).
+  // Each page starts with its search empty (the pill's field), once it shows (lib/navStep: the page before keeps its
+  // words until then; back to a search brings its words back instead).
   $effect(() => {
     void page;
-    pageView.query = '';
+    untrack(() => leaveOnArrival({ search: 'clear' }, true));
+  });
+  // The page as asked and as shown, for a step's arrival (lib/navStep).
+  $effect(() => {
+    navPlace.page = page;
+    navPlace.shownPage = shownPage;
   });
   // The title beside back gives way to the open search where it would be cut to a few letters or less (the owner,
   // 2026-10-25): measured as the field slides open (200 ms, after a page change 100 ms later), and as the window
@@ -1074,6 +1087,10 @@
     <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
       <Hold key={panel.viewed} bind:shown={panel.shown} seeThrough>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
     </div>
+  {:else if navPlace.layerHeld && !sidebar}
+    <!-- A panel closed for another page (a breadcrumb's): its layer, empty, over the page until the page gone to shows
+         (lib/navStep), not the page before for a moment. -->
+    <div class="playlist-layer" aria-hidden="true" out:fade={{ duration: reducedMotion() ? 0 : 200 }}></div>
   {/if}
   {#if mini}
     <div class="mini-dock" class:over={playlistLayer} class:at-top={miniTop}><MiniPlayer /></div>
@@ -1114,8 +1131,9 @@
         <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
       {:else}
         <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>
-          {#if navAt > 0 || backHome}
-            <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
+          {#if navAt > 0 || backHome || globalSearch.all}
+            <!-- Out of a search's Show all first (it is a step of the history), then back as ever. -->
+            <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.href)))}><Icon name="back" size={22} /></button></span>
           {/if}
           <!-- Wherever the bar of pages is along the top (under 1024 px, as the CSS; the owner, 2026-10-25): from there the
                sidebar of pages names it. -->

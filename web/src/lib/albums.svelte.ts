@@ -1,5 +1,6 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
 import { trackSteps } from './progress.svelte';
+import { leavePlayer } from './navStep.svelte';
 import {
   albumView,
   getAlbumRating,
@@ -160,7 +161,8 @@ export const mainArtist = (artist: string | null | undefined) => artist?.split(/
 /** Go to artist: the artist's panel (decided 2026-10-16, as Symfonium's), over what the panel views (back returns to
  *  it). From the full-screen player, which closes, or it would cover the panel. */
 export function goToArtist(source: string, name: string, from: { id: string; title: string; year?: number | null } | null = null) {
-  if (player.full) player.full = false;
+  // The player over the page closes once the artist shows (lib/navStep), or it would cover them.
+  if (player.full) leavePlayer();
   // From a Bandcamp album (`from`): kept for their page from Discover (lib/discoverArtist cameFrom).
   if (from) Object.assign(cameFrom, { name, album: { id: from.id, title: from.title, year: from.year ?? null, release_group: releaseGroupOfBandcamp(from.id) } });
   // From something on Bandcamp (an album, a preview's track): no server of that name (the owner, 2026-10-25: it said
