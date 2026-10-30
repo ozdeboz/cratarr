@@ -90,6 +90,7 @@
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
+  import { askFor, followingNow } from './following.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
@@ -237,6 +238,17 @@
   const actions = $derived.by<SheetAction[]>(() => {
     if (ask || exporting || step !== 'menu') return [];
     const t = tracks;
+    // Following someone (0.9.19): its tracks asked of them, next or at the end of their queue.
+    if (followingNow()) {
+      const askOf = (how: 'next' | 'last') => () => {
+        onclose();
+        askFor((t ?? []).map((x) => ({ source, id: x.id, name: x.name, artist: x.artist ?? null, album: a.title, album_id: a.id })), how).catch((e) => toast.fail(e, "It couldn't be asked for"));
+      };
+      return inOrder('album', [
+        { icon: 'playNext', label: 'Ask to play next', disabled: !t?.length, onclick: askOf('next') },
+        { icon: 'listAdd', label: 'Ask to add to queue', disabled: !t?.length, onclick: askOf('last') },
+      ]);
+    }
     const at = resumeAt;
     const i = at && t ? t.findIndex((x) => x.id === at.track) : -1;
     const list: SheetAction[] = [

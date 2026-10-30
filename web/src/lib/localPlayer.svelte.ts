@@ -4030,6 +4030,10 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       pageVolume.ducked = m.command === 'duck';
       applyVolume();
       return false;
+    case 'notice':
+      // A word for whoever plays here (0.9.19: a track asked for, accepted or declined; one asked of this player).
+      if (typeof m.text === 'string' && m.text) toast.show({ text: m.text });
+      return false;
     default:
       // The sleep timer is this page's own (lib/sleep); sync play and its measurements are not a page's.
       return false;

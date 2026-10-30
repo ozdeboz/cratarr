@@ -12,6 +12,10 @@
   import FormSheet from './FormSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
+  import MenuEntry from '../MenuEntry.svelte';
+  import MenuSheet from '../MenuSheet.svelte';
+  import { me } from '../me.svelte';
+  import { playOn } from '../playOn.svelte';
 
   const REQUIRED_MORE =
     'On, every page and API request needs a sign-in, an API key or a signed link, on the home network too. Off, Cratarr asks none itself: a proxy in front of it may. Subsonic apps always sign in with their name and password.\n\nSwitching it asks for the password again.';
@@ -34,6 +38,14 @@
   const proxyList = (v: string) => v.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
   // Home (0.9.18-1; the owner, 2026-10-30): where other users may play on, follow or control a device someone shared.
   let editingHome = $state(false);
+  // The guest page's host (0.9.19): a user, or one of the players.
+  let choosingHost = $state(false);
+  const hostName = (h: { user: string } | { player: string } | null) => (!h ? 'No one' : 'user' in h ? h.user : h.player);
+  async function pickHost(host: { user: string } | { player: string }) {
+    const g = runtime.value?.guest;
+    if (!g) return;
+    if (await saveRuntime({ guest: { ...g, host } })) choosingHost = false;
+  }
   const HOME_MORE =
     "Other users may play on, follow or control a device someone shared only from home: a local address, or one named here. Name your home's public address if devices at home reach Cratarr by its public name. Never a VPN's.";
 
@@ -83,6 +95,12 @@
   {#if r.home_networks}
     <Group title="Home" more={HOME_MORE}>
       <Item name="Home networks" value={r.home_networks.length ? r.home_networks.join(', ') : 'Local addresses'} onclick={() => (editingHome = true)} />
+      {#if r.guest}
+        {@const g = r.guest}
+        <!-- The guest page (0.9.19): /guest on the home network, its tracks asked of the host's player. -->
+        <Item name="Guest page" line={g.on ? `${location.origin}/guest` : null} toggle={{ checked: g.on, onchange: (on) => void saveRuntime({ guest: { ...g, on } }) }} />
+        {#if g.on}<Item name="Guests ask" value={hostName(g.host)} onclick={() => (choosingHost = true)} />{/if}
+      {/if}
     </Group>
   {/if}
 {/if}
@@ -101,6 +119,22 @@
     }}
     onclose={() => (editingProxies = false)}
   />
+{/if}
+
+{#if choosingHost && runtime.value?.guest}
+  {@const g = runtime.value.guest}
+  <!-- Whose player the guests' tracks are asked of: oneself (whatever one plays on), or one player. -->
+  <MenuSheet label="Guests ask" title="Guests ask" step="menu" onclose={() => (choosingHost = false)}>
+    <div role="menu">
+      {#if me.name}
+        {@const name = me.name}
+        <MenuEntry label={`Me (${name})`} checked={!!g.host && 'user' in g.host && g.host.user === name} plus={false} onclick={() => pickHost({ user: name })} />
+      {/if}
+      {#each playOn.players.filter((p) => p.mine !== false || p.shared) as p (p.name)}
+        <MenuEntry label={p.name} checked={!!g.host && 'player' in g.host && g.host.player === p.name} plus={false} onclick={() => pickHost({ player: p.name })} />
+      {/each}
+    </div>
+  </MenuSheet>
 {/if}
 
 {#if editingHome}

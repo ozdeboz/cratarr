@@ -46,6 +46,7 @@ export type EntryId =
   | 'albumPicture'
   | 'adjustBpm'
   | 'betterCopy'
+  | 'alwaysAccept'
   | 'repair'
   | 'sync'
   | 'queues'
@@ -65,12 +66,12 @@ export type MenuCard = { group: MenuGroupId; entries: readonly EntryId[]; label?
 type Kind = { actions: readonly string[]; cards: readonly MenuCard[] };
 
 /** The large actions' names in their order (0058's A): a menu shows the ones that apply. */
-const PLAY = ['Play', 'Resume', 'Shuffle', 'Play next', 'Add to queue', 'Start radio'];
+const PLAY = ['Play', 'Resume', 'Shuffle', 'Play next', 'Add to queue', 'Ask to play next', 'Ask to add to queue', 'Start radio'];
 
 export const MENUS: Record<MenuKind, Kind> = {
   track: {
     // A queue row's own: Play now, and Play next moving it (or "Play again next", a copy, where it cannot move).
-    actions: ['Play now', 'Play next', 'Play again next', 'Add to queue', 'Start radio'],
+    actions: ['Play now', 'Play next', 'Play again next', 'Add to queue', 'Ask to play next', 'Ask to add to queue', 'Start radio'],
     cards: [
       { group: 'go', entries: ['goAlbum', 'goArtist', 'goGenre', 'soundsLike'] },
       { group: 'discover', entries: ['discover'] },
@@ -78,7 +79,8 @@ export const MENUS: Record<MenuKind, Kind> = {
       { group: 'collect', entries: ['addToPlaylist'] },
       { group: 'take', entries: ['download', 'share'] },
       { group: 'know', entries: ['info', 'webSearch', 'geniusSearch'] },
-      { group: 'change', entries: ['adjustBpm', 'betterCopy'] },
+      // A track asked for of one's own player (0.9.19): whoever asked, accepted at once from now on or not.
+      { group: 'change', entries: ['adjustBpm', 'betterCopy', 'alwaysAccept'] },
       { group: 'remove', entries: ['removeFromQueue', 'removeFromList'] },
     ],
   },

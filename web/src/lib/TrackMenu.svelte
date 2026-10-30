@@ -53,6 +53,8 @@
   import { crateOf, genreOf, viewGenre, viewLike } from './crates.svelte';
   import { me } from './me.svelte';
   import TempoStep from './TempoStep.svelte';
+  import { askFor, followingNow } from './following.svelte';
+  import { mine, setAutoAccept } from './mySettings.svelte';
 
   let {
     onclose,
@@ -61,6 +63,7 @@
     queue: place = null,
     onplaylists = null,
     outs = [],
+    asker = null,
   }: {
     onclose: () => void;
     track?: MenuTrack | null;
@@ -71,7 +74,21 @@
     /** Opened on a list one can take it out of: Remove from a playlist, Exclude from a crate (the track, its album), as
      *  a swipe left does there (the owner, 2026-10-19). */
     outs?: { label: string; icon: IconName; run: () => void }[];
+    /** A track asked for of one's own player (0.9.19): the user who asked, whose tracks may be accepted at once. */
+    asker?: string | null;
   } = $props();
+  /** Following someone (0.9.19): Play next and Add to queue ask them instead. */
+  const followed = $derived(followingNow());
+  async function ask(how: 'next' | 'last') {
+    const tr = t;
+    if (!tr) return;
+    onclose();
+    try {
+      await askFor([{ source: tr.source, id: tr.id, name: tr.name, artist: tr.artist, album: tr.album, album_id: tr.album_id }], how);
+    } catch (e) {
+      toast.fail(e, "It couldn't be asked for");
+    }
+  }
 
   const np = $derived(playing());
   /** The menu is for what plays (no track given, or the given one plays); a queue row is always its own place. */
@@ -375,6 +392,11 @@
     {#if me.admin && !onDevice && hasWave}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
   {:else if e === 'betterCopy'}
     {#if me.admin && t.source === 'cratarr' && t.album_id}<MenuEntry icon="search" label="Find a better copy…" onclick={() => (betterOpen = true)} />{/if}
+  {:else if e === 'alwaysAccept'}
+    {#if asker}
+      {@const on = mine.autoAccept.includes(asker)}
+      <MenuEntry icon="thumbsUp" label={`Always accept from ${asker}`} switched={on} onclick={() => void setAutoAccept(asker, !on)} />
+    {/if}
   {:else if e === 'removeFromQueue'}
     {#if movesHere && !forPlaying}<MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />{/if}
   {:else if e === 'removeFromList'}
@@ -423,6 +445,11 @@
             { icon: 'play', label: 'Play now', onclick: playNow, disabled: working },
             { icon: 'playNext', label: movesHere ? 'Play next' : 'Play again next', onclick: playNextFromQueue, disabled: working },
             ...(radioFrom ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
+          ])
+        : followed
+        ? inOrder('track', [
+            { icon: 'playNext', label: 'Ask to play next', onclick: () => ask('next'), disabled: working },
+            { icon: 'listAdd', label: 'Ask to add to queue', onclick: () => ask('last'), disabled: working },
           ])
         : inOrder('track', [
             { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },

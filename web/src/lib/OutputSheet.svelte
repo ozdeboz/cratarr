@@ -32,6 +32,9 @@
   import { prefs } from './prefs.svelte';
   import { shownCover } from './remote.svelte';
   import { toast } from './toast.svelte';
+  import { follow, followingNow, loadFollow } from './following.svelte';
+  import { followOn, stopFollowing } from './api';
+  import { mine, setAutoAccept, setFollowable } from './mySettings.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -128,6 +131,22 @@
 
   function held(name: string) {
     toggleGroup(name).catch((e) => toast.fail(e, group.includes(name) ? "It didn't leave the group" : "It didn't join"));
+  }
+
+  // Following (0.9.19; the owner, 2026-10-30): this device's player listening along to another user's, who lets
+  // others follow them; at the sheet's foot, letting others follow one, and those who do, each accepted at once or not.
+  void loadFollow();
+  const followed = $derived(followingNow());
+  async function followTap(user: string, player: string) {
+    if (!me) return;
+    navigator.vibrate?.(8);
+    const on = followed?.user === user && followed.player === player;
+    try {
+      await (on ? stopFollowing(me) : followOn(me, user, player));
+      onclose();
+    } catch (e) {
+      toast.fail(e, on ? "It didn't stop following" : "It didn't follow");
+    }
   }
 
   async function choose(output: typeof prefs.output, how: (output: typeof prefs.output) => Promise<void>) {
@@ -231,8 +250,33 @@
       {#if !playOn.players.some((p) => p.name === remoteName)}
         <MenuEntry label={remoteName} checked={!here && drivenName() === null} plus={false} onclick={() => pick('remote')} />
       {/if}
+      <!-- Others' players, to follow on this device's (who let others follow them; the one followed ticked). -->
+      {#if follow.served && me}
+        {#each follow.leaders as l (l.user)}
+          {#each l.players as pl (pl.name)}
+            <MenuEntry
+              label={`Follow ${l.user} on ${pl.name}`}
+              sub={pl.track ? (pl.track.artist ? `${pl.track.name} · ${pl.track.artist}` : pl.track.name) : null}
+              subIcon={pl.track ? (pl.playing ? 'play' : 'pause') : null}
+              checked={followed?.user === l.user && followed.player === pl.name}
+              plus={false}
+              onclick={() => followTap(l.user, pl.name)}
+            />
+          {/each}
+        {/each}
+      {/if}
       {#if group.length > 1}<GroupVolume names={group} />
       {:else if !inApp && here && playOn.self}<GroupVolume names={[playOn.self]} />{/if}
+      <!-- At its foot: others may follow one, and those who do, each one's tracks asked for accepted at once or not. -->
+      {#if follow.served && mine.known}
+        <MenuEntry icon="users" label="Let others follow me" switched={mine.followable} onclick={() => void setFollowable(!mine.followable)} />
+        {#if mine.followable}
+          {#each follow.followers as f (f.user)}
+            {@const on = mine.autoAccept.includes(f.user)}
+            <MenuEntry icon="thumbsUp" label={`Always accept ${f.user}`} switched={on} onclick={() => void setAutoAccept(f.user, !on)} />
+          {/each}
+        {/if}
+      {/if}
     {/if}
   </div>
 </MenuSheet>

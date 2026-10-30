@@ -16,6 +16,8 @@ const precacheList = (): Plugin => ({
 const server = process.env.CRATARR_URL ?? 'http://127.0.0.1:8080';
 export default defineConfig({
   plugins: [svelte(), precacheList()],
+  // Two pages: the app, and the guest page (0.9.19), apart from the app's shell, which asks for a sign-in.
+  build: { rollupOptions: { input: { main: 'index.html', guest: 'guest.html' } } },
   server: {
     // The Host as the browser sent it: the server takes a form post only from its own address (its sign-in's same-origin
     // check), which a rewritten Host to its own port made another site.

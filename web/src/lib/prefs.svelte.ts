@@ -274,6 +274,9 @@ export type Prefs = {
   /** The Playlists page in Quick add (0.9.18; the owner, 2026-10-29): each playlist's circle adds or takes out the
    *  playing track; in Normal the playlists only open. */
   playlistQuickAdd: boolean;
+  /** The queue sheet's tracks asked for shown or hidden (0.9.19), as chosen on this device; null: shown while others
+   *  may follow this account (lib/queueRequests). */
+  queueRequestsShown: boolean | null;
   crateOrder: CrateOrder;
   crateDown: boolean;
   /** The panel's track lists' order, per kind of list (decision 0060). */
@@ -481,6 +484,7 @@ export const DEFAULTS: Prefs = {
   playlistDown: false,
   playlistLayout: 'chips',
   playlistQuickAdd: false,
+  queueRequestsShown: null,
   crateOrder: 'own',
   crateDown: false,
   panelSorts: {},
@@ -515,6 +519,7 @@ function read(): Prefs {
       if (PLAYLIST_ORDERS.includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
       if (saved.playlistLayout === 'chips' || saved.playlistLayout === 'table') p.playlistLayout = saved.playlistLayout;
       if (typeof saved.playlistQuickAdd === 'boolean') p.playlistQuickAdd = saved.playlistQuickAdd;
+      if (typeof saved.queueRequestsShown === 'boolean') p.queueRequestsShown = saved.queueRequestsShown;
       if (PLAYLIST_ORDERS.includes(saved.listOrder) && saved.listOrder !== 'missing') p.listOrder = saved.listOrder;
       if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
       // Before the list header: "✓ first" was the playlists' only other order.
