@@ -14,12 +14,14 @@ the parts are and how they talk.
 ```
 
 - **The server** is one static binary. It reads the music folders, keeps the catalogue and every user's data in SQLite,
-  serves the web app (built into the binary), Cratarr's own API (`/api`) and OpenSubsonic (`/rest`), and holds every
-  player's queue.
+  serves the web app (from a folder beside it: `CRATARR_WEB_DIR`, else the image's `/web`), Cratarr's own API (`/api`)
+  and OpenSubsonic (`/rest`), and holds every player's queue. `GET /api/capabilities` lists what it can do, so the
+  page leaves out what it can't.
 - **The web app** is every page. It plays by itself in a browser, and in the Android and desktop apps it is the app's
   whole face.
 - **The Android app** is a thin shell around the web app: it plays the music with Android's own player (Media3),
-  keeps downloads, and talks to the page over a message port.
+  keeps downloads, and talks to the page over a message port. It carries its own copy of the page, opened when the
+  server is out of reach; of the two, the newer is used (each page's `build.json`).
 - **The desktop app** ([desktop/](../desktop)) shows the web app in a window of its own (Electron), starts at login and
   keeps playing with the window closed; the page plays the music, as in a browser.
 
