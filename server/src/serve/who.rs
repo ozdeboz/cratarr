@@ -38,6 +38,15 @@ pub fn current() -> Option<Who> {
     CURRENT.try_with(|w| w.clone()).ok()
 }
 
+/// `f` as `who` (none: as no one), on a thread of its own: work a request hands to `spawn_blocking` whole (0.10.2: the
+/// slow answers of 2026-10-30, a player's report).
+pub fn acting_as_blocking<R>(who: Option<Who>, f: impl FnOnce() -> R) -> R {
+    match who {
+        Some(w) => CURRENT.sync_scope(w, f),
+        None => f(),
+    }
+}
+
 /// `f` as the running request's account, for a task of its own that works for the request (a live channel's).
 pub fn carried<F: Future>(f: F) -> impl Future<Output = F::Output> {
     let who = current();
@@ -66,5 +75,14 @@ mod tests {
         assert_eq!(inside, Some(ann.clone()));
         assert_eq!(spawned, None, "a spawned task carries no one: read it first and pass it on");
         assert_eq!(carried, Some(ann), "unless it is carried");
+    }
+
+    #[tokio::test]
+    async fn work_handed_to_a_thread_of_its_own_is_for_the_account_it_is_given() {
+        let bo = Who { user: "bo".into(), admin: false, scope: Scope::Control, home: false };
+        let given = Some(bo.clone());
+        let (on_it, without) = tokio::task::spawn_blocking(move || (acting_as_blocking(given, current), acting_as_blocking(None, current))).await.unwrap();
+        assert_eq!(on_it, Some(bo));
+        assert_eq!(without, None);
     }
 }

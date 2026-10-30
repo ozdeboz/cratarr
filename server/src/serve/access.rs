@@ -193,32 +193,39 @@ fn who_of(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, query: O
     None
 }
 
+/// Who a request is for, as the requirement decides: `Some(Some(who))` an account, `Some(None)` no one but let in (an
+/// open route, a signed link, or anyone while signing in is off and there is no account), `None` refused. While signing
+/// in is not required (decision 0051), one signed in or with a key is that account, anyone else the owner, as an
+/// administrator (one user, as before accounts); a key still counts as used, so Settings shows before the switch that
+/// a client sends its key. Blocking: a session's and a key's check read, and now and then write, sessions.sqlite.
+fn identify(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, query: Option<&str>, home: bool) -> Option<Option<Who>> {
+    if !serve.sign_in_required() {
+        if let Some(key) = key_of(headers) {
+            let _ = serve.sessions.check_key(key, now());
+        }
+        return Some(match who_of(serve, method, headers, path, query, home) {
+            Some(Some(who)) => Some(who),
+            _ => serve.users.owner().map(|user| Who { user, admin: true, scope: Scope::Full, home }),
+        });
+    }
+    who_of(serve, method, headers, path, query, home)
+}
+
 /// The requirement, around every route (`main`): a request without a way in is refused; one let in runs as whoever it
 /// is for (`who`), from the home network or not (the client after the proxies' screen, `api::request_ids`).
 pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Next) -> Response {
     let (method, uri) = (request.method().as_str().to_string(), request.uri().clone());
     let peer = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
     let home = super::proxy::at_home(&super::signin::client(request.headers(), peer));
-    if !serve.sign_in_required() {
-        // Off, a key still counts as used: before the switch, Settings shows that a client sends its key.
-        if let Some(key) = key_of(request.headers()) {
-            let _ = serve.sessions.check_key(key, now());
-        }
-        // Not required, still heard (decision 0051): one signed in, or with a key, is that account; anyone else is
-        // the owner, as an administrator (one user, as before accounts).
-        let who = match who_of(&serve, &method, request.headers(), uri.path(), uri.query(), home) {
-            Some(Some(who)) => Some(who),
-            _ => serve.users.owner().map(|user| Who { user, admin: true, scope: Scope::Full, home }),
-        };
-        return match who {
-            Some(who) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
-                (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This key only reads." }))).into_response()
-            }
-            Some(who) => acting_as(who, next.run(request)).await,
-            None => next.run(request).await,
-        };
-    }
-    match who_of(&serve, &method, request.headers(), uri.path(), uri.query(), home) {
+    // Who it is for, decided on a thread of its own (0.10.2: the slow answers of 2026-10-30): its session's check holds
+    // the sessions' lock and touches sessions.sqlite, which on one of the server's few async threads held up every
+    // answer while the disk was slow.
+    let decided = {
+        let (serve, method, headers, path, query) = (Arc::clone(&serve), method.clone(), request.headers().clone(), uri.path().to_string(), uri.query().map(str::to_string));
+        tokio::task::spawn_blocking(move || identify(&serve, &method, &headers, &path, query.as_deref(), home)).await
+    };
+    let Ok(decided) = decided else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+    match decided {
         // A key that only reads changes nothing.
         Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
             return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This key only reads." }))).into_response();

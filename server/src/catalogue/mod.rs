@@ -1632,25 +1632,23 @@ impl Catalogue {
     /// The track a server's item id stands for (decision 0012), when the item is linked to a file the catalogue
     /// counts. Cratarr's own source (decision 0032) needs no links: its ids are the track ids. Blocking.
     pub fn track_of_source(&self, source: &str, item: &str) -> Option<i64> {
-        if source == crate::source::cratarr::KIND.id {
-            let track = crate::serve::ids::track_of(item)?;
-            let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
-            return self.db().query_row(&present, [track], |_| Ok(())).optional().ok().flatten().map(|()| track);
-        }
-        self.db()
-            .query_row(
-                &format!(
-                    "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
-                     WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
-                    PRESENT_F
-                ),
-                params![source, item],
-                |r| r.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
-            .flatten()
+        track_of_source(&self.db(), source, item)
+    }
+
+    /// Each of these server tracks' file (folder id, relative path) and length, nearest first, as `track_of_source`,
+    /// `file_of` and `duration_of` find them one by one; up to the first it has no file of. In one hold of the catalogue
+    /// (0.10.2: the slow answers of 2026-10-30): a wind through the queue looked up its 64 tracks with three takes of
+    /// the lock each, 192 waits behind whatever else held it, before its headers went. Blocking.
+    pub fn files_of_sources(&self, items: &[(&str, &str)]) -> Vec<(i64, String, Option<u64>)> {
+        let db = self.db();
+        items
+            .iter()
+            .map_while(|(source, item)| {
+                let (folder, rel) = file_of(&db, track_of_source(&db, source, item)?)?;
+                let duration_ms = duration_of(&db, folder, &rel);
+                Some((folder, rel, duration_ms))
+            })
+            .collect()
     }
 
     /// A track's item id on a server (decision 0012), when it is linked. Blocking.
@@ -1735,16 +1733,7 @@ impl Catalogue {
     }
 
     pub fn duration_of(&self, folder: i64, rel: &str) -> Option<u64> {
-        self.db()
-            .query_row(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
-                r.get::<_, Option<i64>>(0)
-            })
-            .optional()
-            .ok()
-            .flatten()
-            .flatten()
-            .filter(|d| *d > 0)
-            .map(|d| d as u64)
+        duration_of(&self.db(), folder, rel)
     }
 
     // --- A file's analysis (decision 0035) ---
@@ -2105,11 +2094,7 @@ impl Catalogue {
     }
 
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
-        self.db()
-            .query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
-            .optional()
-            .ok()
-            .flatten()
+        file_of(&self.db(), track)
     }
 
     /// A note the catalogue keeps (its `meta` table), by key.
@@ -2622,6 +2607,49 @@ fn album_gains_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Has
             crate::analysis::album_gain(&refs).map(|g| (dir, g))
         })
         .collect())
+}
+
+/// See `Catalogue::track_of_source`; on the catalogue's connection, held (`files_of_sources` asks for many at once).
+fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
+    if source == crate::source::cratarr::KIND.id {
+        let track = crate::serve::ids::track_of(item)?;
+        let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
+        return db.query_row(&present, [track], |_| Ok(())).optional().ok().flatten().map(|()| track);
+    }
+    db.query_row(
+        &format!(
+            "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
+             WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
+            PRESENT_F
+        ),
+        params![source, item],
+        |r| r.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+/// See `Catalogue::file_of`.
+fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
+    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+        .ok()
+        .flatten()
+}
+
+/// See `Catalogue::duration_of`.
+fn duration_of(db: &Connection, folder: i64, rel: &str) -> Option<u64> {
+    db.query_row(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
+        r.get::<_, Option<i64>>(0)
+    })
+    .optional()
+    .ok()
+    .flatten()
+    .flatten()
+    .filter(|d| *d > 0)
+    .map(|d| d as u64)
 }
 
 /// The cover files of each folder of a library folder (0.9.8), as a print: an album built again when its folder's
@@ -3401,6 +3429,36 @@ mod tests {
         assert_eq!(cat.status().unwrap().files, 0, "different files: the rows go");
         std::fs::remove_dir_all(&moved).ok();
         std::fs::remove_dir_all(&empty).ok();
+    }
+
+    #[test]
+    fn a_wind_s_tracks_are_found_at_once_as_one_by_one() {
+        let a = music();
+        let cat = Catalogue::open(None, vec![a.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        let two = cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap();
+        cat.record_links("jf", "music", &[("j-2".into(), 0, "A - B (2020)/02 Two.flac".into())], 1).unwrap();
+        let (one, two) = (crate::serve::ids::song(one), crate::serve::ids::song(two));
+        let each = |items: &[(&str, &str)]| -> Vec<(i64, String, Option<u64>)> {
+            items
+                .iter()
+                .map_while(|(s, i)| {
+                    let (folder, rel) = cat.file_of(cat.track_of_source(s, i)?)?;
+                    let d = cat.duration_of(folder, &rel);
+                    Some((folder, rel, d))
+                })
+                .collect()
+        };
+        let asked = [("cratarr", two.as_str()), ("jf", "j-2"), ("cratarr", one.as_str()), ("jf", "j-unknown"), ("cratarr", one.as_str())];
+        let found = cat.files_of_sources(&asked);
+        assert_eq!(found, each(&asked));
+        assert_eq!(found.len(), 3, "up to the first it has no file of: {found:?}");
+        assert_eq!(found[1], (0, "A - B (2020)/02 Two.flac".to_string(), Some(200_000)), "a server's id, linked");
+        assert!(cat.files_of_sources(&[]).is_empty());
+        std::fs::remove_dir_all(&a).ok();
     }
 
     #[test]
