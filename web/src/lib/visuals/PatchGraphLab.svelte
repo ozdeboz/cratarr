@@ -13,7 +13,8 @@
   import { MODULATORS } from './modulators/modulators';
   import { change, newStore, redo, undo } from './patch-store';
   import { helpFor } from './module-help';
-  import { applyV2, type PickRequest, type XY } from './patchgraph';
+  import { type PickRequest, type XY } from './patchgraph';
+  import { applyEdit } from './patch-edits';
   import { LiveFaces } from './faces.svelte';
   import { labTypes, labV2, wiresV2 } from './graph-lab';
   import { splitMusic } from './music-signals';
@@ -55,11 +56,11 @@
     const { r, at: where } = picking;
     const scope = r.module.slice(0, -1);
     store = change(store, (p) => {
-      applyV2(p, { kind: 'add', scope, type }, types);
+      applyEdit(p, { kind: 'add', scope, type }, types);
       const inside = scope.reduce<PatchV2>((q, id) => (q.modules.find((x) => x.id === id) as unknown as { patch: PatchV2 }).patch, p);
       const made = inside.modules[inside.modules.length - 1];
       positions = { ...positions, [`${at.join('/')}|${[...scope.slice(at.length), made.id].join('/')}`]: where };
-      return applyV2(p, { kind: 'connect', scope, from: { module: made.id, port: 'out' }, to: { module: r.module[r.module.length - 1], port: r.knob } }, types);
+      return applyEdit(p, { kind: 'connect', scope, from: { module: made.id, port: 'out' }, to: { module: r.module[r.module.length - 1], port: r.knob } }, types);
     });
     picking = null;
     last = `new ${type} → ${r.module.join('/')}.${r.knob}`;
