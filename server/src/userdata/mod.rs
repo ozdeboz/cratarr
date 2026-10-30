@@ -14,6 +14,7 @@
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
+pub mod offline;
 pub mod tags;
 pub mod words;
 pub mod works;
@@ -648,6 +649,9 @@ impl UserData {
         conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;
         conn.execute_batch(words::SCHEMA).context("creating the words' tables")?;
         conn.execute_batch(works::SCHEMA).context("creating the works' tables")?;
+        // Offline writes (0.12, decision 0087): what is counted and made once, kept 30 days.
+        conn.execute_batch(offline::SCHEMA).context("keeping the plays counted and the changes made")?;
+        offline::migrate(&conn).context("bringing the change log up to date")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
@@ -1339,12 +1343,18 @@ impl UserData {
              ON CONFLICT (user, key) DO UPDATE SET name = excluded.name",
             params![user, key, name, now()],
         )?;
+        offline::log(&db, user, offline::ChangeKind::Excluded, "artists", offline::Op::Changed, false)?;
         Ok(!had)
     }
 
     /// An artist taken back off `user`'s list: picked again. Whether they were on it.
     pub fn include_artist(&self, user: &str, key: &str) -> Result<bool> {
-        Ok(self.db().execute("DELETE FROM excluded_artist WHERE user = ?1 AND key = ?2", params![user, key])? > 0)
+        let db = self.db();
+        let gone = db.execute("DELETE FROM excluded_artist WHERE user = ?1 AND key = ?2", params![user, key])? > 0;
+        if gone {
+            offline::log(&db, user, offline::ChangeKind::Excluded, "artists", offline::Op::Changed, false)?;
+        }
+        Ok(gone)
     }
 
     /// The artists `user` excluded everywhere, the newest first.
@@ -1700,8 +1710,13 @@ impl UserData {
         tx.execute("DELETE FROM playlist_alias WHERE old = ?1", [to])?;
         tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1", [to])?;
         tx.execute("UPDATE playlist_entry SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        // Its entry ids go with it (decision 0087).
+        tx.execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [to])?;
+        tx.execute("UPDATE playlist_entry_id SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         tx.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [to])?;
         tx.execute("UPDATE playlist_shared SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        // Logged again now its sharing moved with it (the store logged it before), so those it is shared with see it.
+        offline::log_playlist(&tx, to, offline::Op::Changed, false)?;
         tx.commit()?;
         Ok(())
     }
@@ -1721,6 +1736,7 @@ impl UserData {
     pub fn playlist_gone(&self, name: &str) -> Result<()> {
         self.db().execute("DELETE FROM playlist_alias WHERE name = ?1 OR old = ?1", [name])?;
         self.db().execute("DELETE FROM playlist_entry WHERE playlist = ?1", [name])?;
+        self.db().execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [name])?;
         self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [name])?;
         Ok(())
     }
@@ -1732,13 +1748,23 @@ impl UserData {
         Ok(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<()> {
-        if on {
-            self.db().execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?;
+    /// Shares a playlist (by its key) or stops; whether that changed anything. Logged (decision 0087): shared, everyone
+    /// sees it come; no longer, its owner sees it changed (the others are told it is gone: `playlist_gone_for`). A
+    /// playlist deleted (unshared as it goes) is not logged back.
+    pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<bool> {
+        let db = self.db();
+        let n = if on {
+            db.execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?
         } else {
-            self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?;
+            db.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?
+        };
+        let deleted = db
+            .prepare_cached("SELECT 1 FROM change_log WHERE kind = 'playlist' AND item = ?1 AND op = 'deleted' AND seen_by = ''")?
+            .exists([playlist])?;
+        if n > 0 && !deleted {
+            offline::log_playlist(&db, playlist, offline::Op::Changed, on)?;
         }
-        Ok(())
+        Ok(n > 0)
     }
 
     /// A playlist was written (every write: the store tells it, `playlists::on_write`): an entry that came now dates

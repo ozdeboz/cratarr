@@ -17,6 +17,7 @@ use super::Serve;
 use super::api::{self, Album, Artist, Song};
 use super::read::AlbumOrder;
 use super::users::User;
+use crate::userdata::offline::{ChangeKind, Op, item_id};
 use crate::userdata::{Annotation, Kind};
 
 /// A request's parameters; a name may repeat (`id=1&id=2`).
@@ -453,6 +454,13 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             serve.userdata.set_starred(&me, Kind::Song, &song_ids, on)?;
             serve.userdata.set_starred(&me, Kind::Album, &album_ids, on)?;
             serve.userdata.set_starred(&me, Kind::Artist, &artist_ids, on)?;
+            // Changes made now (decision 0087): an older one an app's outbox sends later does not undo them.
+            let marked = song_ids.iter().map(|id| ("track", id.clone()))
+                .chain(album_ids.iter().map(|id| ("album", id.clone())))
+                .chain(artist_ids.iter().filter_map(|id| serve.library.artist_name(id).ok().flatten()).map(|n| ("artist", n)));
+            for (what, id) in marked.collect::<Vec<_>>() {
+                mark_now(serve, &me, ChangeKind::Favourite, &item_id(what, CRATARR, &id), Op::of(on));
+            }
             Ok(Answer::Json(json!({})))
         }
         "setRating" => {
@@ -464,6 +472,14 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 _ => Kind::Song,
             };
             serve.userdata.set_rating(&me, kind, id, rating)?;
+            let named = match kind {
+                Kind::Album => Some(("album", id.to_string())),
+                Kind::Artist => serve.library.artist_name(id).ok().flatten().map(|n| ("artist", n)),
+                _ => Some(("track", id.to_string())),
+            };
+            if let Some((what, id)) = named {
+                mark_now(serve, &me, ChangeKind::Rating, &item_id(what, CRATARR, &id), Op::of(rating > 0));
+            }
             Ok(Answer::Json(json!({})))
         }
         "scrobble" => {
@@ -625,6 +641,17 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({})))
         }
         _ => Err(Failed(501, format!("{method} is not implemented"))),
+    }
+}
+
+/// Cratarr's own library, as the change log names its items' source.
+const CRATARR: &str = crate::source::cratarr::KIND.id;
+
+/// A Subsonic app's change, made now (decision 0087): kept as the item's last change. Not kept costs only that.
+fn mark_now(serve: &Serve, me: &str, kind: ChangeKind, item: &str, op: Op) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    if let Err(e) = serve.userdata.mark_changed(me, kind, item, op, now) {
+        tracing::warn!("subsonic: the change of {item} not kept: {e:#}");
     }
 }
 

@@ -52,12 +52,30 @@ static INSTANCE: std::sync::OnceLock<Arc<Serve>> = std::sync::OnceLock::new();
 
 pub fn set_instance(serve: Arc<Serve>) {
     let _ = INSTANCE.set(serve);
-    // Every playlist write: when its entries came is kept (the panel's Added order).
+    // Every playlist write: when its entries came is kept (the panel's Added order), and the change logged (decision
+    // 0087).
     crate::playlists::on_write(Box::new(|id, before, after| {
-        if let Some(s) = instance()
-            && let Err(e) = s.userdata.entries_written(id, before, after)
-        {
+        let Some(s) = instance() else { return };
+        if let Err(e) = s.userdata.entries_written(id, before, after) {
             tracing::warn!("playlist {id}: when its entries came not kept: {e:#}");
+        }
+        // Its lines keep their entry ids through Cratarr's own edits (decision 0087).
+        if let Err(e) = s.userdata.entries_of(id, after) {
+            tracing::warn!("playlist {id}: its entry ids not kept: {e:#}");
+        }
+        if let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::Changed) {
+            tracing::warn!("playlist {id}: its change not logged: {e:#}");
+        }
+    }));
+    // A playlist made, renamed, deleted or brought back: logged (decision 0087); one shared that goes (deleted, renamed
+    // away), told to the others as gone.
+    crate::playlists::on_named(Box::new(|id, there| {
+        let Some(s) = instance() else { return };
+        if !there && s.userdata.is_playlist_shared(id).unwrap_or(false) {
+            s.playlist_gone_for_others(id);
+        }
+        if let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::of(there)) {
+            tracing::warn!("playlist {id}: its change not logged: {e:#}");
         }
     }));
 }
@@ -255,6 +273,19 @@ impl Serve {
 
     /// A playlist was renamed (every rename goes through the playlist service, which tells this): its old ids keep
     /// leading to it, as Subsonic clients keep a playlist's id across a rename.
+    /// A shared playlist (by its key) gone from the others' sight (unshared, deleted, renamed away): every account but
+    /// its owner is told it as deleted (decision 0087).
+    pub fn playlist_gone_for_others(&self, key: &str) {
+        let owner = match key.split_once('/') {
+            Some((account, _)) => Some(account.to_string()),
+            None => self.users.owner(),
+        };
+        let others: Vec<String> = self.users.names().into_iter().filter(|n| Some(n) != owner.as_ref()).collect();
+        if let Err(e) = self.userdata.playlist_gone_for(key, &others) {
+            tracing::warn!("playlist {key}: its going not logged for the others: {e:#}");
+        }
+    }
+
     pub fn playlist_renamed(&self, from: &str, to: &str) {
         if let Err(e) = self.userdata.playlist_renamed(from, to) {
             tracing::warn!("subsonic: the rename of {from} to {to} not kept: {e:#}");

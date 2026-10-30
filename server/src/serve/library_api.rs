@@ -210,8 +210,16 @@ async fn set_favourite(serve: Arc<Serve>, track: String, on: bool) -> Response {
     let s = serve.clone();
     let id = track.clone();
     match blocking(move || Ok(!s.library.songs_by_id(std::slice::from_ref(&id))?.is_empty())).await {
-        Ok(true) => match serve.userdata.set_starred(&owner, Kind::Song, &[track], on) {
-            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => match serve.userdata.set_starred(&owner, Kind::Song, std::slice::from_ref(&track), on) {
+            Ok(()) => {
+                // Made now (decision 0087): an older heart a page's outbox sends later does not undo it.
+                let (item, now) = (crate::userdata::offline::item_id("track", crate::source::cratarr::KIND.id, &track), now_ms());
+                let op = crate::userdata::offline::Op::of(on);
+                if let Err(e) = serve.userdata.mark_changed(&owner, crate::userdata::offline::ChangeKind::Favourite, &item, op, now) {
+                    tracing::warn!("the change of {item} not kept: {e:#}");
+                }
+                StatusCode::NO_CONTENT.into_response()
+            }
             Err(e) => failed(e),
         },
         Ok(false) => fail(StatusCode::NOT_FOUND, "no such track"),
@@ -261,6 +269,10 @@ async fn file(State(serve): State<Arc<Serve>>, Path(track): Path<String>, header
         Ok(None) => fail(StatusCode::NOT_FOUND, "no such track"),
         Err(e) => failed(e),
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 #[cfg(test)]

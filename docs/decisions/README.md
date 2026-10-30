@@ -243,3 +243,7 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0086: Classical's works and movements](0086-classical-works-and-movements.md): proposed for 0.12, the owner's
   choices made. A composer's works first, then their records; a work opens its recordings, each playable; an album's
   movements under their work's heading. Behind the capability `works`; a5's API draft.
+- [0087: Offline writes: ids, times and the change log](0087-offline-writes.md): accepted, for 0.12. A change's time
+  in `X-Cratarr-At`, favourites and ratings the last change winning; `Idempotency-Key` and play ids kept 30 days; one
+  change log per server (`/api/changes`); playlist edits as operations on entry ids, merged as a set, the last move
+  winning.
