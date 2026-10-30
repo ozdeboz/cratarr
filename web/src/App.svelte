@@ -835,6 +835,46 @@
       : []),
   ]);
   const subsOf = (id: string): Sub[] => (id === LIBRARY.id ? librarySubs : id === DISCOVER.id ? discoverSubs : []);
+  // One section open at a time (0.9.19; the owner, 2026-10-30): the page's own, or the one tapped open. A tap on a
+  // section's name only opens it (no page change; one of its links goes there); folded, the sidebar unfolds for it
+  // (peek). One opened by hand folds again on a tap or the pointer elsewhere, and the page's comes back.
+  let opened = $state<string | null>(null);
+  const pageSection = $derived(subsOf(page).length ? page : null);
+  const openSection = $derived(opened ?? pageSection);
+  function sectionTap(e: MouseEvent, id: string) {
+    e.preventDefault();
+    if (prefs.navFolded && !peek) peek = true;
+    opened = opened === id || id === pageSection ? null : id;
+  }
+  $effect(() => {
+    if (opened === null) return;
+    const away = (e: PointerEvent) => {
+      if (!(e.target as Element | null)?.closest?.(`[data-section="${opened}"]`)) opened = null;
+    };
+    addEventListener('pointerdown', away, true);
+    return () => removeEventListener('pointerdown', away, true);
+  });
+  // In sight (the owner, 2026-10-30), where the sidebar is too low for all of it: a section opened by hand; else the
+  // page's end of it, the top for the pages from Home to Discover, the bottom for those at its foot (Settings…).
+  let sidebarEl = $state<HTMLElement>();
+  $effect(() => {
+    const el = sidebarEl;
+    const id = opened;
+    const below = APART.some((p) => p.id === page);
+    if (!el || el.scrollHeight <= el.clientHeight) return;
+    const behavior: ScrollBehavior = reducedMotion() ? 'auto' : 'smooth';
+    // After the section's unfolding (its slide), so its whole height is known.
+    const t = setTimeout(() => {
+      if (id) el.querySelector(`[data-section="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior });
+      else el.scrollTo({ top: below ? el.scrollHeight : 0, behavior });
+    }, id ? 160 : 0);
+    return () => clearTimeout(t);
+  });
+  // Gone to (one of its links, or the page changed otherwise): the page's own section is the open one.
+  $effect(() => {
+    void page;
+    untrack(() => (opened = null));
+  });
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const mayRequest = $derived(me.admin || me.permissions.request || me.permissions.manage_requests);
@@ -894,9 +934,9 @@
     onclickcapture={collapse}
     onclick={stripTap}
     onpointerenter={(e) => prefs.navFolded && navDrag === null && e.pointerType === 'mouse' && (peek = true)}
-    onpointerleave={(e) => e.pointerType === 'mouse' && navDrag === null && (peek = false)}
+    onpointerleave={(e) => e.pointerType === 'mouse' && navDrag === null && ((peek = false), (opened = null))}
   >
-    <aside class="sidebar" class:peek>
+    <aside class="sidebar" class:peek bind:this={sidebarEl}>
       <!-- The mode switcher with a local folder on (decision 0052, mock B); otherwise the mark and the connection line. -->
       {#if switchInBar}
         <ModeSwitcher {connection} />
@@ -912,15 +952,29 @@
 
       <nav aria-label="Pages">
         {#each MAIN as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
-            ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
-          >
-          {#if subsOf(p.id).length}
-            <div class="subs" role="group" aria-label="{p.label} shows">
-              {#each subsOf(p.id) as s (s.id)}
-                <a class="sub" href={keepViewed(p.href)} aria-current={page === p.id && s.on ? 'true' : undefined} onclick={() => ((peek = false), s.pick())}>{s.label}</a>
-              {/each}
+          {@const subs = subsOf(p.id)}
+          {#if subs.length}
+            <!-- A section (Library, Discover): its name opens it, its links go there. -->
+            <div class="section" data-section={p.id}>
+              <a
+                href={keepViewed(p.href)}
+                aria-current={page === p.id ? 'page' : undefined}
+                aria-expanded={openSection === p.id}
+                onclick={(e) => sectionTap(e, p.id)}
+                ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
+              >
+              {#if openSection === p.id}
+                <div class="subs" role="group" aria-label="{p.label} shows" transition:slide={{ duration: reducedMotion() ? 0 : 150 }}>
+                  {#each subs as s (s.id)}
+                    <a class="sub" href={keepViewed(p.href)} aria-current={page === p.id && s.on ? 'true' : undefined} onclick={() => ((peek = false), (opened = null), s.pick())}>{s.label}</a>
+                  {/each}
+                </div>
+              {/if}
             </div>
+          {:else}
+            <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
+              ><Icon name={p.icon} /><span class="label">{p.label}</span></a
+            >
           {/if}
         {/each}
       </nav>
@@ -1638,6 +1692,10 @@
 
   /* The direct links under Library and Discover (the owner, 2026-10-29), in line with their page's name; the one its
      picker shows in the accent's ink, the page itself lit above it. */
+  .sidebar nav .section {
+    display: grid;
+  }
+
   .sidebar nav .subs {
     display: grid;
     gap: 2px;
