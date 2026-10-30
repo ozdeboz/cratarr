@@ -59,17 +59,18 @@ pub struct Status {
 
 /// How MusicBrainz stands now.
 pub async fn status() -> Result<Status> {
-    let (asked, of) = match crate::serve::instance() {
+    let (asked, works, of) = match crate::serve::instance() {
         Some(s) => {
             let (lib, ud) = (s.library.clone(), s.userdata.clone());
-            tokio::task::spawn_blocking(move || -> Result<(usize, usize)> {
+            tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize)> {
                 let releases = lib.album_releases()?;
                 let typed = ud.release_types_asked("mb:", 0)?;
-                Ok((releases.iter().filter(|r| typed.contains(*r)).count(), releases.len()))
+                let read = ud.mb_releases_asked(0, 0)?;
+                Ok((releases.iter().filter(|r| typed.contains(*r)).count(), releases.iter().filter(|r| read.contains(*r)).count(), releases.len()))
             })
             .await??
         }
-        None => (0, 0),
+        None => (0, 0, 0),
     };
     let next = PASS_NEXT.load(Ordering::Relaxed);
     let reach = super::reach::state("musicbrainz");
@@ -78,7 +79,11 @@ pub async fn status() -> Result<Status> {
         last_ok: Some(reach.last_ok).filter(|t| *t > 0),
         last_error: reach.last_error.map(|(at, message)| Failed { at, message }),
         pace_secs: PACE_SECS,
-        passes: vec![Pass { name: "Release types and years", done: asked, total: of, running: PASS_RUNNING.load(Ordering::Relaxed), next_at: Some(next).filter(|t| *t > 0) }],
+        passes: vec![
+            Pass { name: "Release types and years", done: asked, total: of, running: PASS_RUNNING.load(Ordering::Relaxed), next_at: Some(next).filter(|t| *t > 0) },
+            // The works and their composers (0.10, `works`): in turn with the release types, in the same asker.
+            Pass { name: "Works and composers", done: works, total: of, running: PASS_RUNNING.load(Ordering::Relaxed), next_at: Some(next).filter(|t| *t > 0) },
+        ],
         asked,
         of,
     })

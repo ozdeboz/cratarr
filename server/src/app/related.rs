@@ -139,9 +139,13 @@ async fn lb_similar(http: &reqwest::Client, mbid: &str) -> Result<Vec<(String, S
     Ok(list.into_iter().filter(|s| s.artist_mbid != mbid).take(SIMILAR).map(|s| (s.artist_mbid, s.name, s.score)).collect())
 }
 
+/// A related artist as MusicBrainz names them: (their MusicBrainz id, name, why).
+type MbRelated = Vec<(String, String, &'static str)>;
+
 /// MusicBrainz's artists related to an artist, each with why: the bands they play in and their members, those they
-/// worked with, those who played with them.
-async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<Vec<(String, String, &'static str)>> {
+/// worked with, those who played with them, the person a performance name is and the names a person performs as (0.10:
+/// kept, `works::persons_of`, so an alias is the real person); and those "is person" relations as found.
+async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<(MbRelated, Vec<(String, String, String)>)> {
     #[derive(Deserialize)]
     struct Artist {
         id: String,
@@ -161,8 +165,10 @@ async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<Vec<(String, S
         relations: Vec<Relation>,
     }
     let url = format!("https://musicbrainz.org/ws/2/artist/{mbid}?inc=artist-rels&fmt=json");
-    let found: Lookup = http.get(url).asked().await?.error_for_status()?.json().await?;
-    Ok(found
+    let raw: serde_json::Value = http.get(url).asked().await?.error_for_status()?.json().await?;
+    let persons = super::works::persons_of(mbid, &raw);
+    let found: Lookup = serde_json::from_value(raw)?;
+    let related = found
         .relations
         .into_iter()
         .filter_map(|r| {
@@ -172,12 +178,15 @@ async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<Vec<(String, S
                 ("collaboration", _) => "Worked together",
                 ("supporting musician" | "instrumental supporting musician" | "vocal supporting musician", _) => "Played together",
                 ("subgroup", _) => "Their group",
+                ("is person", "backward") => "Same person",
+                ("is person", _) => "Performs as",
                 _ => return None,
             };
             let a = r.artist?;
             (a.id != mbid).then_some((a.id, a.name, why))
         })
-        .collect())
+        .collect();
+    Ok((related, persons))
 }
 
 /// An album of the artist that plays on Bandcamp, and its title: their own Bandcamp page as MusicBrainz keeps it, its
@@ -213,9 +222,15 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
         Err(e) => tracing::info!("related artists of {name}: ListenBrainz: {e:#}"),
     }
     match mb_related(&http, mbid).await {
-        Ok(related) => {
+        Ok((related, persons)) => {
             for (id, n, why) in related {
                 add(id, n, why, RELATED_ON_MB);
+            }
+            if !persons.is_empty() {
+                let ud = serve.userdata.clone();
+                if let Err(e) = tokio::task::spawn_blocking(move || ud.add_persons(&persons)).await.map_err(anyhow::Error::from).and_then(|r| r) {
+                    tracing::info!("related artists of {name}: who is who not kept: {e:#}");
+                }
             }
         }
         Err(e) => tracing::info!("related artists of {name}: MusicBrainz: {e:#}"),

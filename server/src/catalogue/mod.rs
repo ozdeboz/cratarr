@@ -160,6 +160,8 @@ struct KeptFacts {
     folders: Vec<PathBuf>,
     built: i64,
     words: i64,
+    /// The classical marks as read (0.10): a mark reads them again at once.
+    marks: i64,
     at: std::time::Instant,
     facts: Arc<Vec<crate::crates::Facts>>,
 }
@@ -903,12 +905,14 @@ impl Catalogue {
         // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
         let served = crate::serve::instance();
         let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
-        // And when the library's words change (0.9.7, `app::words::stamp`).
-        let words = served.as_ref().map_or(0, |s| crate::app::words::stamp(s));
+        // And when the library's words change (0.9.7, `app::words::stamp`), or what Classical is made of (0.10).
+        let words = served.as_ref().map_or(0, |s| crate::app::words::stamp(s).wrapping_mul(31).wrapping_add(crate::app::classical::stamp(s)));
+        let marks = served.as_ref().map_or(0, |s| s.userdata.marks_stamp().unwrap_or(0));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(k) = kept.as_ref()
             && k.folders == folders
             && k.built == built
+            && k.marks == marks
             // A write to the catalogue or a word harvested reads them again only every so often (0.9.7: a reader's
             // reread of every file writes all along for hours, the harvest a word at a time; each Home read them
             // all again, and the sim went past 768 MB). A build or other folders read them at once.
@@ -926,6 +930,12 @@ impl Catalogue {
                 }
             }
         }
+        // And Classical where its album is one (0.10): a Type value of every list and crate.
+        if let Some(s) = &served
+            && let Err(e) = crate::app::classical::add_kind(s, &mut facts)
+        {
+            tracing::warn!("crates: Classical not read: {e:#}");
+        }
         // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
         if let Some(s) = &served
             && let (Ok(merged), Ok(albums)) = (crate::app::words::merged(s), s.library.song_album_map())
@@ -937,7 +947,7 @@ impl Catalogue {
             }
         }
         let facts = Arc::new(facts);
-        *kept = Some(KeptFacts { changes, folders, built, words, at: std::time::Instant::now(), facts: facts.clone() });
+        *kept = Some(KeptFacts { changes, folders, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
         Ok(facts)
     }
 

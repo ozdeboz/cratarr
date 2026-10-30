@@ -225,3 +225,7 @@ by a later record that says so in its header. A new decision takes the next numb
   accepted; amended 2026-10-30. An album's type is its MusicBrainz release group's, else its Discogs release's when
   that release fits the album's tracks or length; an EP's edition far longer than its group's first release is an
   Album.
+- [0082: Classical as a kind of record, and a track's Other versions](0082-classical-and-other-versions.md): accepted.
+  A record is classical by a genre gate and one confirmation (MusicBrainz works with performers, a composer confirmed
+  elsewhere, or a mark); composers by MusicBrainz artist; each record in its primary kind by default; a track's other
+  recordings of its work.

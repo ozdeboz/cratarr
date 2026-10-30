@@ -678,7 +678,7 @@ impl PlayingService {
         // What the source knows of the files (Cratarr's own library does; a source that cannot say leaves them out).
         let details = s.album_summary(album_id).await.ok().flatten();
         let (format, bitrate_kbps) = details.map_or((None, None), |d| (d.format, d.bitrate_kbps));
-        let rows = tracks
+        let mut rows: Vec<super::playlists::PlaylistRow> = tracks
             .into_iter()
             .map(|t| {
                 let entry = t.path.unwrap_or_else(|| t.id.clone());
@@ -695,6 +695,15 @@ impl PlayingService {
                 }
             })
             .collect();
+        // Other versions (0.10): the tracks whose work the library holds another recording of.
+        if source_id == crate::source::cratarr::KIND.id
+            && let Some(served) = crate::serve::instance()
+            && let Ok(Ok(ix)) = tokio::task::spawn_blocking(move || super::classical::index(&served)).await
+        {
+            for r in rows.iter_mut().filter(|r| r.id.as_deref().is_some_and(|id| ix.has_versions(id))) {
+                r.has_versions = Some(true);
+            }
+        }
         let listening = s.album_listening(album_id).await.unwrap_or_default();
         Ok(AlbumView {
             source: source_id.to_string(),
@@ -763,7 +772,11 @@ impl PlayingService {
             }
             _ => None,
         };
-        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums: w.albums, appears_on: w.appears_on, rows, favorite: w.favorite, mbid })
+        // Classical (0.10), as the Library's albums say it.
+        let (mut albums, mut appears_on) = (w.albums, w.appears_on);
+        super::classical::tell(source_id, &mut albums).await;
+        super::classical::tell(source_id, &mut appears_on).await;
+        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums, appears_on, rows, favorite: w.favorite, mbid })
     }
 
     /// Makes an artist a favourite or not (the artist panel's heart).

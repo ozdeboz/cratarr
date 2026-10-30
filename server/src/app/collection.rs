@@ -56,6 +56,12 @@ impl CollectionService {
         self.changed.subscribe()
     }
 
+    /// The pages showing the albums told to read them again: what is said of them changed without a read (0.10, a
+    /// record marked classical or not).
+    pub fn tell_changed(&self) {
+        let _ = self.changed.send(());
+    }
+
     /// Every server with a Music library (or only `want`), its albums newest first. The kept lists, read from the
     /// server only when there is none yet (after a start, the first background pass is usually reading it already).
     pub async fn list(&self, want: Option<&str>) -> CollectionView {

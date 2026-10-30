@@ -16,6 +16,7 @@
 
 pub mod tags;
 pub mod words;
+pub mod works;
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -626,6 +627,7 @@ impl UserData {
         conn.execute_batch(SCHEMA).context("creating the user data tables")?;
         conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;
         conn.execute_batch(words::SCHEMA).context("creating the words' tables")?;
+        conn.execute_batch(works::SCHEMA).context("creating the works' tables")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
