@@ -2,9 +2,9 @@
 //! aliases), nothing fetched. A name's aliases are the other names of its group ([`of`]), groups found by their letters
 //! (separators don't count), so a library's "Drum & Bass" and "drum and bass" both find "DnB".
 //!
-//! [`GENRES`] is a small set of well-known spellings, not MusicBrainz's list: the full one (MusicBrainz's genres with
-//! their aliases, CC0) is for the server to fetch at its own pace and pass in as groups of the same shape ([`of`]
-//! takes any). Spellings that differ only in separators, case or marks ("Hip-Hop", "hiphop", "Lo-Fi") need no alias.
+//! [`GENRES`] is kept by hand (the owner, 2026-10-30: no reading of MusicBrainz's website, whose web service gives
+//! genres no aliases): well-known spellings, extended when a gap is found. Spellings that differ only in separators,
+//! case or marks ("Hip-Hop", "hiphop", "Lo-Fi") need no alias.
 
 /// Groups of names for one genre each, its usual name first.
 pub const GENRES: &[&[&str]] = &[

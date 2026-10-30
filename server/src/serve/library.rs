@@ -1816,6 +1816,19 @@ mod tests {
     }
 
     #[test]
+    fn a_genre_is_found_by_its_aliases_in_search() {
+        // 0.12: one matcher, genre aliases (the rules crate's hand-kept list).
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.db().execute("INSERT INTO genres (name, song_count, album_count) VALUES ('Drum and Bass', 4, 1), ('Dub', 9, 2), ('R&B', 2, 1)", []).unwrap();
+        let words = |q: &str| crate::search::words(q);
+        let f = lib.find(&words("dnb"), 10).unwrap();
+        assert_eq!((f.genres, f.totals.genres), (vec![("Drum and Bass".to_string(), 4)], 1), "by its alias, Dub not by its letters");
+        assert_eq!(lib.find(&words("rnb"), 10).unwrap().genres, [("R&B".to_string(), 2)]);
+        assert!(lib.find(&words("jungle"), 10).unwrap().genres.is_empty());
+    }
+
+    #[test]
     fn new_analyses_alone_are_told_apart_from_changed_songs() {
         let (first, print) = change_between(None, "catalogue 1 2 a rules f files 10/5", "3/99");
         assert_eq!(first, Change::Songs, "never built");

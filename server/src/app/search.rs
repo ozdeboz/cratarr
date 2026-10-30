@@ -148,6 +148,54 @@ fn score(title: &str, words: &[String], at: usize, of: usize) -> f32 {
     crate::search::rank(title, words, at, of)
 }
 
+/// The library's words of one kind the words find (0.9.7, `app::words`), in the index's order, each with its score. A
+/// genre or a style by its name or one of its aliases (0.12: one matcher, genre aliases, the hand-kept list, which
+/// names Cratarr's styles too: "dnb" finds Drum and Bass); a mood, a tag or a label by its name.
+fn word_hits<'a>(index: &'a [(&'static str, String, usize)], kind: &str, w: &[String]) -> Vec<(&'a (&'static str, String, usize), f32)> {
+    let aliased = matches!(kind, "genre" | "style");
+    let found: Vec<(&(&'static str, String, usize), Option<cratarr_rules::matcher::Name>)> = index
+        .iter()
+        .filter(|(k, ..)| *k == kind)
+        .filter_map(|e| {
+            if aliased {
+                let name = crate::search::genre_name(&e.1);
+                crate::search::matches_name(&name, w).then_some((e, Some(name)))
+            } else {
+                crate::search::matches(&e.1, w).then_some((e, None))
+            }
+        })
+        .collect();
+    let n = found.len();
+    found
+        .into_iter()
+        .enumerate()
+        .map(|(i, (e, name))| {
+            let s = match &name {
+                Some(name) => crate::search::rank_name(name, w, i, n),
+                None => score(&e.1, w, i, n),
+            };
+            (e, s)
+        })
+        .collect()
+}
+
+/// The library's genres with the other names they go by (0.12: one matcher, genre aliases; `GET /api/genres/aliases`,
+/// what the page's matcher is given as each genre's `aliases`), those with none left out: the genres the library reads
+/// from its files and those its words name (`words::search_index`, the genre crates' and search's), as written there.
+pub async fn genre_aliases(app: &super::App) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+    let Some(served) = app.served.clone() else { return Ok(BTreeMap::new()) };
+    let cat = app.library.catalogue();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+        let mut genres: Vec<String> = served.library.genres()?.into_iter().map(|(g, _, _)| g).collect();
+        match super::words::search_index(&served, &cat) {
+            Ok(index) => genres.extend(index.iter().filter(|(kind, ..)| *kind == "genre").map(|(_, g, _)| g.clone())),
+            Err(e) => tracing::debug!("genre aliases: the library's words not read: {e:#}"),
+        }
+        Ok(crate::search::library_genre_aliases(genres.iter().map(String::as_str)))
+    })
+    .await?
+}
+
 fn matched_name(title: &str) -> Vec<Matched> {
     vec![Matched { on: "name", text: title.to_string(), count: None }]
 }
@@ -633,7 +681,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     composers: Vec::new(),
                     id: None,
                     request: None,
-                    score: score(g, &w, i, n),
+                    // By its name or an alias (0.12: one matcher, genre aliases).
+                    score: crate::search::rank_name(&crate::search::genre_name(g), &w, i, n),
                     matched: matched_name(g),
                 })
                 .collect(),
@@ -649,14 +698,12 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         match tokio::task::spawn_blocking(move || super::words::search_index(&s, &cat)).await? {
             Ok(index) => {
                 for kind in super::words::KINDS.into_iter().chain(["label"]).filter(|k| wants(k)) {
-                    let hits: Vec<&(&'static str, String, usize)> = index.iter().filter(|(k, word, _)| *k == kind && crate::search::matches(word, &w)).collect();
-                    let n = hits.len();
-                    totals.insert(kind, n);
+                    let hits = word_hits(&index, kind, &w);
+                    totals.insert(kind, hits.len());
                     groups.insert(
                         kind,
-                        hits.iter()
-                            .enumerate()
-                            .map(|(i, (_, word, albums))| Item {
+                        hits.into_iter()
+                            .map(|((_, word, albums), score)| Item {
                                 kind,
                                 album: None,
                                 album_id: None,
@@ -675,7 +722,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                                 composers: Vec::new(),
                                 id: None,
                                 request: None,
-                                score: score(word, &w, i, n),
+                                score,
                                 matched: vec![Matched { on: kind, text: word.clone(), count: None }],
                             })
                             .collect(),
@@ -984,6 +1031,22 @@ mod tests {
         assert_eq!(&subjects("partita")[..2], ["work:w-p2", "work:w-p1"]);
         assert_eq!(&subjects("partita bach")[..2], ["work:w-p2", "work:w-p1"]);
         assert!(subjects("schubert").is_empty());
+    }
+
+    #[test]
+    fn a_genre_word_is_found_by_its_aliases_and_a_tag_only_by_its_name() {
+        // 0.12: one matcher, genre aliases (the rules crate's hand-kept list).
+        let index: Vec<(&'static str, String, usize)> =
+            vec![("genre", "Dub".into(), 9), ("genre", "Drum and Bass".into(), 3), ("style", "R&B".into(), 2), ("tag", "Drum and Bass".into(), 5), ("tag", "dnb tapes".into(), 1)];
+        let w = words("dnb");
+        let genres: Vec<&str> = word_hits(&index, "genre", &w).into_iter().map(|(e, _)| e.1.as_str()).collect();
+        assert_eq!(genres, ["Drum and Bass"]);
+        let tags: Vec<&str> = word_hits(&index, "tag", &w).into_iter().map(|(e, _)| e.1.as_str()).collect();
+        assert_eq!(tags, ["dnb tapes"], "a tag by its own name only");
+        let (_, s) = word_hits(&index, "genre", &w)[0];
+        assert!(s > word_hits(&index, "tag", &w)[0].1, "the alias, all of it, above a start: {s}");
+        assert_eq!(word_hits(&index, "style", &words("rnb")).len(), 1);
+        assert!(word_hits(&index, "genre", &words("jungle")).is_empty());
     }
 
     #[test]
