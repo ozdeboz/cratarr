@@ -170,6 +170,8 @@ export type Prefs = {
   coverColourGlass: boolean;
   coverColourMini: boolean;
   coverColourPlayer: boolean;
+  /** Opening a track's menu plays its snippet (0.12, lib/snippet): this device's own; on unless switched off. */
+  snippetsInMenus: boolean;
   /** Shuffle (the owner, 2026-10-27): the ticked ones take turns behind the flows, in place of the one chosen. */
   flowShuffle: boolean;
   /** The ones ticked for Shuffle. */
@@ -446,6 +448,7 @@ export const DEFAULTS: Prefs = {
   coverColourGlass: true,
   coverColourMini: true,
   coverColourPlayer: true,
+  snippetsInMenus: true,
   flowShuffle: false,
   flowShuffled: [...FLOW_BACKDROPS.filter((b) => b !== 'own')],
   flowShuffleWhen: 'flow',
@@ -562,6 +565,7 @@ function read(): Prefs {
       if (FLOW_BACKDROPS.includes(backdrop as FlowBackdrop)) p.flowBackdrop = backdrop as FlowBackdrop;
       if (typeof saved.flowShuffle === 'boolean') p.flowShuffle = saved.flowShuffle;
       for (const k of ['coverColourGlass', 'coverColourMini', 'coverColourPlayer'] as const) if (typeof saved[k] === 'boolean') p[k] = saved[k];
+      if (typeof saved.snippetsInMenus === 'boolean') p.snippetsInMenus = saved.snippetsInMenus;
       if (Array.isArray(saved.flowShuffled)) {
         const ticked = saved.flowShuffled.filter((b: unknown): b is FlowBackdrop => FLOW_BACKDROPS.includes(b as FlowBackdrop));
         if (ticked.length) p.flowShuffled = ticked;

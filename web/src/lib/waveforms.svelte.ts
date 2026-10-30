@@ -38,7 +38,7 @@ async function readAll(r: Response, onpart: (share: number) => void): Promise<Ui
 }
 
 /** What the device read of a track it worked out itself (a Bandcamp preview's): its stream as its frames say. */
-export type Heard = { format: string; sample_rate_hz: number; channels: number; bitrate_kbps: number };
+export type Heard = { format: string; sample_rate_hz: number; channels: number; bitrate_kbps: number; duration_secs?: number };
 const heard = $state<Record<string, Heard>>({});
 export const heardOf = (source: string, id: string): Heard | null => heard[`${source}/${id}`] ?? null;
 
@@ -57,7 +57,9 @@ async function analyse(key: string, url: string) {
   const bytes = await readAll(r, (share) => (loading[key] = share / 2));
   const mp3 = frames(bytes);
   if (!mp3) return null;
-  heard[key] = { format: 'MP3', sample_rate_hz: mp3.sampleRate, channels: mp3.channels, bitrate_kbps: mp3.bitrateKbps };
+  // Its length by its frames (a snippet's place in it, lib/snippet).
+  const duration_secs = mp3.sampleRate ? (mp3.starts.length * mp3.samplesPerFrame) / mp3.sampleRate : undefined;
+  heard[key] = { format: 'MP3', sample_rate_hz: mp3.sampleRate, channels: mp3.channels, bitrate_kbps: mp3.bitrateKbps, duration_secs };
   if (typeof OfflineAudioContext === 'undefined') return null;
   const ctx = new OfflineAudioContext(1, 1, mp3.sampleRate);
   const bins = binFrames(mp3.starts.length, BINS);
