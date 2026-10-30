@@ -22,7 +22,10 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 - **0.12: Classical's works and movements** (a composer, their works, each work's recordings, movements grouped under
   their work), with offline first's steps 2 and 3 whole beside it: Downloads an offline shelf, and nothing done offline
   lost, playlist edits included (the server's change log; below). Modes per server moved to 0.13 (the owner,
-  2026-10-30: deferred, the change log pulled forward instead).
+  2026-10-30: deferred, the change log pulled forward instead). *On trunk:* all of it, and with it Grab a crate as a
+  sentence, snippets, one search matcher, the steady waveform, one table head, menus on search results and works,
+  and menus that offer only what works away ([whats-new-0.12](whats-new-0.12.md)); works in global search wait for
+  the server's search kind.
 - **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and modes per server** (the External
   library below, taken up). Cratarr's mode is Cratarr's own library, its libraries (Music, Incoming, each user's own)
   still switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
