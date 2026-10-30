@@ -1,13 +1,13 @@
-// Where music plays (decisions 0019, 0022, 0031): on a media server's player (remote: Finamp on the tablet), in this
-// browser or app (local, lib/localPlayer.svelte.ts), or on one of Cratarr's own players (Play On, lib/playOn.svelte.ts),
-// which the page drives as it drives the local player. The player shows each the same way: the queue the page holds is
+// Where music plays (decisions 0022, 0031): in this browser or app (local, lib/localPlayer.svelte.ts), or on one of
+// Cratarr's own players (Play On, lib/playOn.svelte.ts), which the page drives as it drives the local player. The media
+// server's player (remote, decision 0019) went from Cratarr's mode in 0.12; a Jellyfin mode lists that server's own
+// players by name (0.13). A browser that cannot play here with no player chosen still plays on it (lib/player/port). The player shows each the same way: the queue the page holds is
 // presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
 // other side, which plays from there, and the side that played stops.
 import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
-import { albumView, handover, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
+import { albumView, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
 import { untrack } from 'svelte';
-import { live, refresh } from './live.svelte';
 import { canPlayHere, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { rewindNow } from './ramping.svelte';
@@ -18,24 +18,6 @@ import { toast } from './toast.svelte';
 
 // Which player the page drives, and what this device's queue shows of what plays: the port's (lib/player/port).
 export { isLocal, localNowPlaying, localState, tookLocal } from './player/port.svelte';
-
-// "The server's player" while one of Cratarr's own players plays: that player, driven. Cratarr's own source has no
-// server-side player; such a page only showed what that player played, without seek or queue edits, while its output
-// read like the player's (2026-10-16).
-if (typeof window !== 'undefined') {
-  $effect.root(() => {
-    $effect(() => {
-      if (prefs.output !== 'remote') return;
-      const name = live.view?.now_playing?.player;
-      if (name && playOn.players.some((p) => p.name === name && p.online)) {
-        untrack(() => {
-          pointAt(`player:${name}`);
-          follow(name);
-        });
-      }
-    });
-  });
-}
 
 /** Whether the music plays in this page (its stream, or the app it runs in). */
 export const playsHere = () => prefs.output === 'local' && canPlayHere;
@@ -232,11 +214,6 @@ export async function moveTo(output: typeof prefs.output) {
   pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
   if (!was) return;
-  if (output === 'remote') {
-    await handover(was.tracks.map((t) => t.id), was.index, was.position, was.tracks[0].source);
-    setTimeout(refresh, 700);
-    return;
-  }
   playQueue(was.tracks, was.index, null, was.position > 1 ? was.position : 0, false, true);
 }
 
@@ -284,6 +261,3 @@ if (typeof window !== 'undefined') {
 
 /** Moves the music here. */
 export const toLocal = () => moveTo('local');
-
-/** Moves the music to the server's player. */
-export const toRemote = () => moveTo('remote');

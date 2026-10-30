@@ -6,6 +6,7 @@
 import { untrack } from 'svelte';
 import { getPlayer, getPlayers, playerCommand, type PlayOnPlayer } from './api';
 import { appInfo, inApp, onSeedTarget, toApp } from './app.svelte';
+import { outputOfTarget, targetOfOutput } from './player/commands';
 import { on } from './events.svelte';
 import { drive, emptyHere, reportedBy, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
@@ -61,9 +62,9 @@ export function hereAgain() {
   emptyHere();
 }
 
-/** The page's output for an app's target (decision 0062), and back. */
-const outputOf = (target: string): typeof prefs.output => (target === 'server' ? 'remote' : target.startsWith('player:') ? (target as `player:${string}`) : 'local');
-export const targetOf = (output: typeof prefs.output) => (output === 'remote' ? 'server' : output.startsWith('player:') ? output : 'self');
+/** The page's output for an app's target (decision 0062), and back (lib/player/commands). */
+const outputOf = outputOfTarget;
+export const targetOf = targetOfOutput;
 
 /** Points this device's controls at `output`: in the app it asks the app, which owns it (decision 0062) and answers
  *  with what it decided (shown meanwhile); in a browser the page owns it. */
@@ -76,6 +77,8 @@ export function pointAt(output: typeof prefs.output) {
  *  restart), whatever the page last thought. */
 function fromApp(target: string) {
   const out = outputOf(target);
+  // An app still pointed at the media server's player (gone in 0.12) is pointed here, so the two agree.
+  if (target === 'server' && appInfo.target !== null) toApp({ type: 'target', to: 'self' });
   if (prefs.output === out) return;
   prefs.output = out;
   follow(drivenName());
