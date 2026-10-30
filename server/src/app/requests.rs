@@ -329,6 +329,14 @@ async fn views(f: Option<&dyn Fetcher>, lib: Option<&Matcher>, rs: Vec<Request>)
 }
 
 /// The library's albums by name (the import's matcher), where Cratarr's data folder holds it.
+/// Of these requests, those whose album is not in the library yet (the owner, 2026-10-30: "Once something is actually
+/// in the library, there's no reason to show it in any of the requested sections except for in the requests control
+/// panel").
+pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
+    let lib = library(serve).await;
+    rs.into_iter().filter(|r| !lib.as_ref().is_some_and(|m| m.find_album(&r.album, Some(&r.artist)).is_some())).collect()
+}
+
 async fn library(serve: &Serve) -> Option<Matcher> {
     let dir = serve.data_dir.clone()?;
     tokio::task::spawn_blocking(move || Matcher::read(&dir.join("library.sqlite")).ok()).await.ok().flatten()

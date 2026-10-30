@@ -559,6 +559,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     .into_iter()
                     .filter(|r| r.status == super::requests::PENDING || r.status == super::requests::APPROVED)
                     .collect();
+                // One in the library is the library's now: requested only on the Requests page.
+                let open = super::requests::not_in_library(&served, open).await;
                 let n = open.len();
                 let items = open
                     .iter()
