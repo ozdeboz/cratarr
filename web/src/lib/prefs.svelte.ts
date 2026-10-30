@@ -2,6 +2,7 @@
 // is remembered). Server-wide settings live on the server, see Settings.svelte.
 
 import { inApp, toApp } from './app.svelte';
+import { RECORD_ORDERS, type CrateView, type RecordOrder } from './crateRecords';
 import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
@@ -287,6 +288,10 @@ export type Prefs = {
   crateDown: boolean;
   /** The panel's track lists' order, per kind of list (decision 0060). */
   panelSorts: Partial<Record<PanelKind, ListSort>>;
+  /** Each crate as records or tracks, as chosen for it (0.10, lib/crateRecords; none: as its kind starts), and the
+   *  records' order. */
+  crateViews: Record<string, CrateView>;
+  crateRecordSort: { key: RecordOrder; down: boolean };
   /** Every list's filter, per kind of list (a page's id, or a panel kind; decisions 0060 and 0061). */
   filters: Partial<Record<string, ListFilter>>;
 };
@@ -499,11 +504,13 @@ export const DEFAULTS: Prefs = {
   crateOrder: 'own',
   crateDown: false,
   panelSorts: {},
+  crateViews: {},
+  crateRecordSort: { key: 'own', down: false },
   filters: {},
 };
 
 function read(): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, filters: {} } as Prefs;
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {} } as Prefs;
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
@@ -618,6 +625,10 @@ function read(): Prefs {
         p.output = saved.output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
       if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
+      if (saved.crateViews && typeof saved.crateViews === 'object')
+        for (const [k, v] of Object.entries(saved.crateViews)) if (v === 'records' || v === 'tracks') p.crateViews[k] = v;
+      if (RECORD_ORDERS.some((o) => o.value === saved.crateRecordSort?.key) && typeof saved.crateRecordSort?.down === 'boolean')
+        p.crateRecordSort = { key: saved.crateRecordSort.key, down: saved.crateRecordSort.down };
       if (saved.panelSorts && typeof saved.panelSorts === 'object')
         for (const [k, v] of Object.entries(saved.panelSorts) as [PanelKind, ListSort][])
           if (typeof v?.key === 'string' && typeof v.down === 'boolean') p.panelSorts[k] = { key: v.key, down: v.down };

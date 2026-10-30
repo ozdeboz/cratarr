@@ -126,6 +126,8 @@
   import { everywhere } from './globalSearch.svelte';
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
+  import SectionHead from './SectionHead.svelte';
+  import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
@@ -135,7 +137,7 @@
   import { playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
-  import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
+  import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
   import { coverKey, localCovers } from './localCovers.svelte';
@@ -654,6 +656,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     down: sortDown,
     set: setSort,
     columns: { kind: 'tracks' as const, shown: cols.map((c) => c.id), offered: sortFields.map((f) => f.value) },
+    view: crate && !crateEditing ? { value: crateViewOf(crate, prefs.crateViews), set: (v: 'records' | 'tracks') => (prefs.crateViews = { ...prefs.crateViews, [crate]: v }) } : undefined,
   });
   // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches (Favourites only, Unplayed
   // only, Hide missing tracks) and its conditions (any of what the server knows of a track: genre, mood, tempo, …),
@@ -700,6 +703,48 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return list;
   });
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
+  // A crate as records or tracks (0.10; the owner, 2026-10-30: lib/crateRecords): its tracks grouped by album, in the
+  // crate's order or an album order, each saying how much of its album the crate holds; a record opened shows its crate
+  // tracks, a step of the history. Playing the crate is as ever: its tracks in its order, whichever way it shows.
+  const recordsView = $derived(!!crate && !crateEditing && crateViewOf(crate, prefs.crateViews) === 'records');
+  const records = $derived(recordsView && shown ? orderRecords(recordsOf(shown), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : []);
+  // An album's own count, from the Library's list (Cratarr's own albums: a row of another source has no album id).
+  $effect(() => {
+    if (recordsView && !library.view) untrack(() => void readLibrary(false));
+  });
+  const albumTotal = (id: string | null) => (id ? (library.view?.sources.find((s) => s.id === source)?.albums.find((a) => a.id === id)?.tracks ?? null) : null);
+  let recordOpen = $state<string | null>(null);
+  const openRecord = $derived(recordsView && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
+  const recordShown = $derived(openRecord && shown ? shown.filter((x) => openRecord.at.includes(x.i)) : []);
+  function showRecord(key: string) {
+    history.pushState({ ...(history.state ?? {}), crateRecord: key }, '');
+    recordOpen = key;
+  }
+  $effect(() => {
+    const back = () => (recordOpen = (history.state?.crateRecord as string | undefined) ?? null);
+    addEventListener('popstate', back);
+    return () => removeEventListener('popstate', back);
+  });
+  // Another crate, or tracks chosen: no record open.
+  $effect(() => {
+    void crate;
+    void recordsView;
+    untrack(() => (recordOpen = null));
+  });
+  /** A record's menu: its crate tracks as a selection's (lib/SelectionMenu), with Go to album and out of this crate. */
+  let recordMenu = $state.raw<CrateRecord | null>(null);
+  const recordRows = (rec: CrateRecord) => rec.at.map((i) => rows![i]).filter(Boolean);
+  /** In select mode a record ticks its crate tracks, or unticks them where all were. */
+  function tickRecord(rec: CrateRecord) {
+    if (!selecting) return;
+    const t = new Set(selecting);
+    const all = rec.at.every((i) => t.has(i));
+    for (const i of rec.at) {
+      if (all) t.delete(i);
+      else t.add(i);
+    }
+    selecting = t;
+  }
   const shownPlayable = $derived(shownRows.filter((r) => r.id && !r.missing));
   const sorted = $derived(sortKey !== 'own' || sortDown);
   /** What shows is not the subject as it is: ordered otherwise, or filtered; it plays as it shows. */
@@ -2058,6 +2103,25 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
     {:else if rows && shown}
+      {#if openRecord}
+        <!-- A record opened: its crate tracks, back to the records (a step of the history). -->
+        <SectionHead title={`${openRecord.title || 'Unknown album'} · ${holdsLine(openRecord.at.length, albumTotal(openRecord.albumId))}`} onback={() => history.back()} />
+        <ol class="rows" class:selecting={!!selecting} bind:clientWidth={listWidth}>
+          {#each recordShown as x (x.i)}{@render trackRow(x.r, source, title, recordShown.map((y) => y.r), x.i, false)}{/each}
+        </ol>
+      {:else if recordsView}
+        <ListHead
+          fields={RECORD_ORDERS}
+          bind:value={() => prefs.crateRecordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: prefs.crateRecordSort.down })}
+          bind:down={() => prefs.crateRecordSort.down, (d) => (prefs.crateRecordSort = { key: prefs.crateRecordSort.key, down: d })}
+          count={plural(records.length, 'record')}
+          selecting={!!selecting}
+          onselect={() => (selecting ? (selecting = null) : startSelect())}
+        />
+        <ol class="rows" class:selecting={!!selecting} bind:clientWidth={listWidth}>
+          {#each records as rec (rec.key)}{@render recordRow(rec)}{/each}
+        </ol>
+      {:else}
       <ListHead
         fields={sortFields}
         bind:value={() => sortKey, (v) => setSort(v, sortDown)}
@@ -2071,6 +2135,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <ol class="rows" class:numbered={!!album} class:selecting={!!selecting} bind:clientWidth={listWidth}>
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
+      {/if}
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
       <!-- Each list's own kind of similar ones at its foot (the owner, 2026-10-23); a crate's once all its rows are in. -->
       <!-- One's own playlist: tracks to add to it (lib/SuggestedTracks; the owner, 2026-10-23). -->
@@ -2260,6 +2325,34 @@ ${r.album_artist ?? r.artist ?? ''}`;
   </li>
 {/snippet}
 
+<!-- A crate's record (0.10, lib/crateRecords): its album's cover, title, artist and how much of it the crate holds; a
+     tap opens its crate tracks (in select mode ticks them all), a long press or its menu button its menu. -->
+{#snippet recordRow(rec: CrateRecord)}
+  {@const first = rows![rec.at[0]]}
+  {@const all = !!selecting && rec.at.every((i) => selecting!.has(i))}
+  <li class:ticked={all}>
+    <Row
+      size="large"
+      title={rec.title || 'Unknown album'}
+      label={selecting ? `${all ? 'Untick' : 'Tick'} ${rec.title}` : `Open ${rec.title}`}
+      onclick={() => (selecting ? tickRecord(rec) : showRecord(rec.key))}
+      attachMain={fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (recordMenu = rec)))}
+    >
+      {#snippet lead()}{#if first}{@render cover(first, source)}{/if}{/snippet}
+      {#snippet sub()}<span class="artist">{rec.artist ?? ''}</span><span class="album">{holdsLine(rec.at.length, albumTotal(rec.albumId))}</span>{/snippet}
+      {#snippet action()}
+        {#if selecting}
+          <button class="tool tick" class:on={all} role="checkbox" aria-checked={all} aria-label={`Select ${rec.title}`} onclick={() => tickRecord(rec)}
+            ><Icon name={all ? 'circleCheck' : 'circle'} size={24} /></button
+          >
+        {:else}
+          <button class="tool" aria-label={`Menu of ${rec.title}`} onclick={() => (recordMenu = rec)}><Icon name="moreVert" size={22} /></button>
+        {/if}
+      {/snippet}
+    </Row>
+  </li>
+{/snippet}
+
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
   <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id, album_id: r.album_id }) : null} playing={here} paused={paused()} />
 {/snippet}
@@ -2284,6 +2377,47 @@ ${r.album_artist ?? r.artist ?? ''}`;
   {@const away = tickedOuts(tickedMenu.rows)}
   <SelectionMenu title={plural(tickedMenu.tracks.length, 'track')} tracks={tickedMenu.tracks} onclose={() => ((tickedMenu = null), (selecting = null))}>
     {#snippet extra(close)}
+      {#if away.length}
+        <MenuGroup>
+          {#each away as o (o.label)}
+            <MenuEntry
+              icon={o.icon}
+              label={o.label}
+              danger
+              onclick={() => {
+                close();
+                o.run();
+              }}
+            />
+          {/each}
+        </MenuGroup>
+      {/if}
+    {/snippet}
+  </SelectionMenu>
+{/if}
+{#if recordMenu}
+  {@const rec = recordMenu}
+  {@const rs = recordRows(rec)}
+  {@const away = tickedOuts(rs)}
+  <SelectionMenu
+    title={rec.title || 'Unknown album'}
+    chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec.albumId))].filter(Boolean)}
+    tracks={tracksOf(rs.filter((r) => r.id && !r.missing))}
+    onclose={() => (recordMenu = null)}
+  >
+    {#snippet extra(close)}
+      {#if rec.albumId}
+        <MenuGroup>
+          <MenuEntry
+            icon="squareArrowOutUpRight"
+            label="Go to album"
+            onclick={() => {
+              close();
+              viewOver(albumSubject(source, rec.albumId!));
+            }}
+          />
+        </MenuGroup>
+      {/if}
       {#if away.length}
         <MenuGroup>
           {#each away as o (o.label)}
