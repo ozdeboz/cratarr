@@ -43,6 +43,8 @@ pub const CODE: &[&str] = &[
     "slskd_settings",
     "spectrum",
     "track_files",
+    // Works and movements (0.12, decision 0086): a composer's works, a work's recordings, an album's rows' works.
+    "works",
 ];
 
 /// What is set up and switched on here, as `read` finds it.

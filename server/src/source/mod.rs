@@ -240,7 +240,8 @@ pub struct ReleaseType {
 
 /// A composer as a record, a track or a search result names them (0.10): the key the page addresses them by, and
 /// their name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ComposerRef {
     pub key: String,
     pub name: String,
