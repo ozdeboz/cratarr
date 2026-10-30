@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn a_bad_proxy_is_named_and_good_ones_are_ranges() {
-        assert_eq!(proxies_of(&["172.19.0.0/16".into(), " 192.168.178.5 ".into(), "".into()]).unwrap().len(), 2);
+        assert_eq!(proxies_of(&["172.19.0.0/16".into(), " 192.168.1.5 ".into(), "".into()]).unwrap().len(), 2);
         assert_eq!(proxies_of(&["10.0.0.1".into(), "proxy.lan".into()]).unwrap_err(), "proxy.lan is not an address or a range.");
     }
 

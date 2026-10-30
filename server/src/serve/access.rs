@@ -609,11 +609,11 @@ mod tests {
             let r = app().oneshot(req);
             async move { String::from_utf8(axum::body::to_bytes(r.await.unwrap().into_body(), 64).await.unwrap().to_vec()).unwrap() }
         };
-        assert_eq!(home("192.168.178.20", None).await, "Some(true)");
+        assert_eq!(home("192.168.1.20", None).await, "Some(true)");
         assert_eq!(home("203.0.113.9", None).await, "Some(false)");
-        assert_eq!(home("203.0.113.9", Some("192.168.178.20")).await, "Some(false)", "a peer not believed names no one");
+        assert_eq!(home("203.0.113.9", Some("192.168.1.20")).await, "Some(false)", "a peer not believed names no one");
         assert_eq!(home("172.19.0.3", Some("203.0.113.9")).await, "Some(false)", "a local proxy names the client");
-        assert_eq!(home("172.19.0.3", Some("192.168.178.20")).await, "Some(true)");
+        assert_eq!(home("172.19.0.3", Some("192.168.1.20")).await, "Some(true)");
         assert_eq!(home("2001:db8:7::5", None).await, "Some(false)");
         super::super::proxy::set_home(vec!["2001:db8:7::/48".parse().unwrap()]);
         assert_eq!(home("2001:db8:7::5", None).await, "Some(true)", "a home network named");

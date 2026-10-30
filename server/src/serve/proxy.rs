@@ -1,7 +1,7 @@
 //! Whose `X-Forwarded-*` headers Cratarr believes (as Jellyfin's KnownProxies; the owner, 2026-10-23). The client's
 //! address (the sign-in throttle, the diagnostics log, a runaway client) and whether it came over HTTPS are read from
 //! them, so a client that reaches Cratarr's port directly could otherwise name any address it likes. With
-//! `CRATARR_PROXIES` set (addresses or ranges, comma-separated: `172.19.0.0/16, 192.168.178.5`), a request from any other
+//! `CRATARR_PROXIES` set (addresses or ranges, comma-separated: `172.19.0.0/16, 192.168.1.5`), a request from any other
 //! peer has those headers taken off before anything reads them, and the first such request of each peer is written
 //! down. Unset, a peer on a local address is believed (loopback, the private ranges, link-local, unique local: a proxy
 //! on the same computer, its Docker network or the home network; 0.9.8, before others run Cratarr on their own) and
@@ -121,14 +121,14 @@ mod tests {
     fn proxies_are_addresses_or_ranges_and_others_are_not_believed() {
         assert_eq!(parse(None), None);
         assert_eq!(parse(Some("  ")), None);
-        let p = parse(Some("172.19.0.0/16, 192.168.178.5 ,nonsense,::1")).unwrap();
+        let p = parse(Some("172.19.0.0/16, 192.168.1.5 ,nonsense,::1")).unwrap();
         assert_eq!(p.len(), 3);
         let at = |a: &str| believed(Some(&p), a.parse().unwrap());
         assert!(at("172.19.0.10"));
-        assert!(at("192.168.178.5"));
+        assert!(at("192.168.1.5"));
         assert!(at("::1"));
-        assert!(!at("192.168.178.20"), "a client on the LAN reaching the port itself");
-        assert!(believed(None, "192.168.178.20".parse().unwrap()), "unset: a local peer");
+        assert!(!at("192.168.1.20"), "a client on the LAN reaching the port itself");
+        assert!(believed(None, "192.168.1.20".parse().unwrap()), "unset: a local peer");
         assert!(believed(None, "172.19.0.3".parse().unwrap()), "unset: a Docker network's proxy");
         assert!(believed(None, "::1".parse().unwrap()));
         assert!(believed(None, "fd00::5".parse().unwrap()), "unset: IPv6's unique local");
@@ -140,8 +140,8 @@ mod tests {
     #[test]
     fn home_is_a_local_address_or_a_home_network_named() {
         let at = |client: &str, home: &[IpNet]| home_in(client, home);
-        assert!(at("192.168.178.20", &[]));
-        assert!(at("::ffff:192.168.178.20", &[]));
+        assert!(at("192.168.1.20", &[]));
+        assert!(at("::ffff:192.168.1.20", &[]));
         assert!(at("fd00::5", &[]));
         assert!(!at("unknown", &[]));
         assert!(!at("203.0.113.9", &[]));

@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn a_download_masks_each_client_address_with_one_name_throughout() {
         let d = logged(|| {
-            for (i, client) in ["192.168.178.100", "84.1.2.3", "192.168.178.100", "84.1.2.3, 10.0.0.2", "unknown", "[fd00::1]:443", "::1"].into_iter().enumerate() {
+            for (i, client) in ["192.168.1.100", "84.1.2.3", "192.168.1.100", "84.1.2.3, 10.0.0.2", "unknown", "[fd00::1]:443", "::1"].into_iter().enumerate() {
                 tracing::warn!(target: "signin", client, path = %format!("/x/{i}"), "request refused");
             }
             tracing::info!(target: "playon", player = "Phone", "connected");
