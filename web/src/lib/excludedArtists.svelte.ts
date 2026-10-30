@@ -62,7 +62,11 @@ export const notInThisCrate = (crate: string | null, name: string) => !!crate &&
 export async function setNotInCrate(crate: string, name: string, on: boolean) {
   try {
     const was = excludedArtists.crates[crate]?.find((a) => a.key === artistKey(name) || artistKey(a.name) === artistKey(name));
-    const r = on ? await notInCrate(crate, name) : await backInCrate(crate, was?.key ?? artistKey(name));
+    const key = was?.key ?? artistKey(name);
+    // Out of reach the list as it will be (the outbox sends the change when Cratarr answers again, lib/later).
+    const rest = (excludedArtists.crates[crate] ?? []).filter((a) => a.key !== key);
+    const meanwhile = () => ({ crate, not_artists: on ? [...rest, { key, name }] : rest, undo: null });
+    const r = on ? await notInCrate(crate, name, meanwhile) : await backInCrate(crate, key, meanwhile);
     excludedArtists.crates[crate] = r.not_artists;
     excludedArtists.version++;
     withUndo(on ? `${name} out of this crate.` : `${name} back in this crate.`, [r.undo], { after: () => (loadCrateArtists(crate), excludedArtists.version++) });

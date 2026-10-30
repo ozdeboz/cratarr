@@ -27,6 +27,7 @@
   import { toast } from './toast.svelte';
   import TrackCover from './TrackCover.svelte';
   import { withUndo } from './undo.svelte';
+  import { reach } from './reach.svelte';
 
   const chips = $derived(quickCrates.chips);
   const min = $derived(quickCrates.min);
@@ -232,6 +233,10 @@
 </script>
 
 <section class="quick" aria-label="Grab a crate">
+  <!-- Out of reach (decision 0085): reading words, the preview and Save are all Cratarr's, so one line instead. -->
+  {#if reach.away}
+  <p class="note">Grabbing a crate needs Cratarr.</p>
+  {:else}
   <p class="sentence" class:empty={!chips.length}>
     {#each parts as p, k (k)}{#if k && !p.tight}{' '}{/if}{#if p.chip !== undefined}{@const c = chips[p.chip]}<button
           class="term"
@@ -313,6 +318,7 @@
         </li>
       {/each}
     </ul>
+  {/if}
   {/if}
 </section>
 
