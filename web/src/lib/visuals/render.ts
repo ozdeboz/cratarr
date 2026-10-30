@@ -191,6 +191,8 @@ export class FlameRenderer {
   private showParts = new Set<string>();
   /** Which module each stage reads (stage-values.ts): Show's parts, the light loop's and the Flame, by type. */
   private stageIds: StageIds = { show: new Map(), loop: new Map() };
+  /** A module type's choices (its step knobs), for the compositor's glide between them. */
+  private choicesOf: (type: string) => readonly string[] = () => [];
   /** The effect module on the light in its loop (its carry pass draws it), where there is one. */
   private loopEffect: { id: string; type: string } | null = null;
   /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
@@ -282,6 +284,12 @@ export class FlameRenderer {
     const onLight = stages ? c.order.find((n) => stageOf(n) === 'carry' && fxOfModule(n.type, {})) : undefined;
     this.loopEffect = onLight ? { id: onLight.id, type: onLight.type } : null;
     this.stageIds = stageIdsOf(p, typeOf);
+    // Each module type's choices (its step knobs): the compositor glides from one to the next.
+    const choices = new Map<string, readonly string[]>();
+    this.choicesOf = (type) => {
+      if (!choices.has(type)) choices.set(type, (typeOf(type)?.knobs ?? []).filter((k) => k.kind === 'step').map((k) => k.id));
+      return choices.get(type)!;
+    };
     this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
     this.coverDrawn = !!stages && c.order.some((n) => n.type === 'music');
     this.walker?.prune(this.composed?.ids ?? new Set());
@@ -448,7 +456,10 @@ export class FlameRenderer {
     const fx = now?.effects;
     const fxOf = (n: PictureNode): Fx | null => fxOfModule(n.type, given?.knobs(n.id) ?? this.knobsIn.get(n.id) ?? {});
     const walks = this.stages.has('compose') && this.compiled && this.composed;
-    if (walks) this.walker ??= new Walker(gl, this.fin, this.now);
+    if (walks) {
+      this.walker ??= new Walker(gl, this.fin, this.now);
+      this.walker.steps = this.choicesOf;
+    }
     const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf, seeing) : null;
     const cover = this.wantsCover ? this.coverOf(given?.cover?.() ?? null) : null;
     if (!drawn && !walking) {

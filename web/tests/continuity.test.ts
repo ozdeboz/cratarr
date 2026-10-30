@@ -95,3 +95,25 @@ test('a Lens on a picture is drawn: each of its kinds a warp the pass bends by, 
     else assert.ok(v >= VARIATIONS.cratarr, `${LENSES[kind - 1]}: a shape (${v}), the picture let through`);
   }
 });
+
+test('a choice glides: the compositor draws the one before and the new one and crossfades them over its time', async () => {
+  const { choiceGlide, CHOICE_GLIDE_MS } = await import('../src/lib/visuals/nodes/walker.ts');
+  const steps = ['kind'];
+  let g = choiceGlide(undefined, steps, { kind: 2, amount: 0.5 }, 0);
+  assert.equal(g.from, null, 'the first frame: nothing to glide from');
+  g = choiceGlide(g.glide, steps, { kind: 2, amount: 0.6 }, 16);
+  assert.equal(g.from, null, 'a continuous knob moving: no glide (it moves by itself)');
+  g = choiceGlide(g.glide, steps, { kind: 3, amount: 0.6 }, 100);
+  assert.deepEqual(g.from, { kind: 2, amount: 0.6 }, 'the choice before, the rest as it is now');
+  assert.equal(g.s, 0, 'all of the one before at first');
+  const half = choiceGlide(g.glide, steps, { kind: 3, amount: 0.7 }, 100 + CHOICE_GLIDE_MS / 2);
+  assert.deepEqual(half.from, { kind: 2, amount: 0.7 });
+  assert.ok(Math.abs(half.s - 0.5) < 1e-9, 'halfway through its time, half and half (eased)');
+  assert.equal(choiceGlide(half.glide, steps, { kind: 3, amount: 0.7 }, 100 + CHOICE_GLIDE_MS).from, null, 'then the new one alone');
+  // Changed again while gliding: from the choice just before, anew.
+  let h = choiceGlide(undefined, steps, { kind: 1 }, 0);
+  h = choiceGlide(h.glide, steps, { kind: 2 }, 10);
+  h = choiceGlide(h.glide, steps, { kind: 3 }, 20);
+  assert.deepEqual(h.from, { kind: 2 });
+  assert.equal(h.s, 0);
+});
