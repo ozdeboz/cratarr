@@ -9,7 +9,13 @@
     down: boolean;
     set: (value: string, down: boolean) => void;
     columns?: { kind: ColumnKind; shown: readonly string[]; offered: readonly string[] };
+    /** A crate's: as records or as tracks (0.10, lib/crateRecords), its own choice. */
+    view?: { value: 'records' | 'tracks'; set: (v: 'records' | 'tracks') => void };
   };
+  const CRATE_VIEWS = [
+    { value: 'records' as const, label: 'Records' },
+    { value: 'tracks' as const, label: 'Tracks' },
+  ];
 </script>
 
 <script lang="ts">
@@ -36,7 +42,11 @@
 <MenuSheet label="View" icon="sliders" title="View" {onclose}>
   <div class="parts">
     {#if order}
-      {#if order.columns?.shown.length}<ColumnOrder {...order.columns} />{/if}
+      {#if order.view}
+        {@const v = order.view}
+        <SettingRow card label="Show"><Seg label="Show" options={CRATE_VIEWS} bind:value={() => v.value, (x) => v.set(x)} /></SettingRow>
+      {/if}
+      {#if order.columns?.shown.length && order.view?.value !== 'records'}<ColumnOrder {...order.columns} />{/if}
     {:else if page === 'playlists'}
       <SettingRow card label="Layout"><Seg label="Layout" options={playlistLayouts()} bind:value={playlistLayout, (v) => (prefs.playlistLayout = v)} /></SettingRow>
       {#if playlistLayout() === 'table'}
