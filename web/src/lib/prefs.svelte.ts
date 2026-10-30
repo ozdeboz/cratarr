@@ -159,7 +159,6 @@ export type Prefs = {
   /** Home's header greets by name ("Good evening, Oskar", then "Best for now") in place of the moment's own name. */
   homeGreeting: boolean;
   /** The greeting's name with a capital first letter, for an account named in lower case (the owner, 2026-10-25). */
-  homeGreetingCapital: boolean;
   /** One's own header picture (Appearance) replaces Home's weather sky too, besides being every flow's backdrop. */
   flowPictureOnHome: boolean;
   /** Behind every flow (the owner, 2026-10-26): one of Cratarr's photos (public/backdrops), or one's own picture. */
@@ -428,7 +427,6 @@ export const DEFAULTS: Prefs = {
   homeParts: homeDefault(),
   // On by default (the owner, 2026-10-25).
   homeGreeting: true,
-  homeGreetingCapital: false,
   flowPictureOnHome: false,
   coverColourGlass: true,
   coverColourMini: true,
@@ -536,7 +534,6 @@ function read(): Prefs {
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
       if (typeof saved.profile === 'boolean') p.profile = saved.profile;
       if (typeof saved.homeGreeting === 'boolean') p.homeGreeting = saved.homeGreeting;
-      if (typeof saved.homeGreetingCapital === 'boolean') p.homeGreetingCapital = saved.homeGreetingCapital;
       if (typeof saved.flowPictureOnHome === 'boolean') p.flowPictureOnHome = saved.flowPictureOnHome;
       // Renamed on 2026-10-26 (the owner): Clock is Mosaic, Yellow is Mellow; Mellow is Pastel since 2026-10-27 (another
       // photo); the ones taken away (Grey, Lamp) fall back to the default.

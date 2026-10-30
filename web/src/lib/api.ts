@@ -1075,6 +1075,8 @@ export type UserSession = { id: string; device: string; created: number; last_us
  *  may do, whether they have set a password for OpenSubsonic apps, their devices and sign-ins. */
 export type Me = {
   name: string | null;
+  /** The directory's display name (LDAP's displayName, 0.9.19); none for a local account or a server before it. */
+  display_name?: string | null;
   admin: boolean;
   /** Deactivated: left the directory's music group (their data kept). */
   active?: boolean;
