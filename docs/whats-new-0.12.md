@@ -51,6 +51,8 @@ Since 0.11.0; 0.11.1's fixes are in it too. The notes for each part are in [deci
 - **On an album, a work's movements sit under its heading**, named by movement only ("I. Allegro con brio"), with
   Play and a menu for the work. Movements, recordings and headings have their menus (Play next, Add to queue, the
   snippet).
+- **Search finds works**, by title, catalogue number or composer ("goldberg bach", "BWV 988", "op 67"): a Works
+  group with each work's composers and how many recordings you have; a tap opens it.
 
 ## Lists
 
@@ -86,4 +88,4 @@ Since 0.11.0; 0.11.1's fixes are in it too. The notes for each part are in [deci
 
 ## Not yet
 
-- **Works in global search**: the page has its group; the server's search kind for works comes next.
+- **Genre aliases** ("dnb" for Drum and Bass): MusicBrainz's genre list comes next.
