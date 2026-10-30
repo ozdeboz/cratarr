@@ -27,9 +27,10 @@ export function speedBetween(a: Seen | null, b: Seen): number | null {
 /** The same place reported again for longer than this: it stands (a winding player reports every 250 ms). */
 export const STAND_MS = 400;
 
-/** A new place seen: the speed through a wind, measured. The same place again keeps when it was first seen (the server
- *  stamps a view when it sends it, and does not count a winding player on: another player's change sends the same
- *  report anew, later) and the speed it had, until it has stood longer than a report's interval: then it stands. */
+/** A new place seen: the speed through a wind, measured. The same place again keeps when it was first seen (a 0.11.0
+ *  server stamps a view when it sends it and does not count a winding player on, so another player's change sends the
+ *  same report anew, later; from 0.11.1 it counts a winding player on at its own speed, so a view re-sent says a new
+ *  place) and the speed it had, until it has stood longer than a report's interval: then it stands. */
 export function measure(was: Measured | null, seen: Seen): Measured {
   if (was && was.seen.index === seen.index && was.seen.pos === seen.pos) return seen.at - was.seen.at > STAND_MS ? { seen: was.seen, v: 0 } : was;
   return { seen, v: speedBetween(was?.seen ?? null, seen) };
