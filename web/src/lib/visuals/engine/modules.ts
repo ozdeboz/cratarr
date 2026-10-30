@@ -1,9 +1,18 @@
-// The one engine's modules for what aspects.ts did out of sight (decision 0057, §3): each a small stepper with its own
-// state, its knobs and its outputs, so the graph can show it and the evaluator can wire it. Pure; the same arithmetic
-// as aspects.ts, so the equivalence harness holds them to it.
+// The one engine's modules for what the old engine (aspects.ts, gone in 0.9.19) did out of sight (decision 0057, §3):
+// each a small stepper with its own state, its knobs and its outputs, so the graph can show it and the evaluator can
+// wire it. Pure; the golden frames hold what they give (tests/golden-frames.test.ts).
 
-/** A beat's turn of the transforms: once around in 32 beats (aspects.ts's STEP). */
+/** A beat's turn of the transforms: once around in 32 beats. */
 export const STEP = (2 * Math.PI) / 32;
+
+/** Floor: none at 0, then from 0.002 of the display's scale (a stray speck's) up to 1 (the flame's mean), evenly in its
+ *  log. */
+export const floorOf = (v: number) => (v > 0 ? 0.002 * 500 ** v : 0);
+
+/** Haze (−1..1, 65, decision 0050) as the display shows it: Depth's and Floor's own curves on one axis, 0 as their
+ *  defaults were (gamma 3, no floor). More haze lifts the faint mist (the gamma up to 6); less cuts it (the gamma down
+ *  to 1.5, a floor up to Floor's 75 %: a fifth of the flame's mean; its 100 %, the mean, blacked out half the flame). */
+export const hazeOf = (h: number) => ({ gamma: 3 * 2 ** h, floor: h < 0 ? floorOf(0.75 * -h) : 0 });
 
 /** The Loudness (an Envelope Follower on Music's loudness): the loudness as heard, followed (rising over `attack`,
  *  falling over `release`, s), as far as Intensity lets it count (`level`, what a cable from the loudness reads); `out`

@@ -25,6 +25,32 @@ import { POINTS_NODES } from './points-pictures';
 import type { FlowField } from './modules';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
+
+/** How long a module's choice takes to change (0.9.19; the owner, 2026-10-29: continuous over discrete): its picture
+ *  of the choice before and of the new one crossfaded, eased. */
+export const CHOICE_GLIDE_MS = 600;
+
+/** Where a module's choice is gliding: the choice it had (its steps' values) and when it changed. */
+type Glide = { key: string; last: Record<string, number>; from: Record<string, number> | null; start: number };
+
+/** A module's choices changed: `steps`' values as they were a frame before, and how far the glide to the new ones is
+ *  (0..1, eased; null when none runs). Pure: the walker's, and a test's. */
+export function choiceGlide(g: Glide | undefined, steps: readonly string[], k: Record<string, number>, now: number, ms = CHOICE_GLIDE_MS): { glide: Glide; from: Record<string, number> | null; s: number } {
+  const key = steps.map((s) => Math.round(k[s] ?? 0)).join('|');
+  if (!g) return { glide: { key, last: { ...k }, from: null, start: now }, from: null, s: 1 };
+  if (g.key !== key) {
+    g.from = Object.fromEntries(steps.map((s) => [s, g.last[s] ?? 0]));
+    g.start = now;
+    g.key = key;
+  }
+  g.last = { ...k };
+  const u = g.from ? (now - g.start) / ms : 1;
+  if (!g.from || u >= 1) {
+    g.from = null;
+    return { glide: g, from: null, s: 1 };
+  }
+  return { glide: g, from: { ...k, ...g.from }, s: u * u * (3 - 2 * u) };
+}
 /** A loop drawn as one pass, by its Mix: its Feedback, the Warps and Keeps between them, the Mix's input the new
  *  picture comes in at (the other is the loop's). */
 type Loop = { feedback: string; chain: { id: string; type: string }[]; now: 'in1' | 'in2' };
@@ -82,6 +108,11 @@ export class Walker {
   private nodes = new Map<string, { type: string; node: ModuleNode | null }>();
   private mixes = new Map<number, WebGLProgram>();
   private copy: WebGLProgram;
+  /** Two pictures crossfaded (a choice gliding). */
+  private fade: WebGLProgram;
+  private glides = new Map<string, Glide>();
+  /** A module type's choices (its step knobs), the renderer's from the picture types: they glide. */
+  steps: (type: string) => readonly string[] = () => [];
   private loop: WebGLProgram;
   private empty: WebGLVertexArrayObject;
   /** Nothing, for a loop's first frame. */
@@ -121,6 +152,14 @@ in vec2 vUv;
 out vec4 o;
 uniform sampler2D uIn;
 void main() { o = texture(uIn, vUv); }`);
+    this.fade = program(gl, VERTEX, `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uA;
+uniform sampler2D uB;
+uniform float uK;
+void main() { o = mix(texture(uA, vUv), texture(uB, vUv), uK); }`);
     this.loop = program(gl, VERTEX, LOOP);
     this.empty = gl.createVertexArray()!;
   }
@@ -220,7 +259,42 @@ void main() { o = texture(uIn, vUv); }`);
     this.state.pinned = null;
   }
 
+  /** A module drawn; a choice of its changing, drawn with the choice before too (its clocks held: no time passes for it)
+   *  and the two crossfaded over CHOICE_GLIDE_MS. */
   private draw(n: PictureNode, inputs: Map<string, Target | null>, out: Target, k: Record<string, number>, frame: FrameInfo, points: readonly Point[] | null) {
+    const steps = this.steps(n.type);
+    const g = steps.length ? choiceGlide(this.glides.get(n.id), steps, k, this.now()) : null;
+    if (g) this.glides.set(n.id, g.glide);
+    if (!g?.from) return this.drawOnce(n, inputs, out, k, frame, points);
+    const [now, before] = [this.pool.take(this.spec), this.pool.take(this.spec)];
+    this.drawOnce(n, inputs, now, k, frame, points);
+    this.drawOnce(n, inputs, before, g.from, { ...frame, dt: 0 }, points);
+    this.faded(before, now, out, g.s);
+    this.pool.give(now);
+    this.pool.give(before);
+  }
+
+  /** `a` into `b` by `k`, into `out`. */
+  private faded(a: Target, b: Target, out: Target, k: number) {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
+    gl.viewport(0, 0, this.spec.w, this.spec.h);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.fade);
+    [a, b].forEach((t, i) => {
+      gl.activeTexture(gl.TEXTURE0 + i);
+      gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    });
+    gl.uniform1i(gl.getUniformLocation(this.fade, 'uA'), 0);
+    gl.uniform1i(gl.getUniformLocation(this.fade, 'uB'), 1);
+    gl.uniform1f(gl.getUniformLocation(this.fade, 'uK'), k);
+    gl.bindVertexArray(this.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  private drawOnce(n: PictureNode, inputs: Map<string, Target | null>, out: Target, k: Record<string, number>, frame: FrameInfo, points: readonly Point[] | null) {
     const gl = this.gl;
     const { w, h } = this.spec;
     if (n.type === 'mix') return this.mix(inputs, out, k);
@@ -389,6 +463,7 @@ void main() { o = texture(uIn, vUv); }`);
   /** Lets go of the nodes of modules no longer in the patch. */
   prune(ids: ReadonlySet<string>) {
     for (const [id, r] of this.nodes) if (!ids.has(id)) (r.node?.dispose(this.gl), this.nodes.delete(id));
+    for (const id of this.glides.keys()) if (!ids.has(id)) this.glides.delete(id);
   }
 
   /** At a new size every target goes, and the Feedbacks start from nothing. */
@@ -432,6 +507,7 @@ void main() { o = texture(uIn, vUv); }`);
     this.pool.clear();
     for (const p of this.mixes.values()) this.gl.deleteProgram(p);
     this.gl.deleteProgram(this.copy);
+    this.gl.deleteProgram(this.fade);
     this.gl.deleteProgram(this.loop);
     for (const p of this.fxPrograms.values()) if (p) this.gl.deleteProgram(p);
     if (this.black) this.free(this.black);

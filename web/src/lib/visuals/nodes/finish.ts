@@ -3,7 +3,7 @@
 // the walk from, at the light's size: made when a walk first asks, let go of ten seconds after the last.
 import { type EffectClocks, MOST_PICTURE } from '../effects';
 import type { Fluid } from '../fluid';
-import type { EffectsParams } from '../chain-params';
+import type { EffectsParams } from '../stage-values';
 import { none, uniforms } from './shared';
 
 /** A pass's targets: what it reads as the last picture (0) and what it draws into (1), at `w` x `h`. */

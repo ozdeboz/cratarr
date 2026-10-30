@@ -11,7 +11,7 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { FieldShape } from './field';
-import type { ChainNow, ShowParams } from './chain-params';
+import type { ShowParams, StageValues } from './stage-values';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { compile, composeOf, plan, STAGES, stageOf, stageRefusal, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
 import { fxOfModule, type Fx } from './nodes/effect-runs';
@@ -32,11 +32,11 @@ import { Thumbs } from './nodes/thumbs';
 import { chain, IDENTITY, toScreen, transformOf } from './transform';
 import { densityScale, Show } from './nodes/show';
 import type { NodeParams } from './engine/graph';
-import { DIVE_MOST, TUNNEL_MOST } from './zoom';
+import { stageIdsOf, stagesNow, type StageIds } from './stage-values';
 import { none } from './nodes/shared';
 
 /** Show's look with only `parts` of Show's drawn in its pass (by type), the rest at their neutral: no bend, no
- *  smoothing, Haze at 0 (its gamma 3: aspects.ts hazeOf), all of its colour. A part elsewhere (Blur after the layers)
+ *  smoothing, Haze at 0 (its gamma 3: engine/modules.ts hazeOf), all of its colour. A part elsewhere (Blur after the layers)
  *  is a module of its own. */
 function showWith(look: ShowParams, parts: ReadonlySet<string>): ShowParams {
   return {
@@ -49,43 +49,6 @@ function showWith(look: ShowParams, parts: ReadonlySet<string>): ShowParams {
 }
 
 /** The modules whose values the light loop and the camera take (ownLoop). */
-const LOOP_TYPES = new Set(['trails', 'fluid', 'tunnel', 'dive', 'flame']);
-
-/** Show's look with each part's own values (its module's: the engine's `params`, step 5) where it has them. */
-function ownShow(look: ShowParams, of: (type: string) => NodeParams | undefined): ShowParams {
-  const [tone, sat, curve, blur] = [of('tonemap'), of('saturate'), of('curve'), of('blur')];
-  return {
-    ...look,
-    ...(tone?.flash !== undefined ? { flash: tone.flash } : {}),
-    ...(tone?.exposure !== undefined ? { exposure: tone.exposure } : {}),
-    ...(sat?.saturation !== undefined ? { saturation: sat.saturation } : {}),
-    ...(curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : {}),
-    ...(blur?.smoothing !== undefined ? { smoothing: blur.smoothing } : {}),
-  };
-}
-
-/** The light loop's and the camera's values with each module's own (the engine's `params`, step 5) where it has them:
- *  Trails' keep, the Fluid's, Tunnel's, Dive's, the Flame's size. */
-function ownLoop(now: ChainNow, of: (type: string) => NodeParams | undefined): ChainNow {
-  const [trails, fluid, tunnel, dive, flame] = [of('trails'), of('fluid'), of('tunnel'), of('dive'), of('flame')];
-  const keep = trails?.keep ?? now.carry.keep;
-  return {
-    ...now,
-    points: {
-      ...now.points,
-      ...(flame?.scale !== undefined ? { scale: flame.scale } : {}),
-      ...(flame?.flame ? { turn: flame.flame.turn } : {}),
-      ...(dive?.dive !== undefined ? { dive: DIVE_MOST * dive.dive } : {}),
-    },
-    carry: {
-      ...now.carry,
-      keep,
-      ...(fluid?.fluid !== undefined ? { fluid: fluid.fluid, warp: fluid.warp ?? 0, facets: { hex: now.carry.facets?.hex ?? false, amount: fluid.facets ?? 0 } } : {}),
-      ...(tunnel?.tunnel !== undefined ? { tunnel: TUNNEL_MOST * tunnel.tunnel } : {}),
-    },
-    show: { ...now.show, keep, ...(flame?.flame ? { hits: flame.flame.hits } : {}) },
-  };
-}
 
 /** Of `parts`, those as far as `type` in Show's order (a fusion barrier at the observed part). */
 const partsUpTo = (parts: ReadonlySet<string>, type: string) => new Set([...parts].filter((t) => SHOW_PARTS.findIndex((p) => p.type === t) <= SHOW_PARTS.findIndex((p) => p.type === type)));
@@ -93,7 +56,7 @@ const partsUpTo = (parts: ReadonlySet<string>, type: string) => new Set([...part
 /** The size the cover is drawn at as a picture (16:9, the middle of a square cover). */
 const COVER: [number, number] = [320, 180];
 
-/** Everything the nodes read in a frame, as one (the frozen renderer's look; chain-params.ts groups it by node). */
+/** Everything the nodes read in a frame, as one (stage-values.ts groups it by stage). */
 export type Shown = {
   /** Brightness, around 1. */
   brightness: number;
@@ -226,12 +189,12 @@ export class FlameRenderer {
   private showOut: string | null = null;
   /** The types of Show's parts drawn in its pass (the rest neutral there). */
   private showParts = new Set<string>();
-  /** Show's parts' modules by type (whose values it draws with). */
-  private showIds = new Map<string, string>();
+  /** Which module each stage reads (stage-values.ts): Show's parts, the light loop's and the Flame, by type. */
+  private stageIds: StageIds = { show: new Map(), loop: new Map() };
+  /** A module type's choices (its step knobs), for the compositor's glide between them. */
+  private choicesOf: (type: string) => readonly string[] = () => [];
   /** The effect module on the light in its loop (its carry pass draws it), where there is one. */
   private loopEffect: { id: string; type: string } | null = null;
-  /** The light loop's modules and the Flame by type (whose values the loop and the camera take). */
-  private loopIds = new Map<string, string>();
   /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
   private peek: { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
   /** The Music modules, whether one's cover reaches the Screen, and the cover as a texture (made again as it changes). */
@@ -318,12 +281,15 @@ export class FlameRenderer {
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
     this.showParts = new Set(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => n.type) : SHOW_PARTS.map((p) => p.type));
-    this.showIds = new Map(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => [n.type, n.id]) : []);
     const onLight = stages ? c.order.find((n) => stageOf(n) === 'carry' && fxOfModule(n.type, {})) : undefined;
     this.loopEffect = onLight ? { id: onLight.id, type: onLight.type } : null;
-    // The light loop's modules and the Flame, by type (the first of each: the one light loop).
-    this.loopIds = new Map();
-    for (const m of flat.modules) if (LOOP_TYPES.has(m.type) && !this.loopIds.has(m.type)) this.loopIds.set(m.type, m.id);
+    this.stageIds = stageIdsOf(p, typeOf);
+    // Each module type's choices (its step knobs): the compositor glides from one to the next.
+    const choices = new Map<string, readonly string[]>();
+    this.choicesOf = (type) => {
+      if (!choices.has(type)) choices.set(type, (typeOf(type)?.knobs ?? []).filter((k) => k.kind === 'step').map((k) => k.id));
+      return choices.get(type)!;
+    };
     this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
     this.coverDrawn = !!stages && c.order.some((n) => n.type === 'music');
     this.walker?.prune(this.composed?.ids ?? new Set());
@@ -419,14 +385,12 @@ export class FlameRenderer {
   /** One frame of the patch: the flame (its light faded by `now.carry.keep`, `passes` more steps of every point in it,
    *  shown), what the compose step draws, the effects, onto the screen. `now` null: no flame data (no Cratarr chain):
    *  its stages are skipped and the rest drawn as the patch wires it; where nothing reaches the screen, it is blank. */
-  frame(passes: number, now: ChainNow | null, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
+  frame(passes: number, now: StageValues | null, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
     const given = inputs && 'extra' in inputs ? inputsOfExtras(inputs) : inputs;
     const knobsAt = (id: string) => given?.knobs(id) ?? this.knobsIn.get(id) ?? {};
-    if (now && given?.params) {
-      const ids = this.loopIds;
-      now = ownLoop(now, (type) => (ids.has(type) ? given.params!(ids.get(type)!) : undefined));
-    }
-    const shown = now ? ownShow(now.show, (type) => (this.showIds.has(type) ? given?.params?.(this.showIds.get(type)!) : undefined)) : null;
+    // Each stage with its own modules' values (stage-values.ts), the device's where it has none.
+    if (now) now = stagesNow(now, this.stageIds, (id) => given?.params?.(id));
+    const shown = now ? now.show : null;
     const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const light = this.light;
@@ -492,7 +456,10 @@ export class FlameRenderer {
     const fx = now?.effects;
     const fxOf = (n: PictureNode): Fx | null => fxOfModule(n.type, given?.knobs(n.id) ?? this.knobsIn.get(n.id) ?? {});
     const walks = this.stages.has('compose') && this.compiled && this.composed;
-    if (walks) this.walker ??= new Walker(gl, this.fin, this.now);
+    if (walks) {
+      this.walker ??= new Walker(gl, this.fin, this.now);
+      this.walker.steps = this.choicesOf;
+    }
     const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf, seeing) : null;
     const cover = this.wantsCover ? this.coverOf(given?.cover?.() ?? null) : null;
     if (!drawn && !walking) {

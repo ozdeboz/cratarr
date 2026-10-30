@@ -5,7 +5,7 @@ import { PARTS } from '../flame';
 import { WAVE_BEND, type Fluid } from '../fluid';
 import { FIELD_GLSL, GIANT_GLSL } from '../field';
 import { program } from '../sources/gl';
-import type { ShowParams } from '../chain-params';
+import type { ShowParams } from '../stage-values';
 import type { Light } from './light';
 import type { FlamePoints } from './points';
 import { BAD, FULL, none, uniforms } from './shared';

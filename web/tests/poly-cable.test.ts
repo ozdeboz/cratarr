@@ -3,7 +3,7 @@
 // copies merged gives what it gave over the copies, frame by frame.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRACKS, compare, record, track, type Engine } from './harness/aspects-record.ts';
+import { TRACKS, compare, record, track, type Engine } from './harness/recorded.ts';
 
 const { DEFAULTS } = await import('../src/lib/visuals/settings.svelte.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
@@ -49,7 +49,7 @@ const over = (convert: (p: PatchV2) => PatchV2): Engine => {
         from = s;
         p = convert(flatten(toV2(s, { follow: false })));
       }
-      return stepEngine(st, p!, {}, m, () => 0, dt, opts).aspects;
+      return stepEngine(st, p!, {}, m, () => 0, dt, opts);
     },
   };
 };

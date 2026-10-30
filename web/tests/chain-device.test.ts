@@ -3,7 +3,7 @@
 // patch without it draws nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRACKS, compare, record, todays, track, type Engine } from './harness/aspects-record.ts';
+import { TRACKS, compare, record, track, type Engine } from './harness/recorded.ts';
 
 const { DEFAULTS, FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
@@ -23,7 +23,7 @@ const over = (patch: (s: typeof DEFAULTS) => PatchV2): Engine => {
         from = s;
         p = patch(s);
       }
-      return stepEngine(st, p!, {}, m, () => 0, dt, opts).aspects!;
+      return stepEngine(st, p!, {}, m, () => 0, dt, opts);
     },
   };
 };
@@ -52,7 +52,7 @@ test('a blank slate: an empty patch, or one with only a modulator, runs and draw
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
     for (const p of [empty, lfo]) {
       const f = stepEngine(st, p, {}, m, () => 0, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
-      assert.equal(f.aspects, null);
+      assert.equal(f.device, null);
       if (p === lfo) assert.ok(Number.isFinite(f.outputs.osc));
     }
   }
@@ -69,7 +69,7 @@ test('the chain inside a device (its modules named cratarr/…) gives what it ga
   }
 });
 
-test("the patch is the truth: the chain's knobs turned in the patch alone give what today's engine gives with those settings", () => {
+test("the patch is the truth: the chain's knobs turned in the patch alone give what the same settings converted give", () => {
   const set = { tunnel: 0.7, flash: 1.6, haze: 0.4 };
   const turned = (p: PatchV2): PatchV2 => ({
     ...p,
@@ -87,7 +87,7 @@ test("the patch is the truth: the chain's knobs turned in the patch alone give w
   const wanted = { ...structuredClone(DEFAULTS), ...set, continuity };
   for (const id of TRACKS) {
     const t = track(id);
-    const a = record(todays(), t, wanted, 30, 15, false);
+    const a = record(over((s) => inDevice(flatten(toV2(s)))), t, wanted, 30, 15, false);
     // The settings as they were (the engine must not take these from them), the knobs turned in the patch.
     const b = record(over((s) => turned(inDevice(flatten(toV2(s))))), t, DEFAULTS, 30, 15, false);
     for (const [k, d] of compare(a, b)) assert.ok(d.most <= 1e-4, `${id}: ${k} differs by ${d.most} at frame ${d.frame}`);

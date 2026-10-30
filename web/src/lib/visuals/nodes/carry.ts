@@ -4,7 +4,7 @@
 import { FLOW_IN_LIGHT, Fluid, gridFor, type Loop } from '../fluid';
 import { loopFunction } from '../effects';
 import { program } from '../sources/gl';
-import type { CarryParams } from '../chain-params';
+import type { CarryParams } from '../stage-values';
 import type { Light } from './light';
 import { FULL, uniforms } from './shared';
 

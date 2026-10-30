@@ -2,7 +2,7 @@
 // maps a device's macro, nothing reaches past a device's edge: npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRACKS, track } from './harness/aspects-record.ts';
+import { TRACKS, track } from './harness/recorded.ts';
 const { DEFAULTS, FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
 const { DEVICES } = await import('../src/lib/visuals/devices.ts');
 const { asSet, flatten, toV2 } = await import('../src/lib/visuals/v2.ts');
