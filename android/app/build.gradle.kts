@@ -80,6 +80,15 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // JNA's native part (Spike B) for ABIs no device of the app's has.
+            excludes += setOf("lib/mips/**", "lib/mips64/**", "lib/armeabi/**")
+        }
+    }
+
+    // Spike B: the rules library as scripts/rules-android.sh builds it (not kept in the repository: an app built without it packs none).
+    sourceSets {
+        getByName("main") {
+            jniLibs.directories.add("build/rustJniLibs")
         }
     }
 }
@@ -141,6 +150,8 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.work.runtime)
+    // Spike B: the rules library's Kotlin (UniFFI) reaches it through JNA; the AAR carries JNA's own native part.
+    implementation(libs.jna) { artifact { type = "aar" } }
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
 }

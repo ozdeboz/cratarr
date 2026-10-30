@@ -70,3 +70,26 @@ the curve over the bridge, and this engine in the app.
   stopped.
 - **Anything interrupts anything:** a pause during any wind brakes it from its rate and rests where it got; a press the
   other way during a ramp turns it from the level it has reached (`turn`); nothing waits for a ramp's end.
+
+## Spike B: the rules crate in the Android app (2026-10-30, 0.11)
+
+The brake (`server/rules`'s `brake`) reached the app through UniFFI 0.29 (`server/rules-ffi`, its own workspace so the
+server and the page's WebAssembly stay without it), built in Docker by `scripts/rules-android.sh` (cargo-ndk, NDK r27c;
+the library is built, never kept in the repository). The device's `rustRules` switch, off by default, puts it under the
+tape's let-go plan (`Plan`); switched on, `RustRules` compares it with the app's Kotlin and logs what it found.
+
+Measured on the x86_64 emulator, a debug build (so both sides slower than a release build on a phone; the ratio is the
+point):
+
+- **The same answers:** 4,272 calls over 16 brakes like the tape's (speeds −128× to 128×, to 1× and to still), the
+  greatest difference from the Kotlin 0, bit for bit.
+- **Loading:** the first call 120 to 140 ms (JNA finds and binds the library); every later call is warm.
+- **A warm call:** about 100 µs through UniFFI and JNA, against 2 to 5 µs for the same sum in Kotlin. A frame that asks
+  the brake three times spends about 0.3 ms.
+- **Size:** the debug APK 1.6 MB larger (21.96 → 23.59 MB): the library 320 KB (arm64) and 350 KB (x86_64) at `opt-level = "z"`, and JNA's own
+  native part for every ABI it ships (trimmed to the app's).
+
+So the shared Rust works in the app and agrees with the page and the server, but a call costs too much to be made per
+value. The one tape engine (0075) crosses into Rust **once per frame or per audio buffer**, its loop inside Rust,
+handing back the whole frame's answers: never per sample, never per value. If even that is too dear on a phone, the
+hot path takes direct JNI (the `jni` crate) and UniFFI keeps the rest.
