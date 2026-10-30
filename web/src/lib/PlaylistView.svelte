@@ -129,7 +129,7 @@
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
@@ -153,6 +153,7 @@
   import LikeCurve from './LikeCurve.svelte';
   import type { Cell } from './Row.svelte';
   import { fit } from './columns.svelte';
+  import { headCells as headCellsOf, headSort, type Order } from './columnHead';
   import { fromAction } from 'svelte/attachments';
   import RepairTab from './RepairTab.svelte';
   import SyncTab from './SyncTab.svelte';
@@ -647,16 +648,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
   const cellsOf = (r: PlaylistRow): Cell[] | undefined =>
     cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, r) })) : undefined;
-  /** The list's head: its column names, a tap orders by one, a second turns it round. Plays and dates start most and
-   *  newest first. */
-  const headCells = $derived<Cell[]>(
-    cols.map((c) => ({
-      ...c,
-      text: c.label,
-      on: sortKey === c.id,
-      onclick: () => setSort(c.id, sortKey === c.id ? !sortDown : !!sortFields.find((f) => f.value === c.id)?.most),
-    })),
-  );
+  /** The list's head: its column names, Title and Length among them, a tap orders by one, a second turns it round,
+   *  as every table's head (lib/columnHead). */
+  const trackNow = $derived<Order<TrackOrder>>({ key: sortKey, down: sortDown });
+  const setTrackOrder = (o: Order<TrackOrder>) => setSort(o.key, o.down);
+  const headCells = $derived<Cell[]>(headCellsOf(cols, (id) => id as TrackOrder, trackNow, sortFields, setTrackOrder));
+  const trackHeads = $derived({ title: headSort<TrackOrder>('title', trackNow, sortFields, setTrackOrder), count: headSort<TrackOrder>('length', trackNow, sortFields, setTrackOrder) });
   // The same order in the pill's View (lib/ViewSheet).
   const listOrder = $derived({
     fields: sortFields,
@@ -716,6 +713,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // tracks, a step of the history. Playing the crate is as ever: its tracks in its order, whichever way it shows.
   const recordsView = $derived(!!crate && !crateEditing && crateViewOf(crate, prefs.crateViews) === 'records');
   const records = $derived(recordsView && shown ? orderRecords(recordsOf(shown), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : []);
+  // As a table (the owner, 2026-10-30: one table head): the Library's records' columns as far as a record has them,
+  // where the list has room (a crate's row is wider in front: its cover's 60 px and the rows' sides), and its head.
+  const recordCols = $derived(recordsView ? fit('albums', listWidth - 28, (id) => id in RECORD_COLUMNS) : []);
+  const recordNow = $derived<Order<RecordOrder>>(prefs.crateRecordSort);
+  const setRecordOrder = (o: Order<RecordOrder>) => (prefs.crateRecordSort = o);
+  const recordHeadCells = $derived<Cell[]>(headCellsOf(recordCols, (id) => RECORD_COLUMNS[id], recordNow, RECORD_ORDERS, setRecordOrder));
+  const recordHeads = $derived({ title: headSort<RecordOrder>('title', recordNow, RECORD_ORDERS, setRecordOrder) });
+  const recordCells = (rec: CrateRecord): Cell[] => recordCols.map((c) => ({ ...c, text: recordCell(rec, c.id, albumTotal(rec), clockText, addedOn) }));
   // An album's own count, from the Library's list (Cratarr's own albums: a row of another source has no album id).
   $effect(() => {
     if (recordsView && !library.view) untrack(() => void readLibrary(false));
@@ -2130,6 +2135,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           selecting={!!selecting}
           onselect={() => (selecting ? (selecting = null) : startSelect())}
         />
+        {#if recordCols.length}{@render recordHead()}{/if}
         <ol class="rows" class:selecting={!!selecting} bind:clientWidth={listWidth}>
           {#each records as rec (rec.key)}{@render recordRow(rec)}{/each}
         </ol>
@@ -2244,8 +2250,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
   <div class="column-head">
     <!-- Its end as wide as its rows' (rowEnd: the heart and the menu, the tick while selecting, nothing for the
          device's own music), so the columns share out the same room and line up (the owner, 2026-10-23). -->
-    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} action={onDevice ? undefined : endSpace}>
+    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} sorts={sorts ? trackHeads : undefined} action={onDevice ? undefined : endSpace}>
       {#snippet lead()}<span class="cover-space"></span>{/snippet}
+    </Row>
+  </div>
+{/snippet}
+
+<!-- A crate's records as a table: their column names, as the Library's records table and every list's head. -->
+{#snippet recordHead()}
+  <div class="column-head">
+    <Row size="large" as="div" head title="Title" cells={recordHeadCells} sorts={recordHeads}>
+      {#snippet lead()}<span class="cover-space"></span>{/snippet}
+      {#snippet action()}<span></span>{/snippet}
     </Row>
   </div>
 {/snippet}
@@ -2347,12 +2363,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <Row
       size="large"
       title={rec.title || 'Unknown album'}
+      cells={recordCols.length ? recordCells(rec) : undefined}
       label={selecting ? `${all ? 'Untick' : 'Tick'} ${rec.title}` : `Open ${rec.title}`}
       onclick={() => (selecting ? tickRecord(rec) : showRecord(rec.key))}
       attachMain={fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (recordMenu = rec)))}
     >
       {#snippet lead()}{#if first}{@render cover(first, source)}{/if}{/snippet}
-      {#snippet sub()}<span class="artist">{rec.artist ?? ''}</span><span class="album">{holdsLine(rec.at.length, albumTotal(rec))}</span>{/snippet}
+      {#snippet sub()}<span class="artist">{rec.artist ?? ''}</span>{#if !recordCols.some((c) => c.id === 'tracks')}<span class="album">{holdsLine(rec.at.length, albumTotal(rec))}</span>{/if}{/snippet}
       {#snippet action()}
         {#if selecting}
           <button class="tool tick" class:on={all} role="checkbox" aria-checked={all} aria-label={`Select ${rec.title}`} onclick={() => tickRecord(rec)}
