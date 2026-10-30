@@ -60,7 +60,7 @@
     if (!words.trim()) return;
     const read = (await readLine(words, ask)).filter((r) => !quickCrates.chips.some((c) => c.term.toLowerCase() === r.term.toLowerCase()));
     missed = read.filter((r) => !r.readings.length).map((r) => r.term);
-    quickCrates.chips = [...quickCrates.chips, ...read.flatMap((r) => chipOf(r.term, r.readings) ?? [])];
+    quickCrates.chips = [...quickCrates.chips, ...read.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? [])];
   }
   // A search's words (lib/quickCrates openQuickCrate), read as they come.
   $effect(() => {
