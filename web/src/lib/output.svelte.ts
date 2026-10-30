@@ -11,7 +11,7 @@ import { live, refresh } from './live.svelte';
 import { canPlayHere, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { rewindNow } from './ramping.svelte';
-import { follow, playOn, pointAt } from './playOn.svelte';
+import { drivenName, follow, playOn, pointAt } from './playOn.svelte';
 import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -250,6 +250,36 @@ export async function joinTo(output: typeof prefs.output) {
   await port().pauseToJoin();
   pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
+}
+
+/** The screen follows the music (0.9.19; the owner, 2026-10-30: "Every screen showing that player"): moved from the
+ *  player this screen shows to `name` (a handover elsewhere), it shows and drives that one, as if chosen in Play On;
+ *  nothing is moved or paused by it. */
+export function followTo(name: string) {
+  if (drivenName() === name) return;
+  pointAt(`player:${name}`);
+  follow(name);
+}
+if (typeof window !== 'undefined') {
+  $effect.root(() => {
+    // A screen driving a player whose music went to another since it began to: after it (a move told before this
+    // screen chose that player is not followed, so choosing it again stays the owner's choice).
+    let since = 0;
+    let shown: string | null = null;
+    $effect(() => {
+      const name = drivenName();
+      if (name !== shown) {
+        shown = name;
+        since = Date.now();
+      }
+      if (!name) return;
+      const moved = (playOn.players.find((p) => p.name === name) as { moved_to?: { player: string; at: number } } | undefined)?.moved_to;
+      if (!moved || moved.player === name) return;
+      const atMs = moved.at > 1e12 ? moved.at : moved.at * 1000;
+      if (atMs + 2000 < since) return;
+      untrack(() => followTo(moved.player));
+    });
+  });
 }
 
 /** Moves the music here. */
