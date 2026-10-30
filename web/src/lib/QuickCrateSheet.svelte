@@ -4,9 +4,11 @@
   // first tracks from the server's preview, and plays from there; where an artist is "like", the closeness curve
   // (lib/LikeCurve) loosens or tightens its cut. Save makes it one's own crate, the chips its conditions, and opens it;
   // Edit opens it in the crate builder. Closed unsaved, it is kept here among the last few (lib/quickCrates).
+  import { untrack } from 'svelte';
   import { coverUrl, createCrate, likeCurve, previewCrate, search, type PlaylistRow } from './api';
   import { CRATE, loadCrates, startCrate } from './crates.svelte';
   import LikeCurve from './LikeCurve.svelte';
+  import { curveKey, type CurveAsk } from './likeCurveAsk';
   import { hiddenLibraries } from './listFilter.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
@@ -83,17 +85,26 @@
   const seeds = $derived(seedsOf(chips));
   const own = $derived(keepsOwn(chips));
 
-  // The closeness curve, for the artists "like" (and whether their own tracks are in it).
+  // The closeness curve, for the artists "like" (and whether their own tracks are in it), counted among the tracks the
+  // other chips leave (the owner: "Filtered curve in 0.11"), so its count is the preview's; asked as the preview is,
+  // 300 ms after a change, and not again when only its cut moves.
   let curve = $state<number[] | null>(null);
+  const curveAsk = $derived<CurveAsk>({ of: seeds, within: conditions, without: hiddenLibraries(), own });
+  const curveAt = $derived(curveKey(curveAsk, prefs.source || undefined));
   $effect(() => {
-    if (!seeds.length) return void (curve = null);
+    void curveAt;
+    const ask = untrack(() => curveAsk);
+    if (!ask.of.length) return void (curve = null);
     let gone = false;
-    likeCurve(seeds, undefined, hiddenLibraries(), false, undefined, own).then(
-      (c) => !gone && (curve = c.alike),
-      () => !gone && (curve = null),
-    );
+    const t = setTimeout(() => {
+      likeCurve(ask, prefs.source || undefined).then(
+        (c) => !gone && (curve = c.alike),
+        () => !gone && (curve = null),
+      );
+    }, 300);
     return () => {
       gone = true;
+      clearTimeout(t);
     };
   });
 

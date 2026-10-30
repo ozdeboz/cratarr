@@ -909,7 +909,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       .then((d) => {
         nameLike(c, d.name);
         const v = d.conditions.find((x) => x.value.kind === 'like')?.value;
-        return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined, hiddenLibraries(), v.fresh, v.weights) : null;
+        return v && v.kind === 'like' ? likeCurve({ of: v.of, within: d.conditions, without: hiddenLibraries(), fresh: v.fresh, weights: v.weights, own: v.own }, prefs.source || undefined) : null;
       })
       .then(
         (k) => {
