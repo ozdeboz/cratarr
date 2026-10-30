@@ -6,7 +6,11 @@
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
   // the server makes them (0.11), Grab a crate (the owner, 2026-10-30; was Make a crate of this): Crates, the words read into a quick crate's sentence (lib/QuickCrate).
+  import { fromAction } from 'svelte/attachments';
   import { includeArtist, takeBackExcluded } from './api';
+  import { longpress } from './longpress';
+  import WorkMenu from './WorkMenu.svelte';
+  import WorkSheet from './WorkSheet.svelte';
   import { loadExcludedArtists } from './excludedArtists.svelte';
   const EVERYWHERE = 'excluded-everywhere:';
   import Cover from './Cover.svelte';
@@ -56,7 +60,12 @@
   const DEEP_KINDS = ['album', 'artist', 'playlist', 'crate'];
   const KNOWN = ['spotify', 'suggested', 'requested'];
   const deep = (it: SearchResult) => DEEP_KINDS.includes(it.kind) && it.matched.some((m) => m.on !== 'name');
+  /** A work found (0.12): its sheet over the results, which stay; its menu (a long-press, a right-click or ⋮). */
+  let workOpen = $state<{ mbid: string; title: string } | null>(null);
+  let workMenu = $state<{ mbid: string; title: string } | null>(null);
+  const workOf = (it: SearchResult) => ({ mbid: it.subject.slice('work:'.length), title: it.title });
   function open(it: SearchResult) {
+    if (it.kind === 'work') return void (workOpen = workOf(it));
     leaveSearch(deep(it));
     if (it.subject.startsWith('#')) location.hash = it.subject;
     else if (it.kind === 'missing')
@@ -104,12 +113,24 @@
 
 {#snippet found(it: SearchResult & { track?: string })}
   <li>
+    {#if it.kind === 'work'}{@render work(it)}{:else}
     <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
       {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
     </Row>
+    {/if}
   </li>
+{/snippet}
+
+<!-- A work found (0.12): its composers as its second line, then its catalogue and recordings; a tap opens it, a
+     long-press, a right-click or ⋮ its menu (lib/WorkMenu). -->
+{#snippet work(it: SearchResult)}
+  <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={fromAction(longpress, () => () => (workMenu = workOf(it)))}>
+    {#snippet front()}<span class="art"><Cover src={it.cover ?? null} /></span>{/snippet}
+    {#snippet sub()}{(it.composers ?? []).map((c) => c.name).join(', ')}{#if it.sub}<span class="why">{it.composers?.length ? ' · ' : ''}{it.sub}</span>{/if}{/snippet}
+    {#snippet action()}<button class="tool" aria-label="{it.title}: its menu" onclick={() => (workMenu = workOf(it))}><Icon name="moreVert" size={22} /></button>{/snippet}
+  </Row>
 {/snippet}
 
 {#if q && globalSearch.all}
@@ -164,6 +185,9 @@
 {/if}
 <!-- A server that cannot search (before 0.9.3) or did not answer: nothing more than the page's own. -->
 
+{#if workMenu}{@const w = workMenu}<WorkMenu mbid={w.mbid} title={w.title} onopen={() => (workOpen = w)} onclose={() => (workMenu = null)} />{/if}
+{#if workOpen}<WorkSheet mbid={workOpen.mbid} title={workOpen.title} onclose={() => (workOpen = null)} />{/if}
+
 <style>
   /* The pages' own side gutter (the owner: too little room on the left), outside any page's <main>. */
   .global {
@@ -175,6 +199,19 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* A work's ⋮ (0.12), as WorkSheet's. */
+  .tool {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
   }
 
   .art {

@@ -81,6 +81,13 @@ export type WorkLine<R> =
   | { kind: 'work'; work: { mbid: string; title: string }; rows: R[]; at: number[] }
   | { kind: 'track'; row: R; at: number; movement: string | null };
 
+/** What a work's menu plays when no movements are given (0.12: a work found in search): its first recording's tracks
+ *  (the oldest, as the server lists them) in the work's order; none without a recording. */
+export function firstRecording(w: { parts: readonly { mbid: string; number?: number | null }[]; recordings: readonly { tracks: readonly { id: string; part?: string | null }[] }[] }): string[] {
+  const first = w.recordings[0];
+  return first ? inPartOrder(first.tracks, w.parts).map((t) => t.id) : [];
+}
+
 /** An album's rows grouped by work (the owner: "a work heading over its movements"): two or more tracks in a row whose
  *  works are parts of the same work go under that work's heading. A track whose work has no parent yet (MusicBrainz's
  *  parts come in over days), one alone, or none stays as it is, so a heading is never half there. */
