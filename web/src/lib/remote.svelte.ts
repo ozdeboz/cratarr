@@ -42,7 +42,8 @@ export const coverFailed = (src: string) => (failed[src] = true);
 // Covers ready ahead (the owner, 2026-10-30: Next within an album darkened the cover and turned the ring, though what
 // comes next and what came before are known): the next track's cover and the one before are loaded and decoded while
 // this one plays, and the last few shown are kept, so Next and Previous show theirs at once. Held here, so the browser
-// keeps them decoded.
+// keeps them decoded. Not while the tape winds (lib/oneInFlight: over plain http each request holds one of six
+// connections; a wind through the queue changes track every second or two, and its stream comes first).
 const WARM_KEEP = 4;
 const warm = new Map<string, HTMLImageElement>();
 const warming = new Set<string>();
@@ -53,6 +54,7 @@ function keepWarm(src: string, img: HTMLImageElement) {
 }
 $effect.root(() => {
   $effect(() => {
+    if (rewindNow.on) return;
     const np = playing();
     const next = np?.upcoming[0];
     const before = live.before;
