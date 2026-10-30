@@ -240,3 +240,6 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0085: Offline first, in five steps](0085-offline-first.md): accepted as a plan, beside 0.11 to 0.14. The apps
   carry their own pages; Downloads an offline shelf; nothing done offline lost; the whole library's index on the
   device; crates and the queue on the device, through the shared Rust core. The merge rules are the owner's to set.
+- [0086: Classical's works and movements](0086-classical-works-and-movements.md): proposed for 0.12, the owner's
+  choices made. A composer's works first, then their records; a work opens its recordings, each playable; an album's
+  movements under their work's heading. Behind the capability `works`; a5's API draft.

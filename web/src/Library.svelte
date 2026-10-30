@@ -22,6 +22,8 @@
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
   import ComposerList from './lib/ComposerList.svelte';
+  import ComposerWorks from './lib/ComposerWorks.svelte';
+  import { can } from './lib/capabilities.svelte';
   import { classical, followAddress } from './lib/classical.svelte';
   import { classicalListed, kindNow } from './lib/recordKinds';
 
@@ -160,6 +162,8 @@
     <ComposerList />
   {:else}
     {#if composer}<h2 class="composer">{composer.name}</h2>{/if}
+    <!-- Their works first, then their records (0.12, decision 0086), where the server knows works. -->
+    {#if composer && can('works') === true}<ComposerWorks composer={composer.key} />{/if}
     <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
