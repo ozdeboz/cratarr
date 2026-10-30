@@ -1,15 +1,14 @@
 // A track's snippet heard (0.12, the owner's mockup A2; lib/snippet picks it): from a track's menu as it opens, or from
 // a crate search row's button. On this device only, never on a Play On player, never touching the queue: in its own
 // audio element, from the stream at its start, faded in and out; what plays here eased under it (DUCK) and back. In
-// the app the app plays it (its own sound beside the app's player would take Android's audio focus from it), where the
-// app can; else the menu stays silent. One at a time: a new one ends the one before.
+// the app the app plays it (the page's own sound beside the app's player would take Android's audio focus from it).
+// One at a time: a new one ends the one before.
 import { BANDCAMP } from './bandcampPreview';
-import { appInfo, inApp, onAppSnippet, toApp } from './app.svelte';
+import { inApp, onAppSnippet, toApp } from './app.svelte';
 import { local, pageVolume, setSnippetDuck } from './localPlayer.svelte';
 import { playsHere } from './output.svelte';
 import { playCollection } from './play.svelte';
 import { playing, seekTo } from './remote.svelte';
-import { can } from './capabilities.svelte';
 import { DUCK, FADE_MS, SNIPPET_S, START_DELAY_MS, duckGain, snippetGain, snippetOf, type Stretch } from './snippet';
 import { decode } from './visuals/beats';
 import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
@@ -28,13 +27,12 @@ export const snippetable = (t: SnippetTrack | null | undefined) => !!t && t.sour
 export const lengthOf = (t: SnippetTrack) => t.duration_secs ?? (t.source === BANDCAMP ? (heardOf(t.source, t.id)?.duration_secs ?? null) : null);
 
 /** A track's stored beats (seconds), null where none is stored; asked once per track, never worked out for a menu
- *  (2026-10-30: a menu never asks the server to work anything out: `stored=1` answers 404 rather than decode), and only
- *  from a server that says it can (`beats_stored`; one before would work them out on demand). */
+ *  (2026-10-30: a menu never asks the server to work anything out: `stored=1` answers 404 rather than decode). */
 const storedBeats = new Map<string, Float64Array | null>();
 let beatsAsk: AbortController | null = null;
 function askBeats(t: SnippetTrack) {
   const key = keyOf(t);
-  if (storedBeats.has(key) || can('beats_stored') !== true) return;
+  if (storedBeats.has(key)) return;
   // One at a time: a new menu's ask cancels the one before.
   beatsAsk?.abort();
   const ctl = (beatsAsk = new AbortController());
@@ -120,7 +118,6 @@ export function startSnippet(t: SnippetTrack) {
 
 function sound(t: SnippetTrack, s: Stretch) {
   if (inApp) {
-    if (!appInfo.snippets) return;
     toApp({ type: 'snippet', play: { source: t.source, id: t.id, from_ms: Math.round(s.from * 1000), to_ms: Math.round(s.to * 1000), fade_ms: FADE_MS, duck: DUCK } });
     snippet.sounding = true;
     return;
