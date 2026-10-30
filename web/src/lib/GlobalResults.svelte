@@ -111,10 +111,12 @@
   let menu = $state<Menu | null>(null);
   function menuOf(it: SearchResult & { track?: string }): Menu | null {
     const album = /^album:([^/]+)\/(.+)$/.exec(it.subject);
-    // A track's line is its artist and its album, as the server writes it.
+    // A track's artist, album and length as the server gives them apart from its line (0.12).
     if (it.kind === 'track' && it.track && album) {
-      const [artist, ...rest] = (it.sub ?? '').split(' · ');
-      return { kind: 'track', track: { source: album[1], id: it.track, name: it.title, artist: artist || null, album: rest.join(' · ') || null, album_id: album[2] } };
+      return {
+        kind: 'track',
+        track: { source: album[1], id: it.track, name: it.title, artist: it.artist ?? null, album: it.album ?? null, album_id: it.album_id ?? album[2], duration_secs: it.duration_secs ?? null },
+      };
     }
     if (it.kind === 'album' && album) return { kind: 'album', source: album[1], id: album[2], title: it.title, artist: (it.sub ?? '').split(' · ')[0] || null };
     const artist = /^artist:([^/]+)\/(.+)$/.exec(it.subject);

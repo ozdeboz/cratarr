@@ -16,8 +16,12 @@ export type SearchResult = {
   title: string;
   sub?: string | null;
   cover?: string | null;
-  /** The artist, where a result needs it apart from its line (an album not in the library: to look it up). */
+  /** The artist, where a result needs it apart from its line (an album not in the library: to look it up; a track, 0.12). */
   artist?: string | null;
+  /** A track's album, its id and its length (0.12): for its menu, apart from its line. */
+  album?: string | null;
+  album_id?: string | null;
+  duration_secs?: number | null;
   /** An album not in the library: its page on Bandcamp, where an open found it (0.9.5). */
   bandcamp?: string | null;
   /** An album not in the library, asked for: where it stands (lib/CoverStatus). */
