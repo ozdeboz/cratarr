@@ -125,6 +125,32 @@ abstract class FetchSnapclient : DefaultTask() {
     }
 }
 
+/**
+ * The app's own copy of the page (decision 0085, step 1): the web app's build (web/dist, as `pnpm build` leaves it) packed
+ * under the assets' `page/`, answered in place of the server's (BundledPage.kt). Without a build there, the app goes to
+ * the server's page as before.
+ */
+abstract class BundlePage : DefaultTask() {
+    @get:InputFiles @get:Optional abstract val dist: DirectoryProperty
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun bundle() {
+        val out = outputDir.get().asFile.resolve("page")
+        out.deleteRecursively()
+        val from = dist.orNull?.asFile?.takeIf { it.resolve("build.json").isFile } ?: return
+        from.copyRecursively(out, overwrite = true)
+        // The backdrops' and skies' pictures (17 MB of the page's 21) stay the server's: asked for there, then kept by
+        // the page's service worker, so only an app that never reached its server goes without them.
+        for (heavy in listOf("backdrops", "skies")) out.resolve(heavy).deleteRecursively()
+    }
+}
+
+val bundlePage = tasks.register<BundlePage>("bundlePage") {
+    dist.set(rootProject.layout.projectDirectory.dir("../web/dist"))
+    outputDir.set(layout.buildDirectory.dir("page"))
+}
+
 val fetchSnapclient = tasks.register<FetchSnapclient>("fetchSnapclient") {
     url.set("https://github.com/snapcast/snapdroid/releases/download/v0.29.0.2/Snapcast-signed-v0.29.0.2.apk")
     sha256.set("cd835c12ae3bf084ef06064333599040559a871fee48e83f3539e89224b40010")
@@ -135,6 +161,7 @@ val fetchSnapclient = tasks.register<FetchSnapclient>("fetchSnapclient") {
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(fetchSnapclient, FetchSnapclient::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(bundlePage, BundlePage::outputDir)
     }
 }
 
