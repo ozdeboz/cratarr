@@ -7,6 +7,7 @@ import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
+import { savedOutput } from './player/commands';
 
 /** The bands' Speed (lib/BandSlider): Ultra slow to Radical, times each look's own pace (Radical: four times the first
  *  Lively, Ultra slow a seventh of the first Calm; the owner, 2026-10-24). */
@@ -255,9 +256,9 @@ export type Prefs = {
   healthPart: string;
   /** Each kind of list's columns in the owner's order (decision 0042, lib/columns), by id. */
   columns: Partial<Record<string, string[]>>;
-  /** Where music plays (decisions 0019, 0022, 0031): on a server's player (`remote`), in this browser or app (`local`),
-   *  or on one of Cratarr's own players by name (`player:Salon tablet`). */
-  output: 'remote' | 'local' | `player:${string}`;
+  /** Where music plays (decisions 0022, 0031): in this browser or app (`local`), or on one of Cratarr's own players by
+   *  name (`player:Salon tablet`). The media server's player (`remote`) went in 0.12 (lib/player/commands savedOutput). */
+  output: 'local' | `player:${string}`;
   /** Playlists pinned to the top of the Playlists page, in the order pinned (ids). */
   pinned: string[];
   /** The Playlists page's filter section (the filter and the order) is shown. */
@@ -621,8 +622,8 @@ function read(): Prefs {
       if (saved.columns && typeof saved.columns === 'object')
         for (const [k, v] of Object.entries(saved.columns))
           if (Array.isArray(v)) p.columns[k] = v.filter((x: unknown): x is string => typeof x === 'string');
-      if (saved.output === 'remote' || saved.output === 'local' || (typeof saved.output === 'string' && saved.output.startsWith('player:')))
-        p.output = saved.output;
+      const output = savedOutput(saved.output);
+      if (output) p.output = output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
       if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
       if (saved.crateViews && typeof saved.crateViews === 'object')
