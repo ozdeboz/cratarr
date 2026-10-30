@@ -5,6 +5,7 @@
   // one by one (the owner: "more deeper information": the albums waiting, the playlists and their missing tracks, the
   // folders not heard, the slow pages, the files), each opening where it is; and where to deal with it all. Beside the
   // list on a roomy window (no ✕ there), over it on a phone.
+  import { findsTracks, offers } from './capabilities.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
@@ -130,7 +131,7 @@
       {#if item.playlist}<HealthMissing playlist={item.playlist} />{/if}
       {#if incoming && item.album}<HealthIncoming source={item.album[0]} album={item.album[1]} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- Track numbers off (unnumbered ones too): renumbered as a release has them (lib/HealthRenumber). -->
-      {#if problem === 'library:track-numbers' && item.album?.[0] === 'cratarr'}<HealthRenumber album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
+      {#if problem === 'library:track-numbers' && item.album?.[0] === 'cratarr' && offers('renumber')}<HealthRenumber album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- Year, genre, album artist, MusicBrainz release, a rule's names: the fix proposed, Apply (lib/HealthFixes). -->
       {#if fixable && item.album?.[0] === 'cratarr'}<HealthFixes finding={problem} album={item.album[1]} track={item.track ?? null} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- No cover: Change cover, straight on its choices (Upload and an address in its corner). -->
@@ -142,7 +143,7 @@
       {/if}
       <!-- A track's file cut off or breaking off (2026-10-28): a better copy of it, as the track's menu finds one. -->
       {#if item.track && item.album && me.admin}
-        <button class="act" onclick={() => (betterOf = item.track!)}>Find a better copy<Icon name="chevronRight" size={18} /></button>
+        {#if findsTracks()}<button class="act" onclick={() => (betterOf = item.track!)}>Find a better copy<Icon name="chevronRight" size={18} /></button>{/if}
         {#if betterOf === item.track}
           <ReplaceTrackSheet source={item.album[0]} album={{ id: item.album[1], title: '' }} replace={{ source: item.album[0], id: item.track }} onclose={() => ((betterOf = null), loadHealth())} />
         {/if}
