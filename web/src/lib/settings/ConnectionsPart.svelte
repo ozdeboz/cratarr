@@ -6,6 +6,7 @@
   // Remove last (the settings' North Star, 2026-10-19; the owner, 2026-10-25: Last.fm and Discogs the same way, no
   // longer rows of their own kind). Headed by what each is for, generic (the owner, 2026-10-25: Media servers, Download
   // stack, Discovery and metadata, Home automation), which the settings search finds too.
+  import { offers } from '../capabilities.svelte';
   import type { Field } from '../api';
   import {
     getAcoustid,
@@ -80,7 +81,8 @@
       (d) => ((discogs = d), (discogsKnown = true)),
       (e) => ((discogs = null), (discogsKnown = !missingCall(e))),
     );
-  loadDiscogs();
+  // Asked only where the server's list says it has the setting (0.11, lib/capabilities); a server before it, as before.
+  if (offers('discogs_settings')) loadDiscogs();
   let discogsForm = $state<{ key: string; secret: string; busy: boolean; error: string | null } | null>(null);
   // slskd and AcoustID (0.9.8: single-track replacement): a missing track fetched from Soulseek, fingerprinted
   // against the release, added to its album. Each saved at once, as Discogs; slskd's key never comes back, nor AcoustID's.
@@ -95,7 +97,7 @@
       (d) => ((slskd = d), (slskdKnown = true)),
       (e) => ((slskd = null), (slskdKnown = !missingCall(e))),
     );
-  loadSlskd();
+  if (offers('slskd_settings')) loadSlskd();
   type SlskdForm = { url: string; key: string; folder: string; busy: boolean; error: string | null };
   let slskdForm = $state<SlskdForm | null>(null);
   let acoustid = $state<AcoustidSetting | null>(null);
@@ -105,7 +107,7 @@
       (d) => ((acoustid = d), (acoustidKnown = true)),
       (e) => ((acoustid = null), (acoustidKnown = !missingCall(e))),
     );
-  loadAcoustid();
+  if (offers('acoustid_settings')) loadAcoustid();
   let acoustidForm = $state<{ key: string; busy: boolean; error: string | null } | null>(null);
   // MusicBrainz (the owner, 2026-10-25: visible, without a key): how its questions stand, read as the part opens; a
   // server before it has no row.
@@ -124,7 +126,7 @@
         if (!missingCall(e) && ++mbTries < 4) mbRetry = setTimeout(loadMb, 5000);
       },
     );
-  loadMb();
+  if (offers('musicbrainz_settings')) loadMb();
   $effect(() => () => clearTimeout(mbRetry));
   /** Its last answer failed: an error later than the last answer. */
   const mbFailing = $derived(!!mb?.last_error && (mb.last_ok === null || mb.last_error.at > mb.last_ok));

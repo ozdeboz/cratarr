@@ -26,6 +26,7 @@ import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
 import { libraryShown } from './sources.svelte';
 import { toast } from './toast.svelte';
+import { can } from './capabilities.svelte';
 
 /** The Library's list (GET /api/albums) as last read: the page shows it, and the album panel's menu finds the album's
  *  library there (what it may do with it). */
@@ -105,14 +106,16 @@ export async function playListedAlbum(source: string, a: Pick<ListedAlbum, 'id' 
 
 /** Several albums' tracks, one album after another, in each album's order (an album's select bar). */
 export async function tracksOfAlbums(list: { source: string; a: ListedAlbum }[]): Promise<LocalTrack[]> {
-  // One call for them all (0.9.4: thousands of album views at once timed out, "cannot reach", the owner 2026-10-25).
-  try {
-    const { tracks } = await albumsTracks(list.map(({ source, a }) => ({ source, id: a.id })));
-    return tracks.map((t) => ({ source: t.source, id: t.id, name: t.name, artist: t.artist ?? null, album: t.album ?? null, album_id: t.album_id, duration_secs: t.duration_secs ?? null }));
-  } catch (e) {
-    // A server before it (no such call): album by album as below; anything else is the error it is.
-    if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) throw e;
-  }
+  // One call for them all (0.9.4: thousands of album views at once timed out, "cannot reach", the owner 2026-10-25),
+  // not asked where the server's list (0.11) says it has no such call.
+  if (can('batches') !== false)
+    try {
+      const { tracks } = await albumsTracks(list.map(({ source, a }) => ({ source, id: a.id })));
+      return tracks.map((t) => ({ source: t.source, id: t.id, name: t.name, artist: t.artist ?? null, album: t.album ?? null, album_id: t.album_id, duration_secs: t.duration_secs ?? null }));
+    } catch (e) {
+      // A server before it (no such call): album by album as below; anything else is the error it is.
+      if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) throw e;
+    }
   // A few albums at a time: thousands at once waited in the browser's line until they timed out.
   const views: { r: Awaited<ReturnType<typeof albumView>>; a: ListedAlbum }[] = new Array(list.length);
   let next = 0;

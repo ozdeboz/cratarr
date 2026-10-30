@@ -3,6 +3,7 @@
 // analysis here and Beat This! (Libraries), the address players reach playing in step on (Devices). Settings wins once
 // saved; `from_env` says which the environment still sets. One read for the three parts; each change saved at once.
 // (GET/PUT /api/settings/server-runtime, administrators'.)
+import { can } from './capabilities.svelte';
 
 export type ServerRuntime = {
   proxies: string[];
@@ -41,6 +42,8 @@ let asked = false;
 /** Read once (a server before 0.9.8 has none: the rows stay away). */
 export function loadRuntime() {
   if (asked) return;
+  // Not asked where the server's list says it has none (0.11, lib/capabilities: server_runtime); the rows stay away.
+  if (can('server_runtime') === false) return void (runtime.known = false);
   asked = true;
   call().then(
     (v) => ((runtime.value = v), (runtime.known = true)),

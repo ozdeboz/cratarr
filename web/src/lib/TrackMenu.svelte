@@ -16,6 +16,7 @@
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
+  import { can, findsTracks } from './capabilities.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { leavePlayer } from './navStep.svelte';
   import { port } from './player/port.svelte';
@@ -78,7 +79,8 @@
   }: {
     onclose: () => void;
     track?: MenuTrack | null;
-    start?: 'menu' | 'lists';
+    /** `versions`: its Other versions at once (an album's row's mark, lib/PlaylistView). */
+    start?: 'menu' | 'lists' | 'versions';
     queue?: QueuePlace | null;
     /** Opened from a component over the whole page (the full player): its playlists' step offers the Playlists page. */
     onplaylists?: (() => void) | null;
@@ -161,14 +163,21 @@
   // Other versions (0.10): the library's other recordings of its work (MusicBrainz's work links), asked as the menu
   // opens where the list says there are some, or does not say (a server without them answers 404: none shown).
   let versions = $state<TrackVersions | null>(null);
+  // Answered (with none, or failed): what a sheet opened at its versions says then.
+  let versionsAnswered = $state(false);
   $effect(() => {
     const now = t;
     versions = null;
-    if (!now || now.source !== 'cratarr' || now.has_versions === false) return;
+    versionsAnswered = false;
+    if (!now || now.source !== 'cratarr' || now.has_versions === false || can('other_versions') === false) return void (versionsAnswered = true);
     let gone = false;
     getTrackVersions(now.source, now.id).then(
-      (v) => !gone && v?.versions?.length && (versions = v),
-      () => {},
+      (v) => {
+        if (gone) return;
+        if (v?.versions?.length) versions = v;
+        versionsAnswered = true;
+      },
+      () => !gone && (versionsAnswered = true),
     );
     return () => (gone = true);
   });
@@ -446,7 +455,7 @@
   {:else if e === 'adjustBpm'}
     {#if me.admin && !onDevice && hasWave}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
   {:else if e === 'betterCopy'}
-    {#if me.admin && t.source === 'cratarr' && t.album_id}<MenuEntry icon="search" label="Find a better copy…" onclick={() => (betterOpen = true)} />{/if}
+    {#if me.admin && t.source === 'cratarr' && t.album_id && findsTracks()}<MenuEntry icon="search" label="Find a better copy…" onclick={() => (betterOpen = true)} />{/if}
   {:else if e === 'alwaysAccept'}
     {#if asker}
       {@const on = mine.autoAccept.includes(asker)}
@@ -525,6 +534,8 @@
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}
       </PlaylistToggles>
+    {:else if step === 'versions' && !versions}
+      {#if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
     {:else if step === 'versions' && versions}
       {@const v = versions}
       <p class="work">{v.work.title}{#if v.composers.length} · {v.composers.map((c) => c.name).join(', ')}{/if}</p>

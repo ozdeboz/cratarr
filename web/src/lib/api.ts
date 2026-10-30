@@ -806,6 +806,8 @@ export type PlaylistRow = {
   album_id?: string;
   /** A crate's row: how many tracks its album has (0.10; Cratarr's own library's rows). */
   album_tracks?: number;
+  /** An album's row on Cratarr's own library: the library holds other recordings of its work (0.10, Other versions). */
+  has_versions?: boolean;
 };
 
 /** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */
@@ -1112,6 +1114,8 @@ export type Me = {
   sessions?: UserSession[];
 };
 export const getMe = () => quietly<Me>('/api/me');
+/** What this server can do (0.11, lib/capabilities): the names of what it has configured and what its code supports. */
+export const getCapabilities = () => quietly<import('./generated/Capabilities').Capabilities>('/api/capabilities');
 /** Ends one of one's own sign-ins, or takes one of one's own devices away. */
 export const endMySession = (id: string) => request<void>(`/api/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -2435,11 +2439,18 @@ export const albumsTracks = (albums: { source: string; id: string }[]) =>
 /** Whether the server has 0.9.4's calls for many at once (its library tracks list answers), asked once: a call it
  *  already had with a new meaning (append's only_new) is used only then. */
 let newer: Promise<boolean> | null = null;
-export const hasBatches = () =>
-  (newer ??= quietly(`/api/library/tracks?${new URLSearchParams({ offset: '0', limit: '1' })}`).then(
+export const hasBatches = (): Promise<boolean> => {
+  // The server's list says it, where it has one (0.11, lib/capabilities); else asked as before.
+  const said = canBatch?.();
+  if (said !== null && said !== undefined) return Promise.resolve(said);
+  return (newer ??= quietly(`/api/library/tracks?${new URLSearchParams({ offset: '0', limit: '1' })}`).then(
     () => true,
     (e) => !(e instanceof ApiError && (e.status === 404 || e.status === 405)),
   ));
+};
+/** The capability list's word on batches, given by lib/capabilities (which imports this module, so not the other way). */
+let canBatch: (() => boolean | null) | null = null;
+export const tellBatches = (f: () => boolean | null) => void (canBatch = f);
 /** Those of `ids` a playlist does not hold yet, added in one call (0.9.4). */
 export const appendNew = (id: string, source: string, ids: string[]) =>
   post<{ playlist: string; added: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/append`, { source, ids, only_new: true });

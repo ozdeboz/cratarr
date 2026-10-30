@@ -47,7 +47,7 @@
   import { shownPlaylists } from './output.svelte';
   import { clockText, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite, playPause, rampInert, shownPaused } from './remote.svelte';
   import { toast } from './toast.svelte';
-  import { accept, askedOf, askerName, decline, follow, followingNow, loadAsked, playerShown, waiting } from './following.svelte';
+  import { accept, askedOf, askerName, decline, follow, followingNow, loadAsked, playerShown, requestsOffered, waiting } from './following.svelte';
   import { mine } from './mySettings.svelte';
   import { prefs } from './prefs.svelte';
   import { ACCEPTED_MS, requestsShown, stillComing, withRequests } from './queueRequests';
@@ -324,7 +324,7 @@
           <span class="title">Queue</span>
           <span class="tools">
             <!-- The tracks asked for, shown or hidden, how many on it (0.10). -->
-            {#if follow.served && (mine.followable || askedCount > 0)}
+            {#if requestsOffered() && (mine.followable || askedCount > 0)}
               <button
                 class="asked-toggle"
                 class:lit={showAsked}
