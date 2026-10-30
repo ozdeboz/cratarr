@@ -1,6 +1,6 @@
 # 0084: Each user's own music
 
-- Status: accepted as a plan (the owner, 2026-10-30), for 0.11 or 0.12; not built
+- Status: accepted as a plan (the owner, 2026-10-30), for 0.13 (after 0.11 quick crates and 0.12 modes per server); not built
 - Date: 2026-10-30
 - Builds on: 0044 (folders), 0051 (several users), 0070 (requests), 0080 (single-track intake and its gate),
   0058 (Download…)
@@ -20,7 +20,9 @@ their own music, not incoming. There is no new "saved" mark: the Favourite (the 
 **Seeing.** Every user can switch every library and every Incoming on or off for themselves; switching only hides from
 one's own view. Defaults: every library on; one's own music on; the owner's Lidarr Incoming on (open to everyone);
 other users' own music off. Radio and Autoplay's choice of libraries (0.9.5), the crates' library switches and the
-Subsonic apps' music folders already work per library, so each user's music joins them as a library.
+Subsonic apps' music folders already work per library, so each user's music joins them as a library. With 0.12's
+modes per server, these switches stay within Cratarr's own mode (the owner, 2026-10-30: "Switches only within
+Cratarr"): Music, Incoming and users' own music; other servers become modes of their own.
 
 **What arrives, and how.**
 
