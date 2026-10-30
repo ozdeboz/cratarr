@@ -695,8 +695,6 @@ export type ExportWhat =
 /** The files as they are; hi-res ones at CD quality (16-bit FLAC, 44.1 kHz); lossless ones as Opus, or as MP3 at 320
  *  kb/s or V0 (0.9.19; lossy ones always stay as they are). */
 export type ExportFormat = 'original' | 'flac-cd' | 'opus' | 'mp3-320' | 'mp3-v0';
-/** One .zip, or the files one by one (0.9.19: in the app, into a folder picked there; the browser keeps the zip). */
-export type ExportPackage = 'zip' | 'files';
 /** One folder, or Artist/Album folders. */
 export type ExportLayout = 'flat' | 'folders';
 /** An export (decision 0058): what, its format (Opus at `bitrate` kb/s: 96, 128, 160, 256) and layout; playlists with
@@ -710,22 +708,18 @@ export type ExportRequest = {
   tracks: boolean;
   combine: string | null;
   m3u: boolean;
-  /** A server before 0.9.19 makes a zip whatever this says. */
-  package: ExportPackage;
 };
-/** A readied export's files, as `package: 'files'` lists them (each from `exportFileUrl`). */
-export type ExportFile = { path: string; bytes?: number };
 /** What an export will hold, before starting: `bytes` only with tracks, `estimate` when converted files make it a
  *  guess; missing tracks are left out. */
 export type ExportPreview = { tracks: number; missing: number; bytes: number | null; estimate: boolean };
 export const exportPreview = (c: ExportChoice | ExportRequest) =>
   quietly<ExportPreview>('/api/export/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) });
-/** Readies an export on the server for a few minutes; its download is then a plain link (`exportDownloadUrl`). */
+/** Readies an export on the server for a few minutes; its download is then a plain link (`exportDownloadUrl`): one
+ *  file as itself, several as one zip (0.9.19; the owner, 2026-10-30: "Multiple files should always be a zip. A single
+ *  file, always a single file, not a zip"), `name` its name either way. */
 export const prepareExport = (r: ExportRequest) =>
-  request<{ token: string; name: string; files?: ExportFile[] }>('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(r) });
+  request<{ token: string; name: string }>('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(r) });
 export const exportDownloadUrl = (token: string) => `/api/export/${encodeURIComponent(token)}`;
-/** One of a readied export's files (`package: 'files'`). */
-export const exportFileUrl = (token: string, path: string) => `/api/export/${encodeURIComponent(token)}/file?${new URLSearchParams({ path })}`;
 /** The download itself: a link, so the browser shows its progress and can cancel it. */
 export function exportUrl(c: ExportChoice): string {
   const q = new URLSearchParams();

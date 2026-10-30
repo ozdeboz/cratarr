@@ -109,6 +109,11 @@ every file under the names the zip would give them (the formats' treatment chose
 names are known before anything is converted), and each is fetched on its own, converted as it is asked for. A
 Bandcamp preview (0071) is never exported: it is left out as missing.
 
+Amendment (2026-10-30, later, 0.9.19): **one file or one zip, never loose files.** The owner: "Multiple files should
+always be a zip. A single file, always a single file, not a zip." No packaging to choose: an export of one file (one
+track, no playlist file) is that file, converted as its format says; several are one zip. In the app it is saved
+where its user picks (Android's save dialog), in a browser it is a link's download. The loose files above are gone.
+
 ## Consequences
 
 - Albums and playlists: a long-press opens the menu (before: it started selecting); Select is the header's button.
@@ -137,8 +142,8 @@ context menu population rules." Chosen in a question set, for 0.9.19:
   was) or as files; in an installed page to this browser or as files; in the browser files only. **Sync to this
   device** (the table's Keep, renamed by the owner 2026-10-24) stays the switch beside it.
 - **Formats:** MP3 at 320 kb/s and MP3 V0 join the original files, FLAC at CD quality and Opus ("Keep them, add MP3").
-  **Packaging:** one zip or the files one by one ("One zip or loose files"); the files one by one only in the app,
-  which writes them into a folder picked there. The layout switch stays; no new folder or file-name patterns.
+  **Packaging:** none to choose (amended above): one file as itself, several as one zip. The layout switch stays; no
+  new folder or file-name patterns.
 - **Bandcamp's previews** queue as any track ("Every player"): Play, Shuffle, Play next and Add to queue on a
   Bandcamp album's menu and its tracks', on this page, the app and Play On, the server streaming the preview. Never
   Download or Keep ("No Download on Bandcamp"): they are previews, bought on Bandcamp; never in a playlist (0071).
