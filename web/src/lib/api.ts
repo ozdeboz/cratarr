@@ -1375,6 +1375,8 @@ export type ListedAlbum = {
   library?: string;
   /** Its artists one by one, when the source credits several; absent: `artist` alone. */
   artists?: string[];
+  /** Its length (s), its tracks' together; null where one of them is not known (0.9.19; a server before it gives none). */
+  duration_secs?: number | null;
 };
 
 /** One server's album list. */

@@ -37,6 +37,7 @@
   import { albumSubject, panel, viewPlaylist } from './panel.svelte';
   import { leaveSearch } from './globalSearch.svelte';
   import { prefs, type AlbumLayout, type CollectionOrder } from './prefs.svelte';
+  import { clockText } from './remote.svelte';
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
@@ -191,6 +192,8 @@
       rating: (x, y) => use(x).rating - use(y).rating || use(x).plays - use(y).plays,
       quality: (x, y) => qualityOf(x) - qualityOf(y) || byArtist(x, y) || byTitle(x, y),
       tracks: (x, y) => x.tracks - y.tracks || byArtist(x, y) || byTitle(x, y),
+      // Not known (null) below every known one, whichever way round.
+      length: (x, y) => (x.duration_secs ?? -1) - (y.duration_secs ?? -1) || byArtist(x, y) || byTitle(x, y),
     };
   };
   const found = $derived(
@@ -226,6 +229,7 @@
       { id: 'artist', label: 'Artist', full: a.artist ?? '' },
       { id: 'year', label: 'Year', full: a.year ? String(a.year) : '' },
       { id: 'tracks', label: 'Tracks', full: a.tracks ? String(a.tracks) : '' },
+      { id: 'length', label: 'Length', full: a.duration_secs ? clockText(a.duration_secs) : '' },
       { id: 'quality', label: 'Quality', full: quality(a) ?? '' },
       { id: 'added', label: 'Added', full: a.added ? addedOn(a.added) : '' },
       { id: 'plays', label: 'Plays', full: u.plays ? String(u.plays) : '' },
@@ -241,6 +245,7 @@
   const axisOf = (s: ShelfSource, a: ListedAlbum) => {
     if (order === 'year') return a.year ? String(a.year) : null;
     if (order === 'added') return a.added ? addedOn(a.added) : null;
+    if (order === 'length') return a.duration_secs ? clockText(a.duration_secs) : null;
     if (order === 'quality') return a.format ? [a.format, isLossless(a.format) ? null : a.bitrate_kbps].filter(Boolean).join(' ') : null;
     const u = useOf(s.id, a.id);
     if (order === 'plays') return u.plays ? (u.plays === 1 ? '1 play' : `${u.plays} plays`) : null;
@@ -258,7 +263,7 @@
   // The table's columns (decision 0042): as many as the list's width allows, in the owner's order (View).
   const tableCols = $derived(table ? fit('albums', width) : []);
   // The ones that order the list, by the order they stand for; Plays, dates and Rating start most and newest first.
-  const ORDER_OF: Partial<Record<string, CollectionOrder>> = { year: 'year', tracks: 'tracks', added: 'added', plays: 'plays', lastPlayed: 'played', rating: 'rating', format: 'quality' };
+  const ORDER_OF: Partial<Record<string, CollectionOrder>> = { year: 'year', tracks: 'tracks', length: 'length', added: 'added', plays: 'plays', lastPlayed: 'played', rating: 'rating', format: 'quality' };
   /** A tap on a name: ordered by it; again, the other way round. All but Year and Title start most and newest first. */
   function orderBy(o: CollectionOrder) {
     if (order === o) down = !down;
@@ -281,6 +286,7 @@
     const u = id === 'plays' || id === 'lastPlayed' || id === 'rating' ? useOf(s.id, a.id) : null;
     if (id === 'year') return a.year ? String(a.year) : '';
     if (id === 'tracks') return String(a.tracks);
+    if (id === 'length') return a.duration_secs ? clockText(a.duration_secs) : '';
     if (id === 'added') return a.added ? addedOn(a.added) : '';
     if (id === 'plays') return u?.plays ? u.plays.toLocaleString() : '';
     if (id === 'lastPlayed') return u?.played ? addedOn(u.played) : '';
