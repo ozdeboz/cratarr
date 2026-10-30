@@ -30,6 +30,7 @@ import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
 import { rampSlot } from './player/rampSlot';
 import { motionSlot } from './player/motionSlot';
+import { armSlot } from './player/armSlot';
 import { due, entered, NO_DEADLINES, type Deadlines } from './player/graces';
 import { brakeLengthMs, brakeSpeed, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
@@ -243,6 +244,11 @@ let windPos: number | null = null;
 type Hold = { dir: 1 | -1; released: boolean };
 let holdState: Hold | null = null;
 const quiet = { pause: false, until: 0 };
+/** The streams the tape asks for ahead (lib/player/armSlot): the wind to a point's, a hold's at its touch, the knob's
+ *  backwards one at its turn. Asked anew, the one before is let go. */
+const pointArms = armSlot<Armed>((a) => disarm(a));
+const preArms = armSlot<{ dir: 1 | -1; armed: Armed; at: number }>((p) => disarm(p.armed));
+const turnArms = armSlot<Armed>((a) => disarm(a));
 const tape = {
   /** What a ramp under way has committed to (paused or playing), shown at once on every device. A press of play or pause
    *  during one turns it round from where it has got to (decision 0075's first step). Null: no ramp. */
@@ -317,11 +323,17 @@ const tape = {
     tapeChanged();
   },
   /** The forward wind to a point being armed (a newer one replaces it). */
-  pointArmed: null as Armed | null,
+  get pointArmed() {
+    return pointArms.now;
+  },
   /** A hold's stream asked at the touch, for where the hold will start from. */
-  prearmed: null as { dir: 1 | -1; armed: Armed; at: number } | null,
+  get prearmed() {
+    return preArms.now;
+  },
   /** The knob's backwards stream asked at its turn, from where the brake will stand (no wait after the stop). */
-  turnArmed: null as Armed | null,
+  get turnArmed() {
+    return turnArms.now;
+  },
   /** Next pressed while a pause brakes: the next track, started up once the tape stands still. */
   nextAfterPause: false,
   /** Next pressed on the last track while Autoplay fetches: on into its first pick once it is in. */
@@ -344,14 +356,11 @@ const tape = {
  *  what went before lingers (a hold, a pending Next, an armed stream, a quiet rest, a ramp's hold on the counter). A
  *  wind under way and a ramp end through their own (endRewind, atOnce), which the callers run first. */
 function resetTape() {
-  if (tape.pointArmed) disarm(tape.pointArmed);
-  if (tape.prearmed) disarm(tape.prearmed.armed);
-  disarm(tape.turnArmed);
+  pointArms.drop();
+  preArms.drop();
+  turnArms.drop();
   aim(null);
   Object.assign(tape, {
-    turnArmed: null,
-    pointArmed: null,
-    prearmed: null,
     holding: null,
     plainHold: null,
     nextAfterPause: false,
@@ -3036,14 +3045,14 @@ function armPoint(to: number, lead: number, motion: PointMotion): Armed | null {
  *  the place. False where it cannot (the caller winds the stopping way). */
 function flyTo(to: number, motion: PointMotion, tries = 0): boolean {
   if (!audio || audio.paused || tape.committed !== null || tape.rewinding) return false;
-  if (tape.pointArmed) disarm(tape.pointArmed);
+  pointArms.drop();
   const armed = armPoint(to, FLY_LEAD * (tries + 1), motion);
   if (!armed) return false;
-  tape.pointArmed = armed;
+  pointArms.arm(armed);
   windAsked(true);
   const giveUp = () => {
     disarm(armed);
-    if (tape.pointArmed === armed) tape.pointArmed = null;
+    pointArms.release(armed);
   };
   const watch = () => {
     if (tape.pointArmed !== armed) return;
@@ -3054,7 +3063,7 @@ function flyTo(to: number, motion: PointMotion, tries = 0): boolean {
     }
     if (w.offset >= armed.from - 0.02) {
       if (armed.clip.readyState >= 3) {
-        tape.pointArmed = null;
+        pointArms.take();
         // Its floor from the stream as made (way, the app's too): f = (length − area) / (D − area). A server that
         // made it from still (before fly=1) gives about none: then the stopping way.
         const D = armed.D ?? 0;
@@ -3599,18 +3608,16 @@ export function windArm(dir: 'back' | 'forward') {
   const here = where();
   const lead = !playingNow ? 0 : d > 0 ? HOLD_S + FLY_LEAD : stand && here ? stand.pos - here.offset : 0;
   const armed = armWind(d, lead, d > 0 && playingNow ? FLY_SPEED : holdFor(d).speed);
-  if (armed) tape.prearmed = { dir: d, armed, at: performance.now() };
+  if (armed) preArms.arm({ dir: d, armed, at: performance.now() });
 }
 /** The touch was a tap after all: its stream dropped. */
 export function windDisarm() {
-  if (tape.prearmed) disarm(tape.prearmed.armed);
-  tape.prearmed = null;
+  preArms.drop();
 }
 /** The pre-armed stream for a hold in `dir`, where it still fits (the same track, not passed yet). `stopping`: the hold
  *  stops first, resting where it began: the stream must start there. */
 function takeArmed(dir: 1 | -1, stopping = false): Armed | null {
-  const p = tape.prearmed;
-  tape.prearmed = null;
+  const p = preArms.take();
   if (!p) return null;
   const here = where();
   const stand = stopping ? standOf() : null;
@@ -3865,11 +3872,11 @@ async function stepTape() {
     tapeDir.state = 'stopping';
     // Its stream asked now, from where the brake will stand, loaded while it brakes (measured on the owner's tablet,
     // 2026-10-28: asked at the stop, 135–180 ms of silence before backwards).
-    disarm(tape.turnArmed);
-    tape.turnArmed = armBackwards();
+    const asked = armBackwards();
+    if (asked) turnArms.arm(asked);
+    else turnArms.drop();
     await turned(() => pauseRamped());
-    const armed = tape.turnArmed;
-    tape.turnArmed = null;
+    const armed = turnArms.take();
     if (tapeDir.state !== 'stopping') return void disarm(armed);
     tapeDir.state = 'forward';
     if (tapeDir.want === 'L') return void backwards(armed);
