@@ -25,7 +25,7 @@ export const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 /** The Grid's knobs as ports.ts's GRID declares them: `lattice` a step into LATTICES, `count` points (1 … 64),
  *  `spacing` between neighbours (the picture's short side spanning −1..1), `rotation` in turns, `jitter` 0..1 (1: up
  *  to half the spacing). */
-export type GridKnobs = { lattice: number; count: number; spacing: number; rotation: number; jitter: number };
+export type GridKnobs = { lattice: number; count: number; spacing: number; rotation: number; jitter: number; fit?: number; cover?: number; aspect?: number };
 
 export type GridPoint = { x: number; y: number };
 
@@ -75,21 +75,51 @@ function rows(n: number, columns: number, step: number, rowStep: number, shift: 
 /** Columns for `n` points whose rows are `rowStep` apart and points `step` apart, so the whole is about as tall as wide. */
 const columnsFor = (n: number, step: number, rowStep: number) => Math.max(1, Math.min(n, Math.ceil(Math.sqrt((n * rowStep) / step))));
 
-function lay(lattice: (typeof LATTICES)[number], n: number, s: number): Laid[] {
+/** Fit to the screen (2026-10-30): the spacing and, for the rows lattices, the columns that make `n` points
+ *  cover a `w` × `h` area (the screen times Cover, in the short-side −1..1 frame): rows as wide as the screen is,
+ *  the round lattices out to the corners. */
+function fitted(lattice: (typeof LATTICES)[number], n: number, w: number, h: number): { s: number; columns?: number } {
+  const area = (w * h) / n;
+  switch (lattice) {
+    case 'square': {
+      const s = Math.sqrt(area);
+      return { s, columns: Math.max(1, Math.min(n, Math.round(w / s) + 1)) };
+    }
+    case 'hexagonal': {
+      const s = Math.sqrt(area / (Math.sqrt(3) / 2));
+      return { s, columns: Math.max(1, Math.min(n, Math.round(w / s) + 1)) };
+    }
+    case 'triangular': {
+      const s = Math.sqrt(area / ((3 * Math.sqrt(3)) / 4));
+      return { s, columns: Math.max(1, Math.min(n, Math.round(w / ((s * Math.sqrt(3)) / 2)) + 1)) };
+    }
+    case 'rings': {
+      // As many whole rings as the points fill, the outermost out at the corners.
+      let rings = 0;
+      for (let left = n - 1, k = 1; left > 0; k++, rings++) left -= 6 * k;
+      return { s: Math.hypot(w, h) / 2 / Math.max(1, rings) };
+    }
+    case 'spiral':
+      // The last point (radius s·√(n/π)) out at the corners.
+      return { s: (Math.hypot(w, h) / 2) * Math.sqrt(Math.PI / Math.max(1, n)) };
+  }
+}
+
+function lay(lattice: (typeof LATTICES)[number], n: number, s: number, fit?: number): Laid[] {
   switch (lattice) {
     case 'square':
-      return rows(n, columnsFor(n, s, s), s, s, () => ({ x: 0, y: 0 }));
+      return rows(n, fit ?? columnsFor(n, s, s), s, s, () => ({ x: 0, y: 0 }));
     case 'hexagonal': {
       // Rows √3/2 apart, every other one half a step along: each point's six neighbours a spacing away.
       const h = (s * Math.sqrt(3)) / 2;
-      return rows(n, columnsFor(n, s, h), s, h, (r) => ({ x: r % 2 ? s / 2 : 0, y: 0 }));
+      return rows(n, fit ?? columnsFor(n, s, h), s, h, (r) => ({ x: r % 2 ? s / 2 : 0, y: 0 }));
     }
     case 'triangular': {
       // Triangles of side s√3 (their centres a spacing from their three neighbours'), up and down in turn along a row:
       // centres half a side apart along it, an up one's a third of the height above its row's base, a down one's two.
       const side = s * Math.sqrt(3);
       const height = (side * Math.sqrt(3)) / 2;
-      const columns = columnsFor(n, side / 2, height);
+      const columns = fit ?? columnsFor(n, side / 2, height);
       return rows(n, columns, side / 2, height, (r, c) => ({ x: 0, y: ((r + c) % 2 === 0 ? 1 : 2) * (height / 3) - height / 2 }));
     }
     case 'rings': {
@@ -124,10 +154,15 @@ function lay(lattice: (typeof LATTICES)[number], n: number, s: number): Laid[] {
 export function gridOf(knobs: Partial<GridKnobs>, seed: number): Grid {
   const lattice = LATTICES[clamp(Math.round(knobOf(knobs.lattice, DEFAULTS.lattice)), 0, LATTICES.length - 1)];
   const n = clamp(Math.round(knobOf(knobs.count, DEFAULTS.count)), 1, MOST_POINTS);
-  const s = clamp(knobOf(knobs.spacing, DEFAULTS.spacing), 0.02, 1);
   const turn = 2 * Math.PI * knobOf(knobs.rotation, DEFAULTS.rotation);
   const jitter = clamp(knobOf(knobs.jitter, DEFAULTS.jitter), 0, 1);
-  const laid = lay(lattice, n, s);
+  // Fit Screen: the spacing (and columns) from the count, so the points cover the screen times Cover; Spacing as set.
+  const screen = Math.round(knobOf(knobs.fit, 0)) === 1;
+  const aspect = clamp(knobOf(knobs.aspect, 16 / 9), 0.2, 5);
+  const cover = clamp(knobOf(knobs.cover, 1.2), 1, 2);
+  const fit = screen ? fitted(lattice, n, 2 * aspect * cover, 2 * cover) : null;
+  const s = fit ? fit.s : clamp(knobOf(knobs.spacing, DEFAULTS.spacing), 0.02, 1);
+  const laid = lay(lattice, n, s, fit?.columns);
   const cos = Math.cos(turn);
   const sin = Math.sin(turn);
   const points = laid.map((p, i): GridPoint => {

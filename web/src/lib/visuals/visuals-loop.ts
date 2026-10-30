@@ -178,6 +178,14 @@ export class VisualsLoop {
       }
       if (k >= 1) easing = null;
     };
+    /** A knob's value as the morph under way shows it at `now`, else `stored`. */
+    const shownNow = (id: string, knob: string, stored: number, now: number): number => {
+      const was = easing?.from[id]?.[knob];
+      const to = easing?.to[id]?.[knob];
+      if (!easing || typeof was !== 'number' || typeof to !== 'number') return stored;
+      const k = Math.min(1, (now - easing.start) / easing.ms);
+      return was + (to - was) * k * k * (3 - 2 * k);
+    };
     /** Values into the store as the visuals play them (a performance) or as an edit (the dice, a new track's look), eased
      *  in. */
     const apply = (values: Randomized, cables: Record<string, PatchV2['cables'][number]['value']>, ms: number, edit: string | null, now: number, macros: Record<string, number> = {}) => {
@@ -190,7 +198,9 @@ export class VisualsLoop {
         const t = host.types[m.type];
         const eased = Object.keys(knobs).filter((k) => t?.knobs.find((x) => x.id === k.replace(/\.\d+$/, ''))?.kind !== 'step');
         if (!eased.length) continue;
-        fromValues[id] = Object.fromEntries(eased.map((k) => [k, m.knobs[k]]));
+        // From where the knob is shown now: mid-morph, between the last roll's start and end (so a Dice with
+        // a Glide that fires again before its morph is done carries on from there, with no jump).
+        fromValues[id] = Object.fromEntries(eased.map((k) => [k, shownNow(id, k, m.knobs[k], now)]));
         toValues[id] = Object.fromEntries(eased.map((k) => [k, knobs[k]]));
       }
       // A macro's value glides in the one morph (0077), unless it maps a step (Form, Symmetry, a Lens, Colours: a choice
@@ -207,7 +217,10 @@ export class VisualsLoop {
       for (const [id, v] of Object.entries(macros)) {
         const x = flat.macros.find((y) => y.id === id);
         if (!x || mapsStep(x)) continue;
-        macrosFrom[id] = x.value;
+        const was = easing?.macrosFrom[id];
+        const to = easing?.macrosTo[id];
+        const k = easing ? Math.min(1, (now - easing.start) / easing.ms) : 1;
+        macrosFrom[id] = easing && typeof was === 'number' && typeof to === 'number' ? was + (to - was) * k * k * (3 - 2 * k) : x.value;
         macrosTo[id] = v;
       }
       const f = (p: PatchV2) => applyEdit(p, { kind: 'values', knobs: values, cables, macros }, host.types);
@@ -425,6 +438,12 @@ export class VisualsLoop {
       for (const r of stepped.dice) {
         if (rolling) break;
         rolling = rollFor(r.seed, r.scope, r.reach);
+        // A Dice with a Glide: its roll morphs in over that long, a performance (no undo step), from where
+        // the knobs are now, mid-morph or not, so one morph flows into the next.
+        if (r.glide > 0) {
+          rollingAs = { edit: null, ms: r.glide * 1000 };
+          continue;
+        }
         // The first look shows at once; each next one blends in over a new track's time.
         rollingAs = { edit: looked ? 'track' : null, ms: looked ? BLEND_MS : 0 };
         looked = true;

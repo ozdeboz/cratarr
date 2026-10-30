@@ -29,6 +29,13 @@ test('there are examples, each with an id of its own that no snapshot can have',
   }
 });
 
+/** Racks let off the one-pass loop, each with its reason. "The middle, still" is a test rack (the owner's, 2026-10-30):
+ *  every knob at the middle of its range, its Mix's amounts at a half too, so its loop is blended module by module, as
+ *  any loop with a part-way Mix is; it is there to be looked at, not played. */
+const NOT_ONE_PASS: Readonly<Record<string, string>> = {
+  'example:wandering-kaleido-middle': 'its Mix at a half, every knob at its middle',
+};
+
 // The technique racks; Fire is the Cratarr device (below).
 for (const x of EXAMPLES.filter((e) => !e.patch.modules.some((m) => m.type === 'flame'))) {
   test(`${x.label}: known modules, cables that fit, the Screen reached, the loop in one pass`, () => {
@@ -65,7 +72,7 @@ for (const x of EXAMPLES.filter((e) => !e.patch.modules.some((m) => m.type === '
     // A loop of Warps and Keeps only is drawn in one pass (compose.ts LOOP); one with anything else in it (a Fold, a
     // Displace) module by module, its Feedback in the order.
     const onePass = p.cables.filter((x) => x.from.module === 'feedback').every((x) => ['warp', 'keep'].includes(byId.get(x.to.module)?.type ?? ''));
-    if (onePass) assert.equal(loopsOf(c.order, knobs).size, 1, 'its loop drawn in one pass (compose.ts LOOP)');
+    if (onePass && !NOT_ONE_PASS[x.id]) assert.equal(loopsOf(c.order, knobs).size, 1, 'its loop drawn in one pass (compose.ts LOOP)');
     else assert.ok(c.order.some((n) => n.type === 'feedback'), 'its loop drawn module by module');
     // As a kept patch made current (upgrade.ts), it is the same rack.
     const up = upgraded(structuredClone(p), RECORD);

@@ -7,6 +7,7 @@ import { ASPECTS, BAND_SIGNALS, isRoute, routeKey, TRACK_SIGNALS, type Aspect } 
 import { curveFrom, valueOf as keptValue, type RouteValue } from './curves';
 import type { VisualSettings } from './settings.svelte';
 import { COOLING_MOST, LIFT_MOST } from './fluid';
+import { withAspects } from './engine/knob-aspects';
 
 /** A knob: its range, its neutral (where its module does nothing) and its default. A level is a share its cables let
  *  through under its setting; a swing moves about it; a step changes only while its module is at neutral (0056's
@@ -35,7 +36,14 @@ export type Knob = {
   /** A step's choices by name, the first for its least step: what the panel and the graph say in place of its number
    *  (a yes or a no a switch, two or three a track, more a sheet). */
   options?: readonly string[];
+  /** What it means to the aspect dice (Spatial, Motion, Colours, Lightness): where things are and how space is laid
+   *  out, how fast things move, a colour, how light; `null` for none of them (how much, which mode, a modulator's
+   *  dynamics). Declared with its module (engine/knob-aspects `withAspects`), so a renamed knob keeps it. */
+  aspect?: KnobAspect | null;
 };
+
+/** A knob's meaning to the aspect dice (Knob `aspect`). */
+export type KnobAspect = 'spatial' | 'motion' | 'colour' | 'light';
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the
  *  picture's), finish, the whole frame, or a modulator (no picture). */
@@ -274,6 +282,25 @@ const LABELS: Record<string, string> = {
   k1: 'Control 1', k2: 'Control 2',
 };
 
+/** What the chain's knobs mean to the aspect dice (engine/knob-aspects), by module; a band's channels (`lighting.3`) its
+ *  knob's. Each module's every knob is named, `null` for none of the four. */
+const CHAIN_ASPECTS: Record<string, Record<string, KnobAspect | null>> = {
+  frame: {
+    quality: null, fps: null, brightness: 'light', intensity: null, flash: null, speed: 'motion', wild: null, loose: null, effects: null,
+    lookWalk: 'motion', behaviourWalk: 'motion',
+  },
+  flame: {
+    form: null, detail: 'spatial', twist: 'spatial', warp: null, symmetry: 'spatial', mirror: 'spatial', final: null, lensSides: 'spatial',
+    lensDepth: 'spatial', family: 'colour', hue: 'colour', lightness: 'light', vividness: 'colour', spread: 'spatial', purity: 'colour', shape: null,
+    rotation: 'spatial', lights: 'light', presence: 'light', zoom: 'spatial', lighting: 'light', evolution: 'motion', continuity: 'motion', fit: 'spatial',
+  },
+  show: { glow: 'light', saturation: 'colour', smoothing: null, haze: 'light', waves: 'spatial' },
+  fluid: { fluid: null, stir: 'motion', flow: 'motion', swirl: 'motion', facets: null, lattice: 'spatial', lift: 'light', open: 'spatial', cooling: 'motion' },
+  tunnel: { tunnel: null },
+  dive: { dive: null },
+  trails: { trails: 'motion' },
+};
+
 /** The module types of today's pipeline, their knobs from today's settings' ranges and defaults. */
 export function cratarrTypes(ranges: Record<string, [number, number]>, defaults: VisualSettings): ModuleType[] {
   const byModule = new Map<string, Knob[]>();
@@ -302,7 +329,13 @@ export function cratarrTypes(ranges: Record<string, [number, number]>, defaults:
   add('fluid', { ...knob('lift', 'Lift', [0, LIFT_MOST], 0, 'level', 0), randomize: false });
   add('fluid', { ...knob('open', 'Open walls', [0, 1], 0, 'level', 0), randomize: false });
   add('fluid', { ...knob('cooling', 'Cooling', [0, COOLING_MOST], 0, 'level', 0), randomize: false });
-  const type = (id: string, label: string, place: Place): ModuleType => ({ type: id, label, place, knobs: byModule.get(id) ?? [] });
+  const type = (id: string, label: string, place: Place): ModuleType => {
+    const knobs = byModule.get(id) ?? [];
+    const of = CHAIN_ASPECTS[id];
+    // The effect slots (the loop's, fx1–fx3): which effect, how much, its two controls: none of the four.
+    if (!of) return { type: id, label, place, knobs: withAspects(knobs, {}, null) };
+    return { type: id, label, place, knobs: withAspects(knobs, Object.fromEntries(knobs.flatMap((k) => { const a = of[k.id.replace(/\.\d+$/, '')]; return a === undefined ? [] : [[k.id, a]]; }))) };
+  };
   return [
     type('frame', 'Whole frame', 'frame'),
     type('flame', 'Flame', 'source'),

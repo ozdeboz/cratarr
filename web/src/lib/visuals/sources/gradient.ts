@@ -8,12 +8,13 @@
 import type { FrameInfo, ModuleType, PictureModule } from '../patch';
 import { done, program, target } from './gl';
 import { knob, values } from './knob';
+import { withAspects } from '../engine/knob-aspects';
 
 export const GRADIENT: ModuleType = {
   type: 'gradient',
   label: 'Gradient',
   place: 'source',
-  knobs: [
+  knobs: withAspects([
     knob('amount', 'Amount', 0, 1, 1, 'level'),
     // How much of each field (below 0 turned over): the distance from the centre, 0 there and 1 at the short side's edge.
     knob('distance', 'Distance', -1, 1, 1),
@@ -31,7 +32,10 @@ export const GRADIENT: ModuleType = {
     knob('repeat', 'Repeat', 0, 16, 0),
     // How fast the bands move along the field (bands a second; below 0 the other way).
     knob('speed', 'Speed', -1, 1, 0),
-  ],
+  ], {
+    amount: null, distance: 'spatial', round: 'spatial', roundCount: 'spatial', across: 'spatial', up: 'spatial', centreX: 'spatial', centreY: 'spatial',
+    turn: 'spatial', repeat: 'spatial', speed: 'motion',
+  }),
 };
 
 /** Its fields at the point `p` (centred, aspect-true: the short side −1..1, the long side ±aspect), as the shader draws
