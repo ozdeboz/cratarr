@@ -52,6 +52,8 @@ export type LocalTrack = {
   addable?: boolean;
   /** Its length (s), where the list it came from said: the queue's lengths and when it ends. */
   duration_secs?: number | null;
+  /** Who asked for it, a queue request accepted (0.9.19). */
+  asked_by?: string;
 };
 
 export type Repeat = 'off' | 'one' | 'all';
@@ -3884,6 +3886,7 @@ function trackOf(t: Record<string, unknown>): LocalTrack | null {
     artist: typeof t.artist === 'string' ? t.artist : null,
     album: typeof t.album === 'string' ? t.album : null,
     album_id: typeof t.album_id === 'string' ? t.album_id : null,
+    ...(typeof t.asked_by === 'string' ? { asked_by: t.asked_by } : {}),
   };
 }
 const tracksOf = (v: unknown) => (Array.isArray(v) ? v.map((t) => trackOf(t as Record<string, unknown>)).filter((t): t is LocalTrack => !!t) : []);

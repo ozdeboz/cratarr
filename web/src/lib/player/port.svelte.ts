@@ -127,6 +127,7 @@ const upcomingLocal = $derived(
     addable: u.addable ?? true,
     duration_secs: u.duration_secs ?? null,
     lane: u.lane,
+    ...(u.asked_by ? { asked_by: u.asked_by } : {}),
   })),
 );
 /** The local queue's playing track as a now-playing view (the shape the player shows), made once per change. */

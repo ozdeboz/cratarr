@@ -86,6 +86,8 @@ export type Upcoming = {
   /** `next`: added by hand, ahead of the album or playlist (decision 0033's two lanes); `radio`: Radio's inserts;
    *  `autoplay`: Autoplay's, after everything (decision 0036, amended). */
   lane?: 'next' | 'radio' | 'autoplay';
+  /** Who asked for it, a queue request accepted (0.9.19: a follower's name, or a guest's). */
+  asked_by?: string;
 };
 
 export type Progress = {

@@ -245,8 +245,9 @@
   const accepted = $derived(np ? follow.accepted.filter((a) => a.r.player === askedPlayer && stillComing(a, np.upcoming, Date.now())).map((a) => a.r) : []);
   // While a row is dragged, only the queue's own rows (the reorder counts them).
   const lines = $derived(np ? (drag ? withRequests(np.upcoming, []) : withRequests(np.upcoming, [...asked, ...mineWaiting], accepted)) : []);
-  /** Whether who asked stays on an accepted one's row (the owner: open; for now only while it waits). */
-  const ASKER_STAYS = false;
+  /** Who asked stays on an accepted one's row (the owner, 2026-10-30: "Yes, that should stay on the row"): while it
+   *  stands in here, then as the queue's own entry says (`asked_by`). */
+  const ASKER_STAYS = true;
   const timesQueued = (id: string) => np?.upcoming.filter((t) => t.id === id).length ?? 0;
 </script>
 
@@ -426,7 +427,7 @@
                 use:swipe={{ enabled: editable && !drag, left: () => removeSwiped(i) }}
               >
                 {@render heldCover({ source: np.source, id: t.id, album_id: t.album_id, duration_secs: t.duration_secs })}
-                <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{:else if t.lane === 'autoplay'}<i class="radio" title="Autoplay"><Icon name="infinity" size={14} /></i>{/if}{@render byline(t)}</span></div>
+                <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{:else if t.lane === 'autoplay'}<i class="radio" title="Autoplay"><Icon name="infinity" size={14} /></i>{/if}{@render byline(t)}</span>{#if t.asked_by}<span class="who">Asked by {t.asked_by}</span>{/if}</div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>
               {@render rowHeart(asTrack(t, np.source))}
