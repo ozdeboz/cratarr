@@ -1,6 +1,6 @@
 # 0084: Each user's own music
 
-- Status: accepted as a plan (the owner, 2026-10-30), for after 0.10; not built
+- Status: accepted as a plan (the owner, 2026-10-30), for 0.11 or 0.12; not built
 - Date: 2026-10-30
 - Builds on: 0044 (folders), 0051 (several users), 0070 (requests), 0080 (single-track intake and its gate),
   0058 (Download…)
@@ -51,7 +51,10 @@ album into Music stays the administrators'. Administrators keep every right ever
 favourite album whole, a favourite track as itself in its artist/album folder, a favourite artist's albums), through
 a **read-only network drive per user** (WebDAV) that Cratarr serves: "My music" and "Favourites", signed in with the
 account's app password, home network only, copied natively by any computer and resumable. Windows' own client wants
-HTTPS for passwords, so it is reached through the home https name.
+HTTPS for passwords, so it is reached through the home https name. **From outside, per account:** a switch on each
+account, "Network drive from outside", off by default, opens that user's drive over the public internet too, over HTTPS
+through the public name, signed in the same way and through the sign-in throttle. It needs Caddy to pass the drive's
+path to Cratarr's own login check, as it does the Subsonic API's `/rest` (nas-infra).
 
 **A user who leaves.** Their own music stays as it was, an ownerless library that counts against nobody, until an
 administrator acts.
