@@ -2071,7 +2071,7 @@ export type AlbumView = {
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
-export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
+export type SearchKind = 'album' | 'artist' | 'track' | 'work' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
 /** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed). */
 export type ServerSearch = {
   q: string;

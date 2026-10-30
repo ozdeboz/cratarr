@@ -179,6 +179,8 @@
   import { groupByWork } from './works';
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
+  import WorkMenu from './WorkMenu.svelte';
+  import WorkSheet from './WorkSheet.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -995,6 +997,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let menuStart = $state<'menu' | 'delete'>('menu');
   /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
   let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' | 'versions'; outs?: { label: string; icon: IconName; run: () => void }[] } | null>(null);
+  /** A work's heading's menu (its movements here, in the album's order), and the work opened from it (0.12). */
+  let workMenu = $state<{ mbid: string; title: string; ids: string[] } | null>(null);
+  let workOpen = $state<{ mbid: string; title: string } | null>(null);
+  const workIds = (list: PlaylistRow[]) => list.filter((x) => x.id && !x.missing).map((x) => x.id!);
   const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null, has_versions: r.has_versions });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
@@ -2235,7 +2241,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <ol class="rows" class:numbered={!!album} class:selecting={!!selecting} bind:clientWidth={listWidth}>
         {#if workLines && shown}
           {@const at = shown}
-          {#each workLines as l (l.kind === 'work' ? `work ${l.at[0]}` : at[l.at].i)}{#if l.kind === 'work'}{@render workHead(l.work.title, l.rows)}{:else}{@render albumRow(l.row, at[l.at].i, shownRows, l.movement)}{/if}{/each}
+          {#each workLines as l (l.kind === 'work' ? `work ${l.at[0]}` : at[l.at].i)}{#if l.kind === 'work'}{@render workHead(l.work, l.rows)}{:else}{@render albumRow(l.row, at[l.at].i, shownRows, l.movement)}{/if}{/each}
         {:else}
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
         {/if}
@@ -2417,11 +2423,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
 <!-- An album's track (Symfonium's album screen): its number (the playing one's dots instead), the title, and the artist
      only when it is not the album's; the cover is the header's. -->
-<!-- A work's heading over its movements (0.12, decision 0086): its name, and Play for the whole work. -->
-{#snippet workHead(title: string, list: PlaylistRow[])}
-  <li class="work-head">
-    <span class="work-title">{title}</span>
-    <button class="tool" aria-label="Play {title}" onclick={() => playWork(title, list)}><Icon name="play" size={22} /></button>
+<!-- A work's heading over its movements (0.12, decision 0086): its name, Play for the whole work, and its menu (a
+     long-press, a right-click or ⋮: Play, Play next, Add to queue, Go to the work; the owner, 2026-10-30). -->
+{#snippet workHead(work: { mbid: string; title: string }, list: PlaylistRow[])}
+  <li class="work-head" use:longpress={() => (workMenu = { ...work, ids: workIds(list) })}>
+    <span class="work-title">{work.title}</span>
+    <button class="tool" aria-label="Play {work.title}" onclick={() => playWork(work.title, list)}><Icon name="play" size={22} /></button>
+    <button class="tool" aria-label="{work.title}: its menu" onclick={() => (workMenu = { ...work, ids: workIds(list) })}><Icon name="moreVert" size={22} /></button>
   </li>
 {/snippet}
 
@@ -2587,6 +2595,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} outs={trackMenu.outs} crate={crateEditing ? null : crate} onclose={() => (trackMenu = null)} />
 {/if}
+{#if workMenu}{@const w = workMenu}<WorkMenu mbid={w.mbid} title={w.title} ids={w.ids} onopen={() => (workOpen = { mbid: w.mbid, title: w.title })} onclose={() => (workMenu = null)} />{/if}
+{#if workOpen}<WorkSheet mbid={workOpen.mbid} title={workOpen.title} onclose={() => (workOpen = null)} />{/if}
 {#if leftOutOpen && crate}
   <ExcludedSheet {crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
 {/if}
