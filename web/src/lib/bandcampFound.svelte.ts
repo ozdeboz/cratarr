@@ -7,6 +7,7 @@ import { albumIdOf } from './bandcampPreview';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playQueue } from './localPlayer.svelte';
 import { port } from './player/port.svelte';
+import { can } from './capabilities.svelte';
 import { toast } from './toast.svelte';
 
 const pages = $state<Record<string, string>>({});
@@ -50,11 +51,13 @@ export async function playArtistOnBandcamp(key: string, artist: string, own: str
   bandcampPlay.key = key;
   try {
     let tracks: LocalTrack[] = [];
-    try {
-      tracks = (await previewBandcampArtist(artist, own)).albums.flatMap((a) => a.tracks);
-    } catch (e) {
-      if (!(e instanceof ApiError && e.status === 404) || !page) throw e;
-    }
+    // Not asked where the server's list (0.11) says it cannot list an artist's and the album shown can stand in.
+    if (can('bandcamp_artist') !== false || !page)
+      try {
+        tracks = (await previewBandcampArtist(artist, own)).albums.flatMap((a) => a.tracks);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404) || !page) throw e;
+      }
     if (!tracks.length && page) tracks = (await previewBandcamp(page)).tracks;
     if (!tracks.length) throw new Error('Nothing of theirs on Bandcamp.');
     playQueue(

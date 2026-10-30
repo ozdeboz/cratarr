@@ -6,6 +6,7 @@
 import { complete } from './filterRow';
 import { filterOf, setConditions } from './listFilter.svelte';
 import { library } from './albums.svelte';
+import { can } from './capabilities.svelte';
 import { kindOfRows, kindsOffered, rowsOfKind, type RecordKind } from './recordKindRules';
 
 export { RECORD_KINDS, type RecordKind } from './recordKindRules';
@@ -14,7 +15,7 @@ const KIND = 'library';
 
 /** Whether the server says which records are classical (0.10: its albums carry `classical`); a server before it does
  *  not, and Classical is not offered. */
-export const classicalListed = () => !!library.view?.sources.some((s) => s.albums.some((a) => a.classical !== undefined));
+export const classicalListed = () => can('classical') ?? !!library.view?.sources.some((s) => s.albums.some((a) => a.classical !== undefined));
 /** The kinds offered now. */
 export const recordKinds = () => kindsOffered(classicalListed());
 

@@ -4,6 +4,7 @@
 // yet is asked for (a few hundred at a time) and its name, artist, album, album id, length and whether it can go in a
 // playlist are the server's, whatever list it was started from. Other servers' tracks stay as they came. A server
 // before describe (0.9.5) answers 404: then nothing is asked again, and reports keep carrying the details.
+import { can } from './capabilities.svelte';
 import { untrack } from 'svelte';
 import { describeTracks, missingCall, type DescribedTrack } from './api';
 import { local, type LocalTrack } from './localPlayer.svelte';
@@ -34,7 +35,8 @@ async function describe(queue: LocalTrack[]) {
     const d = known.get(key(t));
     if (d) apply(t, d);
   }
-  if (describing.server === false) return;
+  // Not asked of a server whose list says it cannot (0.11, lib/capabilities: describe), nor of one found without the call.
+  if (describing.server === false || can('describe') === false) return;
   const wanted = [...new Map(queue.filter((t) => ours(t) && !asked.has(key(t))).map((t) => [key(t), { source: t.source, id: t.id }])).values()];
   for (let at = 0; at < wanted.length; at += MOST) {
     const part = wanted.slice(at, at + MOST);

@@ -7,6 +7,7 @@ import { acceptRequest, ApiError, askForTrack, declineRequest, getFollowers, get
 import { port } from './player/port.svelte';
 import { drivenName, playOn, selfName } from './playOn.svelte';
 import { toast } from './toast.svelte';
+import { can } from './capabilities.svelte';
 
 export const follow = $state({
   /** The server keeps following (null: not asked yet). */
@@ -20,6 +21,11 @@ export const follow = $state({
   /** One's own asked of the one followed, as the server last said. */
   mine: [] as QueueRequest[],
 });
+
+/** Following offered: as the server's list says (0.11, lib/capabilities), else as its calls answered (a 404: none). */
+export const followOffered = () => can('follow') ?? follow.served;
+/** Asking for tracks (queue requests) offered, likewise. */
+export const requestsOffered = () => can('queue_requests') ?? follow.served;
 
 const served = (e: unknown) => {
   if (e instanceof ApiError && e.status === 404) follow.served = false;
