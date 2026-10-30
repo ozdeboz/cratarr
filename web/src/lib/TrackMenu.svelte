@@ -63,7 +63,9 @@
   import { toast } from './toast.svelte';
   import { albumSubject, artistOf, panel, viewOver } from './panel.svelte';
   import { linkTo, share } from './share';
-  import { crateOf, genreOf, viewGenre, viewLike } from './crates.svelte';
+  import { crateOf, genreOf, viewGenre } from './crates.svelte';
+  import { likeChip } from './quickCrate';
+  import { grabCrate } from './quickCrates.svelte';
   import { me } from './me.svelte';
   import TempoStep from './TempoStep.svelte';
   import { askFor, followingNow } from './following.svelte';
@@ -300,13 +302,14 @@
     leavePlayer();
     viewGenre(name);
   }
-  /** Sounds like it: a crate seeded with the track (Cratarr's own, which AudioMuse hears). */
+  /** Sounds like it: the crate search's sentence with the track as its "like" term (0.12; the owner: one way to make a
+   *  crate), to refine or save; Cratarr's own, which AudioMuse hears. */
   function goToLike() {
     // Read before closing: closing lets go of the track.
-    const id = t!.id;
+    const chip = likeChip('track', t!.id, t!.name);
     onclose();
     leavePlayer();
-    viewLike(id);
+    grabCrate([chip]);
   }
   const plays = $derived(forPlaying ? (np?.info?.play_count ?? null) : (other?.info?.play_count ?? null));
   const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
