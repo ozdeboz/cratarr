@@ -1,10 +1,10 @@
 // The spike's switch (0075, 2026-10-30): the brake's rules from the WebAssembly where this browser keeps
 // `cratarr.rulesWasm` = 1, else this page's own (startStop's JS_BRAKE, kept to compare). Bundled into the page's
-// script (a data: URL), so the service worker's copy holds it; nothing more is fetched. Its start-up and its cost per
+// script (as base64, lib/wasm/rulesWasm), so the service worker's copy holds it; nothing more is fetched. Its start-up and its cost per
 // call are measured here for the tablet (`cratarrRulesWasm()` from the console, over CDP).
 import { JS_BRAKE, useBrake } from '../startStop';
 import { brakeRulesOf, instantiateRules, type RulesExports } from './brakeRules';
-import wasmUrl from './rules.wasm?inline';
+import b64 from './rulesWasm';
 
 const KEY = 'cratarr.rulesWasm';
 const on = () => {
@@ -19,7 +19,6 @@ let ready: Promise<{ exports: RulesExports; startMs: number }> | null = null;
 function load() {
   ready ??= (async () => {
     const t0 = performance.now();
-    const b64 = wasmUrl.slice(wasmUrl.indexOf(',') + 1);
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     const exports = await instantiateRules(bytes);
     return { exports, startMs: performance.now() - t0 };
