@@ -4,6 +4,7 @@
 - Date: 2026-10-30
 - Builds on: 0024 (crates; amended 2026-10-19: tracks left out of a crate, tracks excluded everywhere), 0061 (the
   filter), 0069 (Discover), 0026 (the one undo)
+- Amended by: the amendment of 2026-10-30 below (the Artist filter itself counts every credit)
 
 ## Context
 
@@ -18,7 +19,7 @@ The owner's, 2026-10-30:
 1. **Not in this crate uses the crate's own artist filter.** It adds "Artist is not X" to that crate's own filter, as
    one would set it by hand: the name joins an "Artist is not" row that is on (of any track), else a row of its own.
    Once: an artist the crate leaves out already, in any spelling of their key, is not added again. It is matched as
-   the artist filter matches (the artist and album artist tags, whole).
+   the artist filter matches (then the artist and album artist tags, whole; by any credit since the amendment below).
    - One's own crate gets it in its saved conditions; its undo is the crate's.
    - A fixed crate has no filter of one's own: the permanent Unlisted, a genre's (style, mood, tag), Home's (New for
      you, Grave digging), and every Sounds like (Sounds like your week, the moment's, a track's, an album's, a
@@ -59,3 +60,13 @@ The owner's, 2026-10-30:
 - A crate's rows carry their album's size (`album_tracks`) on Cratarr's own source, beside its `album_id`, for the
   Records view's "3 of 10". Rows on another server have neither: the catalogue keeps no server's album ids, and asking
   the server for them per page is not cheap.
+
+## Amended 2026-10-30 (0.10): the Artist filter counts every credit
+
+The owner, 2026-10-30: the Artist filter itself now counts every credit, so "Not in this crate" and "Exclude
+everywhere" match the same way. One meaning wherever the axis is used (the Library's filter, a crate's conditions,
+every list's Filter sheet, the crate builder): a row matches a file's credits (`Facts::credits`) by the same loose key,
+whole names only. "Artist is Beck" finds "Air feat. Beck" and "Beck & Air", never "Becky Hill"; "Artist is not Beck"
+leaves them out; "AC/DC" stays one name. The axis offers and counts each credited artist, as first written
+(`Facts::credit_names`), so a featured track counts for both. The stored row is unchanged; only matching widens.
+An artist's own page and their Top recommendations still go by their artist and album artist tags.
