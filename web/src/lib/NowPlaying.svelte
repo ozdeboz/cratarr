@@ -142,7 +142,7 @@
   // Seeking (decision 0019, now that Cratarr plays music itself): as Finamp's slider, the handle and the time follow
   // the finger and the player seeks only on release. Only on this device for now: seeking the server's player is
   // tried on it first.
-  const canSeek = $derived(isLocal() && !!dur);
+  const canSeek = $derived(port().seekable && !!dur);
   // The track's waveform (decision 0035), where it has one: the seek bar draws it instead of its line.
   $effect(() => {
     if (np) loadWaveform(np.source, np.id);
@@ -184,7 +184,8 @@
   // one label).
   const inPlaylists = $derived(memberCount === 0 ? 'In no playlist' : `In ${memberCount} ${memberCount === 1 ? 'playlist' : 'playlists'}`);
   const queuePlace = $derived.by(() => {
-    if (isLocal()) return local.index < 0 ? '' : `${local.index + 1} of ${local.queue.length}`;
+    const q = port().queue();
+    if (q) return q.index < 0 ? '' : `${q.index + 1} of ${q.tracks.length}`;
     const np = playing();
     return np ? `1 of ${np.upcoming.length + 1}` : '';
   });
@@ -335,7 +336,7 @@
           onpress: () => windTouch(dir, true),
           oncancel: () => windTouch(dir, false),
           // Dragged down: held back, to aim (this page's player; the app's and one driven hold for themselves).
-          ondrag: isLocal() && !inApp ? windDrag : undefined,
+          ondrag: port().seekable && !inApp ? windDrag : undefined,
         }
       : null;
 
@@ -481,7 +482,7 @@
           ><Icon name="playlists" size={22} /></button
         >
       {/if}
-      {#if np && isLocal()}
+      {#if np && port().sleeps}
         <button
           class="corner sleep"
           class:on={sleep() !== null}
@@ -544,7 +545,7 @@
               >{/if}{#if np.artist && np.album}<span class="dot">·</span>{/if}{#if np.album && np.album_id}<button class="album-name" onclick={toAlbum}>{np.album}</button
               >{:else if np.album}<span class="album-name">{np.album}</span>{/if}
           </div>
-        {:else if isLocal() || live.view}
+        {:else if port().holdsQueue || live.view}
           <!-- Another player's: said once its state was read, not before the first poll (the owner, 2026-10-24). -->
           <div class="title idle"><span>Nothing is playing</span></div>
         {/if}
@@ -588,7 +589,7 @@
                  Shuffle is in the queue's sheet): on, it fills from the bottom by how far the playing track is turned down
                  (shown, never a number). A tap opens its sheet, where it is switched (the owner, 2026-10-27: not by a
                  tap); a long press shows or hides the levelling in the waveform. -->
-            {#if isLocal()}
+            {#if port().level()}
               <button
                 class="level"
                 class:on={playingLevelOn()}
@@ -624,7 +625,7 @@
             <button aria-label="Next track" disabled={!hasNext()} onclick={() => send('next')} use:holdWind={hasNext() ? windHold('forward') : null}><Icon name="next" size={24} /></button>
             <!-- Repeat is in the queue's sheet (a long press on Queue; the owner, 2026-10-26, 0.9.8): its place kept, so
                  play stays in the middle. -->
-            {#if isLocal()}<span class="spot" aria-hidden="true"></span>{/if}
+            {#if port().radio}<span class="spot" aria-hidden="true"></span>{/if}
           </div>
         </div>
         <i class="sp c"></i>
@@ -658,7 +659,7 @@
           {/if}
           <!-- More music (Radio and Autoplay, decision 0036, amended), where the device button was; only where the page holds the queue.
                A tap opens its sheet; lit while either is on. -->
-          {#if isLocal() && !localMode()}
+          {#if port().radio && !localMode()}
             <button
               class="act radio more"
               class:on={local.radio || local.autoplay !== null}

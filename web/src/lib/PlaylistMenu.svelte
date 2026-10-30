@@ -13,6 +13,7 @@
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
   import { batchDelete, batchRows, missingCall, playlistRows, type PlaylistRow } from './api';
+  import { port } from './player/port.svelte';
   import { inApp } from './app.svelte';
   import { trackSteps } from './progress.svelte';
   import { linkTo, share } from './share';
@@ -27,7 +28,7 @@
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
   import { installed } from './offline.svelte';
-  import { isLocal, startPlaylists } from './output.svelte';
+  import { startPlaylists } from './output.svelte';
   import { openTab, viewSelection, panel, type Tab } from './panel.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { withUndo } from './undo.svelte';
@@ -423,7 +424,7 @@
     ? inOrder('playlist', [
         { icon: 'play', label: 'Play', onclick: () => play('play'), disabled: working },
         { icon: 'shuffle', label: 'Shuffle', onclick: () => play('shuffle'), disabled: working },
-        ...(isLocal() ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
+        ...(port().radio ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
       ])
     : []}
   onback={mode === 'menu' ? null : () => (mode = 'menu')}

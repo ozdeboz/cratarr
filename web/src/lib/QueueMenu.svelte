@@ -5,6 +5,7 @@
   // made of: how many of its tracks Radio put in and how many Autoplay serves; then in the table's order (lib/menuTable)
   // Save as playlist; Download…; Queues… (the switcher); Clear the queue last (with its Undo).
   import MenuSheet from './MenuSheet.svelte';
+  import { port } from './player/port.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuTable from './MenuTable.svelte';
   import DownloadStep from './DownloadStep.svelte';
@@ -13,7 +14,6 @@
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import QueuesSheet from './QueuesSheet.svelte';
   import { clearUpcoming, local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
-  import { isLocal } from './output.svelte';
   import { playing } from './remote.svelte';
   import { plural } from './insights.svelte';
   import { toast } from './toast.svelte';
@@ -21,10 +21,11 @@
   let { onclose }: { onclose: () => void } = $props();
 
   const np = $derived(playing());
-  const here = $derived(isLocal());
-  const name = $derived((here ? local.from : null) ?? 'Queue');
+  const held = $derived(port().queue());
+  const here = $derived(held !== null);
+  const name = $derived(held?.from ?? 'Queue');
   // What it holds from the playing track on: this page's own, or what the server's player said.
-  const listed = $derived(here ? local.queue.slice(Math.max(0, local.index)) : np ? [np, ...np.upcoming] : []);
+  const listed = $derived(held ? held.tracks.slice(Math.max(0, held.index)) : np ? [np, ...np.upcoming] : []);
   // Bandcamp's previews are never downloaded (decision 0071): Download… leaves them out.
   const kept = $derived(
     listed
@@ -34,7 +35,7 @@
   const tracks = $derived(listed.map((t) => ({ source: 'source' in t ? t.source : np!.source, id: t.id })));
   const fromRadio = $derived(listed.filter((t) => 'lane' in t && t.lane === 'radio').length);
   const fromAutoplay = $derived(listed.filter((t) => 'lane' in t && t.lane === 'autoplay').length);
-  const upcoming = $derived(here ? local.queue.length - local.index - 1 : (np?.upcoming.length ?? 0));
+  const upcoming = $derived(held ? held.tracks.length - held.index - 1 : (np?.upcoming.length ?? 0));
 
   let step = $state<'menu' | 'download'>('menu');
   let saving = $state(false);

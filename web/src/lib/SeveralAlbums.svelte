@@ -1,5 +1,6 @@
 <script lang="ts" module>
   import type { IconName } from './Icon.svelte';
+  import { port } from './player/port.svelte';
 
   /** A question the list asks once the menu has closed (lib/settings/ConfirmSheet): Delete's, Move's. */
   export type Ask = { title: string; text?: string | null; label: string; icon: IconName; go: () => void };
@@ -24,7 +25,6 @@
   import { me } from './me.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
-  import { isLocal } from './output.svelte';
   import { albumGone } from './panel.svelte';
   import RatingStars from './RatingStars.svelte';
   import { toast } from './toast.svelte';
@@ -197,7 +197,7 @@
 </script>
 
 <MenuGroup>
-  {#if isLocal() && tracks.length && items.length}<MenuEntry icon="radio" label="Start radio" onclick={radio} />{/if}
+  {#if port().radio && tracks.length && items.length}<MenuEntry icon="radio" label="Start radio" onclick={radio} />{/if}
 </MenuGroup>
 <!-- Feel: the rating (the heart is the select bar's). -->
 <MenuGroup>

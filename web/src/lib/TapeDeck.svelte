@@ -7,8 +7,7 @@
   // still drawing, an endless turn whose rate alone is changed, and only when the speed has moved; the packs and the
   // tape four times a second; the head's light an opacity.
   import { appInfo, inApp } from './app.svelte';
-  import { isLocal } from './output.svelte';
-  import { port } from './player/port.svelte';
+    import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
   import { ramping, tapeDir } from './ramping.svelte';
   import { deckSpeed, turnTape, windable } from './localPlayer.svelte';
@@ -62,7 +61,7 @@
     lastPos = pos;
     lastAt = now;
     // The app's deck says its speed (0.9.14-2): that, as it is.
-    const said = isLocal() ? deckSpeed(now) : null;
+    const said = port().holdsQueue ? deckSpeed(now) : null;
     if (said !== null) return said;
     if (rewinding) return speed * 0.85 + moved * 0.15;
     if (ramping.dir) {
@@ -140,7 +139,7 @@
   const KNOB = { x: 160, y: 36, r: 3.2 };
   /** The knob where a player can turn: this page's own, the app's, one driven (not Kodi, which plays as told). */
   const turnable = $derived(
-    isLocal() &&
+    port().holdsQueue &&
       playOn.players.find((p) => p.name === drivenName())?.kind !== 'kodi' &&
       // Part of the tape engine: only while Tape winding is on (the owner, 2026-10-27).
       (inApp ? appInfo.startStop : prefs.startStop).rewind,

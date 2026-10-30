@@ -1,5 +1,6 @@
 <script lang="ts">
   import StartStopSheet from './StartStopSheet.svelte';
+  import { port } from './player/port.svelte';
   // The queue (decisions 0019, 0022), as Finamp's queue sheet (lib/components/PlayerScreen/queue_list.dart): a sheet
   // over the player on the blurred cover, a grab handle and "Queue"; then the previous tracks (folded, this device
   // only: the server's player reports only what comes next), the playing track as a card that fills as it plays
@@ -42,7 +43,7 @@
   import { BANDCAMP } from './bandcampPreview';
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
-  import { isLocal, shownPlaylists } from './output.svelte';
+  import { shownPlaylists } from './output.svelte';
   import { clockText, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite, playPause, rampInert, shownPaused } from './remote.svelte';
   import { toast } from './toast.svelte';
   import { accept, askedOf, askerName, decline, follow, followingNow, loadAsked, playerShown, waiting } from './following.svelte';
@@ -57,7 +58,8 @@
   const np = $derived(playing());
   const pos = $derived(position());
   const dur = $derived(duration());
-  const here = $derived(isLocal());
+  const held = $derived(port().queue());
+  const here = $derived(held !== null);
   // Finamp's haptics: a selection tick and a heavy one.
   const tick = () => navigator.vibrate?.(8);
   const heavy = () => navigator.vibrate?.(25);
@@ -65,14 +67,14 @@
 
   // The previous tracks: folded, as Finamp's default.
   let prevOpen = $state(false);
-  const previous = $derived(here ? local.queue.slice(0, Math.max(0, local.index)) : []);
+  const previous = $derived(held ? held.tracks.slice(0, Math.max(0, held.index)) : []);
 
   // The queue section's header: where the queue came from, and "i / n (remaining)".
-  const from = $derived(here ? local.from : null);
+  const from = $derived(held?.from ?? null);
   const count = $derived.by(() => {
     if (!np) return '';
-    const n = here ? local.queue.length : np.upcoming.length + 1;
-    const i = here ? local.index + 1 : 1;
+    const n = held ? held.tracks.length : np.upcoming.length + 1;
+    const i = held ? held.index + 1 : 1;
     const lengths = np.upcoming.map((u) => u.duration_secs);
     const left = dur && lengths.every((l) => l !== null) ? dur - pos + lengths.reduce((a: number, l) => a + (l ?? 0), 0) : null;
     if (left === null) return `${i} of ${n}`;
@@ -94,7 +96,7 @@
   /** A crate's chip needs the crates, which nothing else may have read: read here, and until then the line says
    *  nothing rather than "Playing from" as words that turn into a chip (the owner, 2026-10-24). */
   let cratesComing = $state(false);
-  if (isLocal() && local.from && crates.list === null) {
+  if (port().queue()?.from && crates.list === null) {
     cratesComing = true;
     void loadCrates().finally(() => (cratesComing = false));
   }

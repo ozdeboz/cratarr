@@ -2,7 +2,6 @@
 // (winding back or forward for as long as held, lib/holdWind's way), where nothing else takes the arrows: not in a
 // field, on a slider, the seek bar, a list or a menu, nor with a modifier held. Installed once by App.
 import { appInfo, inApp } from './app.svelte';
-import { isLocal } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { holdsHere } from './holdWind';
 import { playing, send, wind, windTouch } from './remote.svelte';

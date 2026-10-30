@@ -1,5 +1,6 @@
 <script lang="ts">
   import StartStopSheet from './StartStopSheet.svelte';
+  import { port } from './player/port.svelte';
   // The mini-player along the bottom (decision 0018), as Finamp's now-playing bar: a floating bar with the cover and
   // play/pause on it, the title (scrolling when it does not fit), artist and time, and the heart. The whole bar fills
   // from the left as the track plays, in the cover's colour. Tap or swipe up: the full player (beside the page when
@@ -26,7 +27,6 @@
   import { prefs } from './prefs.svelte';
   import Cover from './Cover.svelte';
   import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampInert, shownPaused, waveStill, playingKey } from './remote.svelte';
-  import { isLocal } from './output.svelte';
   import SeekWave from './SeekWave.svelte';
   import { Seek } from './seekState.svelte';
   import { askedOf, playerShown } from './following.svelte';
@@ -42,7 +42,7 @@
   // lib/SeekWave): the bar is the waveform alone while held, its usual self again once let go.
   const seek = new Seek(position, () => dur, seekTo);
   const pos = $derived(seek.pos);
-  const canSeek = $derived(isLocal() && !!dur);
+  const canSeek = $derived(port().seekable && !!dur);
   $effect(() => {
     if (np) loadWaveform(np.source, np.id);
   });

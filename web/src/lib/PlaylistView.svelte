@@ -132,7 +132,7 @@
   import { inApp } from './app.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
-  import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
+  import { playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
   import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
@@ -941,9 +941,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     // Play next and Add to queue: an album's and an artist's, not a playlist's or a crate's (the owner, 2026-10-23).
     if (album || artist) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
     // An artist as the radio's input (decision 0036), as a crate is: their tracks, and like them from anywhere.
-    if (artist && isLocal() && source === 'cratarr') list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: artistRadio, disabled: !canPlay });
+    if (artist && port().radio && source === 'cratarr') list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: artistRadio, disabled: !canPlay });
     // A crate as the radio's input (decision 0036): like it, from anywhere; or only its tracks, endlessly.
-    else if (crate && isLocal()) {
+    else if (crate && port().radio) {
       list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: () => crateRadio(false), disabled: !canPlay });
       list.push({ key: 'station', icon: 'radioTower', label: 'Play as radio', run: () => crateRadio(true), disabled: !canPlay });
     }
@@ -1232,8 +1232,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   function playNext(r: PlaylistRow, src = source) {
     (async () => {
       try {
-        if (isLocal()) enqueue(tracksOf([r], src), 'next');
-        else await queueTrack(r.id!, 'next', src);
+        await port().enqueueOne(tracksOf([r], src)[0], 'next');
         toast.show({ text: 'Plays next.', tone: 'done' });
         setTimeout(refresh, 700);
       } catch (e) {
@@ -2325,7 +2324,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     favorite={artistHead?.favorite}
     ontogglefavorite={toggleArtistFavorite}
     onact={(mode) => act(mode)}
-    onradio={isLocal() && artist.source === 'cratarr' ? artistRadio : undefined}
+    onradio={port().radio && artist.source === 'cratarr' ? artistRadio : undefined}
     onclose={() => (artistMenuOpen = false)}
   />
 {/if}

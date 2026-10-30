@@ -6,11 +6,11 @@
 // page's reach, and on another player it plays elsewhere: there the loudness comes from the waveform until the server's
 // signals are in. Read once per frame by the visuals' loop.
 import { NEXT } from '../analysisAsks';
+import { port } from '../player/port.svelte';
 import { getTrackGain, trackState, type TrackGain } from '../api';
 import { appInfo, inApp } from '../app.svelte';
 import { prefs } from '../prefs.svelte';
 import { audioTap } from '../localPlayer.svelte';
-import { isLocal } from '../output.svelte';
 import { paused, playing } from '../remote.svelte';
 import { placeAt } from '../trackPlace.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
@@ -126,7 +126,7 @@ const APP_EAR = {} as AudioNode;
 /** What has been heard lately, where the page plays the music (this browser, or the app it runs in, which hears its own
  *  player); null elsewhere. */
 function listen(): LiveNow | null {
-  const tap = inApp ? (prefs.output === 'local' ? { node: APP_EAR, context: null } : null) : isLocal() ? audioTap() : null;
+  const tap = inApp ? (prefs.output === 'local' ? { node: APP_EAR, context: null } : null) : port().tap();
   if (!tap) {
     stopLive();
     return null;
