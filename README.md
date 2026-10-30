@@ -9,8 +9,8 @@ playlists stay plain `.m3u` files beside your music.
 
 ## Try it
 
-Each release on GitHub has a ready image (amd64 and arm64), the Android app, the desktop app for Linux and Windows,
-and `SHA256SUMS` of them all.
+Each release on GitHub has a ready image (amd64 and arm64), the Android app, the desktop app for Linux, and
+`SHA256SUMS` of them all.
 
 ```sh
 mkdir -p ~/cratarr
@@ -26,8 +26,8 @@ Until that first account exists, anyone who reaches the server can make it, and 
 run). Make it before the server can be reached from outside your home.
 
 For the Android app, install the APK from the latest [release](https://github.com/ozdeboz/cratarr/releases) and give
-it your server's address. For the desktop app, add its APT repository on Ubuntu, Linux Mint or Debian, or run the
-Windows installer from the same release, and give it the address too ([desktop/README.md](desktop/README.md)).
+it your server's address. For the desktop app, add its APT repository on Ubuntu, Linux Mint or Debian, and give it the
+address too ([desktop/README.md](desktop/README.md)).
 
 ## What it does
 
@@ -167,8 +167,8 @@ few settings Settings can change later (what Settings saves wins):
 - **Web**: every page of Cratarr. It plays by itself, and over HTTPS it installs as an app.
 - **Android**: [android/](android), a thin app around Cratarr's pages that plays the music itself (the APK is in each
   release). It also plays the phone's own music (Local mode, [0052](docs/decisions/0052-local-library.md)).
-- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own: for Linux from an APT repository, for
-  Windows an installer that updates itself from the releases.
+- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own, for Linux from an APT repository. A
+  Windows installer is prepared but not yet built or tried.
 - **Subsonic apps**: point them at Cratarr's address and sign in with your Cratarr account.
 - **Kodi**: added in Settings → Players, it becomes one of Cratarr's players over Kodi's own remote control ("Allow
   remote control via HTTP"), with nothing installed on Kodi.

@@ -2,8 +2,8 @@
 
 A thin app around Cratarr's pages, so a computer can be a Cratarr player that starts at login and keeps playing with
 its window closed (decision [0078](../docs/decisions/0078-a-desktop-app.md)). On Linux it comes as a `.deb` for Ubuntu,
-Linux Mint and Debian, from an APT repository so it updates with the system; on Windows as an installer that updates
-itself.
+Linux Mint and Debian, from an APT repository so it updates with the system. A Windows installer that updates itself
+is prepared (`npm run dist:win`, the release workflow's Windows job) but has not been built or tried yet.
 
 ## What it does
 
@@ -29,8 +29,8 @@ echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/cratarr.gpg] https://ozdeboz.g
 sudo apt update && sudo apt install cratarr-desktop
 ```
 
-Windows: `Cratarr-Setup-<version>.exe` from the latest [release](https://github.com/ozdeboz/cratarr/releases). It
-updates itself from the releases. It is not signed yet, so Windows asks once before it runs.
+Windows: not yet. The release workflow has a job for `Cratarr-Setup-<version>.exe`, an installer that would update
+itself from the releases (unsigned, so Windows would ask once before it runs), but it has not been built or tried.
 
 Each release's `SHA256SUMS` holds its files' checksums.
 
