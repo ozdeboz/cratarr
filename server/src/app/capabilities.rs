@@ -35,7 +35,8 @@ pub const CODE: &[&str] = &[
     "offline",
     "other_versions",
     "queue_requests",
-    // quick_crates: added by its own branch when it lands.
+    // Quick crates (0.11): Sounds like an artist, the closeness cutoff, the label and album axes.
+    "quick_crates",
     "renumber",
     "server_restart",
     "server_runtime",
