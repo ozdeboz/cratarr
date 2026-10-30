@@ -410,7 +410,8 @@ class MainActivity : AppCompatActivity() {
 
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
-     *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file). */
+     *  `address`, `open` (a link outside), `export-save` (Download…: an export saved as its one file), `snippet` (a
+     *  track's snippet, 0.12). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -436,6 +437,9 @@ class MainActivity : AppCompatActivity() {
             "network" -> reply.postMessage(NetState.now(this).toString())
             "device-plays" -> reply.postMessage(Plays.playedHere(this).toString())
             "player" -> player?.handle(message) ?: waiting.add(message)
+            // A track's snippet (0.12): played beside the music by the player service. Before the player is connected
+            // it is let go: a snippet asked then would sound late, after its menu.
+            "snippet" -> player?.snippet(message)
             // Where this device's controls point (decision 0062): asked of the player service, which decides and
             // tells the page (modeChanged). Started for it while the app is in front.
             "target" -> {
