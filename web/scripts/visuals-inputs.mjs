@@ -17,7 +17,8 @@ const { DEFAULTS, keptFrom, fluidFrom63, BEHAVIOUR_PINS, BAND_PINS } = await imp
 const { emptyExtra } = await import(`${src}patch.ts`);
 const { routeKey, SCALE_KEYS } = await import(`${src}routes.ts`);
 const { PRESET_KEYS } = await import(`${src}flame.ts`);
-const { CHAINS, EXAMPLES } = await import(`${src}chains.ts`);
+// The preset chains are the tests' fixture since the app reaches them no more (0.9.19).
+const { CHAINS, EXAMPLES } = await import('../tests/harness/oracle/chains.ts');
 
 export const copy = (v) => JSON.parse(JSON.stringify(v));
 

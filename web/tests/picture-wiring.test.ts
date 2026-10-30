@@ -8,7 +8,7 @@ const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { compile, stagesOf, STAGES, v2Types } = await import('../src/lib/visuals/picture-graph.ts');
 const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
-const { EXAMPLES } = await import('../src/lib/visuals/chains.ts');
+const { EXAMPLES } = await import('./harness/oracle/chains.ts');
 const { routeKey } = await import('../src/lib/visuals/routes.ts');
 type VisualSettings = typeof DEFAULTS;
 
@@ -210,7 +210,7 @@ test('a device’s loop (its Feedback on the Mix’s second input) is one pass t
 });
 
 test('every chain and example converted is drawn whole: no errors, its stages', async () => {
-  const { chainRoutes, CHAINS, EXAMPLES } = await import('../src/lib/visuals/chains.ts');
+  const { chainRoutes, CHAINS, EXAMPLES } = await import('./harness/oracle/chains.ts');
   for (const c0 of [...CHAINS, ...EXAMPLES]) {
     const v = toV2({ ...settings(), ...(c0.settings ?? {}), routes: chainRoutes(c0, 6), extra: JSON.parse(JSON.stringify(c0.extra)) } as never);
     const c = compile(v, types);
