@@ -203,6 +203,7 @@ pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str,
                 output: None,
                 context: Some(CONTEXT.into()),
                 event: Some(event(l)),
+                followed: false,
             };
             c.found(serve.userdata.record(&account, (song, &pid), &album, &artists, &heard)?);
         }

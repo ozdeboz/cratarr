@@ -162,6 +162,8 @@ async fn forget_own_history(State(serve): State<Arc<Serve>>) -> Response {
 
 /// One's own settings (decision 0051's split: the server's are the administrators', these each user's): what the apps
 /// keep for the account (Radio's and Autoplay's defaults, leaving favourites out, and the like), as `{ version, settings }`.
+/// The server reads two of them (decision 0079): `followable` (Others may follow me; absent: off) and `auto_accept`
+/// (the users whose queue requests go straight in).
 /// Signed in or not: while signing in is off, the owner's.
 async fn own_settings(State(serve): State<Arc<Serve>>) -> Response {
     let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
@@ -188,7 +190,15 @@ async fn set_own_settings(State(serve): State<Arc<Serve>>, axum::Json(b): axum::
         return refused(StatusCode::PAYLOAD_TOO_LARGE, "Those settings are too large to keep.");
     }
     match serve.userdata.put_settings(&me, b.base, &settings) {
-        Ok(Ok(version)) => axum::Json(json!({ "version": version })).into_response(),
+        Ok(Ok(version)) => {
+            // "Others may follow me" off (decision 0079): whoever follows them follows no one now.
+            if settings["followable"].as_bool() != Some(true)
+                && let Some(on) = crate::app::PlayOn::instance()
+            {
+                on.end_following_of(&me);
+            }
+            axum::Json(json!({ "version": version })).into_response()
+        }
         Ok(Err(crate::userdata::Stale)) => refused(StatusCode::CONFLICT, "They changed meanwhile."),
         Err(e) => refused(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
     }

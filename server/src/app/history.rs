@@ -29,12 +29,18 @@ pub fn weighted(rows: &[Logged], now: i64) -> Vec<(String, f32)> {
     by_song
 }
 
+/// One's own listening, for what reads a taste from it (the taste profile, Sounds like your week): what was heard while
+/// following another listener left out (the owner, 2026-10-30). The history itself shows it all.
+pub fn own(rows: Vec<Logged>) -> Vec<Logged> {
+    rows.into_iter().filter(|r| !r.followed).collect()
+}
+
 /// Sounds like your week's seed: the songs heard since `since`, weighted (`weighted`). None while the log does not
 /// reach back that far (it starts empty, decision 0064): the caller goes by the last plays then.
 pub fn since(userdata: &UserData, user: &str, since: i64, now: i64) -> Result<Option<Vec<(String, f32)>>> {
     match userdata.heard_from(user)? {
         // What played while they slept is not theirs (the owner, 2026-10-23).
-        Some(first) if first <= since => Ok(Some(weighted(&userdata.heard_since(user, since)?, now))),
+        Some(first) if first <= since => Ok(Some(weighted(&own(userdata.heard_since(user, since)?), now))),
         _ => Ok(None),
     }
 }
@@ -308,7 +314,16 @@ mod tests {
     use super::*;
 
     fn row(song: &str, at: i64, ended: Ended, counted: bool) -> Logged {
-        Logged { song: song.into(), at, heard_secs: None, length_secs: None, ended, counted, context: None }
+        Logged { song: song.into(), at, heard_secs: None, length_secs: None, ended, counted, context: None, followed: false }
+    }
+
+    #[test]
+    fn what_was_heard_while_following_is_history_but_not_ones_taste() {
+        let mut along = row("b", 20, Ended::Finished, true);
+        along.followed = true;
+        let rows = vec![row("a", 10, Ended::Finished, true), along];
+        assert_eq!(own(rows.clone()).iter().map(|r| r.song.as_str()).collect::<Vec<_>>(), ["a"], "the taste reads one's own");
+        assert_eq!(weighted(&rows, 30).len(), 2, "the history keeps both");
     }
 
     #[test]
@@ -320,7 +335,7 @@ mod tests {
         let fact = |t: &str, a: &str, g: &str| SongFacts { title: t.into(), artist: a.into(), album: format!("{a} LP"), album_id: format!("al-{a}"), genre: Some(g.into()) };
         facts.insert("a".to_string(), fact("A", "Ann", "House"));
         facts.insert("b".to_string(), fact("B", "Bob", "Jazz"));
-        let heard = |song: &str, at: i64, secs: f64, ended: Ended| Logged { song: song.into(), at, heard_secs: Some(secs), length_secs: None, ended, counted: ended == Ended::Finished, context: None };
+        let heard = |song: &str, at: i64, secs: f64, ended: Ended| Logged { song: song.into(), at, heard_secs: Some(secs), length_secs: None, ended, counted: ended == Ended::Finished, context: None, followed: false };
         let rows = [
             heard("a", now - 3600, 200.0, Ended::Finished),
             heard("a", now - day, 100.0, Ended::Finished),

@@ -504,7 +504,10 @@ async fn players_events(
     tokio::spawn(crate::serve::who::carried(async move {
         let mut sent = String::new();
         loop {
-            let now = json!({ "players": app.play_on.list() }).to_string();
+            // With the account's queue requests' version (decision 0079): a request of theirs answered, or one to them,
+            // reaches their pages even where no player of theirs changed.
+            let requests = app.play_on.requests.version_of(crate::app::whose_players().as_deref());
+            let now = json!({ "players": app.play_on.list(), "queue_requests": requests }).to_string();
             if now != sent {
                 if out.send(("players", now.clone())).await.is_err() {
                     return;

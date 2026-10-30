@@ -126,10 +126,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        Notices.inFront = true
         live()
     }
 
     override fun onStop() {
+        Notices.inFront = false
         LiveSound.listener = null
         super.onStop()
     }

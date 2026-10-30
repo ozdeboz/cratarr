@@ -51,7 +51,7 @@ mod tests {
 
     #[test]
     fn only_plain_public_paths_pass_without_a_session() {
-        for uri in ["/signin", "/signin?next=%2F", "/signout", "/manifest.webmanifest", "/sw.js", "/icons/icon-192.png", "/rest/ping.view?u=me", "/api/health"] {
+        for uri in ["/signin", "/signin?next=%2F", "/signout", "/manifest.webmanifest", "/sw.js", "/icons/icon-192.png", "/rest/ping.view?u=me", "/api/health", "/guest", "/api/guest/now", "/assets/index-abc.js"] {
             assert!(public(uri), "{uri}");
         }
         for uri in [
@@ -66,6 +66,8 @@ mod tests {
             "/rest\\..\\api",
             "/api/x?next=/signin",
             "/api/healthz",
+            "/guests",
+            "/assets/../api/library",
         ] {
             assert!(!public(uri), "{uri}");
         }

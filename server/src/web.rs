@@ -35,6 +35,14 @@ pub async fn serve(uri: Uri) -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
+/// The guest portal's page (decision 0079), the build's second entry: none until it is built.
+pub fn guest_page() -> Response {
+    match Assets::get("guest.html") {
+        Some(file) => respond("guest.html", file),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 fn respond(path: &str, file: rust_embed::EmbeddedFile) -> Response {
     // Vite fingerprints everything under assets/, so those files can be cached forever; the shell must not be.
     let cache = if path.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };

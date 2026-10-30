@@ -393,6 +393,9 @@ class PlayOnLink(
                     report()
                 },
             )
+            // A queue request asked of this account, or one of its own answered (decision 0079): a notification while
+            // the app is not in front.
+            "notice" -> return Notices.show(service, m.optString("text"))
             // The player's own, as the page's are (local mode's rules there too).
             else -> if (!commands.run(m, PlayerCommands.From.PLAY_ON)) Log.w(TAG, "a command this app does not know: $json")
         }

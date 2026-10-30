@@ -144,7 +144,7 @@ fn taste_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excl
     let starred = ud.starred(user, crate::userdata::Kind::Song)?;
     let mut skips: HashMap<usize, u32> = HashMap::new();
     let mut played: HashMap<usize, u32> = HashMap::new();
-    for l in ud.heard_since(user, 0)? {
+    for l in super::history::own(ud.heard_since(user, 0)?) {
         let Some(i) = place(&l.song) else { continue };
         if l.ended == crate::userdata::Ended::Skipped && !l.counted {
             *skips.entry(i).or_default() += 1;
@@ -2935,7 +2935,8 @@ impl PlaylistService {
             let playlists = lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line).filter(|&i| lib.on(i))?, lists.len()))).collect();
             // Plays from the log (the counts have no times), finished or counted.
             let mut played: HashMap<usize, u32> = HashMap::new();
-            let heard = ud.heard_since(&user, since)?;
+            // What was heard while following another is not one's taste (the owner, 2026-10-30).
+            let heard = super::history::own(ud.heard_since(&user, since)?);
             for l in heard.iter().filter(|l| l.counted || l.ended == crate::userdata::Ended::Finished) {
                 if let Some(i) = place(&l.song) {
                     *played.entry(i).or_default() += 1;

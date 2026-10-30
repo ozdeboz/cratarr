@@ -289,6 +289,7 @@ pub fn into_history(
                 output: None,
                 context: Some(context.to_string()),
                 event: Some(l.event.clone()),
+                followed: false,
             };
             if !serve.userdata.record(account, (song, &pid), &album, &artists, &h)? {
                 c.found(false);

@@ -3,10 +3,12 @@
 
 pub mod access;
 pub mod accounts;
+pub mod along;
 pub mod api;
 pub mod art;
 pub mod auth_check;
 pub mod files;
+pub mod guest;
 pub mod ids;
 pub mod import;
 pub mod ldap;

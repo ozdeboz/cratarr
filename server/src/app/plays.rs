@@ -55,6 +55,8 @@ impl PlayEvent {
             output: self.output.clone(),
             context: self.context.clone(),
             event: Some(self.id.clone()),
+            // Set as it is counted (`PlayingService::hear`): Play On knows whether its player was following then.
+            followed: false,
         }
     }
 }
