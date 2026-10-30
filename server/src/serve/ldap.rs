@@ -12,6 +12,9 @@
 //! the user's address (`mail`) too; the hash is kept by directory name only, so while the directory is away only that
 //! name signs in.
 //!
+//! The name a user goes by is read with them, at sign-in and in the hourly check: `displayName` (LLDAP's), else `cn`,
+//! else none. The page greets them with it.
+//!
 //! An empty password is refused before any exchange (a bind with one is an anonymous bind, which succeeds), and so is
 //! a name with control characters. Names and group go into the search filter escaped (RFC 4515). Plain LDAP is
 //! accepted only to a host on this machine's networks (a container name, localhost, a private address); anything
@@ -142,6 +145,39 @@ fn filter(attribute: &str, name: &str, group: &str) -> String {
 /// The address attribute a sign-in name is also looked up in.
 const MAIL: &str = "mail";
 
+/// Where the name a user goes by is, the first found: the standard attribute (LLDAP's), then the common name.
+const DISPLAY_NAME: [&str; 2] = ["displayName", "cn"];
+
+/// The attributes a search for users asks for: the name and the display name's.
+fn wanted(attribute: &str) -> Vec<&str> {
+    vec![attribute, DISPLAY_NAME[0], DISPLAY_NAME[1]]
+}
+
+/// An attribute's first value, its name matched regardless of case (as directories match them).
+fn first<'a>(attrs: &'a HashMap<String, Vec<String>>, name: &str) -> Option<&'a String> {
+    attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).and_then(|(_, v)| v.first())
+}
+
+/// The name a user goes by, from their entry's attributes: `displayName`, else `cn`, else none; trimmed, an empty one
+/// being none.
+fn display_name(attrs: &HashMap<String, Vec<String>>) -> Option<String> {
+    DISPLAY_NAME.iter().find_map(|a| first(attrs, a).map(|v| v.trim()).filter(|v| !v.is_empty()).map(str::to_string))
+}
+
+/// A user the directory has: their name as it spells it, and the name they go by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    pub name: String,
+    pub display_name: Option<String>,
+}
+
+/// What the directory says of a user it signed in: whether an administrator, and the name they go by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Said {
+    pub admin: bool,
+    pub display_name: Option<String>,
+}
+
 /// The one form a name's kept hash is filed under: directories match names regardless of case, so a refusal for
 /// "OSKAR" must delete what an earlier sign-in kept for "oskar".
 fn key(name: &str) -> String {
@@ -156,8 +192,9 @@ fn acceptable(name: &str, password: &str) -> bool {
 /// The directory's answer to a name and password.
 #[derive(Debug, PartialEq, Eq)]
 enum Answer {
-    /// Signed in as this directory name (as the directory spells it), and whether it is in the administrators' group.
-    Yes(String, bool),
+    /// Signed in as this directory name (as the directory spells it), with whether it is in the administrators' group and
+    /// its display name.
+    Yes(String, Said),
     /// Refused: no such user (in the group), or the wrong password.
     No,
     /// Not reachable: no connection, or no answer in time. A recent sign-in's kept hash may stand in.
@@ -262,17 +299,18 @@ impl Directory {
 
     /// The Cratarr account a name and password sign in as through the directory; `None` when it is off, refuses them,
     /// or cannot be reached and has no recent sign-in of theirs. `account`: the Cratarr account for a name (the one
-    /// `accounts` maps it to, else the same), given whether the directory says it is an administrator (`None`: not asked,
-    /// it was unreachable); made or brought back where the directory signed it in (decision 0051), only found otherwise.
-    pub async fn sign_in(&self, name: &str, password: &str, account: &(dyn Fn(&str, Option<bool>) -> Option<String> + Sync), now: i64) -> Option<String> {
+    /// `accounts` maps it to, else the same), given what the directory says of it (whether an administrator, its display
+    /// name; `None`: not asked, it was unreachable); made or brought back where the directory signed it in (decision
+    /// 0051), only found otherwise.
+    pub async fn sign_in(&self, name: &str, password: &str, account: &(dyn Fn(&str, Option<Said>) -> Option<String> + Sync), now: i64) -> Option<String> {
         let config = self.config();
         if !config.enabled || !acceptable(name, password) {
             return None;
         }
         let mapped = |directory_name: &str| config.accounts.get(directory_name).cloned().unwrap_or_else(|| directory_name.to_string());
         match ask(&config, name, password).await {
-            Answer::Yes(directory_name, admin) => {
-                let account = account(&mapped(&directory_name), Some(admin))?;
+            Answer::Yes(directory_name, said) => {
+                let account = account(&mapped(&directory_name), Some(said))?;
                 self.remember(&directory_name, password, now).await;
                 Some(account)
             }
@@ -288,9 +326,10 @@ impl Directory {
         }
     }
 
-    /// The directory's members now (decision 0051's hourly check): the Cratarr accounts of the sign-in group's members,
-    /// and of the administrators' group's; `None` when it is off, unreachable or refusing (then no one is let go).
-    pub async fn census(&self) -> Option<(Vec<String>, Vec<String>)> {
+    /// The directory's members now (decision 0051's hourly check): the Cratarr accounts of the sign-in group's members
+    /// (with their display names), and of the administrators' group's; `None` when it is off, unreachable or refusing
+    /// (then no one is let go).
+    pub async fn census(&self) -> Option<(Vec<Member>, Vec<String>)> {
         let config = self.config();
         if !config.enabled {
             return None;
@@ -300,9 +339,12 @@ impl Directory {
             let members = members(&mut ldap, &config, &config.group).await;
             let admins = if config.admin_group.trim().is_empty() { Ok(Vec::new()) } else { members_of_admins(&mut ldap, &config).await };
             let _ = ldap.unbind().await;
-            let mapped = |names: Vec<String>| names.into_iter().map(|n| config.accounts.get(&n).cloned().unwrap_or(n)).collect::<Vec<_>>();
+            let account = |n: String| config.accounts.get(&n).cloned().unwrap_or(n);
             match (members, admins) {
-                (Ok(m), Ok(a)) => Some((mapped(m), mapped(a))),
+                (Ok(m), Ok(a)) => Some((
+                    m.into_iter().map(|m| Member { name: account(m.name), ..m }).collect(),
+                    a.into_iter().map(|m| account(m.name)).collect(),
+                )),
                 (m, a) => {
                     let why = m.err().or(a.err()).map(|f| f.why().to_string()).unwrap_or_default();
                     tracing::warn!(target: "signin", reason = %why, "directory census not taken");
@@ -375,12 +417,12 @@ async fn connect(config: &Config) -> std::result::Result<(ldap3::Ldap, ()), Fail
     }
 }
 
-/// The DN and directory name of the user with this name (in the group); `None`: not found.
-async fn find(ldap: &mut ldap3::Ldap, config: &Config, name: &str) -> std::result::Result<Option<(String, String)>, Failure> {
+/// The DN of the user with this name (in the group), and the user as the directory has them; `None`: not found.
+async fn find(ldap: &mut ldap3::Ldap, config: &Config, name: &str) -> std::result::Result<Option<(String, Member)>, Failure> {
     let attribute = config.attribute();
     let found = ldap
         .with_timeout(TIMEOUT)
-        .search(&config.base_dn, ldap3::Scope::Subtree, &filter(attribute, name, &config.group), vec![attribute])
+        .search(&config.base_dn, ldap3::Scope::Subtree, &filter(attribute, name, &config.group), wanted(attribute))
         .await
         .map_err(|_| Failure::Unreachable("The directory did not answer the search.".into()))?
         .success()
@@ -390,8 +432,9 @@ async fn find(ldap: &mut ldap3::Ldap, config: &Config, name: &str) -> std::resul
         return Ok(None);
     }
     let entry = ldap3::SearchEntry::construct(found.into_iter().next().expect("one"));
-    let spelled = entry.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(attribute)).and_then(|(_, v)| v.first().cloned());
-    Ok(Some((entry.dn, spelled.unwrap_or_else(|| name.to_string()))))
+    let spelled = first(&entry.attrs, attribute).cloned().unwrap_or_else(|| name.to_string());
+    let display_name = display_name(&entry.attrs);
+    Ok(Some((entry.dn, Member { name: spelled, display_name })))
 }
 
 /// Whether `name` is a member of `group` (none set: no one is), asked on a connection bound as the service account.
@@ -411,14 +454,14 @@ async fn member(ldap: &mut ldap3::Ldap, config: &Config, name: &str, group: &str
     Ok(found.len() == 1)
 }
 
-/// The names of `group`'s members (any user under the base when none is set), as the directory spells them, asked on a
-/// connection bound as the service account.
-async fn members(ldap: &mut ldap3::Ldap, config: &Config, group: &str) -> std::result::Result<Vec<String>, Failure> {
+/// `group`'s members (any user under the base when none is set): their names as the directory spells them and their
+/// display names, asked on a connection bound as the service account.
+async fn members(ldap: &mut ldap3::Ldap, config: &Config, group: &str) -> std::result::Result<Vec<Member>, Failure> {
     let attribute = config.attribute();
     let filter = if group.trim().is_empty() { format!("({attribute}=*)") } else { format!("(&({attribute}=*)(memberOf={}))", escape(group.trim())) };
     let found = ldap
         .with_timeout(TIMEOUT)
-        .search(&config.base_dn, ldap3::Scope::Subtree, &filter, vec![attribute])
+        .search(&config.base_dn, ldap3::Scope::Subtree, &filter, wanted(attribute))
         .await
         .map_err(|_| Failure::Unreachable("The directory did not answer the search.".into()))?
         .success()
@@ -428,12 +471,13 @@ async fn members(ldap: &mut ldap3::Ldap, config: &Config, group: &str) -> std::r
         .into_iter()
         .filter_map(|e| {
             let entry = ldap3::SearchEntry::construct(e);
-            entry.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(attribute)).and_then(|(_, v)| v.first().cloned())
+            let name = first(&entry.attrs, attribute).cloned()?;
+            Some(Member { name, display_name: display_name(&entry.attrs) })
         })
         .collect())
 }
 
-async fn members_of_admins(ldap: &mut ldap3::Ldap, config: &Config) -> std::result::Result<Vec<String>, Failure> {
+async fn members_of_admins(ldap: &mut ldap3::Ldap, config: &Config) -> std::result::Result<Vec<Member>, Failure> {
     members(ldap, config, &config.admin_group).await
 }
 
@@ -452,10 +496,10 @@ async fn ask(config: &Config, name: &str, password: &str) -> Answer {
                 why.answer()
             }
             Ok(None) => Answer::No,
-            Ok(Some((dn, spelled))) => {
+            Ok(Some((dn, found))) => {
                 // Whether an administrator, asked as the service account, before binding as the user (who may not
                 // search).
-                let admin = match member(&mut ldap, config, &spelled, &config.admin_group).await {
+                let admin = match member(&mut ldap, config, &found.name, &config.admin_group).await {
                     Ok(admin) => admin,
                     Err(why) => {
                         tracing::warn!(target: "signin", reason = %why.why(), "directory not usable");
@@ -464,7 +508,7 @@ async fn ask(config: &Config, name: &str, password: &str) -> Answer {
                     }
                 };
                 match ldap.with_timeout(TIMEOUT).simple_bind(&dn, password).await {
-                    Ok(r) if r.rc == 0 => Answer::Yes(spelled, admin),
+                    Ok(r) if r.rc == 0 => Answer::Yes(found.name, Said { admin, display_name: found.display_name }),
                     // 49: invalidCredentials.
                     Ok(r) if r.rc == 49 => Answer::No,
                     _ => Answer::Unreachable,
@@ -559,6 +603,18 @@ mod tests {
         assert!(acceptable("oskar", "secret"));
     }
 
+    #[test]
+    fn the_display_name_is_display_name_else_cn_else_none() {
+        let attrs = |pairs: &[(&str, &str)]| -> HashMap<String, Vec<String>> { pairs.iter().map(|(k, v)| (k.to_string(), vec![v.to_string()])).collect() };
+        assert_eq!(display_name(&attrs(&[("uid", "elva"), ("displayName", " Elva Smith "), ("cn", "elva")])).as_deref(), Some("Elva Smith"));
+        assert_eq!(display_name(&attrs(&[("uid", "elva"), ("displayname", "Elva")])).as_deref(), Some("Elva"), "whatever the attribute's case");
+        assert_eq!(display_name(&attrs(&[("uid", "elva"), ("displayName", "  "), ("CN", "Elva S.")])).as_deref(), Some("Elva S."), "an empty one: the common name");
+        assert_eq!(display_name(&attrs(&[("uid", "elva"), ("cn", "")])), None);
+        assert_eq!(display_name(&attrs(&[("uid", "elva")])), None);
+        assert_eq!(display_name(&HashMap::from([("displayName".to_string(), Vec::new())])), None, "an attribute without a value");
+        assert_eq!(wanted("uid"), ["uid", "displayName", "cn"]);
+    }
+
     fn config() -> Config {
         Config {
             enabled: true,
@@ -604,7 +660,7 @@ mod tests {
         let dir = Directory::open(Some(&d)).unwrap();
         // Nothing listens on port 1: the directory cannot be reached.
         dir.set_config(Config { url: "ldap://127.0.0.1:1".into(), bind_password_file: pw.display().to_string(), ..config() }).unwrap();
-        let exists = |a: &str, _admin: Option<bool>| (a == "oskar").then(|| a.to_string());
+        let exists = |a: &str, _: Option<Said>| (a == "oskar").then(|| a.to_string());
         assert_eq!(dir.sign_in("oskar", "secret", &exists, 1_000).await, None, "nothing kept yet");
         // As if the directory had accepted it at time 1000.
         dir.remember("oskar", "secret", 1_000).await;
@@ -626,31 +682,31 @@ mod tests {
         let mut mapped = again.config();
         mapped.accounts.insert("oskar".into(), "owner".into());
         again.set_config(mapped).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
-        assert_eq!(again.sign_in("oskar", "secret", &|_: &str, _: Option<bool>| None, 3_000).await, None);
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
+        assert_eq!(again.sign_in("oskar", "secret", &|_: &str, _: Option<Said>| None, 3_000).await, None);
         // A refusal for the name in another case deletes it (directories match names regardless of case), and the
         // name typed in another case finds the directory's spelling for the mapping.
-        assert_eq!(again.sign_in("OSKAR", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
+        assert_eq!(again.sign_in("OSKAR", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
         again.forget("OSKAR");
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "gone after a refusal");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "gone after a refusal");
         again.remember("oskar", "secret", 1_000).await;
         // A misconfiguration (the service account's password file unreadable) fails closed: no kept hash stands in,
         // and none is deleted.
         let mut broken = again.config();
         broken.bind_password_file = d.join("missing").display().to_string();
         again.set_config(broken.clone()).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "fails closed");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "fails closed");
         broken.bind_password_file = pw.display().to_string();
         again.set_config(broken).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"), "kept, not deleted");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"), "kept, not deleted");
         // After 30 days it is gone.
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 1_000 + KEEP_SECS + 1).await, None);
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "and stays gone");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 1_000 + KEEP_SECS + 1).await, None);
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "and stays gone");
         // Switched off, the directory is not asked at all.
         let mut off = again.config();
         off.enabled = false;
         again.set_config(off).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| Some(a.to_string()), 3_000).await, None);
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<Said>| Some(a.to_string()), 3_000).await, None);
         std::fs::remove_dir_all(&d).ok();
     }
 

@@ -505,13 +505,14 @@ mod tests {
     #[tokio::test]
     async fn with_signing_in_off_one_still_signed_in_is_told_who_they_are() {
         let s = served(false);
-        s.users.from_directory("ann", false).unwrap();
+        s.users.from_directory("ann", false, Some(" Ann Example ")).unwrap();
         let (token, _) = s.sessions.create("ann", "d", now()).unwrap();
         let as_ann = |uri: &str| HttpRequest::get(uri).header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap();
         let me = app(&s).oneshot(as_ann("/api/me")).await.unwrap();
         assert_eq!(me.status(), StatusCode::OK);
         let body: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(me.into_body(), 1 << 16).await.unwrap()).unwrap();
         assert_eq!((body["name"].as_str(), body["admin"].as_bool()), (Some("ann"), Some(false)), "ann, no administrator");
+        assert_eq!(body["display_name"].as_str(), Some("Ann Example"), "the name the directory gives her, trimmed");
         assert_eq!(status(&s, as_ann("/api/users")).await.0, StatusCode::FORBIDDEN, "as the server treats her");
         // No one signed in: the one user, as before.
         assert_eq!(status(&s, HttpRequest::get("/api/me").body(Body::empty()).unwrap()).await.0, StatusCode::NOT_FOUND);
@@ -563,7 +564,7 @@ mod tests {
     #[tokio::test]
     async fn an_account_goes_as_far_as_it_may_and_a_key_no_further_than_its_scope() {
         let s = served(true);
-        s.users.from_directory("ann", false).unwrap();
+        s.users.from_directory("ann", false, None).unwrap();
         let signed_in = |user: &str, uri: &str| {
             let (token, _) = s.sessions.create(user, "d", now()).unwrap();
             HttpRequest::get(uri).header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap()
@@ -575,6 +576,7 @@ mod tests {
         let me = app(&s).oneshot(signed_in("ann", "/api/me")).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(me.into_body(), 1 << 16).await.unwrap()).unwrap();
         assert_eq!((body["name"].as_str(), body["admin"].as_bool()), (Some("ann"), Some(false)));
+        assert!(body["display_name"].is_null(), "none given: null");
 
         let keyed = |key: &str, method: &str, uri: &str| HttpRequest::builder().method(method).uri(uri).header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
         let (reads, _) = s.sessions.new_key("Dashboard", Some("me"), "read", None, now()).unwrap();
@@ -629,7 +631,7 @@ mod tests {
         assert!(s.sessions.keys().unwrap().iter().find(|k| k.id == made.id).unwrap().last_used.is_some());
         // Not required, still heard: one signed in is themselves, not the owner (decision 0051).
         assert_eq!(status(&s, get_("/api/auth/keys")).await.0, StatusCode::OK, "anyone else: the owner");
-        s.users.from_directory("ann", false).unwrap();
+        s.users.from_directory("ann", false, None).unwrap();
         let (token, _) = s.sessions.create("ann", "d", now()).unwrap();
         let ann = HttpRequest::get("/api/auth/keys").header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, ann).await.0, StatusCode::FORBIDDEN);

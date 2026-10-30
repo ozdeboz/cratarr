@@ -62,3 +62,17 @@ directory never gives out.
 - A password changed in the directory does not sign out devices already signed in (their sessions stay until signed
   out in Settings, or 90 days unused); changing Cratarr's own password still does.
 - The data folder holds two more owner-only files: `ldap.json` and `ldap-verifiers.json`.
+
+## Amendment, 2026-10-30: the display name
+
+The owner, of the Home greeting's "Capital first letter" switch (0.9.19): "has no right to exist. We use LDAP, which
+offers the display name option, and we should simply use the display name."
+
+- **Read from the directory** with the user: at sign-in (the same search that finds them) and in 0051's hourly check
+  (the same search that lists the group). The name a user goes by is `displayName` (LLDAP's), else `cn`, else none;
+  trimmed, an empty one being none. No setting: these are the standard attributes.
+- **Kept with the account** in `subsonic-users.json` (`display_name`, absent in older files), written only when the
+  directory gives a different one. Cratarr's own account the directory signs in as (the same name, or mapped) takes
+  it too, and nothing else from it; an account the directory never signs in has none.
+- **Shown by the page's greeting**: `/api/me` (and the Users panel's list) carries `display_name`, null when there is
+  none; the page greets one with it, else with the account's name as it is.

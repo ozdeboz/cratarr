@@ -1,5 +1,6 @@
-//! One's own account and, for the administrators, everyone's (decision 0051, several users): `/api/me` (who one is, what
-//! one may do, whether one's OpenSubsonic password is set, one's devices and sign-ins) and `/api/users` (the Users panel).
+//! One's own account and, for the administrators, everyone's (decision 0051, several users): `/api/me` (who one is and
+//! the name one goes by, what one may do, whether one's OpenSubsonic password is set, one's devices and sign-ins) and
+//! `/api/users` (the Users panel).
 //! A device is a Play On player of the account's (`{ id, name, kind, online, last_seen }`, its id its name).
 //! With signing in off (one user) there is no one to be: `/api/me` answers 404, and the page takes it for the owner.
 
@@ -75,10 +76,11 @@ fn devices_of(serve: &Serve, user: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// An account as the Users panel shows it.
+/// An account as the Users panel shows it. `display_name`: the name the directory gives it (null: none), which the page
+/// greets one with, else the name.
 fn view(serve: &Serve, u: &User, current: Option<&str>) -> serde_json::Value {
     json!({
-        "name": u.name, "admin": u.admin, "active": u.active, "directory": u.directory, "permissions": u.permissions,
+        "name": u.name, "display_name": u.display_name, "admin": u.admin, "active": u.active, "directory": u.directory, "permissions": u.permissions,
         "app_password": !u.password.is_empty(), "devices": devices_of(serve, &u.name), "sessions": sessions_of(serve, &u.name, current),
     })
 }
@@ -321,16 +323,26 @@ async fn end_session(State(serve): State<Arc<Serve>>, Path((name, id)): Path<(St
     end(&serve, &name, &id)
 }
 
-/// The hourly check (decision 0051): who is still in the directory's group, and who of them is an administrator. One
-/// who left can no longer sign in; their sign-ins end and their kept password stops standing in when the directory is
-/// down; their data stays. Nothing changes when the directory cannot be asked.
+/// The hourly check (decision 0051): who is still in the directory's group, who of them is an administrator, and the
+/// name each goes by (kept on any account of theirs, Cratarr's own of the same name too). One who left can no longer
+/// sign in; their sign-ins end and their kept password stops standing in when the directory is down; their data stays.
+/// Nothing changes when the directory cannot be asked.
 pub async fn check_directory(serve: &Serve) {
     let Some((members, admins)) = serve.directory.census().await else { return };
-    for u in serve.users.all().into_iter().filter(|u| u.directory) {
-        if members.iter().any(|m| m == &u.name) {
-            if u.active && u.admin != admins.iter().any(|a| a == &u.name) {
-                let _ = serve.users.from_directory(&u.name, !u.admin);
+    for u in serve.users.all() {
+        if let Some(m) = members.iter().find(|m| m.name == u.name) {
+            let display_name = m.display_name.as_deref();
+            let kept = if u.directory && u.active && u.admin != admins.iter().any(|a| a == &u.name) {
+                serve.users.from_directory(&u.name, !u.admin, display_name).map(|_| ())
+            } else {
+                serve.users.set_display_name(&u.name, display_name).map(|_| ())
+            };
+            if let Err(e) = kept {
+                tracing::warn!(target: "signin", user = %u.name, "could not keep what the directory says of the account: {e:#}");
             }
+            continue;
+        }
+        if !u.directory {
             continue;
         }
         match serve.users.deactivate(&u.name) {

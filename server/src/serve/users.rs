@@ -35,6 +35,10 @@ pub struct User {
     pub directory: bool,
     #[serde(default)]
     pub permissions: Permissions,
+    /// The name the person goes by, from the directory (its `displayName`, else `cn`), which the page greets them with;
+    /// `None` for an account the directory never signed in, or one it gives no such name.
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 fn yes() -> bool {
@@ -97,8 +101,21 @@ impl Refused {
 impl User {
     /// A new, active account of this name: no password yet, not an administrator, the usual permissions.
     pub fn named(name: &str) -> Self {
-        Self { name: name.to_string(), password: String::new(), admin: false, active: true, directory: false, permissions: Permissions::default() }
+        Self {
+            name: name.to_string(),
+            password: String::new(),
+            admin: false,
+            active: true,
+            directory: false,
+            permissions: Permissions::default(),
+            display_name: None,
+        }
     }
+}
+
+/// A display name as it is kept: trimmed, and none when that leaves nothing.
+fn tidy(display_name: Option<&str>) -> Option<String> {
+    display_name.map(str::trim).filter(|d| !d.is_empty()).map(str::to_string)
 }
 
 pub struct Users {
@@ -225,27 +242,54 @@ impl Users {
     }
 
     /// The account the directory signs `name` in as (decision 0051): made at its first sign-in, active again if it had
-    /// left, an administrator as the directory says. Cratarr's own accounts (not from the directory) are left as they
-    /// are: one of the same name is that account.
-    pub fn from_directory(&self, name: &str, admin: bool) -> Result<User> {
+    /// left, an administrator as the directory says, with the display name it gives. Cratarr's own accounts (not from
+    /// the directory) are left as they are but for that name: one of the same name is that account. Written only when
+    /// something changed.
+    pub fn from_directory(&self, name: &str, admin: bool, display_name: Option<&str>) -> Result<User> {
+        let display_name = tidy(display_name);
         let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
         let before = users.clone();
         match users.iter_mut().find(|u| u.name == name) {
-            Some(u) if !u.directory => return Ok(u.clone()),
+            Some(u) if !u.directory => {
+                if u.display_name == display_name {
+                    return Ok(u.clone());
+                }
+                u.display_name = display_name;
+            }
             Some(u) => {
-                if (u.admin, u.active) == (admin, true) {
+                if (u.admin, u.active, &u.display_name) == (admin, true, &display_name) {
                     return Ok(u.clone());
                 }
                 u.admin = admin;
                 u.active = true;
+                u.display_name = display_name;
             }
-            None => users.push(User { admin, directory: true, ..User::named(name) }),
+            None => users.push(User { admin, directory: true, display_name, ..User::named(name) }),
         }
         if let Err(e) = self.save(&users) {
             *users = before;
             return Err(e);
         }
         Ok(users.iter().find(|u| u.name == name).cloned().expect("just kept"))
+    }
+
+    /// The display name the directory gives an account now (the hourly check): kept, and the file written, only when it
+    /// changed. Returns whether it did.
+    pub fn set_display_name(&self, name: &str, display_name: Option<&str>) -> Result<bool> {
+        let display_name = tidy(display_name);
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        let Some(u) = users.iter_mut().find(|u| u.name == name) else { return Ok(false) };
+        if u.display_name == display_name {
+            return Ok(false);
+        }
+        let old = std::mem::replace(&mut u.display_name, display_name);
+        let saved = self.save(&users);
+        if saved.is_err() {
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.display_name = old;
+            }
+        }
+        saved.map(|()| true)
     }
 
     /// An account from the directory that left its group (decision 0051): it may no longer sign in, its data kept.
@@ -535,6 +579,49 @@ mod tests {
     }
 
     #[test]
+    fn a_users_file_from_before_display_names_still_reads() {
+        let dir = std::env::temp_dir().join(format!("cratarr-users-old-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("subsonic-users.json"), r#"[{ "name": "me", "password": "pw", "admin": true }, { "name": "dee", "password": "", "directory": true }]"#).unwrap();
+        let users = Users::open(Some(&dir)).unwrap();
+        assert!(users.all().iter().all(|u| u.display_name.is_none() && u.active));
+        assert!(users.check(Some("me"), None, None, Some("pw")).unwrap().admin);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_directorys_display_name_is_kept_and_written_only_when_it_changed() {
+        let dir = std::env::temp_dir().join(format!("cratarr-users-dname-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("subsonic-users.json");
+        let users = Users::open(Some(&dir)).unwrap();
+        users.set("me", "pw").unwrap();
+        assert_eq!(users.get("me").unwrap().display_name, None, "Cratarr's own account: none");
+        assert_eq!(users.from_directory("dee", false, Some("  Dee Example ")).unwrap().display_name.as_deref(), Some("Dee Example"));
+        assert!(std::fs::read_to_string(&file).unwrap().contains("\"display_name\": \"Dee Example\""));
+
+        // The same again (trimmed alike) writes nothing: the file, taken away, stays away.
+        std::fs::remove_file(&file).unwrap();
+        users.from_directory("dee", false, Some("Dee Example")).unwrap();
+        assert!(!users.set_display_name("dee", Some(" Dee Example")).unwrap());
+        assert!(!file.exists(), "unchanged: not written");
+
+        // A new one is kept and written; an empty one is none.
+        assert!(users.set_display_name("dee", Some("Dee E.")).unwrap());
+        assert!(file.exists());
+        assert_eq!(Users::open(Some(&dir)).unwrap().get("dee").unwrap().display_name.as_deref(), Some("Dee E."));
+        assert!(users.set_display_name("dee", Some("  ")).unwrap());
+        assert_eq!(users.get("dee").unwrap().display_name, None);
+        assert!(!users.set_display_name("nobody", Some("x")).unwrap());
+
+        // Cratarr's own account the directory signs in as takes its display name, nothing else.
+        assert_eq!(users.from_directory("me", false, Some("Me Myself")).unwrap().display_name.as_deref(), Some("Me Myself"));
+        let me = users.get("me").unwrap();
+        assert!(me.admin && !me.directory);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn cratarr_accounts_are_made_and_kept_beside_the_directorys() {
         let users = Users::open(None).unwrap();
         // The first is an administrator whatever is asked (nghe's setup); the name rules; a name taken whatever its case.
@@ -543,7 +630,7 @@ mod tests {
             assert!(matches!(users.create(bad, "pw", false), Err(Refusal::Bad(_))), "{bad:?}");
         }
         assert!(matches!(users.create("bob", "", false), Err(Refusal::Bad(_))));
-        users.from_directory("dee", false).unwrap();
+        users.from_directory("dee", false, None).unwrap();
         assert_eq!(users.create("ANN", "pw", false), Err(Refusal::Conflict("That name is taken.")));
         assert_eq!(users.create("Dee", "pw", false), Err(Refusal::Conflict("That name is taken.")), "a directory account's too");
         let bob = users.create("Bob Smith", "pw", false).unwrap();
