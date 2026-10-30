@@ -8,7 +8,7 @@
 //   worker, and with it Downloads, work there as on https.
 'use strict';
 
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, powerMonitor, screen, session, shell } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -250,6 +250,9 @@ if (first) {
   app.on('second-instance', show);
   app.on('before-quit', () => (quitting = true));
   app.whenReady().then(() => {
+    // Woken or unlocked (0.9.19; the owner, 2026-10-30: the ThinkPad's player came back a minute after its Wi-Fi): the
+    // page reconnects at once instead of waiting out a dead connection or its retry.
+    for (const e of ['resume', 'unlock-screen']) powerMonitor.on(e, () => win?.webContents.send('wake'));
     session.defaultSession.setPermissionRequestHandler((_wc, permission, done, details) => done(ALLOWED.has(permission) && sameOrigin(details.requestingUrl)));
     session.defaultSession.setPermissionCheckHandler((_wc, permission, requesting) => ALLOWED.has(permission) && sameOrigin(requesting));
     tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 24, height: 24 }));

@@ -10,6 +10,8 @@ const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slic
 contextBridge.exposeInMainWorld('CratarrDesktop', {
   version: arg('cratarr-desktop'),
   name: arg('cratarr-desktop-name'),
+  // The computer woke or was unlocked (main.js): the page reconnects at once (0.9.19).
+  onWake: (f) => ipcRenderer.on('wake', () => f()),
   ...(location.protocol === 'file:'
     ? { server: () => ipcRenderer.invoke('server'), connect: (address) => ipcRenderer.invoke('connect', address) }
     : {}),
