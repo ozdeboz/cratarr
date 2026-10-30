@@ -15,6 +15,7 @@
 //! Blocking and single-threaded: the pass runs several at once.
 
 pub mod band_wave;
+pub mod flaws;
 pub mod spectrum;
 pub mod batch;
 pub mod signals;
@@ -25,7 +26,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
-use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::audio::{AudioCodecId, AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
@@ -237,6 +238,8 @@ struct Opened {
     reader: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
     track: u32,
+    /// What the sound is coded in (FLAC, MP3, …).
+    codec: AudioCodecId,
     rate: u32,
     channels: usize,
     /// The track's time base (numerator, denominator), which packets' times are in.
@@ -263,7 +266,7 @@ fn open_from(path: &Path, start: u64) -> Result<Opened> {
     if channels == 0 || rate < 8_000 {
         bail!("{channels} channels at {rate} Hz");
     }
-    Ok(Opened { reader, decoder, track: id, rate, channels, time_base })
+    Ok(Opened { reader, decoder, track: id, codec: params.codec, rate, channels, time_base })
 }
 
 /// Opens the file; one that does not probe is tried again after its ID3v2 tag.
@@ -281,19 +284,21 @@ fn open(path: &Path) -> Result<Opened> {
 }
 
 /// A file's sound decoded whole, as a gate looks at it (0.9.8, single-track replacement): its rate, channels and
-/// length, and how many frames would not decode.
+/// length, how many frames would not decode, what it is coded in and how many bytes its sound is (for its bitrate).
 pub struct Walked {
     pub rate: u32,
     pub channels: usize,
     pub frames: u64,
     pub damaged: u32,
+    pub codec: AudioCodecId,
+    pub bytes: u64,
 }
 
 /// Decodes every packet of the file, handing each one's sound (planar, -1..1) to `each`; a damaged frame is counted
 /// and skipped, as the analysis skips it.
 pub fn walk(path: &Path, mut each: impl FnMut(&[Vec<f32>], u32, usize)) -> Result<Walked> {
     let mut o = open(path)?;
-    let mut w = Walked { rate: o.rate, channels: o.channels, frames: 0, damaged: 0 };
+    let mut w = Walked { rate: o.rate, channels: o.channels, frames: 0, damaged: 0, codec: o.codec, bytes: 0 };
     let mut scratch: Vec<Vec<f32>> = Vec::new();
     loop {
         let packet = match o.reader.next_packet() {
@@ -305,6 +310,7 @@ pub fn walk(path: &Path, mut each: impl FnMut(&[Vec<f32>], u32, usize)) -> Resul
         if packet.track_id != o.track {
             continue;
         }
+        w.bytes += packet.data.len() as u64;
         let decoded = match o.decoder.decode(&packet) {
             Ok(d) => d,
             Err(SymphoniaError::DecodeError(_)) => {
