@@ -11,8 +11,13 @@
 //! - **The queue after the playing track** (decisions 0033 and 0036, amended): where tracks added by hand go
 //!   ([`add_place`]), a shuffle once ([`shuffle_order`]), clearing ([`upcoming_start`]) and Undo of both
 //!   ([`restore_order`]).
+//! - **A let-go's brake** ([`brake`], decision 0075): its length, speed and way, for the page through WebAssembly too.
 
 use serde::{Deserialize, Serialize};
+
+pub mod brake;
+#[cfg(target_arch = "wasm32")]
+mod wasm;
 
 /// The most tracks one play puts in a queue (the owner, 2026-10-23).
 pub const QUEUE_MOST: usize = 500;
