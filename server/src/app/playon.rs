@@ -615,7 +615,14 @@ pub enum Command {
     Pause,
     Resume,
     Toggle,
-    Stop,
+    /// Its queue emptied. A handover's stop names the player the music went to, `moved_to` (the owner, 2026-10-30: "the
+    /// screen follows the music"): the player and every screen driving it switch to that one. Every other stop names
+    /// none.
+    Stop {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        moved_to: Option<String>,
+    },
     Next,
     Previous,
     /// Previous or Next held (decision 0074): `start` pauses with the device's Start and stop, then winds `back` or
@@ -734,6 +741,20 @@ pub struct AutoplayView {
     pub albums: bool,
     pub restart: bool,
 }
+
+/// Where a player's music went at a handover, and when (the owner, 2026-10-30: "the screen follows the music").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+pub struct MovedTo {
+    pub player: String,
+    /// When (epoch ms).
+    pub at: u64,
+}
+
+/// How long a player shows where its music went, unless it plays again first.
+const MOVED_SHOWN: Duration = Duration::from_secs(5 * 60);
+
+/// How many moves on Play On follows from a player to where its music is now (`PlayOn::moved_on`).
+const MOVES_FOLLOWED: usize = 4;
 
 /// A player as Home Assistant and the pages see it.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -855,6 +876,12 @@ pub struct PlayerView {
     #[serde(skip_serializing_if = "is_zero")]
     #[ts(as = "Option<usize>", optional)]
     pub queue_requests: usize,
+    /// Where its music went, as a handover moved it (the owner, 2026-10-30: "the screen follows the music"): a screen
+    /// showing this player switches to that one. Until it plays again, five minutes at most; only to one who may reach
+    /// that player.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub moved_to: Option<MovedTo>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -960,6 +987,11 @@ struct Entry {
     /// When it followed (epoch seconds: from, and until once it stopped), the latest last: a play it tells later is
     /// known as heard while following.
     follow_spans: Vec<(i64, Option<i64>)>,
+    /// It was set following from away from home: where the music it follows moves, the shared-device fence is
+    /// judged as then.
+    follow_away: bool,
+    /// Where a handover moved its music, and since when (`PlayerView::moved_to`).
+    moved_to: Option<(MovedTo, Instant)>,
 }
 
 /// What a player is: the app; a Kodi (driven by Cratarr, app::kodi); a page in a browser, a player while it is open
@@ -1014,7 +1046,14 @@ impl Entry {
             held: false,
             lined: None,
             follow_spans: Vec::new(),
+            follow_away: false,
+            moved_to: None,
         }
+    }
+
+    /// Where its music went, while that is shown.
+    fn moved_now(&self) -> Option<&MovedTo> {
+        self.moved_to.as_ref().filter(|(_, since)| since.elapsed() < MOVED_SHOWN).map(|(m, _)| m)
     }
 
     /// The queue that plays, as it stands now, to be kept as it is left behind; none when there is none, nor for a
@@ -1206,6 +1245,7 @@ impl Entry {
             // Others' and the requests: filled where all players are known (`view_in`, `list_for`).
             followers: Vec::new(),
             queue_requests: 0,
+            moved_to: self.moved_now().cloned(),
         }
     }
 }
@@ -1306,10 +1346,13 @@ fn generic_name(name: &str) -> bool {
 /// and volume (decision 0037).
 /// A view with whose it is for `user` (`None`: no accounts, everyone's own): `mine`, `shared`, and its owner where
 /// it is another's.
-fn whose_view(mut v: PlayerView, e: &Entry, user: Option<&str>, first: Option<&str>) -> PlayerView {
+/// Where its music went is shown only to one who may reach that player (the owner, 2026-10-30), from where they ask
+/// (`away`).
+fn whose_view(mut v: PlayerView, entries: &HashMap<String, Entry>, e: &Entry, user: Option<&str>, first: Option<&str>, away: bool) -> PlayerView {
     v.shared = e.shared;
     v.mine = user.is_none_or(|u| belongs_to(e, u, first));
     v.owner = (!v.mine).then(|| e.owner.clone().or_else(|| first.map(str::to_string))).flatten();
+    v.moved_to = v.moved_to.filter(|m| user.is_none_or(|u| entries.get(&m.player).is_some_and(|y| reach(y, u, first, away).is_ok())));
     v
 }
 
@@ -1330,6 +1373,7 @@ fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Op
             // What the device is (a Kodi stays one, so it is never made a leader).
             kind: own.kind,
             following: own.following,
+            moved_to: own.moved_to,
             ..le.view(l, with_queue)
         },
         None => own,
@@ -1441,6 +1485,10 @@ const RADIO_START: usize = 5;
 
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// A queue's name when none was given: its album's, else its artist's, else its first track's.
@@ -1777,7 +1825,7 @@ impl PlayOn {
         let mut out: Vec<PlayerView> = entries
             .iter()
             .filter(|(_, e)| user.is_none_or(|u| reach(e, u, first.as_deref(), away).is_ok()))
-            .filter_map(|(n, e)| Some(whose_view(view_in(&entries, n, false)?, e, user, first.as_deref())))
+            .filter_map(|(n, e)| Some(whose_view(view_in(&entries, n, false)?, &entries, e, user, first.as_deref(), away)))
             .collect();
         drop(entries);
         let PlayOnSettings { delays, grouped, .. } = self.settings();
@@ -1891,7 +1939,7 @@ impl PlayOn {
     pub fn get(&self, name: &str) -> Option<PlayerView> {
         self.reached(name).ok()?;
         let entries = self.entries();
-        let mut v = whose_view(view_in(&entries, name, true)?, entries.get(name)?, whose().as_deref(), first_owner().as_deref());
+        let mut v = whose_view(view_in(&entries, name, true)?, &entries, entries.get(name)?, whose().as_deref(), first_owner().as_deref(), away());
         drop(entries);
         super::describe::fill_view(&mut v);
         if v.mine {
@@ -2011,6 +2059,10 @@ impl PlayOn {
             e.heard = Instant::now();
             (e.report.volume, e.report.ducked, e.report.announce) = (report.volume, report.ducked, report.announce.clone());
             (e.report.output, e.report.link, e.report.held) = (report.output.clone(), report.link.clone(), report.held.clone());
+            // Playing again, its own music: where its music went before is no longer news.
+            if report.playing {
+                e.moved_to = None;
+            }
             e.device = Some((report, Instant::now()));
             let after = e.view(name, false);
             drop(entries);
@@ -2118,6 +2170,11 @@ impl PlayOn {
             }
             e.report = Report { queue: None, ..report };
             e.at = Instant::now();
+            // Playing again: where its music went before is no longer news (unless what plays is that music, stopped
+            // just below).
+            if e.report.playing && !stop_moved {
+                e.moved_to = None;
+            }
             // Where its queue is heard (decision 0033, amended 2026-10-19): this player, through its output.
             if e.report.playing && !e.queue.tracks.is_empty() && e.kind != PlayerKind::Browser {
                 let out = e.report.output.clone();
@@ -2141,7 +2198,10 @@ impl PlayOn {
         }
         if stop_moved {
             tracing::info!(target: "playon", player = name, "stopped on its return");
-            let _ = self.send(name, &Command::Stop);
+            // Told where the music went while that is still shown (the owner, 2026-10-30: a screen asleep at the
+            // handover switches there as it wakes).
+            let moved_to = self.entries().get(name).and_then(|e| e.moved_now().map(|m| m.player.clone()));
+            let _ = self.send(name, &Command::Stop { moved_to });
         }
         // A new track: its ids, looked up outside the lock; its album's id from its own source when it came without one
         // (queued by a page, handed over): Home Assistant finds "this album" by it.
@@ -2228,6 +2288,14 @@ impl PlayOn {
         if let Command::Join { to } | Command::Handover { to } = &command {
             self.reached(to)?;
         }
+        // An announcement to a player whose music a handover moved goes where the music is now (the owner, 2026-10-30:
+        // Home Assistant names its players).
+        let moved = matches!(command, Command::Announce { .. }).then(|| self.moved_on(name)).filter(|m| m != name);
+        if let Some(m) = &moved {
+            self.reached(m)?;
+            tracing::info!(target: "playon", player = name, to = m.as_str(), "announcement sent where the music moved");
+        }
+        let name = moved.as_deref().unwrap_or(name);
         // A command to any player of a group is the group's, played by its leader; its volume stays its own.
         let own = matches!(command, Command::Volume { .. } | Command::Duck | Command::Unduck | Command::Sample { .. } | Command::Join { .. } | Command::Leave);
         let leader = if own { None } else { self.leader_of(name) };
@@ -2243,7 +2311,7 @@ impl PlayOn {
                 Command::Duck | Command::Unduck | Command::Sleep { .. } | Command::Seek { .. } | Command::Sample { .. } => command,
                 Command::Announce { .. } => command,
                 Command::Play { .. } | Command::Queue { .. } | Command::QueueRename { .. } | Command::QueueDelete { .. } => command,
-                Command::Stop => Command::Pause,
+                Command::Stop { .. } => Command::Pause,
                 _ => return Err(ToggleError::Refused(OWN_MUSIC.into())),
             }
         } else {
@@ -2256,8 +2324,10 @@ impl PlayOn {
             Command::Notice { .. } => return Err(ToggleError::Refused("A notice is Cratarr's own.".into())),
             // Played on one player: the group ends (decision 0037).
             Command::Handover { to } => {
+                // The group's other players played this music too: whoever followed them goes with it.
+                let also: Vec<String> = self.leader_of(name).map(|l| self.group(&l)).unwrap_or_default().into_iter().filter(|m| m != name && *m != to).collect();
                 self.dissolve(name);
-                return self.handover(name, &to).await.map(|()| None);
+                return self.handover(name, &to, &also).await.map(|()| None);
             }
             Command::Queue { played_on: Some(text), .. } => return self.switch_to_played_on(name, &text).await.map(|()| None),
             Command::Queue { id, .. } => return self.switch(name, &id).await.map(|()| None),
@@ -2373,14 +2443,18 @@ impl PlayOn {
             tracing::warn!(target: "playon", player = name, command = command_name(&command).as_str(), reason = "offline", "command not delivered");
             // A pause or a stop while it is away is kept: back, its queue is given back paused, not playing on
             // (2026-10-30: the ThinkPad started again playing what Home Assistant had paused while it was away).
-            if matches!(command, Command::Pause | Command::Stop) || (matches!(command, Command::Toggle) && e.report.playing) {
+            if matches!(command, Command::Pause | Command::Stop { .. }) || (matches!(command, Command::Toggle) && e.report.playing) {
                 e.report.playing = false;
                 self.save.notify_one();
             }
             return Err(ToggleError::Refused(format!("{name} is not connected.")));
         }
-        let leaves = matches!(command, Command::Play { .. } | Command::Stop);
+        let leaves = matches!(command, Command::Play { .. } | Command::Stop { .. });
         let standing = if leaves { e.standing() } else { None };
+        // Played again: where its music went before is no longer news.
+        if matches!(command, Command::Play { .. }) {
+            e.moved_to = None;
+        }
         let mut queue = e.queue.clone();
         let current = usize::try_from(e.index()).ok();
         let start = cratarr_rules::upcoming_start(current, queue.tracks.len());
@@ -2447,16 +2521,20 @@ impl PlayOn {
 
     /// The queue and position of `from` go to `to`, which plays them, with their entries; `from` stops (decision 0033).
     /// The queue moves on as itself, its id and name with it, and the player it left keeps it as it stood (0033 amended).
-    async fn handover(&self, from: &str, to: &str) -> Result<(), ToggleError> {
+    /// What goes with the music (the owner, 2026-10-30): the sleep timer, whoever followed `from` (or the players of
+    /// `also`, a group's that played it too), the queue requests waiting on it, its shared visuals, and whom `from`
+    /// followed itself. Its stop names `to`, and so does its view a while (`moved_to`): every screen showing it
+    /// switches there.
+    async fn handover(&self, from: &str, to: &str, also: &[String]) -> Result<(), ToggleError> {
         tracing::info!(target: "playon", player = from, to, "handover");
         if self.entries().get(from).is_some_and(|e| e.device.is_some()) {
             return Err(ToggleError::Refused(OWN_MUSIC.into()));
         }
-        let (queue, index, position_ms, sleep) = {
+        let (queue, index, position_ms, sleep, following) = {
             let entries = self.entries();
             let Some(e) = entries.get(from) else { return Err(ToggleError::Refused(format!("No player is called {from}."))) };
             let v = e.view(from, false);
-            (e.queue.clone(), v.index.max(0) as usize, v.position_ms, e.report.sleep)
+            (e.queue.clone(), v.index.max(0) as usize, v.position_ms, e.report.sleep, e.following.clone().map(|f| (f, e.follow_away)))
         };
         if queue.tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
@@ -2475,16 +2553,64 @@ impl PlayOn {
         };
         Box::pin(self.command(to, play)).await?;
         self.settle(to, &queue).await;
-        // A sleep timer moves with the music.
+        // A sleep timer moves with the music: the time it ends, or the end of the track; the one here is cleared.
         if let Some(s) = sleep.filter(|s| s.at_ms.is_some() || s.end_of_track) {
             let _ = Box::pin(self.command(to, Command::Sleep { at_ms: s.at_ms, end_of_track: s.end_of_track })).await;
+            let _ = Box::pin(self.command(from, Command::Sleep { at_ms: None, end_of_track: false })).await;
+        }
+        if let Some(e) = self.entries().get_mut(from) {
+            e.moved_to = Some((MovedTo { player: to.to_string(), at: now_ms() }, Instant::now()));
+        }
+        // Whoever followed it follows the music there, put in line with what plays there now: the track and place
+        // just handed over (the player there has not reported it yet).
+        let now = queue.tracks.get(index).cloned().map(|t| (t, position_ms, true));
+        for p in std::iter::once(from).chain(also.iter().map(String::as_str)) {
+            self.follow_moved(p, to, now.clone());
+        }
+        let leader = self.owner_of(to).unwrap_or_default();
+        let requests = self.requests.moved(from, to, &leader);
+        if requests > 0 {
+            tracing::info!(target: "playon", player = from, to, requests, "queue requests moved");
+        }
+        if let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) {
+            app.visuals.moved(from, to);
         }
         // The music is on its way there; this one stopping is no reason to fail the handover. One that cannot be told
         // (offline) is stopped here as the stop would have left it, and stopped itself once it is back.
-        if Box::pin(self.command(from, Command::Stop)).await.is_err() {
+        let stop = Command::Stop { moved_to: Some(to.to_string()) };
+        if Box::pin(self.command(from, stop)).await.is_err() {
             self.stopped_away(from);
         }
+        // It followed another's music itself (decision 0079): the player the music went to follows it now, if it
+        // may (the stop above ended this one's following).
+        if let Some((target, away)) = following {
+            let user = self.account_of(to).unwrap_or_default();
+            match self.follow(&user, to, target.clone(), away, true) {
+                Ok(()) => tracing::info!(target: "playon", player = to, leader = target.player.as_str(), "following moved with the music"),
+                Err(e) => {
+                    tracing::info!(target: "playon", player = to, leader = target.player.as_str(), "following not moved: {e}");
+                    self.notice(&user, &format!("{to} does not follow {}: {e}", target.user));
+                }
+            }
+        }
+        self.changed();
         Ok(())
+    }
+
+    /// Where player `name`'s music is now: the player a handover moved it to while that is shown, and on from there,
+    /// a few moves at most and never round in a circle (a guest's host, an announcement); `name` itself when it moved
+    /// nowhere.
+    pub fn moved_on(&self, name: &str) -> String {
+        let entries = self.entries();
+        let mut seen = vec![name.to_string()];
+        while seen.len() <= MOVES_FOLLOWED {
+            let Some(next) = seen.last().and_then(|n| entries.get(n)).and_then(Entry::moved_now).map(|m| m.player.clone()) else { break };
+            if seen.contains(&next) {
+                break;
+            }
+            seen.push(next);
+        }
+        seen.pop().unwrap_or_else(|| name.to_string())
     }
 
     /// A queue's settings on the player that takes it up (a handover, a switch): repeat (repeat one too, decision 0033
@@ -2722,7 +2848,7 @@ impl PlayOn {
         e.moved = e.queue.tracks.iter().map(|t| t.entry.clone()).filter(|x| !x.is_empty()).collect();
         let standing = e.standing();
         e.keep(standing);
-        if e.queue.edit_at(Command::Stop, None).is_ok() {
+        if e.queue.edit_at(Command::Stop { moved_to: None }, None).is_ok() {
             e.told = e.queue.version;
         }
         (e.queue.id, e.queue.name, e.queue.renamed, e.queue.from) = (String::new(), String::new(), false, None);
@@ -2853,7 +2979,7 @@ impl PlayOn {
                 for n in &rest {
                     self.tell_group(n);
                 }
-                let _ = self.handover(name, next).await;
+                let _ = self.handover(name, next, &[]).await;
             }
         } else if rest.len() == 1 {
             // Only the leader left: it plays alone.
@@ -3609,7 +3735,7 @@ mod tests {
         p.command("tablet", Command::QueueDelete { id: evening.id }).await.unwrap();
         assert_eq!(p.get("tablet").unwrap().queues.unwrap().len(), 1);
         // A stop keeps it too.
-        p.command("tablet", Command::Stop).await.unwrap();
+        p.command("tablet", Command::Stop { moved_to: None }).await.unwrap();
         let list = p.get("tablet").unwrap().queues.unwrap();
         assert_eq!(list.iter().map(|q| (q.name.as_str(), q.playing)).collect::<Vec<_>>(), vec![("Transit", false)]);
     }
@@ -3873,7 +3999,7 @@ mod tests {
         assert!(v.track.is_none());
         // Steered: a pause reaches it; a stop is a pause there; an edit or a handover from it is refused.
         p.command("Phone", Command::Pause).await.unwrap();
-        p.command("Phone", Command::Stop).await.unwrap();
+        p.command("Phone", Command::Stop { moved_to: None }).await.unwrap();
         assert_eq!(said(&mut phone), ["pause", "pause"]);
         let add = Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: None, how: None };
         assert!(matches!(p.command("Phone", add).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
@@ -4354,5 +4480,180 @@ mod tests {
         let asked: Vec<&str> = play["tracks"].as_array().unwrap().iter().filter_map(|t| t["asked_by"].as_str()).collect();
         assert_eq!(asked.len(), 2);
         assert!(asked.contains(&"bob") && asked.contains(&"Guest Sam"));
+    }
+
+    #[test]
+    fn a_stop_names_where_the_music_went_only_at_a_handover() {
+        // From before (pages, Home Assistant, the app): a plain stop still reads, and is sent as it was.
+        let plain: Command = serde_json::from_str(r#"{"command":"stop"}"#).unwrap();
+        assert_eq!(plain, Command::Stop { moved_to: None });
+        assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"command":"stop"}"#);
+        let moved = Command::Stop { moved_to: Some("tablet".into()) };
+        assert_eq!(serde_json::to_string(&moved).unwrap(), r#"{"command":"stop","moved_to":"tablet"}"#);
+        assert_eq!(serde_json::from_str::<Command>(r#"{"command":"stop","moved_to":"tablet"}"#).unwrap(), moved);
+    }
+
+    #[tokio::test]
+    async fn a_handover_tells_the_player_it_left_where_the_music_went_until_it_plays_again() {
+        let p = play_on().await;
+        let (mut phone, mut tablet) = (p.connect("phone").unwrap(), p.connect("tablet").unwrap());
+        p.command("phone", Command::play(vec![track("tr-1"), track("tr-2")], 0, 0)).await.unwrap();
+        said(&mut phone);
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        let stop = told(&mut phone).into_iter().find(|m| m["command"] == "stop").expect("stopped");
+        assert_eq!(stop["moved_to"], "tablet");
+        let moved = p.get("phone").unwrap().moved_to.expect("its view says where the music went");
+        assert_eq!(moved.player, "tablet");
+        assert!(moved.at > 0);
+        assert_eq!(p.get("tablet").unwrap().moved_to, None);
+        assert_eq!(p.moved_on("phone"), "tablet");
+
+        // An announcement to it goes where the music is.
+        said(&mut tablet);
+        p.command("phone", Command::Announce { url: "http://ha/tts.mp3".into(), id: "ha-1".into() }).await.unwrap();
+        assert_eq!(said(&mut tablet), vec!["announce"]);
+        assert!(!said(&mut phone).contains(&"announce".to_string()));
+
+        // Played again (here, the music handed back): no longer.
+        p.command("tablet", Command::Handover { to: "phone".into() }).await.unwrap();
+        assert_eq!(p.get("phone").unwrap().moved_to, None, "a play to it clears it");
+        assert_eq!(p.get("tablet").unwrap().moved_to.map(|m| m.player).as_deref(), Some("phone"));
+        // A report that it plays clears it too.
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: -1, version: Some(version), playing: false, ..Report::default() }).unwrap();
+        assert!(p.get("tablet").unwrap().moved_to.is_some(), "stopped: still shown");
+        p.command("tablet", Command::play(vec![track("tr-9")], 0, 0)).await.unwrap();
+        p.entries().get_mut("tablet").unwrap().moved_to = Some((MovedTo { player: "phone".into(), at: 1 }, Instant::now()));
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: 0, version: Some(version), playing: true, ..Report::default() }).unwrap();
+        assert_eq!(p.get("tablet").unwrap().moved_to, None, "playing again");
+
+        // Five minutes on, it is no longer shown.
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        assert!(p.get("phone").unwrap().moved_to.is_some());
+        p.entries().get_mut("phone").unwrap().moved_to.as_mut().unwrap().1 = Instant::now().checked_sub(MOVED_SHOWN + Duration::from_secs(1)).unwrap();
+        assert_eq!(p.get("phone").unwrap().moved_to, None);
+        assert_eq!(p.moved_on("phone"), "phone");
+
+        // Any other stop names nothing.
+        told(&mut tablet);
+        p.command("tablet", Command::Stop { moved_to: None }).await.unwrap();
+        let stop = told(&mut tablet).into_iter().find(|m| m["command"] == "stop").unwrap();
+        assert!(stop.get("moved_to").is_none());
+        assert_eq!(p.get("tablet").unwrap().moved_to, None);
+    }
+
+    #[test]
+    fn where_the_music_went_is_shown_only_to_one_who_may_reach_it() {
+        let mut entries = HashMap::new();
+        for (name, shared) in [("Kitchen", true), ("Salon", true), ("Ann phone", false)] {
+            let mut e = Entry::new();
+            (e.owner, e.shared) = (Some("ann".into()), shared);
+            entries.insert(name.to_string(), e);
+        }
+        let shown = |entries: &HashMap<String, Entry>, user: &str, away: bool| {
+            let e = &entries["Kitchen"];
+            whose_view(e.view("Kitchen", false), entries, e, Some(user), None, away).moved_to.map(|m| m.player)
+        };
+        let moved = |entries: &mut HashMap<String, Entry>, to: &str| {
+            entries.get_mut("Kitchen").unwrap().moved_to = Some((MovedTo { player: to.into(), at: 1 }, Instant::now()));
+        };
+        moved(&mut entries, "Ann phone");
+        assert_eq!(shown(&entries, "ann", true).as_deref(), Some("Ann phone"), "one's own, from anywhere");
+        assert_eq!(shown(&entries, "bob", false), None, "another's own device: not theirs to reach");
+        moved(&mut entries, "Salon");
+        assert_eq!(shown(&entries, "bob", false).as_deref(), Some("Salon"), "another's shared device, at home");
+        assert_eq!(shown(&entries, "bob", true), None, "away");
+    }
+
+    #[tokio::test]
+    async fn a_player_asleep_at_the_handover_is_told_where_the_music_went_as_it_wakes() {
+        let p = play_on().await;
+        let mut tablet = p.connect("tablet").unwrap();
+        let phone = p.connect("phone").unwrap();
+        p.command("phone", Command::play(vec![track("tr-1"), track("tr-2")], 0, 0)).await.unwrap();
+        let entry = p.get("phone").unwrap().queue.unwrap()[0].entry.clone();
+        let version = p.get("phone").unwrap().queue_version;
+        p.report("phone", Report { index: 0, entry: Some(entry.clone()), version: Some(version), playing: true, ..Report::default() }).unwrap();
+        drop(phone);
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        assert_eq!(said(&mut tablet).iter().filter(|c| *c == "play").count(), 1);
+        // Back: its view says so at once, and its stop names where the music went.
+        let mut phone = p.connect("phone").unwrap();
+        said(&mut phone);
+        assert_eq!(p.get("phone").unwrap().moved_to.map(|m| m.player).as_deref(), Some("tablet"));
+        p.report("phone", Report { index: 0, entry: Some(entry), version: Some(version), playing: true, ..Report::default() }).unwrap();
+        let stop = told(&mut phone).into_iter().find(|m| m["command"] == "stop").expect("stopped on its return");
+        assert_eq!(stop["moved_to"], "tablet");
+        assert_eq!(p.get("phone").unwrap().moved_to.map(|m| m.player).as_deref(), Some("tablet"), "still shown");
+    }
+
+    #[tokio::test]
+    async fn a_sleep_timer_goes_with_the_music() {
+        let p = play_on().await;
+        let (mut phone, mut tablet) = (p.connect("phone").unwrap(), p.connect("tablet").unwrap());
+        p.command("phone", Command::play(vec![track("tr-1")], 0, 0)).await.unwrap();
+        let version = p.get("phone").unwrap().queue_version;
+        let sleep = Sleep { at_ms: Some(1_900_000_000_000), end_of_track: false };
+        p.report("phone", Report { index: 0, version: Some(version), playing: true, sleep: Some(sleep), ..Report::default() }).unwrap();
+        told(&mut phone);
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        let there = told(&mut tablet).into_iter().find(|m| m["command"] == "sleep").expect("the timer told there");
+        assert_eq!(there["at_ms"].as_u64(), Some(1_900_000_000_000));
+        let here: Vec<serde_json::Value> = told(&mut phone);
+        let cleared = here.iter().position(|m| m["command"] == "sleep").expect("cleared here");
+        assert!(here[cleared]["at_ms"].is_null() && here[cleared].get("end_of_track").is_none());
+        assert!(here.iter().position(|m| m["command"] == "stop").is_some_and(|s| s > cleared), "before its stop");
+    }
+
+    #[tokio::test]
+    async fn followers_and_requests_go_with_the_music() {
+        use super::super::queue_requests::Asker;
+        let p = play_on().await;
+        let mut players = owned(&p, &[("Ann phone", "ann"), ("Salon", "ann"), ("Bob phone", "bob"), ("Carl phone", "carl")]);
+        p.entries().get_mut("Salon").unwrap().shared = true;
+        leading(&p, "Ann phone", &["tr-1", "tr-2"], 30_000).await;
+        let ann = FollowTarget { user: "ann".into(), player: "Ann phone".into() };
+        p.follow("bob", "Bob phone", ann.clone(), false, true).unwrap();
+        // Carl follows from away: Ann's phone is no shared device, so that may be.
+        p.follow("carl", "Carl phone", ann.clone(), true, true).unwrap();
+        let r = p.ask_for(Asker::User("bob".into()), "Ann phone", "ann", track("tr-9"), "next", None, false).await.unwrap();
+        for c in players.iter_mut() {
+            told(c);
+        }
+
+        p.command("Ann phone", Command::Handover { to: "Salon".into() }).await.unwrap();
+        // Bob follows the Salon now, put in line at once where the music is.
+        assert_eq!(p.following_of("Bob phone"), Some(FollowTarget { user: "ann".into(), player: "Salon".into() }));
+        let play = last_play(&mut players[2]).expect("put in line with the Salon");
+        assert_eq!(play["tracks"][0]["id"], "tr-1");
+        let at = play["position_ms"].as_u64().unwrap();
+        assert!((30_000..31_000).contains(&at), "where the music is: {at}");
+        assert_eq!(p.get("Salon").unwrap().followers, ["bob"]);
+        // Carl, away, may not follow a shared device: no longer following, and told.
+        assert_eq!(p.following_of("Carl phone"), None);
+        let notices: Vec<String> = told(&mut players[3]).into_iter().filter(|m| m["command"] == "notice").map(|m| m["text"].as_str().unwrap().to_string()).collect();
+        assert_eq!(notices, ["ann's music moved to Salon"]);
+        // The request waits on the Salon, for Ann.
+        assert_eq!(p.requests.get(&r.id).map(|q| q.player).as_deref(), Some("Salon"));
+        assert_eq!(p.requests.waiting_for("ann", Some("Salon")).len(), 1);
+        assert_eq!(p.get("Salon").unwrap().queue_requests, 1);
+    }
+
+    #[tokio::test]
+    async fn a_follower_handing_its_music_over_follows_on_there() {
+        let p = play_on().await;
+        let mut players = owned(&p, &[("Ann phone", "ann"), ("Bob phone", "bob"), ("Bob tablet", "bob")]);
+        leading(&p, "Ann phone", &["tr-1"], 10_000).await;
+        let ann = FollowTarget { user: "ann".into(), player: "Ann phone".into() };
+        p.follow("bob", "Bob phone", ann.clone(), false, true).unwrap();
+        told(&mut players[2]);
+        p.command("Bob phone", Command::Handover { to: "Bob tablet".into() }).await.unwrap();
+        assert_eq!(p.following_of("Bob tablet"), Some(ann));
+        assert_eq!(p.following_of("Bob phone"), None);
+        let play = last_play(&mut players[2]).expect("in line with Ann");
+        assert_eq!(play["tracks"][0]["id"], "tr-1");
+        assert!(play["position_ms"].as_u64().unwrap() >= 10_000);
+        assert_eq!(p.get("Ann phone").unwrap().followers, ["bob"]);
     }
 }

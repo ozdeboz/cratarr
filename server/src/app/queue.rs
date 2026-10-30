@@ -437,9 +437,9 @@ impl Queue {
                 let i = self.place(entry.as_deref(), index)?;
                 return Ok(Command::Jump { index: Some(i), entry: Some(self.tracks[i].entry.clone()) });
             }
-            Command::Stop => {
+            Command::Stop { moved_to } => {
                 self.tracks.clear();
-                Command::Stop
+                Command::Stop { moved_to }
             }
             other => return Ok(other),
         };
@@ -845,7 +845,7 @@ mod tests {
         let b = q.tracks[1].entry.clone();
         assert_eq!(q.edit(Command::Jump { index: Some(1), entry: None }).unwrap(), Command::Jump { index: Some(1), entry: Some(b) });
         assert_eq!(q.version, 1);
-        q.edit(Command::Stop).unwrap();
+        q.edit(Command::Stop { moved_to: None }).unwrap();
         assert!(q.tracks.is_empty());
         assert_eq!(q.version, 2);
     }

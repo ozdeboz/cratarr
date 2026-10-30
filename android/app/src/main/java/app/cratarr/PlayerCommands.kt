@@ -41,6 +41,7 @@ class PlayerCommands(
                 "stop" -> {
                     link()?.release()
                     p.pause()
+                    followMusic(m)
                     return true
                 }
                 else -> {
@@ -134,6 +135,7 @@ class PlayerCommands(
                 startStop.reset()
                 p.stop()
                 p.clearMediaItems()
+                followMusic(m)
             }
             // Next as the app's own: fast-forward to the end where winding is on, else a skip (0.9.6, Start and stop:
             // the change shows once it is made, after a ramp out). Previous: a rewind to the start where it winds, else
@@ -253,6 +255,17 @@ class PlayerCommands(
         shown.playWhenReady = !m.optBoolean("paused")
     }
 
+    /**
+     * A handover's stop names where the music went (the owner, 2026-10-30: "the screen follows the music"): where this
+     * device's controls pointed at its own player, they point there now, as if it was picked in Play On (decision
+     * 0062), so the page shows that player's mini player and its controls drive it. Pointed elsewhere, they stay.
+     */
+    private fun followMusic(m: JSONObject) {
+        val to = MovedTo.ofStop(m) ?: return
+        if (prefs.target != Prefs.TARGET_SELF) return
+        service.pointAt(to, "the music moved there")
+    }
+
     /** The place of the entry a command names, else the place it gives. */
     private fun placed(m: JSONObject, entry: String, place: String): Int =
         m.optString(entry, null)?.let { placeOf(player, it) }?.takeIf { it >= 0 } ?: m.optInt(place, -1)
@@ -268,4 +281,21 @@ class PlayerCommands(
             return out
         }
     }
+}
+
+/**
+ * Where the music went at a handover (the owner, 2026-10-30: "the screen follows the music"): Play On's stop names the
+ * player (`moved_to`), and so does the view of the player it left, a while (`moved_to`: its `player` and `at`).
+ */
+object MovedTo {
+    /** The target ([Prefs.target]) a stop names; null for a plain stop. */
+    fun ofStop(m: JSONObject): String? = if (m.isNull("moved_to")) null else target(m.optString("moved_to"))
+
+    /** The target a player's view names, with when the music moved (epoch ms); null where it moved nowhere. */
+    fun ofView(view: JSONObject?): Pair<String, Long>? {
+        val m = view?.optJSONObject("moved_to") ?: return null
+        return target(m.optString("player"))?.let { it to m.optLong("at") }
+    }
+
+    private fun target(name: String): String? = name.trim().takeIf { it.isNotEmpty() }?.let { "player:$it" }
 }

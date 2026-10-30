@@ -153,6 +153,27 @@ impl Requests {
         out
     }
 
+    /// Those waiting on player `from` wait on `to` now, answered by `leader` (its owner): the music they were asked
+    /// for was handed over there (the owner, 2026-10-30), so an Accept adds to the queue that plays. How many moved.
+    pub fn moved(&self, from: &str, to: &str, leader: &str) -> usize {
+        let mut inner = self.inner();
+        inner.prune(now_secs());
+        let mut moved = Vec::new();
+        for r in inner.list.iter_mut().filter(|r| r.state == State::Pending && r.player == from) {
+            let before = std::mem::replace(&mut r.leader, leader.to_string());
+            r.player = to.to_string();
+            moved.push((before, r.clone()));
+        }
+        // The pages of everyone it concerns hear of it: the askers, and the answering account after and before.
+        for (before, r) in &moved {
+            inner.bump(r);
+            if *before != r.leader {
+                *inner.versions.entry(before.clone()).or_default() += 1;
+            }
+        }
+        moved.len()
+    }
+
     /// How many wait on `player`.
     pub fn pending_for(&self, player: &str) -> usize {
         let now = now_secs();
@@ -265,6 +286,26 @@ mod tests {
         let json = serde_json::to_value(&r.of_user("bob")[0]).unwrap();
         assert_eq!((json["from"]["user"].as_str(), json["state"].as_str()), (Some("bob"), Some("declined")));
         assert!(json.get("leader").is_none() && json.get("guest").is_none(), "nor whose token");
+    }
+
+    #[test]
+    fn requests_waiting_on_a_player_move_with_its_music() {
+        let r = Requests::default();
+        let a = r.ask(Asker::User("bob".into()), track("So What"), "next", "Ann phone", "ann", None);
+        let done = r.ask(Asker::User("bob".into()), track("Blue"), "last", "Ann phone", "ann", None);
+        r.answer(&done.id, State::Declined);
+        let other = r.ask(Asker::User("bob".into()), track("Green"), "last", "Kitchen", "ann", None);
+        let before = (r.version_of(Some("ann")), r.version_of(Some("bob")));
+        assert_eq!(r.moved("Ann phone", "Salon", "ann"), 1, "the waiting one only");
+        assert_eq!(r.get(&a.id).map(|x| x.player), Some("Salon".to_string()));
+        assert_eq!(r.get(&done.id).map(|x| x.player), Some("Ann phone".to_string()), "an answered one stays");
+        assert_eq!(r.get(&other.id).map(|x| x.player), Some("Kitchen".to_string()));
+        assert_eq!((r.pending_for("Ann phone"), r.pending_for("Salon")), (0, 1));
+        assert!(r.version_of(Some("ann")) > before.0 && r.version_of(Some("bob")) > before.1, "their pages are told");
+        // To another's shared device: its owner answers now.
+        assert_eq!(r.moved("Salon", "Carl tablet", "carl"), 1);
+        assert_eq!(r.waiting_for("carl", None).len(), 1);
+        assert!(r.waiting_for("ann", None).is_empty());
     }
 
     #[test]

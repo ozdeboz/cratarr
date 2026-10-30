@@ -40,6 +40,9 @@ class RemotePlayer(private val service: PlayerService, private val prefs: Prefs)
         private set
     /** Its last view (`/api/players`' entry); null until heard. */
     private var view: JSONObject? = null
+    /** Whether a view of it was heard since it was pointed at, and when its music last moved as that said (epoch ms). */
+    private var heardOnce = false
+    private var movedAt: Long? = null
     /** The reading of the live channel under way: a newer one ends it. */
     @Volatile private var reading = 0
     @Volatile private var connection: java.net.HttpURLConnection? = null
@@ -49,6 +52,8 @@ class RemotePlayer(private val service: PlayerService, private val prefs: Prefs)
         if (player == name) return
         name = player
         view = null
+        heardOnce = false
+        movedAt = null
         val run = ++reading
         connection?.disconnect()
         invalidateState()
@@ -117,7 +122,14 @@ class RemotePlayer(private val service: PlayerService, private val prefs: Prefs)
             null
         } ?: return
         view = (0 until players.length()).map(players::getJSONObject).firstOrNull { it.optString("name") == name }
+        // Its music handed over to another player (the owner, 2026-10-30: "every screen showing that player"): the
+        // controls go there, as if it was picked. Not for a move its first view already says (pointed here since).
+        val moved = MovedTo.ofView(view)
+        val news = heardOnce && moved != null && moved.second != movedAt
+        heardOnce = true
+        movedAt = moved?.second
         invalidateState()
+        if (news && moved != null) service.pointAt(moved.first, "its music moved there")
     }
 
     override fun getState(): State {

@@ -114,6 +114,20 @@ impl GroupVisuals {
             .collect()
     }
 
+    /// The visuals shared by player `from` go to `to`, whose music it now is (a handover; the owner, 2026-10-30): in
+    /// place of any `to` had, as a change no page wrote. Nothing when `from` shared none.
+    pub fn moved(&self, from: &str, to: &str) {
+        if from == to {
+            return;
+        }
+        let mut groups = self.groups();
+        let Some(shared) = groups.remove(from) else { return };
+        let version = self.last.fetch_add(1, Ordering::SeqCst) + 1;
+        groups.insert(to.to_string(), Shared { version, settings: shared.settings.clone() });
+        drop(groups);
+        let _ = self.changed.send(Changed { group: to.to_string(), version, settings: shared.settings, writer: String::new() });
+    }
+
     /// Only these groups' visuals kept (the others' groups are gone).
     pub fn keep_only(&self, groups: &HashSet<String>) {
         self.groups().retain(|g, _| groups.contains(g));
@@ -188,6 +202,24 @@ mod tests {
         assert_eq!(v.put("g", 1, big, "a"), Err(Refused::TooLarge));
         assert_eq!(v.put("g", 1, Map::new(), &"w".repeat(MOST_WRITER + 1)), Err(Refused::TooLarge));
         assert_eq!(Value::Object(v.get("g").unwrap().settings), json!({ "flash": 1.0 }));
+    }
+
+    #[test]
+    fn a_players_visuals_go_where_its_music_is_handed_over() {
+        let v = GroupVisuals::new();
+        let before = v.put("ThinkPad", 0, map(json!({ "flash": 0.7 })), "a").unwrap();
+        v.put("Salon tablet", 0, map(json!({ "flash": 0.1 })), "b").unwrap();
+        let mut heard = v.subscribe();
+        v.moved("ThinkPad", "Salon tablet");
+        assert!(v.get("ThinkPad").is_none());
+        let there = v.get("Salon tablet").unwrap();
+        assert_eq!(there.settings["flash"], json!(0.7), "in place of its own");
+        assert!(there.version > before);
+        let c = heard.try_recv().unwrap();
+        assert_eq!((c.group.as_str(), c.version, c.writer.as_str()), ("Salon tablet", there.version, ""));
+        // None shared: nothing changes.
+        v.moved("Kitchen", "Salon tablet");
+        assert_eq!(v.get("Salon tablet").unwrap().version, there.version);
     }
 
     #[test]
