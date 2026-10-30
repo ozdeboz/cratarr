@@ -409,7 +409,9 @@ export type CrateValue =
   | { kind: 'like'; of: string[]; count: number; fresh?: boolean; weights?: number[] };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
-export type CrateDef = { id: string; name: string; conditions: Condition[] };
+/** `not_artists`: the artists left out of it by hand (0.10, decision 0083: "Not in this crate", an Artist-is-not row of
+ *  its filter); none from a server before it. */
+export type CrateDef = { id: string; name: string; conditions: Condition[]; not_artists?: ExcludedArtist[] };
 /** An axis the builder draws a control for, with its domain in this library. */
 export type Axis = {
   key: string;
@@ -447,6 +449,26 @@ function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
 }
 export const getCrateAxes = (source?: string, without?: string[]) => quietly<Axis[]>(`/api/crates/axes${crateQuery(new URLSearchParams(), source, { without })}`);
 export const getCrate = (id: string) => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`);
+/** An artist left out (0.10, decision 0083): by the server's key (the name loosely) and as named. */
+export type ExcludedArtist = { key: string; name: string; at?: number };
+/** An artist left out of one crate, or taken back: the crate's list after it, and the undo. */
+export const notInCrate = (id: string, name: string) =>
+  request<{ crate: string; not_artists: ExcludedArtist[]; undo: string | null }>(`/api/crates/${encodeURIComponent(id)}/not-artist`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+export const backInCrate = (id: string, key: string) =>
+  request<{ crate: string; not_artists: ExcludedArtist[]; undo: string | null }>(`/api/crates/${encodeURIComponent(id)}/not-artist/${encodeURIComponent(key)}`, { method: 'DELETE' });
+/** The artists the account excluded everywhere (every crate, radio, Autoplay, Discover), and the changes, each with its undo. */
+export const getExcludedArtists = () => quietly<ExcludedArtist[]>('/api/me/excluded-artists');
+export const excludeArtist = (key: string, name: string) =>
+  request<ExcludedArtist & { undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+export const includeArtist = (key: string) => request<{ key: string; undo: string | null }>(`/api/me/excluded-artists/${encodeURIComponent(key)}`, { method: 'DELETE' });
 /** Every change answers with its undo token (`undo`, decision 0026), for `withUndo`. */
 type Undo = { undo: string | null };
 export const createCrate = (name: string, conditions: Condition[]) => post<{ id: string } & Undo>('/api/crates', { name, conditions });
@@ -782,6 +804,8 @@ export type PlaylistRow = {
   added?: number;
   /** Its album's id, where the rows are of several albums (an artist's). */
   album_id?: string;
+  /** A crate's row: how many tracks its album has (0.10; Cratarr's own library's rows). */
+  album_tracks?: number;
 };
 
 /** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */

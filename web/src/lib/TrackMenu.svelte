@@ -63,6 +63,8 @@
   import TempoStep from './TempoStep.svelte';
   import { askFor, followingNow } from './following.svelte';
   import { mine, setAutoAccept } from './mySettings.svelte';
+  import { creditsOf } from './artistCredits';
+  import { excludedArtists, excludedEverywhere, loadCrateArtists, loadExcludedArtists, notInThisCrate, setExcludedEverywhere, setNotInCrate } from './excludedArtists.svelte';
 
   let {
     onclose,
@@ -71,6 +73,7 @@
     queue: place = null,
     onplaylists = null,
     outs = [],
+    crate = null,
     asker = null,
   }: {
     onclose: () => void;
@@ -84,7 +87,14 @@
     outs?: { label: string; icon: IconName; run: () => void }[];
     /** A track asked for of one's own player (0.10): the user who asked, whose tracks may be accepted at once. */
     asker?: string | null;
+    /** Opened in a crate (its id): its artists Not in this crate (0.10, decision 0083). */
+    crate?: string | null;
   } = $props();
+  // Its artists left out everywhere or of the crate it is opened in (0.10, decision 0083): read as the menu opens.
+  loadExcludedArtists();
+  $effect(() => {
+    if (crate) loadCrateArtists(crate);
+  });
   /** Following someone (0.10): Play next and Add to queue ask them instead. */
   const followed = $derived(followingNow());
   async function ask(how: 'next' | 'last') {
@@ -171,6 +181,8 @@
   // Go to artist: the artist's panel (lib/albums goToArtist). A "feat." credit is left out: the albums are under the
   // main artist.
   const artistName = $derived(mainArtist(t?.artist));
+  /** The artists its credit names, each on its own (feat., &, with…: decision 0083's split). */
+  const credited = $derived(creditsOf(t?.artist));
   function goToArtist() {
     // Read before closing, as every action here: the opener drops the menu's track on close.
     const name = artistName;
@@ -405,6 +417,20 @@
     {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
   {:else if e === 'excludeEverywhere'}
     {#if !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
+  {:else if e === 'excludeArtist'}
+    {#if !onDevice && t.source !== BANDCAMP && excludedArtists.everywhere !== null}
+      {#each credited as a (a)}
+        {@const on = excludedEverywhere(a)}
+        <MenuEntry icon="ban" label="Exclude {a} everywhere" switched={on} onclick={() => setExcludedEverywhere(a, !on)} />
+      {/each}
+    {/if}
+  {:else if e === 'notInCrate'}
+    {#if crate && excludedArtists.crates[crate]}
+      {#each credited as a (a)}
+        {@const out = notInThisCrate(crate, a)}
+        <MenuEntry icon="crateOut" label="{a} not in this crate" switched={out} onclick={() => setNotInCrate(crate, a, !out)} />
+      {/each}
+    {/if}
   {:else if e === 'addToPlaylist'}
     {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
   {:else if e === 'download'}

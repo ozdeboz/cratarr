@@ -45,3 +45,10 @@ test('what a record holds of its album', () => {
   assert.equal(holdsLine(1, undefined), '1 track');
   assert.equal(holdsLine(4, 2), '4 tracks', "an album's count below the crate's: not trusted");
 });
+
+test("a record's album total as its rows say it (album_tracks), else not said", () => {
+  const recs = recordsOf([{ r: { album_id: 'x', album: 'X', artist: 'Y', album_tracks: 10 }, i: 0 }, { r: { album_id: 'z', album: 'Z', artist: 'Y' }, i: 1 }]);
+  assert.equal(recs[0].of, 10);
+  assert.equal(recs[1].of, null);
+  assert.equal(holdsLine(3, recs[0].of), '3 of 10 tracks');
+});

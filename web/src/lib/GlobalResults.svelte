@@ -5,7 +5,9 @@
   // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music.
-  import { takeBackExcluded } from './api';
+  import { includeArtist, takeBackExcluded } from './api';
+  import { loadExcludedArtists } from './excludedArtists.svelte';
+  const EVERYWHERE = 'excluded-everywhere:';
   import Cover from './Cover.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import CoverBusy from './CoverBusy.svelte';
@@ -71,7 +73,9 @@
   async function takeBack(it: SearchResult) {
     leftOut = null;
     try {
-      await takeBackExcluded(it.subject.startsWith('excluded-artist:') ? { artist: it.subject.slice('excluded-artist:'.length) } : { key: it.subject.slice('excluded:'.length) });
+      // An artist excluded everywhere (0.10, decision 0083), or Discover's own left out (an artist, an album).
+      if (it.subject.startsWith(EVERYWHERE)) await includeArtist(it.subject.slice(EVERYWHERE.length)).then(() => loadExcludedArtists(true));
+      else await takeBackExcluded(it.subject.startsWith('excluded-artist:') ? { artist: it.subject.slice('excluded-artist:'.length) } : { key: it.subject.slice('excluded:'.length) });
       globalSearch.again++;
     } catch (e) {
       toast.fail(e, 'Could not take it back');
