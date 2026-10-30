@@ -1961,7 +1961,7 @@ async fn crate_tempo(
 
 #[derive(serde::Deserialize)]
 struct LikeCurveQuery {
-    /// The seeds, song ids, comma-separated.
+    /// The seeds, comma-separated: song ids, and (0.11, quick crates) albums' and artists' (`al-…`, `ar-…`).
     of: String,
     source: Option<String>,
     /// The libraries switched off (`source/library`, comma-separated), as a crate's tracks leave them out.
@@ -1969,6 +1969,8 @@ struct LikeCurveQuery {
     /// The seeds themselves left out, as a `fresh` Sounds like leaves them (Sounds like your week).
     #[serde(default)]
     fresh: bool,
+    /// An artist seed's own tracks kept, as a Sounds like's `own` (0.11, quick crates); left out by default.
+    own: Option<bool>,
     /// How much each seed counts, by `of`'s order, comma-separated (Sounds like your week); none, all alike.
     weights: Option<String>,
 }
@@ -1978,7 +1980,7 @@ async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh).await?))
+    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh, q.own).await?))
 }
 
 #[derive(serde::Deserialize)]

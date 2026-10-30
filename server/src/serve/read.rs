@@ -812,6 +812,14 @@ impl Library {
         Ok(out)
     }
 
+    /// Each album's Music-form id, by its id (0.11, quick crates: the crates' Album axis, Discogs' labels).
+    pub fn album_bases(&self) -> Result<HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, base_id FROM albums")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Each song's album (0.9.7: a file's words are its album's).
     pub fn song_album_map(&self) -> Result<HashMap<String, String>> {
         let db = self.db();
