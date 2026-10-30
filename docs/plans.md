@@ -27,6 +27,13 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   library below, taken up). Cratarr's mode is Cratarr's own library, its libraries (Music, Incoming, each user's own)
   still switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
   library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests.
+  With it (the owner, 2026-10-30): **scrolling to what a link leads to, and every automatic scroll clear of the
+  chrome.** Arriving through a link or a search result (an album in a list, a track in a playlist or crate, an
+  artist's place) scrolls to that item and marks it; and every scroll the page makes by itself (that one, the
+  sidebar's section, the queue's playing track, a list's own place kept) stops with its item fully in sight: not under
+  the top bar, a sticky list head or column head, nor the floating glass top and bottom (`--glass-top`,
+  `--glass-bottom`). One rule for it (scroll-padding from the chrome's real heights, kept as they change), not each
+  place's own offset. Today: 4 scrollIntoView and 9 scrollTo calls, no vertical scroll-padding anywhere.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
