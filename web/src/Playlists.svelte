@@ -33,6 +33,7 @@
   import { fit } from './lib/columns.svelte';
   import { playlistStats, type PlaylistStats } from './lib/api';
   import { addedOn } from './lib/albums.svelte';
+  import { reach } from './lib/reach.svelte';
   import { clockText } from './lib/remote.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
@@ -158,7 +159,8 @@
 
   // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
-  usePageAction(() => ({ icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
+  // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change; one line says so.
+  usePageAction(() => (reach.away ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
   // Its two modes (0.9.18; the owner, 2026-10-29): Normal, the playlists only open; Quick add, each one's circle adds or
   // takes out the playing track. The mode's button is left of New playlist, a double check (the plus is New playlist's).
   const quick = $derived(prefs.playlistQuickAdd);
@@ -200,6 +202,7 @@
   {#if error}
     <Notice text={error} />
   {/if}
+  {#if reach.away}<p class="away">New playlists need Cratarr.</p>{/if}
 
   {#if (!view || waiting) && !error}
     <PageLoading />
@@ -298,6 +301,12 @@
 {/if}
 
 <style>
+  .away {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
   /* The page answers to its own width (beside the player or not), not the window's: a container. */
   main {
     position: relative;
