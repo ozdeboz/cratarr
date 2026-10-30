@@ -70,15 +70,14 @@ pub struct Brake {
 }
 
 impl Brake {
-    /// Its speed `s` seconds into it (×).
+    /// Its speed `s` seconds into it (×): the players' one brake (`cratarr_rules::brake`).
     fn v(&self, s: f64) -> f64 {
-        if s >= self.secs { self.to } else { self.to + (self.v0 - self.to) * (1.0 + (PI * s / self.secs).cos()) / 2.0 }
+        cratarr_rules::brake::v(self.v0, self.to, self.secs * 1000.0, s * 1000.0)
     }
 
     /// Its way from its start to `s` seconds into it (seconds of track).
     fn w(&self, s: f64) -> f64 {
-        let s1 = s.clamp(0.0, self.secs);
-        self.to * s1 + (self.v0 - self.to) * (s1 / 2.0 + self.secs / (2.0 * PI) * (PI * s1 / self.secs).sin()) + self.to * (s - self.secs).max(0.0)
+        cratarr_rules::brake::way(self.v0, self.to, self.secs * 1000.0, s * 1000.0) / 1000.0
     }
 
     /// Where its stream ends (stream seconds): at the brake's end, the aim.
