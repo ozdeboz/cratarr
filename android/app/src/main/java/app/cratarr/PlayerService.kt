@@ -305,13 +305,13 @@ class PlayerService : MediaSessionService() {
     }
 
     /**
-     * Where this device's controls point (decision 0062), changed here only: `self`, `player:<name>` or `server`. Asked by
+     * Where this device's controls point (decision 0062), changed here only: `self` or `player:<name>` (0.12: the media
+     * server's player is gone from Cratarr's mode, the owner 2026-10-30; a page still asking for it gets `self`). Asked by
      * the page, or by the rule: *sounding here means controls here* (its own player started, whatever started it). To
      * point away it pauses its own player first, if it still plays. The page hears every change (MainActivity).
      */
     fun pointAt(to: String, why: String) {
         val target = when {
-            to == Prefs.TARGET_SERVER -> Prefs.TARGET_SERVER
             to.startsWith("player:") && to.length > 7 && to.removePrefix("player:") != prefs.playerName -> to
             else -> Prefs.TARGET_SELF
         }
