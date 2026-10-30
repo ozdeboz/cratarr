@@ -468,7 +468,7 @@ impl Queue {
 
     /// The queue a player reports, taken as it is: the player holds what plays (decision 0033, step 1). Tracks it
     /// sends without entries (an app from before 0033) keep the entries they had here, in order, so an entry keeps
-    /// its id through moves; who asked for an entry stays with it where an app from before 0.9.19 leaves it out. None
+    /// its id through moves; who asked for an entry stays with it where an app from before 0.10 leaves it out. None
     /// when nothing changed; else whether it is another queue: something new the player started itself, or none at all
     /// (the one before is left behind, decision 0033 amended).
     pub fn adopted(&mut self, reported: Vec<QueueTrack>) -> Option<bool> {

@@ -1,6 +1,6 @@
 # 0079: Listening along: following another listener, asking for a track, and a guest page
 
-- Status: accepted (the owner, 2026-10-30: "Decide now, build in 0.9.19")
+- Status: accepted (the owner, 2026-10-30: "Decide now, build in 0.10")
 - Date: 2026-10-30
 - Builds on: 0031 (Play On), 0033 (Cratarr holds the queues), 0051 (several users), 0064 (one listening history),
   0068 (one way in for listening), 0.9.8 (shared devices, used from home only)

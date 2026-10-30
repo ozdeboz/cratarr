@@ -70,7 +70,7 @@ fun queueOf(player: Player, thin: Boolean = false): JSONArray {
 }
 
 /** What makes a queue entry what it is, whatever Cratarr says of its track: its entry, lane and place, the track, and
- *  who asked for it (a queue request accepted, 0.9.19). */
+ *  who asked for it (a queue request accepted, 0.10). */
 private val IDENTITY = listOf("entry", "lane", "n", "source", "id", "asked_by")
 
 /** A track's identity: what the queue is told when Cratarr describes it. */

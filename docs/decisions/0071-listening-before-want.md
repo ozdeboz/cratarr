@@ -78,9 +78,9 @@ Bandcamp is asked politely: one page or search at a time, at most one a second, 
 or "unavailable" (503) none for as long as it asks (a minute where it does not say). A new look keeps the pages the
 one before found instead of looking them up again, so what plays stays playable while a sync runs.
 
-## Amended 2026-10-30 (0.9.19): previews in the queue, on every player
+## Amended 2026-10-30 (0.10): previews in the queue, on every player
 
-The owner, 2026-10-30, for 0.9.19's scope: "All goes in 9.19!": Bandcamp in the queue, on every player.
+The owner, 2026-10-30, for 0.10's scope: "All goes in 9.19!": Bandcamp in the queue, on every player.
 
 - **A queue entry as any other.** A preview's track is `QueueTrack { source: "bandcamp", id }`, its id the album's
   page and the track's number (`bandcamp::track_id`, `bc.` then URL-safe base64 of `n|page`), with its own name,

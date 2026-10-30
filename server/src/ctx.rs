@@ -1,4 +1,4 @@
-//! What a request reaches (the audit, 0.9.19): the app, Cratarr's own library, the players and who asks, handed to each
+//! What a request reaches (the audit, 0.10): the app, Cratarr's own library, the players and who asks, handed to each
 //! handler instead of read from process-wide statics. What a handler uses is in its signature, and a test hands it its
 //! own.
 

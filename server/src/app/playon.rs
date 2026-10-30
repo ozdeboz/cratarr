@@ -67,7 +67,7 @@ pub struct QueueTrack {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub duration_secs: Option<f64>,
-    /// Who asked for it, a queue request accepted (decision 0079; 0.9.19): the follower's name, or the guest's as the
+    /// Who asked for it, a queue request accepted (decision 0079; 0.10): the follower's name, or the guest's as the
     /// page shows it ("Guest Sam"). It stays with the entry wherever the entry goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

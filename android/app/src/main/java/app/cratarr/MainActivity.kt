@@ -151,7 +151,7 @@ class MainActivity : AppCompatActivity() {
         fileCallback = null
     }
 
-    /** Download… (0.9.19): the page's export while the user says where it is saved, and the page that asked. */
+    /** Download… (0.10): the page's export while the user says where it is saved, and the page that asked. */
     private var saveAsked: Pair<JSONObject, JavaScriptReplyProxy>? = null
     private val exportSave = registerForActivityResult(ExportSave.SaveAs()) { doc ->
         val (message, reply) = saveAsked ?: return@registerForActivityResult
@@ -588,7 +588,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "kept-sync" -> Kept.sync(this, retryFailed = true)
-            // Download… (0.9.19): Cratarr prepared the export and named its download (a zip, or the one file); the user
+            // Download… (0.10): Cratarr prepared the export and named its download (a zip, or the one file); the user
             // says where it is saved, in Android's save dialog with that name.
             "export-save" -> {
                 val token = message.optString("token")
