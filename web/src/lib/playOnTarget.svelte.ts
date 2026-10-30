@@ -125,13 +125,16 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-/** This page's own id (one per tab, kept over a reload): Cratarr lets no other page take its name while it holds it. */
+/** This page's own id (one per tab, kept over a reload): Cratarr lets no other page take its name while it holds it.
+ *  In the desktop app, one window, kept over a restart too, so a restarted app takes its own name back at once (0.9.19,
+ *  2026-10-30). */
 const PAGE = (() => {
   try {
-    const kept = sessionStorage.getItem('cratarr-page');
+    const store = desktop ? localStorage : sessionStorage;
+    const kept = store.getItem('cratarr-page');
     if (kept) return kept;
     const id = uuid();
-    sessionStorage.setItem('cratarr-page', id);
+    store.setItem('cratarr-page', id);
     return id;
   } catch {
     return uuid();
@@ -294,6 +297,10 @@ function connect() {
       return;
     }
     if (typeof m.version === 'number') version = m.version;
+    // What starts or stops the sound, in the device's log, as it came (0.9.19, 2026-10-30: a restarted ThinkPad played on
+    // by itself, and only the server's log could say why).
+    if (m.command === 'play' || m.command === 'resume' || m.command === 'pause' || m.command === 'stop' || m.command === 'toggle')
+      note('info', 'command', { command: m.command, ...(m.command === 'play' ? { paused: m.paused === true, index: m.index, position_ms: m.position_ms } : {}) });
     // Sync play: in a group led by another, its sound here and its screen on the group (its own music stops); alone
     // again, quiet.
     if (m.command === 'group') {
