@@ -192,12 +192,15 @@ pub struct Heard {
     pub output: Option<String>,
     pub context: Option<String>,
     pub event: Option<String>,
+    /// Heard while following another listener (the owner, 2026-10-30): in the history and scrobbled, but never counted
+    /// on the song, its album and its artists, which the taste, Discover and the radio's picks read.
+    pub followed: bool,
 }
 
 impl Heard {
     /// A counted play and nothing more known (a Subsonic app's scrobble, a player from before 0064).
     pub fn counted(at: i64) -> Self {
-        Heard { at, heard_secs: None, length_secs: None, ended: Ended::Finished, counts: true, player: None, output: None, context: None, event: None }
+        Heard { at, heard_secs: None, length_secs: None, ended: Ended::Finished, counts: true, player: None, output: None, context: None, event: None, followed: false }
     }
 }
 
@@ -211,6 +214,8 @@ pub struct Logged {
     pub ended: Ended,
     pub counted: bool,
     pub context: Option<String>,
+    /// Heard while following another listener: the history shows it, the taste leaves it out (the owner, 2026-10-30).
+    pub followed: bool,
 }
 
 /// The week before a user's log began, from the songs' last plays (the owner, 2026-10-23, for 74.3.1: the log began
@@ -240,6 +245,7 @@ fn logged(r: &rusqlite::Row) -> rusqlite::Result<Logged> {
         ended: Ended::of(&r.get::<_, String>(4)?),
         counted: r.get(5)?,
         context: r.get(6)?,
+        followed: r.get::<_, Option<bool>>(7)?.unwrap_or(false),
     })
 }
 
@@ -547,6 +553,15 @@ fn add_answer_names(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Plays from before following (the owner, 2026-10-30) get the column: none was heard while following. Safe to repeat.
+fn add_plays_followed(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('plays') WHERE name = 'followed'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE plays ADD COLUMN followed INTEGER NOT NULL DEFAULT 0")?;
+    }
+    Ok(())
+}
+
 /// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
 fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
@@ -580,6 +595,7 @@ impl UserData {
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
         add_answer_names(&conn)?;
+        add_plays_followed(&conn)?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
     }
@@ -721,9 +737,9 @@ impl UserData {
         let mut db = self.db();
         let tx = db.transaction()?;
         let added = tx.execute(
-            "INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT DO NOTHING",
-            params![user, song.0, song.1, h.at, h.heard_secs, h.length_secs, h.ended.as_str(), h.counts, h.player, h.output, h.context, h.event],
+            "INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event, followed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) ON CONFLICT DO NOTHING",
+            params![user, song.0, song.1, h.at, h.heard_secs, h.length_secs, h.ended.as_str(), h.counts, h.player, h.output, h.context, h.event, h.followed],
         )?;
         if added == 0 {
             return Ok(false);
@@ -736,7 +752,8 @@ impl UserData {
                 params![user, song.0, h.at],
             )?;
         }
-        if h.counts {
+        // Heard while following (the owner, 2026-10-30): logged and sent, not counted on what the picks read.
+        if h.counts && !h.followed {
             let at = h.at;
             let mut st = tx.prepare_cached(
                 "INSERT INTO annotation (user, item, kind, pid, play_count, play_date) VALUES (?1, ?2, ?3, ?4, 1, ?5)
@@ -890,7 +907,7 @@ impl UserData {
         }
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT song, at, heard_secs, length_secs, ended, counted, context FROM plays WHERE user = ?1 AND at >= ?2 ORDER BY at",
+            "SELECT song, at, heard_secs, length_secs, ended, counted, context, followed FROM plays WHERE user = ?1 AND at >= ?2 ORDER BY at",
         )?;
         let rows = st.query_map(params![user, since], logged)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -2043,6 +2060,20 @@ mod tests {
         u.record("me", ("tr-1", "pid1"), "al-1", &[], &imported).unwrap();
         assert_eq!(u.heard_from("me").unwrap(), Some(100), "an import's older rows are no live history");
         assert!(u.heard_since("me", 150).unwrap().len() == 1 && u.heard_since("you", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_play_heard_while_following_is_logged_and_sent_but_not_counted() {
+        let u = UserData::open(None).unwrap();
+        u.set_scrobble_target("me", "listenbrainz", "me", "{}").unwrap();
+        let along = Heard { event: Some("f1".into()), followed: true, ..Heard::counted(500) };
+        assert!(u.record("me", ("tr-1", "pid1"), "al-1", &["ar-1".to_string()], &along).unwrap());
+        let log = u.heard_since("me", 0).unwrap();
+        assert_eq!(log.iter().map(|l| (l.song.as_str(), l.counted, l.followed)).collect::<Vec<_>>(), [("tr-1", true, true)], "in the history");
+        assert_eq!(u.due_scrobbles(i64::MAX, 10).unwrap().len(), 1, "scrobbled");
+        assert!(u.play_stats("me", &["tr-1".to_string()]).unwrap().is_empty(), "never counted on the song");
+        u.count_play("me", ("tr-2", "pid2"), "al-1", &[], 600).unwrap();
+        assert!(!u.heard_since("me", 0).unwrap()[1].followed);
     }
 
     #[test]
