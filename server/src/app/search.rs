@@ -110,6 +110,9 @@ pub struct Item {
     /// A classical record's, or its track's, composers (0.10); a record found by its composer says so in `matched`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub composers: Vec<crate::source::ComposerRef>,
+    /// An artist's library id (`ar-…`; 0.11, quick crates: what a Sounds like is seeded with from a search hit).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub score: f32,
     pub matched: Vec<Matched>,
 }
@@ -208,6 +211,7 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
                 subject: format!("missing:{}", m.release_group),
                 known: vec![format!("Missing from {}", m.artist)],
                 composers: Vec::new(),
+                id: None,
                 title: m.title.clone(),
                 sub: [Some(m.artist.clone()), m.year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
                 cover: Some(m.cover.clone()),
@@ -251,6 +255,7 @@ fn excluded_items(
                 bandcamp: None,
                 known: Vec::new(),
                 composers: Vec::new(),
+                id: None,
                 request: None,
                 score: matched_rank(close, &matched, w, i, n),
                 matched,
@@ -267,6 +272,7 @@ fn excluded_items(
             bandcamp: None,
             known: Vec::new(),
             composers: Vec::new(),
+            id: None,
             request: None,
             score: score(&a.artist, w, i, n),
             matched: matched_name(&a.artist),
@@ -282,6 +288,7 @@ fn excluded_items(
             bandcamp: None,
             known: Vec::new(),
             composers: Vec::new(),
+            id: None,
             request: None,
             score: score(&a.name, w, i, n),
             matched: matched_name(&a.name),
@@ -306,6 +313,7 @@ fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: O
         request: None,
         known: vec![why.to_string()],
         composers: Vec::new(),
+        id: None,
         score: matched_rank(close, &matched, w, at, of),
         matched,
     })
@@ -343,6 +351,7 @@ fn by_composer(c: &super::classical::Index, w: &[String], have: &std::collection
                 bandcamp: None,
                 known: Vec::new(),
                 composers: r.composers.clone(),
+                id: None,
                 request: None,
                 // Below the records named by the words themselves, the composer's closeness among them.
                 score: score(&composer.name, w, i, n) * 0.9,
@@ -425,6 +434,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 bandcamp: None,
                 known: Vec::new(),
                 composers: composers_of(a.id.as_str()),
+                id: None,
                 request: None,
                 score: score(&a.name, &w, i, n),
                 matched: matched(h),
@@ -459,6 +469,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     bandcamp: None,
                     known: Vec::new(),
                     composers: Vec::new(),
+                    id: Some(a.id.clone()),
                     request: None,
                     score: score(&a.name, &w, i, n),
                     matched: matched(h),
@@ -483,6 +494,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     bandcamp: None,
                     known: Vec::new(),
                     composers: classical.as_ref().map(|c| c.song_composers(&t.id)).unwrap_or_default(),
+                    id: None,
                     request: None,
                     score: score(&t.title, &w, i, n),
                     matched: if crate::search::matches(&t.title, &w) { matched_name(&t.title) } else { vec![Matched { on: "artist", text: t.artist.clone(), count: None }] },
@@ -510,6 +522,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     bandcamp: None,
                     known: Vec::new(),
                     composers: Vec::new(),
+                    id: None,
                     request: None,
                     score: score(g, &w, i, n),
                     matched: matched_name(g),
@@ -548,6 +561,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                                 bandcamp: None,
                                 known: Vec::new(),
                                 composers: Vec::new(),
+                                id: None,
                                 request: None,
                                 score: score(word, &w, i, n),
                                 matched: vec![Matched { on: kind, text: word.clone(), count: None }],
@@ -586,6 +600,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                 bandcamp: None,
                 known: Vec::new(),
                 composers: Vec::new(),
+                id: None,
                 request: None,
                 score,
                 matched,
@@ -611,7 +626,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             } else {
                 continue;
             };
-            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), score, matched, title: name });
+            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), composers: Vec::new(), id: None, score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);

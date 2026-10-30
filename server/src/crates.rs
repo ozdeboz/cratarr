@@ -476,10 +476,6 @@ pub struct AxisView {
     pub label: &'static str,
     pub kind: Kind,
     pub values: Vec<String>,
-    /// Each of `values`' name where the values are ids (0.11, quick crates: an album's, as names alike are not one
-    /// album); empty where the values are their own names.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub names: Vec<String>,
     /// How many items have each of `values` (a list in view's, decision 0061; a track list's items are its tracks);
     /// empty where not counted (the builder's playlists).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -781,10 +777,9 @@ pub struct Facts {
     pub key: Option<String>,
     /// Its album's release types as shown ("EP", "Live"), primary first (0.9.6); empty where not known.
     pub release_types: Vec<String>,
-    /// Its album, by its id and as named (0.11, quick crates: the Album axis, an album seed); one copy shared by its
-    /// tracks. None where the library has not built it.
+    /// Its album's id (0.11, quick crates: the Album axis, an album seed); one copy shared by its tracks. None where
+    /// the library has not built it.
     pub album: Option<Arc<str>>,
-    pub album_name: Option<Arc<str>>,
     /// Its labels (0.11, quick crates): its tags' (LABEL, ID3 TPUB, PUBLISHER), else what Discogs said of its album
     /// where that is kept (never asked for here: the Discogs rounds fill it in).
     pub labels: Vec<String>,
@@ -889,8 +884,8 @@ const AXES: [(&str, &str, Kind); 23] = [
     ("rating", "Rating", Kind::Range),
     ("genre", "Genre", Kind::Values),
     ("artist", "Artist", Kind::Values),
-    // By album (its id: names alike are not one album) and by label (0.11, quick crates: "by this album" a chip as
-    // well as a seed; the label the tags name, else Discogs').
+    // By album (its id: names alike are not one album; no values listed, its chips come from search) and by label
+    // (0.11, quick crates: "by this album" a chip as well as a seed; the label the tags name, else Discogs').
     ("album", "Album", Kind::Values),
     ("label", "Label", Kind::Values),
     // The album's release type (0.9.6, the owner: hide EPs and singles); an album of no known type has none.
@@ -922,24 +917,6 @@ fn by_count<'a>(items: &[&[&'a Facts]], names: fn(&'a Facts) -> &'a [String]) ->
 /// credit them among their tracks: "Air feat. Beck" counts for Air and for Beck.
 fn credits_by_count(items: &[&[&Facts]]) -> Vec<(String, usize)> {
     keyed_count(items, |f| f.credits.iter().cloned().zip(&f.credit_names))
-}
-
-/// Each album, the most common first, by its id with its name, with how many items have its tracks.
-fn albums_by_count(items: &[&[&Facts]]) -> Vec<(String, String, usize)> {
-    let mut seen: HashMap<&str, (&str, usize)> = HashMap::new();
-    for tracks in items {
-        let mut here = HashSet::new();
-        for f in tracks.iter().copied() {
-            if let Some(a) = f.album.as_deref()
-                && here.insert(a)
-            {
-                seen.entry(a).or_insert((f.album_name.as_deref().unwrap_or(""), 0)).1 += 1;
-            }
-        }
-    }
-    let mut all: Vec<(String, String, usize)> = seen.into_iter().map(|(a, (n, c))| (a.to_string(), n.to_string(), c)).collect();
-    all.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())).then_with(|| a.0.cmp(&b.0)));
-    all
 }
 
 /// `by_count` by each name's key (`each`: a file's names, each with its key), each named as first met.
@@ -1034,7 +1011,6 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 label,
                 kind,
                 values: Vec::new(),
-                names: Vec::new(),
                 counts: Vec::new(),
                 min: None,
                 max: None,
@@ -1059,14 +1035,9 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                     (a.values, a.counts) = credits_by_count(items).into_iter().unzip();
                     a.known = known(|f| !f.credits.is_empty());
                 }
-                "album" => {
-                    for (id, name, count) in albums_by_count(items) {
-                        a.values.push(id);
-                        a.names.push(name);
-                        a.counts.push(count);
-                    }
-                    a.known = known(|f| f.album.is_some());
-                }
+                // No values: the library's every album is no list to choose from (0.11, quick crates: an album's chip
+                // comes from search's albums, its value the album's id).
+                "album" => a.known = known(|f| f.album.is_some()),
                 "label" => {
                     (a.values, a.counts) = counted(|f| &f.labels);
                     a.known = known(|f| !f.labels.is_empty());
@@ -2224,19 +2195,19 @@ mod tests {
 
     #[test]
     fn an_album_is_a_seed_by_its_id_and_an_axis_by_its_id_named() {
-        let f = |rel: &str, track: i64, album: &str, name: &str, v: [f32; 2]| Facts {
+        let f = |rel: &str, track: i64, album: &str, v: [f32; 2]| Facts {
             rel: rel.into(),
             track: Some(track),
             album: Some(album.into()),
-            album_name: Some(name.into()),
             sound: Some(Arc::from(v.as_slice())),
             ..Facts::default()
         };
+        // Two albums of one name ("Greatest Hits"), apart by their ids.
         let files = vec![
-            f("a/1.flac", 1, "al-a", "Greatest Hits", [1.0, 0.0]),
-            f("a/2.flac", 2, "al-a", "Greatest Hits", [0.999, 0.045]),
-            f("b/1.flac", 3, "al-b", "Greatest Hits", [0.99, 0.14]),
-            f("c/1.flac", 4, "al-c", "Other", [0.0, 1.0]),
+            f("a/1.flac", 1, "al-a", [1.0, 0.0]),
+            f("a/2.flac", 2, "al-a", [0.999, 0.045]),
+            f("b/1.flac", 3, "al-b", [0.99, 0.14]),
+            f("c/1.flac", 4, "al-c", [0.0, 1.0]),
         ];
         let alike = Alike::of(&files, &HashMap::new());
         assert_eq!(alike.seed_places("al-a"), [0, 1]);
@@ -2244,12 +2215,11 @@ mod tests {
         let a = ["al-a".to_string()];
         assert!(SeedsOut::of(&a, true, None, &alike).holds(&files[1]) && !SeedsOut::of(&a, true, None, &alike).holds(&files[2]));
         assert!(!SeedsOut::of(&a, false, None, &alike).holds(&files[0]));
-        // The Album axis: by id, each named; two albums of one name apart.
+        // The Album axis: by id; no albums listed (its chips come from search).
         let all = axes(&files, &[]);
         let album = all.iter().find(|x| x.key == "album").unwrap();
-        assert_eq!(album.values, ["al-a", "al-b", "al-c"]);
-        assert_eq!(album.names, ["Greatest Hits", "Greatest Hits", "Other"]);
-        assert_eq!(album.counts, [2, 1, 1]);
+        assert!(album.values.is_empty() && album.counts.is_empty());
+        assert_eq!(album.known, 4);
         let membership = HashMap::new();
         let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
         let by_album = [Condition::new("album", false, Value::AnyOf { values: vec!["al-b".into()] })];

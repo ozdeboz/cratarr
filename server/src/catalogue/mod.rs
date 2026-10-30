@@ -947,16 +947,15 @@ impl Catalogue {
                     }
                 }
             }
-            // And with its album, by id and name (0.11, quick crates: the Album axis, an album seed), one copy for all
-            // its tracks; its labels Discogs' for its album where its tags name none, as kept (never asked for here).
-            match (s.library.album_names(), crate::app::discogs_facts::kept_labels(s)) {
-                (Ok(named), Ok(labels)) => {
-                    let mut shared: HashMap<&str, (Arc<str>, Arc<str>)> = HashMap::new();
+            // And with its album's id (0.11, quick crates: the Album axis, an album seed), one copy for all its
+            // tracks; its labels Discogs' for its album where its tags name none, as kept (never asked for here).
+            match (s.library.album_bases(), crate::app::discogs_facts::kept_labels(s)) {
+                (Ok(bases), Ok(labels)) => {
+                    let mut shared: HashMap<&str, Arc<str>> = HashMap::new();
                     for f in &mut facts {
                         let Some(album) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))) else { continue };
-                        let Some((name, base)) = named.get(album) else { continue };
-                        let (id, shown) = shared.entry(album.as_str()).or_insert_with(|| (Arc::from(album.as_str()), Arc::from(name.as_str()))).clone();
-                        (f.album, f.album_name) = (Some(id), Some(shown));
+                        let Some(base) = bases.get(album) else { continue };
+                        f.album = Some(shared.entry(album.as_str()).or_insert_with(|| Arc::from(album.as_str())).clone());
                         if f.labels.is_empty()
                             && let Some(l) = labels.get(base)
                         {
@@ -1114,7 +1113,6 @@ impl Catalogue {
                     release_types: Vec::new(),
                     tags: file_tags,
                     album: None,
-                    album_name: None,
                     labels: tag_labels.remove(&place).unwrap_or_default(),
                 })
             })
