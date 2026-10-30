@@ -55,6 +55,7 @@
       "synopsis": "Cratarr's pages in a window of their own"
     },
     "deb": {
+      "afterInstall": "after-install.tpl",
       "depends": [
         "libgtk-3-0",
         "libnotify4",
