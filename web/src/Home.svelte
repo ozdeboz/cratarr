@@ -66,8 +66,8 @@
   });
   const sources = $derived((library.view?.sources ?? []).filter((s) => s.id !== DEVICE));
 
-  // New for you (the owner, 2026-10-23): the server's (app::home): every used library's newest albums, those heard 5% or
-  // more of and those without a cover left out.
+  // New for you (the owner, 2026-10-23 and 2026-10-30): the server's (one rule with its crate): Cratarr's own library's
+  // newest albums, those heard 5% or more of and those without a cover left out, at most 3 of an album artist's.
   let serverNewest = $state<{ source: string; a: ListedAlbum }[]>([]);
   let serverNewestIn = $state(false);
   const newest = $derived(local ? newestHere().map((a) => ({ source: DEVICE, a })) : serverNewest);
