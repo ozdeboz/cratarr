@@ -305,7 +305,7 @@ mod tests {
         // To another's shared device: its owner answers now.
         assert_eq!(r.moved("Salon", "Carl tablet", "carl"), 1);
         assert_eq!(r.waiting_for("carl", None).len(), 1);
-        assert!(r.waiting_for("ann", None).is_empty());
+        assert_eq!(r.waiting_for("ann", None).iter().map(|x| x.player.as_str()).collect::<Vec<_>>(), ["Kitchen"], "hers on her own player still wait");
     }
 
     #[test]
