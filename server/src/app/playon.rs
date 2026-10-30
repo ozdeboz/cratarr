@@ -2270,6 +2270,12 @@ impl PlayOn {
         let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
         if !e.online() {
             tracing::warn!(target: "playon", player = name, command = command_name(&command).as_str(), reason = "offline", "command not delivered");
+            // A pause or a stop while it is away is kept: back, its queue is given back paused, not playing on
+            // (2026-10-30: the ThinkPad started again playing what Home Assistant had paused while it was away).
+            if matches!(command, Command::Pause | Command::Stop) || (matches!(command, Command::Toggle) && e.report.playing) {
+                e.report.playing = false;
+                self.save.notify_one();
+            }
             return Err(ToggleError::Refused(format!("{name} is not connected.")));
         }
         let leaves = matches!(command, Command::Play { .. } | Command::Stop);
@@ -3389,6 +3395,24 @@ mod tests {
         let back = told(&mut again);
         let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
         assert_eq!((play["tracks"].as_array().unwrap().len(), play["index"].as_u64()), (2, Some(1)));
+    }
+
+    #[tokio::test]
+    async fn a_pause_while_away_gives_the_queue_back_paused() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let page = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
+        p.command("ThinkPad", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
+        p.report("ThinkPad", Report { index: 0, playing: true, ..Report::default() }).unwrap();
+        // The computer went away playing; Home Assistant paused it meanwhile.
+        drop(page);
+        assert!(matches!(p.command("ThinkPad", Command::Pause).await, Err(ToggleError::Refused(_))));
+        let mut again = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
+        said(&mut again);
+        p.report("ThinkPad", Report { index: -1, ..Report::default() }).unwrap();
+        let back = told(&mut again);
+        let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
+        assert_eq!(play["paused"].as_bool(), Some(true), "paused, as it was told while away");
     }
 
     #[tokio::test]
