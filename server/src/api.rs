@@ -87,7 +87,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/similar", get(similar_crates))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
-        .route("/api/like-curve", get(like_curve))
+        .route("/api/like-curve", get(like_curve).post(like_curve_within))
         .route("/api/tempo", post(tempo_of).put(adjust_tempo))
         .route("/api/playlists/stats", get(playlist_stats))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
@@ -1991,7 +1991,28 @@ async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh, q.own).await?))
+    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
+}
+
+/// The Sounds like curve within a crate's other conditions (0.11, quick crates; the owner: "Filtered curve in 0.11"):
+/// the same as the query's, its seeds as a list, and the crate's other conditions as the preview sends them, so the
+/// curve counts only the tracks the crate can pick among. A Sounds like among them is passed over.
+#[derive(Deserialize)]
+struct LikeCurveWithin {
+    of: Vec<String>,
+    #[serde(default)]
+    without: Vec<String>,
+    #[serde(default)]
+    fresh: bool,
+    own: Option<bool>,
+    #[serde(default)]
+    weights: Vec<f32>,
+    #[serde(default)]
+    conditions: Vec<crate::crates::Condition>,
+}
+
+async fn like_curve_within(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(b): Json<LikeCurveWithin>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
+    Ok(Json(app.playlists.like_curve(&b.of, &b.weights, f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
 }
 
 #[derive(serde::Deserialize)]
