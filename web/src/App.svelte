@@ -25,6 +25,8 @@
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
   import { later } from './lib/later.svelte';
+  // What changed elsewhere while away, read again (decision 0087).
+  import './lib/changes.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
   import Visuals from './lib/visuals/Visuals.svelte';

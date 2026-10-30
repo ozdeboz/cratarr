@@ -47,6 +47,7 @@
     albumCoverUrl,
     playlistCovers,
     playlistRows,
+    playlistOps,
     queueTrack,
     setTrackFavorite,
     setAlbumFavorite,
@@ -104,6 +105,9 @@
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { can, offers } from './capabilities.svelte';
+  import { later, laterKey } from './later.svelte';
+  import { applyOps, opsFor, type PlaylistOp } from './playlistOps';
+  import { reach } from './reach.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
@@ -388,7 +392,10 @@
               }
               return { ...r, total: r.rows.length, genres: null };
             })
-          : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length, genres: null }));
+          : playlistRows(want, prefs.source || undefined).then((r) => {
+              const shown = withWaiting(want, r.rows);
+              return { ...r, rows: shown, total: shown.length, genres: null };
+            });
     asked.then(
       (r) => {
         if (want !== id || shownFav() !== fav) return;
@@ -1332,6 +1339,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (album || artist) return null;
     const pl = shownPlaylists().find((x) => x.id === list);
     if (!pl || pl.mine === false || (multi ? !(list in sections) : list !== id)) return null;
+    const s = sections[list];
+    if (reach.away && !opsReady(multi ? (s && 'rows' in s ? s.rows : null) : rows)) return null;
     return () => outOfPlaylist(list, [r]);
   }
   /** How many tracks and albums the crate viewed excludes, and their sheet. */
@@ -1434,6 +1443,36 @@ ${r.album_artist ?? r.artist ?? ''}`;
       saved++;
     });
   }
+  // A playlist's edits with no network (decision 0087, 0.12): as operations through the outbox, where Cratarr takes them
+  // (its `playlist_ops`, and an id on every line); its rows shown as the operations still waiting leave them. Online
+  // the whole-list save stays, with its Undo. Where Cratarr cannot take them, editing is not offered while away, and a
+  // line says so (decision 0085: never offered and then refused).
+  const opsReady = (rs: readonly PlaylistRow[] | null | undefined) => can('playlist_ops') === true && !!rs?.length && rs.every((r) => !!r.entry_id);
+  const opsPath = (list: string) => `/api/playlists/${encodeURIComponent(list)}/ops`;
+  function withWaiting(list: string, rs: PlaylistRow[]): PlaylistRow[] {
+    const ops = later.list
+      .filter((c) => c.path === opsPath(list) && c.body)
+      .flatMap((c): PlaylistOp[] => {
+        try {
+          return (JSON.parse(c.body ?? '') as { ops: PlaylistOp[] }).ops.filter((o) => o.op !== 'add');
+        } catch {
+          return [];
+        }
+      });
+    if (!ops.length || !rs.every((r) => !!r.entry_id)) return rs;
+    return applyOps(rs, ops, (r) => r.entry_id ?? '', () => {
+      throw new Error('a line added here is not shown before Cratarr has it');
+    });
+  }
+  const editWaits = $derived(reach.away && !!p && p.mine !== false && !!rows && !opsReady(rows));
+  // Changed elsewhere while this page was away (lib/changes): the list, and this one's rows unless being edited.
+  $effect(() =>
+    on<{ area: string; ids?: string[] | null }>('changed', ({ area, ids }) => {
+      if (area !== 'playlists') return;
+      refresh();
+      if (!editing && (!ids || ids.includes(id))) saved++;
+    }),
+  );
   // A playlist's line out of its file. Swipes in a row wait for each other: each save names the lines as the one before
   // left them (the server refuses a save over lines that changed), and the list is read again once they are all done.
   const leaving: Record<string, PlaylistRow[]> = {};
@@ -1445,6 +1484,22 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const before = leaving[list] ?? (multi ? (s && 'rows' in s ? s.rows : null) : rows);
     if (!before) return 'away' as const;
     const after = before.filter((x) => !rs.includes(x));
+    if (reach.away && opsReady(before)) {
+      for (const r of rs) dropShown(list, r);
+      playlistOps(
+        list,
+        opsFor(
+          before.map((x) => x.entry_id ?? ''),
+          after.map((x) => x.entry_id ?? ''),
+          Date.now(),
+          laterKey,
+        ),
+      ).then(
+        () => saved++,
+        (e) => toast.fail(e, "It wasn't taken out"),
+      );
+      return 'away' as const;
+    }
     leaving[list] = after;
     outs++;
     for (const r of rs) dropShown(list, r);
@@ -1663,7 +1718,17 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const [from, to, renamed] = [id, newName, nameChanged];
     const tokens: (string | null)[] = [];
     try {
-      if (tracksChanged)
+      if (tracksChanged && reach.away && opsReady(rows))
+        await playlistOps(
+          id,
+          opsFor(
+            rows.map((r) => r.entry_id ?? ''),
+            editing.rows.map((x) => x.r.entry_id ?? ''),
+            Date.now(),
+            laterKey,
+          ),
+        );
+      else if (tracksChanged)
         tokens.push(
           (
             await editPlaylist(
@@ -1917,7 +1982,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else}
-          {#if p && p.mine !== false}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+          {#if p && p.mine !== false}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
           <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
             ><Icon name="heart" size={24} /></button
           >
@@ -1925,6 +1990,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {/if}
       </div>
       {/if}
+      {#if editWaits}<p class="note">Editing this playlist needs Cratarr.</p>{/if}
       <header class="meta">
         <!-- What it is, and beside it on a wide panel its tempo spread (decision 0041). -->
         <div class="meta-main">

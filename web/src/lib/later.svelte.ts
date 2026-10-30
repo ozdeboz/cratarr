@@ -1,80 +1,118 @@
-// Changes made while Cratarr is out of reach (the owner, 2026-10-28: "the best PWA offline support possible"): a heart,
-// a rating, a playlist's tracks or name, what is excluded, kept on this device in the order made and sent when Cratarr
-// answers again (lib/api's `later`). Each carries the key it was first tried with (Idempotency-Key, 0.9.15): one
-// whose first try reached Cratarr but whose answer was lost is not made twice. A change Cratarr turns down when it comes
-// (the playlist gone meanwhile) is let go: Cratarr's state is the truth.
+// The outbox (decision 0085, step 3; the owner, 2026-10-28: "the best PWA offline support possible"): a heart, a rating,
+// a playlist's tracks or name, what is excluded. Each change is kept on this device first (lib/keptStore), in the order
+// made, then sent (lib/api's `later`); one that does not reach Cratarr waits, and all behind it, until Cratarr answers
+// again. Each carries its op id (Idempotency-Key, 0.9.15) and the time it was made (X-Cratarr-At, 0.12): one whose
+// first try reached Cratarr but whose answer was lost is not made twice, and a later change made elsewhere wins. A
+// change Cratarr turns down when it comes (the playlist gone meanwhile) is let go: Cratarr's state is the truth. The
+// rules are lib/outbox's.
+import { keep, readKept } from './keptStore';
+import { headersOf, mergeOps, opsFrom, outcomeOf, stale, type Op } from './outbox';
 import { notReached, reach, whenReached } from './reach.svelte';
 
-export type Later = { key: string; method: string; path: string; body: string | null; type: string | null; at: number };
+export type Later = Op;
 
-const KEY = 'cratarr-later';
-function load(): Later[] {
+const NAME = 'outbox';
+/** 0.9.15 to 0.11's list, in localStorage: taken over once. */
+const OLD_KEY = 'cratarr-later';
+function oldList(): Op[] {
   try {
-    const v = JSON.parse(localStorage.getItem(KEY) ?? '[]');
-    return Array.isArray(v) ? v : [];
+    return opsFrom(JSON.parse(localStorage.getItem(OLD_KEY) ?? '[]'));
   } catch {
     return [];
   }
 }
-export const later = $state({ list: load() });
-function save() {
+
+export const later = $state({ list: typeof window === 'undefined' ? [] : oldList() });
+/** Done once the stored outbox has been read in (until then a change waits behind it, kept in order). */
+const loaded =
+  typeof window === 'undefined'
+    ? Promise.resolve()
+    : readKept<unknown>(NAME).then(async (v) => {
+        later.list = mergeOps(opsFrom(v), later.list);
+        await save();
+        try {
+          localStorage.removeItem(OLD_KEY);
+        } catch {
+          /* nothing there */
+        }
+        if (later.list.length && !reach.away) void sendLater();
+      });
+const save = () => keep(NAME, $state.snapshot(later.list));
+
+/** A key for a change, the same for its first try and every resend. */
+export const laterKey = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+/** Called once what waited has been sent (lib/changes reads what changed meanwhile). */
+export const whenSent = new Set<() => void>();
+
+/** A first try or the resending at work: one at a time, so a change is never sent twice at once. */
+let busy = false;
+const letGo = async (key: string) => {
+  later.list = later.list.filter((c) => c.key !== key);
+  await save();
+};
+
+/** Keeps a change, written before it is first tried, then tries it unless others wait before it. `send` makes the
+ *  request with the headers given; `unreached` tells its failure "not reached" apart. Returns what `send` returned, or
+ *  null when the change waits (the caller shows its stand-in). A change turned down is let go and its error thrown. */
+export async function keepAndTry<T>(op: Op, send: (headers: Record<string, string>) => Promise<T>, unreached: (e: unknown) => boolean): Promise<{ value: T } | null> {
+  await loaded;
+  const ahead = busy || later.list.length > 0;
+  later.list = [...later.list, op];
+  await save();
+  if (ahead) {
+    void sendLater();
+    return null;
+  }
+  busy = true;
   try {
-    localStorage.setItem(KEY, JSON.stringify(later.list));
-  } catch {
-    // A private window, or storage refused: kept while the page is open.
+    const value = await send(headersOf(op));
+    await letGo(op.key);
+    return { value };
+  } catch (e) {
+    if (unreached(e)) return null;
+    await letGo(op.key);
+    throw e;
+  } finally {
+    busy = false;
+    if (later.list.length && !reach.away) void sendLater();
   }
 }
 
-/** A key for a change, the same for its first try and every replay. */
-export const laterKey = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
-
-/** Keeps a change for when Cratarr answers again. */
-export function keepForLater(c: Omit<Later, 'at'>) {
-  later.list = [...later.list, { ...c, at: Date.now() }];
-  save();
-}
-
-const STALE_MS = 7 * 86_400_000;
-let sending = false;
 /** Sends what waits, in order, while Cratarr answers; stops at the first that does not reach it. */
 export async function sendLater() {
-  if (sending || !later.list.length) return;
-  sending = true;
+  await loaded;
+  if (busy || !later.list.length) return;
+  busy = true;
+  let sent = 0;
   try {
     while (later.list.length) {
       const c = later.list[0];
-      // A week waiting (each try turned away as though out of reach): let go, not to hold the rest back for ever.
-      if (Date.now() - c.at > STALE_MS) {
+      if (stale(c, Date.now())) {
         console.warn('A change made away was let go, never taken', c.method, c.path);
-        later.list = later.list.slice(1);
-        save();
+        await letGo(c.key);
         continue;
       }
-      let r: Response;
+      let r: Response | null = null;
       try {
-        r = await fetch(c.path, {
-          method: c.method,
-          headers: { 'Idempotency-Key': c.key, ...(c.type ? { 'Content-Type': c.type } : {}) },
-          body: c.body,
-        });
+        r = await fetch(c.path, { method: c.method, headers: headersOf(c), body: c.body });
       } catch {
-        break;
+        /* not reached */
       }
-      // The first try still at work there: once more in a moment.
-      if (r.status === 409 && r.headers.has('Retry-After')) {
+      const outcome = outcomeOf(r?.status ?? null, !!r?.headers.has('Retry-After'), notReached);
+      if (outcome === 'wait') break;
+      if (outcome === 'again') {
         await new Promise((ok) => setTimeout(ok, 1000));
         continue;
       }
-      // Not reached, not signed in, or Cratarr not well: it waits on.
-      if (notReached(r.status) || r.status === 401 || r.status >= 500) break;
-      if (!r.ok) console.warn('A change made away was turned down', c.method, c.path, r.status);
-      later.list = later.list.slice(1);
-      save();
+      if (outcome === 'refused') console.warn('A change made away was turned down', c.method, c.path, r?.status);
+      await letGo(c.key);
+      sent++;
     }
   } finally {
-    sending = false;
+    busy = false;
   }
+  if (sent && !later.list.length) for (const f of whenSent) f();
 }
 
 whenReached.add(() => void sendLater());
-if (typeof window !== 'undefined' && later.list.length && !reach.away) void sendLater();

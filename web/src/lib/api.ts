@@ -1,5 +1,5 @@
 import { track } from './progress.svelte';
-import { keepForLater, later as laterWaits, laterKey, sendLater } from './later.svelte';
+import { keepAndTry, laterKey } from './later.svelte';
 import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
@@ -7,6 +7,8 @@ import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
+import type { PlaylistOp } from './playlistOps';
+import type { ChangesAnswer } from './changeLog';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -171,28 +173,18 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** A change that waits for Cratarr while it is out of reach (lib/later): tried now with its replay key; not reached,
- *  kept in order and sent when Cratarr answers again, `answer` standing for Cratarr's meanwhile. While others wait, it
- *  waits behind them. */
+/** A change through the outbox (lib/later, decision 0085 step 3): kept on this device first, then tried with its op id
+ *  and its time; not reached, it waits in order and is sent when Cratarr answers again, `answer` standing for Cratarr's
+ *  meanwhile. While others wait, it waits behind them. */
 async function later<T>(path: string, init: RequestInit, answer: () => T): Promise<T> {
-  const key = laterKey();
-  const headers = new Headers(init.headers);
-  headers.set('Idempotency-Key', key);
-  const keep = () => {
-    keepForLater({ key, method: init.method ?? 'POST', path, body: typeof init.body === 'string' ? init.body : null, type: headers.get('Content-Type') });
-    return answer();
-  };
-  if (laterWaits.list.length) {
-    const kept = keep();
-    void sendLater();
-    return kept;
-  }
-  try {
-    return await fetchJson<T>(path, { ...init, headers });
-  } catch (e) {
-    if (e instanceof ApiError && e.message === UNREACHED) return keep();
-    throw e;
-  }
+  const type = new Headers(init.headers).get('Content-Type');
+  const op = { key: laterKey(), method: init.method ?? 'POST', path, body: typeof init.body === 'string' ? init.body : null, type, at: Date.now() };
+  const r = await keepAndTry(
+    op,
+    (headers) => fetchJson<T>(path, { ...init, headers }),
+    (e) => e instanceof ApiError && e.message === UNREACHED,
+  );
+  return r ? r.value : answer();
 }
 const laterJson = <T>(path: string, body: unknown, answer: () => T, method = 'POST') =>
   later<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, answer);
@@ -791,6 +783,9 @@ export function exportUrl(c: ExportChoice): string {
  *  to the server, `missing` when the file is not in the Music folder. */
 export type PlaylistRow = {
   entry: string;
+  /** The line's own id (decision 0087, 0.12: kept beside the .m3u), what a playlist's operations name; absent from a
+   *  server without them. */
+  entry_id?: string;
   file: string;
   id: string | null;
   name: string | null;
@@ -846,6 +841,19 @@ export const editPlaylist = (id: string, expected: string[], entries: string[]) 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ expected, entries }),
   });
+
+/** A playlist's edits as operations (decision 0087, lib/playlistOps): through the outbox, so they are made with no
+ *  network too; Cratarr merges them and answers with the entries as they now stand (null meanwhile). */
+export const playlistOps = (id: string, ops: PlaylistOp[]) =>
+  laterJson<{ rev: number | null; entries: { entry: string; track: { source: string; id: string } }[] | null }>(
+    `/api/playlists/${encodeURIComponent(id)}/ops`,
+    { ops },
+    () => ({ rev: null, entries: null }),
+  );
+
+/** What changed since `since` (decision 0087, lib/changes), of these kinds. */
+export const getChanges = (since: number, kinds: readonly string[]) =>
+  quietly<ChangesAnswer>(`/api/changes?${new URLSearchParams({ since: String(since), kinds: kinds.join(',') })}`);
 
 /** Lists like a list, of its kind (the one similarity): the closest first, each with how alike (0 to 100). */
 export type Alike = { id: string; alike: number };
