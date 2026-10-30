@@ -52,6 +52,7 @@
   import { goToArtist, mainArtist } from './albums.svelte';
   import { artistFavorite } from './api';
   import { toast } from './toast.svelte';
+  import { askedOf, playerShown } from './following.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -672,7 +673,7 @@
             >
           {/if}
           <button class="act labelled queue" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)} use:longpress={() => (queueMenuOpen = true)}
-            ><Icon name="playlists" size={24} /><small>{queuePlace}</small></button
+            ><Icon name="playlists" size={24} /><small>{queuePlace}</small>{#if askedOf(playerShown())}<span class="asked-count">{askedOf(playerShown())}</span>{/if}</button
           >
         </div>
       {/if}
@@ -1502,5 +1503,22 @@
 
   header.drop-progress .progress {
     display: none;
+  }
+
+  /* Tracks asked for of this player (0.9.19): how many, on the queue button's corner. */
+  .asked-count {
+    position: absolute;
+    top: -4px;
+    right: -6px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
   }
 </style>

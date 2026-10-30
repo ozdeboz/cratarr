@@ -21,6 +21,10 @@ export type Choices = {
   tracking?: boolean;
   /** Discover's picks of the day moved on from (the owner, 2026-10-25: rotated from its menu), the latest last. */
   discover_pick_skip?: string[];
+  /** Others may follow this account's playing (0.9.19; off unless switched on), and whose tracks asked for go into
+   *  the queue at once. */
+  followable?: boolean;
+  auto_accept?: string[];
 };
 export type MoreFrom = { libraries: string[] | null; bandcamp: boolean };
 
@@ -74,7 +78,19 @@ export function setDefaults(part: { radio?: Partial<Defaults['radio']>; autoplay
 }
 
 /** The Personal parts' own (Radio and Autoplay, Tracking), as kept. */
-export const mine = $state({ moreFrom: { libraries: null, bandcamp: false } as MoreFrom, tracking: true, pickSkip: [] as string[] });
+export const mine = $state({ moreFrom: { libraries: null, bandcamp: false } as MoreFrom, tracking: true, pickSkip: [] as string[], followable: false, autoAccept: [] as string[], known: false });
+/** Others may follow this account or not (0.9.19, the Play On sheet's foot). */
+export function setFollowable(on: boolean): Promise<void> {
+  mine.followable = on;
+  keep({ followable: on });
+  return flush();
+}
+/** `user`'s tracks asked for go into the queue at once, or wait for an answer. */
+export function setAutoAccept(user: string, on: boolean): Promise<void> {
+  mine.autoAccept = on ? [...mine.autoAccept.filter((u) => u !== user), user] : mine.autoAccept.filter((u) => u !== user);
+  keep({ auto_accept: mine.autoAccept });
+  return flush();
+}
 /** The pick of the day moved on to the next that plays (Discover's menu of it): kept for the account, so every device
  *  shows the same; the last 50. */
 export function skipPick(key: string) {
@@ -118,6 +134,10 @@ export async function loadMine(): Promise<Choices | null> {
     const from = (settings as Choices).more_music;
     mine.moreFrom = { libraries: Array.isArray(from?.libraries) ? from.libraries : null, bandcamp: !!from?.bandcamp };
     mine.tracking = (settings as Choices).tracking !== false;
+    mine.followable = (settings as Choices).followable === true;
+    const auto = (settings as Choices).auto_accept;
+    mine.autoAccept = Array.isArray(auto) ? auto.filter((u) => typeof u === 'string') : [];
+    mine.known = true;
     const skip = (settings as Choices).discover_pick_skip;
     mine.pickSkip = Array.isArray(skip) ? skip.filter((k) => typeof k === 'string') : [];
     const c = settings as Choices;

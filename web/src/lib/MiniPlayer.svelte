@@ -29,6 +29,7 @@
   import { isLocal } from './output.svelte';
   import SeekWave from './SeekWave.svelte';
   import { Seek } from './seekState.svelte';
+  import { askedOf, playerShown } from './following.svelte';
   import { loadWaveform, waveformOf, waveLoading } from './waveforms.svelte';
 
   // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
@@ -217,7 +218,9 @@
       </div>
       {#if roomForQueue}
         <button class="own queue" class:answer={!!answer} aria-haspopup="dialog" aria-label="Queue" onclick={() => (queueOpen = true)}
-          >{#key answer}<Icon name={answer === 'next' ? 'listStart' : answer === 'last' ? 'listEnd' : 'playlists'} size={24} />{/key}</button
+          >{#key answer}<Icon name={answer === 'next' ? 'listStart' : answer === 'last' ? 'listEnd' : 'playlists'} size={24} />{/key}{#if askedOf(playerShown())}<span class="asked-count"
+              >{askedOf(playerShown())}</span
+            >{/if}</button
         >
       {/if}
       <button class="own device" class:elsewhere={!!np.player} aria-haspopup="dialog"
@@ -486,5 +489,22 @@
   .fav.off {
     color: var(--muted);
     cursor: default;
+  }
+
+  /* Tracks asked for of this player (0.9.19): how many, on the queue button's corner. */
+  .asked-count {
+    position: absolute;
+    top: 12px;
+    right: 0;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
   }
 </style>

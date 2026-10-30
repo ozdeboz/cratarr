@@ -45,6 +45,10 @@
   import { isLocal, shownPlaylists } from './output.svelte';
   import { clockText, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite, playPause, rampInert, shownPaused } from './remote.svelte';
   import { toast } from './toast.svelte';
+  import { accept, askedOf, askerName, decline, follow, followingNow, loadAsked, playerShown, waiting } from './following.svelte';
+  import { mine } from './mySettings.svelte';
+  import { prefs } from './prefs.svelte';
+  import { ACCEPTED_MS, requestsShown, stillComing, withRequests } from './queueRequests';
 
   /** `screen`: over the whole window, as the other sheets (opened from the mini-player, the owner 2026-10-25: it was
    *  held inside the bar); else over the full player that holds it. */
@@ -141,11 +145,13 @@
     if (source) untrack(() => loadFavorites(source, listed));
   });
 
-  // A row's menu: the whole menu (long-press on the row) or straight to its playlists (the row's heart).
-  let menuFor = $state<{ track: MenuTrack; start: 'menu' | 'lists'; queue: QueuePlace | null } | null>(null);
+  // A row's menu: the whole menu (long-press on the row) or straight to its playlists (the row's heart). A track asked
+  // for: its menu with Always accept from whoever asked (a user, not a guest).
+  type RowMenu = { track: MenuTrack; start: 'menu' | 'lists'; queue: QueuePlace | null; asker?: string | null };
+  let menuFor = $state<RowMenu | null>(null);
   // Shown or not; what it is for stays while it slides out.
   let menuShown = $state(false);
-  const showMenu = (m: { track: MenuTrack; start: 'menu' | 'lists'; queue: QueuePlace | null }) => ((menuFor = m), (menuShown = true));
+  const showMenu = (m: RowMenu) => ((menuFor = m), (menuShown = true));
   const asTrack = (t: { id: string; name: string; artist: string | null; album: string | null; album_id: string | null }, source: string): MenuTrack => ({
     source,
     id: t.id,
@@ -155,9 +161,9 @@
     album_id: t.album_id,
   });
   /** A row's menu, about its place in the queue; the playing track's card gives the playing track's own menu. */
-  function rowMenu(track: MenuTrack, queue: QueuePlace | null) {
+  function rowMenu(track: MenuTrack, queue: QueuePlace | null, asker: string | null = null) {
     tick();
-    showMenu({ track, start: 'menu', queue });
+    showMenu({ track, start: 'menu', queue, asker });
   }
 
   async function play(i: number) {
@@ -211,6 +217,37 @@
   };
   /** A long press on the play button: Start and stop's controls (lib/StartStopSheet; the owner, 2026-10-26). */
   let startStopOpen = $state(false);
+
+  // Tracks asked for (0.9.19; the owner, 2026-10-30), on one's own player: each a row where it would go, its thumbs up
+  // (into the queue, a row of it at once) and thumbs down (gone) in place of the heart and the handle, who asked on its
+  // third line; shown or hidden from the head's thumb, its count on it (on while others may follow, unless chosen here).
+  // One's own asked of the one followed show as rows too, waiting for them, until answered.
+  const askedPlayer = $derived(playerShown());
+  const askedCount = $derived(askedOf(askedPlayer));
+  $effect(() => {
+    const p = askedPlayer;
+    void askedCount;
+    if (p) untrack(() => loadAsked(p));
+  });
+  const showAsked = $derived(requestsShown(prefs.queueRequestsShown, mine.followable));
+  const followed = $derived(followingNow());
+  const asked = $derived(askedPlayer && showAsked ? (follow.asked[askedPlayer] ?? []) : []);
+  const mineWaiting = $derived(followed ? waiting() : []);
+  /** This device's queue to edit by hand: not while it follows someone (theirs is theirs). */
+  const editable = $derived(here && !followed);
+  const ownAsked = $derived(new Set(mineWaiting.map((r) => r.id)));
+  // An accepted one stands in until the player's report has it, a while at most.
+  $effect(() => {
+    if (!follow.accepted.length) return;
+    const t = setTimeout(() => (follow.accepted = follow.accepted.filter((a) => Date.now() - a.at < ACCEPTED_MS)), ACCEPTED_MS);
+    return () => clearTimeout(t);
+  });
+  const accepted = $derived(np ? follow.accepted.filter((a) => a.r.player === askedPlayer && stillComing(a, np.upcoming, Date.now())).map((a) => a.r) : []);
+  // While a row is dragged, only the queue's own rows (the reorder counts them).
+  const lines = $derived(np ? (drag ? withRequests(np.upcoming, []) : withRequests(np.upcoming, [...asked, ...mineWaiting], accepted)) : []);
+  /** Whether who asked stays on an accepted one's row (the owner: open; for now only while it waits). */
+  const ASKER_STAYS = false;
+  const timesQueued = (id: string) => np?.upcoming.filter((t) => t.id === id).length ?? 0;
 </script>
 
 <!-- A row's cover; held, its track plays until the finger lifts (lib/preview.svelte.ts), ringed meanwhile. -->
@@ -282,6 +319,18 @@
         {:else}
           <span class="title">Queue</span>
           <span class="tools">
+            <!-- The tracks asked for, shown or hidden, how many on it (0.9.19). -->
+            {#if follow.served && (mine.followable || askedCount > 0)}
+              <button
+                class="asked-toggle"
+                class:lit={showAsked}
+                aria-pressed={showAsked}
+                aria-label={askedCount ? `Tracks asked for, ${askedCount}` : 'Tracks asked for'}
+                title="Asked for"
+                onclick={() => (prefs.queueRequestsShown = !showAsked)}
+                ><Icon name="thumbsUp" size={22} />{#if askedCount}<span class="badge">{askedCount > 99 ? '99+' : askedCount}</span>{/if}</button
+              >
+            {/if}
             <!-- Search and the queue's menu (decision 0058: Shuffle, Save as playlist, Download…, Queues…, Clear). -->
             <button aria-label="Search the queue" onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
             <button aria-label="Menu of the queue" title="Menu" onclick={() => (queueMenu = true)}><Icon name="moreVert" size={22} /></button>
@@ -351,9 +400,12 @@
         <div class="count">{count}</div>
       </div>
 
-      {#if np.upcoming.length}
+      {#if lines.length}
         <ol class="rows" class:dragging={!!drag}>
-          {#each np.upcoming as t, i (t.id + ':' + i)}
+          {#each lines as line (line.kind === 'track' ? line.t.id + ':' + line.i : `${line.kind}:${line.r.id}`)}
+            {#if line.kind === 'track'}
+            {@const t = line.t}
+            {@const i = line.i}
             <!-- A line where the tracks added by hand end and the album or playlist goes on (decision 0033), and where
                  the radio's begin (decision 0036). -->
             <li
@@ -362,7 +414,7 @@
               class:lane-end={i > 0 && np.upcoming[i - 1].lane !== t.lane && (np.upcoming[i - 1].lane === 'next' || t.lane === 'radio' || t.lane === 'autoplay')}
               style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}
             >
-              {#if here}<SwipeBehind left={REMOVE} />{/if}
+              {#if editable}<SwipeBehind left={REMOVE} />{/if}
               <button
                 class="row"
                 onclick={() => play(i)}
@@ -370,8 +422,8 @@
                 onpointermove={reorder.move}
                 onpointerup={reorder.end}
                 onpointercancel={reorder.end}
-                use:longpress={() => (here && !q.length ? liftRow(i) : rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i }))}
-                use:swipe={{ enabled: here && !drag, left: () => removeSwiped(i) }}
+                use:longpress={() => (editable && !q.length ? liftRow(i) : rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i }))}
+                use:swipe={{ enabled: editable && !drag, left: () => removeSwiped(i) }}
               >
                 {@render heldCover({ source: np.source, id: t.id, album_id: t.album_id, duration_secs: t.duration_secs })}
                 <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{:else if t.lane === 'autoplay'}<i class="radio" title="Autoplay"><Icon name="infinity" size={14} /></i>{/if}{@render byline(t)}</span></div>
@@ -379,7 +431,7 @@
               </button>
               {@render rowHeart(asTrack(t, np.source))}
               {@render more(asTrack(t, np.source), { list: 'upcoming', at: i })}
-              {#if here && !q.length}
+              {#if editable && !q.length}
                 <button
                   class="grip"
                   aria-label="Drag to reorder"
@@ -391,6 +443,42 @@
                 >
               {/if}
             </li>
+            {:else}
+            <!-- A track asked for (0.9.19): a row as any, its thumbs up and down in place of the heart and the handle (an
+                 accepted one has them back), who asked under its artist. One's own asked: waiting for the one followed. -->
+            {@const r = line.r}
+            {@const own = ownAsked.has(r.id)}
+            {@const pending = line.kind === 'request'}
+            <li hidden={!matches(r.track)} class:asked={pending}>
+              <button
+                class="row"
+                onclick={tick}
+                use:longpress={() => rowMenu(asTrack(r.track, r.track.source), null, !own && 'user' in r.from ? r.from.user : null)}
+              >
+                {@render heldCover({ source: r.track.source, id: r.track.id, album_id: r.track.album_id, duration_secs: r.track.duration_secs })}
+                <div
+                  ><strong>{r.track.name}</strong><span>{@render byline(r.track)}</span>{#if pending || ASKER_STAYS}<span class="who"
+                      >{own ? `Waiting for ${followed?.user ?? ''}` : `Asked by ${askerName(r)}`}</span
+                    >{/if}</div
+                >
+                {#if r.track.duration_secs}<span class="d">{clockText(r.track.duration_secs)}</span>{/if}
+              </button>
+              {#if pending && !own}
+                <button class="thumb" aria-label="Accept {r.track.name}" title="Accept" onclick={() => (tick(), accept(r, timesQueued(r.track.id)))}><Icon name="thumbsUp" size={22} /></button>
+              {:else if !pending}
+                {@render rowHeart(asTrack(r.track, r.track.source))}
+              {/if}
+              <button class="more" aria-label="Menu of {r.track.name}" onclick={() => rowMenu(asTrack(r.track, r.track.source), null, !own && 'user' in r.from ? r.from.user : null)}
+                ><Icon name="moreVert" size={22} /></button
+              >
+              {#if pending && !own}
+                <button class="thumb" aria-label="Decline {r.track.name}" title="Decline" onclick={() => (heavy(), decline(r))}><Icon name="thumbsDown" size={22} /></button>
+              {:else if !pending}
+                <!-- Its handle once the queue has it (the player's next report). -->
+                <span class="grip" aria-hidden="true"><Icon name="order" size={24} /></span>
+              {/if}
+            </li>
+            {/if}
           {/each}
         </ol>
       {:else}
@@ -420,6 +508,7 @@
     track={menuFor.track}
     start={menuFor.start}
     queue={menuFor.queue}
+    asker={menuFor.asker ?? null}
     onclose={() => (menuShown = false)}
   />
 {/if}
@@ -967,6 +1056,49 @@
     opacity: 0.85;
     font-size: 13px;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* A track asked for: its thumbs where the heart and the handle are (0.9.19). */
+  .thumb {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .row div span.who {
+    font-size: 12px;
+    opacity: 0.6;
+  }
+
+  .tools .asked-toggle {
+    position: relative;
+  }
+
+  .tools .asked-toggle:not(.lit) {
+    opacity: 0.55;
+  }
+
+  .tools .badge {
+    position: absolute;
+    top: 2px;
+    right: 0;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
   }
 
   .grip {

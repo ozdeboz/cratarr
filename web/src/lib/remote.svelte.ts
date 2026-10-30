@@ -5,6 +5,7 @@ import { coverUrl, albumCoverUrl, type NowPlaying, type Transport, type Upcoming
 import { expect, live } from './live.svelte';
 import { rewindNow, sought } from './localPlayer.svelte';
 import { port } from './player/port.svelte';
+import { followingNow } from './following.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
 import { toast } from './toast.svelte';
@@ -292,7 +293,12 @@ function show(command: Transport) {
   }
 }
 
-export const send = (command: Transport) => port().send(command, show);
+export const send = (command: Transport) => {
+  // Following someone (0.9.19): their queue is theirs; a track is asked of them instead (lib/following).
+  const f = followingNow();
+  if (f && (command === 'next' || command === 'previous')) return void toast.show({ text: `Following ${f.user}: ask for a track instead.` });
+  return port().send(command, show);
+};
 
 /** Holding Previous (`back`) or Next (`forward`): winds the tape (decision 0074), here (or the app's or the driven
  *  player, lib/localPlayer), or on one of Cratarr's players through the server, which does the rest. */
@@ -303,7 +309,7 @@ export const windTouch = (dir: 'back' | 'forward', on: boolean) => port().windTo
 
 /** Whether anything can follow what plays (Next dimmed where nothing can; the owner, 2026-10-27): a next track, or
  *  Autoplay, Radio or repeat to make one; elsewhere, what the player says is to come. */
-export const hasNext = (): boolean => port().hasNext();
+export const hasNext = (): boolean => !followingNow() && port().hasNext();
 
 /** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
 export const playUpcoming = async (i: number) => port().playUpcoming(i);

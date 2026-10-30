@@ -274,6 +274,30 @@ export const playerCommand = (name: string, command: PlayerCommand) =>
     body: JSON.stringify(command),
   });
 
+// Following and queue requests (0.9.19; the owner, 2026-10-30: "This is a queue matter"): another user's playing,
+// listened along to on one's own player, its leader asked for tracks, who accepts or declines each (some people at
+// once); and a guest's, on the home network (lib/guest).
+const json = (method: string, body?: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+/** Someone who may be followed, their players and what each plays. */
+export type FollowLeader = { user: string; players: { name: string; playing: boolean; track?: QueueTrack | null; position_ms: number; position_at: number }[] };
+/** Someone following one of my players now (`players`), or one I accept at once who does not now (none). */
+export type Follower = { user: string; players: string[] };
+/** Who asks: a user, or a guest by the name they gave. */
+export type Asker = { user: string } | { guest: string };
+/** A track asked for, played next or at the end of `player`'s queue once accepted. */
+export type QueueRequest = { id: string; from: Asker; track: QueueTrack; how: 'next' | 'last'; at: number; player: string; state?: 'pending' | 'accepted' | 'declined' };
+/** How following and asking stand on a player (a server before 0.9.19 says none of it). */
+export type FollowView = { following?: { user: string; player: string } | null; followers?: string[]; queue_requests?: number };
+export const getLeaders = () => quietly<FollowLeader[]>('/api/follow/leaders');
+export const getFollowers = () => quietly<Follower[]>('/api/follow/followers');
+export const followOn = (mine: string, user: string, player: string) => request<void>(`/api/players/${encodeURIComponent(mine)}/follow`, json('PUT', { user, player }));
+export const stopFollowing = (mine: string) => request<void>(`/api/players/${encodeURIComponent(mine)}/follow`, json('DELETE'));
+export const getQueueRequests = (player?: string) => quietly<QueueRequest[]>(`/api/queue-requests${player ? `?${new URLSearchParams({ player })}` : ''}`);
+export const askForTrack = (to: { user: string; player: string }, track: QueueTrack, how: 'next' | 'last') =>
+  request<{ id: string; state: 'pending' | 'accepted' }>('/api/queue-requests', json('POST', { to, track, how }));
+export const acceptRequest = (id: string) => request<void>(`/api/queue-requests/${encodeURIComponent(id)}/accept`, json('POST'));
+export const declineRequest = (id: string) => request<void>(`/api/queue-requests/${encodeURIComponent(id)}/decline`, json('POST'));
+
 /** A track's cover. The device's own music (local mode, decision 0052) has its album's, which the app serves on the
  *  page's own address. */
 export const coverUrl = (np: { source: string; id: string; album_id?: string | null }) =>
