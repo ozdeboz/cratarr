@@ -1086,8 +1086,22 @@ fn kept_bytes(bytes: Vec<u8>, tag: char, headers: &HeaderMap) -> Response {
 /// they cannot be worked out now. It changes with a new analysis, and once when Beat this!'s beats replace the
 /// analysis' own (decision 0049, amended): an ETag of when the analysis was made and whose beats they are; kept a long
 /// time once they are Beat this!'s, asked again each time until then.
-async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
-    for_visuals(app, source, id, headers, false).await
+async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(k): Query<Kept>, headers: HeaderMap) -> Response {
+    for_visuals(app, source, id, headers, false, k.stored).await
+}
+
+/// `?stored=1` (0.12, a track's menu and its snippet): only what the analysis kept, 404 where there is none, never a
+/// decode now (a menu opened on each of many tracks must not queue a decode each on the server).
+#[derive(Deserialize)]
+struct Kept {
+    #[serde(default, deserialize_with = "flag")]
+    stored: bool,
+}
+
+/// `1`/`true` (or present and empty) as true; absent, `0`, `false` as false.
+fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let s = <Option<String> as serde::Deserialize>::deserialize(d)?;
+    Ok(s.is_some_and(|v| !matches!(v.as_str(), "0" | "false")))
 }
 
 /// A track's signals for the visuals (decision 0046, amended), as `analysis::signals::Signals` keeps them (format 3):
@@ -1107,12 +1121,12 @@ async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
 ///
 /// A page skips the sections it does not know. Empty where the decode did not cover the whole file. Worked out and kept
 /// as `track_beats`, in the same decode; served under its old name, `bands`.
-async fn track_bands(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
-    for_visuals(app, source, id, headers, true).await
+async fn track_bands(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(k): Query<Kept>, headers: HeaderMap) -> Response {
+    for_visuals(app, source, id, headers, true, k.stored).await
 }
 
 /// A track's beats, or its bands: as kept or worked out now (`app::analysis_pass::visual`).
-async fn for_visuals(app: Arc<App>, source: String, id: String, headers: HeaderMap, bands: bool) -> Response {
+async fn for_visuals(app: Arc<App>, source: String, id: String, headers: HeaderMap, bands: bool, stored: bool) -> Response {
     let cat = app.library.catalogue();
     let c = cat.clone();
     let file = tokio::task::spawn_blocking(move || {
@@ -1123,6 +1137,15 @@ async fn for_visuals(app: Arc<App>, source: String, id: String, headers: HeaderM
     .ok()
     .flatten();
     let Some((folder, rel)) = file else { return StatusCode::NOT_FOUND.into_response() };
+    // Only what is kept: none is a 404, not a decode.
+    if stored {
+        let (c, r) = (cat.clone(), rel.clone());
+        let kept = tokio::task::spawn_blocking(move || crate::app::analysis_pass::kept(&c, folder, &r)).await.unwrap_or((None, None));
+        let kept = if bands { kept.1.map(|s| s.0) } else { kept.0.map(|b| b.0) };
+        if kept.is_none() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    }
     // Not now: the file did not decode, or its turn or decode took too long; the page may ask again later.
     let got = if bands {
         crate::app::analysis_pass::signals(cat.clone(), folder, rel.clone()).await.map(|b| b.0)
