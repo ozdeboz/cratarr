@@ -3,6 +3,7 @@ import type { Announcing } from "./Announcing";
 import type { AudioOutput } from "./AudioOutput";
 import type { Autoplay } from "./Autoplay";
 import type { DeviceTrack } from "./DeviceTrack";
+import type { Landing } from "./Landing";
 import type { QueueTrack } from "./QueueTrack";
 import type { RadioBy } from "./RadioBy";
 import type { Repeat } from "./Repeat";
@@ -90,6 +91,11 @@ starting?: boolean,
  * Players from before leave them out.
  */
 speed_x?: number, accel_x?: number, 
+/**
+ * Where its hold lands (0.11.1: a driven player's wind shown as it is, 2026-10-30), as a page says it while it holds;
+ * null once it holds no more. Left out: not said (apps and pages from before, a page in a group).
+ */
+landing?: Landing | null, 
 /**
  * The direction knob as set (0.9.12): `L` backwards, `R` (or left out) forwards.
  */

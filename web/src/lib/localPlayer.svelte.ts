@@ -1331,8 +1331,9 @@ export function reportedBy(m: {
   const now = performance.now();
   const pos = (Number(m.positionMs) || 0) / 1000;
   if (typeof m.speedX === 'number' && Number.isFinite(m.speedX)) {
-    // The place shown until now: the new course's correction fades in from it, on the same track (lib/deckCourse).
-    const before = deck ? deckPlace(deck, now) : null;
+    // The place shown until now: the new course's correction fades in from it, on the same track (lib/deckCourse); a
+    // wind's first report, glided to, as shown (lib/drivenCourse: the speed is measured from its second on).
+    const before = deck ? deckPlace(deck, now) : tape.glide ? local.position : null;
     deck = { pos, at: readAt(clockGaps, m.deckAtMs, now), v: m.speedX, a: typeof m.accelX === 'number' && Number.isFinite(m.accelX) ? m.accelX : 0 };
     eased = easeInto(before, deck, now, trackKey(local.queue[local.index]) === trackBefore);
     deckNow.back = deck.v < 0;
@@ -3235,7 +3236,9 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const plain = () => {
     endRewind();
     tape.holding = null;
-    if (to !== null) return seek(to);
+    // There plainly, never another wind there (2026-10-30: a seek from the tablet whose wind came late was asked again
+    // as this device's own seek, which flew there in its turn and never got there before the next; it played on).
+    if (to !== null) return seek(to, false);
     // The knob's backwards could not start: forwards again, the knob too.
     if (reverse) Object.assign(tapeDir, SKIPPED);
     playOnAt(seg.index, from);

@@ -9,6 +9,7 @@ import { appInfo, inApp, onSeedTarget, toApp } from './app.svelte';
 import { on } from './events.svelte';
 import { drive, emptyHere, reportedBy, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
+import { measure, speedOf, type Measured } from './drivenCourse';
 
 /** `self`: the name this page is a player under, in a browser (lib/playOnTarget); null in the app or before. `known`:
  *  the players have been read once (until then no "None yet"). */
@@ -44,6 +45,7 @@ function driveShown() {
   const was = driving;
   driving = name;
   shownVersion = -1;
+  measured = null;
   drive(name);
   // Out of the group again: the app's own player says what it holds now.
   if (!name && was && inApp) toApp({ type: 'hello' });
@@ -114,6 +116,11 @@ export async function endGroup() {
 
 /** The queue version shown, per player: a newer one is read whole. */
 let shownVersion = -1;
+/** The driven player's last place and the speed measured from it (lib/drivenCourse). */
+let measured: Measured | null = null;
+/** What a player's report may say beyond the view's fields where the server passes it on: its speed and how fast that
+ *  changes (0075, as the app says them), and its hold's landing; a server that does not, leaves them out. */
+type Moving = { speed_x?: number; accel_x?: number; landing?: { index: number; position_ms: number; top_x?: number } | null };
 
 function take(players: PlayOnPlayer[]) {
   playOn.players = players;
@@ -123,7 +130,17 @@ function take(players: PlayOnPlayer[]) {
   const p = name ? players.find((x) => x.name === name) : undefined;
   if (!p) return;
   const sleep = p.sleep ? { atMs: p.sleep.at_ms, endOfTrack: p.sleep.end_of_track } : null;
+  const m = p as PlayOnPlayer & Moving;
+  // Counted on from when its place was so, at its speed (the owner, 2026-10-30: through a wind the tablet glided to each
+  // report and stood, while the ThinkPad wound on): as it says it, else measured between its reports.
+  measured = measure(measured, { index: p.index, pos: p.position_ms / 1000, at: p.position_at });
+  const speedX = speedOf(m.speed_x, p.rewinding ?? false, p.playing, measured.v);
+  const l = m.landing;
   reportedBy({
+    // From when it was first seen there (a view sent again carries a later stamp for the same place).
+    ...(speedX === undefined ? {} : { speedX, accelX: typeof m.accel_x === 'number' ? m.accel_x : 0, deckAtMs: measured.seen.at }),
+    // Its hold's landing, where the server passes it on: the look-ahead and the hold's zoom as the player has them.
+    ...(l === undefined ? {} : { landing: l ? { index: l.index, positionMs: l.position_ms, topX: l.top_x } : null }),
     index: p.index,
     positionMs: p.position_ms,
     durationMs: p.duration_ms ?? -1,

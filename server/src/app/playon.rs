@@ -34,6 +34,10 @@ const LEASE: Duration = Duration::from_secs(75);
 /// A player not heard from for this long (longer than its 30 s heartbeat) gives way to another page of the same
 /// account taking up its name.
 const QUIET: Duration = Duration::from_secs(35);
+/// A wind is counted on from its report at its speed this long at most (0.11.1: a driven player's wind shown as it is,
+/// 2026-10-30): a winding player reports every quarter to third of a second (a page every 250 ms, the app every 300);
+/// one silent longer has stopped or is late, and at tens of times its music's speed a guess carries it far.
+const WIND_COUNTED: Duration = Duration::from_secs(2);
 /// Changes reaching the webhooks within this long go out as one.
 const SETTLE: Duration = Duration::from_millis(300);
 /// How long a webhook may take to answer.
@@ -263,6 +267,11 @@ pub struct Report {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub accel_x: Option<f64>,
+    /// Where its hold lands (0.11.1: a driven player's wind shown as it is, 2026-10-30), as a page says it while it holds;
+    /// null once it holds no more. Left out: not said (apps and pages from before, a page in a group).
+    #[serde(default, deserialize_with = "landing_said", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub landing: Option<Option<Landing>>,
     /// The direction knob as set (0.9.12): `L` backwards, `R` (or left out) forwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -300,6 +309,25 @@ pub struct Report {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub queue_name: Option<String>,
+}
+
+/// Where a hold lands, as the player has it (0.11.1: a driven player's wind shown as it is, 2026-10-30): the track's
+/// place in the queue, the place in it, and the hold's top speed (×) where it says it. A page driving the player shows
+/// its look-ahead and the hold's zoom by it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct Landing {
+    pub index: i64,
+    pub position_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub top_x: Option<f64>,
+}
+
+/// A report's `landing` (0.11.1): left out, not said (`None`, its default); null, or one not read as a landing, none
+/// (`Some(None)`): a report is never refused for it.
+fn landing_said<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<Landing>>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(Some(serde_json::from_value(v).ok()))
 }
 
 /// A track of a device's own music, as its app tells it in local mode (decision 0052).
@@ -772,9 +800,9 @@ pub struct PlayerView {
     pub seen: u64,
     pub playing: bool,
     pub index: i64,
-    /// Now: counted on from the last report while it plays.
+    /// Now: counted on from the last report while it plays; while it winds, at the speed it says (0.11.1).
     pub position_ms: u64,
-    /// When `position_ms` was so (epoch ms): from then on it moves with the music while `playing`.
+    /// When `position_ms` was so (epoch ms): from then on it moves with the music while `playing`, or at `speed_x`.
     pub position_at: u64,
     pub duration_ms: Option<u64>,
     pub volume: u8,
@@ -787,6 +815,19 @@ pub struct PlayerView {
     pub rewinding: bool,
     /// Asked to play from rest and not sounding yet, as the player says (0.9.14).
     pub starting: bool,
+    /// How it moves, as the player says (0075; 0.11.1: a driven player's wind shown as it is, 2026-10-30): track ms per
+    /// ms, signed, and how fast that changes a second. Left out where it does not say (a page says it only while it
+    /// winds or holds): then 1 playing, 0 paused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub speed_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub accel_x: Option<f64>,
+    /// Where its hold lands, as the player says (0.11.1): null once it holds no more; left out where it does not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub landing: Option<Option<Landing>>,
     /// The direction knob as the player says (0.9.12): `L` or `R`.
     #[ts(type = "\"L\" | \"R\"")]
     pub direction: &'static str,
@@ -886,6 +927,13 @@ pub struct PlayerView {
 
 fn is_zero(n: &usize) -> bool {
     *n == 0
+}
+
+/// A view as compared for news (a change pushed to the pages and the webhooks): its place moves on as counted and is no
+/// news. Its speed is, in along's twentieths (0.11.1: a wind's speed changes as it goes; a group's drift in the third
+/// decimal is no news), and how fast that changes is not.
+fn still(v: &PlayerView) -> PlayerView {
+    PlayerView { position_ms: 0, position_at: 0, seen: 0, speed_x: v.speed_x.map(|s| along::rate(Some(s)) as f64), accel_x: None, ..v.clone() }
 }
 
 /// Saved in `players.json`.
@@ -1135,6 +1183,13 @@ impl Entry {
             return p;
         }
         let r = &self.report;
+        // A wind (0.11.1: a driven player's wind shown as it is, 2026-10-30): on at the speed it says, back or forth, so a
+        // view made between its reports (another player's change, a page asking) shows where it is, not where it was.
+        if let Some(v) = self.winding_at().filter(|_| on) {
+            let ms = self.at.elapsed().min(WIND_COUNTED).as_millis() as f64;
+            let p = (r.position_ms as f64 + v * ms).max(0.0) as u64;
+            return r.duration_ms.map_or(p, |d| p.min(d));
+        }
         let mut position_ms = r.position_ms;
         if r.playing && on && !r.rewinding {
             position_ms += self.at.elapsed().as_millis() as u64;
@@ -1143,6 +1198,15 @@ impl Entry {
             }
         }
         position_ms
+    }
+
+    /// The speed it winds at, as it says (0.11.1): one other than its music's own (1) and other than still (0), in
+    /// along's twentieths (a group's drift in the third decimal is its music's own), while it plays or winds. None
+    /// otherwise, and for a player that says no speed: counted on as before.
+    fn winding_at(&self) -> Option<f64> {
+        let r = &self.report;
+        let v = r.speed_x.filter(|v| v.is_finite())?;
+        ((r.playing || r.rewinding) && !matches!(along::rate(Some(v)), 0 | 20)).then_some(v)
     }
 
     fn view(&self, name: &str, with_queue: bool) -> PlayerView {
@@ -1160,6 +1224,8 @@ impl Entry {
             v.mode = DEVICE_MODE;
             v.state = if d.playing { "playing" } else { "paused" };
             (v.playing, v.position_ms, v.duration_ms, v.index, v.queue_length) = (d.playing, position_ms, d.duration_ms, -1, 0);
+            // How that music moves, as its report says (none: the deck's speed is Cratarr's music's).
+            (v.speed_x, v.accel_x, v.landing) = (d.speed_x, d.accel_x, d.landing.clone());
             (v.title, v.artist, v.album) = (Some(t.name).filter(|n| !n.is_empty()), t.artist, t.album);
             (v.track, v.ids, v.current_entry_id) = (None, TrackIds::default(), None);
             v.queue = with_queue.then(Vec::new);
@@ -1207,6 +1273,10 @@ impl Entry {
             held: r.held.clone(),
             rewinding: r.rewinding,
             starting: r.starting,
+            // As it says them, for a page driving it to count on from (0.11.1: a driven player's wind shown as it is).
+            speed_x: r.speed_x,
+            accel_x: r.accel_x,
+            landing: r.landing.clone(),
             direction: if r.direction.as_deref() == Some("L") { "L" } else { "R" },
             levelling: r.levelling.unwrap_or(false),
             level_unknown: r.level_unknown.clone(),
@@ -2077,7 +2147,6 @@ impl PlayOn {
             e.device = Some((report, Instant::now()));
             let after = e.view(name, false);
             drop(entries);
-            let still = |v: &PlayerView| PlayerView { position_ms: 0, position_at: 0, seen: 0, ..v.clone() };
             if still(&before) != still(&after) {
                 self.changed();
             }
@@ -2250,7 +2319,6 @@ impl PlayOn {
         if after.following.is_some() {
             self.check_in_line(name);
         }
-        let still = |v: &PlayerView| PlayerView { position_ms: 0, position_at: 0, seen: 0, ..v.clone() };
         if still(&before) != still(&after) || jumped || after.rewinding {
             self.changed();
         }
@@ -3483,6 +3551,95 @@ mod tests {
         assert_eq!(e.view("p", false).held.as_deref(), Some("Android would not let it play"));
         e.report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":true,"held":null}"#).unwrap();
         assert_eq!(e.view("p", false).held, None);
+    }
+
+    /// A player online: connected (its commands go nowhere) and just heard from.
+    fn online_entry() -> Entry {
+        let mut e = Entry::new();
+        let (tx, _) = mpsc::channel(1);
+        e.connection = Some((1, tx));
+        e
+    }
+
+    #[test]
+    fn a_driven_players_speed_and_landing_reach_the_page_driving_it() {
+        // As a page reports while it holds (0.11.1, lib/playOnTarget): its speed as measured, and where the hold lands.
+        let mut e = online_entry();
+        e.report = serde_json::from_str(r#"{"index":0,"position_ms":30000,"duration_ms":200000,"playing":true,"speed_x":4,"landing":{"index":1,"position_ms":5000,"top_x":16}}"#).unwrap();
+        let v = serde_json::to_value(e.view("p", false)).unwrap();
+        assert_eq!((v["speed_x"].as_f64(), v.get("accel_x")), (Some(4.0), None));
+        assert_eq!(v["landing"], serde_json::json!({"index": 1, "position_ms": 5000, "top_x": 16.0}));
+        // Its hold over: null, so the page driving it lets its hold go; at its music's own speed a page says none.
+        e.report = serde_json::from_str(r#"{"index":1,"position_ms":5000,"playing":true,"landing":null}"#).unwrap();
+        let v = serde_json::to_value(e.view("p", false)).unwrap();
+        assert_eq!(v.get("landing"), Some(&serde_json::Value::Null));
+        assert!(v.get("speed_x").is_none());
+        // A landing not read as one is none; the report is still taken.
+        let r: Report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":true,"landing":{"index":"x"}}"#).unwrap();
+        assert_eq!(r.landing, Some(None));
+        // A player from before says none of them: its view leaves them out, as before.
+        e.report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":true}"#).unwrap();
+        let v = serde_json::to_value(e.view("p", false)).unwrap();
+        assert!(["speed_x", "accel_x", "landing"].iter().all(|k| v.get(k).is_none()), "{v}");
+        // The app's deck (0075), as it reports it: passed on (the audit, 2026-10-29: it was dropped here).
+        e.report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":true,"speed_x":1.0,"accel_x":0.0}"#).unwrap();
+        let v = e.view("p", false);
+        assert_eq!((v.speed_x, v.accel_x, v.landing), (Some(1.0), Some(0.0), None));
+    }
+
+    #[test]
+    fn a_winding_player_is_counted_on_at_its_speed_between_its_reports() {
+        let ago = |ms: u64| Instant::now().checked_sub(Duration::from_millis(ms)).unwrap();
+        let mut e = online_entry();
+        // A page winding back at 8× (0.11.1): a second after its report, 8 s further back.
+        e.report = serde_json::from_str(r#"{"index":0,"position_ms":60000,"duration_ms":200000,"playing":true,"rewinding":true,"speed_x":-8}"#).unwrap();
+        e.at = ago(1_000);
+        let p = e.position_now();
+        assert!((50_400..=52_000).contains(&p), "{p}");
+        assert!(e.view("p", false).position_ms.abs_diff(p) < 400, "the view's place is the one counted on");
+        // Silent longer than a wind reports: counted on no further than WIND_COUNTED, and never before the start.
+        e.at = ago(10_000);
+        assert_eq!(e.position_now(), 60_000 - 8 * 2_000);
+        e.report.position_ms = 5_000;
+        assert_eq!(e.position_now(), 0);
+        // Forwards at 30×: never past the track's end.
+        e.report = serde_json::from_str(r#"{"index":0,"position_ms":190000,"duration_ms":200000,"playing":true,"rewinding":true,"speed_x":30}"#).unwrap();
+        assert_eq!(e.position_now(), 200_000);
+        // A page's hold at 4× (not the tape's wind: `rewinding` false): at its speed too.
+        e.report = Report { index: 0, position_ms: 30_000, duration_ms: Some(200_000), playing: true, speed_x: Some(4.0), ..Report::default() };
+        e.at = ago(500);
+        let p = e.position_now();
+        assert!((32_000..=32_800).contains(&p), "{p}");
+        // Its music's own speed (a group's drift with it) and still: counted on at 1× while it plays, as before.
+        for speed in [1.0, 1.0004, 0.0] {
+            e.report = Report { index: 0, position_ms: 30_000, duration_ms: Some(200_000), playing: true, speed_x: Some(speed), ..Report::default() };
+            e.at = ago(10_000);
+            let p = e.position_now();
+            assert!((40_000..=40_800).contains(&p), "{speed}: {p}");
+        }
+        // A wind from a player that says no speed: where it said, as before; paused, a speed is not counted on; nor
+        // once it is offline.
+        e.report = Report { index: 0, position_ms: 30_000, playing: true, rewinding: true, ..Report::default() };
+        assert_eq!(e.position_now(), 30_000);
+        e.report = Report { index: 0, position_ms: 30_000, playing: false, speed_x: Some(4.0), ..Report::default() };
+        assert_eq!(e.position_now(), 30_000);
+        e.report = Report { index: 0, position_ms: 30_000, playing: true, rewinding: true, speed_x: Some(-8.0), ..Report::default() };
+        e.connection = None;
+        assert_eq!(e.position_now(), 30_000);
+    }
+
+    #[test]
+    fn a_winds_speed_and_landing_are_news_and_a_groups_drift_is_not() {
+        let mut e = online_entry();
+        e.report = Report { index: 0, playing: true, speed_x: Some(1.0), accel_x: Some(0.0), ..Report::default() };
+        let one = still(&e.view("p", false));
+        (e.report.speed_x, e.report.accel_x) = (Some(1.0004), Some(0.3));
+        assert_eq!(still(&e.view("p", false)), one, "a group's drift, and how fast a speed changes, are no news");
+        e.report.speed_x = Some(4.0);
+        let four = still(&e.view("p", false));
+        assert_ne!(four, one);
+        e.report.landing = Some(Some(Landing { index: 0, position_ms: 9_000, top_x: None }));
+        assert_ne!(still(&e.view("p", false)), four);
     }
 
     #[test]

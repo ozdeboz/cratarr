@@ -1,6 +1,6 @@
 [package]
 name = "cratarr-server"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
 license = "AGPL-3.0-or-later"

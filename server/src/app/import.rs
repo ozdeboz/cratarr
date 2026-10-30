@@ -108,6 +108,18 @@ pub struct Matcher {
 impl Matcher {
     /// The library's songs, from Cratarr's catalogue (`library.sqlite`).
     pub fn read(library: &Path) -> Result<Self> {
+        Self::read_songs(library, true)
+    }
+
+    /// The library's albums alone, as [`Matcher::find_album`] reads them; it finds no track (`find`). What knowing
+    /// whether the library has an album needs: one entry an album, where the songs' four maps (some 70 MB on the NAS's
+    /// library) have four a song (0.11.1: /api/discover's memory, 2026-10-30).
+    pub fn read_albums(library: &Path) -> Result<Self> {
+        Self::read_songs(library, false)
+    }
+
+    /// The same rows in the same order either way, so `find_album` answers alike from both.
+    fn read_songs(library: &Path, songs: bool) -> Result<Self> {
         let conn = crate::db::open_read_only(library)?;
         let mut st = conn.prepare("SELECT id, title, artist, album, mbid, duration_ms, album_id, album_artist FROM songs")?;
         let mut m = Matcher::default();
@@ -119,10 +131,24 @@ impl Matcher {
         })?;
         for row in rows {
             let ((id, title, artist, album), (mbid, ms, album_id, album_artist)) = row?;
-            m.add(&id, &title, artist.as_deref(), &album, mbid.as_deref(), ms.map(|ms| ms as f64 / 1000.0));
+            if songs {
+                m.add(&id, &title, artist.as_deref(), &album, mbid.as_deref(), ms.map(|ms| ms as f64 / 1000.0));
+            }
             m.add_album(&album_id, &album, album_artist.as_deref().or(artist.as_deref()));
         }
         Ok(m)
+    }
+
+    /// The library's albums (`read_albums`), one reading shared (0.11.1: /api/discover's memory, 2026-10-30: twelve
+    /// Discover requests at once each read the whole library's songs, twice, and filled the NAS's 768 MB). Those asking
+    /// at once wait for one reading; it is kept while the library is not built again (`built`: `Serve::built_at`), a
+    /// minute at most. Without `built`, read now and not kept. Blocking.
+    pub fn library_albums(library: &Path, built: Option<i64>) -> Result<std::sync::Arc<Self>> {
+        static KEPT: std::sync::Mutex<KeptAlbums> = std::sync::Mutex::new(None);
+        match built {
+            Some(built) => kept_or_read(&KEPT, library, built, super::moment::now_secs(), || Self::read_albums(library)),
+            None => Ok(std::sync::Arc::new(Self::read_albums(library)?)),
+        }
     }
 
     pub fn add(&mut self, id: &str, title: &str, artist: Option<&str>, album: &str, mbid: Option<&str>, length_secs: Option<f64>) {
@@ -180,6 +206,40 @@ fn nearest(c: &[Candidate], length: Option<f64>) -> Option<&str> {
         _ => f64::MAX,
     };
     c.iter().min_by(|a, b| by(a).total_cmp(&by(b))).map(|x| x.0.as_str())
+}
+
+/// The library's albums as last read (`Matcher::library_albums`): the file, the build it was read after, when, and them.
+type KeptAlbums = Option<(std::path::PathBuf, i64, std::time::Instant, std::sync::Arc<Matcher>)>;
+
+/// The longest the library's albums are kept, the library built again or not (0.11.1: /api/discover's memory).
+const ALBUMS_KEEP: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `slot`'s albums where they were read from `library` after build `built` and are young enough, else `read` and kept
+/// there. The slot is held while reading, so those asking meanwhile wait and share the one reading instead of each
+/// holding their own. One read within a second of its build (`now`) is not kept: `built` counts seconds, and a second
+/// build that same second would not show (0.11.1: /api/discover's memory, 2026-10-30). Blocking.
+fn kept_or_read(
+    slot: &std::sync::Mutex<KeptAlbums>,
+    library: &Path,
+    built: i64,
+    now: i64,
+    read: impl FnOnce() -> Result<Matcher>,
+) -> Result<std::sync::Arc<Matcher>> {
+    let mut kept = slot.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((file, at_build, at, m)) = kept.as_ref()
+        && file == library
+        && *at_build == built
+        && at.elapsed() < ALBUMS_KEEP
+    {
+        return Ok(m.clone());
+    }
+    // The old reading goes before the new one is made: never two at once.
+    *kept = None;
+    let m = std::sync::Arc::new(read()?);
+    if now - built > 1 {
+        *kept = Some((library.to_path_buf(), built, std::time::Instant::now(), m.clone()));
+    }
+    Ok(m)
 }
 
 /// How many of what was not found an import lists (the most items first).
@@ -373,5 +433,67 @@ mod tests {
         let t = c.tally();
         assert_eq!((t.items, t.found, t.new, t.missing_tracks), (6, 2, 1, 2));
         assert_eq!(t.missing[0], Missing { artist: "Band".into(), title: "B".into(), count: 3 });
+    }
+
+    #[test]
+    fn the_albums_alone_find_every_album_the_whole_reading_does_and_no_track() {
+        let dir = std::env::temp_dir().join(format!("cratarr-import-albums-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        let _ = std::fs::remove_file(&file);
+        let db = rusqlite::Connection::open(&file).unwrap();
+        db.execute_batch(
+            "CREATE TABLE songs (id TEXT, title TEXT, artist TEXT, album TEXT, mbid TEXT, duration_ms INTEGER, album_id TEXT, album_artist TEXT);
+             INSERT INTO songs VALUES ('tr-1', 'Joga', 'Björk', 'Homogenic', 'm1', 300000, 'al-1', NULL);
+             INSERT INTO songs VALUES ('tr-2', 'Human Behaviour', 'Björk', 'Debut', NULL, 250000, 'al-2', 'Björk');
+             INSERT INTO songs VALUES ('tr-3', 'Intro', 'Guest', 'Hits', NULL, NULL, 'al-3', 'Various Artists');
+             INSERT INTO songs VALUES ('tr-4', 'Intro', 'Other', 'Hits', NULL, NULL, 'al-4', 'Someone');",
+        )
+        .unwrap();
+        drop(db);
+        let (whole, albums) = (Matcher::read(&file).unwrap(), Matcher::read_albums(&file).unwrap());
+        for (name, artist) in [("Homogenic", "Bjork"), ("Debut", "Anyone"), ("Hits", "Various Artists"), ("Hits", "Nobody"), ("Post", "Björk")] {
+            assert_eq!(albums.find_album(name, Some(artist)), whole.find_album(name, Some(artist)), "{name} by {artist}");
+        }
+        assert_eq!(albums.find_album("Homogenic", None), Some("al-1"));
+        assert!(whole.find(&track("Joga", "Björk", None, None, None)).is_some());
+        assert_eq!(albums.find(&track("Joga", "Björk", None, Some("m1"), None)), None, "no songs read");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn those_asking_at_once_share_one_reading_kept_until_the_library_is_built_again() {
+        let slot = std::sync::Mutex::new(None);
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        let library = Path::new("/data/library.sqlite");
+        let read = || -> Result<Matcher> {
+            reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let mut m = Matcher::default();
+            m.add_album("al-1", "Moon Safari", Some("Air"));
+            Ok(m)
+        };
+        // Twelve at once (the Discover page's blinks): one reading, the same one for all.
+        let (shared, reading) = (&slot, &read);
+        let got: Vec<std::sync::Arc<Matcher>> = std::thread::scope(|s| {
+            let asks: Vec<_> = (0..12).map(|_| s.spawn(move || kept_or_read(shared, library, 100, 200, reading).unwrap())).collect();
+            asks.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(got.iter().all(|m| std::sync::Arc::ptr_eq(m, &got[0])));
+        assert_eq!(got[0].find_album("Moon Safari", Some("AIR")), Some("al-1"));
+        // Built again: read again. Another library file: read again.
+        kept_or_read(&slot, library, 150, 200, read).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 2);
+        kept_or_read(&slot, Path::new("/elsewhere/library.sqlite"), 150, 200, read).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 3);
+        // Read within a second of its build: not kept, the next asks again.
+        kept_or_read(&slot, library, 199, 200, read).unwrap();
+        kept_or_read(&slot, library, 199, 200, read).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 5);
+        // A reading that fails is not kept either.
+        assert!(kept_or_read(&slot, library, 120, 200, || anyhow::bail!("gone")).is_err());
+        kept_or_read(&slot, library, 120, 200, read).unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 6);
     }
 }
