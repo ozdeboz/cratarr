@@ -149,6 +149,21 @@ class MainActivity : AppCompatActivity() {
         fileCallback = null
     }
 
+    /** "Download… as files" (0.9.19): the page's export while the user picks the folder it goes into, and the page that
+     *  asked. */
+    private var exportAsked: Pair<JSONObject, JavaScriptReplyProxy>? = null
+    private val exportFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        val (message, reply) = exportAsked ?: return@registerForActivityResult
+        exportAsked = null
+        val job = tree?.let { ExportFiles.jobOf(it, message) }
+        if (tree == null || job == null) {
+            reply.postMessage(JSONObject().put("type", "export-files").put("state", "cancelled").put("token", message.optString("token")).toString())
+            return@registerForActivityResult
+        }
+        ExportFiles.keepFolder(this, tree)
+        ExportFiles.start(this, job)
+    }
+
     /** Where the first page opens, past the server's address: Settings (the launcher's Settings shortcut), or a
      *  connection's own page (back from a sign-in in the browser). */
     private var openAt: String? = null
@@ -243,6 +258,8 @@ class MainActivity : AppCompatActivity() {
         Kept.onChange = { runOnUiThread { tellKept() } }
         Kept.schedule(this)
         Kept.sync(this)
+        // An export written as files reports to the page in view, whichever page asked for it.
+        ExportFiles.onReport = { m -> runOnUiThread { page?.postMessage(m) } }
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(modeChanged)
         Reach.watch(this)
@@ -301,6 +318,7 @@ class MainActivity : AppCompatActivity() {
         outputs?.stop()
         network?.stop()
         Plays.onPlayedHere = null
+        ExportFiles.onReport = null
         contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(modeChanged)
@@ -374,7 +392,7 @@ class MainActivity : AppCompatActivity() {
 
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
-     *  `address`, `open` (a link outside). */
+     *  `address`, `open` (a link outside), `export-files` (Download… as files). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -393,6 +411,8 @@ class MainActivity : AppCompatActivity() {
                 reply.postMessage(NetState.now(this).toString())
                 reply.postMessage(Plays.playedHere(this).toString())
                 player?.report(withQueue = true)
+                // An export being written as files: where it is.
+                ExportFiles.latest?.let { reply.postMessage(it) }
                 followSession()
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
@@ -568,6 +588,21 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             "kept-sync" -> Kept.sync(this, retryFailed = true)
+            // "Download… as files" (0.9.19): Cratarr prepared the export; the user picks the folder it is written into,
+            // Android's picker opening at the one picked last.
+            "export-files" -> {
+                if (ExportFiles.jobOf(Uri.EMPTY, message) == null) {
+                    reply.postMessage(JSONObject().put("type", "export-files").put("state", "failed").put("token", message.optString("token")).put("error", "Nothing to export.").toString())
+                    return
+                }
+                exportAsked = message to reply
+                try {
+                    exportFolder.launch(ExportFiles.startAt(this))
+                } catch (e: ActivityNotFoundException) {
+                    exportAsked = null
+                    reply.postMessage(JSONObject().put("type", "export-files").put("state", "failed").put("token", message.optString("token")).put("error", "No app on this device picks a folder.").toString())
+                }
+            }
             "download-remove" -> {
                 if (message.optBoolean("all")) {
                     Downloads.removeAll(this)
