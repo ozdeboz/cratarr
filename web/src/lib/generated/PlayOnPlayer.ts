@@ -3,6 +3,7 @@ import type { Announcing } from "./Announcing";
 import type { AudioOutput } from "./AudioOutput";
 import type { AutoplayView } from "./AutoplayView";
 import type { FollowTarget } from "./FollowTarget";
+import type { MovedTo } from "./MovedTo";
 import type { PlayerLink } from "./PlayerLink";
 import type { QueueItem } from "./QueueItem";
 import type { QueueTrack } from "./QueueTrack";
@@ -163,4 +164,10 @@ followers?: Array<string>,
 /**
  * Queue requests waiting for its owner's answer (decision 0079); on the asking account's own players only.
  */
-queue_requests?: number, track_id: string | null, album_id: string | null, album_artist: string | null, };
+queue_requests?: number, 
+/**
+ * Where its music went, as a handover moved it (the owner, 2026-10-30: "the screen follows the music"): a screen
+ * showing this player switches to that one. Until it plays again, five minutes at most; only to one who may reach
+ * that player.
+ */
+moved_to?: MovedTo, track_id: string | null, album_id: string | null, album_artist: string | null, };

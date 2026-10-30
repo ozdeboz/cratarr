@@ -398,7 +398,7 @@ impl Driver {
                     return Box::pin(self.run(Command::Resume)).await;
                 }
             }
-            Command::Stop => {
+            Command::Stop { .. } => {
                 let _ = self.rpc.call("Player.Stop", json!({ "playerid": PLAYER })).await;
                 self.rpc.call("Playlist.Clear", json!({ "playlistid": PLAYLIST })).await?;
                 self.queue.clear();
@@ -872,7 +872,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
         d.now = d.read().await.unwrap();
         step("pause", &d);
-        d.run(Command::Stop).await.unwrap();
+        d.run(Command::Stop { moved_to: None }).await.unwrap();
         tokio::time::sleep(Duration::from_secs(1)).await;
         d.now = d.read().await.unwrap();
         step("stop", &d);

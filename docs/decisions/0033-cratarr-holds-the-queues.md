@@ -333,3 +333,29 @@ started play, and the server passed that copy on.
 - `POST /api/tracks/describe` `{tracks: [{source, id}]}` (at most 500) answers `{tracks: [{source, id, name, artist,
   album, album_id, duration_secs, addable, favorite, found}]}` in the order asked. The browser's own player and the
   app's notification and lock screen use it, since they need titles before or without the server's state.
+
+## Amendment (2026-10-30): the screen follows the music, and what goes with it
+
+The owner: "the screen follows the music"; "every screen showing that player". The ThinkPad was playing; on the tablet
+the owner picked "this device". The music and the amp moved, but the ThinkPad's screen stayed on its own empty player:
+the handover's stop to it was a plain stop, so neither it nor a screen driving it could tell a handover from a stop.
+
+- **The handover's stop names where the music went:** `{"command": "stop", "moved_to": "<player>"}`. Every other stop
+  names none; a plain `{"command": "stop"}` still reads.
+- **The player left shows it** in its view, `moved_to: {player, at}` (epoch ms), until it plays again (a play to it, or
+  a report that it plays), five minutes at most. It is kept in memory only, and shown only to one who may reach that
+  player (their own, or another's shared one from home).
+- **Screens switch.** The app, told such a stop while its controls point at its own player, points them at that player
+  (0062), as if it was picked in Play On. A screen driving the player left switches when its view first says so. A
+  player offline at the handover is told it on its return (the stop it gets then names the player while it is still
+  shown).
+- **What goes with the music** (the owner: "if another user or guest is following, then these also move when the music
+  moves"; "add all three"):
+  - whoever followed it (0079) follows the new player, put in line at once, if they may (that player's user open to
+    followers, a shared device from home only); one who may not stops following and is told. A group's other players'
+    followers go too;
+  - a player that followed someone itself: the new player follows them, if it may;
+  - the queue requests waiting on it, answered by the new player's owner;
+  - its shared visuals (0046);
+  - its sleep timer (cleared on the player left);
+  - an announcement to it while it shows where its music went, and a guest host named as a player, go there too.
