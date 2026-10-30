@@ -63,7 +63,7 @@ async fn every_route_is_behind_the_sign_in_and_is_there() {
     let (token, _) = served.sessions.create("me", "the sweep", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).unwrap();
     let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
     let saved = crate::settings::Saved { music_folder: Some(dir.to_string_lossy().into_owned()), ..Default::default() };
-    let app = crate::app::App::new(cfg, saved, crate::settings::Origin::Env).await.unwrap();
+    let app = crate::app::App::new(cfg, saved, crate::settings::Origin::Env, Some(Arc::clone(&served))).await.unwrap();
     let router = super::routes(app, Arc::clone(&served));
 
     let routes = named_routes();

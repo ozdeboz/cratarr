@@ -201,8 +201,13 @@ impl Serve {
     /// (one user, decision 0043 off), the owner. `None` outside a request when signing in is required: work of its own
     /// must say whose it is.
     pub fn current_user(&self) -> Option<String> {
-        match who::current() {
-            Some(w) => Some(w.user),
+        self.user_for(who::current().as_ref())
+    }
+
+    /// The account `asking` acts for, as `current_user` says for the running request (a handler's `Ctx` hands its own).
+    pub fn user_for(&self, asking: Option<&who::Who>) -> Option<String> {
+        match asking {
+            Some(w) => Some(w.user.clone()),
             None if !self.sign_in_required() => self.users.owner(),
             None => None,
         }
