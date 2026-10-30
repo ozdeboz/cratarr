@@ -192,8 +192,9 @@ pub struct Heard {
     pub output: Option<String>,
     pub context: Option<String>,
     pub event: Option<String>,
-    /// Heard while following another listener (the owner, 2026-10-30): in the history and scrobbled, but never counted
-    /// on the song, its album and its artists, which the taste, Discover and the radio's picks read.
+    /// Heard while following another listener (the owner, 2026-10-30): in the history, scrobbled and counted in the
+    /// library's play counts, but not in one's own plays (`Annotation::own_count`), which the taste, Discover, Home's
+    /// picks and the radio read.
     pub followed: bool,
 }
 
@@ -273,9 +274,15 @@ impl Kind {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Annotation {
+    /// Every counted play, followed ones too (the owner, 2026-10-30): what the library shows, sorts by and syncs.
     pub play_count: u32,
     /// Epoch seconds.
     pub play_date: Option<i64>,
+    /// One's own plays only, none heard while following another listener: what the picks read (Discover, Home's
+    /// looks, the radio). Never more than `play_count`.
+    pub own_count: u32,
+    /// The last of them, epoch seconds.
+    pub own_date: Option<i64>,
     /// 0 (none) to 5.
     pub rating: u8,
     /// Epoch seconds, when starred.
@@ -562,6 +569,21 @@ fn add_plays_followed(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Counts from before one's own plays were kept apart from followed ones (the owner, 2026-10-30) get the columns,
+/// filled from the counts: until then every counted play was one's own (a followed play was counted nowhere). Safe to
+/// repeat.
+fn add_annotation_own(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('annotation') WHERE name = 'own_count'")?.exists([])?;
+    if !has {
+        conn.execute_batch(
+            "ALTER TABLE annotation ADD COLUMN own_count INTEGER NOT NULL DEFAULT 0; ALTER TABLE annotation ADD COLUMN own_date INTEGER;
+             UPDATE annotation SET own_count = play_count, own_date = play_date;",
+        )?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS annotation_own_played ON annotation (user, kind, own_date);")?;
+    Ok(())
+}
+
 /// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
 fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
@@ -596,6 +618,7 @@ impl UserData {
         add_scrobble_off(&conn)?;
         add_answer_names(&conn)?;
         add_plays_followed(&conn)?;
+        add_annotation_own(&conn).context("keeping one's own plays apart from followed ones")?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
     }
@@ -608,7 +631,7 @@ impl UserData {
     pub fn get(&self, user: &str, kind: Kind, items: &[String]) -> Result<std::collections::HashMap<String, Annotation>> {
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT play_count, play_date, rating, starred, starred_at FROM annotation WHERE user = ?1 AND kind = ?2 AND item = ?3",
+            "SELECT play_count, play_date, rating, starred, starred_at, own_count, own_date FROM annotation WHERE user = ?1 AND kind = ?2 AND item = ?3",
         )?;
         let mut out = std::collections::HashMap::new();
         for item in items {
@@ -619,6 +642,8 @@ impl UserData {
                         play_date: r.get(1)?,
                         rating: r.get::<_, i64>(2)?.clamp(0, 5) as u8,
                         starred_at: if r.get::<_, i64>(3)? != 0 { Some(r.get::<_, Option<i64>>(4)?.unwrap_or(0)) } else { None },
+                        own_count: r.get::<_, i64>(5)?.max(0) as u32,
+                        own_date: r.get(6)?,
                     })
                 })
                 .optional()?;
@@ -657,13 +682,13 @@ impl UserData {
     }
 
     /// Every item of one kind a user played or rated, with its annotation (the Library's orders and filters by plays
-    /// and rating): one read for all of them.
+    /// and rating; the picks read its own plays): one read for all of them.
     pub fn used(&self, user: &str, kind: Kind) -> Result<std::collections::HashMap<String, Annotation>> {
         // Its play history off (0.9.5): only what it rated, nothing of what it played.
         let keeps = self.tracking(user);
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT item, play_count, play_date, rating, starred, starred_at FROM annotation
+            "SELECT item, play_count, play_date, rating, starred, starred_at, own_count, own_date FROM annotation
              WHERE user = ?1 AND kind = ?2 AND (play_count > 0 OR play_date IS NOT NULL OR rating > 0)",
         )?;
         let rows = st.query_map(params![user, kind.as_str()], |r| {
@@ -674,13 +699,19 @@ impl UserData {
                     play_date: r.get(2)?,
                     rating: r.get::<_, i64>(3)?.clamp(0, 5) as u8,
                     starred_at: if r.get::<_, i64>(4)? != 0 { Some(r.get::<_, Option<i64>>(5)?.unwrap_or(0)) } else { None },
+                    own_count: r.get::<_, i64>(6)?.max(0) as u32,
+                    own_date: r.get(7)?,
                 },
             ))
         })?;
         let all: std::collections::HashMap<String, Annotation> = rows.collect::<rusqlite::Result<_>>()?;
         Ok(match keeps {
             true => all,
-            false => all.into_iter().filter(|(_, a)| a.rating > 0).map(|(k, a)| (k, Annotation { play_count: 0, play_date: None, ..a })).collect(),
+            false => all
+                .into_iter()
+                .filter(|(_, a)| a.rating > 0)
+                .map(|(k, a)| (k, Annotation { play_count: 0, play_date: None, own_count: 0, own_date: None, ..a }))
+                .collect(),
         })
     }
 
@@ -727,8 +758,8 @@ impl UserData {
     }
 
     /// A track heard (decision 0064): a row in the log and, when it counts as a play (0022), the play counted on the
-    /// song, its album and its artists, together. A report with an `event` already in the log changes nothing; false
-    /// then.
+    /// song, its album and its artists, together; as one's own too unless heard while following. A report with an
+    /// `event` already in the log changes nothing; false then.
     pub fn record(&self, user: &str, song: (&str, &str), album: &str, artists: &[String], h: &Heard) -> Result<bool> {
         // Its play history off (0.9.5): nothing written, whoever brings it (a player, an import).
         if !self.tracking(user) {
@@ -752,19 +783,23 @@ impl UserData {
                 params![user, song.0, h.at],
             )?;
         }
-        // Heard while following (the owner, 2026-10-30): logged and sent, not counted on what the picks read.
-        if h.counts && !h.followed {
-            let at = h.at;
+        // Heard while following (the owner, 2026-10-30): counted, but not as one's own, which the picks read.
+        if h.counts {
+            let (at, own) = (h.at, i64::from(!h.followed));
             let mut st = tx.prepare_cached(
-                "INSERT INTO annotation (user, item, kind, pid, play_count, play_date) VALUES (?1, ?2, ?3, ?4, 1, ?5)
+                "INSERT INTO annotation (user, item, kind, pid, play_count, play_date, own_count, own_date)
+                 VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, CASE WHEN ?6 > 0 THEN ?5 END)
                  ON CONFLICT (user, item, kind) DO UPDATE SET play_count = annotation.play_count + 1,
                    play_date = max(coalesce(annotation.play_date, 0), excluded.play_date),
+                   own_count = annotation.own_count + excluded.own_count,
+                   own_date = CASE WHEN excluded.own_date IS NULL THEN annotation.own_date
+                     ELSE max(coalesce(annotation.own_date, 0), excluded.own_date) END,
                    pid = coalesce(excluded.pid, annotation.pid)",
             )?;
-            st.execute(params![user, song.0, Kind::Song.as_str(), song.1, at])?;
-            st.execute(params![user, album, Kind::Album.as_str(), Option::<String>::None, at])?;
+            st.execute(params![user, song.0, Kind::Song.as_str(), song.1, at, own])?;
+            st.execute(params![user, album, Kind::Album.as_str(), Option::<String>::None, at, own])?;
             for a in artists {
-                st.execute(params![user, a, Kind::Artist.as_str(), Option::<String>::None, at])?;
+                st.execute(params![user, a, Kind::Artist.as_str(), Option::<String>::None, at, own])?;
             }
         }
         tx.commit()?;
@@ -929,15 +964,29 @@ impl UserData {
         Ok(self.db().execute_batch(WEEK_BEFORE_THE_LOG)?)
     }
 
-    /// Sets an item's whole annotation for a user (a song taking over another's data, decision 0013). Safe to repeat.
+    /// Sets an item's whole annotation for a user (a song taking over another's data, decision 0013), its own plays
+    /// never more than all of them. Safe to repeat.
     pub fn set_annotation(&self, user: &str, kind: Kind, item: &str, pid: Option<&str>, a: &Annotation) -> Result<()> {
         self.db().execute(
-            "INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT (user, item, kind) DO UPDATE SET pid = coalesce(excluded.pid, annotation.pid),
                play_count = excluded.play_count, play_date = excluded.play_date, rating = excluded.rating,
-               starred = excluded.starred, starred_at = excluded.starred_at",
-            params![user, item, kind.as_str(), pid, a.play_count, a.play_date, a.rating, a.starred_at.is_some(), a.starred_at],
+               starred = excluded.starred, starred_at = excluded.starred_at,
+               own_count = excluded.own_count, own_date = excluded.own_date",
+            params![
+                user,
+                item,
+                kind.as_str(),
+                pid,
+                a.play_count,
+                a.play_date,
+                a.rating,
+                a.starred_at.is_some(),
+                a.starred_at,
+                a.own_count.min(a.play_count),
+                a.own_date
+            ],
         )?;
         Ok(())
     }
@@ -978,16 +1027,20 @@ impl UserData {
 
     /// Applies an import's changes to `key.account`'s annotations and keeps what the server said, all or nothing.
     /// Annotations keep Navidrome's shape: plays add up, last played is the later one, a star keeps its first time.
+    /// Imported plays are one's own.
     pub fn apply_import(&self, key: ImportKey, changes: &[ImportChange]) -> Result<()> {
         let user = key.account;
         let mut db = self.db();
         let tx = db.transaction()?;
         {
             let mut plays = tx.prepare_cached(
-                "INSERT INTO annotation (user, item, kind, pid, play_count, play_date) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO annotation (user, item, kind, pid, play_count, play_date, own_count, own_date) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5, ?6)
                  ON CONFLICT (user, item, kind) DO UPDATE SET play_count = annotation.play_count + excluded.play_count,
                    play_date = CASE WHEN excluded.play_date IS NULL THEN annotation.play_date
                      ELSE max(coalesce(annotation.play_date, 0), excluded.play_date) END,
+                   own_count = annotation.own_count + excluded.own_count,
+                   own_date = CASE WHEN excluded.own_date IS NULL THEN annotation.own_date
+                     ELSE max(coalesce(annotation.own_date, 0), excluded.own_date) END,
                    pid = coalesce(excluded.pid, annotation.pid)",
             )?;
             let mut star = tx.prepare_cached(
@@ -1068,7 +1121,9 @@ impl UserData {
         let mut db = self.db();
         let tx = db.transaction()?;
         {
-            let mut less = tx.prepare_cached("UPDATE annotation SET play_count = max(0, play_count - ?4) WHERE user = ?1 AND item = ?2 AND kind = ?3")?;
+            let mut less = tx.prepare_cached(
+                "UPDATE annotation SET play_count = max(0, play_count - ?4), own_count = max(0, own_count - ?4) WHERE user = ?1 AND item = ?2 AND kind = ?3",
+            )?;
             let mut unstar = tx.prepare_cached("UPDATE annotation SET starred = 0, starred_at = NULL WHERE user = ?1 AND item = ?2 AND kind = ?3 AND starred = 1")?;
             let mut unrate = tx.prepare_cached("UPDATE annotation SET rating = 0 WHERE user = ?1 AND item = ?2 AND kind = ?3 AND rating = ?4")?;
             for (kind, item, plays, starred, rating) in &rows {
@@ -1508,7 +1563,7 @@ impl UserData {
         let mut db = self.db();
         let tx = db.transaction()?;
         let removed = tx.execute("DELETE FROM plays WHERE user = ?1", [user])?;
-        tx.execute("UPDATE annotation SET play_count = 0, play_date = NULL WHERE user = ?1", [user])?;
+        tx.execute("UPDATE annotation SET play_count = 0, play_date = NULL, own_count = 0, own_date = NULL WHERE user = ?1", [user])?;
         tx.execute("DELETE FROM annotation WHERE user = ?1 AND play_count = 0 AND rating = 0 AND starred = 0", [user])?;
         tx.execute("DELETE FROM scrobble_queue WHERE user = ?1", [user])?;
         tx.execute("DELETE FROM discover_found WHERE user = ?1", [user])?;
@@ -1658,6 +1713,15 @@ impl UserData {
     pub fn song_plays(&self, user: &str) -> Result<std::collections::HashMap<String, (u32, Option<i64>)>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT item, play_count, play_date FROM annotation WHERE user = ?1 AND kind = ?2 AND play_count > 0")?;
+        let rows = st.query_map(params![user, Kind::Song.as_str()], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?.max(0) as u32, r.get(2)?))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every song a user played as their own (none heard while following another): its own plays and the last of them,
+    /// for what picks (Home's New for you and looks back).
+    pub fn own_song_plays(&self, user: &str) -> Result<std::collections::HashMap<String, (u32, Option<i64>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT item, own_count, own_date FROM annotation WHERE user = ?1 AND kind = ?2 AND own_count > 0")?;
         let rows = st.query_map(params![user, Kind::Song.as_str()], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?.max(0) as u32, r.get(2)?))))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -2063,7 +2127,7 @@ mod tests {
     }
 
     #[test]
-    fn a_play_heard_while_following_is_logged_and_sent_but_not_counted() {
+    fn a_play_heard_while_following_is_logged_sent_and_counted_but_not_as_ones_own() {
         let u = UserData::open(None).unwrap();
         u.set_scrobble_target("me", "listenbrainz", "me", "{}").unwrap();
         let along = Heard { event: Some("f1".into()), followed: true, ..Heard::counted(500) };
@@ -2071,9 +2135,60 @@ mod tests {
         let log = u.heard_since("me", 0).unwrap();
         assert_eq!(log.iter().map(|l| (l.song.as_str(), l.counted, l.followed)).collect::<Vec<_>>(), [("tr-1", true, true)], "in the history");
         assert_eq!(u.due_scrobbles(i64::MAX, 10).unwrap().len(), 1, "scrobbled");
-        assert!(u.play_stats("me", &["tr-1".to_string()]).unwrap().is_empty(), "never counted on the song");
+        assert_eq!(u.play_stats("me", &["tr-1".to_string()]).unwrap().get("tr-1"), Some(&(1, Some(500))), "counted on the song");
+        let counts = |kind, item: &str| {
+            let a = u.get("me", kind, &[item.to_string()]).unwrap().remove(item).unwrap_or_default();
+            (a.play_count, a.play_date, a.own_count, a.own_date)
+        };
+        for (kind, item) in [(Kind::Song, "tr-1"), (Kind::Album, "al-1"), (Kind::Artist, "ar-1")] {
+            assert_eq!(counts(kind, item), (1, Some(500), 0, None), "{item}: in the play count, not one's own");
+        }
+        assert!(u.own_song_plays("me").unwrap().is_empty(), "nothing played as one's own");
+        // One's own play adds to both; the followed one stays out of the own count and its date.
+        u.count_play("me", ("tr-1", "pid1"), "al-1", &["ar-1".to_string()], 400).unwrap();
+        assert_eq!(counts(Kind::Song, "tr-1"), (2, Some(500), 1, Some(400)));
+        assert_eq!(counts(Kind::Artist, "ar-1"), (2, Some(500), 1, Some(400)));
+        assert_eq!(u.own_song_plays("me").unwrap().get("tr-1"), Some(&(1, Some(400))));
         u.count_play("me", ("tr-2", "pid2"), "al-1", &[], 600).unwrap();
-        assert!(!u.heard_since("me", 0).unwrap()[1].followed);
+        assert!(!u.heard_since("me", 0).unwrap()[2].followed);
+        assert_eq!(counts(Kind::Song, "tr-2"), (1, Some(600), 1, Some(600)), "one's own: both");
+        assert_eq!(u.forget_history("me").unwrap(), 3);
+        assert!(u.get("me", Kind::Song, &["tr-1".into()]).unwrap().is_empty(), "both counts gone with the history");
+    }
+
+    #[test]
+    fn counts_from_before_are_ones_own() {
+        let dir = std::env::temp_dir().join(format!("cratarr-own-counts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("u.db");
+        let _ = std::fs::remove_file(&file);
+        // The annotation table as it was before one's own plays were kept apart.
+        let old = Connection::open(&file).unwrap();
+        old.execute_batch(
+            "CREATE TABLE annotation (
+               user TEXT NOT NULL, item TEXT NOT NULL, kind TEXT NOT NULL, pid TEXT,
+               play_count INTEGER NOT NULL DEFAULT 0, play_date INTEGER, rating INTEGER NOT NULL DEFAULT 0,
+               starred INTEGER NOT NULL DEFAULT 0, starred_at INTEGER,
+               PRIMARY KEY (user, item, kind)) WITHOUT ROWID;
+             INSERT INTO annotation (user, item, kind, pid, play_count, play_date) VALUES ('me', 'tr-1', 'song', 'p1', 5, 300);
+             INSERT INTO annotation (user, item, kind, rating) VALUES ('me', 'al-1', 'album', 4);",
+        )
+        .unwrap();
+        drop(old);
+        let u = UserData::open(Some(&file)).unwrap();
+        let a = &u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"];
+        assert_eq!((a.play_count, a.play_date, a.own_count, a.own_date), (5, Some(300), 5, Some(300)), "filled from the counts");
+        let b = &u.get("me", Kind::Album, &["al-1".into()]).unwrap()["al-1"];
+        assert_eq!((b.own_count, b.own_date, b.rating), (0, None, 4));
+        // Opened again after a followed play: nothing filled twice.
+        let along = Heard { event: Some("f1".into()), followed: true, ..Heard::counted(400) };
+        u.record("me", ("tr-1", "p1"), "al-1", &[], &along).unwrap();
+        drop(u);
+        let u = UserData::open(Some(&file)).unwrap();
+        let a = &u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"];
+        assert_eq!((a.play_count, a.play_date, a.own_count, a.own_date), (6, Some(400), 5, Some(300)));
+        drop(u);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2198,8 +2313,10 @@ mod tests {
         u.apply_import(KEY, &[change.clone()]).unwrap();
         let a = &u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"];
         assert_eq!((a.play_count, a.play_date, a.starred_at, a.rating), (8, Some(500), Some(5), 4), "added to Cratarr's own play");
+        assert_eq!((a.own_count, a.own_date), (8, Some(500)), "imported plays are one's own");
         assert_eq!(u.get("me", Kind::Album, &["al-x".into()]).unwrap()["al-x"].play_count, 8);
-        assert_eq!(u.get("me", Kind::Artist, &["ar-a".into()]).unwrap()["ar-a"].play_count, 8);
+        let artist = &u.get("me", Kind::Artist, &["ar-a".into()]).unwrap()["ar-a"];
+        assert_eq!((artist.play_count, artist.own_count), (8, 8));
         assert_eq!(u.imported(KEY, Kind::Song, &["tr-1".into(), "tr-2".into()]).unwrap(), [("tr-1".to_string(), change.now.clone())].into());
         assert_eq!(u.imported_starred(KEY, Kind::Song).unwrap(), vec![("tr-1".to_string(), change.now.clone())]);
         let other = ImportKey { account: "you", ..KEY };
@@ -2237,8 +2354,10 @@ mod tests {
         assert_eq!(undone, Undone { items: 2, plays: 14, unstarred: 2, unrated: 1 });
         let get = |kind, item: &str| u.get("me", kind, &[item.to_string()]).unwrap().remove(item).unwrap_or_default();
         assert_eq!((get(Kind::Song, "tr-1").play_count, get(Kind::Song, "tr-1").rating), (1, 0), "Cratarr's own play stays");
+        assert_eq!(get(Kind::Song, "tr-1").own_count, 1, "and as one's own");
         assert_eq!(get(Kind::Song, "tr-2").rating, 5, "a rating changed since is the user's");
         assert_eq!((get(Kind::Album, "al-x").play_count, get(Kind::Artist, "ar-a").play_count), (1, 1));
+        assert_eq!((get(Kind::Album, "al-x").own_count, get(Kind::Artist, "ar-a").own_count), (1, 1));
         assert!(get(Kind::Song, "tr-1").starred_at.is_none());
         assert!(u.imported(KEY, Kind::Song, &["tr-1".into()]).unwrap().is_empty(), "forgotten: the next import starts afresh");
     }

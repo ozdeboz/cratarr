@@ -4,6 +4,8 @@
 - Date: 2026-10-30
 - Builds on: 0031 (Play On), 0033 (Cratarr holds the queues), 0051 (several users), 0064 (one listening history),
   0068 (one way in for listening), 0.9.8 (shared devices, used from home only)
+- Amended by: the amendment of 2026-10-30 below (followed plays count in the library's play counts; the picks read
+  one's own plays)
 - Not: 0037 (sync play: one room's players playing one sound, each steering it), 0070 (album requests, which own
   `/api/requests`)
 
@@ -87,3 +89,23 @@ The owner's decisions (2026-10-30):
 - Requests and guests are not kept over a restart; the relation is.
 - Listening services (ListenBrainz, Last.fm) hear followed plays, so Discover's suggestions from them may reflect them;
   Cratarr's own picks do not.
+
+## Amendment (2026-10-30): followed plays count; the picks read one's own
+
+Asked whether plays heard while following should count in the library's play counts, the owner said "Yes". A play
+heard along is a play of that song: the counts the Library shows, sorts by and syncs (Subsonic's `playCount`, the
+crates' Play count and their order by plays, the tracks table, Insights) take it like any other. What decision 3 keeps
+out stays out: the taste profile, Discover, Home's picks and the radio's and Autoplay's picks read one's own plays only.
+
+- **Two counts.** Each song, album and artist keeps its play count and last played (every counted play) and beside
+  them its own count and own last played (`own_count`, `own_date`: the plays not heard while following). A followed
+  play adds to the first only; any other counted play to both. Imported plays are one's own. A merge of two songs'
+  data adds both counts up; an undone import takes its plays off both; Delete play history clears both.
+- **The change.** The columns are added where missing and filled from the counts: until then every counted play was
+  one's own, and a followed play had been counted nowhere, so they start out exact.
+- **Who reads which.** One's own: Discover's own artists (and through them its gaps and Around artists you play), the
+  radio's recent plays (a song heard while following may come again), Home's New for you (what was heard), its Blast
+  from the past and Grave digging, its moment (albums played lately), and Sounds like your week where the log does not
+  reach back a week. Everything shown or sorted by reads the play count.
+- This replaces the History bullet above where it says followed plays are not counted on the song, its album and its
+  artists: they are, in the play count, not in one's own.
