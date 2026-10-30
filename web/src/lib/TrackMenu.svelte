@@ -8,9 +8,10 @@
 <script lang="ts">
   // A track's menu (decisions 0019, 0021, 0023): the playing track's (the menu button in the player, a right-click on
   // its cover) or any other's (a long-press on a row). A sheet as Finamp's track menu: the track on the card (with the
-  // heart), Play next, Add to queue and Start radio as the large actions, then in the album menu's order: View album,
+  // heart), Play next, Add to queue and Start radio as the large actions, then in the album menu's order: Go to album,
   // Go to its artist and genres, the favourite, Add to playlist (the playlists as toggle cards, a tap adds or removes),
-  // Download, Share, Details, Adjust BPM (administrators: lib/TempoStep), Web search.
+  // Download…, Share, Info, Web search, Adjust BPM (administrators: lib/TempoStep), in the table's order (lib/menuTable).
+  // A Bandcamp preview queues as any track (0.9.19) and is never downloaded (decision 0071).
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
@@ -35,11 +36,10 @@
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
   import { excludeGlobally } from './exclusions.svelte';
-  import ExportStep from './ExportStep.svelte';
-  import MenuCards from './MenuCards.svelte';
-  import DownloadEntry from './DownloadEntry.svelte';
+  import DownloadStep from './DownloadStep.svelte';
+  import MenuTable from './MenuTable.svelte';
+  import { inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
-  import MenuGroup from './MenuGroup.svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
@@ -98,7 +98,7 @@
     forPlaying ? shownCover() : track ? (track.album_id ? albumCoverUrl(track.source, track.album_id) : coverUrl(track)) : null,
   );
   const addable = $derived(forPlaying ? !!np?.addable : !!other?.addable);
-  /** The track's album, for View album: as the track came, else as the server says. */
+  /** The track's album, for Go to album: as the track came, else as the server says. */
   const albumId = $derived(t?.album_id ?? (forPlaying ? null : (other?.album_id ?? null)));
   // Opened from a row of what the panel shows (a playlist's, an album's, a genre's, an artist's): what it shows already
   // is not offered again (from the player or the queue it is: they cover the panel).
@@ -122,7 +122,7 @@
 
   // The step it opens on; later steps are the sheet's own.
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists' | 'details' | 'export' | 'tempo'>(start);
+  let step = $state<'menu' | 'lists' | 'details' | 'download' | 'tempo'>(start);
 
   // Go to artist: the artist's panel (lib/albums goToArtist). A "feat." credit is left out: the albums are under the
   // main artist.
@@ -336,6 +336,62 @@
   }
 </script>
 
+{#snippet entry(e: EntryId)}
+  {#if !t}
+    <!-- Nothing to show. -->
+  {:else if e === 'goAlbum'}
+    {#if albumId && !(fromPanel && panel.viewed === albumSubject(t.source, albumId))}
+      <MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={viewAlbum} />
+    {/if}
+  {:else if e === 'goArtist'}
+    {#if artistName && !(fromPanel && viewedArtist?.source === t.source && viewedArtist?.name === artistName)}
+      <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
+    {/if}
+  {:else if e === 'goGenre'}
+    {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
+      <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
+    {/each}
+  {:else if e === 'soundsLike'}
+    {#if t.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
+  {:else if e === 'discover'}
+    <DiscoverEntries page={bandcampPage} artist={t.artist} album={t.album} {onclose} />
+  {:else if e === 'favourite'}
+    {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
+  {:else if e === 'excludeEverywhere'}
+    {#if !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
+  {:else if e === 'addToPlaylist'}
+    {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+  {:else if e === 'download'}
+    {#if !onDevice && t.source !== BANDCAMP}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (step = 'download')} />{/if}
+  {:else if e === 'share'}
+    {#if !onDevice}<MenuEntry icon="share" label="Share" onclick={shareIt} />{/if}
+  {:else if e === 'info'}
+    {#if !onDevice}<MenuEntry icon="info" label="Info" onclick={showDetails} />{/if}
+  {:else if e === 'webSearch'}
+    <MenuEntry icon="search" label="Web search" onclick={webSearch} />
+  {:else if e === 'geniusSearch'}
+    <MenuEntry icon="search" label="Genius search" onclick={geniusSearch} />
+  {:else if e === 'adjustBpm'}
+    {#if me.admin && !onDevice && hasWave}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
+  {:else if e === 'betterCopy'}
+    {#if me.admin && t.source === 'cratarr' && t.album_id}<MenuEntry icon="search" label="Find a better copy…" onclick={() => (betterOpen = true)} />{/if}
+  {:else if e === 'removeFromQueue'}
+    {#if movesHere && !forPlaying}<MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />{/if}
+  {:else if e === 'removeFromList'}
+    {#each outs as o (o.label)}
+      <MenuEntry
+        icon={o.icon}
+        label={o.label}
+        danger
+        onclick={() => {
+          onclose();
+          o.run();
+        }}
+      />
+    {/each}
+  {/if}
+{/snippet}
+
 {#if t && betterOpen && t.album_id}
   <!-- A better copy of it (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
   <ReplaceTrackSheet source={t.source} album={{ id: t.album_id, title: t.album ?? '' }} replace={{ source: t.source, id: t.id }} {onclose} />
@@ -347,7 +403,7 @@
     title={t.name}
     chips={[t.artist, t.album].filter((c): c is string => !!c)}
     heart={heartKnown ? { on: heartOn, disabled: busy, toggle: heart } : null}
-    actions={step === 'export'
+    actions={step === 'download'
       ? []
       : step === 'lists' && onplaylists
       ? [
@@ -363,73 +419,24 @@
       : step !== 'menu'
         ? []
         : place && !forPlaying
-        ? [
+        ? inOrder('track', [
             { icon: 'play', label: 'Play now', onclick: playNow, disabled: working },
             { icon: 'playNext', label: movesHere ? 'Play next' : 'Play again next', onclick: playNextFromQueue, disabled: working },
             ...(radioFrom ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
-          ]
-        : [
+          ])
+        : inOrder('track', [
             { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
             { icon: 'listAdd', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
             ...(radioFrom ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
-          ]}
+          ])}
     onback={step === 'menu' ? null : () => (step = 'menu')}
     {step}
   >
     {#if step === 'menu'}
-      <!-- The shared groups, in their order (decision 0058): Go to, Feel, Collect, Take away, Know, Remove last. -->
-      <MenuCards>
-        <MenuGroup>
-          {#if albumId && !(fromPanel && panel.viewed === albumSubject(t!.source, albumId))}
-            <MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={viewAlbum} />
-          {/if}
-          {#if artistName && !(fromPanel && viewedArtist?.source === t?.source && viewedArtist?.name === artistName)}
-            <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
-          {/if}
-          {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
-            <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
-          {/each}
-          {#if t?.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
-        </MenuGroup>
-        <DiscoverEntries page={bandcampPage} artist={t?.artist} album={t?.album} {onclose} />
-        <MenuGroup>
-          {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
-          {#if t && !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
-        </MenuGroup>
-        <MenuGroup>
-          {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
-        </MenuGroup>
-        <MenuGroup>
-          {#if t && !onDevice}<DownloadEntry tracks={[t]} />{/if}
-          {#if !onDevice}<MenuEntry icon="export" label="Export…" onclick={() => (step = 'export')} />{/if}
-          {#if !onDevice}<MenuEntry icon="share" label="Share" onclick={shareIt} />{/if}
-        </MenuGroup>
-        <MenuGroup>
-          {#if !onDevice}<MenuEntry icon="info" label="Info" onclick={showDetails} />{/if}
-          {#if me.admin && !onDevice && hasWave}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
-          {#if me.admin && t.source === 'cratarr' && t.album_id}<MenuEntry icon="search" label="Find a better copy…" onclick={() => (betterOpen = true)} />{/if}
-          <MenuEntry icon="search" label="Web search" onclick={webSearch} />
-          <MenuEntry icon="search" label="Genius search" onclick={geniusSearch} />
-        </MenuGroup>
-        <MenuGroup>
-          {#if movesHere && !forPlaying}
-            <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
-          {/if}
-          {#each outs as o (o.label)}
-            <MenuEntry
-              icon={o.icon}
-              label={o.label}
-              danger
-              onclick={() => {
-                onclose();
-                o.run();
-              }}
-            />
-          {/each}
-        </MenuGroup>
-      </MenuCards>
-    {:else if step === 'export'}
-      <ExportStep what={{ kind: 'tracks', name: t.name, tracks: [{ source: t.source, id: t.id }] }} {onclose} />
+      <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
+      <MenuTable kind="track" {entry} />
+    {:else if step === 'download'}
+      <DownloadStep what={{ kind: 'tracks', name: t.name, tracks: [{ source: t.source, id: t.id }] }} tracks={[t]} {onclose} />
     {:else if step === 'tempo'}
       <TempoStep source={t.source} tracks={[{ id: t.id, name: t.name }]} />
     {:else if step === 'lists'}

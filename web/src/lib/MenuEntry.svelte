@@ -8,7 +8,7 @@
   // `plus: false`: no + while off (a choice that adds nothing), the tick only when on.
   // `switched`: an entry that turns something on or off (Keep on this device), its switch at the end. `sub`: a toggle's
   // second line, smaller, after `subIcon` (another player's track and whether it plays, in Play On; no cover).
-  // `progress` (0 to 1): the row fills behind its label as its work goes (Download once, lib/DownloadEntry).
+  // `progress` (0 to 1): the row fills behind its label as its work goes (Download… to this device, lib/DownloadEntry).
   import Icon, { type IconName } from './Icon.svelte';
   import SwitchTrack from './SwitchTrack.svelte';
 

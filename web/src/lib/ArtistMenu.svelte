@@ -1,20 +1,21 @@
 <script lang="ts">
   // An artist's menu (the artist panel's ⋮, decided 2026-10-16, after Symfonium's): the artist at the top (their
   // heart there), the large actions (Play, Shuffle, Play next, Add to queue), then on rounded cards Start radio (their
-  // Radio mix), Add to playlist (all their tracks, as an album's), Download and Share, and their picture on this device
-  // (one chosen here, or their newest album's cover again); in the app Keep on this device (decision 0038). No Instant mix (the owner: "a confusing thing"), no rating
-  // (the server keeps none for artists).
+  // Radio mix), then in the table's order (lib/menuTable) Add to playlist (all their tracks, as an album's), Download…,
+  // in the app Keep on this device (decision 0038), Share, and their picture on this device (one chosen here, or their
+  // newest album's cover again). No Instant mix (the owner: "a confusing thing"), no rating (the server keeps none for
+  // artists).
   import { albumCoverUrl } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { artistPictureId } from './albums.svelte';
   import { coverKey, localCovers, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
-  import ExportStep from './ExportStep.svelte';
-  import MenuCards from './MenuCards.svelte';
-  import DownloadEntry from './DownloadEntry.svelte';
+  import DownloadStep from './DownloadStep.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import MenuGroup from './MenuGroup.svelte';
+  import MenuTable from './MenuTable.svelte';
+  import { inOrder, type EntryId } from './menuTable';
+  import { BANDCAMP } from './bandcampPreview';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { artistSubject } from './panel.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
@@ -60,7 +61,7 @@
       onact(mode);
     };
     const none = !tracks.length;
-    return [
+    return inOrder('artist', [
       { icon: 'play', label: 'Play', disabled: none, onclick: act('play') },
       { icon: 'shuffle', label: 'Shuffle', disabled: none, onclick: act('shuffle') },
       { icon: 'playNext', label: 'Play next', disabled: none, onclick: act('next') },
@@ -78,7 +79,7 @@
             },
           ]
         : []),
-    ];
+    ]);
   });
 
   // Add to playlist (lib/tracksToPlaylist): all their tracks; the first one's state says whether they can go in one.
@@ -92,9 +93,11 @@
     if (ids[0]) toList.ask([ids[0]]);
   });
   let step = $state<ToPlaylistStep>('menu');
-  /** Export… (decision 0058): their tracks, in lib/ExportStep. */
+  /** Download… (decision 0058, amended 0.9.19): their tracks, in lib/DownloadStep. */
   let exporting = $state(false);
 
+  /** Bandcamp's previews (an artist found there): never downloaded or kept (decision 0071). */
+  const previews = $derived(tracks.some((t) => t.source === BANDCAMP));
   /** Their tracks kept on this device (the app's downloads): Remove from this device. */
   const kept = $derived(inApp ? downloads.tracks.filter((t) => t.source === source && ids.includes(t.id)) : []);
 
@@ -132,6 +135,44 @@
   }
 </script>
 
+{#snippet entry(e: EntryId)}
+  {#if e === 'favourite'}
+    {#if favorite !== undefined}<MenuEntry icon="heart" label="Favourite" switched={favorite} onclick={ontogglefavorite} />{/if}
+  {:else if e === 'addToPlaylist'}
+    {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+  {:else if e === 'download'}
+    {#if tracks.length && !previews}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (exporting = true)} />{/if}
+  {:else if e === 'keep'}
+    {#if inApp && !previews}
+      <!-- Kept on this device (decision 0038): their tracks stay in step offline. -->
+      {@const on = isKept('artist', source, name)}
+      <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
+    {/if}
+  {:else if e === 'removeFromDevice'}
+    <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->
+    {#if kept.length}
+      {@const keptIds = kept.map((t) => t.download.id)}
+      <MenuEntry
+        icon="trash"
+        label="Remove from this device"
+        danger
+        onclick={() => {
+          onclose();
+          removeDownloads(keptIds);
+        }}
+      />
+    {/if}
+  {:else if e === 'share'}
+    <MenuEntry icon="share" label="Share" onclick={shareIt} />
+  {:else if e === 'webSearch'}
+    <MenuEntry icon="search" label="Web search" onclick={webSearch} />
+  {:else if e === 'devicePicture'}
+    <MenuEntry icon="image" label="Change picture on this device" onclick={() => picker?.click()} />
+  {:else if e === 'albumPicture'}
+    {#if ownPicture}<MenuEntry icon="imageOff" label="Use their album cover" onclick={dropPicture} />{/if}
+  {/if}
+{/snippet}
+
 <MenuSheet
   label={name}
   {onclose}
@@ -144,48 +185,12 @@
   step={exporting ? 'export' : step}
 >
   {#if exporting}
-    <ExportStep what={{ kind: 'tracks', name, tracks: tracks.map((x) => ({ source: x.source, id: x.id })) }} {onclose} />
+    <DownloadStep what={{ kind: 'tracks', name, tracks: tracks.map((x) => ({ source: x.source, id: x.id })) }} {tracks} {onclose} />
   {:else if step === 'menu'}
-    <!-- The shared groups, in their order (decision 0058). -->
-    <MenuCards>
-      <MenuGroup>
-        {#if favorite !== undefined}<MenuEntry icon="heart" label="Favourite" switched={favorite} onclick={ontogglefavorite} />{/if}
-      </MenuGroup>
-      <MenuGroup>
-        {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
-      </MenuGroup>
-      <MenuGroup>
-        <DownloadEntry {tracks} />
-        {#if inApp}
-          <!-- Kept on this device (decision 0038): their tracks stay in step offline. -->
-          {@const on = isKept('artist', source, name)}
-          <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
-        {/if}
-        <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->
-        {#if kept.length}
-          {@const keptIds = kept.map((t) => t.download.id)}
-          <MenuEntry
-            icon="trash"
-            label="Remove from this device"
-            danger
-            onclick={() => {
-              onclose();
-              removeDownloads(keptIds);
-            }}
-          />
-        {/if}
-        {#if tracks.length}<MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />{/if}
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="image" label="Change picture on this device" onclick={() => picker?.click()} />
-        {#if ownPicture}<MenuEntry icon="imageOff" label="Use their album cover" onclick={dropPicture} />{/if}
-      </MenuGroup>
+    <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
+    <MenuTable kind="artist" {entry}>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
-    </MenuCards>
+    </MenuTable>
   {:else}
     <PlaylistsStep to={toList} bind:step {onclose} />
   {/if}

@@ -2,13 +2,14 @@
   // The queue's menu (decision 0058; the owner, 2026-10-23): the Queue sheet's ⋮ beside its search, and a long-press on
   // the full player's Queue button. Shuffle and Repeat at its header's end (the owner, 2026-10-26: Repeat out of the
   // player's row, 0.9.8; Repeat off, all, one, lit while on; once: a queue always has an order, Undo puts the order before back), and under the name what the queue is
-  // made of: how many of its tracks Radio put in and how many Autoplay serves; then Save as playlist; Export…; Queues…
-  // (the switcher); Clear the queue last (with its Undo).
+  // made of: how many of its tracks Radio put in and how many Autoplay serves; then in the table's order (lib/menuTable)
+  // Save as playlist; Download…; Queues… (the switcher); Clear the queue last (with its Undo).
   import MenuSheet from './MenuSheet.svelte';
-  import MenuCards from './MenuCards.svelte';
-  import MenuGroup from './MenuGroup.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import ExportStep from './ExportStep.svelte';
+  import MenuTable from './MenuTable.svelte';
+  import DownloadStep from './DownloadStep.svelte';
+  import { BANDCAMP } from './bandcampPreview';
+  import type { EntryId } from './menuTable';
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import QueuesSheet from './QueuesSheet.svelte';
   import { clearUpcoming, local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
@@ -24,12 +25,18 @@
   const name = $derived((here ? local.from : null) ?? 'Queue');
   // What it holds from the playing track on: this page's own, or what the server's player said.
   const listed = $derived(here ? local.queue.slice(Math.max(0, local.index)) : np ? [np, ...np.upcoming] : []);
+  // Bandcamp's previews are never downloaded (decision 0071): Download… leaves them out.
+  const kept = $derived(
+    listed
+      .map((t) => ({ source: 'source' in t ? t.source : np!.source, id: t.id, name: t.name, artist: t.artist ?? null, album: t.album ?? null, album_id: t.album_id ?? null }))
+      .filter((t) => t.source !== BANDCAMP),
+  );
   const tracks = $derived(listed.map((t) => ({ source: 'source' in t ? t.source : np!.source, id: t.id })));
   const fromRadio = $derived(listed.filter((t) => 'lane' in t && t.lane === 'radio').length);
   const fromAutoplay = $derived(listed.filter((t) => 'lane' in t && t.lane === 'autoplay').length);
   const upcoming = $derived(here ? local.queue.length - local.index - 1 : (np?.upcoming.length ?? 0));
 
-  let step = $state<'menu' | 'export'>('menu');
+  let step = $state<'menu' | 'download'>('menu');
   let saving = $state(false);
   let switching = $state(false);
 
@@ -44,6 +51,18 @@
     if (removed.length) toast.show({ text: 'Queue cleared.', tone: 'done', act: { label: 'Undo', run: () => restoreUpcoming(removed) } });
   }
 </script>
+
+{#snippet entry(e: EntryId)}
+  {#if e === 'saveAsPlaylist'}
+    <MenuEntry icon="intoBox" label="Save as playlist" onclick={() => (saving = true)} />
+  {:else if e === 'download'}
+    {#if kept.length}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (step = 'download')} />{/if}
+  {:else if e === 'queues'}
+    <MenuEntry icon="list" label="Queues…" onclick={() => (switching = true)} />
+  {:else if e === 'clearQueue'}
+    {#if here}<MenuEntry icon="clearQueue" label="Clear the queue" danger disabled={upcoming < 1} onclick={clear} />{/if}
+  {/if}
+{/snippet}
 
 {#if saving}
   <QueuePlaylistSheet {onclose} />
@@ -70,24 +89,11 @@
     onback={step === 'menu' ? null : () => (step = 'menu')}
     {step}
   >
-    {#if step === 'export'}
-      <ExportStep what={{ kind: 'tracks', name, tracks }} {onclose} />
+    {#if step === 'download'}
+      <DownloadStep what={{ kind: 'tracks', name, tracks: kept.map((t) => ({ source: t.source, id: t.id })) }} tracks={kept} {onclose} />
     {:else}
-      <!-- The shared groups, in their order (decision 0058). -->
-      <MenuCards>
-        <MenuGroup>
-          <MenuEntry icon="intoBox" label="Save as playlist" onclick={() => (saving = true)} />
-        </MenuGroup>
-        <MenuGroup>
-          {#if tracks.length}<MenuEntry icon="export" label="Export…" onclick={() => (step = 'export')} />{/if}
-        </MenuGroup>
-        <MenuGroup>
-          <MenuEntry icon="list" label="Queues…" onclick={() => (switching = true)} />
-        </MenuGroup>
-        <MenuGroup>
-          {#if here}<MenuEntry icon="clearQueue" label="Clear the queue" danger disabled={upcoming < 1} onclick={clear} />{/if}
-        </MenuGroup>
-      </MenuCards>
+      <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
+      <MenuTable kind="queue" {entry} />
     {/if}
   </MenuSheet>
 {/if}

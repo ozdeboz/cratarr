@@ -282,7 +282,7 @@
         {:else}
           <span class="title">Queue</span>
           <span class="tools">
-            <!-- Search and the queue's menu (decision 0058: Shuffle, Save as playlist, Export…, Queues…, Clear). -->
+            <!-- Search and the queue's menu (decision 0058: Shuffle, Save as playlist, Download…, Queues…, Clear). -->
             <button aria-label="Search the queue" onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
             <button aria-label="Menu of the queue" title="Menu" onclick={() => (queueMenu = true)}><Icon name="moreVert" size={22} /></button>
           </span>

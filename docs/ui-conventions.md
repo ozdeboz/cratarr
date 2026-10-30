@@ -149,8 +149,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   made by its Save (`?view=playlist-new`); a new crate is the builder, saved with its Save.
 - **What a menu holds and how it opens** (decision 0058): in the music lists a long-press, a right-click or ⋮ opens
   the object's menu (Select is the list header's); the entries come in fixed groups (Go to, Feel, Collect, Take away,
-  Know, Change, Remove last) with the same names everywhere. The visuals' menus follow this; the rack's long-press
-  selects.
+  Know, Change, Remove last) with the same names everywhere. The table is code since 2026-10-30
+  (`lib/menuTable.ts`, drawn by `lib/MenuTable.svelte`, held to by `tests/menu-table.test.ts`): a new entry goes in the
+  table first. The visuals' menus follow this; the rack's long-press selects.
 - **A menu's head and actions** (`lib/MenuSheet.svelte`, decided 2026-10-16, as Symfonium's): a small cover (64 px),
   the title large beside it and what it is under that in one muted line, on the sheet itself (no card); a track's,
   an album's heart at the end. The large actions are icons only (their words on a long-press, as every icon
@@ -160,7 +161,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   its heart, the large actions (Play, Resume when it has a resume point, Shuffle, Play next, Add to queue), then
   entries on rounded cards: View (not from the panel showing it), Go to each of its artists (the source's list of
   them, else the credit), Go to its genres (two at most); its rating (five stars, when its server keeps ratings; a tap
-  on the rating it has takes it off); Add to playlist, Download (in the app), Share; what its library allows
+  on the rating it has takes it off); Add to playlist, Download…, Keep on this device (in the app), Share; what its library allows
   (decision 0034: Move to each other used library, Replace in Music for an upgrade, Delete, a second step when it is
   in Music, Cancel conversion while queued), each question asked in the sheet; Change cover on this device (a
   picture kept in this browser, shown wherever the album's cover is; not in Cratarr's own library, where an
@@ -168,13 +169,14 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   again since 0.9.7: a cover's address carries its stamp, so a changed cover shows by itself); Remove resume point, Web search, Genius search.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
   with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
-  their tracks), Download, Share, and their picture on this device. No Instant mix (the owner) and no rating.
-- **Sync to this device** (decision 0038, in the app; named Keep on this device until the owner, 2026-10-24): a switch
-  entry (`MenuEntry`'s `switched`: the entry with a switch at its end) in the album's, the artist's and the panel
-  playlist's menu, beside **Download once** (a one-time copy, `lib/DownloadEntry`: the menu stays open and the row
-  fills as the tracks come in, "Downloading 3 of 12"; Retry for failed tracks, the rest when some are there); on a
-  crate or a genre, an icon in its action bar, in the accent while kept. **Export** (files out of Cratarr) has its
-  own icon, an arrow out of a door (Lucide's log-out), not the download arrows.
+  their tracks), Download…, Share, and their picture on this device. No Instant mix (the owner) and no rating.
+- **Keep on this device** (decision 0038, in the app; the table's name, Sync to this device from 2026-10-24): a switch
+  entry (`MenuEntry`'s `switched`: the entry with a switch at its end) in the album's, the artist's, the playlist's and
+  the crate's menu, beside **Download…** (decision 0058, amended 2026-10-30; `lib/DownloadStep`): one entry on
+  everything with tracks, never Bandcamp's previews. In the app it asks where: to this device (a one-time copy,
+  `lib/DownloadEntry`: the step stays open and the row fills as the tracks come in, "Downloading 3 of 12"; Retry for
+  failed tracks, the rest when some are there) or as files (`lib/ExportStep`: the format, MP3 at 320 or V0 among them,
+  the layout, one zip or the files into a folder); in the browser files only.
 - **Add to playlist** (a track's, an album's, an artist's menu; `lib/PlaylistToggles`): the playlists as toggle cards
   with the size buttons beside the heading (decided 2026-10-16): two bare icons, dimmed when they would change
   nothing; one column by default, two when smaller, never three on a phone (three only on a wider sheet; a name wraps

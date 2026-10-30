@@ -109,3 +109,29 @@ One zip, streamed as it is made (0007's export, which now takes any tracks and a
 - The crate, genre and queue menus are new components on MenuSheet; the heart sheet becomes the Feel slice.
 - The export endpoint takes tracks (an album, an artist's, a selection, a queue) and a format besides playlists; not a
   crate.
+
+## Amendment, 2026-10-30: the table is the code; one Download…
+
+The owner (2026-10-30): "Download is not coherently present. Also the download sheet itself can be more flexible
+for file formats and organization. Bandcamp files cannot be queued, very annoying! … And overall consistency of our
+context menu population rules." Chosen in a question set, for 0.9.19:
+
+- **The table is code** (`web/src/lib/menuTable.ts`): each kind's large actions and its cards of entries in order.
+  Every menu draws its cards from it (`lib/MenuTable.svelte`) and sorts its large actions by it; what is true of the
+  object decides which entries show, never where. `tests/menu-table.test.ts` holds every menu to the table and the
+  names to one spelling. The entries the table above lacks have their places: Adjust BPM, Find a better copy…,
+  Missing tracks… and the cover entries in Change; Copy to my playlists in Collect; Shared with other users and Open
+  on Bandcamp in Take away; Remove resume point and Clear the queue in Remove. Discover's Want and Not interested
+  (decisions 0070 and 0071) keep their own card after Go to; a selection's own items' entries come last.
+- **One "Download…"** ("One Download… everywhere") replaces Export… and Download once, on everything that has tracks:
+  albums, artists, tracks, playlists, crates and genres (the owner's choice named them; this lifts "never a crate"
+  above), selections and the queue. In the app it asks where first: to this device (the one-time copy Download once
+  was) or as files; in an installed page to this browser or as files; in the browser files only. **Keep on this
+  device** stays the switch beside it, by the table's name (it was Sync to this device from 2026-10-24).
+- **Formats:** MP3 at 320 kb/s and MP3 V0 join the original files, FLAC at CD quality and Opus ("Keep them, add MP3").
+  **Packaging:** one zip or the files one by one ("One zip or loose files"); the files one by one only in the app,
+  which writes them into a folder picked there. The layout switch stays; no new folder or file-name patterns.
+- **Bandcamp's previews** queue as any track ("Every player"): Play, Shuffle, Play next and Add to queue on a
+  Bandcamp album's menu and its tracks', on this page, the app and Play On, the server streaming the preview. Never
+  Download or Keep ("No Download on Bandcamp"): they are previews, bought on Bandcamp; never in a playlist (0071).
+

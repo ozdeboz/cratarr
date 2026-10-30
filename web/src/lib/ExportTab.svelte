@@ -1,7 +1,7 @@
 <script lang="ts">
   // The panel's Export tab (decisions 0007, 0025): the selected playlists (each can be left out; more are ticked with the
   // Playlists page's Select: beside the page, on its chips; full-screen, Add playlists goes there), then the same step as
-  // every menu's Export… (lib/ExportStep, decision 0058): what it will hold, the choices and the download.
+  // every menu's Download… (lib/ExportStep, decision 0058): what it will hold, the choices and the download.
   import ExportStep from './ExportStep.svelte';
   import Icon from './Icon.svelte';
   import { inSidebar } from './live.svelte';

@@ -1,11 +1,13 @@
 <script lang="ts">
-  // Export… (decision 0058): one step for every object and selection, inside its menu sheet (lib/MenuSheet), and the
-  // panel's Export tab under its playlists. What it will hold (how many tracks, about how large, how many missing are
-  // left out); for playlists with their tracks or only the playlist files, several as they are or combined into one;
-  // for a list of tracks with a playlist file or not; the format and the layout; then Export, which readies it on the
-  // server and starts the download (a link: the browser shows its progress, and closing it cancels). The choices are
-  // kept in this browser (lib/export.svelte).
+  // Download… as files (decision 0058, amended 0.9.19; lib/DownloadStep): one step for every object and selection,
+  // inside its menu sheet (lib/MenuSheet), and the panel's Export tab under its playlists. What it will hold (how many
+  // tracks, about how large, how many missing are left out); for playlists with their tracks or only the playlist
+  // files, several as they are or combined into one; for a list of tracks with a playlist file or not; the format and
+  // the layout; in the app, one zip or the files one by one; then Download, which readies it on the server and starts
+  // the download (a link: the browser shows its progress, and closing it cancels; the files one by one, the app writes
+  // into a folder picked there). The choices are kept in this browser (lib/export.svelte).
   import { exportDownloadUrl, exportPreview, prepareExport, type ExportPreview, type ExportWhat } from './api';
+  import { inApp, saveExportFiles } from './app.svelte';
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import { exporting } from './export.svelte';
@@ -29,7 +31,8 @@
     if (!exporting.named && s) exporting.name = s;
   });
 
-  const req = $derived(exportRequest(what, exporting));
+  // The files one by one only where the app writes them.
+  const req = $derived(exportRequest(what, exporting, inApp));
   const ready = $derived(exportReady(req));
   const tracks = $derived(withTracks(what, exporting));
 
@@ -68,7 +71,12 @@
   async function start() {
     starting = true;
     try {
-      const { token, name } = await prepareExport(req);
+      const { token, name, files } = await prepareExport(req);
+      if (req.package === 'files' && files) {
+        saveExportFiles(token, name, files);
+        onclose();
+        return;
+      }
       const a = document.createElement('a');
       a.href = exportDownloadUrl(token);
       a.download = name;
@@ -126,8 +134,12 @@
     <!-- The layout as a switch (the owner): on, Artist and album folders; off, one folder. -->
     <Switch card label="Preserve directory layout" checked={exporting.layout === 'folders'} onchange={(on) => (exporting.layout = on ? 'folders' : 'flat')} />
   {/if}
+  {#if inApp}
+    <!-- One zip, or the files straight into a folder picked in the app (0.9.19; the owner, 2026-10-30). -->
+    <Switch card label="As one zip file" checked={exporting.packaging === 'zip'} onchange={(on) => (exporting.packaging = on ? 'zip' : 'files')} />
+  {/if}
 
-  <button class="go" disabled={!ready || starting} aria-busy={starting} onclick={start}><Icon name="export" size={20} /><span>Export</span></button>
+  <button class="go" disabled={!ready || starting} aria-busy={starting} onclick={start}><Icon name="arrowDownToLine" size={20} /><span>Download</span></button>
 </div>
 
 <style>

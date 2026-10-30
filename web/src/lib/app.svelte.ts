@@ -137,7 +137,11 @@ export const setDevice = (change: {
 /** Keeps these tracks on the device, in the quality the settings say. */
 export const download = (tracks: { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null }[]) =>
   toApp({ type: 'download', tracks: tracks.map(({ source, id, name, artist, album, album_id }) => ({ source, id, name, artist, album, album_id })) });
-/** A track as Download once gives it to the app. */
+/** A readied export's files for the app to write one by one into a folder its user picks (Download… as files, 0.9.19):
+ *  each from the export's file address (lib/api exportFileUrl). */
+export const saveExportFiles = (token: string, name: string, files: { path: string; bytes?: number }[]) =>
+  toApp({ type: 'export-files', token, name, files });
+/** A track as Download… gives it to the app, to this device. */
 export type Downloadable = Parameters<typeof download>[0][number];
 /** Asks the app for its downloads; it tells them again on every change. */
 export const askDownloads = () => toApp({ type: 'downloads' });

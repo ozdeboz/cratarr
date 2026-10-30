@@ -1,4 +1,4 @@
-// Export's choices (decisions 0007 and 0058: the panel's Export tab, every menu's Export… step): kept in this browser,
+// Export's choices (decisions 0007 and 0058: the panel's Export tab, every menu's Download… step): kept in this browser,
 // so they stay as they were set while the selection changes, across pages and a reload.
 import { keptExport, type ExportOptions } from './exportChoices';
 

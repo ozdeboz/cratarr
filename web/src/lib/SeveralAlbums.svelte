@@ -8,7 +8,7 @@
 <script lang="ts">
   // Several ticked albums' own entries in the selection's menu (lib/SelectionMenu's `extra`; the owner, 2026-10-27:
   // what one has, several have): as an album's menu (lib/AlbumMenu) has them, each offered when it applies to one of
-  // them at least and done to those it applies to. Start radio; the rating, all to the same stars; Sync to this device
+  // them at least and done to those it applies to. Start radio; the rating, all to the same stars; Keep on this device
   // and Remove from this device (in the app); what their libraries allow (Cancel conversion, Move to another, Delete;
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo.
   import { offerIn } from './AlbumMenu.svelte';
@@ -69,7 +69,7 @@
     );
   }
 
-  // Sync to this device (decision 0038): on for all, or off when all are.
+  // Keep on this device (decision 0038): on for all, or off when all are.
   const allKept = $derived(items.length > 0 && items.every((x) => isKept('album', x.s.id, x.a.id)));
   function sync() {
     const on = !allKept;
@@ -211,7 +211,7 @@
 <MenuGroup>
   {#if inApp && items.length}
     <!-- Kept on this device (decision 0038), each of them. -->
-    <MenuEntry icon="download" label="Sync to this device" switched={allKept} onclick={sync} />
+    <MenuEntry icon="download" label="Keep on this device" switched={allKept} onclick={sync} />
   {/if}
   {#if keptIds.length}
     {@const ids = keptIds}

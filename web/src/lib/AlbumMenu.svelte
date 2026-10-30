@@ -35,11 +35,12 @@
 <script lang="ts">
   // An album's menu, the one every album has wherever it is opened (a Library row or tile, the select bar's More, the
   // album panel's ⋮), after Symfonium's album sheet: the album at the top (its heart there), the large actions (Play,
-  // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards, related ones joined: where to go
-  // (View, each of its artists, its genres); its rating; Add to playlist (all its tracks, the playlists as toggle cards
-  // in a step, as a track's), Download and Share; what its library allows (Move to another, Replace in Music, Delete;
-  // decision 0034), each question asked in place; its cover on this device (a picture chosen here, or the server's read
-  // again); Remove resume point, Web search and Genius search.
+  // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable),
+  // related ones joined: where to go (View, each of its artists, its genres); its rating; Add to playlist (all its
+  // tracks, the playlists as toggle cards in a step, as a track's), Download…, Keep on this device and Share; Web search
+  // and Genius search; its cover on this device (a picture chosen here, or the server's read again); what its library
+  // allows (Move to another, Replace in Music; decision 0034), each question asked in place; Remove resume point and
+  // Delete last.
   import {
     albumCoverUrl,
     albumResume,
@@ -73,14 +74,13 @@
   import { player } from './live.svelte';
   import { startRadio, type LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
-  import ExportStep from './ExportStep.svelte';
+  import DownloadStep from './DownloadStep.svelte';
+  import MenuTable from './MenuTable.svelte';
+  import { inOrder, type EntryId } from './menuTable';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
-  import MenuCards from './MenuCards.svelte';
-  import DownloadEntry from './DownloadEntry.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import MenuGroup from './MenuGroup.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
@@ -256,7 +256,7 @@
     );
     // Start radio (decision 0058, as a playlist's): tracks like the album's, from the whole library; on this device.
     if (isLocal() && t?.length) list.push({ icon: 'radio', label: 'Start radio', onclick: () => run(() => startRadio(t.map((x) => x.id), a.title)) });
-    return list;
+    return inOrder('album', list);
   });
 
   // Go to artist: the artist's panel, as the track menu's; one for each
@@ -348,7 +348,7 @@
   $effect(() => {
     if (untrack(() => start) === 'cover') untrack(askCover);
   });
-  /** Export… (decision 0058): its tracks, in lib/ExportStep. */
+  /** Download… (decision 0058, amended 0.9.19): its tracks, in lib/DownloadStep. */
   let exporting = $state(false);
   // Opened at the playlists for an album outside Music: there is nothing to add it to.
   $effect(() => {
@@ -537,6 +537,105 @@
 {/snippet}
 
 <!-- Missing tracks (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
+{#snippet entry(e: EntryId)}
+  {#if e === 'view'}
+    {#if viewable && panel.viewed !== albumSubject(source, a.id)}
+      <MenuEntry
+        icon="squareArrowOutUpRight"
+        label="View"
+        onclick={() => {
+          onclose();
+          viewPlaylist(albumSubject(source, a.id));
+        }}
+      />
+    {/if}
+  {:else if e === 'goArtist'}
+    {#each artistNames as name (name)}<MenuEntry icon="user" label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
+  {:else if e === 'goGenre'}
+    {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
+  {:else if e === 'soundsLike'}
+    <!-- Sounds like it: a crate seeded with the album's songs (Cratarr's own, which AudioMuse hears). -->
+    {#if source === 'cratarr'}<MenuEntry
+        icon="music"
+        label="Sounds like this"
+        onclick={() => {
+          // Read before closing: closing lets go of the album.
+          const id = a.id;
+          onclose();
+          player.full = false;
+          viewLike(id);
+        }}
+      />{/if}
+  {:else if e === 'favourite'}
+    <MenuEntry icon="heart" label="Favourite" switched={fav} onclick={toggleFavourite} />
+  {:else if e === 'rating'}
+    {#if rating !== null}
+      {@const r = rating}
+      <div class="entry rating">
+        <span>Rating</span>
+        <RatingStars value={r} onrate={(n) => rateAlbum(source, a.id, n)} />
+      </div>
+    {/if}
+  {:else if e === 'addToPlaylist'}
+    {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+  {:else if e === 'download'}
+    {#if tracks?.length && source !== DEVICE}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (exporting = true)} />{/if}
+  {:else if e === 'keep'}
+    {#if inApp}
+      <!-- Kept on this device (decision 0038): stays in step offline; Download… to this device is a one-time copy. -->
+      {@const on = isKept('album', source, a.id)}
+      <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
+    {/if}
+  {:else if e === 'removeFromDevice'}
+    <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->
+    {#if kept.length}
+      {@const ids = kept.map((t) => t.download.id)}
+      <MenuEntry
+        icon="trash"
+        label="Remove from this device"
+        danger
+        onclick={() => {
+          onclose();
+          removeDownloads(ids);
+        }}
+      />
+    {/if}
+  {:else if e === 'share'}
+    <MenuEntry icon="share" label="Share" onclick={shareIt} />
+  {:else if e === 'webSearch'}
+    <MenuEntry icon="search" label="Web search" onclick={() => search('https://duckduckgo.com/?q=')} />
+  {:else if e === 'geniusSearch'}
+    <MenuEntry icon="search" label="Genius search" onclick={() => search('https://genius.com/search?q=')} />
+  {:else if e === 'changeCover'}
+    <!-- Its administrators' (decision 0051): the cover for everyone. -->
+    {#if me.admin && source === 'cratarr'}<MenuEntry icon="image" label="Change cover" onclick={askCover} />{/if}
+  {:else if e === 'missingTracks'}
+    <!-- Its release's tracks, the missing ones found one at a time (0.9.8, single-track replacement). -->
+    {#if me.admin && source === 'cratarr'}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
+  {:else if e === 'deviceCover'}
+    {#if !(me.admin && source === 'cratarr') && deviceCovers}<MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />{/if}
+  {:else if e === 'serverCover'}
+    <!-- No Read the cover again (the owner, 2026-10-26): a cover's address carries its stamp (lib/coverStamps), so a
+         changed one shows by itself. Only a picture chosen on this device is undone here. -->
+    {#if ownCover}<MenuEntry icon="imageOff" label="Use the server's cover" onclick={serverCover} />{/if}
+  {:else if e === 'cancelConversion'}
+    {#if me.admin && offer && offer.job !== null}
+      {@const job = offer.job}
+      <MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />
+    {/if}
+  {:else if e === 'moveTo'}
+    {#if me.admin && offer && offer.job === null}
+      {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
+    {/if}
+  {:else if e === 'replaceIn'}
+    {#if me.admin && offer && offer.job === null && offer.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
+  {:else if e === 'removeResume'}
+    {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
+  {:else if e === 'deleteAlbum'}
+    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
+  {/if}
+{/snippet}
+
 {#if missingOpen}
   <ReplaceTrackSheet {source} album={{ id: a.id, title: a.title }} {onclose} />
 {:else}
@@ -560,7 +659,7 @@
   step={ask || (exporting ? 'export' : step)}
 >
   {#if exporting && tracks}
-    <ExportStep what={{ kind: 'tracks', name: a.title, tracks: tracks.map((x) => ({ source: x.source, id: x.id })) }} {onclose} />
+    <DownloadStep what={{ kind: 'tracks', name: a.title, tracks: tracks.map((x) => ({ source: x.source, id: x.id })) }} {tracks} {onclose} />
   {:else if ask === 'move'}
     <div class="form">
       {#if !keep}
@@ -687,106 +786,10 @@
       </div>
     </div>
   {:else if step === 'menu'}
-    <MenuCards>
-      <MenuGroup>
-        {#if viewable && panel.viewed !== albumSubject(source, a.id)}
-          <MenuEntry
-            icon="squareArrowOutUpRight"
-            label="View"
-            onclick={() => {
-              onclose();
-              viewPlaylist(albumSubject(source, a.id));
-            }}
-          />
-        {/if}
-        {#each artistNames as name (name)}<MenuEntry icon="user" label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
-        {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
-        <!-- Sounds like it: a crate seeded with the album's songs (Cratarr's own, which AudioMuse hears). -->
-        {#if source === 'cratarr'}<MenuEntry
-            icon="music"
-            label="Sounds like this"
-            onclick={() => {
-              // Read before closing: closing lets go of the album.
-              const id = a.id;
-              onclose();
-              player.full = false;
-              viewLike(id);
-            }}
-          />{/if}
-      </MenuGroup>
-      <!-- Feel: the favourite and the rating. -->
-      <MenuGroup>
-        <MenuEntry icon="heart" label="Favourite" switched={fav} onclick={toggleFavourite} />
-        {#if rating !== null}
-          {@const r = rating}
-          <div class="entry rating">
-            <span>Rating</span>
-            <RatingStars value={r} onrate={(n) => rateAlbum(source, a.id, n)} />
-          </div>
-        {/if}
-      </MenuGroup>
-      <MenuGroup>
-        {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
-      </MenuGroup>
-      <MenuGroup>
-        {#if tracks?.length}<DownloadEntry {tracks} />{/if}
-        {#if inApp}
-          <!-- Kept on this device (decision 0038): stays in step offline; Download once above is a one-time copy. -->
-          {@const on = isKept('album', source, a.id)}
-          <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
-        {/if}
-        <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->
-        {#if kept.length}
-          {@const ids = kept.map((t) => t.download.id)}
-          <MenuEntry
-            icon="trash"
-            label="Remove from this device"
-            danger
-            onclick={() => {
-              onclose();
-              removeDownloads(ids);
-            }}
-          />
-        {/if}
-        {#if tracks?.length}<MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />{/if}
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="search" label="Web search" onclick={() => search('https://duckduckgo.com/?q=')} />
-        <MenuEntry icon="search" label="Genius search" onclick={() => search('https://genius.com/search?q=')} />
-      </MenuGroup>
-      <!-- Change: its cover on this device, its resume point, and (its administrators', decision 0051) the library's. -->
-      <MenuGroup>
-        {#if me.admin && source === 'cratarr'}
-          <MenuEntry icon="image" label="Change cover" onclick={askCover} />
-          <!-- Its release's tracks, the missing ones found one at a time (0.9.8, a5's single-track replacement). -->
-          <MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />
-        {:else if deviceCovers}
-          <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
-        {/if}
-        <!-- No Read the cover again (the owner, 2026-10-26): a cover's address carries its stamp (lib/coverStamps), so a
-             changed one shows by itself. Only a picture chosen on this device is undone here. -->
-        {#if ownCover}<MenuEntry icon="imageOff" label="Use the server's cover" onclick={serverCover} />{/if}
-        {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
-      </MenuGroup>
-      {#if me.admin && offer && (offer.job !== null || offer.targets.length || offer.replaceable)}
-        {@const o = offer}
-        <MenuGroup label="Library">
-          {#if o.job !== null}
-            {@const job = o.job}
-            <MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />
-          {:else}
-            {#each o.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
-            {#if o.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
-          {/if}
-        </MenuGroup>
-      {/if}
-      <!-- Remove, last. -->
-      <MenuGroup>
-        {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
-      </MenuGroup>
+    <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
+    <MenuTable kind="album" {entry}>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
-    </MenuCards>
+    </MenuTable>
   {:else}
     <PlaylistsStep to={toList} bind:step {onclose} />
   {/if}

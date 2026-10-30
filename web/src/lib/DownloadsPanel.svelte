@@ -236,7 +236,7 @@
             />
           {/if}
         {:else}
-          <Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />
+          <Item name="Nothing synced" line="Keep on this device from an album's, a playlist's, a crate's or an artist's menu." />
         {/each}
       </Group>
     {:else}
