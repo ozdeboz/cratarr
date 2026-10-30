@@ -2,6 +2,7 @@
 // search's kinds and its others, and the chips as a crate's conditions (filtered first, then Sounds like, cut).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+await import('./with-matcher.ts');
 
 const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, CLOSE, LIKE_MOST } = await import(
   '../src/lib/quickCrate.ts'
@@ -156,6 +157,10 @@ test('a phrase fits a hit whose own name it is, give or take a few letters, not 
   assert.equal(fits('soul', [hit('style', 'Neo Soul')]), false);
   assert.equal(fits('robin', [hit('track', 'Robin')]), false, 'a track is no reading');
   assert.equal(fits('zzz', []), false);
+  // The matcher (0.12): run together, or with a typo, still the name; a word too many is not.
+  assert.equal(fits('hiphop', [hit('genre', 'Hip Hop')]), true, 'run together');
+  assert.equal(fits('robin trip', [hit('artist', 'Robin Trio')]), true, 'a typo in a name of its length');
+  assert.equal(fits('jazz funk soul', [hit('style', 'Jazz-Funk')]), false, 'a word too many');
 });
 
 test('a line: years and decades first, then the longest names that fit, in the order typed; one search each', async () => {

@@ -54,13 +54,17 @@ export const MOST_WORDS = 3;
  *  still to type, or "hiphop" for Hip Hop): "miles davis" Miles Davis, not "miles" Miles Davis Quintet. */
 export const FIT = 0.7;
 
-/** Whether one of a phrase's hits is the phrase: its own name holds the words, the words most of the name. */
+/** Whether one of a phrase's hits is the phrase: its own name holds the words, the words most of the name. A guess
+ *  (the matcher's fuzzy: typos forgiven) fits only a phrase about as long as the name ("miles daivs" Miles Davis), so
+ *  a word too many is read apart, not swallowed ("jazz funk soul" is not Jazz-Funk). */
 export function fits(phrase: string, found: Found): boolean {
   const q = words(phrase);
+  const typed = q.join('').length;
   return found.some((r) => {
     if (!readingOf(r)) return false;
     const rel = relevance(q, r);
-    return rel[0] === 1 && rel[5] >= FIT;
+    const guess = rel[1] < 0;
+    return rel[0] === 1 && rel[5] >= FIT && (!guess || typed <= words(r.title).join('').length / FIT);
   });
 }
 
