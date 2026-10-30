@@ -40,6 +40,88 @@ export function splitTerms(text: string): string[] {
   return out;
 }
 
+/** What search found for a phrase: its hits of the term kinds (a few of each), as a phrase's readings come from. */
+export type Found = readonly (SearchResult & { id?: string })[];
+/** Asks search for a phrase (the sheet's: the term kinds, a few of each). */
+export type Ask = (phrase: string) => Promise<Found>;
+/** A phrase read off a line: the words it took, and their readings, the best first (none: nothing found). */
+export type Read = { term: string; readings: Reading[] };
+
+/** The longest phrase tried past a line's whole run (the owner, 2026-10-30: "Read the whole line"): names of up to
+ *  three words read together, a longer one where the whole run is it ("the dark side of the moon"). */
+export const MOST_WORDS = 3;
+/** A phrase fits a hit when the hit's own name holds its words and they make up this much of the name (a few letters
+ *  still to type, or "hiphop" for Hip Hop): "miles davis" Miles Davis, not "miles" Miles Davis Quintet. */
+export const FIT = 0.7;
+
+/** Whether one of a phrase's hits is the phrase: its own name holds the words, the words most of the name. */
+export function fits(phrase: string, found: Found): boolean {
+  const q = words(phrase);
+  return found.some((r) => {
+    if (!readingOf(r)) return false;
+    const rel = relevance(q, r);
+    return rel[0] === 1 && rel[5] >= FIT;
+  });
+}
+
+/** A line read as the owner types it (2026-10-30: "hip hop 90s miles davis"): apart at commas and semicolons
+ *  (`splitTerms`); in each piece the years and decades first, by rule; the words between them read longest first,
+ *  the whole run, then three words, two, one, a phrase taken where one of its hits fits it (`fits`); where none fits,
+ *  the one word, read by its best hit as a term always was. Each phrase asked once; the shorter ones at a place
+ *  together, after the longest did not fit. In the order typed. */
+export async function readLine(text: string, ask: Ask, now?: number): Promise<Read[]> {
+  const asked = new Map<string, Promise<Found>>();
+  const once = (phrase: string) => {
+    const key = words(phrase).join(' ');
+    let a = asked.get(key);
+    if (!a) asked.set(key, (a = ask(phrase).catch(() => [] as Found)));
+    return a;
+  };
+  const read = (term: string, found: Found): Read => ({ term, readings: readingsFor(term, found, now) });
+
+  async function segment(tokens: string[]): Promise<Read[]> {
+    const out: Read[] = [];
+    for (let i = 0; i < tokens.length; ) {
+      const phrase = (n: number) => tokens.slice(i, i + n).join(' ');
+      const longest = i === 0 ? tokens.length : Math.min(MOST_WORDS, tokens.length - i);
+      const first = await once(phrase(longest));
+      let took = longest;
+      let found = first;
+      if (!fits(phrase(longest), first) && longest > 1) {
+        const shorter = Array.from({ length: Math.min(MOST_WORDS, longest - 1) }, (_, k) => Math.min(MOST_WORDS, longest - 1) - k);
+        const tries = await Promise.all(shorter.map(async (n) => ({ n, found: await once(phrase(n)) })));
+        const fit = tries.find((x) => fits(phrase(x.n), x.found)) ?? tries[tries.length - 1];
+        took = fit.n;
+        found = fit.found;
+      }
+      out.push(read(phrase(took), found));
+      i += took;
+    }
+    return out;
+  }
+
+  const pieces = await Promise.all(
+    splitTerms(text).map(async (piece) => {
+      const tokens = piece.replace(/(\d{4})\s*[-–]\s*(\d{4})/g, '$1-$2').split(' ');
+      const parts: (Read | string[])[] = [];
+      for (const t of tokens) {
+        if (!words(t).length) continue;
+        const year = yearOf(t, now);
+        if (year) parts.push({ term: t, readings: [year] });
+        else if (Array.isArray(parts.at(-1))) (parts.at(-1) as string[]).push(t);
+        else parts.push([t]);
+      }
+      const reads = await Promise.all(parts.map((p) => (Array.isArray(p) ? segment(p) : Promise.resolve([p]))));
+      return reads.flat();
+    }),
+  );
+  const seen = new Set<string>();
+  return pieces.flat().filter((r) => {
+    const key = r.term.toLowerCase();
+    return !seen.has(key) && (seen.add(key), true);
+  });
+}
+
 /** A year or a decade as typed: 1975, '75, 1970s, '70s, 70s, 1970-1979; `now` for which century a two-digit year is
  *  (one after this year's two digits is last century's). */
 export function yearOf(term: string, now = new Date().getFullYear()): Reading | null {
