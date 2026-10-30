@@ -121,6 +121,8 @@ pub struct Playing {
 pub struct Upcoming {
     pub track: Track,
     pub duration_secs: Option<f64>,
+    /// Who asked for it, a queue request accepted (Play On's players only).
+    pub asked_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]

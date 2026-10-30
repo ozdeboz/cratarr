@@ -503,7 +503,8 @@ impl PlayOn {
         if track.source.trim().is_empty() || track.id.trim().is_empty() {
             return Err(ToggleError::BadSettings("Ask for which track? Give its source and id.".into()));
         }
-        let mut track = self.named(vec![QueueTrack { entry: String::new(), lane: None, n: None, ..track }]).await.pop().unwrap_or_default();
+        // Who asked is the server's to say, as it accepts.
+        let mut track = self.named(vec![QueueTrack { entry: String::new(), lane: None, n: None, asked_by: None, ..track }]).await.pop().unwrap_or_default();
         if track.name.is_empty() {
             track.name = track.id.clone();
         }
@@ -521,10 +522,11 @@ impl PlayOn {
     }
 
     /// Request `id` accepted by `by` (its leader, or an administrator): its track added to the player's queue, next or
-    /// at the end as asked, through Play On's add as the leader; the asker told.
+    /// at the end as asked, through Play On's add as the leader, its entry saying who asked; the asker told.
     pub async fn accept(&self, id: &str, by: &str, admin: bool) -> Result<QueueRequest, ToggleError> {
         let r = self.waiting(id, by, admin)?;
-        let add = Command::Add { from: PlayFrom::default(), tracks: vec![r.track.clone()], at: None, after: None, how: Some(r.how.clone()) };
+        let track = QueueTrack { asked_by: Some(r.from.named()), ..r.track.clone() };
+        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track], at: None, after: None, how: Some(r.how.clone()) };
         let leader = crate::serve::who::Who { user: r.leader.clone(), admin: false, scope: crate::serve::who::Scope::Full, home: true };
         crate::serve::who::acting_as(leader, self.command(&r.player, add)).await?;
         let done = self.requests.answer(id, State::Accepted).ok_or_else(|| ToggleError::Refused("That request was answered meanwhile.".into()))?;

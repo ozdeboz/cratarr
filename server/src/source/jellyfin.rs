@@ -687,6 +687,7 @@ impl Source for JellyfinSource {
                         .map(|i| Upcoming {
                             duration_secs: i.run_time_ticks.map(|t| t as f64 / 10_000_000.0),
                             track: to_track((i.clone(), found.1.clone())),
+                            asked_by: None,
                         })
                         .collect()
                 })

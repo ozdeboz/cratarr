@@ -19,4 +19,9 @@ n?: number, source: string, id: string, name: string, artist: string | null, alb
 /**
  * Its length, for the queue's rows and the time left; players keep it as they keep the rest.
  */
-duration_secs?: number, };
+duration_secs?: number, 
+/**
+ * Who asked for it, a queue request accepted (decision 0079; 0.9.19): the follower's name, or the guest's as the
+ * page shows it ("Guest Sam"). It stays with the entry wherever the entry goes.
+ */
+asked_by?: string, };

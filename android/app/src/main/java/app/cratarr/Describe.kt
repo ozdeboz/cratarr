@@ -39,10 +39,6 @@ object Describe {
     /** The sources Cratarr describes: its own library's tracks and Bandcamp's previews. */
     fun describes(source: String) = source == "cratarr" || source == "bandcamp"
 
-    /** A track's identity: what the queue is told when Cratarr describes it. */
-    fun identity(t: JSONObject): JSONObject =
-        JSONObject().apply { for (k in listOf("entry", "lane", "n", "source", "id")) if (t.has(k)) put(k, t.get(k)) }
-
     /** The player's tracks Cratarr describes, asked about once each, and shown as it says. On the main thread. */
     fun fill(context: Context, player: Player) {
         if (available == false) return
