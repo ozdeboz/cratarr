@@ -3,8 +3,8 @@
 // locked screen: this page when its own stream plays, else the app's player or the Cratarr player this page drives,
 // through localPlayer's sleep command (decision 0031). What every page shows comes from that player's reports.
 import { inApp } from './app.svelte';
+import { port } from './player/port.svelte';
 import { handSleep, local, togglePlay, type Sleep } from './localPlayer.svelte';
-import { isLocal } from './output.svelte';
 import { drivenName } from './playOn.svelte';
 
 /** Whether the music plays in another player (the app's, a Cratarr player), which then keeps the timer. */
@@ -16,7 +16,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 
 /** The timer as the playing side has it (a deadline, or the end of the playing track); null where there is none. */
 export function sleep(): Sleep | null {
-  if (!isLocal()) return null;
+  if (!port().sleeps) return null;
   return handed() ? (local.sleep ?? null) : own.sleep;
 }
 

@@ -468,16 +468,24 @@ impl Queue {
 
     /// The queue a player reports, taken as it is: the player holds what plays (decision 0033, step 1). Tracks it
     /// sends without entries (an app from before 0033) keep the entries they had here, in order, so an entry keeps
-    /// its id through moves. None when nothing changed; else whether it is another queue: something new the player
-    /// started itself, or none at all (the one before is left behind, decision 0033 amended).
+    /// its id through moves; who asked for an entry stays with it where an app from before 0.9.19 leaves it out. None
+    /// when nothing changed; else whether it is another queue: something new the player started itself, or none at all
+    /// (the one before is left behind, decision 0033 amended).
     pub fn adopted(&mut self, reported: Vec<QueueTrack>) -> Option<bool> {
         let mut known: Vec<Option<&QueueTrack>> = self.tracks.iter().map(Some).collect();
+        let asked: std::collections::HashMap<&str, &str> =
+            self.tracks.iter().filter(|t| !t.entry.is_empty()).filter_map(|t| Some((t.entry.as_str(), t.asked_by.as_deref()?))).collect();
         let tracks: Vec<QueueTrack> = reported
             .into_iter()
             .map(|mut t| {
                 if t.entry.is_empty() {
                     let same = known.iter_mut().find(|k| k.is_some_and(|k| k.source == t.source && k.id == t.id));
                     t.entry = same.and_then(Option::take).map_or_else(new_entry, |k| k.entry.clone());
+                }
+                if t.asked_by.is_none()
+                    && let Some(who) = asked.get(t.entry.as_str())
+                {
+                    t.asked_by = Some((*who).to_string());
                 }
                 t
             })
@@ -630,6 +638,32 @@ mod tests {
         assert!(q.edit_at(Command::Shuffle { on: true }, None).is_err(), "nothing plays");
         // `shuffle` alone is once, as `on: true`.
         assert_eq!(serde_json::from_str::<Command>(r#"{"command":"shuffle"}"#).unwrap(), Command::Shuffle { on: true });
+    }
+
+    #[test]
+    fn who_asked_stays_with_its_entry_through_a_shuffle_its_undo_and_a_report() {
+        let mut q = played(&["a", "b", "c", "d", "e"]);
+        let asked = QueueTrack { asked_by: Some("Guest Sam".into()), ..track("x") };
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![asked], at: None, after: None, how: Some("last".into()) }, Some(0)).unwrap();
+        let x = |q: &Queue| q.tracks.iter().find(|t| t.id == "x").map(|t| (t.entry.clone(), t.asked_by.clone()));
+        let (entry, who) = x(&q).unwrap();
+        assert_eq!(who.as_deref(), Some("Guest Sam"));
+        let before = q.tracks[1..].to_vec();
+        q.edit_at(Command::Shuffle { on: true }, Some(0)).unwrap();
+        assert_eq!(x(&q), Some((entry.clone(), who.clone())));
+        q.edit_at(Command::Restore { tracks: before }, Some(0)).unwrap();
+        assert_eq!(x(&q), Some((entry.clone(), who.clone())));
+        let upcoming = q.tracks[1..].iter().rev().cloned().collect();
+        q.edit_at(Command::Upcoming { tracks: upcoming, shuffled: None }, Some(0)).unwrap();
+        assert_eq!(x(&q), Some((entry.clone(), who.clone())));
+        // An app from before it reports the queue without it, by entry or with none: the entry keeps it.
+        let reported: Vec<QueueTrack> = q.tracks.iter().map(|t| QueueTrack { asked_by: None, ..t.clone() }).collect();
+        assert!(!q.adopt(reported.clone()), "nothing changed");
+        assert_eq!(x(&q), Some((entry.clone(), who.clone())));
+        let unnamed: Vec<QueueTrack> = reported.into_iter().rev().map(|t| QueueTrack { entry: String::new(), ..t }).collect();
+        assert!(q.adopt(unnamed));
+        assert_eq!(x(&q), Some((entry, who)));
+        assert_eq!(q.tracks.iter().filter(|t| t.asked_by.is_some()).count(), 1, "none of the others");
     }
 
     #[test]

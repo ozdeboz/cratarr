@@ -64,7 +64,14 @@ fun queueOf(player: Player, thin: Boolean = false): JSONArray {
     val queue = JSONArray()
     for (i in 0 until player.mediaItemCount) {
         val track = player.getMediaItemAt(i).mediaMetadata.extras?.getString(TRACK)?.let(::JSONObject) ?: JSONObject()
-        queue.put(if (thin && Describe.describes(track.optString("source"))) Describe.identity(track) else track)
+        queue.put(if (thin && Describe.describes(track.optString("source"))) identityOf(track) else track)
     }
     return queue
 }
+
+/** What makes a queue entry what it is, whatever Cratarr says of its track: its entry, lane and place, the track, and
+ *  who asked for it (a queue request accepted, 0.9.19). */
+private val IDENTITY = listOf("entry", "lane", "n", "source", "id", "asked_by")
+
+/** A track's identity: what the queue is told when Cratarr describes it. */
+fun identityOf(t: JSONObject): JSONObject = JSONObject().apply { for (k in IDENTITY) if (t.has(k)) put(k, t.get(k)) }

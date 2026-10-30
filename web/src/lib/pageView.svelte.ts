@@ -55,6 +55,8 @@ export const ALBUM_ORDERS: OrderField<CollectionOrder>[] = [
   { value: 'rating', label: 'Rating', most: true },
   { value: 'quality', label: 'Quality', most: true },
   { value: 'tracks', label: 'Tracks', most: true },
+  // Its length (0.9.19; the owner, 2026-10-30): the longest first.
+  { value: 'length', label: 'Length', most: true },
 ];
 /** The Library's Artists and Tracks (the owner, 2026-10-25): their orders, as the albums' header has them. */
 export const ARTIST_ORDERS: OrderField<'name' | 'albums' | 'tracks'>[] = [

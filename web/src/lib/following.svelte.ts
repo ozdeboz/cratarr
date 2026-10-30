@@ -4,7 +4,7 @@
 // its own: the Play On sheet's foot (lib/OutputSheet) and the queue sheet's rows (lib/QueueSheet). A server before it
 // has none of it (its calls answer 404): nothing of it shows then.
 import { acceptRequest, ApiError, askForTrack, declineRequest, getFollowers, getLeaders, getQueueRequests, type Follower, type FollowLeader, type FollowView, type PlayOnPlayer, type QueueRequest, type QueueTrack } from './api';
-import { isLocal } from './player/port.svelte';
+import { port } from './player/port.svelte';
 import { drivenName, playOn, selfName } from './playOn.svelte';
 import { toast } from './toast.svelte';
 
@@ -28,7 +28,7 @@ const served = (e: unknown) => {
 /** A player's view as Play On lists it, with how following and asking stand on it. */
 export const viewOf = (name: string | null) => (name ? (playOn.players.find((p) => p.name === name) as (PlayOnPlayer & FollowView) | undefined) : undefined);
 /** The player that plays what this page shows, where it is one of Cratarr's own (here, or one driven). */
-export const playerShown = () => (isLocal() ? selfName() : drivenName());
+export const playerShown = () => (port().holdsQueue ? selfName() : drivenName());
 /** Whom this device's player follows now (its Next, Previous and queue edits are then the one followed's). */
 export const followingNow = () => viewOf(selfName())?.following ?? null;
 /** How many tracks are asked of the player shown, where it is one's own. */

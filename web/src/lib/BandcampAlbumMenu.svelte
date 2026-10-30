@@ -7,6 +7,7 @@
   // on any player: the server streams them. Never downloaded, kept or in a playlist (decision 0071): bought there. The
   // menu's pieces as every menu's; what the server keeps of its own albums (heart, rating, playlists) it has none of.
   import { goToArtist, library, readLibrary } from './albums.svelte';
+  import { port } from './player/port.svelte';
   import { albumCoverUrl } from './api';
   import { BANDCAMP, previewPage } from './bandcampPreview';
   import DiscoverEntries from './DiscoverEntries.svelte';
@@ -16,11 +17,8 @@
   import MenuSheet from './MenuSheet.svelte';
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
-  import { enqueue, playQueue, type LocalTrack } from './localPlayer.svelte';
-  import { isLocal } from './output.svelte';
-  import { playCollection } from './play.svelte';
+  import type { LocalTrack } from './localPlayer.svelte';
   import { share } from './share';
-  import { shuffled } from './shuffle';
   import { toast } from './toast.svelte';
 
   let {
@@ -40,12 +38,7 @@
     onclose();
     navigator.vibrate?.(8);
     try {
-      if (isLocal()) {
-        if (how === 'next' || how === 'last') enqueue(list, how);
-        else playQueue(how === 'shuffle' ? shuffled(list) : list, 0, name);
-      } else {
-        await playCollection({ kind: 'tracks', source: BANDCAMP, ids: list.map((t) => t.id) }, how, name);
-      }
+      await port().playTracks(list, how, name, BANDCAMP);
       if (how === 'next' || how === 'last') toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
     } catch (e) {
       toast.fail(e, 'Could not start playing');

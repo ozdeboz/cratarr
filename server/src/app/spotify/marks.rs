@@ -243,7 +243,8 @@ impl Marks<'_> {
             of,
             release_group,
             album: found.map(|id| Ref { source: self.library.source.clone(), id }),
-            request,
+            // In the library, it is the library's (the owner, 2026-10-30): requested only on the Requests page.
+            request: request.filter(|_| status != IN),
             preview: None,
         }
     }
@@ -264,7 +265,7 @@ impl Marks<'_> {
             added_at: t.added_at,
             status,
             track: song.map(|id| Ref { source: self.library.source.clone(), id }),
-            request,
+            request: request.filter(|_| status != IN),
         }
     }
 

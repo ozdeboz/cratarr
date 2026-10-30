@@ -67,8 +67,8 @@ fn sessions_of(serve: &Serve, user: &str, current: Option<&str>) -> Vec<serde_js
 }
 
 /// An account's devices: its Play On players.
-fn devices_of(user: &str) -> Vec<serde_json::Value> {
-    let Some(on) = crate::app::PlayOn::instance() else { return Vec::new() };
+fn devices_of(serve: &Serve, user: &str) -> Vec<serde_json::Value> {
+    let Some(on) = serve.play_on() else { return Vec::new() };
     on.list_for(Some(user))
         .into_iter()
         .map(|p| json!({ "id": p.name, "name": p.name, "kind": p.kind, "online": p.online, "last_seen": p.seen }))
@@ -79,7 +79,7 @@ fn devices_of(user: &str) -> Vec<serde_json::Value> {
 fn view(serve: &Serve, u: &User, current: Option<&str>) -> serde_json::Value {
     json!({
         "name": u.name, "admin": u.admin, "active": u.active, "directory": u.directory, "permissions": u.permissions,
-        "app_password": !u.password.is_empty(), "devices": devices_of(&u.name), "sessions": sessions_of(serve, &u.name, current),
+        "app_password": !u.password.is_empty(), "devices": devices_of(serve, &u.name), "sessions": sessions_of(serve, &u.name, current),
     })
 }
 
@@ -131,12 +131,12 @@ fn end(serve: &Serve, user: &str, id: &str) -> Response {
 
 async fn forget_own_device(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
     let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
-    forget(&me, &id)
+    forget(&serve, &me, &id)
 }
 
 /// Forgets `user`'s device `id` (its queue with it); not found when it is someone else's.
-fn forget(user: &str, id: &str) -> Response {
-    let Some(on) = crate::app::PlayOn::instance() else { return refused(StatusCode::NOT_FOUND, "No such device.") };
+fn forget(serve: &Serve, user: &str, id: &str) -> Response {
+    let Some(on) = serve.play_on() else { return refused(StatusCode::NOT_FOUND, "No such device.") };
     match on.forget(id, user) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => refused(StatusCode::NOT_FOUND, "No such device."),
@@ -144,8 +144,8 @@ fn forget(user: &str, id: &str) -> Response {
     }
 }
 
-async fn forget_device(Path((name, id)): Path<(String, String)>) -> Response {
-    forget(&name, &id)
+async fn forget_device(State(serve): State<Arc<Serve>>, Path((name, id)): Path<(String, String)>) -> Response {
+    forget(&serve, &name, &id)
 }
 
 /// "Delete play history" (0.9.5): the account's plays and what was made of them; its favourites, ratings and
@@ -193,7 +193,7 @@ async fn set_own_settings(State(serve): State<Arc<Serve>>, axum::Json(b): axum::
         Ok(Ok(version)) => {
             // "Others may follow me" off (decision 0079): whoever follows them follows no one now.
             if settings["followable"].as_bool() != Some(true)
-                && let Some(on) = crate::app::PlayOn::instance()
+                && let Some(on) = serve.play_on()
             {
                 on.end_following_of(&me);
             }
@@ -293,7 +293,7 @@ async fn set_active(State(serve): State<Arc<Serve>>, Path(name): Path<String>, a
 /// devices stop playing for it (paused: their queues stay, as its data does). Returns how many sign-ins ended.
 async fn left(serve: &Serve, name: &str) -> usize {
     let ended = serve.sessions.revoke_user(name, None).unwrap_or(0);
-    if let Some(on) = crate::app::PlayOn::instance() {
+    if let Some(on) = serve.play_on() {
         for p in on.list_for(Some(name)).into_iter().filter(|p| p.online && p.playing) {
             if let Err(e) = on.command(&p.name, crate::app::PlayOnCommand::Pause).await {
                 tracing::warn!(target: "signin", user = %name, player = %p.name, "could not stop its player: {e}");

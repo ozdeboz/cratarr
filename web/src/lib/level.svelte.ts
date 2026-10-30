@@ -4,14 +4,15 @@
 // here over Play On (its `level` command; its report says how it stands), and a group as one: every player in it.
 import { playerCommand } from './api';
 import { appInfo, inApp, setDevice } from './app.svelte';
+import { ownCopy } from './deviceSettings';
 import { setLevelling } from './localPlayer.svelte';
 import { drivenName, groupOf, head, outputName, playOn, selfName } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
-export const levelOn = () => (inApp ? appInfo.levelling : prefs.levelling);
+export const levelOn = () => ownCopy(inApp, appInfo.levelling, prefs.levelling);
 export const setLevelOn = (on: boolean) => (inApp ? setDevice({ levelling: on }) : setLevelling(on));
-export const levelUnknown = () => (inApp ? appInfo.levelUnknown : prefs.levelUnknown);
+export const levelUnknown = () => ownCopy(inApp, appInfo.levelUnknown, prefs.levelUnknown);
 export const setLevelUnknown = (v: 'typical' | 'untouched') => (inApp ? setDevice({ levelUnknown: v }) : (prefs.levelUnknown = v));
 /** Whose levelling the player's Level button sets: a group's players (leader first), else the one driven, else this
  *  device; `label` names it in its sheet, as the device button under the player does. */

@@ -197,15 +197,24 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
 }
 
 fn annotation_json(a: &Annotation) -> serde_json::Value {
-    serde_json::json!({ "play_count": a.play_count, "play_date": a.play_date, "rating": a.rating, "starred_at": a.starred_at })
+    serde_json::json!({
+        "play_count": a.play_count, "play_date": a.play_date, "rating": a.rating, "starred_at": a.starred_at,
+        "own_count": a.own_count, "own_date": a.own_date,
+    })
 }
 
+/// Kept from before one's own plays were apart (2026-10-30): all of them one's own.
 fn annotation_of(v: &serde_json::Value) -> Annotation {
+    let play_count = v["play_count"].as_u64().unwrap_or(0) as u32;
+    let play_date = v["play_date"].as_i64();
+    let own = v.get("own_count").is_some();
     Annotation {
-        play_count: v["play_count"].as_u64().unwrap_or(0) as u32,
-        play_date: v["play_date"].as_i64(),
+        play_count,
+        play_date,
         rating: v["rating"].as_u64().unwrap_or(0).min(5) as u8,
         starred_at: v["starred_at"].as_i64(),
+        own_count: if own { (v["own_count"].as_u64().unwrap_or(0) as u32).min(play_count) } else { play_count },
+        own_date: if own { v["own_date"].as_i64() } else { play_date },
     }
 }
 
@@ -307,7 +316,11 @@ impl Source for CratarrSource {
                 upcoming: queue[at + 1..]
                     .iter()
                     .zip(ours.iter().skip(1))
-                    .map(|(t, d)| super::Upcoming { track: track_of(t, d), duration_secs: d.as_ref().and_then(|d| d.duration_secs).or(t.duration_secs) })
+                    .map(|(t, d)| super::Upcoming {
+                        track: track_of(t, d),
+                        duration_secs: d.as_ref().and_then(|d| d.duration_secs).or(t.duration_secs),
+                        asked_by: t.asked_by.clone(),
+                    })
                     .collect(),
             }))
         })
@@ -779,12 +792,14 @@ impl Source for CratarrSource {
         })
     }
 
-    /// Plays added up, the later last-played, the better rating, a star when either has one.
+    /// Plays added up (all and one's own), the later last-played, the better rating, a star when either has one.
     fn combine_user_data(&self, a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Value {
         let (a, b) = (annotation_of(a), annotation_of(b));
         annotation_json(&Annotation {
             play_count: a.play_count + b.play_count,
             play_date: a.play_date.max(b.play_date),
+            own_count: a.own_count + b.own_count,
+            own_date: a.own_date.max(b.own_date),
             rating: a.rating.max(b.rating),
             starred_at: match (a.starred_at, b.starred_at) {
                 (Some(x), Some(y)) => Some(x.min(y)),
@@ -890,5 +905,9 @@ mod tests {
         let b = serde_json::json!({ "play_count": 3, "play_date": 50, "rating": 4, "starred_at": 7 });
         let c = annotation_of(&s.combine_user_data(&a, &b));
         assert_eq!((c.play_count, c.play_date, c.rating, c.starred_at), (5, Some(100), 4, Some(7)));
+        assert_eq!((c.own_count, c.own_date), (5, Some(100)), "kept from before: all one's own");
+        let followed = serde_json::json!({ "play_count": 3, "play_date": 90, "own_count": 1, "own_date": 40, "rating": 0, "starred_at": null });
+        let c = annotation_of(&s.combine_user_data(&a, &followed));
+        assert_eq!((c.play_count, c.play_date, c.own_count, c.own_date), (5, Some(100), 3, Some(100)), "one's own added up apart");
     }
 }

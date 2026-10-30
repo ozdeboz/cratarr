@@ -9,6 +9,7 @@
   import Icon from './Icon.svelte';
   import { accentFor, keepAccent } from './accents.svelte';
   import { appInfo, inApp } from './app.svelte';
+  import { startStopNow } from './device.svelte';
   import { deckNow, local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { port } from './player/port.svelte';
@@ -68,9 +69,10 @@
   const pos = $derived(seek.pos);
   /** As heard: this device's player's level (0..1), the waveform's bars scaled by it (lib/Waveform `heard`), where Level
    *  the volume says to show it. */
-  const heard = $derived(isLocal() && prefs.waveLevel !== 'file' ? 10 ** (local.levelDb / 20) : 1);
+  const level = $derived(port().level());
+  const heard = $derived(level && prefs.waveLevel !== 'file' ? 10 ** (level.db / 20) : 1);
   /** The level shown is the track's own (not a guess while its gain comes). */
-  const heardKnown = $derived(!isLocal() || prefs.waveLevel === 'file' || local.levelKnown);
+  const heardKnown = $derived(!level || prefs.waveLevel === 'file' || level.known);
   /** Shown as paused: from the moment a stop ramp begins, playing from the moment a start ramp begins (the owner,
    *  2026-10-26: the colour goes with the ramp, whenever the player says it paused). */
   // After a ramp, its way holds until the player says the same (an app reporting the pause a moment late: no flash).
@@ -106,7 +108,7 @@
   const ZOOM_KEEP_MS = 2000;
   let zoomShare = $state(1);
   let zoomAnchor = $state<number | null>(null);
-  const zoomOn = $derived(holdNow.on && isLocal() && !reducedMotion());
+  const zoomOn = $derived(holdNow.on && port().holdsQueue && !reducedMotion());
   // Started and stopped by the hold alone (its frames move it, never restart it).
   $effect(() => {
     const on = zoomOn;
@@ -142,7 +144,7 @@
   // The playing track's place and length as the player has them, in the same moment as which track it is (the props
   // follow a frame later: crossing a boundary, the strip was made a frame with the last track's, the owner 2026-10-28).
   const hereLen = $derived(local.queue[local.index]?.duration_secs ?? dur);
-  const herePos = $derived(isLocal() ? local.position : pos);
+  const herePos = $derived(port().position() ?? pos);
   // Continuous (the owner, 2026-10-28): a hold's look-ahead in another track zooms out past the track's edge until it
   // shows, with as much again beyond it as it is ahead of the playhead; the tracks there drawn with their own waveforms,
   // their boundaries marked below. In s along the queue from this track's start (`a` to `b`).
@@ -178,7 +180,7 @@
   const anchorOf = () => Math.min(0.9, Math.max(0.1, zoomAnchor ?? 0.5));
   /** Whether a hold winds on through the queue: Start and stop's as the player that winds has it, the app's in the app
    *  (the owner, 2026-10-29: the zoom's other tracks and their boundaries never showed there). */
-  const throughQueue = $derived((inApp ? appInfo.startStop : prefs.startStop).edges === 'queue');
+  const throughQueue = $derived(startStopNow().edges === 'queue');
   const wideTarget = $derived.by((): { W: number } | null => {
     // Until it is let go (the owner, 2026-10-28): then back to this track's own view.
     if (!zoomOn || !holdNow.held || !throughQueue || !hereLen) return null;
@@ -364,7 +366,7 @@
    *  the line stood at the end, and on the next track at the last one's place). */
   const aimMark = $derived.by(() => {
     const l = holdNow.landing;
-    if (l === null || !dur || !isLocal()) return null;
+    if (l === null || !dur || !port().holdsQueue) return null;
     const at = holdNow.landingIndex;
     if (at !== null && at !== local.index) {
       // Where it is in the wide view; else at this track's edge that way.

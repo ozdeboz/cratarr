@@ -67,6 +67,11 @@ pub struct QueueTrack {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub duration_secs: Option<f64>,
+    /// Who asked for it, a queue request accepted (decision 0079; 0.9.19): the follower's name, or the guest's as the
+    /// page shows it ("Guest Sam"). It stays with the entry wherever the entry goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub asked_by: Option<String>,
 }
 
 /// An announcement as a player reports it (Command::Announce).
@@ -1597,7 +1602,9 @@ impl PlayOn {
         Ok(())
     }
 
-    /// The PlayOn of this Cratarr, once it is open.
+    /// The PlayOn of this Cratarr, once it is open. The app holds it (`App::play_on`) and the server is handed it
+    /// (`Serve::set_play_on`); this stays for the built-in Cratarr source, which plugins' rules leave without a handle,
+    /// and Playing, which is made before it.
     pub fn instance() -> Option<Arc<Self>> {
         INSTANCE.get().cloned()
     }
@@ -1633,7 +1640,7 @@ impl PlayOn {
 
     /// Cratarr's ids of a player's track, from its own library (0030); `None` parts when that does not know it.
     fn ids_of(&self, t: Option<&QueueTrack>) -> TrackIds {
-        let (Some(t), Some(served)) = (t, crate::serve::instance()) else { return TrackIds::default() };
+        let (Some(t), Some(served)) = (t, self.playlists.served()) else { return TrackIds::default() };
         let library = &served.library;
         let Some(track) = self.lib.catalogue().track_of_source(&t.source, &t.id) else { return TrackIds::default() };
         match library.song_ids(track) {
@@ -2207,7 +2214,7 @@ impl PlayOn {
             return;
         }
         let Some(user) = self.account_of(&leader) else { return };
-        let Some(Ok((_, settings))) = crate::serve::instance().map(|s| s.userdata.settings_of(&user)) else { return };
+        let Some(Ok((_, settings))) = self.playlists.served().map(|s| s.userdata.settings_of(&user)) else { return };
         let Some((mode, albums)) = armed(&settings) else { return };
         let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: None, seed: None, within: None };
         if let Err(e) = Box::pin(self.command(&leader, auto)).await {
@@ -2521,7 +2528,7 @@ impl PlayOn {
     async fn picked(&self, name: &str, from: &PlayFrom, how: How, start: Option<super::play::Start>) -> Result<Option<(Vec<QueueTrack>, usize)>, ToggleError> {
         use super::play::Collection;
         let (what, how, most) = match () {
-            _ if from.album.is_some() => return Ok(own_album(from).await?.map(|t| picked_from(t, how, start, from.limit.unwrap_or(QUEUE_MOST)))),
+            _ if from.album.is_some() => return Ok(own_album(self.playlists.served(), from).await?.map(|t| picked_from(t, how, start, from.limit.unwrap_or(QUEUE_MOST)))),
             _ if from.playlist.is_some() => (Collection::Playlist { id: self.playlist_named(from.playlist.as_deref().unwrap_or_default()).await? }, how, from.limit),
             _ if from.favourites => (Collection::Favourites, how, from.limit),
             _ if from.library => (Collection::Library, How::Shuffle, Some(from.limit.unwrap_or(LIBRARY_PICK))),
@@ -3083,7 +3090,7 @@ impl PlayOn {
                 let Some(me) = me.upgrade() else { return };
                 // Home Assistant's: its key acts for the first administrator, whose players these are (decision 0051);
                 // every one while signing in is off.
-                let reach = crate::serve::instance().filter(|s| s.sign_in_required()).and_then(|s| s.users.owner());
+                let reach = me.playlists.served().filter(|s| s.sign_in_required()).and_then(|s| s.users.owner());
                 let (hooks, players) = (me.settings().webhooks, me.list_for(reach.as_deref()));
                 let seq = me.seq.fetch_add(1, Ordering::Relaxed) + 1;
                 drop(me);
@@ -3219,14 +3226,14 @@ fn numbered(mut tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
 
 /// An album of Cratarr's own library (decision 0032) for `play` and `add`, in its order, or a Bandcamp album by its id
 /// (`track_id(page, 0)`, decision 0071) as its previews. `None` when none is asked for.
-async fn own_album(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
+async fn own_album(served: Option<Arc<crate::serve::Serve>>, from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
     let Some(album) = from.album.clone() else { return Ok(None) };
     if crate::bandcamp::is_preview(&album) {
         let (page, _) = crate::bandcamp::read_id(&album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
         let a = crate::bandcamp::Bandcamp::get().album(&page).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         return Ok(Some(a.queue_tracks()));
     }
-    let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+    let Some(served) = served else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
     let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
         Ok(served.library.album(&album)?.and_then(|a| a.song).unwrap_or_default())
     })
@@ -3367,7 +3374,7 @@ mod tests {
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
-        PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal)), None)
+        PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal, None)), None)
     }
 
     #[tokio::test]
@@ -4268,7 +4275,7 @@ mod tests {
         let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-8"), "last", None, false).await.unwrap();
         assert_eq!(p.decline(&r.id, "ann", false).unwrap().state, Asked::Declined);
         assert!(p.requests.waiting_for("ann", None).is_empty(), "out of the leader's list at once");
-        assert_eq!(p.requests.of_user("bob")[0].state, Asked::Declined, "the asker sees it declined");
+        assert_eq!(p.requests.of_user("bob").iter().find(|q| q.id == r.id).unwrap().state, Asked::Declined, "the asker sees it declined");
         assert_eq!(notice(&mut players[1]), ["ann declined: tr-8"]);
         let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-8"), "last", None, false).await.unwrap();
         assert!(p.decline(&r.id, "carl", true).is_ok(), "an administrator answers too");
@@ -4283,5 +4290,69 @@ mod tests {
         p.requests.age(&r.id, KEEP_SECS);
         assert!(p.accept(&r.id, "ann", false).await.is_err());
         assert_eq!(p.get("Ann phone").unwrap().queue_requests, 0);
+    }
+
+    #[tokio::test]
+    async fn an_accepted_request_says_who_asked_wherever_its_entry_goes() {
+        use super::super::queue_requests::Asker;
+        let p = play_on().await;
+        let mut players = owned(&p, &[("Ann phone", "ann"), ("Bob phone", "bob")]);
+        leading(&p, "Ann phone", &["tr-1", "tr-2"], 0).await;
+        let queue = |p: &Arc<PlayOn>| p.get("Ann phone").unwrap().queue.unwrap();
+        let who = |q: &[QueueTrack], id: &str| q.iter().find(|t| t.id == id).and_then(|t| t.asked_by.clone());
+
+        // Who asked is the server's to say: what the asker sends is not taken.
+        let sent = QueueTrack { asked_by: Some("carl".into()), ..track("tr-9") };
+        let r = p.ask_for(Asker::User("bob".into()), "Ann phone", "ann", sent, "next", None, false).await.unwrap();
+        assert_eq!(r.track.asked_by, None);
+        p.accept(&r.id, "ann", false).await.unwrap();
+        let add = told(&mut players[0]).into_iter().rfind(|m| m["command"] == "add").expect("the leader's player told");
+        assert_eq!(add["tracks"][0]["asked_by"], "bob");
+        // A guest's, accepted at once; an ordinary add says nothing.
+        p.ask_for(Asker::Guest("Sam".into()), "Ann phone", "ann", track("tr-8"), "last", Some("tok".into()), true).await.unwrap();
+        let plain = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-7")], at: None, after: None, how: Some("last".into()) };
+        p.command("Ann phone", plain).await.unwrap();
+        let q = queue(&p);
+        assert_eq!((who(&q, "tr-9").as_deref(), who(&q, "tr-8").as_deref()), (Some("bob"), Some("Guest Sam")));
+        assert_eq!((who(&q, "tr-7"), who(&q, "tr-1")), (None, None));
+        assert!(serde_json::to_value(&q[0]).unwrap().get("asked_by").is_none(), "left out where none asked");
+
+        // Moved to the end.
+        let entry = q.iter().find(|t| t.id == "tr-9").unwrap().entry.clone();
+        p.command("Ann phone", Command::Move { from: None, to: Some(q.len() - 1), entry: Some(entry.clone()), after: None }).await.unwrap();
+        let q = queue(&p);
+        assert_eq!((q.last().map(|t| t.entry.as_str()), who(&q, "tr-9").as_deref()), (Some(entry.as_str()), Some("bob")));
+
+        // The player sends its queue back, reordered, with it; and an app from before it, without it.
+        let mut reported = q.clone();
+        reported[1..].reverse();
+        let version = p.get("Ann phone").unwrap().queue_version;
+        p.report("Ann phone", Report { index: 0, version: Some(version), playing: true, queue: Some(reported.clone()), ..Report::default() }).unwrap();
+        let q = queue(&p);
+        assert_eq!(q.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), reported.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), "taken");
+        assert_eq!((who(&q, "tr-9").as_deref(), who(&q, "tr-8").as_deref()), (Some("bob"), Some("Guest Sam")));
+        let mut old: Vec<QueueTrack> = reported.iter().map(|t| QueueTrack { asked_by: None, ..t.clone() }).collect();
+        old[1..].reverse();
+        let version = p.get("Ann phone").unwrap().queue_version;
+        p.report("Ann phone", Report { index: 0, version: Some(version), playing: true, queue: Some(old), ..Report::default() }).unwrap();
+        let q = queue(&p);
+        assert_eq!((who(&q, "tr-9").as_deref(), who(&q, "tr-8").as_deref()), (Some("bob"), Some("Guest Sam")), "the entry keeps it");
+
+        // Left behind for something new, then taken up again from the queue history.
+        let id = p.get("Ann phone").unwrap().queues.unwrap()[0].id.clone();
+        p.command("Ann phone", Command::play(vec![track("tr-5")], 0, 0)).await.unwrap();
+        assert_eq!(queue(&p)[0].id, "tr-5");
+        p.command("Ann phone", Command::Queue { id, played_on: None }).await.unwrap();
+        assert_eq!(who(&queue(&p), "tr-9").as_deref(), Some("bob"));
+
+        // Back without a queue (its app updated): given back with it.
+        drop(players.remove(0));
+        let mut ann = p.connect("Ann phone").unwrap();
+        said(&mut ann);
+        p.report("Ann phone", Report { index: -1, ..Report::default() }).unwrap();
+        let play = told(&mut ann).into_iter().find(|m| m["command"] == "play").expect("its queue given back");
+        let asked: Vec<&str> = play["tracks"].as_array().unwrap().iter().filter_map(|t| t["asked_by"].as_str()).collect();
+        assert_eq!(asked.len(), 2);
+        assert!(asked.contains(&"bob") && asked.contains(&"Guest Sam"));
     }
 }

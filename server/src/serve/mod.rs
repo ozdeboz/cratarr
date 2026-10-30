@@ -62,6 +62,12 @@ pub fn set_instance(serve: Arc<Serve>) {
     }));
 }
 
+/// The server, for what has no handle to it. A request's code takes it from its `Ctx` (api.rs) or the service it holds
+/// (the app's `served`, `PlaylistService::served`); this stays for what is not handed one: the built-in Cratarr source
+/// (sources are made from their settings alone), work of its own started at boot (the passes that read the web, the
+/// artist store's), the playlist write hook above, and free functions reached from many places, where a parameter
+/// would run through dozens of signatures (the album edits run as tasks, Radio, the feature switches, signed links,
+/// the cover cache).
 pub fn instance() -> Option<Arc<Serve>> {
     INSTANCE.get().cloned()
 }
@@ -102,6 +108,8 @@ pub struct Serve {
     pub now_playing: queues::Sessions,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
     incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
+    /// Cratarr's players, once the app is up (`set_play_on`): an account's devices, and what plays for getNowPlaying.
+    play_on: std::sync::OnceLock<Arc<crate::app::PlayOn>>,
     /// Each album's cover stamp (0.9.7, `cover_stamps`), as of the last build; read from the library when first asked.
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
@@ -169,6 +177,7 @@ impl Serve {
             held: Default::default(),
             now_playing: Default::default(),
             incoming: Default::default(),
+            play_on: Default::default(),
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
         }))
@@ -201,8 +210,13 @@ impl Serve {
     /// (one user, decision 0043 off), the owner. `None` outside a request when signing in is required: work of its own
     /// must say whose it is.
     pub fn current_user(&self) -> Option<String> {
-        match who::current() {
-            Some(w) => Some(w.user),
+        self.user_for(who::current().as_ref())
+    }
+
+    /// The account `asking` acts for, as `current_user` says for the running request (a handler's `Ctx` hands its own).
+    pub fn user_for(&self, asking: Option<&who::Who>) -> Option<String> {
+        match asking {
+            Some(w) => Some(w.user.clone()),
             None if !self.sign_in_required() => self.users.owner(),
             None => None,
         }
@@ -252,6 +266,14 @@ impl Serve {
 
     pub fn incoming(&self) -> Option<&Arc<crate::app::IncomingService>> {
         self.incoming.get()
+    }
+
+    pub fn set_play_on(&self, on: Arc<crate::app::PlayOn>) {
+        let _ = self.play_on.set(on);
+    }
+
+    pub fn play_on(&self) -> Option<&Arc<crate::app::PlayOn>> {
+        self.play_on.get()
     }
 
     /// Changes each time the library is built (to the time it was): for views kept from the built-in source.

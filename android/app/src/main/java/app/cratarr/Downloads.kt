@@ -122,7 +122,7 @@ object Downloads {
             val uri = Uri.parse("$server/api/file/$key" + if (copies) "?as=opus" else "")
             val request = DownloadRequest.Builder(key, uri)
                 .setCustomCacheKey(stored)
-                .setData(JSONObject(t.toString()).apply { remove("entry"); put("added", added + i) }.toString().toByteArray())
+                .setData(JSONObject(t.toString()).apply { remove("entry"); remove("asked_by"); put("added", added + i) }.toString().toByteArray())
                 .build()
             DownloadService.sendAddDownload(context, CratarrDownloadService::class.java, request, false)
             held.add(key)

@@ -150,10 +150,14 @@ pub struct App {
     pub visuals: Arc<visuals::GroupVisuals>,
     /// The Opus copies kept for the app's streams on mobile data and smaller downloads; none without a data folder.
     pub opus_copies: Option<Arc<crate::opus_copies::OpusCopies>>,
+    /// Cratarr's own library (decision 0030), opened before the app: `main` always hands it; a test may not.
+    pub served: Option<Arc<crate::serve::Serve>>,
+    /// The sync play server, once it listens (`main`, decision 0037).
+    pub snapcast: std::sync::OnceLock<Arc<crate::snapcast::Snapcast>>,
 }
 
 impl App {
-    pub async fn new(cfg: Config, saved: Saved, origin: Origin) -> Result<Arc<Self>> {
+    pub async fn new(cfg: Config, saved: Saved, origin: Origin, served: Option<Arc<crate::serve::Serve>>) -> Result<Arc<Self>> {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
         let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
@@ -162,7 +166,7 @@ impl App {
         let sync_state = crate::sync_state::SyncState::open(sync_file.as_deref())?;
         let sync = Arc::new(sync::SyncService::new(library.clone(), sync_state, journal.clone()));
         sync.listen();
-        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone()));
+        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone(), served.clone()));
         let files = crate::ports::disk();
         let shelves = Arc::new(shelf::Shelves::new(library.clone(), cfg.data_dir.as_deref()));
         let collection = Arc::new(CollectionService::new(library.clone(), shelves.clone()));
@@ -202,7 +206,7 @@ impl App {
         spotify::start(cfg.data_dir.as_deref());
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
-        if let Some(served) = crate::serve::instance() {
+        if let Some(served) = &served {
             let mut built = served.subscribe_built();
             let (collection, incoming) = (collection.clone(), incoming.clone());
             tokio::spawn(async move {
@@ -229,7 +233,25 @@ impl App {
             });
         }
         let opus_copies = crate::opus_copies::OpusCopies::open(cfg.data_dir.as_deref());
-        let app = Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, artists, settings, journal, events: Default::default(), play_on, plays, visuals, opus_copies });
+        let app = Arc::new(Self {
+            library,
+            sync,
+            playing,
+            playlists,
+            incoming,
+            collection,
+            insights,
+            artists,
+            settings,
+            journal,
+            events: Default::default(),
+            play_on,
+            plays,
+            visuals,
+            opus_copies,
+            served,
+            snapcast: Default::default(),
+        });
         // What a Play On play names is chosen through app::play, as every play.
         app.play_on.set_app(&app);
         Ok(app)

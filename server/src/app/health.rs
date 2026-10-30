@@ -356,8 +356,8 @@ fn name_static(name: &str) -> &'static str {
 }
 
 /// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
-fn check_requests() -> anyhow::Result<Vec<Finding>> {
-    let Some(serve) = crate::serve::instance() else { return Ok(Vec::new()) };
+fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+    let Some(serve) = served else { return Ok(Vec::new()) };
     let waiting = serve.userdata.requests(None, Some(super::requests::PENDING), ITEMS)?;
     if waiting.is_empty() {
         return Ok(Vec::new());
@@ -391,7 +391,7 @@ impl App {
         }
         findings.extend(self.check_players());
         checked.insert("players", at);
-        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests()), ("connections", Ok(check_connections(at)))] {
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests(self.served.as_deref())), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }
@@ -416,7 +416,7 @@ impl App {
     ///   breaks off.
     async fn check_short(&self) -> anyhow::Result<Vec<Finding>> {
         let c = self.library.catalogue();
-        let served = crate::serve::instance();
+        let served = self.served.clone();
         let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(&'static str, Item, i64)>> {
             let mut out = Vec::new();
             for (folder, rel, path, given, heard) in c.shorter_than_heard(SHORT_SLACK_MS)? {
@@ -460,7 +460,7 @@ impl App {
 
     /// Music's albums lacking what the library requires (the owner, 2026-10-24): Incoming's are marked there instead.
     async fn check_library(&self) -> anyhow::Result<Vec<Finding>> {
-        let Some(served) = crate::serve::instance() else { return Ok(Vec::new()) };
+        let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
         let music = self.library.folders().music;
         let folders = self.library.catalogue().folders();
         let music = music.and_then(|m| folders.iter().position(|f| f == std::path::Path::new(&m))).map(|i| i as i64);

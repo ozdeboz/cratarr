@@ -5,13 +5,14 @@ import { coverUrl, albumCoverUrl, type NowPlaying, type Transport, type Upcoming
 import { expect, live } from './live.svelte';
 import { rewindNow, sought } from './localPlayer.svelte';
 import { port } from './player/port.svelte';
+import { heardAt, placeOf, type Anchor } from './player/clock';
 import { followingNow } from './following.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
 import { toast } from './toast.svelte';
 import { ramping, rampPressed, rampTurned } from './ramping.svelte';
 import { appInfo, inApp } from './app.svelte';
-import { prefs } from './prefs.svelte';
+import { startStopNow } from './device.svelte';
 import { RESTART_AFTER, windUpMs } from './localPlayer.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
@@ -103,10 +104,10 @@ export const shownPlaying = (): NowPlaying | null => {
   return named && np && named.id !== np.id ? named : np;
 };
 
-// The clock: between polls the position runs locally. It is re-anchored to the server only when the server disagrees
-// with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.
-type Anchor = { id: string; pos: number; at: number; paused: boolean };
-const clock = $state<{ anchor: Anchor | null; tick: number }>({ anchor: null, tick: performance.now() });
+// The one clock (lib/player/clock): between reports the position runs on from an anchor, re-anchored where a report
+// disagrees much and eased toward one that disagrees a little. The player's bar reads it at its ticks, what moves with
+// the music at each frame (lib/trackPlace).
+export const clock = $state<{ anchor: Anchor | null; tick: number }>({ anchor: null, tick: performance.now() });
 
 $effect.root(() => {
   $effect(() => {
@@ -116,14 +117,9 @@ $effect.root(() => {
       clock.anchor = null;
       return;
     }
-    const now = performance.now();
     const a = untrack(() => clock.anchor);
-    // A tape's rewind: each report as it comes, nothing run on between them.
-    const still = p.paused || !!p.rewinding;
-    const predicted = a ? a.pos + (a.paused ? 0 : (now - a.at) / 1000) : 0;
-    if (!a || a.id !== np.id || a.paused !== still || p.rewinding || Math.abs(predicted - p.position_secs) > 1.5) {
-      clock.anchor = { id: np.id, pos: p.position_secs, at: now, paused: still };
-    }
+    const next = heardAt(a, { id: np.id, pos: p.position_secs, paused: !!p.paused, rewinding: !!p.rewinding }, performance.now());
+    if (next !== a) clock.anchor = next;
   });
   $effect(() => {
     const a = clock.anchor;
@@ -144,11 +140,7 @@ export const duration = (): number | null => playing()?.progress?.duration_secs 
 function running(): number {
   const own = port().position();
   if (own !== null) return own;
-  const a = clock.anchor;
-  if (!a) return 0;
-  const p = a.paused ? a.pos : a.pos + Math.max(0, clock.tick - a.at) / 1000;
-  const d = duration();
-  return d ? Math.min(p, d) : p;
+  return placeOf(clock.anchor, clock.tick, duration());
 }
 // Through a Start and stop ramp the position stands still (the owner, 2026-10-26: it stops hard as a stop begins, and
 // starts hard once a start is at full speed): where it was as the ramp began, until it ends. After a stop it rests
@@ -227,7 +219,7 @@ export const shownPaused = (): boolean => (rampBusy() && ramping.effect ? rampin
 /** The play button: play or pause; during the page's own ramp, that ramp turned round. */
 export function playPause() {
   if (rampInert()) return;
-  const ss = inApp ? appInfo.startStop : prefs.startStop;
+  const ss = startStopNow();
   // The app's ramp turned round at the press, from the fill shown (the page's own turns itself: lib/localPlayer).
   const ramps = port().ramps;
   if (ramps && ss.mode !== 'off' && rampBusy() && inApp && ramping.effect) rampTurned(ss.stopMs, ss.ms);

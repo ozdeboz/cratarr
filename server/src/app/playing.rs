@@ -59,6 +59,9 @@ pub struct UpcomingView {
     pub album_id: Option<String>,
     pub addable: bool,
     pub duration_secs: Option<f64>,
+    /// Who asked for it, a queue request accepted (0.9.19).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,8 +192,8 @@ pub struct PlayingService {
 /// A state is its account's (their player, their favourites: decision 0051) for the source followed.
 type StateKey = (Option<String>, Option<String>);
 
-fn state_key(want: Option<&str>) -> StateKey {
-    (crate::serve::instance().and_then(|s| s.current_user()), want.map(str::to_string))
+fn state_key(served: Option<&crate::serve::Serve>, want: Option<&str>) -> StateKey {
+    (served.and_then(|s| s.current_user()), want.map(str::to_string))
 }
 
 /// How long a state worked out is answered again.
@@ -203,7 +206,7 @@ impl PlayingService {
 
     /// What plays and which playlists hold it: as worked out within the last second, else afresh.
     pub async fn state(&self, want: Option<&str>) -> Result<StateView> {
-        let key = state_key(want);
+        let key = state_key(self.playlists.served().as_deref(), want);
         let mut kept = self.state_kept.lock().await;
         if let Some((at, k, view)) = kept.as_ref()
             && *k == key
@@ -220,7 +223,7 @@ impl PlayingService {
     async fn fresh_state(&self, want: Option<&str>) -> Result<StateView> {
         let mut kept = self.state_kept.lock().await;
         let view = self.work_out_state(want).await?;
-        *kept = Some((std::time::Instant::now(), state_key(want), view.clone()));
+        *kept = Some((std::time::Instant::now(), state_key(self.playlists.served().as_deref(), want), view.clone()));
         Ok(view)
     }
 
@@ -386,7 +389,7 @@ impl PlayingService {
             // Another server's track: only a play that counts reaches it.
             return if e.counts.unwrap_or(true) { self.count_play_at(&e.source, &e.track, Some(e.at / 1000)).await } else { Ok(()) };
         };
-        let s = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let s = self.playlists.served().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let user = s.current_user().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
         let mut heard = e.heard();
         // Heard while its player followed another listener (the owner, 2026-10-30): history, not taste.
@@ -498,6 +501,7 @@ impl PlayingService {
                     album: u.track.album,
                     album_id: u.track.album_id,
                     duration_secs: u.duration_secs,
+                    asked_by: u.asked_by,
                 })
                 .collect(),
             source: a.cfg.id.clone(),
@@ -752,7 +756,7 @@ impl PlayingService {
                 row.bpm = f.bpm;
             }
         }
-        let mbid = match crate::serve::instance() {
+        let mbid = match self.playlists.served() {
             Some(served) if source_id == crate::source::cratarr::KIND.id => {
                 let n = name.to_string();
                 tokio::task::spawn_blocking(move || served.library.artist_by_name(&n)).await.ok().and_then(Result::ok).flatten().and_then(|(_, m)| m)
@@ -854,7 +858,7 @@ mod tests {
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
-        let playing = PlayingService::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal)));
+        let playing = PlayingService::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal, None)));
         assert!(playing.hear(&play(crate::bandcamp::SOURCE, &crate::bandcamp::track_id("https://a.bandcamp.com/album/b", 1))).await.is_ok(), "a preview");
         assert!(playing.hear(&play("old", "3d5336410f0c2dbfca17dd0dbc334d23")).await.is_ok(), "a server switched off");
         assert!(playing.hear(&play("gone", "3d5336410f0c2dbfca17dd0dbc334d23")).await.is_ok(), "a server removed");

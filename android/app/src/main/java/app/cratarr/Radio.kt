@@ -55,7 +55,7 @@ private object Scorer {
             .filter { "${it.optString("source")}/${it.optString("id")}" !in inQueue }
             .shuffled()
         val ordered = if (any) candidates else candidates.sortedBy { if (it.optString("artist") in artists) 0 else 1 }
-        return JSONArray(ordered.take(count).map { JSONObject(it.toString()).apply { remove("download"); remove("added"); remove("entry"); remove("n"); put("lane", lane) } })
+        return JSONArray(ordered.take(count).map { JSONObject(it.toString()).apply { remove("download"); remove("added"); remove("entry"); remove("n"); remove("asked_by"); put("lane", lane) } })
     }
 
     fun tracksOf(player: Player) = (0 until player.mediaItemCount).mapNotNull { trackOf(player.getMediaItemAt(it)) }

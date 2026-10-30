@@ -286,8 +286,8 @@ export type Prefs = {
 };
 
 export type AlbumLayout = 'rows' | 'grid' | 'table' | 'flow';
-export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating' | 'quality' | 'tracks';
-const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating', 'quality', 'tracks'];
+export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating' | 'quality' | 'tracks' | 'length';
+const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating', 'quality', 'tracks', 'length'];
 export type PlaylistOrder = 'name' | 'tracks' | 'playing' | 'missing';
 const PLAYLIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'playing', 'missing'];
 export type CrateOrder = 'own' | 'name' | 'tracks' | 'length' | 'unplayed' | 'newWeek';

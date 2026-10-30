@@ -3,6 +3,7 @@
 // selection as it is ticked; on a phone (the panel covers the page) it is ticked first and viewed with "View N".
 import { sidePanel } from './live.svelte';
 import { closePlaylist, viewSelection, panel } from './panel.svelte';
+import { leaveOnArrival } from './navStep.svelte';
 
 export const select = $state({ on: false, picked: [] as string[] });
 
@@ -57,6 +58,8 @@ const onPlaylists = () => (location.hash.split('?')[0] || '#/') === '#/';
  *  closes so the chips show. (Beside the page they show already: ticking them adds.) */
 export function addMore() {
   if (!select.on) startSelect();
+  // Its layer stays over the page until the Playlists page shows (lib/navStep).
+  if (!onPlaylists()) leaveOnArrival({ layer: true }, false, '#/');
   closePlaylist(() => !onPlaylists() && (location.hash = '#/'));
 }
 

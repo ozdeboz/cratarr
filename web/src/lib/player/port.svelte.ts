@@ -7,8 +7,10 @@ import {
   ApiError,
   handover,
   jumpTo,
+  queueTrack,
   queueTracks,
   playerCommand,
+  pickCollection,
   playPlaylist,
   playlistRows,
   setFavorite,
@@ -18,6 +20,7 @@ import {
   trackState,
   transport,
   type NowPlaying,
+  type PlayHow,
   type PlayMode,
   type Playlist,
   type TrackState,
@@ -25,6 +28,7 @@ import {
 } from '../api';
 import { expectFailed, live, refresh, untilNewTrack } from '../live.svelte';
 import {
+  audioTap,
   canPlayHere,
   enqueue,
   jump as localJump,
@@ -65,6 +69,22 @@ export type PlayerPort = {
   rewinding(): boolean;
   /** Start and stop's ramps run on this side (this page's player or its app's). */
   ramps: boolean;
+  /** The queue as the page holds it (its tracks, the playing one's place, what it was started from); null where the
+   *  server's player holds it. */
+  queue(): { tracks: readonly LocalTrack[]; index: number; from: string | null } | null;
+  /** Radio, Autoplay and Start radio (decision 0036): only where the page holds the queue. */
+  radio: boolean;
+  /** The sleep timer is this side's (the page's own, or handed to the player it drives). */
+  sleeps: boolean;
+  /** Level the volume runs on this side: what it turns the playing track down by (dB, 0 or less) and whether that is
+   *  known yet; null where it does not. */
+  level(): { db: number; known: boolean } | null;
+  /** Its position can be dragged and seeked from here (decision 0019: not the server's player). */
+  seekable: boolean;
+  /** A Bandcamp preview plays on this side's own player (lib/bandcampFound). */
+  previews: boolean;
+  /** The sound as this page plays it, for the visuals to hear (null where it does not play here). */
+  tap(): { context: AudioContext; node: AudioNode } | null;
   /** Play-pause, next or previous; `predict` shows what it leads to where the answer comes later. */
   send(command: Transport, predict: (command: Transport) => void): Promise<void> | void;
   /** Holding Previous or Next winds the tape (decision 0074). */
@@ -91,6 +111,12 @@ export type PlayerPort = {
   playPlaylist(id: string, mode: PlayMode): Promise<void>;
   /** These tracks put next or added to the queue (`source` theirs). */
   enqueue(tracks: LocalTrack[], how: 'next' | 'last', source: string): Promise<void> | void;
+  /** One track put next or added (the server's player takes it by its id alone). */
+  enqueueOne(track: LocalTrack, how: 'next' | 'last'): Promise<void> | void;
+  /** One way to play tracks in hand (0.9.19, the audit: one way to play): played from `index`, shuffled, put next or
+   *  added to the queue, as the queue named `name`. Here the page queues them; the server's player is given them by
+   *  their ids (`source` theirs), the server queuing them itself, as a collection it picked. */
+  playTracks(tracks: LocalTrack[], how: PlayHow, name: string | null, source: string, index?: number): Promise<void> | void;
   /** These tracks from `index` (a playlist's row tapped). */
   playFrom(name: string, source: string, tracks: LocalTrack[], index: number, position: number): Promise<void> | void;
   /** What plays, to move it. */
@@ -209,6 +235,13 @@ const here: PlayerPort = {
   position: () => local.position,
   rewinding: () => rewindNow.on,
   ramps: true,
+  queue: () => ({ tracks: local.queue, index: local.index, from: local.from }),
+  radio: true,
+  sleeps: true,
+  level: () => ({ db: local.levelDb, known: local.levelKnown }),
+  seekable: true,
+  previews: true,
+  tap: audioTap,
   send(command) {
     if (command === 'play-pause') togglePlay();
     else if (command === 'next') localNext();
@@ -241,10 +274,14 @@ const here: PlayerPort = {
       .filter((r) => r.id && !r.missing)
       .map((r) => ({ source, id: r.id!, name: r.name ?? '', artist: r.artist, album: r.album, album_id: null }));
     if (!named.length) throw new Error('None of its tracks can be found.');
-    if (mode === 'next' || mode === 'last') enqueue(named, mode);
-    else playQueue(named, 0, id, 0, mode === 'shuffle');
+    here.playTracks(named, mode, id, source);
+  },
+  playTracks(tracks, how, name, _source, index = 0) {
+    if (how === 'next' || how === 'last') enqueue(tracks, how);
+    else playQueue(tracks, index, name, 0, how === 'shuffle');
   },
   enqueue: (tracks, how) => enqueue(tracks, how),
+  enqueueOne: (track, how) => enqueue([track], how),
   playFrom: (name, _source, tracks, index, position) => playQueue(tracks, index, name, position),
   current: () => (local.index < 0 ? null : { tracks: [...local.queue], index: local.index, position: local.position }),
   leave() {
@@ -272,6 +309,13 @@ const server: PlayerPort = {
   position: () => null,
   rewinding: () => !!live.view?.now_playing?.progress?.rewinding,
   ramps: false,
+  queue: () => null,
+  radio: false,
+  sleeps: false,
+  level: () => null,
+  seekable: false,
+  previews: false,
+  tap: () => null,
   async send(command, predict) {
     const np = live.view?.now_playing ?? null;
     if (!np) return;
@@ -331,6 +375,16 @@ const server: PlayerPort = {
       source,
     );
     setTimeout(refresh, 700);
+  },
+  async enqueueOne(track, how) {
+    await queueTrack(track.id, how, track.source);
+  },
+  async playTracks(tracks, how, _name, source, index = 0) {
+    const ids = tracks.map((t) => t.id);
+    await pickCollection({ kind: 'tracks', source, ids }, how, { from: ids[index], source, on: 'server' });
+    // Show the new track once it plays, not the states on the way.
+    if (how === 'play' || how === 'shuffle') await untilNewTrack();
+    else setTimeout(refresh, 700);
   },
   async playFrom(_name, source, tracks, index, position) {
     await handover(

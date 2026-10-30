@@ -1,5 +1,6 @@
 <script lang="ts">
   import { playlistLayout } from './lib/layouts';
+  import { port } from './lib/player/port.svelte';
   import { askIfMany } from './lib/many.svelte';
   import { plural } from './lib/insights.svelte';
   import ListHead from './lib/ListHead.svelte';
@@ -16,7 +17,7 @@
   import Icon from './lib/Icon.svelte';
   import Seg from './lib/Seg.svelte';
   import SizeControl from './lib/SizeControl.svelte';
-  import { isLocal, setPlayingMember, shownPlaylists, startPlaylists } from './lib/output.svelte';
+  import { setPlayingMember, shownPlaylists, startPlaylists } from './lib/output.svelte';
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
   import { fromAction } from 'svelte/attachments';
@@ -107,7 +108,7 @@
     // The server's player is moving to another track: the tap waits for it (live.svelte.ts). The local track's
     // playlists are a moment away: the tap is not taken.
     if (pending()) {
-      if (!isLocal()) queueTap(p.id);
+      if (!port().holdsQueue) queueTap(p.id);
       return;
     }
     busy[p.id] = true;
