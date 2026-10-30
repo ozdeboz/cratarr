@@ -198,7 +198,8 @@ impl Snapcast {
         Arc::new(Self { epoch: Instant::now(), groups, streams: Mutex::default(), sources: AtomicU64::new(1), buffer_ms, listeners: Mutex::default() })
     }
 
-    /// The server, once Cratarr serves sync play.
+    /// The server, once Cratarr serves sync play. Requests take it from their `Ctx` (the app holds it); this stays for
+    /// a Kodi's driver, a task of its own inside Play On, which is made before sync play (that is handed Play On).
     pub fn instance() -> Option<Arc<Self>> {
         INSTANCE.get().cloned()
     }

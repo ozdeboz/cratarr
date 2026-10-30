@@ -1602,7 +1602,9 @@ impl PlayOn {
         Ok(())
     }
 
-    /// The PlayOn of this Cratarr, once it is open.
+    /// The PlayOn of this Cratarr, once it is open. The app holds it (`App::play_on`) and the server is handed it
+    /// (`Serve::set_play_on`); this stays for the built-in Cratarr source, which plugins' rules leave without a handle,
+    /// and Playing, which is made before it.
     pub fn instance() -> Option<Arc<Self>> {
         INSTANCE.get().cloned()
     }
@@ -1638,7 +1640,7 @@ impl PlayOn {
 
     /// Cratarr's ids of a player's track, from its own library (0030); `None` parts when that does not know it.
     fn ids_of(&self, t: Option<&QueueTrack>) -> TrackIds {
-        let (Some(t), Some(served)) = (t, crate::serve::instance()) else { return TrackIds::default() };
+        let (Some(t), Some(served)) = (t, self.playlists.served()) else { return TrackIds::default() };
         let library = &served.library;
         let Some(track) = self.lib.catalogue().track_of_source(&t.source, &t.id) else { return TrackIds::default() };
         match library.song_ids(track) {
@@ -2212,7 +2214,7 @@ impl PlayOn {
             return;
         }
         let Some(user) = self.account_of(&leader) else { return };
-        let Some(Ok((_, settings))) = crate::serve::instance().map(|s| s.userdata.settings_of(&user)) else { return };
+        let Some(Ok((_, settings))) = self.playlists.served().map(|s| s.userdata.settings_of(&user)) else { return };
         let Some((mode, albums)) = armed(&settings) else { return };
         let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: None, seed: None, within: None };
         if let Err(e) = Box::pin(self.command(&leader, auto)).await {
@@ -2526,7 +2528,7 @@ impl PlayOn {
     async fn picked(&self, name: &str, from: &PlayFrom, how: How, start: Option<super::play::Start>) -> Result<Option<(Vec<QueueTrack>, usize)>, ToggleError> {
         use super::play::Collection;
         let (what, how, most) = match () {
-            _ if from.album.is_some() => return Ok(own_album(from).await?.map(|t| picked_from(t, how, start, from.limit.unwrap_or(QUEUE_MOST)))),
+            _ if from.album.is_some() => return Ok(own_album(self.playlists.served(), from).await?.map(|t| picked_from(t, how, start, from.limit.unwrap_or(QUEUE_MOST)))),
             _ if from.playlist.is_some() => (Collection::Playlist { id: self.playlist_named(from.playlist.as_deref().unwrap_or_default()).await? }, how, from.limit),
             _ if from.favourites => (Collection::Favourites, how, from.limit),
             _ if from.library => (Collection::Library, How::Shuffle, Some(from.limit.unwrap_or(LIBRARY_PICK))),
@@ -3088,7 +3090,7 @@ impl PlayOn {
                 let Some(me) = me.upgrade() else { return };
                 // Home Assistant's: its key acts for the first administrator, whose players these are (decision 0051);
                 // every one while signing in is off.
-                let reach = crate::serve::instance().filter(|s| s.sign_in_required()).and_then(|s| s.users.owner());
+                let reach = me.playlists.served().filter(|s| s.sign_in_required()).and_then(|s| s.users.owner());
                 let (hooks, players) = (me.settings().webhooks, me.list_for(reach.as_deref()));
                 let seq = me.seq.fetch_add(1, Ordering::Relaxed) + 1;
                 drop(me);
@@ -3224,14 +3226,14 @@ fn numbered(mut tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
 
 /// An album of Cratarr's own library (decision 0032) for `play` and `add`, in its order, or a Bandcamp album by its id
 /// (`track_id(page, 0)`, decision 0071) as its previews. `None` when none is asked for.
-async fn own_album(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
+async fn own_album(served: Option<Arc<crate::serve::Serve>>, from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
     let Some(album) = from.album.clone() else { return Ok(None) };
     if crate::bandcamp::is_preview(&album) {
         let (page, _) = crate::bandcamp::read_id(&album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
         let a = crate::bandcamp::Bandcamp::get().album(&page).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         return Ok(Some(a.queue_tracks()));
     }
-    let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+    let Some(served) = served else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
     let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
         Ok(served.library.album(&album)?.and_then(|a| a.song).unwrap_or_default())
     })
@@ -3372,7 +3374,7 @@ mod tests {
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
-        PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal)), None)
+        PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal, None)), None)
     }
 
     #[tokio::test]
