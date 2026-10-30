@@ -162,9 +162,9 @@ pub async fn next(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, accou
 async fn answered(serve: &Arc<crate::serve::Serve>, account: &str, st: State) -> Result<(Vec<String>, Vec<Suggestion>, bool)> {
     let making = st.albums.is_none() && !st.seeds.is_empty();
     let (ud, a) = (serve.userdata.clone(), account.to_string());
-    let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
+    let (answered, no_artists, everywhere) = tokio::task::spawn_blocking(move || super::discover::leaves_out(&ud, &a)).await??;
     let mut albums = st.albums.unwrap_or_default();
-    albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key));
+    albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key) && !super::discover::excluded_everywhere(s, &everywhere));
     Ok((st.seeds.into_iter().map(|(name, _)| name).collect(), albums, making))
 }
 
@@ -201,8 +201,9 @@ async fn make_now(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, accou
     let Some((have, _)) = own(app, serve, account).await? else { return Ok(()) };
     let candidates = super::discover::from_related(serve, &super::discover::http()?, &seeds, &|_, _, _| {}).await;
     let (ud, a) = (serve.userdata.clone(), account.to_string());
-    let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
-    let albums = super::discover::one_list(candidates, &|c| have.has(c), &have.known, &answered, &no_artists);
+    let (answered, no_artists, everywhere) = tokio::task::spawn_blocking(move || super::discover::leaves_out(&ud, &a)).await??;
+    let mut albums = super::discover::one_list(candidates, &|c| have.has(c), &have.known, &answered, &no_artists);
+    albums.retain(|s| !super::discover::excluded_everywhere(s, &everywhere));
     super::cover_cache::warm(albums.iter().filter_map(|s| s.cover.clone()).collect());
     let (s, a) = (serve.clone(), account.to_string());
     tokio::task::spawn_blocking(move || {

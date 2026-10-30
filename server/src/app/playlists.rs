@@ -160,9 +160,12 @@ fn album_heard(serve: &crate::serve::Serve, plays: &HashMap<String, (u32, Option
 /// matched loosely (`import::loose`: case, spacing, a leading "the"; an album without one counts toward none), and
 /// `NEW_ALBUMS` in all, read on page by page until those are found, a page comes back short, or `NEW_FURTHEST` are read.
 /// A compilation counts toward no artist's share (the owner, 2026-10-30: "No cap for compilations"): each on its own.
+/// An album whose album artist is one of `artists_out` (excluded everywhere, decision 0083) is left out too, counted
+/// toward no one.
 fn new_picks(
     mut page: impl FnMut(usize) -> Result<Vec<(String, String, bool)>, ToggleError>,
     mut out: impl FnMut(&str) -> Result<bool, ToggleError>,
+    artists_out: &HashSet<String>,
 ) -> Result<Vec<String>, ToggleError> {
     let mut picks = Vec::new();
     let mut of: HashMap<String, usize> = HashMap::new();
@@ -172,6 +175,9 @@ fn new_picks(
         let read = albums.len();
         for (id, artist, compilation) in albums {
             let artist = artist.trim();
+            if super::excluded_artists::credits_excluded(&[artist], artists_out) {
+                continue;
+            }
             let key = if compilation || artist.is_empty() || artist == crate::serve::library::UNKNOWN_ARTIST { String::new() } else { super::import::loose(artist) };
             // An artist with their share already: the walk does not ask whether this one was heard.
             if !key.is_empty() && of.get(&key).is_some_and(|&n| n >= NEW_PER_ARTIST) {
@@ -220,6 +226,27 @@ fn taste_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excl
         skipped: skips.into_iter().collect(),
     };
     Ok(super::taste::profiles(alike, &sources, &[]).0)
+}
+
+/// Whether an album's album artist is excluded everywhere (decision 0083, the owner 2026-10-30): its artist as shown,
+/// or any of its album artists, by any credit.
+fn album_out(a: &crate::serve::api::Album, artists: &HashSet<String>) -> bool {
+    use super::excluded_artists::credits_excluded;
+    credits_excluded(&[a.artist.as_str()], artists) || credits_excluded(&a.artists.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), artists)
+}
+
+/// The songs of these files that credit an artist excluded everywhere (decision 0083), by their ids: what Radio and
+/// Autoplay, the shuffles and Subsonic's random songs leave out.
+fn songs_crediting(facts: &[crates::Facts], artists: &HashSet<String>) -> Vec<String> {
+    facts.iter().filter(|f| crates::credits_out(f, artists)).filter_map(|f| Some(crate::serve::ids::song(f.track?))).collect()
+}
+
+/// An artist a crate leaves out (decision 0083: Not in this crate), as its view lists them: their key (what takes it
+/// back) and their name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NotArtist {
+    pub key: String,
+    pub name: String,
 }
 
 /// How many albums Home's moment shows, drawn from how many of the nearest; how many of an album's tracks must be
@@ -728,6 +755,9 @@ pub struct PlaylistRow {
     /// Its album's id where it is known: an artist's rows, and a playlist's or a crate's on Cratarr's own source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album_id: Option<String>,
+    /// How many tracks that album has (the Records view's "3 of 10"), where its id is known on Cratarr's own source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_tracks: Option<u32>,
     /// No such file in the Music folder.
     pub missing: bool,
     /// The library holds another recording of its work (0.10, Other versions): an album's rows on Cratarr's own
@@ -1006,6 +1036,107 @@ mod undo_tests {
         s.undo(&said).await.unwrap();
         assert!(s.sync.spoken().remove("Chill").unwrap_or_default().is_empty());
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn not_in_this_crate_goes_in_ones_own_crates_filter_once_and_is_taken_back() {
+        // Decision 0083: one's own crate's "Artist is not", as set by hand; its undo the crate's.
+        let (d, s) = service().await;
+        let cond = |v: &str| crates::Condition::new("genre", false, crates::Value::AnyOf { values: vec![v.into()] });
+        let not_air = crates::Condition::new("artist", true, crates::Value::AnyOf { values: vec!["Air".into()] });
+        let (id, _) = s.crate_save(None, "Jazz", vec![cond("Jazz")]).await.unwrap();
+        let (other, _) = s.crate_save(None, "Bebop", vec![cond("Bebop")]).await.unwrap();
+        let (listed, undo) = s.crate_not_artist(&id, "Air").await.unwrap();
+        assert_eq!(listed, [NotArtist { key: "air".into(), name: "Air".into() }]);
+        let (_, again) = s.crate_not_artist(&id, "AIR").await.unwrap();
+        assert!(undo.is_some() && again.is_none(), "once");
+        assert_eq!(s.crate_def(&id).await.unwrap().conditions, vec![cond("Jazz"), not_air.clone()]);
+        assert_eq!(s.crate_def(&other).await.unwrap().conditions, vec![cond("Bebop")], "that crate only");
+        let (left, back) = s.crate_not_artist_back(&id, "air").await.unwrap();
+        assert!(left.is_empty());
+        assert_eq!(s.crate_def(&id).await.unwrap().conditions, vec![cond("Jazz")], "taken back");
+        assert_eq!(s.crate_not_artist_back(&id, "air").await.unwrap().1, None, "nothing left to take back");
+        s.undo(&back.unwrap()).await.unwrap();
+        assert_eq!(s.crate_def(&id).await.unwrap().conditions, vec![cond("Jazz"), not_air], "the take-back undone");
+        assert!(matches!(s.crate_not_artist(&id, "  ").await, Err(ToggleError::Refused(_))));
+        assert!(matches!(s.crate_not_artist("c-none", "Air").await, Err(ToggleError::UnknownPlaylist)));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_fixed_crate_keeps_the_artists_left_out_of_it_beside_it() {
+        // Decision 0083: a fixed crate has no filter of one's own; what is added is kept by its id, applied with its
+        // own conditions.
+        let (d, s) = service().await;
+        let not_air = crates::Condition::new("artist", true, crates::Value::AnyOf { values: vec!["Air".into()] });
+        let (listed, undo) = s.crate_not_artist("genre:Jazz", "Air").await.unwrap();
+        assert_eq!(listed, [NotArtist { key: "air".into(), name: "Air".into() }]);
+        assert_eq!(s.crate_def("genre:Jazz").await.unwrap().conditions[1..], [not_air]);
+        assert_eq!(s.crate_def("genre:Rock").await.unwrap().conditions.len(), 1, "that crate only");
+        assert_eq!(s.crate_not_artist("genre:Jazz", "air").await.unwrap().1, None, "once");
+        assert_eq!(s.crate_not_artists("genre:Jazz").await.unwrap().len(), 1);
+        // The permanent Unlisted, as the Crates page lists it.
+        s.crate_not_artist("unlisted", "Bonobo").await.unwrap();
+        assert_eq!(s.permanent_crates().await.unwrap()[0].conditions.len(), 2);
+        let (left, _) = s.crate_not_artist_back("unlisted", "bonobo").await.unwrap();
+        assert!(left.is_empty() && s.permanent_crates().await.unwrap()[0].conditions.len() == 1, "taken back");
+        s.undo(&undo.unwrap()).await.unwrap();
+        assert!(s.crate_not_artists("genre:Jazz").await.unwrap().is_empty(), "undone");
+        assert_eq!(s.crate_def("genre:Jazz").await.unwrap().conditions.len(), 1);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn an_artist_is_excluded_everywhere_once_per_account_and_taken_back() {
+        let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.users.set("me", "pw").unwrap();
+        let (d, s) = service_with(Some(served.clone())).await;
+        let (a, undo) = s.exclude_artist("The Avalanches").await.unwrap();
+        assert_eq!((a.key.as_str(), a.name.as_str()), ("avalanches", "The Avalanches"));
+        assert!(undo.is_some());
+        assert_eq!(s.exclude_artist("the avalanches").await.unwrap().1, None, "once, by their key");
+        assert_eq!(s.artists_out().await.unwrap(), HashSet::from(["avalanches".to_string()]), "what every pick reads");
+        assert_eq!(s.excluded_songs_of(Some("me")).await.unwrap(), HashSet::new(), "no file credits them here");
+        assert!(served.userdata.excluded_artists("you").unwrap().is_empty(), "each account its own");
+        let (key, back) = s.include_artist("avalanches").await.unwrap();
+        assert!(key == "avalanches" && s.excluded_artist_list().await.unwrap().is_empty(), "taken back");
+        assert_eq!(s.include_artist("avalanches").await.unwrap().1, None, "not on it any more");
+        s.undo(&back.unwrap()).await.unwrap();
+        assert_eq!(s.excluded_artist_list().await.unwrap().len(), 1, "the take-back undone");
+        assert!(matches!(s.exclude_artist(" ").await, Err(ToggleError::Refused(_))));
+        let (d2, none) = service().await;
+        assert!(matches!(none.exclude_artist("Air").await, Err(ToggleError::Refused(_))), "Cratarr's own library is needed");
+        assert!(none.artists_out().await.unwrap().is_empty());
+        for d in [d, d2] {
+            std::fs::remove_dir_all(&d).ok();
+        }
+    }
+
+    #[test]
+    fn radio_and_autoplay_leave_out_every_song_crediting_an_artist_excluded_everywhere() {
+        // Decision 0083: the songs `excluded_songs_of` adds, which the radio marks excluded (`radio::ready`).
+        let f = |track: i64, artists: &[&str]| {
+            let artists: Vec<String> = artists.iter().map(|a| a.to_string()).collect();
+            crates::Facts { rel: format!("{track}.flac"), track: Some(track), credits: crate::app::excluded_artists::credits_keys(&artists), artists, ..Default::default() }
+        };
+        let facts = [f(1, &["Air"]), f(2, &["Bonobo feat. Air"]), f(3, &["Bonobo"]), f(4, &["Various", "Air"])];
+        let out = HashSet::from(["air".to_string()]);
+        assert_eq!(songs_crediting(&facts, &out), [crate::serve::ids::song(1), crate::serve::ids::song(2), crate::serve::ids::song(4)]);
+        assert!(songs_crediting(&facts, &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn an_album_is_out_when_its_album_artist_is() {
+        let album = |artist: &str, others: &[&str]| crate::serve::api::Album {
+            artist: artist.into(),
+            artists: others.iter().map(|n| crate::serve::api::ArtistRef { id: String::new(), name: n.to_string() }).collect(),
+            ..Default::default()
+        };
+        let out = HashSet::from(["beck".to_string()]);
+        assert!(album_out(&album("Beck", &[]), &out));
+        assert!(album_out(&album("Air & Beck", &[]), &out), "a collaboration");
+        assert!(album_out(&album("Air", &["Air", "Beck"]), &out), "any of its album artists");
+        assert!(!album_out(&album("Air", &["Air"]), &out));
     }
 }
 
@@ -1571,6 +1702,32 @@ impl PlaylistService {
                 crates.set_excluded(before.clone()).await?;
                 Ok(Change::Excluded { before: after, after: before })
             }
+            Change::Added { crate_id, before, after } => {
+                let crates = self.crate_stores.of(account)?;
+                if crates.added(&crate_id).await? != after {
+                    return Err(changed());
+                }
+                crates.set_added(&crate_id, before.clone()).await?;
+                Ok(Change::Added { crate_id, before: after, after: before })
+            }
+            Change::ArtistOut { user, key, name, out } => {
+                let serve = self.served.clone().ok_or_else(changed)?;
+                let (u, k, n) = (user.clone(), key.clone(), name.clone());
+                tokio::task::spawn_blocking(move || -> Result<(), ToggleError> {
+                    if serve.userdata.excluded_artists(&u)?.contains(&k) != out {
+                        return Err(changed());
+                    }
+                    if out {
+                        serve.userdata.include_artist(&u, &k)?;
+                    } else {
+                        serve.userdata.exclude_artist(&u, &k, &n)?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))??;
+                Ok(Change::ArtistOut { user, key, name, out: !out })
+            }
             Change::Tempo { tracks } => {
                 // Each track's BPM tag as the change left it, else "it changed since"; then the tags before.
                 if !crate::serve::access::administering() {
@@ -1866,10 +2023,16 @@ impl PlaylistService {
             let facts = c.line_rows(&sid, &entries)?;
             // Cratarr's own tracks with their album, as the library has it (the app's downloads are told it, and find
             // their album and its cover by it).
-            let albums = match served {
+            let (albums, album_tracks): (HashMap<String, String>, HashMap<String, u32>) = match served {
                 Some(serve) if sid == crate::source::cratarr::KIND.id => {
                     let ids: Vec<String> = facts.iter().filter_map(|f| f.track_id.clone()).collect();
-                    serve.library.albums_of(&ids)?
+                    let albums = serve.library.albums_of(&ids)?;
+                    // Each album's size, for the Records view's "3 of 10" (the owner, 2026-10-30).
+                    let mut of: Vec<String> = albums.values().cloned().collect();
+                    of.sort();
+                    of.dedup();
+                    let sizes = serve.library.albums_by_id(&of)?.into_iter().map(|a| (a.id, a.song_count)).collect();
+                    (albums, sizes)
                 }
                 _ => Default::default(),
             };
@@ -1879,6 +2042,7 @@ impl PlaylistService {
                 .zip(facts)
                 .map(|(entry, f)| PlaylistRow {
                     album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
+                    album_tracks: f.track_id.as_ref().and_then(|t| albums.get(t)).and_then(|a| album_tracks.get(a).copied()),
                     missing: !line_exists(&c, dir.as_deref(), &entry),
                     file: entry.rsplit('/').next().unwrap_or(&entry).to_string(),
                     entry,
@@ -2007,6 +2171,7 @@ impl PlaylistService {
         let left_set = self.own_crates()?.all_left_out().await?;
         let album_tracks = album_lines(self.served.clone(), self.lib.catalogue(), left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
         let excluded = self.own_crates()?.excluded().await?;
+        let artists = self.artists_out().await?;
         let none = crates::LeftOut::default();
         let favourites_of = |id: &str| set.get(id).copied().unwrap_or(crates::Favourites::None);
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
@@ -2016,7 +2181,7 @@ impl PlaylistService {
         let mut lines = HashSet::new();
         for c in &own {
             let gone = left_lines(left_set.get(&c.id).unwrap_or(&none), &album_tracks, &excluded);
-            let shown = crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites_of(&c.id), albums_of(&c.id)));
+            let shown = crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites_of(&c.id), albums_of(&c.id))));
             if lib.knows(&shown) {
                 lines.extend(lib.select(&shown));
             }
@@ -2036,14 +2201,16 @@ impl PlaylistService {
             }
         }
         let all: Vec<(bool, CrateDef)> =
-            crates::permanent().into_iter().chain(built_in).map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
+            self.permanent_crates().await?.into_iter().chain(built_in).map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
         let set = self.own_crates()?.all_favourites().await?;
         let albums_set = self.own_crates()?.all_favourite_albums().await?;
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
         let left_set = self.own_crates()?.all_left_out().await?;
         let album_tracks = album_lines(self.served.clone(), self.lib.catalogue(), left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
-        // Out of every crate too (decision 0024, amended 2026-10-19): the tracks excluded everywhere.
+        // Out of every crate too (decision 0024, amended 2026-10-19): the tracks excluded everywhere, and every track
+        // crediting an artist excluded everywhere (decision 0083).
         let excluded = self.own_crates()?.excluded().await?;
+        let artists = self.artists_out().await?;
         let none = crates::LeftOut::default();
         let left_of = |id: &str| left_set.get(id).unwrap_or(&none);
         // The favourites are asked for only when a crate shows by them (its conditions, or its toggle): asking the
@@ -2080,10 +2247,12 @@ impl PlaylistService {
                 let favourite_albums = albums_of(&c.id);
                 let left = left_of(&c.id);
                 let gone = left_lines(left, &album_tracks, &excluded);
-                let shown = crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites, favourite_albums));
+                let shown = crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites, favourite_albums)));
                 let stats = lib.knows(&shown).then(|| crate_stats(&lib.select(&shown), &facts, &songs, played.as_ref(), now));
                 // Per setting of the favourites toggle, the albums toggle as it is set and the left-out list.
-                let counted = |tracks: crates::Favourites| count(crates::leaving_out(&gone, &crates::shown(&c.conditions, tracks, favourite_albums)));
+                let counted = |tracks: crates::Favourites| {
+                    count(crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, tracks, favourite_albums))))
+                };
                 CrateView {
                     counts: CrateCounts {
                         all: counted(crates::Favourites::All),
@@ -2167,7 +2336,7 @@ impl PlaylistService {
     /// Every crate the account sees with the lines it shows now, as the Crates page shows them from every library
     /// (built-in and its own; one that cannot be made now left out): search finds a crate by its tracks (decision 0072).
     pub async fn crate_members(&self) -> Result<Vec<(String, String, Vec<String>)>, ToggleError> {
-        let mut all = crates::permanent();
+        let mut all = self.permanent_crates().await?;
         for id in [crates::HOME_NEW, crates::HOME_WEEK, crates::HOME_GRAVES] {
             match self.crate_def(id).await {
                 Ok(def) => all.push(def),
@@ -2180,6 +2349,7 @@ impl PlaylistService {
         let left_set = self.own_crates()?.all_left_out().await?;
         let album_tracks = album_lines(self.served.clone(), self.lib.catalogue(), left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
         let excluded = self.own_crates()?.excluded().await?;
+        let artists = self.artists_out().await?;
         let none = crates::LeftOut::default();
         let favourites_of = |id: &str| set.get(id).copied().unwrap_or(crates::Favourites::None);
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
@@ -2190,7 +2360,7 @@ impl PlaylistService {
             .into_iter()
             .filter_map(|c| {
                 let gone = left_lines(left_set.get(&c.id).unwrap_or(&none), &album_tracks, &excluded);
-                let shown = crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites_of(&c.id), albums_of(&c.id)));
+                let shown = crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites_of(&c.id), albums_of(&c.id))));
                 lib.knows(&shown).then(|| (c.id, c.name, lib.select(&shown)))
             })
             .collect())
@@ -2205,8 +2375,28 @@ impl PlaylistService {
         Ok(())
     }
 
-    /// A crate's definition: a permanent one, or one's own.
+    /// A crate's definition: a permanent one, or one's own; a fixed one with the conditions the account added to it
+    /// (decision 0083: Not in this crate).
     pub async fn crate_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
+        let mut def = self.made_def(id).await?;
+        if crates::is_fixed(id) {
+            def.conditions.extend(self.own_crates()?.added(&crates::kept_id(id)).await?);
+        }
+        Ok(def)
+    }
+
+    /// The permanent crates, each with the conditions the account added to it (decision 0083).
+    async fn permanent_crates(&self) -> Result<Vec<CrateDef>, ToggleError> {
+        let store = self.own_crates()?;
+        let mut all = crates::permanent();
+        for c in &mut all {
+            c.conditions.extend(store.added(&crates::kept_id(&c.id)).await?);
+        }
+        Ok(all)
+    }
+
+    /// A crate's definition as made: a permanent one, a genre's, Home's, a Sounds like, or one's own.
+    async fn made_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
         if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id).or_else(|| crates::genre_crate(id)) {
             return Ok(c);
         }
@@ -2386,9 +2576,141 @@ impl PlaylistService {
         let left = self.own_crates()?.left_out(id).await?;
         let album_tracks = album_lines(self.served.clone(), self.lib.catalogue(), left.albums.iter().cloned().collect()).await;
         let excluded = self.own_crates()?.excluded().await?;
-        let mut shown = crates::leaving_out(&left_lines(&left, &album_tracks, &excluded), &crates::shown(&def.conditions, fav, albums));
+        let artists = self.artists_out().await?;
+        let mut shown = crates::leaving_out_artists(
+            &artists,
+            &crates::leaving_out(&left_lines(&left, &album_tracks, &excluded), &crates::shown(&def.conditions, fav, albums)),
+        );
         shown.extend(look.filter.iter().cloned());
         Ok(shown)
+    }
+
+    /// Not in this crate (decision 0083, the owner 2026-10-30): "Artist is not `name`" added to the crate, once. One's
+    /// own crate gets it in its own conditions, as one would set it by hand (its undo the crate's); a fixed crate, which
+    /// has no filter of one's own, among the conditions the account added to it. Returns the artists the crate leaves
+    /// out so, and the undo token (none when it left them out already).
+    pub async fn crate_not_artist(&self, id: &str, name: &str) -> Result<(Vec<NotArtist>, Option<String>), ToggleError> {
+        if super::excluded_artists::key(name).is_empty() {
+            return Err(ToggleError::Refused("Which artist?".into()));
+        }
+        let undo = if crates::is_fixed(id) {
+            self.crate_def(id).await?;
+            let (store, kept) = (self.own_crates()?, crates::kept_id(id));
+            let before = store.added(&kept).await?;
+            match crates::with_not_artist(&before, name) {
+                Some(after) => {
+                    store.set_added(&kept, after.clone()).await?;
+                    self.keep(Change::Added { crate_id: kept, before, after })
+                }
+                None => None,
+            }
+        } else {
+            let def = self.own_crate(id).await?.ok_or(ToggleError::UnknownPlaylist)?;
+            match crates::with_not_artist(&def.conditions, name) {
+                Some(after) => self.crate_save(Some(id), &def.name, after).await?.1,
+                None => None,
+            }
+        };
+        Ok((self.crate_not_artists(id).await?, undo))
+    }
+
+    /// An artist a crate leaves out taken back (by their key): its "Artist is not" rows no longer name them. Returns the
+    /// artists it still leaves out so, and the undo token (none when it named them nowhere).
+    pub async fn crate_not_artist_back(&self, id: &str, key: &str) -> Result<(Vec<NotArtist>, Option<String>), ToggleError> {
+        let key = super::excluded_artists::key(key);
+        let undo = if crates::is_fixed(id) {
+            let (store, kept) = (self.own_crates()?, crates::kept_id(id));
+            let before = store.added(&kept).await?;
+            match crates::without_not_artist(&before, &key) {
+                Some(after) => {
+                    store.set_added(&kept, after.clone()).await?;
+                    self.keep(Change::Added { crate_id: kept, before, after })
+                }
+                None => None,
+            }
+        } else {
+            let def = self.own_crate(id).await?.ok_or(ToggleError::UnknownPlaylist)?;
+            match crates::without_not_artist(&def.conditions, &key) {
+                Some(after) => self.crate_save(Some(id), &def.name, after).await?.1,
+                None => None,
+            }
+        };
+        Ok((self.crate_not_artists(id).await?, undo))
+    }
+
+    /// The artists a crate leaves out by its "Artist is not" rows (decision 0083), as its view lists them: one's own
+    /// crate's in its conditions, a fixed crate's among those the account added to it.
+    pub async fn crate_not_artists(&self, id: &str) -> Result<Vec<NotArtist>, ToggleError> {
+        let conditions = if crates::is_fixed(id) {
+            self.own_crates()?.added(&crates::kept_id(id)).await?
+        } else {
+            self.own_crate(id).await?.ok_or(ToggleError::UnknownPlaylist)?.conditions
+        };
+        Ok(crates::not_artists(&conditions).into_iter().map(|(key, name)| NotArtist { key, name }).collect())
+    }
+
+    /// The keys of the artists the asking account excluded everywhere (decision 0083), read once per pick.
+    async fn artists_out(&self) -> Result<HashSet<String>, ToggleError> {
+        self.artists_out_of(asking_user(self.served.as_deref())).await
+    }
+
+    /// The keys of the artists `user` excluded everywhere; none without Cratarr's own library or an account.
+    async fn artists_out_of(&self, user: Option<String>) -> Result<HashSet<String>, ToggleError> {
+        let (Some(serve), Some(user)) = (self.served.clone(), user) else { return Ok(HashSet::new()) };
+        Ok(tokio::task::spawn_blocking(move || serve.userdata.excluded_artists(&user)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+    }
+
+    /// The account the everywhere list is the asking one's of, and Cratarr's own library: refused without either.
+    fn artist_lister(&self) -> Result<(Arc<crate::serve::Serve>, String), ToggleError> {
+        let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let user = asking_user(Some(&*serve)).ok_or_else(|| ToggleError::Refused("Sign in first: what is excluded is an account's own.".into()))?;
+        Ok((serve, user))
+    }
+
+    /// Exclude everywhere (decision 0083, the owner 2026-10-30): the asking account's every automatic pick (every crate,
+    /// Radio and Autoplay, the shuffles, Discover, Home's shelves) leaves out a track crediting the artist anywhere and
+    /// an album whose album artist they are. Played by hand, they play. Returns them as listed, and the undo token (none
+    /// when they were listed already).
+    pub async fn exclude_artist(&self, name: &str) -> Result<(crate::userdata::ExcludedArtist, Option<String>), ToggleError> {
+        let (serve, user) = self.artist_lister()?;
+        let name = name.trim().to_string();
+        let key = super::excluded_artists::key(&name);
+        if key.is_empty() {
+            return Err(ToggleError::Refused("Which artist?".into()));
+        }
+        let (u, k, n) = (user.clone(), key.clone(), name.clone());
+        let (new, listed) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let new = serve.userdata.exclude_artist(&u, &k, &n)?;
+            Ok((new, serve.userdata.excluded_artist_list(&u)?.into_iter().find(|a| a.key == k)))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let listed = listed.unwrap_or(crate::userdata::ExcludedArtist { key: key.clone(), name: name.clone(), at: super::library::epoch_now() });
+        let undo = new.then(|| self.keep(Change::ArtistOut { user, key, name, out: true })).flatten();
+        Ok((listed, undo))
+    }
+
+    /// An artist taken back off the asking account's everywhere list (by their key): picked again. Their key, and the
+    /// undo token (none when they were not on it).
+    pub async fn include_artist(&self, key: &str) -> Result<(String, Option<String>), ToggleError> {
+        let (serve, user) = self.artist_lister()?;
+        let key = super::excluded_artists::key(key);
+        let (u, k) = (user.clone(), key.clone());
+        let gone = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let was = serve.userdata.excluded_artist_list(&u)?.into_iter().find(|a| a.key == k);
+            serve.userdata.include_artist(&u, &k)?;
+            Ok(was)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let undo = gone.and_then(|a| self.keep(Change::ArtistOut { user, key: key.clone(), name: a.name, out: false }));
+        Ok((key, undo))
+    }
+
+    /// The asking account's everywhere list, the newest first (Settings › Listening).
+    pub async fn excluded_artist_list(&self) -> Result<Vec<crate::userdata::ExcludedArtist>, ToggleError> {
+        let (serve, user) = self.artist_lister()?;
+        Ok(tokio::task::spawn_blocking(move || serve.userdata.excluded_artist_list(&user)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
     }
 
     /// Tracks taken out of a crate by hand, or put back (`out` false), by their ids on a server, and whole albums by
@@ -2475,16 +2797,25 @@ impl PlaylistService {
 
     /// The Cratarr song ids of the tracks `user` excluded everywhere (`None`: the first administrator), for the picks
     /// that leave them out: Radio's and Autoplay's, the shuffles of the library and the favourites, Subsonic's random songs.
+    /// With them every song crediting an artist `user` excluded everywhere (decision 0083), by the crates' facts.
     pub async fn excluded_songs_of(&self, user: Option<&str>) -> Result<HashSet<String>, ToggleError> {
         let account = user.and_then(|u| account_of(self.served.as_deref(), u));
         let lines = self.crate_stores.of(account.as_deref())?.excluded().await?;
-        if lines.is_empty() {
+        let whose = user.map(str::to_string).or_else(|| self.served.as_ref().and_then(|s| s.users.owner()));
+        let artists = self.artists_out_of(whose).await?;
+        if lines.is_empty() && artists.is_empty() {
             return Ok(HashSet::new());
         }
         let cat = self.lib.catalogue();
-        Ok(tokio::task::spawn_blocking(move || lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(&cat, l)).collect())
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?)
+        Ok(tokio::task::spawn_blocking(move || -> Result<HashSet<String>> {
+            let mut songs: HashSet<String> = lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(&cat, l)).collect();
+            if !artists.is_empty() {
+                songs.extend(songs_crediting(&cat.crate_facts()?, &artists));
+            }
+            Ok(songs)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??)
     }
 
     /// A crate's tempo spread (decision 0041), its tracks chosen as its rows are (as it is looked at): counted here, so
@@ -2652,9 +2983,10 @@ impl PlaylistService {
     pub async fn like_curve(&self, of: &[String], weights: &[f32], want: Option<&str>, without: &[String], fresh: bool) -> Result<LikeCurve, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
         let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
+        let artists = self.artists_out().await?;
         let (of, weights, lib) = (of.to_vec(), weights.to_vec(), Arc::new(lib));
         tokio::task::spawn_blocking(move || {
-            let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel)).collect();
+            let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel) && !crates::credits_out(f, &artists)).collect();
             let mut closest = crates::closest_weighted(&of, &weights, lib.alike(), &among, lib.by());
             // Fresh: the seeds left out, as the crate leaves them (crates::resolved).
             if fresh {
@@ -3073,11 +3405,13 @@ impl PlaylistService {
     /// New for you, Home's shelf and its crate alike (the owner, 2026-10-23 and 2026-10-30): of Cratarr's own library
     /// (every folder in use, Music's and the Incoming ones', as the crates are), the newest albums by when the library
     /// added them, less those without a cover and those the asking account heard `HEARD_SHARE` of (one's own plays, none
-    /// heard while following), at most `NEW_PER_ARTIST` of one album artist (`new_picks`). Their ids, newest first.
-    /// Without an account to ask about (sign-in off), none is heard.
+    /// heard while following), at most `NEW_PER_ARTIST` of one album artist (`new_picks`); none whose album artist
+    /// the account excluded everywhere (decision 0083). Their ids, newest first. Without an account to ask about
+    /// (sign-in off), none is heard.
     pub async fn new_for_you(&self) -> Result<Vec<String>, ToggleError> {
         let user = asking_user(self.served.as_deref());
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let artists = self.artists_out().await?;
         tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
             let plays = match &user {
                 Some(user) => serve.userdata.own_song_plays(user)?,
@@ -3098,6 +3432,7 @@ impl PlaylistService {
                         .collect())
                 },
                 |id| Ok(coverless.contains(id) || album_heard(&serve, &plays, id)? != Some(false)),
+                &artists,
             )
         })
         .await
@@ -3113,6 +3448,9 @@ impl PlaylistService {
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lib = self.crate_library(want, false, false, without).await?;
         let excluded = self.own_crates()?.excluded().await?;
+        // Neither shows what credits an artist excluded everywhere (decision 0083): a track by its credits, an album by
+        // its album artist.
+        let artists = self.artists_out().await?;
         tokio::task::spawn_blocking(move || -> Result<Digging, ToggleError> {
             let alike = lib.alike();
             let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
@@ -3120,8 +3458,11 @@ impl PlaylistService {
             let plays = ud.own_song_plays(&user)?;
             let starred = ud.starred(&user, crate::userdata::Kind::Song)?;
             // Blast from the past: the favourites by their last play, the oldest first.
-            let mut past: Vec<(String, i64)> =
-                starred.iter().filter(|s| place(s).is_some()).filter_map(|s| Some((s.clone(), plays.get(s)?.1?))).collect();
+            let mut past: Vec<(String, i64)> = starred
+                .iter()
+                .filter(|s| place(s).is_some_and(|i| !crates::credits_out(&lib.files[i], &artists)))
+                .filter_map(|s| Some((s.clone(), plays.get(s)?.1?)))
+                .collect();
             past.sort_by_key(|p| p.1);
             // Of albums with a cover only (Home shows none without, the owner 2026-10-24).
             let coverless = serve.library.coverless()?;
@@ -3152,7 +3493,9 @@ impl PlaylistService {
             let artist_plays: HashMap<String, u32> = ud.used(&user, crate::userdata::Kind::Artist)?.into_iter().map(|(id, a)| (id, a.own_count)).collect();
             let most = artist_plays.values().copied().max().unwrap_or(0).max(1) as f64;
             let ids: Vec<String> = by_album.keys().cloned().collect();
-            let artist_of: HashMap<String, String> = serve.library.albums_by_id(&ids)?.into_iter().map(|a| (a.id, a.artist_id)).collect();
+            let found = serve.library.albums_by_id(&ids)?;
+            let out: HashSet<String> = found.iter().filter(|a| album_out(a, &artists)).map(|a| a.id.clone()).collect();
+            let artist_of: HashMap<String, String> = found.into_iter().map(|a| (a.id, a.artist_id)).collect();
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
             // How far an album is from the listening (the owner, 2026-10-23: weigh the unplayed, "the albums that are
             // totally opposite our actual listening behaviour while matching our profile"): never played, 1; played,
@@ -3172,7 +3515,7 @@ impl PlaylistService {
             let coverless = serve.library.coverless()?;
             let mut albums: Vec<(String, f64)> = by_album
                 .iter()
-                .filter(|(id, _)| !coverless.contains(*id))
+                .filter(|(id, _)| !coverless.contains(*id) && !out.contains(*id))
                 .filter_map(|(id, set)| Some((id.clone(), alike.compare(&taste, &alike.profile(set), lib.by())? * distance(id))))
                 .collect();
             albums.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -3194,6 +3537,7 @@ impl PlaylistService {
         }
         let m = super::moment::now();
         let lib = self.crate_library(want, false, false, without).await?;
+        let artists_out = self.artists_out().await?;
         tokio::task::spawn_blocking(move || -> Result<MomentView, ToggleError> {
             let alike = lib.alike();
             let scales = crates::Scales::of(&lib.files().collect::<Vec<_>>());
@@ -3225,8 +3569,11 @@ impl PlaylistService {
             near.retain(|(id, _)| !coverless.contains(id));
             near.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
             near.truncate(MOMENT_POOL * 4);
-            let artist_of: HashMap<String, String> =
-                serve.library.albums_by_id(&near.iter().map(|a| a.0.clone()).collect::<Vec<_>>())?.into_iter().map(|a| (a.id, a.artist_id)).collect();
+            let found = serve.library.albums_by_id(&near.iter().map(|a| a.0.clone()).collect::<Vec<_>>())?;
+            // None whose album artist is excluded everywhere (decision 0083).
+            let out: HashSet<&str> = found.iter().filter(|a| album_out(a, &artists_out)).map(|a| a.id.as_str()).collect();
+            near.retain(|(id, _)| !out.contains(id.as_str()));
+            let artist_of: HashMap<String, String> = found.iter().map(|a| (a.id.clone(), a.artist_id.clone())).collect();
             let mut artists = HashSet::new();
             let mut pool: Vec<(String, f64)> = near.into_iter().filter(|(id, _)| artist_of.get(id).is_none_or(|a| artists.insert(a.clone()))).take(MOMENT_POOL).collect();
             // A draw of the pool that holds through the day and the moment, then nearest first.
@@ -3616,7 +3963,22 @@ mod new_for_you_tests {
 
     /// New for you's picks of `albums`, read a page at a time as from the library, `heard` left out.
     fn walk(albums: &[(String, String, bool)], heard: &[&str]) -> Vec<String> {
-        new_picks(|offset| Ok(albums.iter().skip(offset).take(NEW_PAGE).cloned().collect()), |id| Ok(heard.contains(&id))).unwrap()
+        walk_without(albums, heard, &[])
+    }
+
+    /// As `walk`, these artists excluded everywhere.
+    fn walk_without(albums: &[(String, String, bool)], heard: &[&str], out: &[&str]) -> Vec<String> {
+        let out: HashSet<String> = out.iter().map(|a| crate::app::excluded_artists::key(a)).collect();
+        new_picks(|offset| Ok(albums.iter().skip(offset).take(NEW_PAGE).cloned().collect()), |id| Ok(heard.contains(&id)), &out).unwrap()
+    }
+
+    #[test]
+    fn an_album_by_an_artist_excluded_everywhere_is_left_out_and_counted_toward_no_one() {
+        // Decision 0083: the album artist counts, by any credit; the next albums take their places.
+        let artists = ["Air", "Bonobo", "Air & Beck", "Caribou"];
+        assert_eq!(walk_without(&newest(&artists), &[], &["Air"]), ["al-1", "al-3"]);
+        assert_eq!(walk_without(&newest(&artists), &[], &["beck"]), ["al-0", "al-1", "al-3"]);
+        assert_eq!(walk_without(&newest(&artists), &[], &[]).len(), 4, "none excluded, none left out");
     }
 
     #[test]

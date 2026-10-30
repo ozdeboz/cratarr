@@ -425,6 +425,21 @@ pub fn is_permanent(id: &str) -> bool {
     permanent().iter().any(|c| c.id == id)
 }
 
+/// Whether a crate is one of the fixed ones, made by Cratarr with no filter of the listener's (decision 0083): the
+/// permanent Unlisted, a genre's (or a style's, a mood's, a tag's), Home's (New for you, Grave digging), and every
+/// Sounds like (Sounds like your week, the moment's, a track's, an album's, a playlist's suggestions).
+pub fn is_fixed(id: &str) -> bool {
+    is_permanent(id) || genre_crate(id).is_some() || home_crate(id) || id.starts_with(LIKE)
+}
+
+/// The id a fixed crate's own conditions are kept by: a Sounds like's without its count (as its fit), else its own.
+pub fn kept_id(id: &str) -> String {
+    match like_of(id) {
+        Some((item, _)) => format!("{LIKE}{item}"),
+        None => id.to_string(),
+    }
+}
+
 // --- The axes ---
 
 /// How an axis is chosen from in the builder.
@@ -737,6 +752,10 @@ pub struct Facts {
     pub sound: Option<Arc<[f32]>>,
     /// Its artists and album artist (a compilation's left out), for a list's profile.
     pub artists: Vec<String>,
+    /// Every artist it credits, by their keys (`app::excluded_artists::credits_keys`: its artists, its artists list and
+    /// album artist, each credit split where it joins several, "feat." among them): what the artists excluded
+    /// everywhere are matched against (decision 0083).
+    pub credits: Vec<String>,
     /// CLAP's score of each mood, in `similarity::MOODS`' order; none until CLAP heard it.
     pub clap_moods: Option<[f32; 5]>,
     /// Its length (s); lossless or its bitrate's class (`quality_of`); its key, as one spelling (`key_name`).
@@ -1058,6 +1077,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("favourite", Value::Yes) => w.favourites.is_some_and(|s| s.contains(&f.rel)),
         ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| s.contains(&f.rel)),
         (LEFT_OUT, Value::AnyOf { values }) => values.iter().any(|v| *v == f.rel),
+        (CREDITED, Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(v)),
         ("playlist", Value::AnyOf { values }) => match w.membership.get(&f.rel) {
             None => false,
             Some(lists) if values.is_empty() => !lists.is_empty(),
@@ -1083,7 +1103,7 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
     match c.axis.as_str() {
         "favourite" => w.favourites.is_some(),
         "favourite_album" => w.favourite_albums.is_some(),
-        "playlist" | LEFT_OUT => true,
+        "playlist" | LEFT_OUT | CREDITED => true,
         // How it was used, where that is read: every track has a count and a last play (never: longer ago than any).
         // These seven had none (2026-10-29, the Filter sheet's audit): All on them matched nothing, and All negated
         // everything.
@@ -1441,6 +1461,86 @@ pub fn leaving_out(lines: &[String], conditions: &[Condition]) -> Vec<Condition>
 /// The left-out list's condition: a line that is one of these.
 const LEFT_OUT: &str = "line";
 
+/// A crate's conditions with the artists excluded everywhere left out (decision 0083): a file crediting one of these
+/// (their keys, `Facts::credits`) is not in it, whatever else holds. Not an axis one builds with: every crate carries
+/// it unseen, as its left-out list.
+pub fn leaving_out_artists(keys: &HashSet<String>, conditions: &[Condition]) -> Vec<Condition> {
+    let mut all = conditions.to_vec();
+    if !keys.is_empty() {
+        let mut values: Vec<String> = keys.iter().cloned().collect();
+        values.sort();
+        all.push(Condition::new(CREDITED, true, Value::AnyOf { values }));
+    }
+    all
+}
+
+/// The artists excluded everywhere's condition: a file crediting one of these keys.
+const CREDITED: &str = "credited";
+
+/// Whether a file credits one of the artists excluded everywhere (their keys): what a pick that is not a crate leaves
+/// out (decision 0083).
+pub fn credits_out(f: &Facts, keys: &HashSet<String>) -> bool {
+    !keys.is_empty() && f.credits.iter().any(|k| keys.contains(k))
+}
+
+/// Not in this crate (decision 0083, the owner 2026-10-30): the crate's conditions with "Artist is not `name`", as one
+/// would set it by hand: the name added to an "Artist is not" row that is on (of any track), else a row of its own.
+/// `None` when the artist is left out so already (any spelling of their key).
+pub fn with_not_artist(conditions: &[Condition], name: &str) -> Option<Vec<Condition>> {
+    let name = name.trim();
+    let key = crate::app::excluded_artists::key(name);
+    if key.is_empty() || not_artists(conditions).iter().any(|(k, _)| *k == key) {
+        return None;
+    }
+    let mut all = conditions.to_vec();
+    match all.iter().position(|c| is_not_artist(c) && c.enabled && c.quantifier == Quantifier::Any) {
+        Some(i) => {
+            if let Value::AnyOf { values } = &mut all[i].value {
+                values.push(name.to_string());
+            }
+        }
+        None => all.push(Condition::new("artist", true, Value::AnyOf { values: vec![name.to_string()] })),
+    }
+    Some(all)
+}
+
+/// The conditions without the artist of this key in their "Artist is not" rows (a row left empty goes); `None` when no
+/// row names them.
+pub fn without_not_artist(conditions: &[Condition], key: &str) -> Option<Vec<Condition>> {
+    let mut all = conditions.to_vec();
+    let mut found = false;
+    for c in all.iter_mut().filter(|c| is_not_artist(c)) {
+        if let Value::AnyOf { values } = &mut c.value {
+            let before = values.len();
+            values.retain(|v| crate::app::excluded_artists::key(v) != key);
+            found |= values.len() != before;
+        }
+    }
+    all.retain(|c| !is_not_artist(c) || matches!(&c.value, Value::AnyOf { values } if !values.is_empty()));
+    found.then_some(all)
+}
+
+/// The artists a crate's "Artist is not" rows that are on leave out: each one's key and name, as the crate lists them.
+pub fn not_artists(conditions: &[Condition]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for c in conditions.iter().filter(|c| is_not_artist(c) && c.enabled) {
+        if let Value::AnyOf { values } = &c.value {
+            for v in values {
+                let k = crate::app::excluded_artists::key(v);
+                if !k.is_empty() && !out.iter().any(|(x, _)| *x == k) {
+                    out.push((k, v.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// An "Artist is not" row: the artist axis, negated, by its values.
+fn is_not_artist(c: &Condition) -> bool {
+    c.axis == "artist" && c.not && matches!(c.value, Value::AnyOf { .. })
+}
+
 /// A crate's tracks left out by hand (decision 0024, amended 2026-10-19): single tracks by their lines, and whole albums
 /// by their ids, each album a rule (its tracks now and later).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1524,6 +1624,9 @@ struct Stored {
     /// Each ranked crate's fit (its rules and the learned traits dismissed), by its id without a count.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     fits: BTreeMap<String, Fit>,
+    /// The conditions the account added to a fixed crate (decision 0083: Not in this crate), by `kept_id`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    added: BTreeMap<String, Vec<Condition>>,
 }
 
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
@@ -1635,6 +1738,21 @@ impl CrateStore {
             s.fits.remove(id);
         } else {
             s.fits.insert(id.to_string(), fit);
+        }
+        self.write_stored(s).await
+    }
+
+    /// The conditions added to a fixed crate (decision 0083), by `kept_id` (none until some are).
+    pub async fn added(&self, id: &str) -> Result<Vec<Condition>> {
+        Ok(self.stored().await?.added.get(id).cloned().unwrap_or_default())
+    }
+
+    pub async fn set_added(&self, id: &str, conditions: Vec<Condition>) -> Result<()> {
+        let mut s = self.stored().await?;
+        if conditions.is_empty() {
+            s.added.remove(id);
+        } else {
+            s.added.insert(id.to_string(), conditions);
         }
         self.write_stored(s).await
     }
@@ -2129,6 +2247,58 @@ mod tests {
         assert_eq!(select(&files, &leaving_out(&left, &[]), &w), vec!["b", "c", "d"]);
         assert_eq!(leaving_out(&[], &[]), Vec::new(), "nothing left out, nothing added");
         assert!(!is_axis("line"), "not an axis one builds with");
+    }
+
+    /// A file by these artists (its track's and its album's), credited as the catalogue credits it.
+    fn by(rel: &str, artists: &[&str]) -> Facts {
+        let artists: Vec<String> = artists.iter().map(|a| a.to_string()).collect();
+        Facts { rel: rel.into(), genres: vec!["Electronic".into()], credits: crate::app::excluded_artists::credits_keys(&artists), artists, ..Facts::default() }
+    }
+
+    #[test]
+    fn not_in_this_crate_is_one_artist_is_not_row_added_once_and_leaves_them_out_of_that_crate_only() {
+        // Decision 0083: the crate's own artist filter, as set by hand.
+        let files = [by("a", &["Air"]), by("b", &["Bonobo"]), by("c", &["Caribou"])];
+        let (membership, favourites) = (HashMap::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let electronic = vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Electronic".into()] })];
+        let one = with_not_artist(&electronic, "Air").unwrap();
+        assert_eq!(one[1], Condition::new("artist", true, Value::AnyOf { values: vec!["Air".into()] }));
+        assert_eq!(with_not_artist(&one, "AIR"), None, "once, in any spelling of their key");
+        assert_eq!(select(&files, &one, &w), vec!["b", "c"]);
+        assert_eq!(select(&files, &electronic, &w), vec!["a", "b", "c"], "another crate keeps them");
+        // A second artist joins the row; taking one back leaves the other, the last back drops the row.
+        let two = with_not_artist(&one, "Bonobo").unwrap();
+        assert_eq!((two.len(), not_artists(&two)), (2, vec![("air".to_string(), "Air".to_string()), ("bonobo".to_string(), "Bonobo".to_string())]));
+        assert_eq!(select(&files, &two, &w), vec!["c"]);
+        let back = without_not_artist(&two, "air").unwrap();
+        assert_eq!(select(&files, &back, &w), vec!["a", "c"]);
+        assert_eq!(without_not_artist(&back, "bonobo").unwrap(), electronic, "taken back, as it was");
+        assert_eq!(without_not_artist(&electronic, "air"), None, "nothing to take back");
+    }
+
+    #[test]
+    fn a_fixed_crate_is_kept_by_its_id_without_a_count() {
+        assert!(is_fixed("unlisted") && is_fixed("genre:Jazz") && is_fixed("home:new") && is_fixed("like:week") && is_fixed("like:al-1@50"));
+        assert!(!is_fixed("c18f0a") && !is_fixed("genre:"));
+        assert_eq!((kept_id("like:al-1@50"), kept_id("like:al-1"), kept_id("home:graves")), ("like:al-1".to_string(), "like:al-1".to_string(), "home:graves".to_string()));
+    }
+
+    #[test]
+    fn an_artist_excluded_everywhere_is_out_of_every_crate_by_any_credit() {
+        // Decision 0083: featured, a collaboration, the album artist; a crate's own conditions, a fixed one's, both
+        // toggles and a Sounds like's pool.
+        let files = [by("a", &["Air feat. Beck"]), by("b", &["Bonobo", "Beck"]), by("c", &["Caribou & Beck"]), by("d", &["Daft Punk"]), by("e", &["Beckett"])];
+        let (membership, favourites) = (HashMap::new(), HashSet::from(["a".to_string(), "d".to_string()]));
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let out = HashSet::from([crate::app::excluded_artists::key("Beck")]);
+        let electronic = vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Electronic".into()] })];
+        assert_eq!(select(&files, &leaving_out_artists(&out, &electronic), &w), vec!["d", "e"], "a whole name, not a part of one");
+        assert_eq!(select(&files, &leaving_out_artists(&out, &Favourites::Only.with(&electronic)), &w), vec!["d"]);
+        assert_eq!(select(&files, &leaving_out_artists(&out, &permanent()[0].conditions), &w), vec!["d", "e"], "Unlisted, a fixed crate");
+        assert!(files.iter().filter(|f| credits_out(f, &out)).map(|f| f.rel.as_str()).eq(["a", "b", "c"]));
+        assert_eq!(leaving_out_artists(&HashSet::new(), &electronic), electronic, "none excluded, nothing added");
+        assert!(!is_axis("credited"), "not an axis one builds with");
     }
 
     #[test]

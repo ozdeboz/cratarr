@@ -472,6 +472,14 @@ pub struct Answer {
     pub cover: Option<String>,
 }
 
+/// An artist excluded everywhere (decision 0083): their key, their name as it was said, and since when (epoch s).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ExcludedArtist {
+    pub key: String,
+    pub name: String,
+    pub at: i64,
+}
+
 /// A play waiting to be sent to a listening service (app::scrobble).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Queued {
@@ -599,6 +607,18 @@ fn add_release_types_rule(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The artists an account excluded everywhere (decision 0083, the owner 2026-10-30): by the artist's loose key
+/// (`app::excluded_artists::key`), with the name as it was said and when. A user data file from before it gets the
+/// table, empty. Safe to repeat.
+fn add_excluded_artists(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS excluded_artist (
+           user TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL, at INTEGER NOT NULL,
+           PRIMARY KEY (user, key)) WITHOUT ROWID;",
+    )?;
+    Ok(())
+}
+
 /// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
 fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
@@ -636,6 +656,7 @@ impl UserData {
         add_plays_followed(&conn)?;
         add_annotation_own(&conn).context("keeping one's own plays apart from followed ones")?;
         add_release_types_rule(&conn)?;
+        add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
     }
@@ -1306,6 +1327,40 @@ impl UserData {
         )?;
         let artists = st.query_map([user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
         Ok((albums, artists))
+    }
+
+    /// An artist excluded everywhere by `user` (decision 0083), by their key; excluded again, the name is the latest
+    /// said and the time the first. Whether it is new.
+    pub fn exclude_artist(&self, user: &str, key: &str, name: &str) -> Result<bool> {
+        let db = self.db();
+        let had: bool = db.prepare_cached("SELECT 1 FROM excluded_artist WHERE user = ?1 AND key = ?2")?.exists(params![user, key])?;
+        db.execute(
+            "INSERT INTO excluded_artist (user, key, name, at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (user, key) DO UPDATE SET name = excluded.name",
+            params![user, key, name, now()],
+        )?;
+        Ok(!had)
+    }
+
+    /// An artist taken back off `user`'s list: picked again. Whether they were on it.
+    pub fn include_artist(&self, user: &str, key: &str) -> Result<bool> {
+        Ok(self.db().execute("DELETE FROM excluded_artist WHERE user = ?1 AND key = ?2", params![user, key])? > 0)
+    }
+
+    /// The artists `user` excluded everywhere, the newest first.
+    pub fn excluded_artist_list(&self, user: &str) -> Result<Vec<ExcludedArtist>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT key, name, at FROM excluded_artist WHERE user = ?1 ORDER BY at DESC, key")?;
+        let rows = st.query_map([user], |r| Ok(ExcludedArtist { key: r.get(0)?, name: r.get(1)?, at: r.get(2)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The keys of the artists `user` excluded everywhere: what every pick reads, once per pick.
+    pub fn excluded_artists(&self, user: &str) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT key FROM excluded_artist WHERE user = ?1")?;
+        let rows = st.query_map([user], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// A request kept (decision 0070): its id.
@@ -2468,6 +2523,57 @@ mod tests {
         assert_eq!(u.discover_exclusions("me").unwrap().len(), 1, "listed with the exclusions");
         u.unanswer_discover_artist("me", "air").unwrap();
         assert!(u.discover_answered("me").unwrap().1.is_empty(), "taken back");
+    }
+
+    #[test]
+    fn an_artist_excluded_everywhere_is_kept_once_per_account_apart_from_discovers_no() {
+        // Decision 0083.
+        let u = UserData::open(None).unwrap();
+        assert!(u.exclude_artist("me", "air", "Air").unwrap(), "new");
+        assert!(!u.exclude_artist("me", "air", "AIR").unwrap(), "once");
+        let listed = u.excluded_artist_list("me").unwrap();
+        assert_eq!(listed.iter().map(|a| (a.key.as_str(), a.name.as_str())).collect::<Vec<_>>(), [("air", "AIR")], "the name last said");
+        assert!(u.excluded_artists("you").unwrap().is_empty(), "each account its own");
+        // Discover's Not interested in an artist stays Discover's, and the everywhere list is not Discover's.
+        u.answer_discover("me", "artist:bonobo", "bonobo", "artist").unwrap();
+        assert_eq!(u.excluded_artists("me").unwrap().into_iter().collect::<Vec<_>>(), ["air"]);
+        assert_eq!(u.discover_answered("me").unwrap().1.into_iter().collect::<Vec<_>>(), ["bonobo"]);
+        assert_eq!(u.discover_exclusions("me").unwrap().len(), 1);
+        assert!(u.include_artist("me", "air").unwrap(), "taken back");
+        assert!(!u.include_artist("me", "air").unwrap(), "gone already");
+        assert!(u.excluded_artists("me").unwrap().is_empty());
+        assert_eq!(u.discover_answered("me").unwrap().1.len(), 1, "Discover's untouched");
+    }
+
+    #[test]
+    fn a_user_data_file_from_before_gets_the_everywhere_list() {
+        let dir = std::env::temp_dir().join(format!("cratarr-excluded-artists-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("u.db");
+        let _ = std::fs::remove_file(&file);
+        // A file as one was before the list (the annotation table only).
+        let old = Connection::open(&file).unwrap();
+        old.execute_batch(
+            "CREATE TABLE annotation (
+               user TEXT NOT NULL, item TEXT NOT NULL, kind TEXT NOT NULL, pid TEXT,
+               play_count INTEGER NOT NULL DEFAULT 0, play_date INTEGER, rating INTEGER NOT NULL DEFAULT 0,
+               starred INTEGER NOT NULL DEFAULT 0, starred_at INTEGER,
+               PRIMARY KEY (user, item, kind)) WITHOUT ROWID;",
+        )
+        .unwrap();
+        let had = |c: &Connection| c.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'excluded_artist'").unwrap().exists([]).unwrap();
+        assert!(!had(&old));
+        drop(old);
+        let u = UserData::open(Some(&file)).unwrap();
+        assert!(had(&u.db()), "the table, empty");
+        assert!(u.excluded_artists("me").unwrap().is_empty());
+        u.exclude_artist("me", "beck", "Beck").unwrap();
+        drop(u);
+        // Opened again: kept, nothing made twice.
+        let u = UserData::open(Some(&file)).unwrap();
+        assert_eq!(u.excluded_artist_list("me").unwrap().len(), 1);
+        drop(u);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

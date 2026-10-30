@@ -124,6 +124,12 @@ pub enum Change {
     LeftOut { crate_id: String, before: crate::crates::LeftOut, after: crate::crates::LeftOut },
     /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19): their lines before and after.
     Excluded { before: Vec<String>, after: Vec<String> },
+    /// The conditions an account added to a fixed crate (decision 0083: Not in this crate), by its kept id: before and
+    /// after.
+    Added { crate_id: String, before: Vec<crate::crates::Condition>, after: Vec<crate::crates::Condition> },
+    /// An artist put on an account's everywhere list (`out`) or taken off it (decision 0083): the account, the artist's
+    /// key and name.
+    ArtistOut { user: String, key: String, name: String, out: bool },
     /// Tracks' tempo adjusted (Adjust BPM, 2026-10-23): each one's BPM tag before and after.
     Tempo { tracks: Vec<crate::app::tempo::TempoChange> },
 }
