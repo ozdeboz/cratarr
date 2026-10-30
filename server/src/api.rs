@@ -304,7 +304,7 @@ const SLOW_MS: u128 = 1000;
 /// request runs in a `request` span with its id and the app's connection id (`X-Cratarr-Connection`), so the events it
 /// logs carry both (decision 0045). Outermost: the sign-in layer's refusals have them too. First a peer that is not a
 /// proxy named loses its forwarding headers (serve::proxy); then the client is counted (serve::rate); an answer slower
-/// than [SLOW_MS] is a warning in the log, with what was asked (the path's first three parts) and its status.
+/// than [SLOW_MS] is a warning in the log, with what was asked (its method and route, `route_of`) and its status.
 pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     use tracing::Instrument;
     let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
@@ -316,6 +316,7 @@ pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware
     let client = crate::serve::signin::client(req.headers(), peer);
     crate::serve::rate::RATES.seen(&client, conn.as_deref(), req.uri().path());
     let asked = crate::serve::rate::kind_of(req.uri().path());
+    let route = route_of(req.method(), req.extensions().get::<axum::extract::MatchedPath>().map(|m| m.as_str()), req.uri().path());
     let span = tracing::info_span!("request", request = %id, conn = tracing::field::Empty);
     if let Some(c) = &conn {
         span.record("conn", c.as_str());
@@ -327,13 +328,21 @@ pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware
     let ms = started.elapsed().as_millis();
     if ms > SLOW_MS {
         let status = res.status().as_u16();
-        span.in_scope(|| tracing::warn!(target: "server", client, path = asked.as_str(), status, ms = ms as u64, "slow response"));
+        span.in_scope(|| tracing::warn!(target: "server", client, path = route.as_str(), status, ms = ms as u64, "slow response"));
     }
     if let Ok(v) = HeaderValue::from_str(&id) {
         res.headers_mut().insert("x-request-id", v);
     }
     res.headers_mut().insert("x-response-time-ms", HeaderValue::from(ms as u64));
     res
+}
+
+/// What a slow answer was asked for, for the log: its method and the route that took it (`GET
+/// /api/stream/{source}/{id}/wind`), so a wind is not taken for a stream (0.10.2: the slow answers of 2026-10-30; the
+/// path's first three parts said `/api/stream/cratarr`). Where no route took it (the web app's pages, the fallback),
+/// the path's first three parts, as before. The runaway count (serve::rate) keeps its own key.
+fn route_of(method: &axum::http::Method, matched: Option<&str>, path: &str) -> String {
+    format!("{method} {}", matched.map_or_else(|| crate::serve::rate::kind_of(path), str::to_string))
 }
 
 /// The diagnostics log (decision 0045), off the async threads; refused while it is not open.
@@ -6288,6 +6297,32 @@ mod tests {
         assert!(own.len() == 16 && own.bytes().all(|b| b.is_ascii_hexdigit()), "{own}");
         assert_ne!(id_of(app.clone().oneshot(ask(Some("a b"))).await.unwrap()), "a b");
         assert_ne!(own, id_of(app.oneshot(ask(None)).await.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn a_slow_answer_is_named_by_its_method_and_route() {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        // Where request_ids runs (a layer around the routes), the route that took the request is known.
+        let seen = |req: &axum::extract::Request| super::route_of(req.method(), req.extensions().get::<axum::extract::MatchedPath>().map(|m| m.as_str()), req.uri().path());
+        // On one line: `no_path_and_method_is_routed_twice` reads each line that starts with a route as the table's.
+        let wind = axum::Router::new().route("/api/stream/{source}/{id}/wind", axum::routing::get(|| async { "ok" }));
+        let app = wind
+            .fallback(|| async { "page" })
+            .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                let route = seen(&req);
+                let mut res = next.run(req).await;
+                res.headers_mut().insert("x-route", axum::http::HeaderValue::from_str(&route).unwrap());
+                res
+            }));
+        let route = |uri: &str| {
+            let app = app.clone();
+            let uri = uri.to_string();
+            async move { app.oneshot(axum::http::Request::get(uri.as_str()).body(Body::empty()).unwrap()).await.unwrap().headers()["x-route"].to_str().unwrap().to_string() }
+        };
+        assert_eq!(route("/api/stream/cratarr/tr-1/wind?dir=back").await, "GET /api/stream/{source}/{id}/wind");
+        assert_eq!(route("/albums/some/where/deep").await, "GET /albums/some/where", "no route: the path's first three parts");
+        assert_eq!(super::route_of(&axum::http::Method::PUT, Some("/api/players/{name}"), "/api/players/Phone"), "PUT /api/players/{name}");
     }
 
     #[test]
