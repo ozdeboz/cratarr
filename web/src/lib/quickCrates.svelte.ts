@@ -1,7 +1,7 @@
 // Quick crates' state (0.11, lib/quickCrate): whether this server makes them (its capabilities name `quick_crates`,
 // lib/capabilities; one before 0.11 has no list: none then), the crate being made at the top of Crates (0.12, the
-// owner's mockup B: lib/QuickCrate reads it as a sentence), words handed to it from elsewhere (a search's "Make a crate
-// of this"), and the last few made here and not saved, kept in this browser to come back to.
+// owner's mockup B: lib/QuickCrate reads it as a sentence), words handed to it from elsewhere (a search's "Grab a crate"),
+// and the last few made here and not saved, kept in this browser to come back to.
 import { can } from './capabilities.svelte';
 import { CLOSE, type Chip } from './quickCrate';
 
