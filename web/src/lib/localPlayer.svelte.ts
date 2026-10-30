@@ -30,7 +30,8 @@ import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
 import { rampSlot } from './player/rampSlot';
 import { motionSlot } from './player/motionSlot';
-import { tapeRules, type Since } from './player/tape';
+import { armSlot } from './player/armSlot';
+import { due, entered, NO_DEADLINES, type Deadlines } from './player/graces';
 import { brakeLengthMs, brakeSpeed, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 import { shuffled } from './shuffle';
@@ -228,9 +229,10 @@ let errorIndex = -1;
 // --- The tape engine's one state (decision 0075; the owner, 2026-10-27: "spread... fix it") ---
 // Everything that moves the tape, in one place, so no two parts of it can disagree: what a ramp has committed to and how
 // far it has got, whether it is the tape's own (quiet: a hold's stop, a knob's turn, a wind-up after a wind) or a Start
-// and stop effect, a wind under way and where it stands, a hold, what waits for its moment. Its invariants are checked
-// four times a second (checkTape) and any broken one written to the playback log; resetTape clears every transient part
-// at once where something new begins (a jump, a new queue, a stop).
+// and stop effect, a wind under way and where it stands, a hold, what waits for its moment. Its ramp and its motion
+// are one value each (lib/player/rampSlot, motionSlot), so what may not hold together cannot; its passing states each
+// have a deadline, set as they are entered (settleTape, lib/player/graces); resetTape clears every transient part at
+// once where something new begins (a jump, a new queue, a stop).
 /** The ramp under way, one value (lib/player/rampSlot): what it committed to, where it holds the counter. */
 const rampNow = rampSlot();
 /** The tape's motion, one value (lib/player/motionSlot): a wind here, a plain hold, or a driven player's glide. */
@@ -239,6 +241,14 @@ type Glide = { from: number; to: number; at: number; span: number };
 const motionNow = motionSlot<Winding, PlainHold, Glide>();
 /** Where a wind's counter stands; only a wind has one (`tape.rewindPos`). */
 let windPos: number | null = null;
+type Hold = { dir: 1 | -1; released: boolean };
+let holdState: Hold | null = null;
+const quiet = { pause: false, until: 0 };
+/** The streams the tape asks for ahead (lib/player/armSlot): the wind to a point's, a hold's at its touch, the knob's
+ *  backwards one at its turn. Asked anew, the one before is let go. */
+const pointArms = armSlot<Armed>((a) => disarm(a));
+const preArms = armSlot<{ dir: 1 | -1; armed: Armed; at: number }>((p) => disarm(p.armed));
+const turnArms = armSlot<Armed>((a) => disarm(a));
 const tape = {
   /** What a ramp under way has committed to (paused or playing), shown at once on every device. A press of play or pause
    *  during one turns it round from where it has got to (decision 0075's first step). Null: no ramp. */
@@ -247,6 +257,7 @@ const tape = {
   },
   set committed(v: boolean | null) {
     rampNow.committed = v;
+    tapeChanged();
   },
   /** How far up the ramp under way has got (0: still or silent, 1: full speed and volume), where a press turns it. */
   rampAt: 1,
@@ -255,9 +266,22 @@ const tape = {
   /** A ramp the tape makes for itself (not a Start and stop effect): the player still shows playing through it. */
   quiet: false,
   /** The quiet pause under way, or the tape's own rest between two of its actions: shown as playing. */
-  quietPause: false,
-  /** Until when that rest may stand (settle); past it, or with nothing of the tape's running, the tick shows what is. */
-  quietUntil: 0,
+  get quietPause() {
+    return quiet.pause;
+  },
+  set quietPause(v: boolean) {
+    quiet.pause = v;
+    tapeChanged();
+  },
+  /** Until when that rest may stand (settle); past it, with nothing of the tape's running, it is over (a deadline of
+   *  the tape's, lib/player/graces). */
+  get quietUntil() {
+    return quiet.until;
+  },
+  set quietUntil(v: number) {
+    quiet.until = v;
+    tapeChanged();
+  },
   /** Where the counter stays while an effect's ramp sounds (stream time); null: where it plays. Only a ramp holds it. */
   get heldAt() {
     return rampNow.heldAt;
@@ -271,6 +295,7 @@ const tape = {
   },
   set rewinding(v: Winding | null) {
     motionNow.rewinding = v;
+    tapeChanged();
   },
   /** Where the counter stands while it sounds (s into the track): the wind's, so none once it has ended, however. */
   get rewindPos() {
@@ -282,20 +307,33 @@ const tape = {
   /** The wind's own fetch of where it goes: it does not end the wind. */
   rewindFetch: false,
   /** A hold under way (its press), before and while it winds: let go, it plays on. */
-  holding: null as { dir: 1 | -1; released: boolean } | null,
+  get holding() {
+    return holdState;
+  },
+  set holding(v: Hold | null) {
+    holdState = v;
+    tapeChanged();
+  },
   /** A hold on a track that cannot be wound (Bandcamp's, the device's own). */
   get plainHold() {
     return motionNow.plainHold;
   },
   set plainHold(v: PlainHold | null) {
     motionNow.plainHold = v;
+    tapeChanged();
   },
   /** The forward wind to a point being armed (a newer one replaces it). */
-  pointArmed: null as Armed | null,
+  get pointArmed() {
+    return pointArms.now;
+  },
   /** A hold's stream asked at the touch, for where the hold will start from. */
-  prearmed: null as { dir: 1 | -1; armed: Armed; at: number } | null,
+  get prearmed() {
+    return preArms.now;
+  },
   /** The knob's backwards stream asked at its turn, from where the brake will stand (no wait after the stop). */
-  turnArmed: null as Armed | null,
+  get turnArmed() {
+    return turnArms.now;
+  },
   /** Next pressed while a pause brakes: the next track, started up once the tape stands still. */
   nextAfterPause: false,
   /** Next pressed on the last track while Autoplay fetches: on into its first pick once it is in. */
@@ -311,20 +349,18 @@ const tape = {
   },
   set glide(v: Glide | null) {
     motionNow.glide = v;
+    tapeChanged();
   },
 };
 /** Something new begins (a jump, a new queue, a stop): every transient part of the tape cleared at once, so nothing of
  *  what went before lingers (a hold, a pending Next, an armed stream, a quiet rest, a ramp's hold on the counter). A
  *  wind under way and a ramp end through their own (endRewind, atOnce), which the callers run first. */
 function resetTape() {
-  if (tape.pointArmed) disarm(tape.pointArmed);
-  if (tape.prearmed) disarm(tape.prearmed.armed);
-  disarm(tape.turnArmed);
+  pointArms.drop();
+  preArms.drop();
+  turnArms.drop();
   aim(null);
   Object.assign(tape, {
-    turnArmed: null,
-    pointArmed: null,
-    prearmed: null,
     holding: null,
     plainHold: null,
     nextAfterPause: false,
@@ -338,36 +374,68 @@ function resetTape() {
 }
 /** The tape's rules, checked with every tick (the page's own player): a broken one written to the playback log (once in
  *  CHECK_EVERY_MS a rule) and, where that is safe, put right, so no stray part of the state lingers unseen. */
-const CHECK_EVERY_MS = 10_000;
-const checked = new Map<string, number>();
-let since: Since = { shownRamp: 0, knobTurn: 0, idleHold: 0 };
-/** The tape's rules (lib/player/tape, pure and tested) applied: each broken one logged, and put right where it says. */
-function checkTape() {
+/** The tape's passing states, each with its deadline (lib/player/graces): set as it is entered, the moment the tape
+ *  changes; reached, a transition of its own. On the page's own player only, as its clock (`tick`) runs. */
+let graces: Deadlines = NO_DEADLINES;
+let settling = false;
+/** The tape changed: what follows from it is settled once the change is done (its setters run in a row). */
+function tapeChanged() {
+  if (settling) return;
+  settling = true;
+  queueMicrotask(settleTape);
+}
+const said = new Map<string, number>();
+const SAY_EVERY_MS = 10_000;
+function sayOnce(what: string, fields: Record<string, unknown> = {}) {
   const now = performance.now();
-  const r = tapeRules(
+  if (now - (said.get(what) ?? -Infinity) < SAY_EVERY_MS) return;
+  said.set(what, now);
+  playback('warn', `tape broke: ${what}`, fields);
+}
+/** What follows from the tape as it stands: the knob forward when nothing plays backwards; the passing states'
+ *  deadlines entered or left; those reached, their transitions. A wind is committed to playing wherever it begins
+ *  (startWind) and gives that up as it ends (endRewind): one found otherwise is said, not changed. */
+function settleTape() {
+  settling = false;
+  if (!audio || local.index < 0 || handed()) return;
+  const now = performance.now();
+  if (tape.rewinding && tape.committed === null) sayOnce('a wind without its commitment');
+  if (tapeDir.state === 'backward' && !tape.rewinding?.reverse) {
+    sayOnce('the knob backwards with nothing playing backwards');
+    tapeDir.state = 'forward';
+  }
+  const free = tape.committed === null && !tape.rewinding;
+  graces = entered(
+    graces,
     {
-      committed: tape.committed,
-      rewinding: tape.rewinding,
-      holding: tape.holding,
-      plainHold: tape.plainHold,
-      glide: tape.glide,
-      shownRamp: ramping.dir,
-      knob: tapeDir.state,
+      shownRamp: ramping.dir !== null && free,
+      knobTurn: tapeDir.state === 'stopping' || tapeDir.state === 'returning',
+      idleHold: !!tape.holding && free,
+      quietRest: tape.quietPause && free ? tape.quietUntil : null,
     },
-    since,
     now,
   );
-  since = r.since;
-  for (const b of r.broken) {
-    if (now - (checked.get(b.rule) ?? -Infinity) >= CHECK_EVERY_MS) {
-      checked.set(b.rule, now);
-      playback('warn', `tape broke: ${b.rule}`, b.fix === 'endShownRamp' ? { dir: ramping.dir } : b.rule.startsWith('a turn') ? { state: tapeDir.state } : {});
-    }
-    if (b.fix === 'endShownRamp') rampEnds();
-    else if (b.fix === 'knobForward') tapeDir.state = 'forward';
-    else if (b.fix === 'dropHold') tape.holding = null;
+  for (const k of due(graces, now)) {
+    graces = { ...graces, [k]: null };
+    if (k === 'shownRamp') {
+      sayOnce('a ramp shown with none running', { dir: ramping.dir });
+      rampEnds();
+    } else if (k === 'knobTurn') {
+      sayOnce('a turn of the knob stuck', { state: tapeDir.state });
+      tapeDir.state = 'forward';
+    } else if (k === 'idleHold') {
+      sayOnce('a hold with nothing under way');
+      tape.holding = null;
+    } else tape.quietPause = false;
   }
 }
+// The shown ramp and the knob are the tape's too: their changes are the tape's.
+$effect.root(() => {
+  $effect(() => {
+    void [ramping.dir, tapeDir.state];
+    tapeChanged();
+  });
+});
 
 // --- MP3: the LAME/Xing header (the measured rule: only the encoder delay precedes the first real sample) ---
 
@@ -763,8 +831,8 @@ function tick() {
   if (!audio || local.index < 0 || handed()) return;
   // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere; the tape's
   // own stop (quiet) shows playing.
-  checkTape();
-  if (tape.quietPause && tape.committed === null && !tape.rewinding && performance.now() > tape.quietUntil) tape.quietPause = false;
+  // The tape's deadlines reached (lib/player/graces): their transitions, at the clock's moments.
+  settleTape();
   local.paused = tape.quietPause ? false : (tape.committed ?? audio.paused);
   const w = where(tape.heldAt ?? audio.currentTime);
   if (w && tape.rewinding) local.position = tape.rewindPos ?? local.position;
@@ -2977,14 +3045,14 @@ function armPoint(to: number, lead: number, motion: PointMotion): Armed | null {
  *  the place. False where it cannot (the caller winds the stopping way). */
 function flyTo(to: number, motion: PointMotion, tries = 0): boolean {
   if (!audio || audio.paused || tape.committed !== null || tape.rewinding) return false;
-  if (tape.pointArmed) disarm(tape.pointArmed);
+  pointArms.drop();
   const armed = armPoint(to, FLY_LEAD * (tries + 1), motion);
   if (!armed) return false;
-  tape.pointArmed = armed;
+  pointArms.arm(armed);
   windAsked(true);
   const giveUp = () => {
     disarm(armed);
-    if (tape.pointArmed === armed) tape.pointArmed = null;
+    pointArms.release(armed);
   };
   const watch = () => {
     if (tape.pointArmed !== armed) return;
@@ -2995,7 +3063,7 @@ function flyTo(to: number, motion: PointMotion, tries = 0): boolean {
     }
     if (w.offset >= armed.from - 0.02) {
       if (armed.clip.readyState >= 3) {
-        tape.pointArmed = null;
+        pointArms.take();
         // Its floor from the stream as made (way, the app's too): f = (length − area) / (D − area). A server that
         // made it from still (before fly=1) gives about none: then the stopping way.
         const D = armed.D ?? 0;
@@ -3540,18 +3608,16 @@ export function windArm(dir: 'back' | 'forward') {
   const here = where();
   const lead = !playingNow ? 0 : d > 0 ? HOLD_S + FLY_LEAD : stand && here ? stand.pos - here.offset : 0;
   const armed = armWind(d, lead, d > 0 && playingNow ? FLY_SPEED : holdFor(d).speed);
-  if (armed) tape.prearmed = { dir: d, armed, at: performance.now() };
+  if (armed) preArms.arm({ dir: d, armed, at: performance.now() });
 }
 /** The touch was a tap after all: its stream dropped. */
 export function windDisarm() {
-  if (tape.prearmed) disarm(tape.prearmed.armed);
-  tape.prearmed = null;
+  preArms.drop();
 }
 /** The pre-armed stream for a hold in `dir`, where it still fits (the same track, not passed yet). `stopping`: the hold
  *  stops first, resting where it began: the stream must start there. */
 function takeArmed(dir: 1 | -1, stopping = false): Armed | null {
-  const p = tape.prearmed;
-  tape.prearmed = null;
+  const p = preArms.take();
   if (!p) return null;
   const here = where();
   const stand = stopping ? standOf() : null;
@@ -3806,11 +3872,11 @@ async function stepTape() {
     tapeDir.state = 'stopping';
     // Its stream asked now, from where the brake will stand, loaded while it brakes (measured on the owner's tablet,
     // 2026-10-28: asked at the stop, 135–180 ms of silence before backwards).
-    disarm(tape.turnArmed);
-    tape.turnArmed = armBackwards();
+    const asked = armBackwards();
+    if (asked) turnArms.arm(asked);
+    else turnArms.drop();
     await turned(() => pauseRamped());
-    const armed = tape.turnArmed;
-    tape.turnArmed = null;
+    const armed = turnArms.take();
     if (tapeDir.state !== 'stopping') return void disarm(armed);
     tapeDir.state = 'forward';
     if (tapeDir.want === 'L') return void backwards(armed);
