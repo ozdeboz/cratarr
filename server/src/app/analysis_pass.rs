@@ -360,8 +360,9 @@ pub async fn signals(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Si
 }
 
 /// What is kept of a file's beats and signals, as the file is now. Signals of an older form count as not worked out;
-/// so do both while Beat this! has heard the file and the beats kept are not its (decision 0049, amended).
-fn kept(cat: &Catalogue, folder: i64, rel: &str) -> (Option<Beats>, Option<Signals>) {
+/// so do both while Beat this! has heard the file and the beats kept are not its (decision 0049, amended). Also what a
+/// page asks for when it must not cause a decode (`?stored=1`, 0.12: a track's menu).
+pub(crate) fn kept(cat: &Catalogue, folder: i64, rel: &str) -> (Option<Beats>, Option<Signals>) {
     if !cat.beats_are_beat_this(folder, rel) && cat.beat_this_of(folder, rel).is_some() {
         return (None, None);
     }
