@@ -42,6 +42,14 @@ class Prefs(context: Context) {
             return p.getString(IN_USE, null)?.takeIf { it == local || it == public } ?: public ?: local
         }
 
+    /** The id of the Cratarr the app belongs to (its health check's `instance`): learned at the public address over
+     *  https, else the first time one answers; the local address is that Cratarr only when it answers with it. */
+    var instance: String?
+        get() = p.getString(INSTANCE, null)
+        set(value) {
+            p.edit().putString(INSTANCE, value).apply()
+        }
+
     /** The address in use as last chosen (null before any was). */
     val inUse: String? get() = p.getString(IN_USE, null)
 
@@ -325,7 +333,7 @@ class Prefs(context: Context) {
     )
 
     /** A setting's range and starting value. */
-    private class Range(val min: Float, val max: Float, val start: Float)
+    internal class Range(val min: Float, val max: Float, val start: Float)
 
     /** The tape's mechanics, alike for every motion; a wind to a point back and forward (duration, speed limit); a hold
      *  back and forward (starting and top speed). */
@@ -479,8 +487,9 @@ class Prefs(context: Context) {
         const val START_STOP_SKIPS = "start_stop_skips"
         const val START_STOP_REWIND = "start_stop_rewind"
 
-        /** The Tape page's settings (the owner, 2026-10-27): each one's range and start, as the page's lib/startStop. */
-        private val TAPE_SETTINGS: Map<String, Map<String, Range>> = mapOf(
+        /** The Tape page's settings (the owner, 2026-10-27): each one's range and start, as the page's lib/startStop
+         *  (and shared/rules.json, which the tests check this against). */
+        internal val TAPE_SETTINGS: Map<String, Map<String, Range>> = mapOf(
             "tape" to mapOf(
                 "attackMs" to Range(100f, 1500f, 400f),
                 "brakeMs" to Range(100f, 1500f, 250f),
@@ -538,6 +547,7 @@ class Prefs(context: Context) {
         private const val OLD_SIGN_IN_PASSWORD = "sign_in_password"
         const val SESSION_MARK = "session_mark"
         const val IN_USE = "address_in_use"
+        const val INSTANCE = "instance"
         const val PAGE_PREFS = "page_prefs"
         const val PLAYER_NAME = "player_name"
         const val STAY_READY = "stay_ready"

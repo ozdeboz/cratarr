@@ -279,6 +279,17 @@ impl Sessions {
         self.set_setting("link_secret", &s)?;
         Ok(s.into_bytes())
     }
+
+    /// This install's id, made once (no secret: the health check shows it to anyone): the app learns it at the public
+    /// address and binds its bridge to the local one only when that answers with it too.
+    pub fn instance_id(&self) -> Result<String> {
+        if let Some(s) = self.setting("instance_id") {
+            return Ok(s);
+        }
+        let s = random_hex(16);
+        self.set_setting("instance_id", &s)?;
+        Ok(s)
+    }
 }
 
 /// Every API key starts with this, so one is known for what it is wherever it turns up.
@@ -393,6 +404,14 @@ mod tests {
         let secret = s.link_secret().unwrap();
         assert_eq!(secret.len(), 64);
         assert_eq!(s.link_secret().unwrap(), secret, "made once");
+    }
+
+    #[test]
+    fn the_instance_id_is_made_once_and_kept() {
+        let s = Sessions::open(None).unwrap();
+        let id = s.instance_id().unwrap();
+        assert_eq!(id.len(), 32);
+        assert_eq!(s.instance_id().unwrap(), id);
     }
 
     #[test]

@@ -1695,7 +1695,7 @@ class StartStop(
         /** A clip not ready by then: the track restarts as ever. */
         private const val REWIND_WAIT_MS = 1_500L
         /** A tap's and a winding seek's longest (a hold has no end but the edge). */
-        private const val WIND_CAP_MS = 12_000L
+        internal const val WIND_CAP_MS = 12_000L
         /** A flying forward hold's stream speed: at the lowest rate ([LOW]) it sounds at the track's own speed. */
         private const val FLY_SPEED = 1f / LOW
         /** It starts this far ahead of where it was pressed: where the track will be when its stream sounds. */

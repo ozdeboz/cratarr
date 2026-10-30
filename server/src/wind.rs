@@ -642,6 +642,27 @@ pub fn chain_map(winds: &[Wind]) -> Vec<(u64, usize, u64)> {
 mod tests {
     use super::*;
 
+    /// The player rules' one table (shared/rules.json; the audit, 2026-10-29), which the app's and the page's tests
+    /// check too.
+    fn rules() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../shared/rules.json")).unwrap()
+    }
+
+    #[test]
+    fn the_winds_rules_and_a_brake_are_the_tables() {
+        let r = rules();
+        assert_eq!(r["wind_cap_ms"].as_u64(), Some(LONGEST_FIT_MS));
+        assert_eq!(r["wind_shortest_ms"].as_u64(), Some(SHORTEST_FIT_MS));
+        for (i, b) in r["brake"].as_array().unwrap().iter().enumerate() {
+            let brake = Brake { v0: b["v0"].as_f64().unwrap(), to: b["to"].as_f64().unwrap(), secs: b["length_ms"].as_f64().unwrap() / 1000.0, at: 0.0 };
+            for p in b["at"].as_array().unwrap() {
+                let s = p["t_ms"].as_f64().unwrap() / 1000.0;
+                assert!((brake.v(s) - p["v"].as_f64().unwrap()).abs() < 1e-9, "brake {i} at {s} s: speed");
+                assert!((brake.w(s) * 1000.0 - p["way_ms"].as_f64().unwrap()).abs() < 1e-6, "brake {i} at {s} s: way");
+            }
+        }
+    }
+
     struct Tone {
         hz: f64,
         secs: f64,

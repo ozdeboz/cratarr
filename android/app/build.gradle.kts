@@ -7,6 +7,9 @@ plugins {
     alias(libs.plugins.android.app)
 }
 
+/** VERSION at the repository's root (the audit, 2026-10-29: one version for everything). */
+val cratarrVersion: String = rootProject.projectDir.resolve("../VERSION").readText().trim()
+
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_11
@@ -21,8 +24,10 @@ android {
         applicationId = "app.cratarr"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionName = "0.9.18"
-        versionCode = 29
+        // The repository's one version (VERSION, scripts/version.sh); its code worked out from it, so each
+        // release is newer than the one before without a second number to keep.
+        versionName = cratarrVersion
+        versionCode = cratarrVersion.split('.').map(String::toInt).let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
     }
 
     signingConfigs {
@@ -137,4 +142,5 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.work.runtime)
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
 }

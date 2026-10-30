@@ -3,6 +3,9 @@
 //! jumps the log says by how much and what was running then: the requests not yet answered (the path's first three
 //! parts, and for how long) and the analysis' file decode (`app::analysis_pass`). Once a jump; again only after it
 //! has come down.
+//!
+//! The budget (the audit, 2026-10-29): a decode starts only while there is room for one under the container's limit
+//! (`room`). The analysis pass waits for it; a decode asked for now is not made without it.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -14,6 +17,12 @@ const JUMP_MB: u64 = 150;
 /// How long the lowest is remembered.
 const LOW_FOR: Duration = Duration::from_secs(20);
 const EVERY: Duration = Duration::from_millis(250);
+/// What one decode may take on top of what runs (MB): the jumps the log has seen were 150 and more.
+const DECODE_MB: u64 = 250;
+/// Of the container's limit, how much Cratarr fills at most (the rest for the kernel's pages).
+const FILL: f64 = 0.9;
+/// How often a wait for room looks again.
+const ROOM_EVERY: Duration = Duration::from_secs(5);
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 static REQUESTS: Mutex<Option<HashMap<u64, (String, Instant)>>> = Mutex::new(None);
@@ -55,6 +64,44 @@ fn resident_mb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let kb: u64 = status.lines().find(|l| l.starts_with("VmRSS:"))?.split_whitespace().nth(1)?.parse().ok()?;
     Some(kb / 1024)
+}
+
+/// The container's memory limit in MB (cgroup v2, else v1); none when there is none.
+fn limit_mb() -> Option<u64> {
+    static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]
+            .iter()
+            .find_map(|f| std::fs::read_to_string(f).ok())
+            .and_then(|t| t.trim().parse::<u64>().ok())
+            .filter(|b| *b < 1 << 50)
+            .map(|b| b / (1024 * 1024))
+    })
+}
+
+/// Whether a decode fits: what is resident and one decode within the limit's fill; with either unknown, it does.
+fn fits(resident: Option<u64>, limit: Option<u64>) -> bool {
+    match (resident, limit) {
+        (Some(r), Some(l)) => r + DECODE_MB <= (l as f64 * FILL) as u64,
+        _ => true,
+    }
+}
+
+/// Whether there is room for a decode now.
+pub fn room() -> bool {
+    fits(resident_mb(), limit_mb())
+}
+
+/// Waits until there is room for a decode; the wait is written down once.
+pub async fn wait_for_room() {
+    let mut said = false;
+    while !room() {
+        if !said {
+            tracing::info!(target: "memory", mb = resident_mb().unwrap_or(0), limit_mb = limit_mb().unwrap_or(0), "waiting for room to decode");
+            said = true;
+        }
+        tokio::time::sleep(ROOM_EVERY).await;
+    }
 }
 
 /// What was running, as one line.
@@ -119,6 +166,14 @@ mod tests {
         assert_eq!(jumped(200, 400, false), (true, false));
         assert_eq!(jumped(200, 600, true), (false, false), "still up: said already");
         assert_eq!(jumped(200, 250, true), (false, true), "down again");
+    }
+
+    #[test]
+    fn a_decode_fits_under_the_limit_or_waits() {
+        assert!(fits(Some(276), Some(768)), "the NAS at rest: 276 + 250 under 691");
+        assert!(!fits(Some(450), Some(768)));
+        assert!(fits(Some(450), None), "no limit known");
+        assert!(fits(None, Some(768)), "nothing resident known");
     }
 
     #[test]

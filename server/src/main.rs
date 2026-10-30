@@ -78,6 +78,21 @@ fn healthcheck() -> i32 {
     i32::from(!reply.starts_with("HTTP/1.1 200") && !reply.starts_with("HTTP/1.0 200"))
 }
 
+/// Every route behind the sign-in requirement (decision 0043), and with each connection's address: the sign-in page's
+/// throttle reads it where no proxy names the client. Each request's id around all of it, the sign-in layer's refusals
+/// too (decision 0045). The whole router, as `main` serves it and the tests sweep it (`whole_router`).
+fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -> axum::Router {
+    api::router(app)
+        .merge(serve::routes::router(served.clone()))
+        // A change sent again with its key (a page's offline changes) made once, inside the access check (whose it is).
+        .layer(axum::middleware::from_fn(idempotent::once))
+        .layer(axum::middleware::from_fn_with_state(served, serve::access::require))
+        .layer(axum::middleware::from_fn(api::request_ids))
+}
+
+#[cfg(test)]
+mod whole_router;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
@@ -158,6 +173,7 @@ async fn main() -> Result<()> {
     serve::proxy::set(cfg.proxies.clone());
     let kept_log = diagnostics::start_global(cfg.data_dir.as_deref().map(|d| std::path::Path::new(d).join("diagnostics.sqlite")).as_deref(), pending)
         .context("cannot start the diagnostics log")?;
+    diagnostics::keep_panics();
     tracing::info!(target: "server", version = env!("CARGO_PKG_VERSION"), "started");
     for retired in config::RETIRED {
         if env(retired).is_some() {
@@ -273,15 +289,7 @@ async fn main() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!("listening on {bind}");
-    // Every route behind the sign-in requirement (decision 0043), and with each connection's address: the sign-in
-    // page's throttle reads it where no proxy names the client.
-    // Each request's id around all of it, the sign-in layer's refusals too (decision 0045).
-    let routes = api::router(app.clone())
-        .merge(serve::routes::router(served.clone()))
-        // A change sent again with its key (a page's offline changes) made once, inside the access check (whose it is).
-        .layer(axum::middleware::from_fn(idempotent::once))
-        .layer(axum::middleware::from_fn_with_state(served, serve::access::require))
-        .layer(axum::middleware::from_fn(api::request_ids));
+    let routes = routes(app.clone(), served);
     // Stopped (docker stop's SIGTERM, or Ctrl-C): no new requests, the players told why their connections end, and
     // what is still open (the players' and pages' live connections never end by themselves) cut after a few seconds.
     let (stopping, mut stopped) = tokio::sync::watch::channel(false);
