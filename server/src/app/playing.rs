@@ -59,6 +59,9 @@ pub struct UpcomingView {
     pub album_id: Option<String>,
     pub addable: bool,
     pub duration_secs: Option<f64>,
+    /// Who asked for it, a queue request accepted (0.9.19).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -498,6 +501,7 @@ impl PlayingService {
                     album: u.track.album,
                     album_id: u.track.album_id,
                     duration_secs: u.duration_secs,
+                    asked_by: u.asked_by,
                 })
                 .collect(),
             source: a.cfg.id.clone(),

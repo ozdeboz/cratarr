@@ -5,6 +5,7 @@
   // in This device (lib/settings/DevicePart, its Tape row) and in the sheet a long press on the play button opens
   // (lib/StartStopSheet). The browser's own (prefs), or the app's player's (told to the app, as Level the volume).
   import { appInfo, inApp, setDevice } from '../app.svelte';
+  import { setStartStopNow, startStopNow } from '../device.svelte';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { panSafe } from '../panSafe';
@@ -56,14 +57,8 @@
   const isHold = (m: Motion) => m === 'holdBack' || m === 'holdFwd';
   const backwards = (m: Motion) => m === 'toStart' || m === 'seekBack' || m === 'holdBack';
 
-  const ss = $derived(inApp ? appInfo.startStop : prefs.startStop);
-  function setSS(change: Partial<StartStop>) {
-    const next = { ...ss, ...change };
-    if (inApp) {
-      appInfo.startStop = next;
-      setDevice({ startStop: next });
-    } else prefs.startStop = next;
-  }
+  const ss = $derived(startStopNow());
+  const setSS = setStartStopNow;
 
   // Every value with as many decimals as its step has, always (the owner, 2026-10-28: 0.25 then 0.3 moved the slider's
   // readout while it was held).

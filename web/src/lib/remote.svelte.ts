@@ -11,7 +11,7 @@ import { on } from './events.svelte';
 import { toast } from './toast.svelte';
 import { ramping, rampPressed, rampTurned } from './ramping.svelte';
 import { appInfo, inApp } from './app.svelte';
-import { prefs } from './prefs.svelte';
+import { startStopNow } from './device.svelte';
 import { RESTART_AFTER, windUpMs } from './localPlayer.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
@@ -227,7 +227,7 @@ export const shownPaused = (): boolean => (rampBusy() && ramping.effect ? rampin
 /** The play button: play or pause; during the page's own ramp, that ramp turned round. */
 export function playPause() {
   if (rampInert()) return;
-  const ss = inApp ? appInfo.startStop : prefs.startStop;
+  const ss = startStopNow();
   // The app's ramp turned round at the press, from the fill shown (the page's own turns itself: lib/localPlayer).
   const ramps = port().ramps;
   if (ramps && ss.mode !== 'off' && rampBusy() && inApp && ramping.effect) rampTurned(ss.stopMs, ss.ms);

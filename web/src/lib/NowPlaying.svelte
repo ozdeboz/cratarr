@@ -33,6 +33,7 @@
   import { port } from './player/port.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
+  import { startStopNow } from './device.svelte';
   import { holdWind, holdsHere, type Hold } from './holdWind';
   import { local, rewindNow, windDrag, windUpMs } from './localPlayer.svelte';
   import TapeDeck from './TapeDeck.svelte';
@@ -95,14 +96,14 @@
   const memberCount = $derived(shownPlaylists().filter((p) => p.member).length);
   const src = $derived(shownCover());
   /** Start and stop on for this device's player: a start winds up (the play button's fill stays empty while paused). */
-  const armed = $derived(port().ramps && (inApp ? appInfo.startStop.mode : prefs.startStop.mode) !== 'off');
+  const armed = $derived(port().ramps && startStopNow().mode !== 'off');
   /** A ramp of this device's player under way, its way. */
   // The fill follows play and pause only, never the tape's own stops (the owner, 2026-10-27).
   const ramp = $derived(port().ramps && ramping.effect ? ramping.dir : null);
   /** Paused with Start and stop on: how much of the wind-up the fill already shows, from where it would start (as it
    *  is held while seeking too): near the track's start the wind-up is shorter (lib/localPlayer windUpMs). */
   const pre = $derived.by(() => {
-    const ss = inApp ? appInfo.startStop : prefs.startStop;
+    const ss = startStopNow();
     // The app's vinyl starts from a quarter of its speed (Android's floor), the browser's from 0.07.
     return ss.ms ? 1 - windUpMs(ss.ms, ss.mode, pos, inApp ? 0.25 : undefined) / ss.ms : 1;
   });

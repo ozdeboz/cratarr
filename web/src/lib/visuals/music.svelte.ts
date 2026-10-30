@@ -8,7 +8,8 @@
 import { NEXT } from '../analysisAsks';
 import { port } from '../player/port.svelte';
 import { getTrackGain, trackState, type TrackGain } from '../api';
-import { appInfo, inApp } from '../app.svelte';
+import { inApp } from '../app.svelte';
+import { levelOn } from '../level.svelte';
 import { prefs } from '../prefs.svelte';
 import { audioTap } from '../localPlayer.svelte';
 import { paused, playing } from '../remote.svelte';
@@ -37,7 +38,7 @@ const tempos = new Map<string, number | null>();
  *  its peak), in dB; 0 where it does not level, or the gain is not known yet. */
 const gains = new Map<string, TrackGain | null>();
 function levelDb(source: string, id: string): number {
-  if (!(inApp ? appInfo.levelling : prefs.levelling)) return 0;
+  if (!levelOn()) return 0;
   const key = `${source}/${id}`;
   if (!gains.has(key)) {
     gains.set(key, null);

@@ -7,11 +7,9 @@
 // (the owner, 2026-10-29: a long hold stopped by itself after a few seconds, the finger's drift of a few pixels starting
 // the player's sideways pan, whose pointercancel let the hold go). How each hold ended goes to the playback log.
 
-import { appInfo, inApp } from './app.svelte';
-
-import { port } from './player/port.svelte';
+import { startStopNow } from './device.svelte';
 import { playback } from './deviceLog';
-import { prefs } from './prefs.svelte';
+import { port } from './player/port.svelte';
 import { windsBy } from './startStop';
 
 const HOLD_MS = 350;
@@ -20,7 +18,7 @@ const HOLD_MS = 350;
  *  (the owner, 2026-10-28: each motion on its own), another of Cratarr's players deciding for itself (`player`). */
 export function holdsHere(dir: 'back' | 'forward', player: unknown): boolean {
   if (!port().holdsQueue) return !!player;
-  return windsBy(inApp ? appInfo.startStop : prefs.startStop, dir === 'back' ? 'holdBack' : 'holdFwd');
+  return windsBy(startStopNow(), dir === 'back' ? 'holdBack' : 'holdFwd');
 }
 
 /** `onpress`: the touch began (a hold's stream asked already, lib/localPlayer windArm); `oncancel`: it was a tap;
