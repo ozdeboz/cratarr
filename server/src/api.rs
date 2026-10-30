@@ -140,6 +140,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/classical/composers/{key}", get(classical_composer))
         .route("/api/tracks/{source}/{id}/versions", get(track_versions))
         .route("/api/status", get(status))
+        // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.
+        .route("/api/capabilities", get(capabilities))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
         // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
@@ -3822,6 +3824,12 @@ impl From<ToggleError> for ApiError {
 
 async fn status(State(app): State<Arc<App>>) -> Json<StatusView> {
     Json(app.status().await)
+}
+
+/// What this install can do (0.11, decision 0085), asked once a page load: the code's features and what is set up and
+/// switched on, names only (`app::capabilities`).
+async fn capabilities(ctx: Ctx) -> Result<Json<crate::app::capabilities::Capabilities>, ApiError> {
+    Ok(Json(crate::app::capabilities::read(&ctx.app, ctx.served.clone()).await.map_err(ToggleError::from)?))
 }
 
 #[derive(Deserialize)]

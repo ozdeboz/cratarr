@@ -307,6 +307,17 @@ impl Library {
         self.connected().into_iter().map(|(a, s)| (a.cfg.id.clone(), s)).collect()
     }
 
+    /// Whether a server of this kind (`source::*::KIND.id`) is set up and switched on, answering or not (0.11, decision
+    /// 0085: the capability list).
+    pub(super) fn kind_on(&self, kind: &str) -> bool {
+        self.live().iter().any(|a| a.cfg.enabled && a.cfg.kind == kind)
+    }
+
+    /// Some enabled server has an Incoming library: the header's `incoming` and the capability list's.
+    pub(super) fn incoming_on(&self) -> bool {
+        self.live().iter().any(|a| a.cfg.enabled && !a.cfg.libraries.incoming.is_empty())
+    }
+
     /// The ids of Cratarr's own libraries (sources of its own kind): where its favourites are.
     pub fn own_sources(&self) -> Vec<String> {
         self.live().iter().filter(|a| a.cfg.kind == crate::source::cratarr::KIND.id).map(|a| a.cfg.id.clone()).collect()
