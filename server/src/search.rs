@@ -100,12 +100,13 @@ pub fn ranked(close: u8, typos: Option<usize>, covered: f32, at: usize, of: usiz
 /// Every index term a query's word meets with typos (`meet`), the fewest first, at most `TYPO_TERMS`: what the FTS
 /// query adds for it (`fts_with`). `terms` are the index's terms beginning with the word's first letter.
 ///
-/// Where the FTS path still differs from the matcher (0.12): the library's FTS tables hold words, so a word is found
-/// as a word, a word's start or one of its typo terms only. Separators (a query "hiphop" for an artist "Hip Hop
-/// Orchestra", "lo fi" for "Lofi Girl"), aliases and trigram likeness reach only what is matched here in memory
-/// (`matches`, `rank`: names the FTS tables do not hold, and the FTS's own hits as they are ranked). The next step: a
-/// second FTS5 table with `tokenize = 'trigram'` over each name's letters run together (`matcher::letters`), asked
-/// for candidates by the query's letters, which the matcher then judges (`matcher::Index` or `matcher::score`).
+/// The library's FTS tables hold words, so through them a word is found as a word, a word's start or one of its typo
+/// terms only; separators and trigram likeness (a query "hiphop" for an artist "Hip Hop Orchestra", "lofi" for an album
+/// "Lo-Fi Beats", "xadiohead" for Radiohead) come from the trigram tables beside them (0.12: one matcher, search in
+/// general; `trigram_query`), by the names' own letters: artists' and albums' names, tracks' titles. What is still
+/// missing there: a track found by its artist's or album's name spelled otherwise (the trigram tables hold titles
+/// only), and aliases (a genre's are matched in memory, `matches`, with the genres' names; the library's other names
+/// have none).
 pub fn typo_terms<'a>(w: &str, terms: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     if typo_budget(w) == 0 {
         return Vec::new();
@@ -117,6 +118,26 @@ pub fn typo_terms<'a>(w: &str, terms: impl IntoIterator<Item = &'a str>) -> Vec<
 
 /// The index terms a word may stand for with typos, at most.
 pub const TYPO_TERMS: usize = 24;
+
+/// The query for the library's trigram tables (0.12: one matcher, search in general): every trigram of the words'
+/// letters run together (`matcher::letters` of the query, as the tables hold each name's), any of them, so a name is a
+/// candidate however it is spelled or spaced and with typos ("radiohed" shares five of its six with Radiohead), the
+/// tables' bm25 putting those sharing more, and rarer, first; the matcher judges them. None under three letters: a
+/// trigram table finds nothing shorter.
+pub fn trigram_query(words: &[String]) -> Option<String> {
+    let letters: Vec<char> = words.concat().chars().collect();
+    if letters.len() < 3 {
+        return None;
+    }
+    let mut grams: Vec<String> = Vec::new();
+    for t in letters.windows(3) {
+        let g: String = t.iter().collect();
+        if !grams.contains(&g) {
+            grams.push(g);
+        }
+    }
+    Some(grams.iter().map(|g| format!("\"{g}\"")).collect::<Vec<_>>().join(" OR "))
+}
 
 /// The FTS5 query for these words with their typos (`typo_terms`, by word): every word, as a word, a word's start or
 /// one of its terms with typos.
@@ -204,6 +225,17 @@ mod tests {
     fn the_fts_query_wants_every_word_whole_or_begun_and_nothing_else() {
         assert_eq!(fts_with(&words("Björk Post"), &[]).as_deref(), Some("(\"bjork\" OR \"bjork\"*) AND (\"post\" OR \"post\"*)"));
         assert_eq!(fts_with(&words("\" *"), &[]), None);
+    }
+
+    #[test]
+    fn the_trigram_query_asks_for_any_trigram_of_the_letters_run_together() {
+        // 0.12: separators don't count ("Hip-Hop" is hiphop), each trigram once, nothing under three letters.
+        assert_eq!(trigram_query(&words("Hip-Hop")).as_deref(), Some("\"hip\" OR \"iph\" OR \"pho\" OR \"hop\""));
+        assert_eq!(trigram_query(&words("lo fi")).as_deref(), Some("\"lof\" OR \"ofi\""));
+        assert_eq!(trigram_query(&words("aaaa")).as_deref(), Some("\"aaa\""));
+        assert_eq!(trigram_query(&words("Björk")).as_deref(), Some("\"bjo\" OR \"jor\" OR \"ork\""));
+        assert_eq!(trigram_query(&words("a b")), None);
+        assert_eq!(trigram_query(&words("\" *")), None);
     }
 
     #[test]
