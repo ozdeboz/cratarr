@@ -17,6 +17,7 @@ import { canPlayHere, local, pageVolume, playOnCommand, rewindNow, stop } from '
 import { tapeDir } from './ramping.svelte';
 import { followGroup, leaveGroup, listening } from './groupListen.svelte';
 import { playOn, drivenName, hereAgain } from './playOn.svelte';
+import { followTo } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { appInfo } from './app.svelte';
 import { asksSignIn, refused, refusedFor, toSignIn } from './reach.svelte';
@@ -322,6 +323,11 @@ function connect() {
     if (m.command === 'sleep') {
       const atMs = typeof m.at_ms === 'number' ? m.at_ms : null;
       setOwnSleep(atMs === null && m.end_of_track !== true ? null : { atMs, endOfTrack: m.end_of_track === true });
+    } else if (m.command === 'stop' && typeof m.moved_to === 'string' && m.moved_to !== player) {
+      // The music moved to another player (a handover there): this one stops, and its screen follows the music
+      // (0.9.19; the owner, 2026-10-30: the ThinkPad stayed on its own empty player when the tablet took it over).
+      playOnCommand(m);
+      followTo(m.moved_to);
     } else if (playOnCommand(m)) {
       // A play the browser may hold back: until the page has been touched once, it asks for that.
       const touched = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive;
