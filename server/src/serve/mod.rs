@@ -188,10 +188,11 @@ impl Serve {
     /// the fallback.
     pub async fn sign_in(&self, name: &str, password: &str) -> Option<String> {
         // The directory's members are Cratarr's users (decision 0051): an account made at the first sign-in, brought back
-        // if it had left, an administrator as the directory says; asked only of an active one when the directory was
-        // unreachable. Cratarr's own account of the same name (not from the directory) is that account.
-        let account = |a: &str, admin: Option<bool>| match admin {
-            Some(admin) => match self.users.from_directory(a, admin) {
+        // if it had left, an administrator as the directory says, with the display name it gives; asked only of an active
+        // one when the directory was unreachable. Cratarr's own account of the same name (not from the directory) is that
+        // account.
+        let account = |a: &str, said: Option<ldap::Said>| match said {
+            Some(said) => match self.users.from_directory(a, said.admin, said.display_name.as_deref()) {
                 Ok(u) => u.active.then_some(u.name),
                 Err(e) => {
                     tracing::warn!(target: "signin", user = %a, "the account from the directory could not be kept: {e:#}");
