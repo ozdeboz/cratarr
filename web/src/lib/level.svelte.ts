@@ -31,7 +31,7 @@ export function playingLevelOn(): boolean {
 export function playingLevelUnknown(): 'typical' | 'untouched' {
   const { players } = levelTarget();
   if (!players.length || players[0] === selfName()) return levelUnknown();
-  return reported(players[0])?.level_unknown ?? 'typical';
+  return reported(players[0])?.level_unknown === 'untouched' ? 'untouched' : 'typical';
 }
 /** Sets the player playing (each of a group's), this device itself directly. */
 function toPlaying(command: { on?: boolean; unknown?: 'typical' | 'untouched' }, here: () => void) {

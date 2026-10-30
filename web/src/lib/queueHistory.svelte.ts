@@ -2,7 +2,7 @@
 // to take up again where they were left, rename or delete. Cratarr keeps each player's (the app's own, a player driven
 // from here); a browser playing itself keeps its own, in this browser only (localPlayer's `keptHere`).
 
-import { getPlayer, playerCommand, type QueueItem } from './api';
+import { getPlayer, playerCommand, type PlayerCommand, type QueueItem } from './api';
 import { appInfo, inApp } from './app.svelte';
 import { deleteLocal, keptHere, localQueues, local, renameLocal, switchLocal } from './localPlayer.svelte';
 import { drivenName, playOn } from './playOn.svelte';
@@ -43,7 +43,7 @@ export async function loadQueues() {
   queues.known = true;
 }
 
-async function command(c: Record<string, unknown>, here: () => void) {
+async function command(c: PlayerCommand, here: () => void) {
   const name = player();
   try {
     if (name === null) here();
