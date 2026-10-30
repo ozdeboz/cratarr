@@ -221,9 +221,9 @@ pub async fn list(app: &super::App, serve: &Serve, account: &str) -> Result<List
     let mine = serve.userdata.requests(Some(account), None, LIST)?;
     let waiting = if may.manage_requests { Some(serve.userdata.requests(None, Some(PENDING), LIST)?) } else { None };
     let (f, lib) = (fetcher(app), library(serve).await);
-    let mine = views(f.as_deref(), lib.as_ref(), mine).await;
+    let mine = views(f.as_deref(), lib.as_deref(), mine).await;
     let waiting = match waiting {
-        Some(w) => Some(views(f.as_deref(), lib.as_ref(), w).await),
+        Some(w) => Some(views(f.as_deref(), lib.as_deref(), w).await),
         None => None,
     };
     Ok(Listing { mine, waiting, may, fetcher: f.is_some() })
@@ -237,8 +237,12 @@ pub async fn of_suggestions(app: &super::App, serve: &Serve, account: &str, keys
             newest.push(r);
         }
     }
+    // None of these asked for: the library is not read (0.11.1: /api/discover's memory, 2026-10-30).
+    if newest.is_empty() {
+        return Ok(Vec::new());
+    }
     let (f, lib) = (fetcher(app), library(serve).await);
-    Ok(views(f.as_deref(), lib.as_ref(), newest).await.into_iter().map(|v| (v.request.album_key.clone(), v)).collect())
+    Ok(views(f.as_deref(), lib.as_deref(), newest).await.into_iter().map(|v| (v.request.album_key.clone(), v)).collect())
 }
 
 /// What Lidarr is looking for and fetching now (the page's "Lidarr is looking for these"); asked while the page is
@@ -290,7 +294,7 @@ pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<HashMap<String
     let open: Vec<Request> = serve.userdata.requests(None, None, OPEN)?.into_iter().filter(|r| r.status == PENDING || r.status == APPROVED).collect();
     let (f, lib) = (fetcher(app), library(serve).await);
     let mut out: HashMap<String, Mark> = HashMap::new();
-    for v in views(f.as_deref(), lib.as_ref(), open).await {
+    for v in views(f.as_deref(), lib.as_deref(), open).await {
         let Some(m) = mark(&v.album_state) else { continue };
         let e = out.entry(v.request.album_key.clone()).or_insert(m);
         if e.state == "wanted" && m.state == "downloading" {
@@ -328,7 +332,6 @@ async fn views(f: Option<&dyn Fetcher>, lib: Option<&Matcher>, rs: Vec<Request>)
     rs.into_iter().zip(found).map(|(r, there)| View { album_state: state(there, progress.as_ref(), &r), request: r }).collect()
 }
 
-/// The library's albums by name (the import's matcher), where Cratarr's data folder holds it.
 /// Of these requests, those whose album is not in the library yet (the owner, 2026-10-30: "Once something is actually
 /// in the library, there's no reason to show it in any of the requested sections except for in the requests control
 /// panel").
@@ -337,9 +340,13 @@ pub async fn not_in_library(serve: &Serve, rs: Vec<Request>) -> Vec<Request> {
     rs.into_iter().filter(|r| !lib.as_ref().is_some_and(|m| m.find_album(&r.album, Some(&r.artist)).is_some())).collect()
 }
 
-async fn library(serve: &Serve) -> Option<Matcher> {
-    let dir = serve.data_dir.clone()?;
-    tokio::task::spawn_blocking(move || Matcher::read(&dir.join("library.sqlite")).ok()).await.ok().flatten()
+/// The library's albums by name (the import's matcher), where Cratarr's data folder holds it: its albums alone, one
+/// reading shared by those asking at once and kept until the library is built again (`Matcher::library_albums`;
+/// 0.11.1: /api/discover's memory, 2026-10-30: each Discover request read every song of the library here, twice, some
+/// 70 MB each time on the NAS).
+async fn library(serve: &Serve) -> Option<Arc<Matcher>> {
+    let (dir, built) = (serve.data_dir.clone()?, serve.built_at());
+    tokio::task::spawn_blocking(move || Matcher::library_albums(&dir.join("library.sqlite"), Some(built)).ok()).await.ok().flatten()
 }
 
 /// A request's album as it stands: the library first, then the fetcher's word (only for one handed to it; none when

@@ -851,7 +851,9 @@ async fn from_fresh(http: &reqwest::Client, user: &str) -> Result<Vec<Candidate>
 /// (the import's matcher), and its artists (loosely, as Last.fm's are compared).
 pub struct Have {
     pub release_groups: HashSet<String>,
-    pub matcher: Matcher,
+    /// The library's albums alone, shared (`Matcher::library_albums`; 0.11.1: /api/discover's memory, 2026-10-30:
+    /// each look, Around, an artist's missing albums and a search read every song of the library here).
+    pub matcher: Arc<Matcher>,
     /// The artists the library has albums by: Last.fm's new artists are none of these.
     pub artists: HashSet<String>,
     /// Those and every artist a track credits (compilations, guests): "New to you" is for none of these (the owner,
@@ -877,7 +879,9 @@ pub fn have(data_dir: &Path, cat: &crate::catalogue::Catalogue, artists: impl In
     }
     {
         let artists: HashSet<String> = artists.into_iter().map(|a| loose(&a)).collect();
-        Ok(Have { release_groups, matcher: Matcher::read(&data_dir.join("library.sqlite"))?, known: artists.clone(), artists })
+        // The server's own library: kept while it is not built again; any other read now.
+        let built = crate::serve::instance().filter(|s| s.data_dir.as_deref() == Some(data_dir)).map(|s| s.built_at());
+        Ok(Have { release_groups, matcher: Matcher::library_albums(&data_dir.join("library.sqlite"), built)?, known: artists.clone(), artists })
     }
 }
 
@@ -2449,7 +2453,7 @@ mod tests {
     fn the_library_is_matched_by_release_group_or_by_name_and_artist() {
         let mut m = Matcher::default();
         m.add_album("al-1", "Moon Safari", Some("Air"));
-        let have = Have { release_groups: HashSet::from(["rg-1".to_string()]), matcher: m, artists: HashSet::new(), known: HashSet::new() };
+        let have = Have { release_groups: HashSet::from(["rg-1".to_string()]), matcher: Arc::new(m), artists: HashSet::new(), known: HashSet::new() };
         assert!(have.has(&c("Anything", "Anyone", Some("rg-1"), "lastfm", "", 0.0)));
         assert!(have.has(&c("Moon Safari (Remastered)", "AIR", None, "lastfm", "", 0.0)), "loosely, as imports match");
         assert!(!have.has(&c("Talkie Walkie", "Air", Some("rg-2"), "lastfm", "", 0.0)));
