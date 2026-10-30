@@ -64,9 +64,9 @@ impl Shelves {
         ShelfRead { supported, albums, error }
     }
 
-    /// Each album with its track count, format and lowest bitrate: from the catalogue where Cratarr sees the album's
-    /// folder (no request), else as kept from before while the source has not saved the album since, else asked of the
-    /// source, one album at a time. Asking is costly for Jellyfin (all 246 albums at once after a restart took it to
+    /// Each album with its track count, format, lowest bitrate and length: from the catalogue where Cratarr sees the
+    /// album's folder (no request), else as kept from before while the source has not saved the album since, else asked
+    /// of the source, one album at a time. Asking is costly for Jellyfin (all 246 albums at once after a restart took it to
     /// 280% CPU and made it time out, 2026-10-13), so what was asked is kept, also across restarts.
     async fn with_details(&self, source_id: &str, s: &dyn Source, listed: Vec<source::Listed>, shelf: Shelf) -> Vec<source::Album> {
         let c = self.lib.catalogue();
@@ -86,7 +86,8 @@ impl Shelves {
                         continue;
                     }
                     let format = (f.formats.len() == 1).then(|| f.formats.iter().next().cloned()).flatten();
-                    out.insert(f.dir, source::AlbumDetails { tracks: f.tracks, format, bitrate_kbps: f.min_kbps });
+                    let duration_secs = f.duration_ms.map(|ms| ms as f64 / 1000.0);
+                    out.insert(f.dir, source::AlbumDetails { tracks: f.tracks, format, bitrate_kbps: f.min_kbps, duration_secs });
                 }
             }
             out
@@ -118,6 +119,8 @@ impl Shelves {
                 album.tracks = d.tracks;
                 album.format = d.format;
                 album.bitrate_kbps = d.bitrate_kbps;
+                // Details kept from before lengths were kept have none: the listing's own then.
+                album.duration_secs = d.duration_secs.or(album.duration_secs);
             }
             albums.push(album);
         }

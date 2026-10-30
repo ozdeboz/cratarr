@@ -190,6 +190,7 @@ mod tests {
             tracks: 1,
             format: None,
             bitrate_kbps: None,
+            duration_secs: None,
             tags: Vec::new(),
             library: None,
             artists: Vec::new(),

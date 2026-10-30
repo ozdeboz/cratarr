@@ -109,16 +109,20 @@ struct ListedAlbumItem {
     tags: Vec<String>,
     /// Changes when Jellyfin saves the album again (rescan, tag edit): the cue to read its tracks again.
     date_last_saved: Option<String>,
+    /// Its tracks' lengths summed by Jellyfin (an unknown one as nothing); sent without asking.
+    run_time_ticks: Option<i64>,
 }
 
 /// What an album's tracks add up to.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AlbumSummary {
     pub tracks: u32,
     /// When every track has the same container; `None` when mixed or unknown.
     pub format: Option<String>,
     /// The lowest track bitrate, so a weak track is not hidden by an average.
     pub bitrate_kbps: Option<u32>,
+    /// Their lengths summed, in seconds; `None` when any is unknown (`source::total_secs`).
+    pub duration_secs: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +130,12 @@ pub struct AlbumSummary {
 struct ListedAudio {
     container: Option<String>,
     media_sources: Option<Vec<ListedSource>>,
+    run_time_ticks: Option<i64>,
+}
+
+/// Jellyfin's ticks (100 ns) in seconds.
+fn ticks_to_secs(ticks: i64) -> f64 {
+    ticks as f64 / 10_000_000.0
 }
 
 #[derive(Debug, Deserialize)]
@@ -1157,6 +1167,7 @@ fn album_head(a: ListedAlbumItem) -> (crate::source::Album, Option<String>) {
         tracks: 0,
         format: None,
         bitrate_kbps: None,
+        duration_secs: a.run_time_ticks.filter(|t| *t > 0).map(ticks_to_secs),
     };
     (album, a.date_last_saved)
 }
@@ -1173,6 +1184,7 @@ fn summarize(tracks: &[ListedAudio]) -> AlbumSummary {
         tracks: tracks.len() as u32,
         format: (formats.len() == 1).then(|| formats.into_iter().next().unwrap_or_default()),
         bitrate_kbps,
+        duration_secs: crate::source::total_secs(tracks.iter().map(|t| t.run_time_ticks.map(ticks_to_secs))),
     }
 }
 
@@ -1287,12 +1299,29 @@ mod tests {
             r#"[{"Container":"flac","MediaSources":[{"Bitrate":884000}]},{"Container":"flac","MediaSources":[{"Bitrate":901000}]}]"#,
         )
         .unwrap();
-        assert_eq!(summarize(&flac), AlbumSummary { tracks: 2, format: Some("FLAC".into()), bitrate_kbps: Some(884) }, "lowest, not average");
+        assert_eq!(
+            summarize(&flac),
+            AlbumSummary { tracks: 2, format: Some("FLAC".into()), bitrate_kbps: Some(884), duration_secs: None },
+            "lowest, not average"
+        );
         let mixed: Vec<ListedAudio> =
             serde_json::from_str(r#"[{"Container":"mp3","MediaSources":[{"Bitrate":320000}]},{"Container":"flac","MediaSources":[{"Bitrate":192000}]}]"#)
                 .unwrap();
-        assert_eq!(summarize(&mixed), AlbumSummary { tracks: 2, format: None, bitrate_kbps: Some(192) });
+        assert_eq!(summarize(&mixed), AlbumSummary { tracks: 2, format: None, bitrate_kbps: Some(192), duration_secs: None });
         assert_eq!(summarize(&[]), AlbumSummary::default());
+    }
+
+    #[test]
+    fn lengths_come_from_ticks_in_seconds() {
+        assert_eq!(ticks_to_secs(2_405_000_000), 240.5);
+        let timed: Vec<ListedAudio> = serde_json::from_str(r#"[{"Container":"flac","RunTimeTicks":2405000000},{"Container":"flac","RunTimeTicks":1995000000}]"#).unwrap();
+        assert_eq!(summarize(&timed).duration_secs, Some(440.0));
+        let partly: Vec<ListedAudio> = serde_json::from_str(r#"[{"Container":"flac","RunTimeTicks":2405000000},{"Container":"flac"}]"#).unwrap();
+        assert_eq!(summarize(&partly).duration_secs, None, "one track's length unknown");
+        let a: ListedAlbumItem = serde_json::from_str(r#"{"Id":"a","Name":"Twirligig","RunTimeTicks":26405000000}"#).unwrap();
+        assert_eq!(album_head(a).0.duration_secs, Some(2640.5));
+        let a: ListedAlbumItem = serde_json::from_str(r#"{"Id":"a","Name":"Twirligig"}"#).unwrap();
+        assert_eq!(album_head(a).0.duration_secs, None);
     }
 
     #[test]

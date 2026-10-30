@@ -339,13 +339,14 @@ fn album_folder<'a>(paths: impl IntoIterator<Item = &'a str>) -> Option<String> 
     common.map(|c| c.join("/")).filter(|f| !f.is_empty())
 }
 
-/// An album's track count, format (one for all, upper case) and lowest bitrate.
+/// An album's track count, format (one for all, upper case), lowest bitrate and length.
 fn summarize(songs: &[&Song]) -> super::AlbumDetails {
     let formats: std::collections::BTreeSet<String> = songs.iter().filter_map(|s| s.suffix.as_deref()).map(str::to_uppercase).collect();
     super::AlbumDetails {
         tracks: songs.len() as u32,
         format: (formats.len() == 1).then(|| formats.into_iter().next().unwrap_or_default()),
         bitrate_kbps: songs.iter().filter_map(|s| s.bit_rate).filter(|b| *b > 0).min(),
+        duration_secs: super::total_secs(songs.iter().map(|s| s.duration)),
     }
 }
 
@@ -663,6 +664,7 @@ impl Source for SubsonicSource {
                         tracks: d.tracks,
                         format: d.format,
                         bitrate_kbps: d.bitrate_kbps,
+                        duration_secs: d.duration_secs,
                     };
                     super::Listed { album, stamp: Some(stamp) }
                 })
@@ -935,7 +937,7 @@ mod tests {
         assert_eq!(s.album_id.as_deref(), Some("05P"));
         assert!(s.starred.is_some());
         let d = summarize(&[&s]);
-        assert_eq!((d.tracks, d.format.as_deref(), d.bitrate_kbps), (1, Some("MP3"), Some(64)));
+        assert_eq!((d.tracks, d.format.as_deref(), d.bitrate_kbps, d.duration_secs), (1, Some("MP3"), Some(64), Some(4.0)));
     }
 
     #[test]

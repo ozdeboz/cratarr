@@ -244,6 +244,8 @@ pub struct AlbumFact {
     pub tracks: u32,
     pub formats: std::collections::BTreeSet<String>,
     pub min_kbps: Option<u32>,
+    /// Its files' lengths summed; `None` when any file's is unknown (as `source::total_secs`).
+    pub duration_ms: Option<u64>,
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub artist: Option<String>,
@@ -1222,18 +1224,23 @@ impl Catalogue {
             .collect()
     }
 
-    /// One row per album directory in `folder`: track count, formats, lowest bitrate, and the album tags Incoming needs
-    /// to recognise an album that is already in the library. Read-only; blocking.
+    /// One row per album directory in `folder`: track count, formats, lowest bitrate, length, and the album tags
+    /// Incoming needs to recognise an album that is already in the library. Read-only; blocking.
     pub fn album_facts(&self, folder: i64) -> Result<Vec<AlbumFact>> {
         let db = self.db();
         let dir_of = |rel: &str| rel.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string());
         let mut by_dir: BTreeMap<String, AlbumFact> = BTreeMap::new();
-        let mut st = db.prepare(&format!("SELECT rel, format, bitrate FROM files WHERE folder = ?1 AND {PRESENT}"))?;
-        let rows = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<i64>>(2)?)))?;
+        let mut st = db.prepare(&format!("SELECT rel, format, bitrate, duration_ms FROM files WHERE folder = ?1 AND {PRESENT}"))?;
+        let rows = st.query_map(params![folder], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?))
+        })?;
         for row in rows {
-            let (rel, format, kbps) = row?;
+            let (rel, format, kbps, ms) = row?;
             let dir = dir_of(&rel);
             let e = by_dir.entry(dir.clone()).or_insert_with(|| AlbumFact { dir, ..AlbumFact::default() });
+            // Summed while every file's length is known; one unknown leaves the whole unknown.
+            let sum = if e.tracks == 0 { Some(0) } else { e.duration_ms };
+            e.duration_ms = sum.zip(ms.filter(|m| *m > 0)).map(|(d, m)| d + m as u64);
             e.tracks += 1;
             if let Some(f) = format {
                 e.formats.insert(f.to_uppercase());
@@ -2674,6 +2681,22 @@ mod tests {
         cat.db().execute_batch("PRAGMA wal_checkpoint(PASSIVE); INSERT OR REPLACE INTO meta (key, value) VALUES ('x', '2');").unwrap();
         assert!(wal() <= 8 << 20, "cut back to the limit: {} bytes", wal());
         drop(cat);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn an_albums_length_is_its_files_summed_and_unknown_when_one_is() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        let facts = cat.album_facts(0).unwrap();
+        let f = facts.iter().find(|f| f.dir == "A - B (2020)").unwrap();
+        assert_eq!((f.tracks, f.duration_ms), (2, Some(400_000)));
+        cat.db().execute("UPDATE files SET duration_ms = NULL WHERE rel = 'A - B (2020)/02 Two.flac'", []).unwrap();
+        let facts = cat.album_facts(0).unwrap();
+        let f = facts.iter().find(|f| f.dir == "A - B (2020)").unwrap();
+        assert_eq!((f.tracks, f.duration_ms), (2, None), "one file's length unknown: the album's is");
         std::fs::remove_dir_all(&d).ok();
     }
 
