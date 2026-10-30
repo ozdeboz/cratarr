@@ -5,7 +5,8 @@
 - Builds on: 0031 (Play On), 0033 (Cratarr holds the queues), 0051 (several users), 0064 (one listening history),
   0068 (one way in for listening), 0.9.8 (shared devices, used from home only)
 - Amended by: the amendment of 2026-10-30 below (followed plays count in the library's play counts; the picks read
-  one's own plays)
+  one's own plays); the later one of 2026-10-30 (New for you: three at most of one album artist, one rule for the
+  shelf and its crate)
 - Not: 0037 (sync play: one room's players playing one sound, each steering it), 0070 (album requests, which own
   `/api/requests`)
 
@@ -109,3 +110,26 @@ out stays out: the taste profile, Discover, Home's picks and the radio's and Aut
   reach back a week. Everything shown or sorted by reads the play count.
 - This replaces the History bullet above where it says followed plays are not counted on the song, its album and its
   artists: they are, in the play count, not in one's own.
+
+## Amendment (2026-10-30, later): New for you, three at most of one album artist, one rule
+
+The owner, for 0.10: "we should probably only show the top 3 albums for each album artist" in New for you; one
+artist's newly added albums had filled much of it. The rule, Home's shelf and its crate (`home:new`, what the shelf's ›
+opens) alike:
+
+1. The newest albums first, by when the library added them.
+2. Left out: those the account heard 5% or more of (one's own plays, as above: none heard while following), and those
+   without a cover (Home shows none).
+3. At most three of one album artist: that artist's three newest not left out. The album artist is matched loosely, as
+   Discover matches artists (case, spacing, accents, a leading "The"); an album without one counts toward no one.
+4. Twelve at most.
+
+- **One rule, one place.** `PlaylistService::new_for_you` gives the albums; the shelf (`GET /api/home/new`) shows them
+  as the album lists have them, the crate plays their tracks album by album, in the same order. Before, the shelf and
+  the crate each had a copy (the crate left albums without a cover in, and the two could drift).
+- **Which libraries.** Cratarr's own library, every folder in use (Music's and the Incoming ones'), which the crates
+  are worked out on too. The shelf used to take every connected server's newest albums, but what was heard and what
+  has a cover are known only of Cratarr's own albums, so another server's passed both unchecked, and the same album
+  could show twice (once as that server's, once as Cratarr's); a crate cannot hold another server's tracks in any case.
+- **How far it looks.** The newest 60 at a time, read on until twelve are found, to 300 at most: when a few artists
+  hold the newest, the cap still fills the shelf from further down.
