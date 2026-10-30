@@ -88,8 +88,9 @@ data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v
         const val DECEL_X = 64.0
 
         /** How long a brake from [v0] to [to] lasts (ms): at [DECEL_X], never shorter than the Brake as set
-         *  ([brakeMs]), which a slow one keeps (the web page: the same). */
+         *  ([brakeMs]), which a slow one keeps (the web page: the same). A half rounds up, as the page's and the server's
+         *  do (`kotlin.math.round` would round it to even: 250.5 ms to 250, not 251; shared/rules.json holds that case). */
         fun lengthMs(v0: Double, to: Double, brakeMs: Long): Long =
-            max(brakeMs, kotlin.math.round(kotlin.math.abs(v0 - to) / DECEL_X * 1000.0).toLong())
+            max(brakeMs, kotlin.math.floor(kotlin.math.abs(v0 - to) / DECEL_X * 1000.0 + 0.5).toLong())
     }
 }
