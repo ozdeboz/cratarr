@@ -143,7 +143,7 @@
     onclose: () => void;
   } = $props();
   // What the menu was opened on, kept: an opener lets go of it as the menu closes (its {@const} turns null, so its
-  // props then read null or throw), while what a tap started still reads it (a5, 2026-10-25: Play in a flow view's
+  // props then read null or throw), while what a tap started still reads it (2026-10-25: Play in a flow view's
   // menu said "Could not start playing"; Play, Shuffle, Play next, Add to queue, Share, the covers all read it after
   // closing).
   let keptAlbum = untrack(() => givenAlbum);
@@ -753,7 +753,7 @@
   {:else if ask === 'cover'}
     <!-- Change cover (0.9.5): the album's own first, then Discogs' and the Cover Art Archive's, as an artist's albums;
          a tap makes it the cover, inside every file and beside them (Undo brings the old one back). -->
-    <!-- A few seconds with Discogs (its master and up to six releases, at its pace; a5): the covers as they are found,
+    <!-- A few seconds with Discogs (its master and up to six releases, at its pace): the covers as they are found,
          how far beside the back button, the busy ring at the top right (the owner, 2026-10-25). -->
     {#if !coversSoFar}
       {#if !coverProgress}<PageLoading />{/if}

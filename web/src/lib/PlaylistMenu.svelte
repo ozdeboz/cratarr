@@ -278,7 +278,7 @@
     const gone: string[] = [];
     const tokens: (string | null)[] = [];
     try {
-      // One call where the server has it (a5, 0.9.4): one Undo for them all; else one by one.
+      // One call where the server has it (0.9.4): one Undo for them all; else one by one.
       let batched = false;
       try {
         const r = await batchDelete(list.map((x) => x.id));
