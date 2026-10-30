@@ -197,7 +197,11 @@ impl App {
         );
         let insights = InsightsService::new(library.clone(), playlists.clone());
         let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
-        let plays = Plays::new(cfg.data_dir.as_deref());
+        let plays = Plays::new(cfg.data_dir.as_deref(), served.as_ref().map(|s| s.userdata.clone()));
+        // What offline writes keep (decision 0087) forgotten after its 30 days, hourly.
+        if let Some(served) = &served {
+            crate::userdata::offline::prune_in_background(served.userdata.clone());
+        }
         let artists = artists::ArtistInfo::open(cfg.data_dir.as_deref());
         if let Some(a) = &artists {
             a.build_slowly();
