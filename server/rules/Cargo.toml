@@ -10,10 +10,15 @@ license = "AGPL-3.0-or-later"
 crate-type = ["rlib", "cdylib"]
 
 # Pure (no I/O, no clock, no randomness of its own): builds for wasm32-unknown-unknown as it is.
+[features]
+default = ["nfkd"]
+# The matcher reads names as search reads them (NFKD, marks dropped): in the crate for the server; the page's
+# WebAssembly leaves it to the browser (`--no-default-features`: its tables would be 100 KB of the page's first load).
+nfkd = ["dep:unicode-normalization"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-# The matcher reads names as search reads them (NFKD, marks dropped): the server's own reading, now here (0.12).
-unicode-normalization = "0.1"
+unicode-normalization = { version = "0.1", optional = true }
 
 [dev-dependencies]
 serde_json = "1"

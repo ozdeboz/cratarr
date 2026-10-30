@@ -14,7 +14,9 @@
 //! Pure as the rest of the crate: no I/O, no clock; aliases come as data (genre aliases in [`aliases`]).
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "nfkd")]
 use unicode_normalization::UnicodeNormalization;
+#[cfg(feature = "nfkd")]
 use unicode_normalization::char::is_combining_mark;
 
 pub mod aliases;
@@ -26,8 +28,17 @@ pub const FLOOR: f32 = 0.5;
 
 /// A text as search reads it: compatibility-decomposed (ﬁ, ＡＢＣ, Ⅳ), its marks dropped (é, ö, ç), case folded. As
 /// SQLite's `unicode61 remove_diacritics 2` and the page's lib/search.ts read it.
+#[cfg(feature = "nfkd")]
 pub fn fold(text: &str) -> String {
     text.nfkd().filter(|c| !is_combining_mark(*c)).flat_map(char::to_lowercase).collect()
+}
+
+/// Without NFKD (the page's WebAssembly): every text comes folded already, as the page folds it before it calls in,
+/// `text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()` (a mark is General_Category M, as
+/// `is_combining_mark`); only case is folded again, which changes nothing then.
+#[cfg(not(feature = "nfkd"))]
+pub fn fold(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
 }
 
 /// A text's words (`fold`ed; everything but letters and digits a gap): what every search reads a query as (decision
