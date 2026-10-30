@@ -3,6 +3,8 @@ import './app.css';
 import App from './App.svelte';
 import { enterCloses } from './lib/enterCloses';
 import { markGpu } from './lib/gpu';
+// The 0075 spike's switch: the brake's rules from the WebAssembly where this browser asks for them.
+import './lib/wasm/brake';
 import { inputWay } from './lib/inputWay';
 import { watchForUpdates } from './lib/update.svelte';
 
