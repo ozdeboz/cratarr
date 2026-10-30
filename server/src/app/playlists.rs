@@ -70,9 +70,10 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
             if let Some(heard) = super::history::since(&served.userdata, &me, since, now)? {
                 return Ok(heard);
             }
+            // One's own last plays: none heard while following (the owner, 2026-10-30).
             let played = served.userdata.used(&me, crate::userdata::Kind::Song)?;
             let mut week: Vec<(String, f32)> =
-                played.into_iter().filter(|(_, a)| a.play_date.is_some_and(|d| d >= since)).map(|(song, _)| (song, 1.0)).collect();
+                played.into_iter().filter(|(_, a)| a.own_date.is_some_and(|d| d >= since)).map(|(song, _)| (song, 1.0)).collect();
             week.sort_by(|a, b| a.0.cmp(&b.0));
             Ok(week)
         })
@@ -2958,12 +2959,13 @@ impl PlaylistService {
     }
 
     /// Of these albums (Cratarr's own), those the asking account has heard a good part of (`HEARD_SHARE` of their length,
-    /// by their tracks' plays times their lengths): Home's New for you leaves them out (the owner, 2026-10-23).
+    /// by their tracks' own plays times their lengths, none heard while following): Home's New for you leaves them out
+    /// (the owner, 2026-10-23).
     pub async fn heard_albums(&self, ids: Vec<String>) -> Result<Vec<String>, ToggleError> {
         let user = asking_user().ok_or_else(|| ToggleError::Refused("What was heard is an account's own: sign in.".into()))?;
         let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
-            let plays = serve.userdata.song_plays(&user)?;
+            let plays = serve.userdata.own_song_plays(&user)?;
             let mut heard = Vec::new();
             for id in ids {
                 let Some(album) = serve.library.album(&id)? else { continue };
@@ -2982,7 +2984,8 @@ impl PlaylistService {
 
     /// Home's two looks back (the owner, 2026-10-23), of the libraries switched on: Blast from the past, the favourite
     /// tracks unplayed longest (played before: a favourite never played was never buried); Grave digging, the albums
-    /// most like the taste (`taste::profiles`, every source) and furthest from the listening, never played furthest.
+    /// most like the taste (`taste::profiles`, every source) and furthest from the listening, never played furthest. Both
+    /// read one's own plays, none heard while following (the owner, 2026-10-30).
     pub async fn digging(&self, want: Option<&str>, without: &[String]) -> Result<Digging, ToggleError> {
         let user = asking_user().ok_or_else(|| ToggleError::Refused("Home's looks back are an account's own: sign in.".into()))?;
         let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -2992,7 +2995,7 @@ impl PlaylistService {
             let alike = lib.alike();
             let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
             let ud = &serve.userdata;
-            let plays = ud.song_plays(&user)?;
+            let plays = ud.own_song_plays(&user)?;
             let starred = ud.starred(&user, crate::userdata::Kind::Song)?;
             // Blast from the past: the favourites by their last play, the oldest first.
             let mut past: Vec<(String, i64)> =
@@ -3023,8 +3026,8 @@ impl PlaylistService {
                     by_album.entry(album).or_default().push((i, 1.0));
                 }
             }
-            let last: HashMap<String, i64> = ud.used(&user, crate::userdata::Kind::Album)?.into_iter().filter_map(|(id, a)| Some((id, a.play_date?))).collect();
-            let artist_plays: HashMap<String, u32> = ud.used(&user, crate::userdata::Kind::Artist)?.into_iter().map(|(id, a)| (id, a.play_count)).collect();
+            let last: HashMap<String, i64> = ud.used(&user, crate::userdata::Kind::Album)?.into_iter().filter_map(|(id, a)| Some((id, a.own_date?))).collect();
+            let artist_plays: HashMap<String, u32> = ud.used(&user, crate::userdata::Kind::Artist)?.into_iter().map(|(id, a)| (id, a.own_count)).collect();
             let most = artist_plays.values().copied().max().unwrap_or(0).max(1) as f64;
             let ids: Vec<String> = by_album.keys().cloned().collect();
             let artist_of: HashMap<String, String> = serve.library.albums_by_id(&ids)?.into_iter().map(|a| (a.id, a.artist_id)).collect();
@@ -3088,7 +3091,8 @@ impl PlaylistService {
             }
             let now = super::moment::now_secs();
             let rested = now - MOMENT_RESTED_DAYS * 86_400;
-            let last: HashMap<String, i64> = serve.userdata.used(&user, crate::userdata::Kind::Album)?.into_iter().filter_map(|(id, a)| Some((id, a.play_date?))).collect();
+            // Played lately as one's own: what was heard while following leaves an album in (the owner, 2026-10-30).
+            let last: HashMap<String, i64> = serve.userdata.used(&user, crate::userdata::Kind::Album)?.into_iter().filter_map(|(id, a)| Some((id, a.own_date?))).collect();
             let mut near: Vec<(String, f64)> = by_album
                 .into_iter()
                 .filter(|(id, (n, _, all))| *n >= MOMENT_TRACKS && *n * 2 >= *all && last.get(id).is_none_or(|&t| t < rested))
