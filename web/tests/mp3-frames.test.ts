@@ -42,3 +42,13 @@ test('the bins cover every frame once, in order', () => {
   for (let i = 1; i < b.length; i++) assert.equal(b[i][0], b[i - 1][1]);
   assert.deepEqual([...scaled([0, 0.5, 1])], [0, 128, 255]);
 });
+
+test('the first frame is one whose next frame follows it, never a sync found by chance (0.10: a seek taken from a false one)', async () => {
+  const { firstFrame } = await import('../src/lib/mp3Frames.ts');
+  // Bytes that look like an MPEG-2.5 header (11025 Hz) by chance, then real 128 kb/s frames.
+  const fake = new Uint8Array([0x12, 0xff, 0xe3, 0x18, 0x40, 0x07, 0x99]);
+  const b = mp3(4, { before: fake });
+  assert.equal(firstFrame(b), fake.length);
+  assert.equal(firstFrame(mp3(4)), 0);
+  assert.equal(firstFrame(mp3(1).slice(0, 300)), null, 'too few bytes to say');
+});

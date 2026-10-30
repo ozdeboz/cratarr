@@ -37,6 +37,19 @@ function header(b: Uint8Array, at: number): Header | null {
   return { length, sampleRate, channels: (b[at + 3] >> 6) === 3 ? 1 : 2, kbps, samples: v1 ? 1152 : 576 };
 }
 
+/** The first frame from `from` on: a header whose next frame has one too, as the server's first_frame finds it (a
+ *  stray 0xFF, or bytes that look like a header by chance, are no frame; 0.10: a seek's stream, taken from a false
+ *  one at 11025 Hz, came out short and was passed over). Null while the bytes are too few to say. */
+export function firstFrame(b: Uint8Array, from = 0): number | null {
+  for (let at = from; at + 4 <= b.length; at++) {
+    const h = header(b, at);
+    if (!h) continue;
+    if (at + h.length + 4 > b.length) return null;
+    if (header(b, at + h.length)) return at;
+  }
+  return null;
+}
+
 /** The frames of an MP3 (an ID3v2 tag before them passed over), else null if it has too few to be one. */
 export function frames(b: Uint8Array): Mp3 | null {
   let at = 0;
