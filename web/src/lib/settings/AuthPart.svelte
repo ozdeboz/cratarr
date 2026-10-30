@@ -32,6 +32,10 @@
   const PROXIES_MORE =
     "A proxy in front of Cratarr tells it the address each request came from. Cratarr believes that from the proxies named here: addresses or ranges. None named: a proxy on a local address (this computer, its Docker network, your home network), never one on the internet.";
   const proxyList = (v: string) => v.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  // Home (0.9.18-1; the owner, 2026-10-30): where other users may play on, follow or control a device someone shared.
+  let editingHome = $state(false);
+  const HOME_MORE =
+    "Other users may play on, follow or control a device someone shared only from home: a local address, or one named here. Name your home's public address if devices at home reach Cratarr by its public name. Never a VPN's.";
 
   // The requirement: flipping it asks for the password, then switches.
   let switching = $state<boolean | null>(null);
@@ -76,6 +80,11 @@
     />
     {#if runtime.error}<Item lead="bad" name={runtime.error} />{/if}
   </Group>
+  {#if r.home_networks}
+    <Group title="Home" more={HOME_MORE}>
+      <Item name="Home networks" value={r.home_networks.length ? r.home_networks.join(', ') : 'Local addresses'} onclick={() => (editingHome = true)} />
+    </Group>
+  {/if}
 {/if}
 
 {#if error && switching === null}<Group><Item lead="bad" name={error} /></Group>{/if}
@@ -91,6 +100,19 @@
       if (await saveRuntime({ proxies: proxyList(v) })) editingProxies = false;
     }}
     onclose={() => (editingProxies = false)}
+  />
+{/if}
+
+{#if editingHome}
+  <ValueSheet
+    title="Home networks"
+    value={runtime.value?.home_networks?.join(', ') ?? ''}
+    placeholder="Local addresses"
+    help="Addresses or ranges besides the local ones, separated by commas: 203.0.113.7, 2001:db8::/56"
+    onsave={async (v) => {
+      if (await saveRuntime({ home_networks: proxyList(v) })) editingHome = false;
+    }}
+    onclose={() => (editingHome = false)}
   />
 {/if}
 
