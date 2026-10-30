@@ -237,6 +237,8 @@ const rampNow = rampSlot();
 type PlainHold = { dir: 1 | -1; speeding: boolean };
 type Glide = { from: number; to: number; at: number; span: number };
 const motionNow = motionSlot<Winding, PlainHold, Glide>();
+/** Where a wind's counter stands; only a wind has one (`tape.rewindPos`). */
+let windPos: number | null = null;
 const tape = {
   /** What a ramp under way has committed to (paused or playing), shown at once on every device. A press of play or pause
    *  during one turns it round from where it has got to (decision 0075's first step). Null: no ramp. */
@@ -270,8 +272,13 @@ const tape = {
   set rewinding(v: Winding | null) {
     motionNow.rewinding = v;
   },
-  /** Where the counter stands while it sounds (s into the track). */
-  rewindPos: null as number | null,
+  /** Where the counter stands while it sounds (s into the track): the wind's, so none once it has ended, however. */
+  get rewindPos() {
+    return motionNow.rewinding ? windPos : null;
+  },
+  set rewindPos(v: number | null) {
+    windPos = v;
+  },
   /** The wind's own fetch of where it goes: it does not end the wind. */
   rewindFetch: false,
   /** A hold under way (its press), before and while it winds: let go, it plays on. */
