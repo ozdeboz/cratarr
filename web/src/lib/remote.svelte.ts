@@ -1,10 +1,10 @@
 // The remote for what plays, shared by the mini-player and the full player (decision 0018): the commands (shown at
 // once, see live.svelte.ts `expect`), the running clock, the favourite, the cover and the colour taken from it.
 import { untrack } from 'svelte';
-import { ApiError, coverUrl, albumCoverUrl, playerCommand, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
-import { expect, expectFailed, live, refresh } from './live.svelte';
-import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought, windArm, windDisarm, windHold, windRelease } from './localPlayer.svelte';
-import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
+import { coverUrl, albumCoverUrl, type NowPlaying, type Transport, type Upcoming } from './api';
+import { expect, live } from './live.svelte';
+import { rewindNow, sought } from './localPlayer.svelte';
+import { port } from './player/port.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
 import { toast } from './toast.svelte';
@@ -12,16 +12,15 @@ import { ramping, rampPressed, rampTurned } from './ramping.svelte';
 import { appInfo, inApp } from './app.svelte';
 import { prefs } from './prefs.svelte';
 import { RESTART_AFTER, windUpMs } from './localPlayer.svelte';
-import { playOn } from './playOn.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
-export const playing = () => (isLocal() ? localNowPlaying() : (live.view?.now_playing ?? null));
+export const playing = () => port().playing();
 
 /** Actions on what plays wait: a server's player command is shown before it was confirmed, or the local track's
  *  playlists and favourite are still being asked for. */
-export const pending = () => (isLocal() ? localState.loading : live.pending);
+export const pending = () => port().pending();
 /** A command to the server's player is not confirmed yet: what plays may still turn out otherwise. */
-export const moving = () => !isLocal() && live.pending;
+export const moving = () => port().moving();
 
 // Cover: the library's cover file for a library track; otherwise (or when there is none) the album's image from the
 // server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped.
@@ -142,7 +141,8 @@ $effect.root(() => {
 
 export const duration = (): number | null => playing()?.progress?.duration_secs ?? null;
 function running(): number {
-  if (isLocal()) return local.position;
+  const own = port().position();
+  if (own !== null) return own;
   const a = clock.anchor;
   if (!a) return 0;
   const p = a.paused ? a.pos : a.pos + Math.max(0, clock.tick - a.at) / 1000;
@@ -166,7 +166,7 @@ function letGo() {
 $effect.root(() => {
   $effect(() => {
     // Start and stop's effects only (the owner, 2026-10-27): the tape's own stops and winds never hold the position.
-    const dir = isLocal() && ramping.effect ? ramping.dir : null;
+    const dir = port().ramps && ramping.effect ? ramping.dir : null;
     void ramping.at;
     const id = playing()?.id ?? null;
     const still = paused();
@@ -203,7 +203,7 @@ export function position(): number {
   const id = playing()?.id ?? null;
   const seeks = sought.n;
   // A tape's rewind on this device goes back on purpose: shown as it goes.
-  const back = isLocal() ? rewindNow.on : !!playing()?.progress?.rewinding;
+  const back = port().rewinding();
   if (!back && id === lastShown.id && seeks === lastShown.seeks && p < lastShown.pos && lastShown.pos - p < STEP_BACK) return lastShown.pos;
   lastShown = { id, pos: p, seeks };
   return p;
@@ -215,7 +215,7 @@ export const waveStill = (progress: { paused?: boolean; starting?: boolean } | n
   (progress?.paused ?? false) || progress?.starting === true;
 /** A Start and stop ramp under way on this device's player. The page's own turns round at a press (0075's first step,
  *  the owner 2026-10-27); the app's play button stays inert until its ramp ends, until the app turns too (0.9.13). */
-export const rampBusy = () => isLocal() && ramping.dir !== null;
+export const rampBusy = () => port().ramps && ramping.dir !== null;
 /** The play button inert: only through the app's own Start and stop effect, in an app that does not turn it round (the
  *  page's turns round at a press, an app's from 0.9.15 too; the tape's own stops never show). */
 export const rampInert = () => rampBusy() && inApp && ramping.effect && !appInfo.turnsRound;
@@ -228,8 +228,9 @@ export function playPause() {
   if (rampInert()) return;
   const ss = inApp ? appInfo.startStop : prefs.startStop;
   // The app's ramp turned round at the press, from the fill shown (the page's own turns itself: lib/localPlayer).
-  if (isLocal() && ss.mode !== 'off' && rampBusy() && inApp && ramping.effect) rampTurned(ss.stopMs, ss.ms);
-  else if (isLocal() && ss.mode !== 'off' && !rampBusy()) {
+  const ramps = port().ramps;
+  if (ramps && ss.mode !== 'off' && rampBusy() && inApp && ramping.effect) rampTurned(ss.stopMs, ss.ms);
+  else if (ramps && ss.mode !== 'off' && !rampBusy()) {
     if (!paused()) rampPressed('out', ss.stopMs);
     else {
       const ms = windUpMs(ss.ms, ss.mode, position(), inApp ? 0.25 : undefined);
@@ -291,78 +292,29 @@ function show(command: Transport) {
   }
 }
 
-export async function send(command: Transport) {
-  if (isLocal()) {
-    if (command === 'play-pause') localToggle();
-    else if (command === 'next') localNext();
-    else if (command === 'previous') localPrevious();
-    return;
-  }
-  const np = playing();
-  if (!np) return;
-  show(command);
-  try {
-    await transport(command, np.source);
-    setTimeout(refresh, 700); // the player reports back within a moment
-  } catch (e) {
-    expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
-  }
-}
+export const send = (command: Transport) => port().send(command, show);
 
 /** Holding Previous (`back`) or Next (`forward`): winds the tape (decision 0074), here (or the app's or the driven
  *  player, lib/localPlayer), or on one of Cratarr's players through the server, which does the rest. */
-export function wind(dir: 'back' | 'forward', phase: 'start' | 'stop') {
-  if (isLocal()) return void (phase === 'start' ? windHold(dir) : windRelease(dir));
-  const np = playing();
-  if (!np?.player || !playOn.players.some((p) => p.name === np.player)) return;
-  playerCommand(np.player, { command: 'wind', dir, phase }).catch((e) =>
-    expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond"),
-  );
-}
+export const wind = (dir: 'back' | 'forward', phase: 'start' | 'stop') => port().wind(dir, phase);
 
 /** A touch on Previous or Next that may become a hold: this player's wind asked already; dropped if it was a tap. */
-export const windTouch = (dir: 'back' | 'forward', on: boolean) => isLocal() && (on ? windArm(dir) : windDisarm());
+export const windTouch = (dir: 'back' | 'forward', on: boolean) => port().windTouch(dir, on);
 
 /** Whether anything can follow what plays (Next dimmed where nothing can; the owner, 2026-10-27): a next track, or
  *  Autoplay, Radio or repeat to make one; elsewhere, what the player says is to come. */
-export function hasNext(): boolean {
-  if (isLocal()) return local.index < local.queue.length - 1 || !!local.autoplay || local.radio || local.repeat !== 'off';
-  const np = playing();
-  return !np || (np.upcoming?.length ?? 1) > 0;
-}
+export const hasNext = (): boolean => port().hasNext();
 
 /** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
-export async function playUpcoming(i: number) {
-  if (isLocal()) return localJump(local.index + 1 + i);
-  const np = playing();
-  const t = np?.upcoming[i];
-  if (!np || !t) return;
-  const { jumpTo } = await import('./api');
-  await jumpTo(t.id, np.source);
-  setTimeout(refresh, 700);
-}
+export const playUpcoming = async (i: number) => port().playUpcoming(i);
 
 /** Seeks the local player (the remote one cannot be dragged yet, decision 0019). */
-export const seekTo = (secs: number) => isLocal() && localSeek(secs);
+export const seekTo = (secs: number) => port().seekTo(secs);
 
 /** Moves what plays `secs` on (back, below 0): the local player at once, within its track; one of Cratarr's players
  *  through the server, which moves it from where it is (and keeps it within its track). Others (a Jellyfin client's
  *  report names a player Play On does not know) are not moved. */
-export async function seekBy(secs: number) {
-  if (isLocal()) {
-    const end = duration();
-    localSeek(Math.max(0, Math.min(end ? end - 1 : Infinity, position() + secs)));
-    return;
-  }
-  const np = playing();
-  if (!np?.player || !playOn.players.some((p) => p.name === np.player)) return;
-  try {
-    await playerCommand(np.player, { command: 'seek', by_ms: Math.round(secs * 1000) });
-    setTimeout(refresh, 700); // the player reports back within a moment
-  } catch (e) {
-    expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
-  }
-}
+export const seekBy = async (secs: number) => port().seekBy(secs, position, duration);
 
 // Favourite: shown as the server reports it; a tap shows the new state at once and asks for it.
 const fav = $state<{ wanted: { id: string; on: boolean } | null }>({ wanted: null });
@@ -396,8 +348,7 @@ export async function toggleFavorite() {
   const want = { id: np.id, on: !favorite() };
   fav.wanted = want;
   try {
-    if (isLocal()) tookLocal(np.source, np.id, await setTrackFavorite(np.source, np.id, want.on));
-    else live.view = await setFavorite(want.on, np.source);
+    await port().setFavorite(np, want.on);
   } catch (e) {
     toast.fail(e, "The favourite didn't change");
   } finally {

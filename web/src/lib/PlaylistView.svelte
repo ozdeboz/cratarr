@@ -48,7 +48,6 @@
     playlistCovers,
     playlistRows,
     queueTrack,
-    queueTracks,
     setTrackFavorite,
     setAlbumFavorite,
     getArtistAbout,
@@ -134,6 +133,7 @@
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
   import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
+  import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
   import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
   import ArtistBody from './ArtistBody.svelte';
@@ -739,15 +739,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     navigator.vibrate?.(8);
     try {
       if (mode === 'play') await playPlaylistFrom(title, source, tracks, 0);
-      else if (isLocal()) enqueue(tracks, mode);
-      else {
-        await queueTracks(
-          tracks.map((t) => t.id),
-          mode,
-          source,
-        );
-        setTimeout(refresh, 700);
-      }
+      else await port().enqueue(tracks, mode, source);
       selecting = null;
     } catch (e) {
       toast.fail(e, 'Could not start playing');
@@ -1183,13 +1175,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       const order = mode === 'shuffle' ? shuffled(tracks) : tracks;
       return playPlaylistFrom(title, source, order, 0);
     }
-    if (isLocal()) return enqueue(tracks, mode);
-    await queueTracks(
-      tracks.map((t) => t.id),
-      mode,
-      source,
-    );
-    setTimeout(refresh, 700);
+    return port().enqueue(tracks, mode, source);
   }
 
   // Make playlist (the save icon): the crate's tracks now as a new playlist, which then shows here. Its name in progress

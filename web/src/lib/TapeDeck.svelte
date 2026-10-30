@@ -7,8 +7,8 @@
   // still drawing, an endless turn whose rate alone is changed, and only when the speed has moved; the packs and the
   // tape four times a second; the head's light an opacity.
   import { appInfo, inApp } from './app.svelte';
-  import { rewindNow } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
+  import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
   import { ramping, tapeDir } from './ramping.svelte';
   import { deckSpeed, turnTape, windable } from './localPlayer.svelte';
@@ -55,7 +55,7 @@
   let lastAt = 0;
   function speedNow(now: number, pos: number): number {
     const np = playing();
-    const rewinding = isLocal() ? rewindNow.on : !!np?.progress?.rewinding;
+    const rewinding = port().rewinding();
     const mode = (inApp ? appInfo.startStop : prefs.startStop).mode;
     const dt = Math.max(0.001, (now - lastAt) / 1000);
     const moved = lastPos === null ? 0 : (pos - lastPos) / dt;
