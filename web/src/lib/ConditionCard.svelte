@@ -14,13 +14,15 @@
   // own saying what the condition is tested on: "Matching any | all tracks in each album" (the owner, 2026-10-23: next
   // to the switch, Any and All read as being about the chosen values). The crate editor and the Filter sheet draw the same cards
   // (lib/ConditionList).
+  import { untrack } from 'svelte';
   import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
   import type { FilterCondition } from './prefs.svelte';
   import Switch from './Switch.svelte';
   import DensityRange from './DensityRange.svelte';
   import LikeCurve from './LikeCurve.svelte';
-  import { likeCurve } from './api';
+  import { likeCurve, type Condition } from './api';
+  import { curveKey, type CurveAsk } from './likeCurveAsk';
   import { hiddenLibraries } from './listFilter.svelte';
   import TempoRange from './TempoRange.svelte';
   import { WORD_AXES, wordShown } from './facts';
@@ -34,6 +36,7 @@
     items = null,
     open = $bindable(false),
     bpms = null,
+    within = null,
     onchange,
     onremove,
   }: {
@@ -51,6 +54,9 @@
     open?: boolean;
     /** The list's tempos, for the Tempo condition's spread; absent: its range as two numbers. */
     bpms?: readonly (number | null | undefined)[] | null;
+    /** A crate's other conditions, a Sounds like's curve counting only the tracks they leave, as the crate picks (0.11,
+     *  the owner: "Filtered curve in 0.11"); null: the whole library (a filter's, where the list narrows it too). */
+    within?: readonly Condition[] | null;
     onremove: () => void;
   } = $props();
 
@@ -70,15 +76,18 @@
   let curve = $state<number[] | null>(null);
   /** The count under a finger dragging the curve: the summary follows it before the release sets it. */
   let dragged = $state<number | null>(null);
-  $effect(() => {
+  // Asked again only when what it counts changes, not when its cut moves (lib/likeCurveAsk curveKey).
+  const curveAsk = $derived.by((): CurveAsk | null => {
     const v = condition.value;
-    if (v.kind !== 'like' || !open) return;
-    const of = v.of.join(',');
-    const fresh = !!v.fresh;
-    const weights = v.weights;
-    const own = !!v.own;
+    return v.kind === 'like' ? { of: v.of, within: within ?? [], without: hiddenLibraries(), fresh: !!v.fresh, weights: v.weights, own: !!v.own } : null;
+  });
+  const curveAt = $derived(curveAsk && curveKey(curveAsk));
+  $effect(() => {
+    void curveAt;
+    const ask = untrack(() => curveAsk);
+    if (!ask || !open) return;
     let gone = false;
-    likeCurve(of.split(','), undefined, hiddenLibraries(), fresh, weights, own).then(
+    likeCurve(ask).then(
       (c) => !gone && (curve = c.alike),
       () => !gone && (curve = null),
     );

@@ -6,6 +6,7 @@ import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
+import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -571,17 +572,22 @@ export type TempoBands = { bands: number[]; with_tempo: number; total: number };
 /** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve), and the profile
  *  of the closest `count` at every step its handle can stop at (the profile follows a drag). */
 export type LikeCurveData = { alike: number[]; profiles: { count: number; profile: ListProfileData }[] };
-export const likeCurve = (of: string[], source?: string, without?: string[], fresh = false, weights?: number[], own = false) =>
-  quietly<LikeCurveData>(
-    `/api/like-curve?${new URLSearchParams({
-      of: of.join(','),
-      ...(source ? { source } : {}),
-      ...(without?.length ? { without: without.join(',') } : {}),
-      ...(fresh ? { fresh: 'true' } : {}),
-      ...(own ? { own: 'true' } : {}),
-      ...(weights?.length ? { weights: weights.map((w) => +w.toFixed(3)).join(',') } : {}),
-    })}`,
-  );
+/** Within a crate's other conditions (lib/likeCurveAsk, 0.11), POSTed; a server before 0.11 has only the GET, and
+ *  is asked that once it said so (the curve then counts the whole library, as before). */
+let curveWithin = true;
+export const likeCurve = (ask: CurveAsk, source?: string): Promise<LikeCurveData> => {
+  const get = () => quietly<LikeCurveData>(`/api/like-curve?${curveQuery(ask, source)}`);
+  if (!curveWithin || !asksWithin(ask)) return get();
+  return quietly<LikeCurveData>(`/api/like-curve${source ? `?${new URLSearchParams({ source })}` : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(curveBody(ask)),
+  }).catch((e) => {
+    if (!missingCall(e)) throw e;
+    curveWithin = false;
+    return get();
+  });
+};
 export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);
