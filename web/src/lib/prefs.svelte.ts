@@ -175,6 +175,13 @@ export type Prefs = {
   /** When Shuffle takes another (the owner, 2026-10-27: the user's to say): each flow that opens, each flow its own
    *  (always the same one for the same flow), each start, or every few minutes. */
   flowShuffleWhen: 'flow' | 'seeded' | 'start' | 'timed';
+  /** The visuals open by themselves (0.9.19; the owner, 2026-10-30): while music plays and the screen is left alone
+   *  this long (ms), full screen, a touch closing them; starting from a snapshot of the library's or as last seen; as it
+   *  is, or a new look (the dice's) each track. This device's. */
+  visualsAuto: boolean;
+  visualsAutoAfter: number;
+  visualsAutoStart: string;
+  visualsAutoRun: 'fixed' | 'track';
   /** One's own crates on Home (Settings › Home, 0.9.3; the owner, 2026-10-25): each a section of its own, a shelf of its
    *  albums, ordered and switched in Home's sections list. */
   homeCrates: boolean;
@@ -285,6 +292,8 @@ export type Prefs = {
 };
 
 export type AlbumLayout = 'rows' | 'grid' | 'table' | 'flow';
+/** How long the screen is left alone before the visuals open by themselves (ms). */
+export const VISUALS_AFTER = [30_000, 60_000, 120_000, 300_000, 600_000];
 export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating' | 'quality' | 'tracks' | 'length';
 const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating', 'quality', 'tracks', 'length'];
 export type PlaylistOrder = 'name' | 'tracks' | 'playing' | 'missing';
@@ -434,6 +443,10 @@ export const DEFAULTS: Prefs = {
   flowShuffle: false,
   flowShuffled: [...FLOW_BACKDROPS.filter((b) => b !== 'own')],
   flowShuffleWhen: 'flow',
+  visualsAuto: false,
+  visualsAutoAfter: 120_000,
+  visualsAutoStart: 'last',
+  visualsAutoRun: 'fixed',
   flowBackdrop: 'wall',
   homeCrates: false,
   levelling: true,
@@ -546,6 +559,10 @@ function read(): Prefs {
         if (ticked.length) p.flowShuffled = ticked;
       }
       if (['flow', 'seeded', 'start', 'timed'].includes(saved.flowShuffleWhen)) p.flowShuffleWhen = saved.flowShuffleWhen;
+      if (typeof saved.visualsAuto === 'boolean') p.visualsAuto = saved.visualsAuto;
+      if (VISUALS_AFTER.includes(saved.visualsAutoAfter)) p.visualsAutoAfter = saved.visualsAutoAfter;
+      if (typeof saved.visualsAutoStart === 'string' && saved.visualsAutoStart) p.visualsAutoStart = saved.visualsAutoStart;
+      if (saved.visualsAutoRun === 'fixed' || saved.visualsAutoRun === 'track') p.visualsAutoRun = saved.visualsAutoRun;
       if (typeof saved.homeCrates === 'boolean') p.homeCrates = saved.homeCrates;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Array.isArray(saved.homeParts) && saved.homeParts.join(',') !== HOME_BEFORE)

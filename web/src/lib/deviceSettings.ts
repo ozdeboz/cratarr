@@ -25,6 +25,7 @@ export const DEVICE_SETTINGS: readonly DeviceSetting[] = [
   { id: 'stayReady', label: 'Stay ready', app: 'app', browser: null, appKeys: ['stayReady'] },
   { id: 'sync', label: 'Sync', app: 'app', browser: null, appKeys: ['downloadQuality', 'downloadOverMobile', 'syncBudgetGb', 'syncOnlyCharging'] },
   { id: 'output', label: 'Audio output', app: 'app', browser: null, appKeys: ['output', 'ordered', 'order', 'forget'] },
+  { id: 'visualsAuto', label: 'Visuals by themselves', app: 'page', browser: 'page' },
   { id: 'delay', label: 'Speaker delay', app: 'server', browser: 'server' },
   { id: 'shared', label: 'Shared with everyone', app: 'server', browser: 'server' },
 ];

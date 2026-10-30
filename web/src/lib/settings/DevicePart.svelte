@@ -11,11 +11,12 @@
   import { startStopNow } from '../device.svelte';
   import { isPhone } from '../localPlayer.svelte';
   import LevelItems from './LevelItems.svelte';
+  import VisualsAutoGroup from './VisualsAutoGroup.svelte';
   import OutputSheet from '../OutputSheet.svelte';
   import { outputName } from '../playOn.svelte';
   import { allowDeviceMusic, askFolders, device, deviceMusicSettings, setFolder } from '../deviceMusic.svelte';
   import { plural } from '../insights.svelte';
-  import { switchable } from '../deviceMusic.svelte';
+  import { localMode, switchable } from '../deviceMusic.svelte';
   import { prefs } from '../prefs.svelte';
   import { defaultBrowserName } from '../playOnTarget.svelte';
   import Group from './Group.svelte';
@@ -78,6 +79,9 @@
     />
   {/if}
 </Group>
+
+<!-- The visuals by themselves (0.9.19): this device's, not in local mode (no visuals there, decision 0052). -->
+{#if !localMode()}<VisualsAutoGroup />{/if}
 
 {#if inApp}
   <Group title="Local music">

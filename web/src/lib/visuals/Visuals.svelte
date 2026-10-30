@@ -6,7 +6,7 @@
   // down, Esc or Back closes. The dice: a tap opens a row of its scopes (Everything, Sources…), each a roll of what is not pinned; the row stays, and
   // holds the controls up, till the dice is tapped again. A long press rolls everything. Reset:
   // the track's own look again, or everything (ResetMenu). Snapshots: saved patches on the server, every device's.
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { fade } from 'svelte/transition';
   import { getVisualsSnapshots, type VisualsSnapshot } from '../api';
   import Icon from '../Icon.svelte';
@@ -203,6 +203,26 @@
     preset = null;
     showChrome();
   }
+  // Opened by themselves (lib/visualsAuto; the owner, 2026-10-30): from the snapshot this device says, once it is
+  // known (a saved one comes with the library), or as last seen; and, where it says so, a new look (the dice's
+  // macros) at each new track while they stay.
+  let autoStarted = false;
+  $effect(() => {
+    if (!visuals.auto || autoStarted) return;
+    const id = prefs.visualsAutoStart;
+    if (id === 'last') return void (autoStarted = true);
+    if (exampleOf(id) || library.some((x) => x.id === id)) {
+      autoStarted = true;
+      untrack(() => choosePreset(id));
+    }
+  });
+  let trackSeen: string | null = null;
+  $effect(() => {
+    const id = np ? `${np.source}:${np.id}` : null;
+    const was = trackSeen;
+    trackSeen = id;
+    if (visuals.auto && prefs.visualsAutoRun === 'track' && was !== null && id !== null && id !== was) untrack(() => roll('macros'));
+  });
   type Scope = (typeof RANDOMIZE_SCOPES)[number];
   function roll(scope: Scope | { module: string[] } = 'macros') {
     loop?.roll(scope);
