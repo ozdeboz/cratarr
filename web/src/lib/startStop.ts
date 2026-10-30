@@ -18,6 +18,9 @@ export type PointMotion = 'toStart' | 'seekBack' | 'toEnd' | 'seekFwd';
 export type HoldMotion = 'holdBack' | 'holdFwd';
 export type Motion = PointMotion | HoldMotion;
 
+/** Previous restarts the track after this many seconds (Finamp: 5): every player's rule, the app's and Kodi's (the
+ *  server's) too, so the remote predicts with it as well (shared/rules.json). */
+export const RESTART_AFTER = 5;
 /** A wind to a point's longest (holding has no end but the edge). */
 export const WIND_CAP_MS = 12_000;
 /** Each setting's range, step and starting value. */
@@ -48,7 +51,15 @@ export const PIECE_MS = 350;
  *  a slow wind's as before. Its shape stays the raised cosine. The app's Plan.lengthMs is the same rule
  *  (0.9.15-2); taps, seeks and the tape's own stop keep the Brake. */
 export const DECEL_X = 64;
-export const brakeLengthMs = (v0: number, to: number, brakeMs: number) => Math.max(brakeMs, Math.round((Math.abs(Math.abs(v0) - to) / DECEL_X) * 1000));
+export const brakeLengthMs = (v0: number, to: number, brakeMs: number) => Math.max(brakeMs, Math.round((Math.abs(v0 - to) / DECEL_X) * 1000));
+/** Such a brake's speed `t` ms into it (×): a raised cosine from `v0` to `to` over `ms`, then `to`. */
+export const brakeSpeed = (v0: number, to: number, ms: number, t: number) => to + ((v0 - to) * (1 + Math.cos(Math.PI * Math.min(1, Math.max(0, t / ms))))) / 2;
+/** How far such a brake from `v`× to `to`× over `ms` has gone after `s` seconds (track s). */
+export function brakeTravel(v: number, ms: number, s: number, to = 1): number {
+  const T = ms / 1000;
+  const u = Math.min(s, T);
+  return to * u + ((v - to) / 2) * (u + (T / Math.PI) * Math.sin((Math.PI * u) / T)) + to * Math.max(0, s - T);
+}
 
 /** `mode`, `ms`, `stopMs`: Start and stop's effect, its start (the wind-up) and its stop (the wind-down; its own, the
  *  tape's Brake being the tape's only: the owner, 2026-10-27); `skips`: it for next and previous too; `rewind`: the tape
