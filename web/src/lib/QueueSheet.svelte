@@ -1,5 +1,6 @@
 <script lang="ts">
   import StartStopSheet from './StartStopSheet.svelte';
+  import { leavePlayer } from './navStep.svelte';
   import { port } from './player/port.svelte';
   // The queue (decisions 0019, 0022), as Finamp's queue sheet (lib/components/PlayerScreen/queue_list.dart): a sheet
   // over the player on the blurred cover, a grab handle and "Queue"; then the previous tracks (folded, this device
@@ -106,7 +107,7 @@
     const v = fromView;
     if (!v) return;
     onclose();
-    player.full = false;
+    leavePlayer();
     viewPlaylist(v);
   }
 

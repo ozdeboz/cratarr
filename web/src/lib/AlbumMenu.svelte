@@ -1,5 +1,6 @@
 <script lang="ts" module>
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
+  import { leavePlayer } from './navStep.svelte';
   import { port } from './player/port.svelte';
   import { untrack } from 'svelte';
   import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
@@ -283,7 +284,7 @@
   }
   function goToGenre(name: string) {
     onclose();
-    player.full = false;
+    leavePlayer();
     viewGenre(name);
   }
   // Web search and Genius search: the album's artist and title, in a new tab (the app opens it outside).
@@ -575,7 +576,7 @@
           // Read before closing: closing lets go of the album.
           const id = a.id;
           onclose();
-          player.full = false;
+          leavePlayer();
           viewLike(id);
         }}
       />{/if}

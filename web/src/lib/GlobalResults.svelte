@@ -18,6 +18,7 @@
   import { viewOver } from './panel.svelte';
   import { libraryDot } from './albums.svelte';
   import { pageView } from './pageView.svelte';
+  import { leaveOnArrival } from './navStep.svelte';
   import type { SearchResult } from './search';
   import { toast } from './toast.svelte';
 
@@ -88,7 +89,8 @@
   /** Nothing anywhere: the search closed, the words looked up on MusicBrainz. */
   function findMore() {
     const words = q;
-    pageView.query = '';
+    // Emptied once Find shows (lib/navStep), not before.
+    leaveOnArrival({ search: 'clear' });
     location.hash = `#/find?q=${encodeURIComponent(words)}`;
   }
 </script>
@@ -109,7 +111,7 @@
   {@const all = globalSearch.allFound}
   {@const label = groups.find((g) => g.kind === kind)?.label ?? ''}
   <section class="global" aria-label={label}>
-    <SectionHead title={all ? `${label} (${all.total.toLocaleString()})` : label} />
+    <SectionHead title={all ? `${label} (${all.total.toLocaleString()})` : label} onback={() => history.back()} />
     <ul class="rows">
       {#each all?.items ?? [] as it (it.subject + (it.track ?? ''))}{@render found(it)}{/each}
       {#if all && !all.done}<li class="more" {@attach nearEnd(() => loadAll(all.q, all.kind))}></li>{/if}

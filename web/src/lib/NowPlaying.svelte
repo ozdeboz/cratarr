@@ -1,5 +1,6 @@
 <script lang="ts">
   import DetailsSheet from './DetailsSheet.svelte';
+  import { leavePlayer } from './navStep.svelte';
   import StartStopSheet from './StartStopSheet.svelte';
   import LevelSheet from './LevelSheet.svelte';
   import { levelShare, playingLevelOn } from './level.svelte';
@@ -239,7 +240,7 @@
 
   /** The Playlists page, from the player over the page (its playlists' sheet): the player closes. */
   function toPlaylistsPage() {
-    player.full = false;
+    leavePlayer();
     location.hash = keepViewed('#/');
   }
 
@@ -267,14 +268,14 @@
   });
   /** The row's Add: Settings → Player, where the row's facts are chosen; the player over the page gives way. */
   function toRowSettings() {
-    player.full = false;
+    leavePlayer();
     location.hash = `#/settings?view=${encodeURIComponent(SETTINGS + 'player')}`;
   }
   /** The album's name: the album in the panel, as the artist's chip opens the artist. */
   function toAlbum() {
     const t = np;
     if (!t?.album_id) return;
-    player.full = false;
+    leavePlayer();
     viewOver(albumSubject(t.source, t.album_id));
   }
   // A new track shows its cover (its id: the player's state is a new object on every report).
