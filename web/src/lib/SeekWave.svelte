@@ -141,6 +141,13 @@
    *  so they stand still as the tape goes on into other tracks (0.11.1: counted from the playing track, every track
    *  change moved them all, and the bars drawn on them with it). */
   let holdBase = $state<number | null>(null);
+  /** What shows, in s of the hold's frame (from holdBase's start), as the window's frame put it: the same place in the
+   *  music whichever track plays when it is drawn (0.12, the owner: "bars jump sideways"; drawn from the window in the
+   *  playing track's s, a track change showed a frame of the last track's window over the new track's places, a
+   *  track's length off). */
+  // The playhead too (`pos`), from the same frame: read as the page draws, it was a frame on from the window at times
+  // and jittered against the bars.
+  let holdShown = $state<{ from: number; to: number; pos: number } | null>(null);
   $effect(() => {
     const on = zoomOn && holdNow.held;
     return untrack(() => {
@@ -172,14 +179,20 @@
           },
           dt,
         );
+        const fa = win && holdBase !== null && holdBase !== local.index ? (along(holdBase, 0) ?? 0) : 0;
+        holdShown = win ? { from: win.shown.from - fa, to: win.shown.to - fa, pos: herePos - fa } : null;
         if (win) raf = requestAnimationFrame(step);
       };
       raf = requestAnimationFrame(step);
       return () => cancelAnimationFrame(raf);
     });
   });
+  /** Where the hold's frame counts from: the start of the track it began in, from this track's start (lib/waveStrip). */
+  const frameAt = $derived(holdBase !== null && holdBase !== local.index ? (along(holdBase, 0) ?? 0) : 0);
+  /** What shows in s from this track's start, from the hold's frame as it is drawn (holdShown). */
+  const shownHere = $derived(win && holdShown ? { a: holdShown.from + frameAt, b: holdShown.to + frameAt } : null);
   /** The wide view: the window through the queue, in s from this track's start. */
-  const wide = $derived(win && throughQueue ? { a: win.shown.from, b: win.shown.to } : null);
+  const wide = $derived(throughQueue ? shownHere : null);
   /** The tracks the wide view's strips cover (the window and as much again either side, lib/waveStrip's STRIP_SPAN), by
    *  queue place, each from where along the queue. */
   const wideTracks = $derived.by(() => {
@@ -208,8 +221,6 @@
       if (q) loadWaveform(q.source, q.id);
     }
   });
-  /** Where the hold's frame counts from: the start of the track it began in, from this track's start (lib/waveStrip). */
-  const frameAt = $derived(holdBase !== null && holdBase !== local.index ? (along(holdBase, 0) ?? 0) : 0);
   /** The tracks the wide view covers, each in the hold's frame with its own bins (each against its own loudest,
    *  lib/waveStrip): a track's bars the same whatever else the window covers, wherever the tape is. */
   const wideBins = $derived.by((): { tracks: StripTrack[]; queue: number[] } | null => {
@@ -243,8 +254,8 @@
     if (!wide || !s || !hereLen) return null;
     return {
       tracks: s.tracks,
-      from: wide.a - frameAt,
-      to: wide.b - frameAt,
+      from: holdShown!.from,
+      to: holdShown!.to,
       cur0: -frameAt,
       cur1: hereLen - frameAt,
       marks: s.tracks.slice(1).map((t) => t.start),
@@ -280,7 +291,7 @@
     wideLost = lost;
   });
   /** The zoom on one track (0..1 of it). */
-  const view = $derived(win && !throughQueue && hereLen ? { from: win.shown.from / hereLen, to: win.shown.to / hereLen } : null);
+  const view = $derived(shownHere && !throughQueue && hereLen ? { from: shownHere.a / hereLen, to: shownHere.b / hereLen } : null);
   /** The look-ahead shown (0..1 of the track): a hold's landing, ahead of the playhead the way it goes; in a track
    *  further on through the queue, at this one's edge that way, until the tape is in that track (the owner, 2026-10-28:
    *  the line stood at the end, and on the next track at the last one's place). */
@@ -400,7 +411,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} want={shownWant} {loading} progress={win && hereLen ? herePos / hereLen : dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} want={shownWant} {loading} progress={shownHere && holdShown && hereLen ? (holdShown.pos + frameAt) / hereLen : dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

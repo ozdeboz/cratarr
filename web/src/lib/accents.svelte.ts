@@ -10,12 +10,15 @@ const known = $state<Record<string, string | null>>({});
 const asked = new Set<string>();
 
 /** A track's colour as known now (its cover fetched the first time it is asked for): its cover's accent, else null. */
-export function accentFor(t: { source: string; id: string; album_id?: string | null }): string | null {
+export function accentFor(t: { source: string; id: string; album_id?: string | null; addable?: boolean }): string | null {
   const key = `${t.source}/${t.id}`;
   if (!asked.has(key)) {
     asked.add(key);
     void (async () => {
-      for (const src of [coverUrl(t), t.album_id ? albumCoverUrl(t.source, t.album_id) : null]) {
+      // In the order the player takes its cover (lib/remote's coverSrc), so a track's colour here is the player's own.
+      const library = coverUrl(t);
+      const album = t.album_id ? albumCoverUrl(t.source, t.album_id) : null;
+      for (const src of t.addable === false ? [album, library] : [library, album]) {
         const a = src ? await accentOf(src) : null;
         if (a) return void (known[key] = a);
       }
