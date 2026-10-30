@@ -40,6 +40,15 @@ impl UserData {
         Ok(self.db().query_row("SELECT at, facts FROM discogs_facts WHERE subject = ?1", [subject], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
     }
 
+    /// What Discogs said of every subject of one kind (`prefix`: "album:"), where it said something (0.11, quick crates:
+    /// the albums' labels for the crates).
+    pub fn discogs_facts_of(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT subject, facts FROM discogs_facts WHERE substr(subject, 1, ?2) = ?1 AND facts IS NOT NULL")?;
+        let rows = st.query_map(params![prefix, prefix.chars().count() as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn set_discogs_facts(&self, subject: &str, facts: Option<&str>, at: i64) -> Result<()> {
         self.db().execute("INSERT OR REPLACE INTO discogs_facts (subject, at, facts) VALUES (?1, ?2, ?3)", params![subject, at, facts])?;
         Ok(())

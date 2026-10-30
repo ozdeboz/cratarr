@@ -4,6 +4,7 @@
 //! for the albums missing a genre or a year; a release group in a Discover look. An album's genres and styles go into
 //! the library's words as Discogs' too (as the harvest's), so every place the words reach has them.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -34,6 +35,38 @@ fn album_subject(served: &crate::serve::Serve, album: &str) -> Result<String> {
 /// An album's facts as kept, not asked for. Blocking.
 pub fn album_kept(served: &crate::serve::Serve, album: &str) -> Result<Option<AlbumFacts>> {
     Ok(parse(served.userdata.discogs_facts(&album_subject(served, album)?)?))
+}
+
+/// Every album's labels as kept from Discogs, by its Music-form id (0.11, quick crates: the crates' Label where an
+/// album's files name none): what the rounds kept so far, never asked for here. Blocking.
+pub fn kept_labels(served: &crate::serve::Serve) -> Result<HashMap<String, Vec<String>>> {
+    #[derive(serde::Deserialize)]
+    struct Labelled {
+        #[serde(default)]
+        labels: Vec<super::discogs::Label>,
+    }
+    let mut out = HashMap::new();
+    for (subject, json) in served.userdata.discogs_facts_of("album:")? {
+        let (Some(base), Ok(kept)) = (subject.strip_prefix("album:"), serde_json::from_str::<Labelled>(&json)) else { continue };
+        let names = label_names(&kept.labels);
+        if !names.is_empty() {
+            out.insert(base.to_string(), names);
+        }
+    }
+    Ok(out)
+}
+
+/// Labels' names as the crates offer them: each once, Discogs' "Not On Label" (self-released, no label) none.
+fn label_names(labels: &[super::discogs::Label]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in labels {
+        let name = l.name.trim();
+        if name.is_empty() || name.to_lowercase().starts_with("not on label") || out.iter().any(|x| x.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        out.push(name.to_string());
+    }
+    out
 }
 
 /// An album's facts: as kept while fresh, else asked now (MusicBrainz's link from its release, else Discogs' search by
@@ -131,4 +164,17 @@ pub fn fill(served: Arc<crate::serve::Serve>, albums: Vec<String>) {
         }
         RUNNING.store(false, Ordering::SeqCst);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::discogs::Label;
+
+    #[test]
+    fn discogs_labels_are_named_once_and_not_on_label_is_no_label() {
+        let l = |name: &str| Label { name: name.into(), catno: None };
+        let names = label_names(&[l("Warp Records"), l("warp records"), l("Not On Label (Air Self-released)"), l(" "), l("Bleep")]);
+        assert_eq!(names, ["Warp Records", "Bleep"]);
+    }
 }

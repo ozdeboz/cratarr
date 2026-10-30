@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::search::{closeness, words};
 
 /// What a search may find, and how much each kind weighs in `top`.
-const KINDS: [(&str, f32); 14] = [
+const KINDS: [(&str, f32); 15] = [
     ("artist", 1.0),
     ("album", 0.95),
     ("playlist", 0.9),
@@ -25,6 +25,8 @@ const KINDS: [(&str, f32); 14] = [
     ("style", 0.68),
     ("mood", 0.66),
     ("tag", 0.64),
+    // The labels (0.11, quick crates: a Label chip), the files' and Discogs'.
+    ("label", 0.62),
     // What Cratarr knows of outside the library (0076, the indexed universe), surest first.
     ("missing", 0.6),
     ("requested", 0.58),
@@ -517,13 +519,14 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     }
     // The library's words (0.9.7, `app::words`): a group per kind, each word opening its crate (`crate:<kind>:<word>`),
     // by how many albums carry it among equals. In place of the library's genres where they can be read.
-    if super::words::KINDS.iter().any(|k| wants(k))
+    // The labels the same way (0.11, quick crates), each opening its crate (`crate:label:<label>`).
+    if super::words::KINDS.iter().chain(&["label"]).any(|k| wants(k))
         && let Some(served) = app.served.clone()
     {
         let (s, cat) = (served.clone(), app.library.catalogue());
         match tokio::task::spawn_blocking(move || super::words::search_index(&s, &cat)).await? {
             Ok(index) => {
-                for kind in super::words::KINDS.into_iter().filter(|k| wants(k)) {
+                for kind in super::words::KINDS.into_iter().chain(["label"]).filter(|k| wants(k)) {
                     let hits: Vec<&(&'static str, String, usize)> = index.iter().filter(|(k, word, _)| *k == kind && crate::search::matches(word, &w)).collect();
                     let n = hits.len();
                     totals.insert(kind, n);

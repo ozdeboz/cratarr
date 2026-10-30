@@ -936,14 +936,35 @@ impl Catalogue {
         {
             tracing::warn!("crates: Classical not read: {e:#}");
         }
-        // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
         if let Some(s) = &served
-            && let (Ok(merged), Ok(albums)) = (crate::app::words::merged(s), s.library.song_album_map())
+            && let Ok(albums) = s.library.song_album_map()
         {
-            for f in &mut facts {
-                if let Some(words) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))).and_then(|a| merged.albums.get(a)) {
-                    crate::app::words::add_to(f, words);
+            // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
+            if let Ok(merged) = crate::app::words::merged(s) {
+                for f in &mut facts {
+                    if let Some(words) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))).and_then(|a| merged.albums.get(a)) {
+                        crate::app::words::add_to(f, words);
+                    }
                 }
+            }
+            // And with its album, by id and name (0.11, quick crates: the Album axis, an album seed), one copy for all
+            // its tracks; its labels Discogs' for its album where its tags name none, as kept (never asked for here).
+            match (s.library.album_names(), crate::app::discogs_facts::kept_labels(s)) {
+                (Ok(named), Ok(labels)) => {
+                    let mut shared: HashMap<&str, (Arc<str>, Arc<str>)> = HashMap::new();
+                    for f in &mut facts {
+                        let Some(album) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))) else { continue };
+                        let Some((name, base)) = named.get(album) else { continue };
+                        let (id, shown) = shared.entry(album.as_str()).or_insert_with(|| (Arc::from(album.as_str()), Arc::from(name.as_str()))).clone();
+                        (f.album, f.album_name) = (Some(id), Some(shown));
+                        if f.labels.is_empty()
+                            && let Some(l) = labels.get(base)
+                        {
+                            f.labels = l.clone();
+                        }
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => tracing::warn!("crates: albums and labels not read: {e:#}"),
             }
         }
         let facts = Arc::new(facts);
@@ -970,6 +991,20 @@ impl Catalogue {
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
             let (place, value) = row?;
             tag_keys.entry(place).or_insert(value);
+        }
+        // Its labels (0.11, quick crates): Vorbis LABEL or ORGANIZATION and MP4's LABEL (read as "label"), ID3v2 TPUB and
+        // Vorbis PUBLISHER (lofty reads those as the publisher: kept by their raw keys). Every tag is kept, so no file
+        // needs reading again for them.
+        let mut st = db.prepare("SELECT folder, rel, value FROM tags WHERE folder >= 0 AND (name = 'label' OR raw IN ('TPUB', 'PUBLISHER')) ORDER BY folder, rel, n")?;
+        let mut tag_labels: HashMap<Place, Vec<String>> = HashMap::new();
+        for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
+            let (place, value) = row?;
+            let into = tag_labels.entry(place).or_default();
+            for l in crate::crates::labels_of(&value) {
+                if !into.iter().any(|x| x.eq_ignore_ascii_case(&l)) {
+                    into.push(l);
+                }
+            }
         }
         let mut st = db.prepare(
             "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist', 'artists', 'mood', 'style', 'grouping') ORDER BY folder, rel, n",
@@ -1078,6 +1113,9 @@ impl Catalogue {
                     key: tag_keys.remove(&place).and_then(|k| crate::crates::key_name(&k)).or_else(|| muse_key.and_then(|k| crate::crates::key_name(&k))),
                     release_types: Vec::new(),
                     tags: file_tags,
+                    album: None,
+                    album_name: None,
+                    labels: tag_labels.remove(&place).unwrap_or_default(),
                 })
             })
             .collect())
@@ -3249,6 +3287,26 @@ mod tests {
         assert_eq!(f.artists, ["Air feat. Beck"], "shown as tagged");
         assert_eq!(f.credits, ["air", "beck", "jarviscocker"]);
         assert_eq!(f.credit_names, ["Air", "Beck", "Jarvis Cocker"], "as the Artist filter offers them");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_files_labels_are_its_label_tags_by_name_or_by_raw_key() {
+        // 0.11, quick crates: lofty reads ID3v2 TPUB (and Vorbis PUBLISHER) as the publisher, kept by its raw key alone;
+        // Vorbis LABEL as "label". Several in one value are several.
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        let (one, two) = ("A - B (2020)/01 One.mp3".to_string(), "A - B (2020)/02 Two.flac".to_string());
+        let db = cat.db();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'TPUB', NULL, 'Warp; Bleep')", params![one]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'LABEL', 'label', 'Ninja Tune')", params![two]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 1, 'ORGANIZATION', 'label', 'ninja tune')", params![two]).unwrap();
+        drop(db);
+        let facts = cat.crate_facts().unwrap();
+        let labels = |rel: &str| facts.iter().find(|f| f.rel == rel).unwrap().labels.clone();
+        assert_eq!(labels(one.as_str()), ["Warp", "Bleep"]);
+        assert_eq!(labels(two.as_str()), ["Ninja Tune"], "one label once, in any case");
         std::fs::remove_dir_all(&d).ok();
     }
 

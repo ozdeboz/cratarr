@@ -277,12 +277,13 @@ pub fn add_to(f: &mut crate::crates::Facts, words: &[Word]) {
 
 /// Every word of the library by kind, with the albums that carry it (by the files' crate facts: the files' own genres,
 /// AudioMuse's styles and moods, and the merged words): what search finds a word by. A word shown as a genre is not
-/// also a style. Blocking.
+/// also a style. The labels too (0.11, quick crates: search's label), a kind apart: a label named as a genre is both.
+/// Blocking.
 pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>) -> Vec<(&'static str, String, usize)> {
     let mut by: HashMap<(&'static str, String), (HashMap<String, usize>, HashSet<&str>)> = HashMap::new();
     for f in facts {
         let Some(album) = f.track.and_then(|t| album_of.get(&crate::serve::ids::song(t))) else { continue };
-        for (kind, list) in [("genre", &f.genres), ("style", &f.styles), ("mood", &f.moods), ("tag", &f.tags)] {
+        for (kind, list) in [("genre", &f.genres), ("style", &f.styles), ("mood", &f.moods), ("tag", &f.tags), ("label", &f.labels)] {
             for w in list {
                 let k = key(w);
                 if k.is_empty() {
@@ -297,7 +298,7 @@ pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>)
     let genres: HashSet<String> = by.keys().filter(|(kind, _)| *kind == "genre").map(|(_, k)| k.clone()).collect();
     let mut out: Vec<(&'static str, String, usize)> = by
         .into_iter()
-        .filter(|((kind, k), _)| *kind == "genre" || !genres.contains(k))
+        .filter(|((kind, k), _)| matches!(*kind, "genre" | "label") || !genres.contains(k))
         .map(|((kind, _), (spellings, albums))| {
             let shown = spellings.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).map(|(w, _)| w).unwrap_or_default();
             (kind, shown, albums.len())
