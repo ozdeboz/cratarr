@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { track, type Track } from './aspects-record.ts';
 
+// The picture side's wiring installs itself into the conversion (v2.ts), as the app has it (snapshot-v2.ts).
+await import('../../src/lib/visuals/picture-wiring.ts');
 const { newEngine, stepEngine } = await import('../../src/lib/visuals/engine/graph.ts');
 const { LivePatch } = await import('../../src/lib/visuals/engine/live-patch.ts');
 const { rollOf } = await import('../../src/lib/visuals/engine/dice.ts');
