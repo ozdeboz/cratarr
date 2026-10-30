@@ -18,7 +18,7 @@ import { createEngine } from './engine-module';
  *  picture's own loop besides Warp and Keep (drawn here). Each draws `input` into `out`, an exact copy at its neutral. */
 export const MODULE_MAKERS: Record<string, (gl: WebGL2RenderingContext) => PictureModule> = {
   [FLUID_LOOP.type]: () => createFluidLoop(),
-  // The effect engines on a layer (claude-5f's engine-module.ts): a kaleidoscope on the shapes.
+  // The effect engines on a layer (engine-module.ts): a kaleidoscope on the shapes.
   'kaleidoscope-engine': (gl) => createEngine('kaleidoscope-engine', gl),
   'eyedo-engine': (gl) => createEngine('eyedo-engine', gl),
   'hydra-engine': (gl) => createEngine('hydra-engine', gl),
@@ -210,7 +210,7 @@ export class Compositor {
     }
     const dt = frame.dt;
     let last = this.feedback[this.fed];
-    // The loop's other modules (claude-5f's fluid…), in order, on the last picture before it is warped and kept.
+    // The loop's other modules (fluid…), in order, on the last picture before it is warped and kept.
     let scratchAt = 0;
     for (const m of extra.loop) {
       if (m.type === 'warp' || m.type === 'keep') continue;

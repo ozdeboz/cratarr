@@ -4,7 +4,7 @@
   // times as finely (the same bins, a bar per 3 px, drawn as lib/Waveform draws: 0.7 of the slot wide, at least 6%
   // tall, against the track's loudest), played in the accent left of the point, muted right; a white line inside marks
   // the point. Its centre keeps 10 px inside the player; a stem runs from the point up to it, a white line crosses the
-  // waveform at the point, and the time where it will land sits above it in a small tag. Geometry as claude-5f's mock
+  // waveform at the point, and the time where it will land sits above it in a small tag. Geometry as the mock
   // (lens-real.png, gen5.py): 130 px, its bottom edge 36 px above the waveform's middle. `now` (0..1): where it plays,
   // a line in the lens's text colour when it is within it (the owner, 2026-10-24: something to aim for). What it shows is
   // always centred on the point, the lens kept inside the player or not (the owner, 2026-10-26: the point never leaves

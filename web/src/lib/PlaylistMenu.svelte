@@ -163,7 +163,7 @@
   const ownIds = $derived(own.map((x) => x.id));
 
   // In the app, where the opener has not their rows (several, the Playlists page): asked for once (one call where the
-  // server has it, a5 0.9.4), for Download once (all their tracks, each once) and Sync to this device (each from its
+  // server has it, 0.9.4), for Download once (all their tracks, each once) and Sync to this device (each from its
   // own server).
   let asked = $state<{ id: string; source: string; rows: PlaylistRow[] }[] | null>(null);
   const idsKey = $derived(ids.join('\n'));
@@ -276,7 +276,7 @@
     const gone: string[] = [];
     const tokens: (string | null)[] = [];
     try {
-      // One call where the server has it (a5, 0.9.4): one Undo for them all; else one by one.
+      // One call where the server has it (0.9.4): one Undo for them all; else one by one.
       let batched = false;
       try {
         const r = await batchDelete(list.map((x) => x.id));

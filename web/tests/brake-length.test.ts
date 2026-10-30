@@ -1,6 +1,6 @@
 // A held wind's brake (startStop's brakeLengthMs; the owner, 2026-10-29: "When spinning down from high speeds, braking
 // takes longer", constant deceleration): as long as its speed asks at DECEL_X × a second, the Brake as set its
-// shortest. The same numbers as the app's Plan.lengthMs (a5, 0.9.15-2).
+// shortest. The same numbers as the app's Plan.lengthMs (0.9.15-2).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

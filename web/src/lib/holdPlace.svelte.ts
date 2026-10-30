@@ -1,4 +1,4 @@
-// One commit (the owner, 2026-10-26, after a5's lab measured the panel and the pages coming in in pieces): what was
+// One commit (the owner, 2026-10-26, after the lab measured the panel and the pages coming in in pieces): what was
 // shown stays, still, until what replaces it is ready, and then the whole of it shows at once ("All together"; "Old
 // page stays, then switch"; Home "Hold until its first screen is ready"). lib/Hold.svelte holds a place (the panel, the
 // page); what shows in it says it is not ready yet with holdUntil, and the place keeps a still picture of what it

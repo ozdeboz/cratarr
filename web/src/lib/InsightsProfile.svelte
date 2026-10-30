@@ -1,6 +1,6 @@
 <script lang="ts">
   // Listening's Profile (the owner, 2026-10-23): your taste as Cratarr reads it, from the one similarity's profile
-  // (a5): what you like (favourites, playlists, plays) and, apart, what you skip or exclude. Words as two lists side by
+  // What you like (favourites, playlists, plays) and, apart, what you skip or exclude. Words as two lists side by
   // side (more of, netted; less of), numbers as where your taste sits on the library's range (a band from the middle's
   // spread, less of under it), moods by how much more of them than in the library (a bar each way from the library's
   // middle).

@@ -1,4 +1,4 @@
-// Typed ports (decision 0057, step 1): the interfaces the one engine (claude-5f), the picture graph (claude-632) and the
+// Typed ports (decision 0057, step 1): the interfaces the one engine, the picture graph and the
 // views build on. Three kinds of signal: a picture (a texture each frame), a value (a number each frame), a trigger
 // (events with their strength). A module type's ports come from what it declares: its knobs are value inputs, a
 // modulator's `inputs` are value inputs, a picture module takes and gives a picture, a modulator gives a value. The
@@ -11,7 +11,7 @@ import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 import { LENSES } from './flame';
 
 /** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
- *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
+ *  flame's own loop works on it (step 3). Only Show converts light into a picture. */
 /** `audio`: the sound itself, its recent samples (Music gives it; the Waves source draws it). */
 /** `points`: a set of positions with values per point (a Grid's; for Instance). `flow`: a velocity field, where the
  *  picture moves and how fast (a Fluid's: 0057 §4h). */
@@ -99,7 +99,7 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   ];
   if (t.place === 'modulator') return { in: [...inputs, ...knobs], out: [VALUE_OUT] };
   if (t.place === 'frame') return { in: knobs, out: [] };
-  // The flame and its own loop work on light (claude-632, step 3): the flame takes last frame's light and gives its
+  // The flame and its own loop work on light (step 3): the flame takes last frame's light and gives its
   // light; Trails, Fluid, Tunnel, the Loop effect and Dive carry light on.
   // The flame's part columns take six channels, one a part (0057 §4b): a band's cable reaches its part; a whole
   // track's every part. Into any one-channel knob, six channels are the bands' mean (a Merge, in the conversion).
@@ -166,7 +166,7 @@ export const OFF_ON: readonly string[] = ['Off', 'On'];
 export const READINGS = ['track', 'lately', 'absolute'] as const;
 const READING_NAMES: readonly string[] = ['This track', 'Lately', 'As it is'];
 
-/** A part of a module's face (claude-632's face/, the standard panel every node draws): what it shows live past its
+/** A part of a module's face (face/, the standard panel every node draws): what it shows live past its
  *  knobs. `of`: the output (or else the knob) it reads, `out` by default; `threshold`: a knob drawn as a line across
  *  it; a meter's `peak` held, its `max` (1 by default), `reduction` drawn as gain taken away (1: none), `channels` a bar
  *  each; a light on an output sits beside that output's name. `adsr` and `lfo`: their own shapes. */
@@ -183,7 +183,7 @@ export type FacePart = {
 type Declared = ModuleType & { ports: Ports; face?: FacePart[] };
 
 /** Today's hidden behaviours as modules (0057 §3). Their knobs are what the old settings held; their ports normalled
- *  to where the behaviour reaches today. claude-5f's engine steps them; the views draw them as any other. */
+ *  to where the behaviour reaches today. The new engine steps them; the views draw them as any other. */
 const MUSIC_KNOBS: Knob[] = [
   { ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 },
   // How each row is read (0057 §7e item 10): 0 against this track's typical, 1 lately's, 2 as it is.
@@ -194,7 +194,7 @@ export const MUSIC: Declared = {
   type: 'music',
   label: 'Music',
   place: 'modulator',
-  // A band's envelope's fall (s): its hold, what today's lighting times gave the envelope (claude-5f).
+  // A band's envelope's fall (s): its hold, what today's lighting times gave the envelope.
   knobs: MUSIC_KNOBS,
   ports: {
     // Hold a cable can move; the readings are set, not cabled (as few jacks as can be).
@@ -342,7 +342,7 @@ export const LOOPER = declared(
   [VALUE_OUT],
 );
 
-/** The Show device's modules (0057 §6), in the order that draws exactly today's picture (claude-632, render.ts's
+/** The Show device's modules (0057 §6), in the order that draws exactly today's picture (render.ts's
  *  show pass): each with the knob it took from Show (id and type alike). Bend and Blur take light or a picture
  *  (polymorphic); Tone map turns light into a picture; the compositor fuses the five into one pass. Show's Size is
  *  the Flame's own zoom, not here. */
@@ -484,7 +484,7 @@ export const FILTER_BANK = declared(
   [out('bands', 'Bands', 'audio', 6), out('level', 'Level', 'value', 6)],
 );
 
-/** The kind of busyness each knob makes (0057 §7e, claude-5f's sidechain): the Ducker of that kind holds it back. */
+/** The kind of busyness each knob makes (0057 §7e, the sidechain): the Ducker of that kind holds it back. */
 export const BUSY_OF: Readonly<Record<string, (typeof BUSY)[number]>> = {
   'clock.speed': 'motion',
   'flame.hue': 'colour',
@@ -493,7 +493,7 @@ export const BUSY_OF: Readonly<Record<string, (typeof BUSY)[number]>> = {
   'gate.gap': 'looks',
 };
 
-/** Ducker (0057 §7e; the broadcast sidechain, claude-5f's): its input lowered by up to Depth (dB) while its key stands
+/** Ducker (0057 §7e; the broadcast sidechain): its input lowered by up to Depth (dB) while its key stands
  *  over the threshold (attack, hold, release; let go under Hysteresis × the threshold). For counts (flashes a second,
  *  looks a minute), which a ratio compressor in a closed loop cannot settle. Its input unplugged is 1. */
 export const DUCKER = declared(
@@ -515,7 +515,7 @@ export const DUCKER = declared(
   [VALUE_OUT],
 );
 
-/** The picture modules of 0057 §5 and §6b (claude-632's ids): `picture` in and out; `by` a second picture. */
+/** The picture modules of 0057 §5 and §6b (ids): `picture` in and out; `by` a second picture. */
 const BY: Port = { id: 'by', label: 'By', type: 'picture' };
 export const GLOW = declared('glow', 'Glow', 'module', [knob('glow', 'Glow', 0, 1, 0.4, 'level')], [PICTURE_IN], [PICTURE_OUT]);
 export const TINT = declared('tint', 'Tint', 'module', [knob('tint', 'Tint', 0, 1, 0.7, 'level')], [PICTURE_IN, BY], [PICTURE_OUT]);
@@ -731,7 +731,7 @@ export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], [
 
 export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
 
-// ---- Faces: what each module's node shows live (claude-632's face/; a module without one: face/face.ts's defaults) --
+// ---- Faces: what each module's node shows live (face/; a module without one: face/face.ts's defaults) --
 ENVELOPE.face = [{ kind: 'meter', of: 'level', peak: true }];
 COMPRESSOR.face = [{ kind: 'meter', of: 'reduction', reduction: true }];
 DUCKER.face = [{ kind: 'meter', of: 'reduction', reduction: true }];

@@ -1,6 +1,6 @@
-// Every module type a patch can hold beyond today's chain (decision 0056): the new sources (sources/, claude-632's), the
+// Every module type a patch can hold beyond today's chain (decision 0056): the new sources (sources/), the
 // effect engines as modules a layer can carry (a kaleidoscope on the shapes), the picture's own loop (loopmods.ts) and
-// the modulators (modulators/, claude-632's). What the kept patch is checked against (patch.ts `extraFrom`).
+// the modulators (modulators/). What the kept patch is checked against (patch.ts `extraFrom`).
 
 import { ENGINE_EFFECTS, ENGINES } from './effects';
 import { LOOP_TYPES } from './loopmods';
@@ -26,10 +26,10 @@ export const ENGINE_TYPES: ModuleType[] = ENGINES.map((e) => ({
   ],
 }));
 
-/** What can go in the picture's own loop: Warp and Keep (drawn by the compositor) and claude-5f's fluid. */
+/** What can go in the picture's own loop: Warp and Keep (drawn by the compositor) and the fluid. */
 export const PICTURE_LOOP_TYPES: ModuleType[] = [...LOOP_TYPES, FLUID_LOOP];
 
-// The ADSR (0057 §4b): a knob's "New ▸ ADSR" makes one; claude-5f's engine runs it.
+// The ADSR (0057 §4b): a knob's "New ▸ ADSR" makes one; the new engine runs it.
 // Glow and Tint (0057 §5): on a layer, as the sources' own tint and glow were.
 export const EXTRA_TYPES: ModuleType[] = [...SOURCE_TYPES, ...ENGINE_TYPES, ...PICTURE_LOOP_TYPES, ...Object.values(MODULATORS), ADSR, GLOW, TINT];
 

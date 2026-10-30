@@ -1,4 +1,4 @@
-// The picture graph (decision 0057, step 3; claude-632): the v2 patch's picture side as what is drawn each frame,
+// The picture graph (decision 0057, step 3): the v2 patch's picture side as what is drawn each frame,
 // apart from how anything draws (the nodes, GL), so it runs in Node's tests.
 // - `compile` (on a change of structure only): the picture and light cables, what reaches the Screen, the order it is
 //   drawn in (a Feedback's output is last frame's, so it is a source; the Feedback itself comes after its input and

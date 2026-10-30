@@ -12,7 +12,7 @@ import { shuffled } from './shuffle';
 
 export const NOT_HERE = 'Not on this device';
 
-/** The device's network, as the app reports it (a5, 0.9.15): `online` some network carries traffic (a home Wi-Fi without
+/** The device's network, as the app reports it (0.9.15): `online` some network carries traffic (a home Wi-Fi without
  *  the internet too: Cratarr may be on it), `validated` Android found the internet on it. No network: out of reach for
  *  sure, at once, before any request finds out. */
 export const network = $state({ online: null as boolean | null, validated: null as boolean | null, kind: null as string | null });

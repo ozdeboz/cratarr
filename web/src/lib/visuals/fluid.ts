@@ -32,7 +32,7 @@ export type Force = { x: number; y: number; dx: number; dy: number; radius: numb
  *  their cycle (radians). */
 /** `field`: a Field stirring it (the owner: the Field's bands shape the swirls, the fluid gives them inertia): its flow
  *  pushes the fluid everywhere, `amount` how hard (a cable's). */
-/** Fire (0.9.18; the owner via the house session's fire-e, 2026-10-29): `lift` how hard the densest light rises by itself,
+/** Fire (0.9.18; the owner via fire-e, 2026-10-29): `lift` how hard the densest light rises by itself,
  *  as hot gas does (heights a second, each second; fire-e's 2); `open` how open the floor and top are (0 sealed, as ever;
  *  1 open: air comes in below and goes out above, the sides still walls); `cooling` how fast the light burns out as it
  *  climbs, from 40 % of the height up and along the side walls above the bed (its share lost a second; fire-e's 3).

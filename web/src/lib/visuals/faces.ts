@@ -1,6 +1,6 @@
 // The graph's live node faces (decision 0057 §4b, as VCV Rack's lights): what a control source is doing now, drawn small
 // on its node. Read from the module's outputs only, as a panel's lights read its jacks, so any engine that gives them
-// lights them (evaluate.ts `outputs` by module id, claude-5f's engine by `module.port`, a channel as `module.port.n`):
+// lights them (evaluate.ts `outputs` by module id, the new engine by `module.port`, a channel as `module.port.n`):
 // - ADSR: its shape from its knobs, the stage it is in lit, a dot where its output is on that shape; a lane a channel.
 // - LFO: its wave from its knobs, a dot at its phase (worked out from its output and which way it is going).
 // - Clock: Beat, Bar and Phrase blink, from the frame's beat (bars of 4, phrases of 8 bars) until the Clock gives them.

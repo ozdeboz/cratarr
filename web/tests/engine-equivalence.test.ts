@@ -65,7 +65,7 @@ test('the same with reduced motion, and under each preset chain', async () => {
   }
 });
 
-/** The one engine over the cables of today's settings as a v2 patch (a5's toV2), its devices opened up (flatten). */
+/** The one engine over the cables of today's settings as a v2 patch (toV2), its devices opened up (flatten). */
 const graph = (): Engine => {
   const st = newEngine();
   let p: PatchV2 | null = null;
@@ -170,7 +170,7 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
       // The hits through the ADSR: its strikes in doubles, today's Hits signal stored as 32-bit floats (adsr.test.ts).
       assert.ok(d <= 1e-6, `frame ${k}: shapes-1.${knob} ${mine.knobs['shapes-1'][knob]} against ${v}`);
     }
-    // An effect engine on a layer (its type also the chain's finish's) is moved by both (evaluate.ts by id since a5's
+    // An effect engine on a layer (its type also the chain's finish's) is moved by both (evaluate.ts by id since the
     // fix), and its Effect (a step) moves on as the Gate toV2 made fires its Next.
     assert.ok(mine.knobs.kal && mine.knobs.kal.effect === 1);
     for (const [knob, v] of Object.entries(theirs.knobs.kal)) assert.ok(Math.abs(v - mine.knobs.kal[knob]) <= 1e-6, `frame ${k}: kal.${knob}`);

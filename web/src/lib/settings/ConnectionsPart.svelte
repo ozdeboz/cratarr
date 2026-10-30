@@ -82,7 +82,7 @@
     );
   loadDiscogs();
   let discogsForm = $state<{ key: string; secret: string; busy: boolean; error: string | null } | null>(null);
-  // slskd and AcoustID (a5, 0.9.8: single-track replacement): a missing track fetched from Soulseek, fingerprinted
+  // slskd and AcoustID (0.9.8: single-track replacement): a missing track fetched from Soulseek, fingerprinted
   // against the release, added to its album. Each saved at once, as Discogs; slskd's key never comes back, nor AcoustID's.
   const SLSKD_MORE = 'Soulseek through slskd: a single missing track found, fingerprinted with AcoustID against the release, and added to its album.';
   const ACOUSTID_MORE = 'Fingerprints a track fetched for an album, so only the right recording is added. A free key from acoustid.org/new-application.';

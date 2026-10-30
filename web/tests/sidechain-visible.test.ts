@@ -38,7 +38,7 @@ const KINDS = [
 const wildOf = (wild: number) => 2 ** (2 * (wild - 0.5));
 const one = (id: string, from: CableV2['from'], to: CableV2['to'], value = 1): CableV2 => ({ id, from, to, value, mode: 'swing', depth: null });
 
-/** The sidechains as toV2 is to wire them (claude-5f's shapes to claude-a5); `activity` a number: the thresholds at
+/** The sidechains as toV2 is to wire them (shapes to the app); `activity` a number: the thresholds at
  *  that activity instead of the music's (the Envelope's level through a VCA into each threshold's gain). */
 function sidechained(p: PatchV2, wild: number, activity: number | false): PatchV2 {
   const modules = [...p.modules, { id: 'meter', type: 'meter', knobs: {} }];

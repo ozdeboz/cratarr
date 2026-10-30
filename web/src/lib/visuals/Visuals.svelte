@@ -1,7 +1,7 @@
 <script lang="ts">
   // The visuals on the rack (decision 0057, the switch): what shows is the patch in the store (visuals-patch.svelte.ts),
-  // drawn by claude-5f's loop (visuals-loop.ts: the one engine, the compositor), changed by the panel
-  // (VisualsPanel.svelte) and the graph (claude-632's PatchGraph) alike, every change one undo step. Over everything,
+  // drawn by the loop (visuals-loop.ts: the one engine, the compositor), changed by the panel
+  // (VisualsPanel.svelte) and the graph (PatchGraph) alike, every change one undo step. Over everything,
   // on black: a tap shows the track, the controls and the dice for a few seconds; two or more on a side seek; a swipe
   // down, Esc or Back closes. The dice: a tap opens a row of its scopes (Everything, Sources…), each a roll of what is not pinned; the row stays, and
   // holds the controls up, till the dice is tapped again. A long press rolls everything. Reset:

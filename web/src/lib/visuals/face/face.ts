@@ -4,7 +4,7 @@
 // a Thumbnail (a picture module's output, small and live), a Number; the ADSR's and the LFO's own shapes. A module
 // type declares its face (ports.ts `face`); one that does not gets this file's default by its type, and a module with
 // a picture (or light) output a thumbnail of it. Live values come from the engine's outputs (LiveFaces: `module.port`,
-// a channel's `module.port.<n>`), else a knob as set. A module inside a device is found by its path, or (as a5's
+// a channel's `module.port.<n>`), else a knob as set. A module inside a device is found by its path, or (as the
 // sidechain.ts leversOf does) by the id after its last `/`. Pure.
 //
 // The meter and the scope follow NexusUI's (MIT, © Ben Taylor): the meter a bar in the accent colour on the panel's

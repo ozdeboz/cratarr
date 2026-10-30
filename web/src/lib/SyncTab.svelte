@@ -27,7 +27,7 @@
     const touched: string[] = [];
     try {
       const changing = ids.filter((id) => isShared(id) !== on);
-      // One call where the server has it (a5, 0.9.4); else one by one.
+      // One call where the server has it (0.9.4); else one by one.
       try {
         for (const id of changing) ((changed[id] = on), touched.push(id));
         const r = await batchLink(changing, on, SHARED);

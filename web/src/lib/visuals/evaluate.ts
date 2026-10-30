@@ -32,7 +32,7 @@ import { modulesOf, type Cable, type FrameInfo, type Knob, type Macro, type Modu
 
 /** Today's pipeline's module types (patch.ts's Cratarr chain), which aspects.ts moves. */
 /** Today's pipeline's modules (patch.ts's Cratarr chain), by id: aspects.ts moves them. By id, not type: an effect
- *  engine on a layer has the finish slots' type, and is the patch's to move (claude-5f found it skipped). */
+ *  engine on a layer has the finish slots' type, and is the patch's to move (it was skipped once). */
 export const TODAYS_IDS: ReadonlySet<string> = new Set(['frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']);
 
 /** A moment comes again no sooner than this (seconds; aspects.ts's 2000 ms). */

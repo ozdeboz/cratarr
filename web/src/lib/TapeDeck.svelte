@@ -61,7 +61,7 @@
     const moved = lastPos === null ? 0 : (pos - lastPos) / dt;
     lastPos = pos;
     lastAt = now;
-    // The app's deck says its speed (a5, 0.9.14-2): that, as it is.
+    // The app's deck says its speed (0.9.14-2): that, as it is.
     const said = isLocal() ? deckSpeed(now) : null;
     if (said !== null) return said;
     if (rewinding) return speed * 0.85 + moved * 0.15;

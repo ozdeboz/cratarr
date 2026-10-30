@@ -131,7 +131,7 @@ export async function setPlaylistFavorites(names: string[], on: boolean) {
   navigator.vibrate?.(8);
   try {
     const changing = was.filter(([, before]) => before !== on);
-    // One call where the server has it (a5, 0.9.4); else one by one.
+    // One call where the server has it (0.9.4); else one by one.
     try {
       const r = await batchFavorite(changing.map(([n]) => n), on, prefs.source || undefined);
       if (r.failed.length) throw new Error(r.failed[0].error);

@@ -28,7 +28,7 @@ export const appInfo = $state({
    *  address in use. `addresses`: the app knows two (an app from before knew one, its `server`). */
   publicAddress: null as string | null,
   localAddress: null as string | null,
-  /** The local network address refused this app's sign-in a moment ago (a5, 0.9.7): the app goes by the public one. */
+  /** The local network address refused this app's sign-in a moment ago (0.9.7): the app goes by the public one. */
   localRefused: false,
   preferLocal: false,
   inUse: null as string | null,

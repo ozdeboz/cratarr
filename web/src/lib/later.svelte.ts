@@ -1,6 +1,6 @@
 // Changes made while Cratarr is out of reach (the owner, 2026-10-28: "the best PWA offline support possible"): a heart,
 // a rating, a playlist's tracks or name, what is excluded, kept on this device in the order made and sent when Cratarr
-// answers again (lib/api's `later`). Each carries the key it was first tried with (a5's Idempotency-Key, 0.9.15): one
+// answers again (lib/api's `later`). Each carries the key it was first tried with (Idempotency-Key, 0.9.15): one
 // whose first try reached Cratarr but whose answer was lost is not made twice. A change Cratarr turns down when it comes
 // (the playlist gone meanwhile) is let go: Cratarr's state is the truth.
 import { notReached, reach, whenReached } from './reach.svelte';

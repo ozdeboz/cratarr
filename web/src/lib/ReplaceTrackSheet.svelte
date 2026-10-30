@@ -114,7 +114,7 @@
       error = e instanceof Error ? e.message : String(e);
     }
   }
-  // The live word on a fetch (a5's `fetch` event), between the polls.
+  // The live word on a fetch (`fetch` event), between the polls.
   $effect(() =>
     on<Fetch & { id: string }>('fetch', (f) => {
       if (f.id === fetchId) fetching = f;

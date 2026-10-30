@@ -25,7 +25,7 @@ export function withInputs(type: string, frame: FrameInfo): FrameInfo {
  *  picture's own loop. Each draws `input` into `out`, an exact copy at its neutral. */
 export const MODULE_MAKERS: Record<string, (gl: WebGL2RenderingContext) => PictureModule> = {
   [FLUID_LOOP.type]: () => createFluidLoop(),
-  // The effect engines on a layer (claude-5f's engine-module.ts): a kaleidoscope on the shapes.
+  // The effect engines on a layer (engine-module.ts): a kaleidoscope on the shapes.
   'kaleidoscope-engine': (gl) => createEngine('kaleidoscope-engine', gl),
   'eyedo-engine': (gl) => createEngine('eyedo-engine', gl),
   'hydra-engine': (gl) => createEngine('hydra-engine', gl),

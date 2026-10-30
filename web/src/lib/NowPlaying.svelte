@@ -101,7 +101,7 @@
    *  is held while seeking too): near the track's start the wind-up is shorter (lib/localPlayer windUpMs). */
   const pre = $derived.by(() => {
     const ss = inApp ? appInfo.startStop : prefs.startStop;
-    // The app's vinyl starts from a quarter of its speed (a5: Android's floor), the browser's from 0.07.
+    // The app's vinyl starts from a quarter of its speed (Android's floor), the browser's from 0.07.
     return ss.ms ? 1 - windUpMs(ss.ms, ss.mode, pos, inApp ? 0.25 : undefined) / ss.ms : 1;
   });
   // A new cover slow to come (the owner, 2026-10-26): after COVER_WAIT_MS the old one fades to dark and the ring fades

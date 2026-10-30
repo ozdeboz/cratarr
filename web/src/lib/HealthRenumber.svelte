@@ -1,6 +1,6 @@
 <script lang="ts">
   // An album whose track numbers are off, Health's third level (the owner, 2026-10-25; unnumbered tracks the same
-  // way): the numbers a release has for it, looked up as a task (MusicBrainz, then Discogs at its pace; a5), each
+  // way): the numbers a release has for it, looked up as a task (MusicBrainz, then Discogs at its pace), each
   // track now and after, then Fix writes exactly those (Undo puts the old ones back). Where they come from and whether
   // its discs stay (a CD's) or run on as one from 01 (vinyl, cassette) is said over the list.
   import { lookRenumber, missingCall, renumber, type Renumbering } from './api';

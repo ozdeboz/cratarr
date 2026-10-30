@@ -104,7 +104,7 @@ export async function playListedAlbum(source: string, a: Pick<ListedAlbum, 'id' 
 
 /** Several albums' tracks, one album after another, in each album's order (an album's select bar). */
 export async function tracksOfAlbums(list: { source: string; a: ListedAlbum }[]): Promise<LocalTrack[]> {
-  // One call for them all (a5, 0.9.4: thousands of album views at once timed out, "cannot reach", the owner 2026-10-25).
+  // One call for them all (0.9.4: thousands of album views at once timed out, "cannot reach", the owner 2026-10-25).
   try {
     const { tracks } = await albumsTracks(list.map(({ source, a }) => ({ source, id: a.id })));
     return tracks.map((t) => ({ source: t.source, id: t.id, name: t.name, artist: t.artist ?? null, album: t.album ?? null, album_id: t.album_id, duration_secs: t.duration_secs ?? null }));

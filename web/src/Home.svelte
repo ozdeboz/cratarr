@@ -4,7 +4,7 @@
   // than 5% of their length, a swipe row; All opens the Library by date added), Sounds like your week (the week's crate: what sounds like the last seven
   // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), Blast
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
-  // from the listening), and System status (claude-632's, lib/HomeStatus). A tile with nothing to show is left out.
+  // from the listening), and System status (lib/HomeStatus). A tile with nothing to show is left out.
   import { onMount, untrack, type Snippet } from 'svelte';
   import {
     albumView,

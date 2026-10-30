@@ -1,4 +1,4 @@
-// Single-track replacement (0.9.8, a5's routes; the owner: an album missing a track gets it one at a time when the whole
+// Single-track replacement (0.9.8, the routes; the owner: an album missing a track gets it one at a time when the whole
 // album cannot be had): the album's release as MusicBrainz has it (which tracks are there), one Soulseek search for a
 // track, its candidates, one fetched and checked (decoded whole, its length, AcoustID naming that recording), then added
 // to the album's folder, tagged from MusicBrainz, with Undo. Administrators only.

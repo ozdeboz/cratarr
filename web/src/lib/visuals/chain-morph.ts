@@ -1,4 +1,4 @@
-// The patch's extras through claude-632's morph (decision 0056, step 6): what the page morphs, and what it draws while
+// The patch's extras through the morph (decision 0056, step 6): what the page morphs, and what it draws while
 // a chain change is under way.
 //
 // - The morph moves the extras' modules (the layers past the flame, the picture's loop, the modulators): today's chain

@@ -1,5 +1,5 @@
 // Downloads in the installed PWA (0.9.8, the owner: "offline in the PWA"): tracks kept in this browser's own storage,
-// played without Cratarr, as the app keeps them (decision 0038). Cratarr makes each track's stream once (a5's
+// played without Cratarr, as the app keeps them (decision 0038). Cratarr makes each track's stream once (the server's
 // POST /api/offline/prepare, form "stream"): the same bytes the player would stream from its start, kept on the server
 // until fetched. This page fetches it whole (?whole=1) into the Cache Storage, with its cover and waveform, and keeps a
 // list of what it holds. The service worker (public/sw.js) answers the player's stream request for a kept track from

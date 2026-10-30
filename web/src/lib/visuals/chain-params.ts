@@ -1,5 +1,5 @@
 // The chain's values for the renderer's nodes (decision 0057, step 3): what the mapping gives this frame (aspects.ts's
-// AspectsNow, as claude-5f's engine will) and the frame's own (ChainContext) grouped into what each node reads: the
+// AspectsNow, as the new engine will) and the frame's own (ChainContext) grouped into what each node reads: the
 // points, the flame's own loop on the light, the show, the effects. Pure. The shaping of the swings into sizes and
 // gains stays where the course filter runs (aspects.ts) until the engine gives knobs in knob units.
 import type { AspectsNow } from './aspects';
