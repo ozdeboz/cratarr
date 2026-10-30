@@ -84,6 +84,8 @@
   import { jobs } from './lib/jobs.svelte';
   import { loadMe, me } from './lib/me.svelte';
   import { loadMine } from './lib/mySettings.svelte';
+  // The Downloads shelf (decision 0085, step 2): it follows the downloads from the start, so Downloads works offline.
+  import './lib/shelfStore.svelte';
 
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision

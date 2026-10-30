@@ -41,6 +41,10 @@ Five steps, each useful on its own, so offline use improves with every release r
 The local store and its sync are one piece of the shared Rust core (SQLite and the sync), built once for the Android
 app and the desktop app; the generated protocol types (lib/generated) are its messages.
 
+*Amended 2026-10-30 (the owner, "Page store now, Rust in 0.13"):* step 2's store is the page's own IndexedDB in 0.12
+(lib/shelfStore: the downloaded tracks' details and small covers, in the app's WebView, the desktop app and an installed
+page alike); it moves into the Rust core's store once, with step 4 in 0.13, rather than being built twice.
+
 ## Graceful degradation, first
 
 The owner (2026-10-30): "graceful degradation is the way to go in first instance, so we don't show what we cannot
