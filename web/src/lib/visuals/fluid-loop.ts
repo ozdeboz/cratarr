@@ -6,6 +6,7 @@
 
 import { Fluid, gridFor } from './fluid';
 import type { FrameInfo, Knob, ModuleType, PictureModule } from './patch';
+import { withAspects } from './engine/knob-aspects';
 import { newStirring, stir, type StirInput, type Stirring } from './stirring';
 
 const knob = (id: string, label: string, min: number, max: number, neutral: number, def: number): Knob => ({
@@ -24,7 +25,12 @@ export const FLUID_LOOP: ModuleType = {
   type: 'fluid-loop',
   label: 'Fluid',
   place: 'loop',
-  knobs: [knob('amount', 'Amount', 0, 1, 0, 0.6), knob('stir', 'Stir', 0, 1, 0, 0.5), knob('flow', 'Flow', 0, 1, 0, 0.5), knob('swirl', 'Swirl', 0, 2, 0, 1)],
+  knobs: withAspects([knob('amount', 'Amount', 0, 1, 0, 0.6), knob('stir', 'Stir', 0, 1, 0, 0.5), knob('flow', 'Flow', 0, 1, 0, 0.5), knob('swirl', 'Swirl', 0, 2, 0, 1)], {
+    amount: null,
+    stir: 'motion',
+    flow: 'motion',
+    swirl: 'motion',
+  }),
 };
 
 const BANDS = 6;

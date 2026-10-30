@@ -13,6 +13,7 @@
 // sidechaining holds it back as it holds the flame back. Pure: no GL here.
 
 import type { Levers } from './engine/sidechain';
+import type { KnobAspect } from './patch';
 import type { VisualSettings } from './settings.svelte';
 
 /** The engines (the owner, 65: "a kaleidoscope engine, exyedo engine, and maybe one more? And then have multiple
@@ -30,7 +31,9 @@ export type Report = Partial<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'z
 
 /** One of an effect's own controls (the owner: "one or two of the most relevant controls per chosen subeffect"): its
  *  label in the panel, and its value (0..1, the half way a middle setting) as the panel shows it. */
-export type Knob = { label: string; text: (v: number) => string };
+/** An effect's knob: its label, what it means to the aspect dice (Knob `aspect` in patch.ts; `null` for none of the four)
+ *  and its value as words. */
+export type Knob = { label: string; aspect: KnobAspect | null; text: (v: number) => string };
 
 /** An effect's two knobs (0..1 each; one it has no knob for is ignored). */
 export type Knobs = readonly [number, number];
@@ -102,8 +105,8 @@ export const EFFECTS: readonly Effect[] = [
     kind: 'shape',
     slots: ['picture', 'loop'],
     knobs: [
-      { label: 'Sides', text: (v) => `${Math.floor(2 + v * 10)}` },
-      { label: 'Spin', text: signedPct },
+      { label: 'Sides', aspect: 'spatial', text: (v) => `${Math.floor(2 + v * 10)}` },
+      { label: 'Spin', aspect: 'motion', text: signedPct },
     ],
     glsl: `vec2 fx_kaleid(vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return p;
@@ -128,7 +131,7 @@ export const EFFECTS: readonly Effect[] = [
     engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
-    knobs: [{ label: 'Steps', text: (v) => `${Math.round(between(16, 2, v))}` }],
+    knobs: [{ label: 'Steps', aspect: null, text: (v) => `${Math.round(between(16, 2, v))}` }],
     glsl: `vec3 fx_posterize(vec3 c, vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return c;
   // From many steps (none to see) down to its own (16 to 2 a channel) at all of it.
@@ -144,7 +147,7 @@ export const EFFECTS: readonly Effect[] = [
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture'],
-    knobs: [{ label: 'Tiles', text: fixed(1, 6, 1, '×') }],
+    knobs: [{ label: 'Tiles', aspect: 'spatial', text: fixed(1, 6, 1, '×') }],
     glsl: `// Itself within -1..1, mirrored back into it beyond.
 float fx_repeat_fold(float x) { return 1.0 - abs(mod(x + 1.0, 4.0) - 2.0); }
 vec2 fx_repeat(vec2 p, float a, vec2 t, vec2 k) {
@@ -163,7 +166,7 @@ vec2 fx_repeat(vec2 p, float a, vec2 t, vec2 k) {
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
-    knobs: [{ label: 'Size', text: (v) => `${Math.round(between(64, 6, v))} cells` }],
+    knobs: [{ label: 'Size', aspect: 'spatial', text: (v) => `${Math.round(between(64, 6, v))} cells` }],
     glsl: `vec2 fx_pixelate(vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return p;
   // From fine (two hundred cells across the height) to its own size (64 to 6) at all of it.
@@ -180,8 +183,8 @@ vec2 fx_repeat(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'colour',
     slots: ['picture'],
     knobs: [
-      { label: 'Spread', text: pct },
-      { label: 'Cycle', text: pct },
+      { label: 'Spread', aspect: 'colour', text: pct },
+      { label: 'Cycle', aspect: 'colour', text: pct },
     ],
     glsl: `${HSV('colorama')}
 vec3 fx_colorama(vec3 c, vec2 p, float a, vec2 t, vec2 k) {
@@ -225,8 +228,8 @@ vec3 fx_hue(vec3 c, vec2 p, float a, vec2 t, vec2 k) {
     kind: 'shape',
     slots: ['picture', 'loop'],
     knobs: [
-      { label: 'Scale', text: fixed(0.5, 5, 1) },
-      { label: 'Speed', text: pct },
+      { label: 'Scale', aspect: 'spatial', text: fixed(0.5, 5, 1) },
+      { label: 'Speed', aspect: 'motion', text: pct },
     ],
     glsl: `// Dave Hoskins' hash without sine (MIT): a sine of a large number loses its precision on some GPUs, and its
 // time only grows.
@@ -259,7 +262,7 @@ vec2 fx_ripple(vec2 p, float a, vec2 t, vec2 k) {
     engine: 'hydra',
     kind: 'shape',
     slots: ['picture', 'loop'],
-    knobs: [{ label: 'Length', text: (v) => `${Math.round(between(0.05, 0.5, v) * 1000)} ms` }],
+    knobs: [{ label: 'Length', aspect: 'spatial', text: (v) => `${Math.round(between(0.05, 0.5, v) * 1000)} ms` }],
     glsl: `vec2 fx_stream(vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return p;
   // Read from upstream: the picture drawn along the fluid's flow (nothing where it does not flow), as much of it as
@@ -276,8 +279,8 @@ vec2 fx_ripple(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'echo',
     slots: ['picture'],
     knobs: [
-      { label: 'Zoom', text: pct },
-      { label: 'Turn', text: pct },
+      { label: 'Zoom', aspect: 'spatial', text: pct },
+      { label: 'Turn', aspect: 'spatial', text: pct },
     ],
     glsl: `vec3 fx_echo(vec3 c, vec2 p, float a, vec2 t, vec2 k, sampler2D prev) {
   if (a <= 0.0) return c;
@@ -302,8 +305,8 @@ vec2 fx_ripple(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'shape',
     slots: ['picture', 'loop'],
     knobs: [
-      { label: 'Speed', text: pct },
-      { label: 'Way', text: (v) => (v < 0.5 ? 'Left' : 'Right') },
+      { label: 'Speed', aspect: 'motion', text: pct },
+      { label: 'Way', aspect: 'motion', text: (v) => (v < 0.5 ? 'Left' : 'Right') },
     ],
     glsl: `vec2 fx_rotate(vec2 p, float a, vec2 t, vec2 k) {
   // The whole turning with its time, up to a tenth of a turn a second at all of it, its way left or right.
@@ -323,8 +326,8 @@ vec2 fx_ripple(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'shape',
     slots: ['picture', 'loop'],
     knobs: [
-      { label: 'Speed', text: pct },
-      { label: 'Way', text: (v) => `${Math.round(v * 360)}°` },
+      { label: 'Speed', aspect: 'motion', text: pct },
+      { label: 'Way', aspect: 'motion', text: (v) => `${Math.round(v * 360)}°` },
     ],
     glsl: `// Itself within -1..1, mirrored back into it beyond.
 float fx_scroll_fold(float x) { return 1.0 - abs(mod(x + 1.0, 4.0) - 2.0); }
@@ -363,8 +366,8 @@ vec2 fx_scroll(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'shape',
     slots: ['picture'],
     knobs: [
-      { label: 'Size', text: pct },
-      { label: 'Power', text: (v) => `${(1 / (1 - between(0.3, 0.9, v))).toFixed(1)}×` },
+      { label: 'Size', aspect: 'spatial', text: pct },
+      { label: 'Power', aspect: 'spatial', text: (v) => `${(1 / (1 - between(0.3, 0.9, v))).toFixed(1)}×` },
     ],
     glsl: `vec2 fx_magnify(vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return p;
@@ -389,8 +392,8 @@ vec2 fx_scroll(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'shape',
     slots: ['picture', 'loop'],
     knobs: [
-      { label: 'Count', text: (v) => `${Math.round(between(6, 30, v))}` },
-      { label: 'Speed', text: pct },
+      { label: 'Count', aspect: 'spatial', text: (v) => `${Math.round(between(6, 30, v))}` },
+      { label: 'Speed', aspect: 'motion', text: pct },
     ],
     glsl: `vec2 fx_rings(vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return p;
@@ -412,8 +415,8 @@ vec2 fx_scroll(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'colour',
     slots: ['picture'],
     knobs: [
-      { label: 'Scale', text: (v) => `${Math.round(between(10, 40, v))}` },
-      { label: 'Drift', text: pct },
+      { label: 'Scale', aspect: 'spatial', text: (v) => `${Math.round(between(10, 40, v))}` },
+      { label: 'Drift', aspect: 'motion', text: pct },
     ],
     glsl: `vec3 fx_interference(vec3 c, vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return c;
@@ -437,8 +440,8 @@ vec2 fx_scroll(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'shape',
     slots: ['picture'],
     knobs: [
-      { label: 'Swell', text: (v) => `${Math.round(between(0.03, 0.25, v) * 100)}%` },
-      { label: 'Decay', text: (v) => `${Math.round(between(0.06, 0.4, v) * 1000)} ms` },
+      { label: 'Swell', aspect: 'spatial', text: (v) => `${Math.round(between(0.03, 0.25, v) * 100)}%` },
+      { label: 'Decay', aspect: null, text: (v) => `${Math.round(between(0.06, 0.4, v) * 1000)} ms` },
     ],
     glsl: `vec2 fx_pulse(vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return p;
@@ -456,8 +459,8 @@ vec2 fx_scroll(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'shape',
     slots: ['picture'],
     knobs: [
-      { label: 'Speed', text: pct },
-      { label: 'Width', text: pct },
+      { label: 'Speed', aspect: 'motion', text: pct },
+      { label: 'Width', aspect: 'spatial', text: pct },
     ],
     glsl: `vec2 fx_burst(vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return p;
@@ -480,8 +483,8 @@ vec2 fx_scroll(vec2 p, float a, vec2 t, vec2 k) {
     kind: 'colour',
     slots: ['picture'],
     knobs: [
-      { label: 'Speed', text: pct },
-      { label: 'Width', text: pct },
+      { label: 'Speed', aspect: 'motion', text: pct },
+      { label: 'Width', aspect: 'spatial', text: pct },
     ],
     glsl: `vec3 fx_halo(vec3 c, vec2 p, float a, vec2 t, vec2 k) {
   if (a <= 0.0) return c;

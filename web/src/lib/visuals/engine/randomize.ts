@@ -73,14 +73,15 @@ export function scopeNamed(name: string, types: Record<string, ModuleType>): Sco
   // Response: how the rack answers the music, not how it looks: what lies between the music and the picture (the
   // followers, ADSRs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
   if (name === 'response') return (m) => RESPONSE.has(m.type);
-  // The aspects (prototype, 2026-10-30; the owner: "all nodes should select by what they mean"): each rolls every knob
-  // of its meaning in any module (knob-aspects.ts), a source's and the loop's too. A knob the table does not know falls
-  // back to the old matching (flagged by tests/knob-aspects.test.ts): Spatial's module list, the colour and light words.
+  // The aspects (the owner, 2026-10-30: "all nodes should select by what they mean"): each rolls every knob of its
+  // meaning in any module, as the module declares it (engine/knob-aspects), a source's and the loop's too. A knob that
+  // declares none falls back to the old matching (tests/knob-aspects.test.ts lists them, expecting none): Spatial's
+  // module list, the colour and light words.
   const ASPECT: Record<string, KnobAspect> = { spatial: 'spatial', motion: 'motion', colours: 'colour', lightness: 'light' };
   if (name in ASPECT) {
     const want = ASPECT[name];
     return (m, k) => {
-      const a = aspectOf(m.type, k.id, (k as Knob & { aspect?: KnobAspect | null }).aspect);
+      const a = aspectOf(k);
       if (a !== undefined) return a === want;
       if (want === 'spatial') return SPATIAL.has(m.type) || (m.type === 'flame' && FLAME_SPATIAL.has(k.id));
       if (want === 'colour') return COLOUR.test(k.id) || COLOUR.test(k.label ?? '');

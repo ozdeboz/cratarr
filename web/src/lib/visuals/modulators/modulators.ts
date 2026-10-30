@@ -15,6 +15,7 @@
 
 import { RATIOS, UNIT_RATIO, ratioOf } from '../engine/clock';
 import type { Knob, Modulator, ModuleType, SignalRef } from '../patch';
+import { withAspects } from '../engine/knob-aspects';
 
 /** The music's signals now, 1 = typical. */
 export type Signals = (ref: SignalRef) => number;
@@ -83,7 +84,9 @@ function define(
     label,
     place: 'modulator',
     range,
-    knobs,
+    // How a modulator follows means none of the aspect dice's four, but what one declares (a rate: how fast what it
+    // moves moves).
+    knobs: withAspects(knobs, {}, null),
     ...(inputs ? { inputs } : {}),
     ...(triggers ? { triggers } : {}),
     create(seed = 0): Modulator {
@@ -258,7 +261,7 @@ const lfo = define(
   'LFO',
   'bipolar',
   [
-    knob('rate', 'Rate', 0, 8, 0, 0.25),
+    { ...knob('rate', 'Rate', 0, 8, 0, 0.25), aspect: 'motion' },
     knob('shape', 'Shape', 0, WAVES.length - 1, 0, 0),
     knob('offset', 'Offset', 0, 1, 0, 0),
     knob('ratio', 'Ratio', 0, RATIOS.length - 1, UNIT_RATIO, UNIT_RATIO),
@@ -334,7 +337,7 @@ export function point(seed: number, i: number): number {
 // jerks: what Drift was), at 1 it jumps (stepped, a sample-and-hold of random values), in between it glides over the
 // first 1 − Shape of each step and holds (VCV's Random's blend). The seed is a hash of the module's id (the caller's),
 // so two differ and a sync group's devices agree.
-const random = define('random', 'Random', 'bipolar', [knob('rate', 'Rate', 0, 2, 0, 0.1), knob('shape', 'Shape', 0, 1, 0, 0), AMOUNT], undefined, (seed) => {
+const random = define('random', 'Random', 'bipolar', [{ ...knob('rate', 'Rate', 0, 2, 0, 0.1), aspect: 'motion' }, knob('shape', 'Shape', 0, 1, 0, 0), AMOUNT], undefined, (seed) => {
   let u = 0;
   return (dt, _signals, k) => {
     u += k.rate * dt;
@@ -352,7 +355,7 @@ const hold = define(
   'hold',
   'Sample and hold',
   'unipolar',
-  [knob('rate', 'Rate', 0, 16, 0, 2), knob('glide', 'Glide', 0, 2, 0, 0), FULL, AMOUNT],
+  [{ ...knob('rate', 'Rate', 0, 16, 0, 2), aspect: 'motion' }, knob('glide', 'Glide', 0, 2, 0, 0), FULL, AMOUNT],
   IN,
   () => {
     let phase = 0;

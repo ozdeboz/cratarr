@@ -7,8 +7,9 @@ import type { Ports } from '../ports';
 import { BANDS, SEGMENT_FLOATS, TAU, WAVE_POINTS, closeSeam, hsv, resample, smooth, synthWave, waveSegments } from './geometry';
 import { Mesh, QUAD, done, program, target } from './gl';
 import { knob, values } from './knob';
+import { withAspects } from '../engine/knob-aspects';
 
-const KNOBS = [
+const KNOBS = withAspects([
   knob('width', 'Width', 0, 0.05, 0.006, 'level'),
   knob('opacity', 'Opacity', 0, 1, 0.9, 'level'),
   knob('amplitude', 'Height', 0, 1, 0.35),
@@ -24,7 +25,10 @@ const KNOBS = [
   knob('hue', 'Hue', 0, 1, 0.5),
   knob('hueSpread', 'Hue along', 0, 1, 0),
   knob('saturation', 'Saturation', 0, 1, 0.6),
-];
+], {
+  width: 'spatial', opacity: 'light', amplitude: 'spatial', circle: 'spatial', radial: 'spatial', radius: 'spatial', length: 'spatial', x: 'spatial', y: 'spatial',
+  rotation: 'spatial', spin: 'motion', smoothing: null, hue: 'colour', hueSpread: 'colour', saturation: 'colour',
+});
 
 export const WAVES: ModuleType & { ports: Ports } = {
   type: 'waves',
