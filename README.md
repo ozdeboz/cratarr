@@ -3,14 +3,9 @@
 
 # Cratarr
 
-A self-hosted music server for the music you own. It plays your library in its web app, its Android app and any
-OpenSubsonic app, moves the music between them, and finds more to play in what you already have. Your playlists stay
-plain `.m3u` files beside your music.
-
-<p align="center">
-  <img src="docs/images/home.png" alt="Home: music for the moment, new albums and what you used to play" width="49%">
-  <img src="docs/images/player.png" alt="The player, with the track's waveform" width="49%">
-</p>
+A self-hosted music server for the music you own. It plays your library in its web app, its Android and desktop
+apps and any OpenSubsonic app, moves the music between them, and finds more to play in what you already have. Your
+playlists stay plain `.m3u` files beside your music.
 
 ## Try it
 
@@ -36,51 +31,67 @@ Windows installer from the same release, and give it the address too ([desktop/R
 
 ## What it does
 
-**Listen**
-- The web app plays by itself, and over HTTPS installs as an app. The Android app plays on the phone, stays reachable
-  with the screen locked, and keeps music for offline use ([0031](docs/decisions/0031-android-app-and-play-on.md),
-  [0038](docs/decisions/0038-kept-on-this-device.md)). The desktop app shows the web app in a window of its own that
-  starts at login and keeps playing with the window closed, so a computer stays a player
-  ([0078](docs/decisions/0078-a-desktop-app.md)).
-- **Play On**: any of Cratarr's players (a browser, a phone, a Kodi box) is controlled from any other. Cratarr holds
-  every queue, so music moves from one player to another where it was, and several players can play one queue in step
+**Play it anywhere**
+- In the browser (installable over HTTPS), the Android app (offline too, and with the screen locked) and the desktop
+  app (a player that starts at login and keeps playing with its window closed); Subsonic and OpenSubsonic apps sign in
+  with your Cratarr account ([0030](docs/decisions/0030-cratarr-serves-opensubsonic.md),
+  [0078](docs/decisions/0078-a-desktop-app.md)).
+- **Play On**: Cratarr holds every queue, so music moves from one player (a browser, a phone, a computer, a Kodi box)
+  to another where it was, any player is controlled from any other, and several play one queue in step
   ([0033](docs/decisions/0033-cratarr-holds-the-queues.md), [0037](docs/decisions/0037-sync-play.md)).
-- Subsonic and OpenSubsonic apps play from it with your Cratarr account
-  ([0030](docs/decisions/0030-cratarr-serves-opensubsonic.md)).
-- Visuals: a full-screen picture that moves with the track, built from modules you can patch
-  ([0046](docs/decisions/0046-visuals.md), [0057](docs/decisions/0057-one-engine.md)).
+- **Listen along**: follow another listener's player and ask for tracks, which they accept or decline in their queue;
+  guests at home can ask too, from `/guest` ([0079](docs/decisions/0079-follow-and-queue-requests.md)).
+- A tape deck's feel, if you want it: Start and stop that spin up and down, and winding through a track while you hold
+  ([0074](docs/decisions/0074-winding.md)).
+- Visuals: a full-screen picture that moves with the track, built from modules you can patch, and opening by itself
+  when the screen is left alone if you like ([0046](docs/decisions/0046-visuals.md),
+  [0057](docs/decisions/0057-one-engine.md)).
 
 **Keep it in order**
-- **Playlists are `.m3u` files** in your music folder, so any player reads them. Every change is backed up and can
-  be undone ([0002](docs/decisions/0002-playlists-are-m3u-files.md), [0026](docs/decisions/0026-one-undo-journal.md)).
-- **Crates** are playlists that fill themselves from rules: genre, year, tempo, mood, favourites, what is in no
-  playlist yet ([0024](docs/decisions/0024-crates.md)). Any list can be filtered the same way
-  ([0061](docs/decisions/0061-filters-are-unsaved-crates.md)).
+- **Playlists are `.m3u` files** in your music folder, so any player reads them. Every change is backed up and can be
+  undone ([0002](docs/decisions/0002-playlists-are-m3u-files.md), [0026](docs/decisions/0026-one-undo-journal.md)).
+- **The Library** lists your records by kind (albums, EPs, singles, compilations, classical by composer) as rows,
+  covers or a table, with one filter for everything: genre, year, tempo, mood, length, what you played
+  ([0061](docs/decisions/0061-filters-are-unsaved-crates.md),
+  [0082](docs/decisions/0082-classical-and-other-versions.md)).
+- **Crates** are playlists that fill themselves from rules, shown as records or as tracks; an artist can be left out
+  of one crate or of everything ([0024](docs/decisions/0024-crates.md),
+  [0083](docs/decisions/0083-excluding-an-artist.md)).
 - **Incoming**: new music waits in a folder of its own until you have heard it. Keep moves an album into your library,
   named as the library names albums; Delete moves it to a trash you can undo from
   ([0013](docs/decisions/0013-keep-and-replace.md), [0034](docs/decisions/0034-one-library-page-and-moves.md)).
 - **Health** says what needs you: missing tracks, unreadable files, a server that can't be reached
-  ([0063](docs/decisions/0063-one-health-report.md)).
+  ([0063](docs/decisions/0063-one-health-report.md)). A missing track can be fetched on its own, through slskd or from
+  a file on the server, and is checked before it is added: the right recording (AcoustID), the right length, truly
+  lossless, no clicks ([0080](docs/decisions/0080-single-track-intake.md)).
 
 **Find more in what you have**
 - **Home**: music for the moment (the time of day and, with Home Assistant, the weather), new albums, what you used to
   play, artists to explore.
 - **Radio** after each track and **Autoplay** when the queue ends, chosen from your own library
   ([0036](docs/decisions/0036-radio.md)).
+- **Discover**: new records from the artists you play, records like what you play, what is missing from your artists,
+  and new artists, from MusicBrainz and Discogs, asked for through Lidarr where you allow it
+  ([0069](docs/decisions/0069-discover.md), [0070](docs/decisions/0070-requests.md)). Your Spotify library, if you
+  bring it, shows what of it you already have ([0073](docs/decisions/0073-spotify-library.md)).
+- **Search** finds everywhere at once: the library, what Cratarr knows of elsewhere, and MusicBrainz
+  ([0076](docs/decisions/0076-search-three-universes.md)).
 - With [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI)'s analysis (optional, separate software; see
   [Optional analysis](#optional-analysis)), mood, energy, danceability and style for every track, and similarity that
   knows how things sound ([0054](docs/decisions/0054-audiomuse-import.md)).
 - **Insights**: your collection, your listening, and a map of your playlists
-  ([0064](docs/decisions/0064-one-listening-history.md), [0065](docs/decisions/0065-insights-collection-listening-map.md)).
+  ([0064](docs/decisions/0064-one-listening-history.md), [0065](docs/decisions/0065-insights-collection-listening-map.md));
+  scrobbling to ListenBrainz or Last.fm ([0068](docs/decisions/0068-one-way-in-for-listening.md)).
 
 **Run it**
 - Several accounts, each with their own playlists, favourites and history; sign-in on every request, API keys for
   Home Assistant, and optionally an LDAP directory ([0051](docs/decisions/0051-several-users.md),
-  [0043](docs/decisions/0043-sign-in-everywhere.md)).
+  [0043](docs/decisions/0043-sign-in-everywhere.md)). A device you share with the others is theirs to use at home only.
 - One container: a single static binary with the web app built in, and a small memory budget.
 - Diagnostics: what happened and why, across the server and its players, kept for 14 days
   ([0045](docs/decisions/0045-diagnostics.md)).
-- Optionally Jellyfin as a second source and Lidarr for Incoming ([0005](docs/decisions/0005-pluggable-sources.md)).
+- Optionally Jellyfin as a second source, and Lidarr and slskd for getting music
+  ([0005](docs/decisions/0005-pluggable-sources.md)).
 
 ## Running it for good
 
@@ -114,6 +125,8 @@ services:
   Caddy's `forward_auth`, Traefik's `forwardAuth` or nginx's `auth_request`). Cratarr believes the client's address that
   a proxy forwards (`X-Forwarded-For`) only from a proxy on a local address (the same computer, its Docker network or
   your home network); a proxy anywhere else is named in Settings → Authentication → Trusted proxies (or `CRATARR_PROXIES`).
+  What counts as your home network (for shared devices and the guest page) is the local addresses, and any named in
+  Settings → Authentication → Home networks.
 - **The data folder** holds `settings.json` (secrets: readable by its owner only) and SQLite databases.
   `library.sqlite` is rebuilt when it is missing; the others are worth backing up.
 
@@ -154,6 +167,8 @@ few settings Settings can change later (what Settings saves wins):
 - **Web**: every page of Cratarr. It plays by itself, and over HTTPS it installs as an app.
 - **Android**: [android/](android), a thin app around Cratarr's pages that plays the music itself (the APK is in each
   release). It also plays the phone's own music (Local mode, [0052](docs/decisions/0052-local-library.md)).
+- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own: for Linux from an APT repository, for
+  Windows an installer that updates itself from the releases.
 - **Subsonic apps**: point them at Cratarr's address and sign in with your Cratarr account.
 - **Kodi**: added in Settings → Players, it becomes one of Cratarr's players over Kodi's own remote control ("Allow
   remote control via HTTP"), with nothing installed on Kodi.
@@ -181,6 +196,7 @@ from why things are as they are rather than from guessing:
 - Server: Rust ([axum](https://github.com/tokio-rs/axum), SQLite), one static binary in an otherwise empty image.
 - Web app: Svelte 5 and Vite, built to static files and embedded in the binary.
 - Android app: Kotlin and Media3, grown from Jellyfin's Android app.
+- Desktop app: Electron around the web app.
 
 ## Credits
 

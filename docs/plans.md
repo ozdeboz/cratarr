@@ -8,7 +8,27 @@ and the pages, and the app shows the server's pages, with a native player under 
 offline play (0038), but it only knows what the server tells it. Each plan below asks the phone, or a car, to know
 something the server doesn't.
 
+## The runway (the owner, 2026-10-30)
+
+What comes after 0.10, in order. Each becomes a decision when it is taken up.
+
+- **0.11: quick crates.** A crate made from a few typed terms: a genre, an artist meaning "sounds like" that artist,
+  a label or an album, each a chip that can switch between "like" and "by"; filtered first, then ranked, with a
+  closeness cutoff and the artist's own tracks left out. The Library's Tracks page goes once these exist. With it: a
+  mark on the tracks that have other versions, and a spike of the rules crate inside the Android app, behind a switch.
+- **0.12: modes per server** (the External library below, taken up). Cratarr's mode is Cratarr's own library, its
+  libraries (Music, Incoming, each user's own) still switched on and off within it; each other server (a Jellyfin, a
+  Subsonic server) is a mode of its own, with its library and playlists, search and Cratarr's players, but no crates,
+  Discover, Insights or Requests. With it: Classical's works and movements (a composer, their works, each work's
+  recordings, movements grouped under their work).
+- **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)).
+- **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
+  and composer where MusicBrainz has no work for them.
+- **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
+
 ## External library
+
+Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood.
 
 Another music server's library played in Cratarr's app directly: an OpenSubsonic server, a Jellyfin, through the same
 kind of adapters Cratarr's own sources use (0005).
@@ -207,101 +227,12 @@ Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre
 MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
 six genres are drawn, each its own colour (the palette's categorical order), the rest no territory.
 
-## 0.9.8: offline in the PWA, levelling you can see, single-track replacement
+## Parked
 
-Agreed by the owner during 0.9.7 (2026-10-26); 0.9.7 went live 2026-10-26 19:58 CET.
+Liked, not taken up:
 
-- **Downloads in the installed PWA.** The app keeps tracks for offline play (0038); an installed PWA keeps them too, in
-  the browser's own storage, and plays them without the server. Downloads and Offline show them as the app's do.
-  Catches: storage limits per browser (Safari's evicts), a download's stream for the service worker, and what the
-  player does with a kept track when the server is back.
-- **Levelling you can see.** A Level button in the player (Lucide audio-lines), filled by how many dB it turns the
-  track down; a long press opens its sheet. The waveform is drawn as heard, the original a ghost behind it. Levelling
-  only turns down, and it is shown, never given as a number. Shuffle moves to the queue sheet only.
-- **Repeat into the queue sheet.** It leaves the player's primary row (its far right) for the queue sheet a long press
-  on the queue button opens, at its header's end beside Shuffle.
-- **Single-track replacement.** An album missing a track gets it one at a time when the whole album cannot be had: a
-  Soulseek search, each candidate fingerprinted (Chromaprint) and checked with AcoustID against the release, then
-  "Add to album" into the existing folder, tagged from MusicBrainz, with Undo. About 2.5–3 server days (an estimate).
-- **Devices shared with everyone.** One switch on each device's page (Settings › Devices), off until turned on: then
-  everyone on this Cratarr plays on it with Play On as its owner does (what plays, its queue, groups), nothing more;
-  its settings, Remove and the switch stay its owner's. In Play On it carries its owner's name.
-- **Server settings in Settings.** Trusted proxies (Authentication), the analysis here and Beat This! (Libraries),
-  Playing in step's address (Devices): seeded by the environment, changed in Settings, at once. Unset, only a proxy on
-  a local address is believed.
-- **An album that plays moving.** Keep/Replace carries on on the player it stopped (0.9.7 played on the followed one),
-  stopping and playing again with Start and stop's wind-down and wind-up on the page and in the app.
-- **Carried over from 0.9.7.**
-  - Some tracks play silently not at all on an iPhone (Safari, some MP3s, Bandcamp previews). 0.9.7 sends the browser
-    player's own log (diagnostics, area playback); read it, then fix.
-  - Play from an album's menu in Home's flow said "Could not start playing" (seen on the phone, not reproduced since).
-  - Saving a cover to a read-only music folder showed the raw system error; it gets one short line.
-  - A browser's stored player name with repeated numbers ("Safari on iOS 2 2 2") is tidied on load.
+- The visuals' VJ ideas: fused passes, a blur pyramid, the loop at a lower resolution, layers at half rate, an A/B
+  crossfade between racks, ISF shaders, a meter of each module's cost.
+- Discover's Weekly (a handful of records each week) and a pick of the day.
 
-## 0.9.3: deep search everywhere, and global search
-
-Moved from 0.9.2 by the owner, 2026-10-25: 0.9.2 ships without it.
-
-The owner, 2026-10-25: "Deep Search Everywhere 0.9.2, together with Global Search. Same thing, really." Every page's
-search finds deep (a playlist by its tracks, a crate by what it holds, an artist by its albums), and one global search
-finds across them all; both by the one pattern (ui-conventions, "Search: the page finds, the panel narrows"): what
-matches shows, and the item opened shows what of it matches the same words. Needs a server search over the library and
-the playlists' and crates' contents (one call, its results by kind).
-
-## 0.9.2: one copy of each album, related artists to explore
-
-The owner, 2026-10-25, looking at Dominik Eulberg's artist page on the phone: "What's up with these duplicate albums? And
-why do I not see anything in the health about this?" Bionik and Heimische Gefilde showed twice: Lidarr's copies in
-Incoming, left there when the FLAC upgrade of 2026-10-12 took them into Music. 24 such albums; 17 the same release with
-the same tracks, Air's Moon Safari with one track more in Incoming, 6 another edition.
-
-- **Health: albums in Music and Incoming at once** (the owner chose it): by MusicBrainz release, else by name and artist
-  as the import's matcher reads them; each says which (the same release, or another edition, with both track counts)
-  and opens its Incoming page, where Delete or Replace settles it.
-- **Similar albums leave out the album's own artist** (the owner: the albums in More from the artist should not be
-  similar albums too): every album by the artist, not only the ones More from shows; More from leads to all of them.
-- **Related artists to explore on an artist page** (the owner: "recommended artists, for example. related artists to
-  explore. That's the best."): one row of artists, as Home's Artists to explore, ranked from several sources: who
-  ListenBrainz finds listened to alongside (similar artists, by MusicBrainz id), MusicBrainz's members, projects and
-  collaborators, label mates (the labels MusicBrainz gives the artist's releases, and a label's own Bandcamp roster),
-  and Bandcamp's "you may also like" on the artist's album pages. Artists that play on Bandcamp first (the owner:
-  "prioritize Bandcamp playable artists"), so a new one can be heard at once. One in the library opens its artist page;
-  a new one its Bandcamp album in the album panel, as Discover's do. Looked up with the artist's other facts and kept;
-  MusicBrainz and Bandcamp at their one request a second.
-- **Discover's masonry** (the owner, 2026-10-25): tiles keep their size (1×1 = 136
-  px, a little under a shelf's 150 px cover), the width decides the columns, two rows at least. Each artist gets the
-  smallest grid its suggestions fill, its seed tile in the middle with the artist's picture (tall over two rows); the
-  suggestions packed outward from it, the most alike nearest, those that play on Bandcamp 2×1 above and below it and
-  1×2 beside it. A first artist's grid grows only while its next suggestions stay close (about half the strongest
-  match or more); width left over goes to a second artist by the same rule. The server gives each suggestion how alike
-  it is to each artist it was found from (`alike`: Last.fm's match per seed).
-
-## 0.9.3: built-in crates, and your crates on Home
-
-The owner, 2026-10-25: Home's crates belong on the Crates page too, and one's own crates may come onto Home.
-
-- **Built-in crates** (the owner chose the word): New for you, Grave digging and Sounds like your week (Home's shelves
-  that are crates) are listed on the Crates page beside Unlisted, which is one already. Like Unlisted, none can be
-  removed (no Delete, no Rename); each is marked as built-in. The crates' filter sheet gets a toggle, "Hide built-in
-  crates".
-- **Your crates on Home:** Settings › Home gets a switch at the top, under the section header, "Your crates on Home".
-  On, each of one's own crates joins the sections list right below, to be ordered and switched on or off as every
-  section is. On Home a crate shows as a shelf of its albums (as New for you does): its name as the header, a row of its
-  albums' covers, › opening the crate, a cover its album, the shelf's play buttons as the others'.
-- **The loved tracks not in the library, with their albums** (the owner, 2026-10-25: "please", after the list showed
-  many without one): Last.fm keeps no album with a love, and a love is often kept under another of the track's artists
-  (Alchemist's "Eggs on the Third Floor" is Action Bronson's on Rare Chandeliers). Each loved track's album is the one
-  it was most scrobbled from under its own artist, else by its title alone where that title was scrobbled from one album
-  only (not for a short, common title), else Last.fm's track info's (500 at most, four a second). The album found
-  also matches the library's track by album and title, so the love becomes a favourite under whichever artist it was
-  kept. A track loved under several of its artists is one row with all of them.
-- **Pure breadcrumbs** (the owner, 2026-10-25: Requests, Downloads, Insights, Health, Settings; "2 at most. So the
-  current and one level above."): every such panel's title is the level above › where one is (lib/Crumbs): Requests ›
-  Waiting for an answer, Collection › Genres, Library › a Health problem (on an item's page: the problem › the item),
-  Settings › Account (on a thing's page: Account › the thing): for Insights and Health the level above is the view's
-  group (the owner chose it). The level above is a tap: a page's or a group's name closes the panel and shows that page
-  wherever the panel was opened from (`upToPage`: global search's results will open anywhere); a part's name goes back
-  to it. Health names its Library domain (it showed "library").
-- **Discover in the bar where there is room** (the owner): the phone and tablet bar shows as many of the main pages as
-  fit (a tab at least 72 px wide): four and More on a phone, all five with Discover on a tablet. The pages apart
-  (Requests, Insights, Health, Settings) stay behind More: "requests is of the other category".
+Shelved by the owner: a live DJ mix between tracks (Auto DJ), and an MCP server in the desktop app.

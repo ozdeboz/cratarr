@@ -5,21 +5,27 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Structure
 
-- **Pages:** Library (decision 0034: Incoming and Collection as one page; `#/incoming` and `#/collection` open it), Crates, Playlists; Insights, Health and Settings apart
-  (at the bottom of the sidebar, in that order; on a phone they follow the others in the same order). One thing lives in one place: no setting, list or action
+- **Pages:** Home, Crates, Playlists, Library (decision 0034: Incoming and Collection as one page; `#/incoming` and
+  `#/collection` open it), Discover, in that order (the owner, 0.9.18); Requests, Downloads, Insights, Health and
+  Settings apart (at the bottom of the sidebar, in that order; on a phone they follow the others in the same order). One thing lives in one place: no setting, list or action
   appears on two pages. Health lists the library's files that cannot be read properly; playlists are repaired in the
   panel's Repair tab (decision 0025).
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
 - **Navigation:** from 1024 px a sidebar on the left; below it a bar of pages fixed along the **top** (icon and label,
   up to five, the rest under More).
+  - **The sidebar's sections** (the owner, 0.10): Library's kinds and Discover's modes are links under their page's
+    name, one section open at a time: the page's own, or one tapped open. A tap on a section's name only opens it (no
+    page change; one of its links goes there); folded, the sidebar unfolds for it. One opened by hand folds again on a
+    tap or the pointer elsewhere. Where the sidebar scrolls, the section opened by hand stays in sight, else its top
+    for the pages from Home to Discover and its bottom for those at its foot.
 - **Cratarr | Local** (decision 0052, the owner's picks): in the app, once a local folder is on (Settings → This device
   → Local music), the sidebar's top is the mode switcher (`lib/ModeSwitcher.svelte`, mock B): a bordered button, the
   mark on its 38 px tile, the mode over "● Connected" or this device's name, the up-down chevrons; a tap opens the two
   modes, the current one lit, no icons. On a phone the same in a slim row (34 px) over the tabs (mock C). Without a
   local folder, and in a browser, the top is as it was. While Local plays, a note before the device's name. A switch is
   the whole app: what plays pauses and is put by, the other mode's queue comes back paused, and the page goes to the
-  mode's first page. Local's menu: Albums, Artists, Tracks, Settings; its pages as the Library's (search, no filter),
-  its albums and artists in the panel as Cratarr's, with nothing of Cratarr's: no hearts, playlists, crates, radio,
+  mode's first page. Local's menu: Records, Settings; its page as the Library's (search, no filter),
+  its albums in the panel as Cratarr's, with nothing of Cratarr's: no hearts, playlists, crates, radio,
   Insights, track menus beyond Play next, Add to queue, its album and artist.
 - **The player is part of the app shell** (decision 0018, after Finamp), on every page: since Cratarr plays music
   itself (decision 0022) it is a player, not only a remote for adding what plays. Which server a browser follows is
@@ -35,8 +41,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     square, next, repeat), progress, and the bottom row (menu, heart, queue with its place under it; the label hangs
     below its icon so the icons line up). The top bar: close at the left; add to playlist (lit while the track is in a
     playlist), the sleep timer (lit while one runs), the visuals (decision 0046: full screen over everything, on
-    black; a tap shows the close button and the track for a few seconds) and beside / over the page at the right,
-    icons only. It lays itself out
+    black; a tap shows the close button and the track for a few seconds; a long press opens their sheet, as the info
+    button's Details: they open by themselves after the screen is left alone while music plays, 30 s to 10 min, a
+    touch closing them, from a snapshot or as last viewed, fixed or a new look each track; this device's) and beside /
+    over the page at the right, icons only. It lays itself out
     for its space (`lib/playerLayout.ts`, a port of Finamp's layout): portrait or landscape, whichever gives the
     larger cover; spare room spreads its three groups (track name; progress and buttons; the actions row);
     when short of height the large gaps, the large play button, the small gaps, the
@@ -64,7 +72,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     handle and "Queue" (drag it down to close), and in its row the tools (decided 2026-10-16, as Symfonium's queue):
     search (in place: the row grows into the field, as the pages' search; the rows whose title, artist or album match
     show) and, where the page holds the queue, Clear (what comes next goes; the toast's Undo puts it back); not shuffle
-    and repeat, which are the player's (the same twice was one too many). **More music** floats over the list's lower
+    and repeat, which are the player's (the same twice was one too many). **Requests** (decision 0079): tracks asked
+    of this player by someone following it, or a guest, stand where they would go (Play next's lane, or the end) as a
+    queue row whose end is the duration, a thumbs up, its ⋮ and a thumbs down; its third line "Asked by Ann", which
+    stays once accepted; a thumbs down takes it out at once (the asker is told), a thumbs up makes it a row as any.
+    A thumbs-up button in the row shows or hides them, its badge counting them (on by default where others may follow
+    you); the queue buttons carry the count too. One's own requests to another show as "Waiting for <name>". **More music** floats over the list's lower
     right corner where the page holds the queue: a pill saying what is on ("Radio · ∞ Same era", else "Off"), lit in
     the cover's accent while either is, opening its sheet (the player's radio button too): Radio, after each of the
     queue's own tracks (Off, Similar to the track, Same artist, Same era; how many after each on a slider, 1 to 10, set when the finger lifts), and Autoplay, when the queue ends (Stop, Similar, Same artist, Same era,
@@ -84,8 +97,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     copy, on the server's player), then Add to playlist, the favourite and Remove from queue (this device).
   - **Output** (`lib/OutputSheet.svelte`, decisions 0019 and 0022): the speaker button in the actions row (menu,
     heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
-    current one checked. Choosing the other one moves the music there (the queue and the position) and stops the side
-    that played; nothing asks first, the player simply carries on there. The choice is remembered by the browser.
+    current one checked; the players of those one may follow, to listen along; at its foot "Let others follow me" and
+    each follower's "Always accept" (decision 0079). Choosing the other one moves the music there (the queue and the
+    position) and stops the side that played; nothing asks first, the player simply carries on there. **The screen
+    follows the music** (the owner, 0.10): when another device takes the music over, the one it left and every screen
+    showing that one show the player it went to. The choice is remembered by the browser.
     Whichever side plays, the player looks and works the same; playlists and the heart act on the
     track that plays there. A track this device cannot play is skipped with one error line naming it. In the app,
     under This device while it plays (alone or in a group), its audio output: the one it sounds on by its icon and
@@ -105,7 +121,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **A viewed playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
   full-height layer with the mini-player floating over its end. It shows the tracks; the selection's (one playlist, or
   several ticked with Select) **other views** (decision 0025) are entries of its ⋮ menu since 2026-10-16, no tabs row:
-  Info (what Insights knows of it: how focused, its closest playlists), Export…, Repair…, Sync…. Each opens as a step
+  Info (what Insights knows of it: how focused, its closest playlists), Repair…, Sync…. Each opens as a step
   of its own (back returns to the tracks, as does Esc) under a plain bar: back, the view's name over the playlist's,
   the panel's place; a view with nothing to do says so. Several
   playlists: their covers and count in the header, ✕ alone in the bar, and on Tracks a folding section per playlist
@@ -214,7 +230,18 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   red), "Add condition" offering the server's axes, and below the first tracks. The bar: Delete (one's own crate; a
   second tap confirms), Cancel in the pencil's place, the favourites toggle, Save. The draft is kept in the browser
   until Save or Cancel. A genre (a track's Go to genre, a genre on top of a list) opens as a crate of that one genre.
-- **Playlist chips** (the Playlists page, medium rows: see Rows) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
+  **Records or Tracks** (the owner, 0.10), in a crate's View sheet, remembered per crate: Records are its tracks by
+  album ("3 of 10 tracks"), in the crate's order of each album's first track, or the album orders; a record opens to
+  its crate tracks, its menu acting on them. New for you and Grave digging open as Records, the others as Tracks; the
+  view never switches by itself, and Play and Shuffle play the crate's tracks in its order either way.
+- **Excluding an artist** (decision 0083): from the artist's menu (and a track's, for its artist), "Exclude
+  everywhere" (out of every crate, Radio, Autoplay, Discover and Home's shelves, for this account) and, opened from a
+  crate, "Not in this crate" (an "Artist is not" condition of that crate's own). Any credit counts. Both are listed in
+  Settings → Listening, each to take back, and search shows them as left out.
+- **Playlists' two modes** (the owner, 0.9.18): Normal, the playlists only open; **Quick add**, a double check left of
+  New playlist in the pill, lit while on, each chip's circle adding or taking out the playing track, as below. Each
+  device remembers its mode.
+- **Playlist chips** (the Playlists page, medium rows: see Rows; in Quick add) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
   tap on the label views the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
@@ -382,7 +409,11 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **The Library** (decision 0034, `Library.svelte` over `lib/AlbumShelf.svelte`, decision 0028): every album of the
   followed server's Music and Incoming libraries as one list, the libraries switched in the filter; the order (Artist,
   Title, Year, Added; Added newest first at first; and by how you used them, decided 2026-10-16: Plays, Last played,
-  Rating, most first when chosen, the value on a tile's corner pill), Rows or Covers, and Size, in columns as the playlist chips are.
+  Rating, most first when chosen, Length, the longest first, the value on a tile's corner pill), Rows, Covers or a
+  Table (its columns, Length among them, each also an order), and Size, in columns as the playlist chips are. The
+  kinds (Records, Albums, EPs, Singles, Compilations, Classical, Other) are the filter's Type row, chosen beside back
+  and in the sidebar; each record in its own kind only, unless the filter's switch says otherwise. Classical opens on
+  its composers, each opening their records, its performers the records' second line.
   Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was added,
   and an Incoming album's lines: its conversion and how it relates to Music; an album of a library other than Music
   has a dot in its library's colour after its title, while more than one library shows); its menu is the album's one
@@ -408,8 +439,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 
 ## Gestures
 
-- **Tap does the page's main action** on an item: on Playlists add or remove the playing track (the circle; the
-  name views the playlist, in Select ticks it); on the Library view the album in the panel
+- **Tap does the page's main action** on an item: on Playlists in Quick add, add or remove the playing track (the
+  circle; the name views the playlist, in Select ticks it); on the Library view the album in the panel
   (its cover's play icon plays it); on Insights' graph highlight the playlist and its closest playlists.
 - **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action. Every
   menu is a **bottom sheet like Finamp's track menu** (decision 0021, `lib/MenuSheet.svelte` + `lib/MenuEntry.svelte`),
@@ -417,13 +448,12 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   its top (its image: a cover, or a playlist's mosaic of its first four albums; its title; small chips; for a track
   the heart); its playback actions as a row of large icons with small labels; then the other entries as rows with an
   icon in the accent colour. The sheet takes its look from the item's image (blurred behind it, its accent).
-  For a playlist: Play, Shuffle, Play next, Add to queue, Start radio; View, the favourite, Pin to top, Download, Keep
-  on this device, Share; Info, Export…, Repair… and Sync… (the panel's views), Spoken as…, Rename, Delete playlist. For
-  a track (the player's menu button, a right-click on its cover, a row's ⋮): Play next, Add to queue, Start radio; View
-  album, Go to its artist, Go to its genres, the favourite, Add to playlist, Download, Share, Details, Web search (a
-  queue row: Play now and Play next as the large actions, Remove from queue last). What a menu opened from the
+  Which entries a menu has, in which group and order, is one table, `lib/menuTable.ts` (decision 0058, amended
+  2026-10-30), for every kind of thing: a track, an album, an artist, a playlist, a crate, a genre, the queue, a
+  selection, a Bandcamp preview; a menu decides only which of its entries show. What a menu opened from the
   panel's own rows would show again is left out (an album's track's View album, a genre's track's Go to it). The
-  entries come in the album menu's order: where the item leads, its state, Add to playlist, Download, Share, the rest.
+  entries come in the table's groups: where the item leads, how one feels about it, collecting it, taking it away
+  (Download…, Sync to this device, Share), knowing more, changing it, removing it last.
   **One icon per action** in every menu and bar: Add to queue a list with a plus, Add to playlist the playlists'. A new
   playlist from the queue is the queue's own (its header). In the app (not a browser) a track's, an album's and a viewed playlist's
   menus also have **Download** (an arrow down to a line): its tracks onto the phone, shown on Downloads. **View** (the square with an arrow out of its corner) is every menu's entry
