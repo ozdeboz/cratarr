@@ -1480,7 +1480,7 @@ export const getClassicalComposers = () => quietly<import('./recordKindRules').C
 export const getClassicalComposer = (key: string) => quietly<{ key: string; name: string; records: string[] }>(`/api/classical/composers/${encodeURIComponent(key)}`);
 // Works and movements (0.12, decision 0086, when the server says `works`): a composer's works, and a work with its
 // movements and the library's recordings of it (Cratarr's own library).
-export const getComposerWorks = (key: string) => quietly<import('./works').WorkListed[]>(`/api/composers/${encodeURIComponent(key)}/works`);
+export const getComposerWorks = (key: string) => quietly<import('./works').WorkListed[]>(`/api/classical/composers/${encodeURIComponent(key)}/works`);
 /** One recording of a work: its album, performers (conductor, ensemble, soloists, as 0082 orders them), year, and its
  *  tracks with the movement (`part`) each is, where known; `duration_secs` where the server gives it. */
 export type WorkRecording = {
