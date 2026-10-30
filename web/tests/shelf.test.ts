@@ -2,6 +2,7 @@
 // album once, search reads what was filled, and albums group and order as Downloads shows them, all with no network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+await import('./with-matcher.ts');
 
 const { recordOf, plan, toFill, filled, shelfMatches, albumsOf, albumMatches, orderAlbums, coverSize, keyOf, REFILL_MS, COVER_PX } = await import('../src/lib/shelf.ts');
 

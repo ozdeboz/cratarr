@@ -86,6 +86,11 @@
   import { loadMine } from './lib/mySettings.svelte';
   // The Downloads shelf (decision 0085, step 2): it follows the downloads from the start, so Downloads works offline.
   import './lib/shelfStore.svelte';
+  // The search's matcher (0.12): fetched once the page is idle, so it is on the device before the network may go; the
+  // pill's lists read again when it is in.
+  import { loadMatcherWhenIdle } from './lib/matcherLoad';
+  import { matcherLoaded } from './lib/pageView.svelte';
+  loadMatcherWhenIdle(matcherLoaded);
 
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
