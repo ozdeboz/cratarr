@@ -736,17 +736,22 @@ impl Library {
         let listed = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
         let mut tracks = pick(&listed, &ranked(listed.iter().map(|t| t.title.as_str()).collect()));
         self.song_artists(&db, &mut tracks)?;
-        // Genres, by their name.
+        // Genres, by their name or one of its aliases (0.12: one matcher, genre aliases from MusicBrainz: "dnb" finds
+        // Drum and Bass; `search::genre_name`).
         let mut st = db.prepare_cached("SELECT name, song_count FROM genres")?;
-        let mut genres: Vec<(String, u32)> = st
+        let mut genres: Vec<(f32, String, u32)> = st
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u32)))?
             .filter_map(Result::ok)
-            .filter(|(g, _)| crate::search::matches(g, words))
+            .filter_map(|(g, n)| {
+                let name = crate::search::genre_name(&g);
+                crate::search::matches_name(&name, words).then(|| (crate::search::rank_name(&name, words, 0, 1), g, n))
+            })
             .collect();
-        // Ranked as the rest (a direct hit, closeness, then how much of the name), the most played among equals.
-        genres.sort_by(|a, b| crate::search::rank(&b.0, words, 0, 1).total_cmp(&crate::search::rank(&a.0, words, 0, 1)).then(b.1.cmp(&a.1)));
+        // Ranked as the rest (a direct hit, closeness, then how much of the name; an alias below the name itself), the
+        // most played among equals.
+        genres.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.2.cmp(&a.2)));
         totals.genres = genres.len();
-        genres.truncate(limit);
+        let genres: Vec<(String, u32)> = genres.into_iter().take(limit).map(|(_, g, n)| (g, n)).collect();
         Ok(Found { albums, artists, tracks, genres, totals })
     }
 
