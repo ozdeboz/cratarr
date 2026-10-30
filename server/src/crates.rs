@@ -2721,6 +2721,8 @@ mod tests {
             quality: Some("lossless".into()),
             key: Some("C".into()),
             release_types: vec!["Album".into()],
+            album: Some("al-1".into()),
+            labels: vec!["Warp".into()],
             ..Facts::default()
         };
         let uses: HashMap<String, Use> = [("a/1".to_string(), Use { plays: 2, last: Some(1), rating: Some(4) })].into();
