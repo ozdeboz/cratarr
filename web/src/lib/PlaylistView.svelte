@@ -103,7 +103,7 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
-  import { offers } from './capabilities.svelte';
+  import { can, offers } from './capabilities.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
@@ -171,6 +171,7 @@
   import SwipeBehind from './SwipeBehind.svelte';
   import ExcludedSheet from './ExcludedSheet.svelte';
   import { toast } from './toast.svelte';
+  import { groupByWork } from './works';
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import MarkLoader from './MarkLoader.svelte';
@@ -759,6 +760,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const sorted = $derived(sortKey !== 'own' || sortDown);
   /** What shows is not the subject as it is: ordered otherwise, or filtered; it plays as it shows. */
   const reshaped = $derived(sorted || (filterable && filtersOn(kind) > 0));
+  // Works and movements (0.12, decision 0086; the owner, 2026-10-30): an album in its own order shows its movements under
+  // their work's heading, where the server knows works; sorted or filtered, as before.
+  const workLines = $derived(album && !reshaped && can('works') === true && shown ? groupByWork(shownRows) : null);
 
   // Select mode (Symfonium's): a long-press on a track or the header's icon starts it, a tap ticks a track, and a bar
   // over the list acts on the ticked ones. A tick is a row (its place), so a track that is there twice is ticked once.
@@ -1262,6 +1266,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
 
   /** A tap on a row: its playlist (`name`, these rows) plays from it. */
+  /** A work's heading's Play (0.12): its movements, in the album's order. */
+  async function playWork(title: string, list: PlaylistRow[]) {
+    const ok = list.filter((x) => x.id && !x.missing);
+    if (!ok.length) return;
+    navigator.vibrate?.(8);
+    try {
+      await playCollection({ kind: 'tracks', source, ids: ok.map((x) => x.id!) }, 'play', title, ok[0].id!);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
+
   async function playFrom(name: string, src: string, list: PlaylistRow[], r: PlaylistRow) {
     if (!r.id || r.missing) return;
     navigator.vibrate?.(8);
@@ -2145,7 +2161,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
       />
       {#if cols.length}{@render columnHead()}{/if}
       <ol class="rows" class:numbered={!!album} class:selecting={!!selecting} bind:clientWidth={listWidth}>
+        {#if workLines && shown}
+          {@const at = shown}
+          {#each workLines as l (l.kind === 'work' ? `work ${l.at[0]}` : at[l.at].i)}{#if l.kind === 'work'}{@render workHead(l.work.title, l.rows)}{:else}{@render albumRow(l.row, at[l.at].i, shownRows, l.movement)}{/if}{/each}
+        {:else}
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
+        {/if}
       </ol>
       {/if}
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
@@ -2314,14 +2335,23 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
 <!-- An album's track (Symfonium's album screen): its number (the playing one's dots instead), the title, and the artist
      only when it is not the album's; the cover is the header's. -->
-{#snippet albumRow(r: PlaylistRow, i: number, list: PlaylistRow[])}
+<!-- A work's heading over its movements (0.12, decision 0086): its name, and Play for the whole work. -->
+{#snippet workHead(title: string, list: PlaylistRow[])}
+  <li class="work-head">
+    <span class="work-title">{title}</span>
+    <button class="tool" aria-label="Play {title}" onclick={() => playWork(title, list)}><Icon name="play" size={22} /></button>
+  </li>
+{/snippet}
+
+<!-- `movement`: the track is a movement under its work's heading, named by its movement only. -->
+{#snippet albumRow(r: PlaylistRow, i: number, list: PlaylistRow[], movement: string | null = null)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
-  <li class:now={here} class:ticked={!!selecting && selecting.has(i)}>
+  <li class:now={here} class:ticked={!!selecting && selecting.has(i)} class:movement={movement !== null}>
     <SwipeBehind right={PLAY_NEXT} />
     <Row
       size="large"
-      title={r.name ?? r.file}
+      title={movement ?? r.name ?? r.file}
       sub={r.missing ? 'Missing file' : r.artist && r.artist !== albumHead?.artist ? r.artist : undefined}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}
@@ -3271,6 +3301,29 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   .rows.numbered :global(.row.large) {
     min-height: 52px;
+  }
+
+  /* A work's heading over its movements (0.12, decision 0086), its movements set in under it. */
+  .rows li.work-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    contain-intrinsic-size: auto 44px;
+    padding: 8px 0 0 12px;
+  }
+
+  .work-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rows li.movement {
+    padding-left: 32px;
   }
 
   .num {

@@ -816,6 +816,9 @@ export type PlaylistRow = {
   album_tracks?: number;
   /** An album's row on Cratarr's own library: the library holds other recordings of its work (0.10, Other versions). */
   has_versions?: boolean;
+  /** An album's row on Cratarr's own library: its MusicBrainz work, and the work that holds it where that is known (0.12,
+   *  decision 0086: movements under their work's heading). */
+  work?: import('./works').TrackWork | null;
 };
 
 /** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */
@@ -1467,6 +1470,26 @@ export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>
 // recordings of the same work, by MusicBrainz's work links).
 export const getClassicalComposers = () => quietly<import('./recordKindRules').Composer[]>('/api/classical/composers');
 export const getClassicalComposer = (key: string) => quietly<{ key: string; name: string; records: string[] }>(`/api/classical/composers/${encodeURIComponent(key)}`);
+// Works and movements (0.12, decision 0086, when the server says `works`): a composer's works, and a work with its
+// movements and the library's recordings of it (Cratarr's own library).
+export const getComposerWorks = (key: string) => quietly<import('./works').WorkListed[]>(`/api/composers/${encodeURIComponent(key)}/works`);
+/** One recording of a work: its album, performers (conductor, ensemble, soloists, as 0082 orders them), year, and its
+ *  tracks with the movement (`part`) each is, where known; `duration_secs` where the server gives it. */
+export type WorkRecording = {
+  album_id: string;
+  album: string;
+  performers: string[];
+  year: number | null;
+  tracks: { id: string; part?: string | null; duration_secs?: number | null }[];
+};
+export type WorkView = {
+  title: string;
+  composers: { key: string; name: string }[];
+  parent?: { mbid: string; title: string } | null;
+  parts: { mbid: string; title: string; number: number | null }[];
+  recordings: WorkRecording[];
+};
+export const getWork = (mbid: string) => quietly<WorkView>(`/api/works/${encodeURIComponent(mbid)}`);
 /** Marks a record classical or not, library-wide (administrators'); null: as Cratarr finds it. */
 export const markClassical = (source: string, id: string, mark: 'classical' | 'not' | null) =>
   request<{ classical: boolean; classical_mark?: 'classical' | 'not' | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(id)}/classical`, {
