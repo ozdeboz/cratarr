@@ -23,7 +23,7 @@
   import { untrack } from 'svelte';
   import type { LiveFrame } from './faces';
   import { curveOf, valueOf as kept, type Curve } from './curves';
-  import { faceAt, freeMacro, panelKey, type PanelEdit } from './patch-edits';
+  import { faceAt, freeMacro, panelKey, type RackEdit } from './patch-edits';
   import { categoryPin, knobText, knobViews, labelOf, moduleName, patchAt, polyTurned, typesOf, type KnobView } from './patchgraph';
   import { fits, isDevice, type CableV2, type Device, type PatchV2, type Port, type PortRef } from './ports';
   import { byCategory, CATEGORIES, CATEGORY_LABEL, deviceCategory, portsFrom, type Category } from './rack';
@@ -51,7 +51,7 @@
     patch: PatchV2;
     types: Record<string, V2Type>;
     /** An edit, and the store's key for it (a knob dragged: one undo step). */
-    onedit: (e: PanelEdit, key: string | null) => void;
+    onedit: (e: RackEdit, key: string | null) => void;
     /** The snapshot library (library.ts), each under its group's heading. */
     presets: readonly { id: string; label: string; line: string; group?: LibraryGroup }[];
     /** The preset the patch was last set to, if any. */
@@ -75,7 +75,7 @@
   const here = $derived(path.at(-1) ?? '');
   const go = (page: string) => (path = [...path, page]);
   const back = (steps = 1) => (path = path.slice(0, Math.max(0, path.length - steps)));
-  const edit = (e: PanelEdit) => onedit(e, panelKey(e));
+  const edit = (e: RackEdit) => onedit(e, panelKey(e));
 
   // Pages are named `kind|…` (ids hold dots and slashes): `m|a/b` a module at its path, `in|a/b|port` the cables into a
   // port, `c|scope|id` a cable, `from|scope|module|port` a source for a new cable, `move|end|scope|id` a cable's end

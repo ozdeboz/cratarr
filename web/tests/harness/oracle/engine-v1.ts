@@ -1,14 +1,14 @@
-// The one engine run on today's patch (decision 0057, step 2): the routes give as they did (routes.ts give, each
+// FROZEN (0.9.19: the tests' reference only): the one engine run on today's patch (decision 0057, step 2): the routes give as they did (routes.ts give, each
 // column's scale), the hidden behaviours run as the modules they become (modules.ts), the chain's own as chain.ts. What
 // the equivalence harness holds frame for frame to aspects.ts, before the port evaluator gives in place of the routes.
 
-import type { AspectsNow } from '../aspects';
-import type { Levers } from './sidechain';
-import type { Music } from '../music-core';
-import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from '../routes';
-import { BANDS, type VisualSettings } from '../settings.svelte';
-import { newChain, stepChain, type ChainState } from './chain';
-import { newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
+import type { AspectsNow } from '../../../src/lib/visuals/aspects.ts';
+import type { Levers } from '../../../src/lib/visuals/engine/sidechain.ts';
+import type { Music } from '../../../src/lib/visuals/music-core.ts';
+import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from '../../../src/lib/visuals/routes.ts';
+import { BANDS, type VisualSettings } from '../../../src/lib/visuals/settings.svelte.ts';
+import { newChain, stepChain, type ChainState } from '../../../src/lib/visuals/engine/chain.ts';
+import { newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from '../../../src/lib/visuals/engine/modules.ts';
 
 /** The columns scaled by their setting (the fluid's stirring is scaled where it stirs). */
 const SCALED = (Object.entries(COLUMN_SCALES) as [keyof typeof COLUMN_SCALES, (typeof COLUMN_SCALES)[keyof typeof COLUMN_SCALES]][])

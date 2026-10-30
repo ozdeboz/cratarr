@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TRACKS, compare, record, todays, track, type Engine } from './harness/aspects-record.ts';
-const { newEngineV1, stepEngineV1 } = await import('../src/lib/visuals/engine/v1.ts');
+const { newEngineV1, stepEngineV1 } = await import('./harness/oracle/engine-v1.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
 import type { PatchV2 } from '../src/lib/visuals/ports.ts';
 const { flatten, toV2 } = await import('../src/lib/visuals/v2.ts');
@@ -49,7 +49,7 @@ test("the hidden behaviours as modules (Envelope, Clock, Track, Flash, the chain
 });
 
 test('the same with reduced motion, and under each preset chain', async () => {
-  const { CHAINS, chainRoutes } = await import('../src/lib/visuals/chains.ts');
+  const { CHAINS, chainRoutes } = await import('./harness/oracle/chains.ts');
   const variants: [string, typeof settings, boolean][] = [];
   for (const c of CHAINS) {
     if (c.extra.cables.length || c.extra.modulators.length) continue;
@@ -83,7 +83,7 @@ const graph = (): Engine => {
 };
 
 test('the one engine over the cables of a v2 patch gives what the routes gave', async () => {
-  const { CHAINS, chainRoutes } = await import('../src/lib/visuals/chains.ts');
+  const { CHAINS, chainRoutes } = await import('./harness/oracle/chains.ts');
   // Every column's scale off 1 (folded into the cables' amounts by toV2, 0057 §7e): Size above all, which is no base.
   const scaled = { ...settings, shape: 1.4, rotation: 0.6, lights: 1.3, glow: 0.7, size: 0.55, saturation: 1.2, trails: 0.8, presence: 1.5, waves: 0.65 } as typeof settings;
   const variants: [string, typeof settings, boolean][] = [['the Cratarr chain', settings, false], ['every scale off 1', scaled, false], ['reduced motion (0057: kept on purpose)', settings, true]];
@@ -259,7 +259,7 @@ test("each chain module's own node values (step 5, the one engine) are today's, 
       },
     };
   };
-  const { CHAINS, chainRoutes } = await import('../src/lib/visuals/chains.ts');
+  const { CHAINS, chainRoutes } = await import('./harness/oracle/chains.ts');
   const scaled = { ...settings, shape: 1.4, rotation: 0.6, lights: 1.3, glow: 0.7, size: 0.55, saturation: 1.2, trails: 0.8, presence: 1.5, waves: 0.65, fluid: 0.6, tunnel: 0.4, dive: 0.3, haze: -0.4 } as typeof settings;
   const effected_ = { ...settings, fx1: 2, fx1Amount: 0.7, fx1K1: 0.3, fx1K2: 0.8, fx2: 1, fx2Amount: 0.5, fx2K1: 0.6, fx2K2: 0.2, fx3: 3, fx3Amount: 0.4, fxLoop: 2, fxLoopAmount: 0.6, fxLoopK1: 0.7, fxLoopK2: 0.25 } as typeof settings;
   const variants = [settings, scaled, effected_, ...CHAINS.filter((c) => !c.extra.cables.length && !c.extra.modulators.length).map((c) => ({ ...settings, ...(c.settings ?? {}), routes: chainRoutes(c) }) as typeof settings)];

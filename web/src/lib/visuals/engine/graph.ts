@@ -8,6 +8,7 @@
 // What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
 import type { AspectsNow } from '../aspects';
+import { throughMacros } from '../macro-map';
 import { hazeOf } from '../aspects';
 import { heightOf, shapeOf, type Shape } from '../evaluate';
 import { seedOf } from '../flame';
@@ -571,9 +572,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
    *  `unset`). */
   // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
   const macroedKnob = (x: Module | undefined, knob: string, or: number) => {
-    let base = knobOf(x, knob, or);
-    for (const g of (x && plan.targetsOf.get(x.id)?.get(knob)) || []) base = g.from + (g.to - g.from) * finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1));
-    return base;
+    return throughMacros(knobOf(x, knob, or), (x && plan.targetsOf.get(x.id)?.get(knob)) || [], (g) => finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1)));
   };
   const chainSettings = {
     flash: macroedKnob(ofType('accent'), 'accent', unset(ofType('accent'), 'accent', 'accent')),
@@ -636,16 +635,24 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const clockModule = ofType('clock');
   const ticks: ClockTriggers = clockModule ? stepClockTriggers(st.clockTriggers, m, clockModule.knobs, step) : { beat: 0, bar: 0, phrase: 0 };
   if (clockModule) for (const k of ['beat', 'bar', 'phrase'] as const) outputs[`${clockModule.id}.${k}`] = ticks[k];
-  // Each Grid laid out by its knobs as set (seeded by its id: the same every frame and on every device).
+  // Each Grid laid out by its knobs as set and as their macros set them (seeded by its id: the same every frame and on
+  // every device). Its macros at their value as last frame left them (the macros are worked out after the Grids, whose
+  // channels the modulators read): a macro on Count or Spacing lays it out anew (0.9.19: they did nothing; the
+  // owner, 2026-10-29: continuous over discrete).
   const points: Record<string, GridPoint[]> = {};
+  const gridType = types.grid ?? ENGINE_TYPES.grid;
   for (const x of plan.grids) {
-    const key = JSON.stringify(x.knobs);
-    if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(x.knobs, seedOf(x.id)) };
+    const laid: Record<string, number> = { ...x.knobs };
+    for (const k of gridType?.knobs ?? [])
+      if (k.kind !== 'step' && plan.targetsOf.get(x.id)?.has(k.id))
+        laid[k.id] = throughMacros(finite(x.knobs[k.id], k.default), plan.targetsOf.get(x.id)!.get(k.id)!, (g) => finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1)), k.taper === 'exp');
+    const key = JSON.stringify(laid);
+    if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(laid, seedOf(x.id)) };
     points[x.id] = st.grids[x.id].grid.points;
     // Points cabled into At (a Flame's parts, where they are on the screen): the lattice shared out, a part laid round each.
     const at = gridAt(plan.intoOf.get(x.id)?.get('at')?.[0]?.from);
     if (at?.length) {
-      const local = gridOf({ ...x.knobs, count: Math.max(1, Math.round(points[x.id].length / at.length)) }, seedOf(x.id)).points;
+      const local = gridOf({ ...laid, count: Math.max(1, Math.round(points[x.id].length / at.length)) }, seedOf(x.id)).points;
       points[x.id] = at.flatMap((s) => local.map((q) => ({ x: s.x + q.x, y: s.y + q.y }))).slice(0, MOST_POINTS);
     }
   }
@@ -1247,11 +1254,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
   function macroed(module: string, knob: Knob | undefined, base: number): number {
-    for (const g of (knob && plan.targetsOf.get(module)?.get(knob.id)) || []) {
-      const at = macroOf(g.macro);
-      base = knob?.taper === 'exp' && g.from > 0 && g.to > 0 ? g.from * (g.to / g.from) ** at : g.from + (g.to - g.from) * at;
-    }
-    return base;
+    return throughMacros(base, (knob && plan.targetsOf.get(module)?.get(knob.id)) || [], (g) => macroOf(g.macro), knob?.taper === 'exp');
   }
   /** A Flame's parts on the screen and its outputs: its node's, as last found, where the engine runs with a view; else
    *  as the caller gives them (a lab, a test). */

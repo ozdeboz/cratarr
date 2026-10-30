@@ -81,30 +81,30 @@ test('a mapped knob shows its macro and the value it sets, in the graph as in th
 });
 
 test('making macros (patch-edits.ts): mapped without a jump, one a knob, let go and removed where they were', async () => {
-  const { applyPanel } = await import('../src/lib/visuals/patch-edits.ts');
+  const { applyEdit } = await import('../src/lib/visuals/patch-edits.ts');
   const p = toV2(structuredClone(DEFAULTS));
   const set = (q: PatchV2, module: string, knob: string) => asSet(flatten(q), flatten(q).modules.find((m) => m.id === module), knob, types)!;
   const hueBefore = set(p, 'flame', 'hue');
-  applyPanel(p, { kind: 'newMacro', scope: [], id: 'macro-13', label: 'Macro 13' }, types);
+  applyEdit(p, { kind: 'newMacro', scope: [], id: 'macro-13', label: 'Macro 13' }, types);
   assert.ok(p.macros.some((x) => x.id === 'macro-13' && x.label === 'Macro 13'));
   // The Flame's Hue mapped to it: taken from Hue's macro, where it was.
-  applyPanel(p, { kind: 'mapKnob', scope: [], id: 'macro-13', module: 'flame', knob: 'hue' }, types);
+  applyEdit(p, { kind: 'mapKnob', scope: [], id: 'macro-13', module: 'flame', knob: 'hue' }, types);
   assert.equal(p.macros.filter((x) => x.targets.some((t) => t.module === 'flame' && t.knob === 'hue')).map((x) => x.id).join(), 'macro-13');
   assert.ok(Math.abs(set(p, 'flame', 'hue') - hueBefore) < 1e-9);
   // Its range, then let go: where it was set.
-  applyPanel(p, { kind: 'macroRange', scope: [], id: 'macro-13', module: 'flame', knob: 'hue', from: 0, to: 1 }, types);
-  applyPanel(p, { kind: 'macro', scope: [], id: 'macro-13', value: 0.25 }, types);
+  applyEdit(p, { kind: 'macroRange', scope: [], id: 'macro-13', module: 'flame', knob: 'hue', from: 0, to: 1 }, types);
+  applyEdit(p, { kind: 'macro', scope: [], id: 'macro-13', value: 0.25 }, types);
   assert.ok(Math.abs(set(p, 'flame', 'hue') - 0.25) < 1e-9);
-  applyPanel(p, { kind: 'unmapKnob', scope: [], id: 'macro-13', module: 'flame', knob: 'hue' }, types);
+  applyEdit(p, { kind: 'unmapKnob', scope: [], id: 'macro-13', module: 'flame', knob: 'hue' }, types);
   assert.ok(Math.abs(p.modules.find((m) => m.id === 'flame')!.knobs.hue - 0.25) < 1e-9);
   // A macro removed: each knob it set where it was, its pin gone.
   const lightness = set(p, 'flame', 'lightness');
   p.pins.push('macro:look-light');
-  applyPanel(p, { kind: 'removeMacro', scope: [], id: 'look-light' }, types);
+  applyEdit(p, { kind: 'removeMacro', scope: [], id: 'look-light' }, types);
   assert.ok(!p.macros.some((x) => x.id === 'look-light') && !p.pins.includes('macro:look-light'));
   assert.ok(Math.abs(p.modules.find((m) => m.id === 'flame')!.knobs.lightness - lightness) < 1e-9);
   // A device's macros are its own: one made inside Calm.
-  applyPanel(p, { kind: 'newMacro', scope: ['calm'], id: 'macro-2', label: 'Macro 2' }, types);
+  applyEdit(p, { kind: 'newMacro', scope: ['calm'], id: 'macro-2', label: 'Macro 2' }, types);
   const calm = p.modules.find((m) => m.id === 'calm');
   assert.ok(calm && isDevice(calm) && calm.macros.some((x) => x.id === 'macro-2'));
 });
