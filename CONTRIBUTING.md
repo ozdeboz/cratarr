@@ -64,6 +64,12 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 - A pull request: GitHub's `main` shares no history with `trunk` (it is one commit per release), so its change is taken
   onto `trunk` (a feature) or the release branch (a fix) as a commit of its own, its author kept, and comes back to
   `main` with the next release.
+- What makes a fix and what a new version is not which part it touches, but whether stepping back undoes it:
+  - a fix (X.Y.Z+1), in any part (the server, the web app, the apps), mends what is there: no change to the data
+    kept on disk (no migration), nothing an app or page of the same X.Y would misread in what the API sends or expects,
+    no new feature. The release before it can always be gone back to without losing anything;
+  - a new version (X.Y+1.0) is everything else: new features, changed behaviour, migrations, changes between the
+    server and its apps. A fix that would need a migration goes there, or is made without one.
 - A release is its branch checked as a whole, with the version raised in one commit (`scripts/version.sh`: plain
   `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and put on `main` as one commit.
   - A new version (X.Y.0) is made on `trunk`, and `release/X.Y` is cut there.
