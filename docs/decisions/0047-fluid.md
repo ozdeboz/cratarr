@@ -83,7 +83,7 @@ its parts are lit and settling in a quiet section; at 100 % the light is smoke.
 - **A finer scale** (the owner: "between 0 and 5% fluid dynamics is about all I want … or maybe 10% should be 100%"):
   Fluid's whole range is a tenth of the fluid's own (`FLUID_FULL`); a Fluid kept or saved in 63 is carried over.
 - **At the Speed setting's pace** (the owner: "speed should scale the fluid's pace as well"), and the governor's.
-- **Stirred in time** (stirring.ts, claude-5f's; the owner asked how the fluid could follow the beat the way the flames
+- **Stirred in time** (stirring.ts; the owner asked how the fluid could follow the beat the way the flames
   do, with no new slider): each band's hits kick its part, 60 ms ahead where the server knows them (the music says how
   soon each band's next hit comes); the beats, downbeats and sections kick from the middle; steady bands stir with
   their level; the flow breathes with the pulse. With reduced motion only the steady stirring.
@@ -102,13 +102,13 @@ its parts are lit and settling in a quiet section; at 100 % the light is smoke.
   64's: "even when I have the fluid on max … max fluid looks great", "restore 64's full range, otherwise it'll probably
   not be good". The phone's case is fixed where it came from: the slider is now the most a route gives Fluid (0046,
   amended), so no route takes it past what is set.
-- **The stirring as routes** (the owner, in claude-a5's session: "Yes, but I do want it in 64.1"): what was built into
+- **The stirring as routes** (the owner: "Yes, but I do want it in 64.1"): what was built into
   stirring.ts (each band's hits, the beats, downbeats, sections, the bands' levels, the loudness, the swell) is three
   route columns, Stir (the pushes), Flow (the flow's energy and breathing) and Swirl (the whirls), every default route
-  straight at 1, so the defaults stir exactly as before (claude-a5's test compares every force frame by frame). Across a
+  straight at 1, so the defaults stir exactly as before (a test compares every force frame by frame). Across a
   curve is the push's own strength; loudness does not scale them. The dice leave them as they are, as the Track row.
   Tempo's hold on the turning and loudness through Intensity stay built in, said in Speed's and Intensity's help.
-- **Eased in and out** (claude-a5's, the owner: "Yes, fix it now"): Fluid tipping across 0 made the flow stop dead and
+- **Eased in and out** (the owner: "Yes, fix it now"): Fluid tipping across 0 made the flow stop dead and
   the smeared light fall apart into specks; the renderer now follows Fluid and the warp (rising over 0.3 s, falling over
   1.5 s), the flow coasting to rest, the same textures carried on when it comes back.
 - **The busy centre's contrast** (the owner asked whether it can be helped): at Fluid 0 a quarter to nearly half of the

@@ -48,7 +48,7 @@ updates itself.**
 
 ## Distribution
 
-The owner, 2026-10-29 (through the ThinkPad's session): conventional open-source workflows only, nothing of the house's
+The owner, 2026-10-29: conventional open-source workflows only, nothing of the house's
 own.
 
 - One GitHub Release per version tag, built by GitHub Actions for every platform: the `.deb`, the Windows installer,

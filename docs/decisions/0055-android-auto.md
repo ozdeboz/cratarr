@@ -35,7 +35,7 @@ What Android Auto asks of a media app (Android for Cars, read 2026-10-19):
 
 ## Decision
 
-When it is built (the app and the server are claude-5f's):
+When it is built:
 
 - **`PlayerService` becomes a `MediaLibraryService`.** The same player, session and Play On link; it adds the browse
   tree, search and the car's entries in the manifest. The 69.1 lesson holds: a connection's commands come from
@@ -56,8 +56,8 @@ When it is built (the app and the server are claude-5f's):
 
 ## Consequences
 
-- Nothing is built in 71. When a car or unit with Android Auto comes, this is the plan: claude-5f builds the app's
-  library service and anything the server needs for short browse lists; tested on the Desktop Head Unit first.
+- Nothing is built in 71. When a car or unit with Android Auto comes, this is the plan: the app's library service, and
+  anything the server needs for short browse lists; tested on the Desktop Head Unit first.
 - The owner sets Auto's developer mode, Unknown sources and the launcher tick once on the phone.
 - HA's car automation needs a guard ("not while Android Auto runs") at the same time.
 - docs/plans.md's CarPlay section points here for Android.

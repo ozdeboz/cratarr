@@ -1464,7 +1464,7 @@ class StartStop(
 
     /**
      * A hold let go (or braked by a pause): one plan from where the deck is, at its speed, over the Brake, forwards to
-     * 1× (the owner, 2026-10-28, as 632's page), backwards and for a pause to still. What shows is the plan's place; the
+     * 1× (the owner, 2026-10-28, as the web page), backwards and for a pause to still. What shows is the plan's place; the
      * track is readied where it ends; the wind follows it as far as its own rate reaches, and where that is not far enough (a
      * fast stream can sound no slower than a quarter of its speed) Cratarr's brake stream takes over at [BRAKE_LEAD_MS],
      * played at 1× (the owner: "let the stream carry the motion").
@@ -1548,7 +1548,7 @@ class StartStop(
     }
 
     /**
-     * A hold's aim (the owner, 2026-10-28, through 632): where its let-go's plan ends, forwards at 1×, backwards (and for
+     * A hold's aim (the owner, 2026-10-28): where its let-go's plan ends, forwards at 1×, backwards (and for
      * a pause) still. Held: the plan letting go now would make; let go: its plan's, until the tape is there (landed, and
      * a wind-up from still over).
      */

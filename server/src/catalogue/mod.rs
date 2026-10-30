@@ -1204,7 +1204,7 @@ impl Catalogue {
                     .query_row(params![folder, rel], |r| Ok((r.get::<_, Option<f64>>(0)?, r.get::<_, Option<f64>>(1)?, r.get::<_, Option<bool>>(2)?)))
                     .optional()?
                     .unwrap_or((None, None, None));
-                // As the served library reads them (a5's 243a89db): nothing from a decode that stopped early, and a whole
+                // As the served library reads them (243a89db): nothing from a decode that stopped early, and a whole
                 // decode's length where the file's header said otherwise by more than 1.5 s.
                 let trusted = complete != Some(false);
                 row.bpm = bpm.or(analysed_bpm.filter(|_| trusted)).map(f64::round).filter(|b| *b > 0.0).map(|b| b as u32);

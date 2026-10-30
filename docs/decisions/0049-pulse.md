@@ -1,6 +1,6 @@
 # 0049: The visuals' beat, downbeat and tempo from a local pulse
 
-- Status: accepted, amended 2026-10-19 (Beat this! directly; proposed by claude-5f, 2026-10-18; the owner asked for it after "drum hits are sometimes recognized while no
+- Status: accepted, amended 2026-10-19 (Beat this! directly; proposed 2026-10-18; the owner asked for it after "drum hits are sometimes recognized while no
   beat signal is showing", and for the web's authoritative insight on better beat and downbeat signals, "possibly
   utilizing other signals we already have")
 - Date: 2026-10-18
@@ -78,15 +78,15 @@ For the visuals only; the BPM column keeps 0035's gate.
 
 ## Amendment (2026-10-19): Beat this! directly, and the interim now
 
-The owner answered both (in a5's session, after the proposal was explained): **"Beat this! directly"**, not 1 and 2
+The owner answered both (after the proposal was explained): **"Beat this! directly"**, not 1 and 2
 measured against it first; and the interim Tempo fade now.
 
 - **The analysis is Beat this!**: beats and downbeats from its model, run on the NAS through an ONNX runtime (the
-  server's part, claude-5f). Its CPU time on the NAS is measured on a sample first, so the library's pass is planned
+  server's part). Its CPU time on the NAS is measured on a sample first, so the library's pass is planned
   from a real figure; 1 and 2 above are dropped, the reference sample in 3 stays as the check that it works here.
-- **The interim, in 70** (the page's part, a5: `lib/visuals/music.svelte.ts`): the Tempo row is the tempo times a
+- **The interim, in 70** (the page's part: `lib/visuals/music.svelte.ts`): the Tempo row is the tempo times a
   smoothstep of the last bar's mean beat strength, 0 at 0.15 or less (the break figure) and all of it at 0.35 or more
-  (provisional: measured by a5 on 12 Test-crate tracks, a steady bar's mean is 0.3 to 0.85; at 0.35 the grooves are
+  (provisional: measured on 12 Test-crate tracks, a steady bar's mean is 0.3 to 0.85; at 0.35 the grooves are
   full 69 to 95% of the time and the breaks reach 0); 0 without beats or outside the grid, moving across each beat so
   it never jumps. The
   turning keeps the grid's tempo (`bps` untouched), so the flame does not stand still in ambient passages.
@@ -149,7 +149,7 @@ them, from 0035's grid until then.
 - **Gaps**: Beat this! gives beats only where it hears a pulse, so a break or an ambient passage has none, where the
   grid ran on (on ten library tracks: 0 to 3 gaps of 1 to 3 s in grooves, 19 in an ambient track, 42 in a Chopin
   nocturne). The page counts an interval over twice the beats' typical one round it as a gap: the beat ends after
-  1.5 typical intervals and the tempo keeps the typical one, so the turning goes on through it (a5, `beats.ts`).
+  1.5 typical intervals and the tempo keeps the typical one, so the turning goes on through it (`beats.ts`).
 
 ## Amendment (2026-10-24): the PC hears new music too
 

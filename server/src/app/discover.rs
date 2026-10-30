@@ -61,7 +61,7 @@ const DISCOGRAPHY_FRESH_SECS: i64 = 30 * 86_400;
 const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
 /// Of the account's own most played artists (Cratarr's plays), how many seed Last.fm's artists like them.
 const OWN_SEEDS: usize = 25;
-/// The masonry's artists (0.9.2; the owner: "more tiles should come from a5's related artists"): of each seed
+/// The masonry's artists (0.9.2; the owner: more tiles should come from the related artists): of each seed
 /// (`app::around`, 0.9.7), this many of its related artists new to the library, an album each; sixteen run a group past
 /// the screen's edge.
 const RELATED_PER_SEED: usize = 16;
@@ -128,7 +128,7 @@ pub struct Suggestion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listeners: Option<u64>,
     /// How alike its artist is to each artist it was found from (Last.fm's `match`, 0 to 1), the most alike first: the
-    /// masonry places it by these (0.9.2, the owner with claude-632). Only Last.fm's suggestions have them.
+    /// masonry places it by these (0.9.2, the owner). Only Last.fm's suggestions have them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alike: Vec<Alike>,
     /// When it came out, as closely as its source says ("YYYY-MM-DD", "YYYY-MM" or "YYYY"): Fresh reads it.
@@ -148,7 +148,7 @@ pub struct Suggestion {
     pub score: f64,
 }
 
-/// Discover's modes (the owner, 2026-10-29, with claude-632): each suggestion shows once, in the mode whose reason
+/// Discover's modes (the owner, 2026-10-29): each suggestion shows once, in the mode whose reason
 /// fits it best ("by how well it fits", not a fixed order). Fresh: anyone's records out in the last three months that
 /// fit; Alike: records of any age that fit; Gaps: missing from the library's artists' albums; Artists: artists new to
 /// the library, with their records.

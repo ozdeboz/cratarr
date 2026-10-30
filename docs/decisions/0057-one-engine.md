@@ -1,7 +1,7 @@
 # 0057: One engine: everything that changes the picture is a module or a cable you can see
 
-- Status: accepted (the owner, 2026-10-20, in claude-a5's session: "Yes, point one now", "I won't settle for anything
-  less than the North Star", "So divide up the work so that the other sessions can be put to good use")
+- Status: accepted (the owner, 2026-10-20: "Yes, point one now", "I won't settle for anything less than the North
+  Star")
 - Date: 2026-10-20
 - Builds on: 0056 (the visuals as a patch) and its amendment (no matrix, fewer lines); replaces how 0046's mapping
   (aspects.ts, routes.ts) runs, not what the picture is
@@ -63,7 +63,7 @@ Six kinds of signal, each with its own wire in the graph:
 | Type | Carries | Wire |
 |---|---|---|
 | `picture` | a texture each frame | solid |
-| `light` | the flame's accumulated light before Show displays it (its RGBA and its bands' shares); the flame's own loop works on it, and only Show turns it into a picture (claude-632) | solid, thick |
+| `light` | the flame's accumulated light before Show displays it (its RGBA and its bands' shares); the flame's own loop works on it, and only Show turns it into a picture | solid, thick |
 | `audio` | the sound itself: its recent samples each frame (the page's own player, or the app's `wave`); Music gives it, the Waves source takes it (the owner: "is video and audio essentially the same?": no) | double line |
 | `points` | a set of positions with values per point (a grid's points; TouchDesigner's geometry for instancing) | chain line |
 | `value` | a number each frame (a signal on 1 = typical; a modulator's own range; a knob's) | dashed |
@@ -140,7 +140,7 @@ Each of today's hidden behaviours becomes a module with ports, in the graph:
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.
-  - **Thresholds and Wild** (the owner, via claude-5f): each Ducker's threshold starts at its default limit × 1.5,
+  - **Thresholds and Wild** (the owner): each Ducker's threshold starts at its default limit × 1.5,
     nothing learned. **Wild is a macro on the five thresholds**, moving each along its exponential taper (a knob's
     taper: equal steps of position multiply the value, as a frequency knob's do) from half to twice. So Wild gives
     exactly today's factor 2^(2(wild − ½)). Randomize's reach is a setting of its own, no longer Wild's.
@@ -376,7 +376,7 @@ The owner: "a difference between morphable shapes and non-morphable shapes … t
 
 ### 4h. A modular Fluid
 
-The owner, 2026-10-20 (through claude-632's session): "Yes, this is what I want"; "Fluid should also be applicable to
+The owner, 2026-10-20: "Yes, this is what I want"; "Fluid should also be applicable to
 grids". No hidden couplings left:
 
 - **Polymorphic:** Fluid takes light, a picture or points and gives the same type out: in the flame's loop, on any
@@ -412,7 +412,7 @@ set of components, modules of which some are inserted as devices, but they are i
   is hidden. It can be collapsed again, and nested: a device may hold devices. Its ports are the ports of its modules
   that it exposes.
   - **Show is a device:** Tone map, Curve, Saturate, Blur, Scale and Bend, wired in the order that draws exactly today's
-    picture (claude-632's harness decides it), with Brightness, Haze, Saturation, Smoothing, Size and Waves as its
+    picture (a harness decides it), with Brightness, Haze, Saturation, Smoothing, Size and Waves as its
     macros. So Show stays one familiar thing on the surface and is standard modules underneath.
   - Other devices are made the same way: select modules, make a device, choose its macros, save it.
 - **Preset:** a saved patch: modules and cables, some of them inside devices. The chains (Calm, Pulse, Flow …) and the
@@ -474,7 +474,7 @@ The owner (2026-10-20): pins at four levels, a **knob**, a **module**, a **devic
 modules each by their own category inside it: §3b). **Multi-select** of modules, devices and cables (not knobs: "We
 don't implement multi-select for knobs"), to pin or unpin them all at once; cables picked may be deleted together. This
 undoes 70's "a long press on a cable gives Delete or Reroute (NOT multi-select)": a long press now also starts picking,
-in the graph (claude-632's SelectBar) and in the panel alike.
+in the graph (SelectBar) and in the panel alike.
 
 ### 7b3. Framing in sight: Transform, and the Camera a device
 
@@ -535,7 +535,7 @@ each module's own inner maths (the flame's parts and light ranges).
 
 ### 7f. No special modules: common patterns as devices
 
-The owner, 2026-10-20 (through claude-632's session): "yes, folded into music"; "yes, no special module needs to
+The owner, 2026-10-20: "yes, folded into music"; "yes, no special module needs to
 remain"; on the follower's normal into every depth, "Yes, please"; on shipping the patterns as devices, "agree". These
 supersede what §3, §4b, §4e and §7e say of Track, the Loudness and the depth normal.
 
@@ -548,7 +548,7 @@ supersede what §3, §4b, §4e and §7e say of Track, the Loudness and the depth
   Track seed, so every track keeps exactly today's look. The dice in the panel trigger the same Randomize with a fresh
   seed.
 - **Track's pulse** ("all of it as a track starts, gone over its first beat") is New track → an ADSR whose release is
-  about a beat (claude-5f).
+  about a beat.
 - **No depth normal.** A cable has no depth unless one is cabled. The loudness scales once at the source: a
   polyphonic **VCA on Music's outputs** (the band rows through as channels), keyed by the Envelope Follower; everything
   from Music goes through it. Loudness's own row bypasses it, as a visible cable from Music directly. A modulator that
@@ -573,21 +573,21 @@ supersede what §3, §4b, §4e and §7e say of Track, the Loudness and the depth
 - Every knob's ring shows what moves it and where it is now (Bitwig).
 - **Bypass** sends a module to its neutral through the morph; a second tap brings it back.
 
-## Steps and owners
+## Steps
 
 Every step keeps the visuals as they are. Steps 2 and 3 are proved by a frame-by-frame comparison against today's
 engine over recorded tracks (the precheck's harness), within a tolerance, before the old code goes.
 
-| Step | What | Owner |
-|---|---|---|
-| 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash modules (the walks as Drifts) and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the Grid's points and channels (§4c); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
-| 3 | **Picture graph:** the compositor over typed picture ports, lazy; Fold (one module for the grid's symmetries) and Instance (§4c); the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
-| 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo; the graph on every screen, phones included, touch first (§7b) (graph: claude-632; its pages and sheets: claude-a5) | claude-632, claude-a5 |
-| 5 | **Devices and macros:** the device type (a module holding a patch, its exposed ports and macros), flattening for the engine and compositor, Show as a device, open/collapse in the rack (graph: claude-632), the whole frame's macros | claude-a5 |
-| 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |
+| Step | What |
+|---|---|
+| 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash modules (the walks as Drifts) and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the Grid's points and channels (§4c); the precheck, the recipe and the dice on the new engine; equivalence tests |
+| 3 | **Picture graph:** the compositor over typed picture ports, lazy; Fold (one module for the grid's symmetries) and Instance (§4c); the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each |
+| 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo; the graph on every screen, phones included, touch first (§7b) |
+| 5 | **Devices and macros:** the device type (a module holding a patch, its exposed ports and macros), flattening for the engine and compositor, Show as a device, open/collapse in the rack, the whole frame's macros |
+| 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys |
 
-claude-a5 coordinates and owns this record. Interfaces are fixed in step 1 (patch.ts) before steps 2 and 3 build on
+Interfaces are fixed in step 1 (patch.ts) before steps 2 and 3 build on
 them. Until step 1 lands, steps 2 and 3 work behind today's interfaces (the equivalence harness; the compositor's
 graph walk).
 
@@ -598,15 +598,15 @@ both views of the store; then step 6; then a tablet check and a release. New mod
 edges) wait. Small differences in the picture are accepted (the owner: "identical was not necessary"); curved cables
 stay exact (§7f).
 
-| Part | What | Owner |
-|---|---|---|
-| S1 | **The store as truth** (`visuals-patch.svelte.ts`): the patch (v2, unflattened) with undo and redo; loaded from its own key, else converted once from the saved settings (toV2); saved; this device's own settings (Quality, FPS, Brightness) apart from it; the phone driving the tablet sends the patch whole (sync groups are not in this version) | claude-a5 |
-| S2 | **The frame loop out of the page** (`visuals-loop.ts`) and **onto the store**: the engine on the flattened patch (a new object only when its structure changes), the look from the Flame's knobs as the engine moves them, the moments and the Dice from the engine's frame, the one morph on v2, the walks gone (Randoms in the patch); `precheckPatch` and the dice's try-and-pick | claude-5f |
-| S3 | **The panel over the store** (`VisualsPanel.svelte` and v2 cable pages): pages by the five categories (rack.ts), a module's knobs from its type, cables as CableV2 (Delete, Reroute, the curve), pins (knobs and whole categories), Randomize's long-press scopes, Reset (to seed, everything), presets and snapshots as v2 patches with their pins | claude-a5 |
-| S4 | **The graph v2-only** (`patch` and `onchange` from the store); the harness over the switched app; the tablet check | claude-632 |
-| S5 | **Step 6:** aspects.ts, routes.ts's matrix, chain-cables.ts, evaluate.ts on extras, drift.ts, recipe.ts, the v1 keys | claude-5f, with a5 and 632 for their files |
+| Part | What |
+|---|---|
+| S1 | **The store as truth** (`visuals-patch.svelte.ts`): the patch (v2, unflattened) with undo and redo; loaded from its own key, else converted once from the saved settings (toV2); saved; this device's own settings (Quality, FPS, Brightness) apart from it; the phone driving the tablet sends the patch whole (sync groups are not in this version) |
+| S2 | **The frame loop out of the page** (`visuals-loop.ts`) and **onto the store**: the engine on the flattened patch (a new object only when its structure changes), the look from the Flame's knobs as the engine moves them, the moments and the Dice from the engine's frame, the one morph on v2, the walks gone (Randoms in the patch); `precheckPatch` and the dice's try-and-pick |
+| S3 | **The panel over the store** (`VisualsPanel.svelte` and v2 cable pages): pages by the five categories (rack.ts), a module's knobs from its type, cables as CableV2 (Delete, Reroute, the curve), pins (knobs and whole categories), Randomize's long-press scopes, Reset (to seed, everything), presets and snapshots as v2 patches with their pins |
+| S4 | **The graph v2-only** (`patch` and `onchange` from the store); the harness over the switched app; the tablet check |
+| S5 | **Step 6:** aspects.ts, routes.ts's matrix, chain-cables.ts, evaluate.ts on extras, drift.ts, recipe.ts, the v1 keys |
 
-Order, so the page is never edited by two at once: S2's extraction of the loop first (claude-5f); meanwhile S1 and
+Order, so the page is never edited by two at once: S2's extraction of the loop first; meanwhile S1 and
 S3 are built as new files; then the page mounts the store, the loop and the panel. The seam is the store's API:
 `patch` (raw state), `change(f, key?)` (one undo step, coalesced by key), `replace(p)`, `undo()`, `redo()`.
 
@@ -614,7 +614,7 @@ After the switch (the owner, 2026-10-20), with the Fluid's picture side, the gri
 Out), its one polymorphic input (a picture, light, points as dots, a flow as arrows) shown live in its node and on its
 page; a tap solos it, its signal full screen in place of the Screen's (TouchDesigner's viewers, VCV's Scope).
 
-### Conversion details (claude-632, step 3)
+### Conversion details (step 3)
 
 - A v1 effects stage samples once with every shape effect applied in slot order, then colours at the final
   coordinates. As one module per effect, the same picture needs the colour effects and Echo first, in slot order, then
@@ -626,7 +626,7 @@ page; a tap solos it, its signal full screen in place of the Screen's (TouchDesi
 ### Purity (the owner, 2026-10-29)
 
 The owner: "the lack of logic is in the UI of the panel". The panel shows the engine's model, so the model is fixed and
-the panel follows. The owner chose all four steps, in order (branch 632/visuals-purity):
+the panel follows. The owner chose all four steps, in order:
 
 1. **Model.**
    - A step knob names its choices (Knob `options`). The panel shows a yes or a no as a switch, two or three as a

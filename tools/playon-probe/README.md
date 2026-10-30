@@ -9,7 +9,7 @@ and again in the Android app.
    needs.
 3. Send `GET /probe/cmd?c=play` (or `pause`, `resume`); read what the page did at `GET /probe/log`.
 
-Result 2026-10-15 (Lenovo Tab, Chrome, installed as an app; measured by the subsonic session):
+Result 2026-10-15 (Lenovo Tab, Chrome, installed as an app):
 
 | Case | Result |
 |---|---|

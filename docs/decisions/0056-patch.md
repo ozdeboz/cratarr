@@ -1,6 +1,6 @@
 # 0056: The visuals as a patch: layers, modules, modulators and cables, morphing all the way
 
-- Status: accepted (the owner, 2026-10-19, through a design talk in claude-a5's session; then "Better start working on
+- Status: accepted (the owner, 2026-10-19, through a design talk; then "Better start working on
   this now", "This is the next version!!" and "Make sure the team gets their jobs")
 - Date: 2026-10-19
 - Builds on: 0046 (the visuals), 0047 (the fluid), 0048 (the randomisation and its limits), 0050 (the effects stage),
@@ -136,7 +136,7 @@ type Patch = { v: 1; layers: Layer[]; loop: Module[]; finish: Module[]; modulato
     targets: { module: string; knob: string; from: number; to: number }[] }[] };
 ```
 
-**Modulators** (web/src/lib/visuals/modulators/, claude-632's): each a `ModuleType` with `place: 'modulator'` and
+**Modulators** (web/src/lib/visuals/modulators/): each a `ModuleType` with `place: 'modulator'` and
 
 ```ts
 type Signals = (ref: SignalRef) => number;   // 1 = typical
@@ -150,7 +150,7 @@ pure TypeScript, testable in Node; continuous knobs only; output 0 at its neutra
 | Today | In the patch |
 |---|---|
 | flame.ts, render.ts's points and show | the **flame** layer: source knobs (form, detail, twist, warp, symmetry and mirror as steps, lens, colour, the parts' shape, rotation, lights, hue, spread, presence, Linger, Evolution, Continuity); its show (size, glow, saturation, smoothing, haze, waves) |
-| fluid.ts (claude-5f), zoom.ts, the loop effect, Facets, the fade | the flame's own loop: Fluid (stir, flow, swirl), Tunnel, Dive, Loop effect, Facets (lattice a step), Trails |
+| fluid.ts, zoom.ts, the loop effect, Facets, the fade | the flame's own loop: Fluid (stir, flow, swirl), Tunnel, Dive, Loop effect, Facets (lattice a step), Trails |
 | effects.ts (0050) | finish modules (Effect 1–3: a step choice, amount, two knobs); later on any layer |
 | routes.ts, curves.ts, aspects.ts | cables; the level-or-swing rule kept; Behaviour's and Look's walks become drift modulators cabled to their containers' macros |
 | settings.svelte.ts | the state; device settings apart; pins become pinned knobs |
@@ -162,22 +162,21 @@ pure TypeScript, testable in Node; continuous knobs only; output 0 at its neutra
 ### Steps (each keeps the visuals working)
 
 1. The patch model: types, the module types of today's pipeline, the **Cratarr chain** equal to it, and a lossless
-   conversion to and from today's settings (round-trip tested). Nothing on screen changes. (claude-a5)
+   conversion to and from today's settings (round-trip tested). Nothing on screen changes.
 2. The nested panel drawn from the patch, over today's renderer, replacing the Behaviour and Look lists and the route
-   grid. (claude-a5)
-3. The graph builder on wide screens (Svelte Flow). (claude-632)
+   grid.
+3. The graph builder on wide screens (Svelte Flow).
 4. The renderer as modules: the flame layer as today, the picture-level loop, finish, new sources (shapes, waves:
    MilkDrop's kinds, written from scratch), per-layer modules; the cost of a layer measured on both Mali devices, the
-   layers capped by it. Fluid as a module (claude-5f's file), a picture-loop variant beside the flame's. (claude-a5,
-   claude-5f)
+   layers capped by it. Fluid as a module, a picture-loop variant beside the flame's.
 5. Normalisation: the page works out each signal's typical value from the series it already holds whole (each
-   channel's median; a band's hits by their median strength; claude-5f's suggestion: no format change, and every
-   track's signals as kept today work), "lately" and the fast/slow forms too, behind one `signalsFor` (claude-5f); the
-   modulators (claude-632, merged).
-   The app's live sound sends a short waveform for the Waves source (claude-5f: about 512 mono samples a tick, as
+   channel's median; a band's hits by their median strength; no format change, and every
+   track's signals as kept today work), "lately" and the fast/slow forms too, behind one `signalsFor`; the
+   modulators (merged).
+   The app's live sound sends a short waveform for the Waves source (about 512 mono samples a tick, as
    `wave` in its 'live' message).
-6. Morphing: the neutral rule, chain changes, chains as presets, evolve. (claude-632's morph.ts, claude-a5's
-   chain-morph.ts and the frame loop)
+6. Morphing: the neutral rule, chain changes, chains as presets, evolve. (morph.ts, chain-morph.ts and the frame
+   loop)
    - Every change to the extras is morphed to: a knob moved on this device over 0.15 s; anything else over 1.5 s, as
      a look blends in (a module added or removed, a recall, the dice, an undo, the group's changes).
    - A module that leaves fades to neutral and is drawn where it stood until then. A whole layer leaves the same way.
@@ -185,7 +184,7 @@ pure TypeScript, testable in Node; continuous knobs only; output 0 at its neutra
    - A snapshot is a chain plus its state. A recall sets the chain whole; one saved before 70 has no extras.
    - A full roll of the dice evolves within the chain: every look knob of the extras gets a new value, and the
      modules, cables and modulators stay as they are.
-   - Cables into today's chain: chain-cables.ts (claude-5f) gives the extras' cables into the routes' columns the way
+   - Cables into today's chain: chain-cables.ts gives the extras' cables into the routes' columns the way
      a route gives them.
 
 ## Consequences
@@ -234,10 +233,10 @@ more usable." In their words, then as decided:
   panel's CurveEditor); a library already in use comes first, then compatible open source (MIT, BSD, Apache-2, GPL-3,
   AGPL-3), ported with its notice.
 
-Who built what ("Split the work evenly among the sessions"): claude-a5 the panel without the matrix, the rack's rows, the
-chain picker and scratch, `flameLayer`; claude-632 the graph's lines (tap, long press, drag into the empty to add);
-claude-5f the chains and the shared pieces (CableSheet, CableMenu, KnobCables, SourcePicker, cable-actions.ts: removing a
-route sets it to 0, a route read as a cable, a new cable a route where it can be one, reroute).
+Built: the panel without the matrix, the rack's rows, the chain picker and scratch, `flameLayer`; the graph's lines
+(tap, long press, drag into the empty to add); the chains and the shared pieces (CableSheet, CableMenu, KnobCables,
+SourcePicker, cable-actions.ts: removing a route sets it to 0, a route read as a cable, a new cable a route where it can
+be one, reroute).
 
 ## Sources
 

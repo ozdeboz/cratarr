@@ -46,7 +46,7 @@ seven days).
 
 ### Amended 2026-10-23: the history before the log, from ListenBrainz
 
-The owner chose to fill the log with Jellyfin's history (in claude-632's session, for Insights' Listening tab).
+The owner chose to fill the log with Jellyfin's history (for Insights' Listening tab).
 Jellyfin kept none; its ListenBrainz plugin sent every listen to ListenBrainz (user `ozdeboz`: 6,383 listens,
 2026-03-07 to 2026-08-27). Settings › Import › From ListenBrainz reads a user's listens from ListenBrainz's public
 API into the signed-in account's log (`app::listenbrainz`): matched by MusicBrainz recording, else artist and title,

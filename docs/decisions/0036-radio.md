@@ -28,7 +28,7 @@ Cratarr has no sound analysis yet. It knows artists, album artists, genres, year
 when each track last played, and which playlists hold it. Playlists are the owner's own curation, which neither app
 uses as a signal.
 
-The owner settled the questions on 2026-10-16 (in the Home Assistant session):
+The owner settled the questions on 2026-10-16:
 
 1. Radio and repeat-all exclude each other. Repeat-one stays possible.
 2. The switch is a radio button in the player's action row, where the device button was. It is lit while radio is on
@@ -173,8 +173,8 @@ Autoplay, and "album mix" sets `albums`. During the change-over Cratarr accepts 
   voice would stop what Home Assistant started; but then the player's own radio switch would stop Autoplay as well.
   Home Assistant moves to `autoplay` itself instead, so the rule is not needed.)
 
-**Work:** the lane rule (queue.rs) and the page's fill (localPlayer) are the radio's builders' (the HA session's);
-the app's fill is claude-5f's; the buttons and Autoplay's sheet are claude-a5's.
+**Work**, in four parts: the lane rule (queue.rs), the page's fill (localPlayer), the app's fill, and the buttons with
+Autoplay's sheet.
 
 ### Radio's choice and count (2026-10-16, the owner)
 

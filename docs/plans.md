@@ -172,7 +172,7 @@ monitored". Lidarr keeps the monitored albums it has not found yet (its Wanted, 
 is fetching now (`/api/v1/queue`): shown in Cratarr beside the requests ("Lidarr is looking for these"), each with how
 far it is, so the queue and Lidarr's own watch read as one.
 
-What Lidarr is for Cratarr (the owner and a5, 2026-10-24): an acquisition engine, a want list on MusicBrainz plus a
+What Lidarr is for Cratarr (the owner, 2026-10-24): an acquisition engine, a want list on MusicBrainz plus a
 search-and-import pipeline that drops albums into Incoming; Cratarr is already the curator around it (the library,
 Incoming's Keep, Delete and Replace, upgrades, covers, Discover deciding what is wanted). Music also comes from other
 sources than Soulseek, so Lidarr stays. The owner liked the intermediate step: in 0.9 **Cratarr keeps the want list and
@@ -199,7 +199,7 @@ up much of the music, so islands, holes and enclaves (a pocket of electronic ins
 mock-up was made (artifact UJ4zeUZEZPw2pcUie2D25B; geometry from scratchpad `territories/geo.py`: each genre's outline
 is the 0.5 contour, by marching squares, of a Gaussian field weighted by the genre's share in each playlist, only
 playlists with a share of 0.25 or more counting). The owner: "Yes, it looks fine." Built in 0.9.8 (2026-10-26,
-lib/territories; a5's per-playlist `shares`): the Map's points no longer move (the owner: "no node movement, a real
+lib/territories; the per-playlist `shares`): the Map's points no longer move (the owner: "no node movement, a real
 map"; pan and zoom stay), the six genres follow the Map's filters, a legend tap shows one, a tap inside one highlights
 its playlists, and the Map fills its page with nothing to scroll.
 
@@ -222,7 +222,7 @@ Agreed by the owner during 0.9.7 (2026-10-26); 0.9.7 went live 2026-10-26 19:58 
   on the queue button opens, at its header's end beside Shuffle.
 - **Single-track replacement.** An album missing a track gets it one at a time when the whole album cannot be had: a
   Soulseek search, each candidate fingerprinted (Chromaprint) and checked with AcoustID against the release, then
-  "Add to album" into the existing folder, tagged from MusicBrainz, with Undo. About 2.5–3 server days (a5's estimate).
+  "Add to album" into the existing folder, tagged from MusicBrainz, with Undo. About 2.5–3 server days (an estimate).
 - **Devices shared with everyone.** One switch on each device's page (Settings › Devices), off until turned on: then
   everyone on this Cratarr plays on it with Play On as its owner does (what plays, its queue, groups), nothing more;
   its settings, Remove and the switch stay its owner's. In Play On it carries its owner's name.
@@ -237,9 +237,6 @@ Agreed by the owner during 0.9.7 (2026-10-26); 0.9.7 went live 2026-10-26 19:58 
   - Play from an album's menu in Home's flow said "Could not start playing" (seen on the phone, not reproduced since).
   - Saving a cover to a read-only music folder showed the raw system error; it gets one short line.
   - A browser's stored player name with repeated numbers ("Safari on iOS 2 2 2") is tidied on load.
-
-Who: the server and the app are a5's (replacement, PWA download support, levelling's numbers from the player); the
-page is claude-632's (PWA storage and playback, the Level button and sheet, the waveform as heard, Repeat, the fixes).
 
 ## 0.9.3: deep search everywhere, and global search
 
@@ -271,7 +268,7 @@ the same tracks, Air's Moon Safari with one track more in Incoming, 6 another ed
   "prioritize Bandcamp playable artists"), so a new one can be heard at once. One in the library opens its artist page;
   a new one its Bandcamp album in the album panel, as Discover's do. Looked up with the artist's other facts and kept;
   MusicBrainz and Bandcamp at their one request a second.
-- **Discover's masonry** (the owner with claude-632, 2026-10-25; the page claude-632's): tiles keep their size (1×1 = 136
+- **Discover's masonry** (the owner, 2026-10-25): tiles keep their size (1×1 = 136
   px, a little under a shelf's 150 px cover), the width decides the columns, two rows at least. Each artist gets the
   smallest grid its suggestions fill, its seed tile in the middle with the artist's picture (tall over two rows); the
   suggestions packed outward from it, the most alike nearest, those that play on Bandcamp 2×1 above and below it and

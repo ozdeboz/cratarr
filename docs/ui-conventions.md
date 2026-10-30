@@ -184,7 +184,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   phone's share sheet (the app's in the app), else copied.
 - **A favourite album's cover** carries a small heart in its upper right corner, in the Library's rows and tiles.
 - **A missing cover** (the owner, 2026-10-19 for 70: "if they don't exist, we need a better way to show up than a broken
-  component"; stand-in A from claude-5f's mock) is the same everywhere: our record mark, faint (the text colour at
+  component"; stand-in A from the mocks) is the same everywhere: our record mark, faint (the text colour at
   28 %, 45 % of the tile), on a tile a step lighter than the page (`--tile`), with the corners of the cover it stands
   in for. No other icon, also where a crate, playlist, artist or snapshot used to show its own. Every cover is
   `lib/Cover.svelte`, which shows it when there is no address or the image fails to load; a failed address is

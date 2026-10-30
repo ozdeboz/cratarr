@@ -1,6 +1,6 @@
 # 0075: One tape engine: a playhead with a signed speed, anything interrupting anything
 
-- Status: accepted as the North Star (the owner, 2026-10-27, through claude-632: "If we have a pure tape engine, then
+- Status: accepted as the North Star (the owner, 2026-10-27: "If we have a pure tape engine, then
   the North Star would be to support interruptible start-stop"; "The North Star, as I now proposed it, is the next
   version")
 - Date: 2026-10-27
@@ -43,7 +43,7 @@ reads the wind stream itself (fetch into MSE, not an audio element), so its map,
 is known at every moment. Cheaper than one read head over decoded sound (no ~100 MB of decoded track on a tablet),
 and the same to the ear; an AudioWorklet read head stays the fallback if a change at zero ever proves audible.
 
-**App (after):** the same model, two heads under one engine (ExoPlayer forwards, the wind stream at speed), a5's.
+**App (after):** the same model, two heads under one engine (ExoPlayer forwards, the wind stream at speed).
 
 ## Consequences
 

@@ -59,7 +59,7 @@ data class Deck(val index: Int, val ms: Long, val speed: Double, val accel: Doub
 }
 
 /**
- * A let-go's one plan (632's page has the same; the owner, 2026-10-28: the stream carries the motion; forwards it brakes
+ * A let-go's one plan (the web page has the same; the owner, 2026-10-28: the stream carries the motion; forwards it brakes
  * to 1×, backwards to still): from where it was let go ([index], [ms]) at [v0] ×, [sign] its way, down to [to] ×
  * over [brakeMs], a raised cosine; [t0] elapsed realtime. What shows is its place; every head follows it; at its end the
  * tape is where it says.
@@ -88,7 +88,7 @@ data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v
         const val DECEL_X = 64.0
 
         /** How long a brake from [v0] to [to] lasts (ms): at [DECEL_X], never shorter than the Brake as set
-         *  ([brakeMs]), which a slow one keeps (632's page: the same). */
+         *  ([brakeMs]), which a slow one keeps (the web page: the same). */
         fun lengthMs(v0: Double, to: Double, brakeMs: Long): Long =
             max(brakeMs, kotlin.math.round(kotlin.math.abs(v0 - to) / DECEL_X * 1000.0).toLong())
     }

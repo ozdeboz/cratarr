@@ -56,8 +56,6 @@ list; crates change by themselves (a heart, a new album). Play On's live channel
 - Downloading becomes mostly unattended: the owner keeps a crate such as "favourites of the last 30 days" and the
   device follows it.
 - The app's store counts holders per track; removing a kept item removes only what nothing else holds.
-- **Work:** the radio's builders (the HA session) build it end to end (the owner), announcing each edit in claude-5f's
-  files (the app, Play On, the server's app/) and claude-a5's (menus, settings, the Downloads page) first.
 
 ## Amendment (2026-10-24): the Downloads page shows it, as Finamp's
 
