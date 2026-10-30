@@ -106,4 +106,4 @@ host?: string, port: number, buffer_ms: number,
  * Its own secret, which the sync server asks of it (decision 0051): as a listener, its snapclient's id is
  * `secret:name`; as a leader, its source hello carries `secret`.
  */
-secret?: string, };
+secret?: string, } | { "command": "notice", text: string, };

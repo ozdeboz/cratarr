@@ -2,7 +2,8 @@
 //! whose forwarded headers are believed, the analysis pass, Beat this!, and the host players reach sync play on. The
 //! environment seeds them; a value saved in Settings wins from then on (kept as server choices, `runtime:*`). Each one
 //! applies at once: the proxies' screen, the analysis pass (woken), sync play's address (Play On's). The home networks
-//! a shared device works from (`serve::proxy::at_home`) are Settings' only, none by default.
+//! a shared device works from (`serve::proxy::at_home`) are Settings' only, none by default; so is the guest portal
+//! (decision 0079), off by default.
 
 use std::sync::{OnceLock, RwLock};
 
@@ -17,6 +18,25 @@ const ANALYSIS: &str = "runtime:analysis";
 const BEAT_THIS: &str = "runtime:beat_this";
 const SNAPCAST_HOST: &str = "runtime:snapcast_host";
 const HOME_NETWORKS: &str = "runtime:home_networks";
+const GUEST: &str = "runtime:guest";
+
+/// The guest portal (decision 0079; the owner, 2026-10-30): `/guest`, at home, without an account, on or off, and whose
+/// queue its requests go to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Guest {
+    #[serde(default)]
+    pub on: bool,
+    #[serde(default)]
+    pub host: Option<GuestHost>,
+}
+
+/// A guest's host: a user (the player they listen on then), or one player (a shared device: its owner answers).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuestHost {
+    User(String),
+    Player(String),
+}
 
 /// The settings in force.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +48,7 @@ pub struct Runtime {
     pub snapcast_host: Option<String>,
     /// Home besides the local addresses.
     pub home_networks: Vec<IpNet>,
+    pub guest: Guest,
 }
 
 /// What the environment said at the start (none: it said nothing).
@@ -60,6 +81,7 @@ struct Saved {
     beat_this: Option<bool>,
     snapcast_host: Option<Option<String>>,
     home_networks: Vec<IpNet>,
+    guest: Guest,
 }
 
 static SEED: OnceLock<Seed> = OnceLock::new();
@@ -84,6 +106,7 @@ fn combine(seed: Seed, saved: &Saved) -> Runtime {
         beat_this: saved.beat_this.or(seed.beat_this).unwrap_or(false),
         snapcast_host: saved.snapcast_host.clone().unwrap_or(seed.snapcast_host),
         home_networks: saved.home_networks.clone(),
+        guest: saved.guest.clone(),
     }
 }
 
@@ -104,6 +127,7 @@ fn read_saved(ud: &crate::userdata::UserData) -> Result<Saved> {
         beat_this: ud.import_choice(BEAT_THIS)?.map(|v| v == "1"),
         snapcast_host: ud.import_choice(SNAPCAST_HOST)?.map(|h| Some(h.trim().to_string()).filter(|h| !h.is_empty())),
         home_networks: ud.import_choice(HOME_NETWORKS)?.as_deref().and_then(|p| crate::serve::proxy::parse(Some(p))).unwrap_or_default(),
+        guest: ud.import_choice(GUEST)?.and_then(|g| serde_json::from_str(&g).ok()).unwrap_or_default(),
     })
 }
 
@@ -132,6 +156,7 @@ pub struct View {
     pub beat_this: bool,
     pub snapcast_host: Option<String>,
     pub home_networks: Vec<String>,
+    pub guest: Guest,
     /// What the environment set and Settings has not saved over.
     pub from_env: serde_json::Map<String, serde_json::Value>,
     /// Those that wait for a restart (none: each applies at once).
@@ -158,6 +183,7 @@ pub fn view(ud: &crate::userdata::UserData) -> Result<View> {
         beat_this: r.beat_this,
         snapcast_host: r.snapcast_host,
         home_networks: r.home_networks.iter().map(ToString::to_string).collect(),
+        guest: r.guest,
         from_env,
         restart: Vec::new(),
     })
@@ -177,6 +203,8 @@ pub struct Change {
     pub snapcast_host: Option<Option<String>>,
     #[serde(default)]
     pub home_networks: Option<Vec<String>>,
+    #[serde(default)]
+    pub guest: Option<Guest>,
 }
 
 fn some_or_null<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Option<String>>, D::Error> {
@@ -208,6 +236,7 @@ pub fn save(ud: &crate::userdata::UserData, c: &Change) -> std::result::Result<R
     {
         return Err(format!("{h} is not a host name or an address."));
     }
+    let guest = c.guest.clone().map(guest_of).transpose()?;
     let fail = |e: anyhow::Error| format!("{e:#}");
     if let Some(p) = &proxies {
         ud.set_import_choice(PROXIES, &p.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")).map_err(fail)?;
@@ -224,6 +253,9 @@ pub fn save(ud: &crate::userdata::UserData, c: &Change) -> std::result::Result<R
     if let Some(n) = &home {
         ud.set_import_choice(HOME_NETWORKS, &n.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")).map_err(fail)?;
     }
+    if let Some(g) = &guest {
+        ud.set_import_choice(GUEST, &serde_json::to_string(g).map_err(|e| e.to_string())?).map_err(fail)?;
+    }
     let r = combine(SEED.get().cloned().unwrap_or_default(), &read_saved(ud).map_err(fail)?);
     crate::serve::proxy::set(r.proxies.clone());
     crate::serve::proxy::set_home(r.home_networks.clone());
@@ -232,9 +264,32 @@ pub fn save(ud: &crate::userdata::UserData, c: &Change) -> std::result::Result<R
     Ok(r)
 }
 
+/// The guest setting as saved: its host's name trimmed; on needs a host.
+fn guest_of(g: Guest) -> std::result::Result<Guest, String> {
+    let named = |n: String| Some(n.trim().to_string()).filter(|n| !n.is_empty() && n.chars().count() <= 64 && !n.chars().any(char::is_control));
+    let host = match g.host {
+        None => None,
+        Some(GuestHost::User(u)) => Some(GuestHost::User(named(u).ok_or("Name the host.")?)),
+        Some(GuestHost::Player(p)) => Some(GuestHost::Player(named(p).ok_or("Name the host's player.")?)),
+    };
+    if g.on && host.is_none() {
+        return Err("The guest page needs a host: a user or a player.".into());
+    }
+    Ok(Guest { on: g.on, host })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_guest_page_is_off_by_default_and_on_needs_a_host() {
+        assert_eq!(combine(Seed::default(), &Saved::default()).guest, Guest::default());
+        let g: Guest = serde_json::from_str(r#"{"on":true,"host":{"player":" Salon tablet "}}"#).unwrap();
+        assert_eq!(guest_of(g).unwrap().host, Some(GuestHost::Player("Salon tablet".into())));
+        assert!(guest_of(Guest { on: true, host: None }).is_err());
+        assert_eq!(serde_json::to_value(Guest { on: false, host: Some(GuestHost::User("ann".into())) }).unwrap(), serde_json::json!({ "on": false, "host": { "user": "ann" } }));
+    }
 
     #[test]
     fn a_bad_proxy_is_named_and_good_ones_are_ranges() {
@@ -248,7 +303,7 @@ mod tests {
         let r = combine(seed.clone(), &Saved::default());
         assert_eq!((r.analysis, r.beat_this, r.snapcast_host.as_deref()), (Mode::All, true, Some("nas")));
         assert_eq!(r.proxies.unwrap().len(), 1);
-        let saved = Saved { proxies_set: true, proxies: None, analysis: Some(Mode::Off), beat_this: Some(false), snapcast_host: Some(None), home_networks: Vec::new() };
+        let saved = Saved { proxies_set: true, proxies: None, analysis: Some(Mode::Off), beat_this: Some(false), snapcast_host: Some(None), home_networks: Vec::new(), guest: Guest::default() };
         let r = combine(seed, &saved);
         assert_eq!((r.proxies, r.analysis, r.beat_this, r.snapcast_host), (None, Mode::Off, false, None), "saved [] is local peers only, over the environment's");
     }

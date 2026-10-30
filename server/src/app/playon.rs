@@ -25,6 +25,9 @@ use super::queue::{PlayedOn, Queue, Repeat};
 use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, RadioBy, from_old};
 use super::{PlaylistService, ToggleError};
 
+mod along;
+pub use along::FollowTarget;
+
 /// A player not heard from (a report, the 30 s heartbeat) for this long is offline, even if its connection still looks
 /// open: a device that lost power or the network leaves the connection open until a write fails, minutes later.
 const LEASE: Duration = Duration::from_secs(75);
@@ -696,6 +699,9 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         secret: String,
     },
+    /// To an app: one short line it shows as a notification while it is not in front (a queue request asked for or
+    /// answered, the owner 2026-10-30). Never taken from outside.
+    Notice { text: String },
 }
 
 impl Command {
@@ -828,6 +834,23 @@ pub struct PlayerView {
     /// `queue_length` 0; the queue itself waits, as do its queues).
     #[ts(type = "\"cratarr\" | \"device\"")]
     pub mode: &'static str,
+    /// The player it follows, by its user and name (decision 0079: listening along): what it plays is kept in line
+    /// with that player's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub following: Option<FollowTarget>,
+    /// The users following it (decision 0079), by name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub followers: Vec<String>,
+    /// Queue requests waiting for its owner's answer (decision 0079); on the asking account's own players only.
+    #[serde(skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<usize>", optional)]
+    pub queue_requests: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// Saved in `players.json`.
@@ -920,6 +943,15 @@ struct Entry {
     device: Option<(Report, Instant)>,
     /// Goes up whenever that list changes, so a page asks for it again.
     kept_version: u64,
+    /// The player it follows (decision 0079), and whether its own listener paused it meanwhile (its pause and resume
+    /// stay its own, the owner 2026-10-30).
+    following: Option<FollowTarget>,
+    held: bool,
+    /// When it was last put in line (a play or a seek sent): its reports just after are not judged.
+    lined: Option<Instant>,
+    /// When it followed (epoch seconds: from, and until once it stopped), the latest last: a play it tells later is
+    /// known as heard while following.
+    follow_spans: Vec<(i64, Option<i64>)>,
 }
 
 /// What a player is: the app; a Kodi (driven by Cratarr, app::kodi); a page in a browser, a player while it is open
@@ -970,6 +1002,10 @@ impl Entry {
             kept: Vec::new(),
             kept_version: 0,
             device: None,
+            following: None,
+            held: false,
+            lined: None,
+            follow_spans: Vec::new(),
         }
     }
 
@@ -1158,6 +1194,10 @@ impl Entry {
             queues: Some(self.queues()),
             queues_version: self.kept_version,
             mode: "cratarr",
+            following: self.following.clone(),
+            // Others' and the requests: filled where all players are known (`view_in`, `list_for`).
+            followers: Vec::new(),
+            queue_requests: 0,
         }
     }
 }
@@ -1269,7 +1309,7 @@ fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Op
     let e = entries.get(name)?;
     let own = e.view(name, with_queue);
     let leader = e.leader.as_deref().filter(|l| *l != name).and_then(|l| Some((l, entries.get(l)?)));
-    Some(match leader {
+    let mut v = match leader {
         Some((l, le)) => PlayerView {
             name: own.name,
             online: own.online,
@@ -1281,10 +1321,13 @@ fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Op
             output: own.output,
             // What the device is (a Kodi stays one, so it is never made a leader).
             kind: own.kind,
+            following: own.following,
             ..le.view(l, with_queue)
         },
         None => own,
-    })
+    };
+    v.followers = along::followers_in(entries, name);
+    Some(v)
 }
 
 /// The one PlayOn, for the Cratarr source's players (decision 0032), which plugins cannot be handed.
@@ -1317,6 +1360,10 @@ pub struct PlayOn {
     stopping: AtomicBool,
     /// The app, for what a play names (app::play: one way to choose for every play); set once it is made.
     app: std::sync::OnceLock<std::sync::Weak<super::App>>,
+    /// Queue requests (decision 0079), kept in memory for two hours.
+    pub requests: super::queue_requests::Requests,
+    /// New requests waiting to be told to their leaders as one notice, by leader (decision 0079).
+    asked: along::Asked,
 }
 
 /// A player's queue as saved, with where it was in it and whether it played.
@@ -1337,6 +1384,11 @@ struct Saved {
     /// Its queues left behind (decision 0033, amended).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     kept: Vec<Kept>,
+    /// The player it follows, and when it followed (decision 0079).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    following: Option<FollowTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    follow_spans: Vec<(i64, Option<i64>)>,
 }
 
 /// A queue left behind (decision 0033, amended: queue history), whole: its tracks with their entries, its repeat,
@@ -1417,6 +1469,7 @@ impl PlayOn {
                 e.owner = s.owner;
                 e.shared = s.shared;
                 e.kept = s.kept;
+                (e.following, e.follow_spans) = (s.following, s.follow_spans);
                 (name, e)
             })
             .collect();
@@ -1438,6 +1491,8 @@ impl PlayOn {
             lan_base: Mutex::new(None),
             stopping: AtomicBool::new(false),
             app: std::sync::OnceLock::new(),
+            requests: Default::default(),
+            asked: Default::default(),
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
@@ -1629,6 +1684,9 @@ impl PlayOn {
                     tracing::info!(target: "playon", player = n.as_str(), reason = "gone quiet", "out of its group");
                     let _ = me.leave(&n).await;
                 }
+                // Following ends once the player followed, or the follower, has been gone a while (decision 0079).
+                me.drop_lost_follows();
+                me.requests.prune();
             }
         });
     }
@@ -1661,7 +1719,8 @@ impl PlayOn {
                     .map(|(n, e)| {
                         let v = e.view(n, false);
                         let (queue, owner, kept) = (e.queue.clone(), e.owner.clone(), e.kept.clone());
-                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner, shared: e.shared, kept })
+                        let (following, follow_spans) = (e.following.clone(), e.follow_spans.clone());
+                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner, shared: e.shared, kept, following, follow_spans })
                     })
                     .collect();
                 drop(me);
@@ -1712,6 +1771,9 @@ impl PlayOn {
         for v in &mut out {
             v.delay_ms = delays.get(&v.name).copied().unwrap_or(0);
             v.grouped = grouped.contains(&v.name);
+            if v.mine {
+                v.queue_requests = self.requests.pending_for(&v.name);
+            }
             super::describe::fill_view(v);
         }
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -1819,6 +1881,9 @@ impl PlayOn {
         let mut v = whose_view(view_in(&entries, name, true)?, entries.get(name)?, whose().as_deref(), first_owner().as_deref());
         drop(entries);
         super::describe::fill_view(&mut v);
+        if v.mine {
+            v.queue_requests = self.requests.pending_for(name);
+        }
         Some(PlayerView { delay_ms: self.delay_of(name), ..v })
     }
 
@@ -1826,6 +1891,20 @@ impl PlayOn {
     #[cfg(test)]
     pub fn connect(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
         self.connect_as(name, PlayerKind::App, None, None)
+    }
+
+    /// Play On over an empty library, with no files kept (other modules' tests).
+    #[cfg(test)]
+    pub async fn for_tests() -> Arc<Self> {
+        tests::play_on().await
+    }
+
+    /// Player `name` made `owner`'s device (the tests').
+    #[cfg(test)]
+    pub fn own(&self, name: &str, owner: &str) {
+        if let Some(e) = self.entries().get_mut(name) {
+            e.owner = Some(owner.to_string());
+        }
     }
 
     /// A player connects: the commands for it come out of the returned stream, which closes the connection when it
@@ -1905,6 +1984,7 @@ impl PlayOn {
         let mut entries = self.entries();
         let e = claim(&mut entries, name, whose().as_deref())?;
         let before = e.view(name, false);
+        let speed_before = e.report.speed_x;
         // The announce channel (0.9.1): each announcement written down once, as it ends, with its timeline.
         if let Some(a) = report.announce.as_ref().filter(|a| a.state != AnnounceState::Playing)
             && e.report.announce.as_ref().is_none_or(|was| was.id != a.id || was.state != a.state)
@@ -2075,6 +2155,17 @@ impl PlayOn {
         // A position that moves on as counted is no news; a jump (a seek) is, and so is each step of Tape rewind's way
         // back (0.9.10), which is not counted on.
         let jumped = before.position_ms.abs_diff(after.position_ms) > 2_000;
+        // Listening along (decision 0079): a leader's change (its track, play or pause, a seek, its speed) puts each of
+        // its followers in line; a follower's own report is checked against its leader.
+        let speed_now = self.entries().get(name).and_then(|e| e.report.speed_x);
+        if key(before.track.as_ref()) != key(after.track.as_ref()) || before.playing != after.playing || jumped || along::rate(speed_before) != along::rate(speed_now) {
+            for f in self.followers_of(name) {
+                self.line_up(&f);
+            }
+        }
+        if after.following.is_some() {
+            self.check_in_line(name);
+        }
         let still = |v: &PlayerView| PlayerView { position_ms: 0, position_at: 0, seen: 0, ..v.clone() };
         if still(&before) != still(&after) || jumped || after.rewinding {
             self.changed();
@@ -2090,6 +2181,8 @@ impl PlayOn {
     /// As [`PlayOn::command`], answered with the command that undoes it: a `restore` for a shuffle or a clear that changed
     /// what was to come (the order before, by entry), else none.
     pub async fn answer(&self, name: &str, command: Command) -> Result<Option<Command>, ToggleError> {
+        // A player that follows another (decision 0079): its queue is the leader's, its pause and resume its own.
+        let Some(command) = self.along(name, command)? else { return Ok(None) };
         // A new queue (not one taken up again, not a radio): Autoplay armed as its account says (0.9.5).
         let new_queue = matches!(&command, Command::Play { queue_id: None, from, .. } if !from.radio);
         let answer = self.answer_now(name, command).await?;
@@ -2147,6 +2240,7 @@ impl PlayOn {
             Command::Join { to } => return self.join(name, &to).await.map(|()| None),
             Command::Leave => return self.leave(name).await.map(|()| None),
             Command::Group { .. } => return Err(ToggleError::Refused("A group is made with join and leave.".into())),
+            Command::Notice { .. } => return Err(ToggleError::Refused("A notice is Cratarr's own.".into())),
             // Played on one player: the group ends (decision 0037).
             Command::Handover { to } => {
                 self.dissolve(name);
@@ -3253,7 +3347,7 @@ mod tests {
     }
 
     /// Play On over an empty library, with no files kept.
-    async fn play_on() -> Arc<PlayOn> {
+    pub(super) async fn play_on() -> Arc<PlayOn> {
         static N: AtomicU64 = AtomicU64::new(0);
         let d = std::env::temp_dir().join(format!("cratarr-playon-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
@@ -3978,4 +4072,175 @@ mod tests {
         assert_eq!(armed(&serde_json::json!({ "autoplay": { "mode": "nonsense" } })), Some((AutoMode::Similar, false)));
     }
 
+    /// Players of accounts, connected: (name, account).
+    fn owned(p: &Arc<PlayOn>, players: &[(&str, &str)]) -> Vec<Commands> {
+        players
+            .iter()
+            .map(|(name, user)| {
+                let c = p.connect(name).unwrap();
+                p.entries().get_mut(*name).unwrap().owner = Some(user.to_string());
+                c
+            })
+            .collect()
+    }
+
+    fn track(id: &str) -> QueueTrack {
+        QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() }
+    }
+
+    /// The leader plays `ids` from the first, `position_ms` into it; its queue's version.
+    async fn leading(p: &Arc<PlayOn>, name: &str, ids: &[&str], position_ms: u64) -> u64 {
+        p.command(name, Command::play(ids.iter().map(|i| track(i)).collect(), 0, 0)).await.unwrap();
+        let version = p.get(name).unwrap().queue_version;
+        p.report(name, Report { index: 0, version: Some(version), position_ms, duration_ms: Some(200_000), playing: true, ..Report::default() }).unwrap();
+        version
+    }
+
+    fn last_play(c: &mut Commands) -> Option<serde_json::Value> {
+        told(c).into_iter().rfind(|m| m["command"] == "play")
+    }
+
+    #[tokio::test]
+    async fn one_opened_to_followers_is_listed_with_the_players_one_may_reach() {
+        let p = play_on().await;
+        let _players = owned(&p, &[("Ann phone", "ann"), ("Salon", "ann"), ("Bob phone", "bob")]);
+        p.entries().get_mut("Salon").unwrap().shared = true;
+        leading(&p, "Ann phone", &["tr-1"], 5_000).await;
+        let open = |u: &str| u == "ann";
+        let listed = |asker: &str, away: bool, open: &dyn Fn(&str) -> bool| {
+            p.leaders(asker, away, open).into_iter().map(|l| (l.user, l.players.into_iter().map(|x| x.name).collect::<Vec<_>>())).collect::<Vec<_>>()
+        };
+        assert_eq!(listed("bob", false, &open), [("ann".to_string(), vec!["Ann phone".to_string(), "Salon".to_string()])]);
+        assert_eq!(listed("bob", true, &open), [("ann".to_string(), vec!["Ann phone".to_string()])], "another's shared player, away: left out");
+        assert!(listed("bob", false, &|_: &str| false).is_empty(), "not open to followers: absent");
+        assert!(listed("ann", false, &|_: &str| true).iter().all(|(u, _)| u != "ann"), "never the asker");
+        let ann = p.leaders("bob", false, &open).remove(0);
+        assert_eq!(ann.players[0].track.as_ref().map(|t| t.id.as_str()), Some("tr-1"));
+    }
+
+    #[tokio::test]
+    async fn a_follower_plays_the_leaders_track_where_the_leader_is_and_asks_instead_of_editing() {
+        let p = play_on().await;
+        let mut players = owned(&p, &[("Ann phone", "ann"), ("Bob phone", "bob")]);
+        let bob = &mut players[1];
+        let version = leading(&p, "Ann phone", &["tr-1", "tr-2"], 30_000).await;
+        said(bob);
+        let to = FollowTarget { user: "ann".into(), player: "Ann phone".into() };
+        assert!(p.follow("bob", "Bob phone", to.clone(), false, false).is_err(), "not open to followers");
+        assert!(p.follow("ann", "Bob phone", to.clone(), false, true).is_err(), "only one's own player follows");
+        p.follow("bob", "Bob phone", to.clone(), false, true).unwrap();
+        let play = last_play(bob).expect("put in line at once");
+        assert_eq!(play["tracks"].as_array().map(Vec::len), Some(1), "the leader's one track");
+        assert_eq!(play["tracks"][0]["id"], "tr-1");
+        let at = play["position_ms"].as_u64().unwrap();
+        assert!((30_000..31_000).contains(&at), "where the leader is now: {at}");
+        assert!(play.get("paused").is_none(), "playing, as the leader is");
+        assert_eq!(p.get("Bob phone").unwrap().following, Some(to.clone()));
+        assert_eq!(p.get("Ann phone").unwrap().followers, ["bob"]);
+
+        // Only the leader edits the queue: Next, Previous and the queue's edits are refused.
+        for c in [
+            Command::Next,
+            Command::Previous,
+            Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()) },
+            Command::Remove { index: Some(0), entry: None },
+            Command::Upcoming { tracks: Vec::new(), shuffled: None },
+        ] {
+            let refused = p.answer("Bob phone", c).await.unwrap_err();
+            assert!(matches!(refused, ToggleError::Refused(_)));
+            assert_eq!(refused.to_string(), "Following ann: ask for a track instead.");
+        }
+
+        // The leader seeks and pauses: the follower too.
+        p.report("Ann phone", Report { index: 0, version: Some(version), position_ms: 90_000, duration_ms: Some(200_000), playing: false, ..Report::default() }).unwrap();
+        let play = last_play(bob).expect("the leader's change");
+        assert_eq!((play["position_ms"].as_u64(), play["paused"].as_bool()), (Some(90_000), Some(true)));
+        // Its next track, playing.
+        p.report("Ann phone", Report { index: 1, version: Some(version), position_ms: 0, duration_ms: Some(200_000), playing: true, ..Report::default() }).unwrap();
+        let play = last_play(bob).expect("the leader's next track");
+        assert_eq!((play["tracks"][0]["id"].as_str(), play.get("paused")), (Some("tr-2"), None));
+
+        // More than two seconds off: sought back to the leader.
+        p.entries().get_mut("Bob phone").unwrap().lined = None;
+        let mine = p.get("Bob phone").unwrap().queue_version;
+        p.report("Bob phone", Report { index: 0, version: Some(mine), position_ms: 9_000, duration_ms: Some(200_000), playing: true, ..Report::default() }).unwrap();
+        let seek = told(bob).into_iter().rfind(|m| m["command"] == "seek").expect("sought back");
+        assert!(seek["position_ms"].as_u64().unwrap() < 2_000);
+
+        // Its pause is its own; its resume catches up with the leader.
+        p.command("Bob phone", Command::Pause).await.unwrap();
+        assert!(said(bob).contains(&"pause".to_string()));
+        assert!(p.entries()["Bob phone"].held);
+        p.command("Bob phone", Command::Resume).await.unwrap();
+        let play = last_play(bob).expect("caught up");
+        assert_eq!((play["tracks"][0]["id"].as_str(), play.get("paused")), (Some("tr-2"), None));
+
+        // Stopped: its own again, and its plays since are its own.
+        assert!(p.unfollow("bob", "Bob phone").unwrap());
+        assert_eq!(p.get("Bob phone").unwrap().following, None);
+        assert!(p.get("Ann phone").unwrap().followers.is_empty());
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        assert!(p.was_following("Bob phone", now - 3), "a play told later is known as heard while following");
+        assert!(!p.was_following("Bob phone", now + 10));
+        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()) };
+        assert!(p.answer("Bob phone", add).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_play_of_something_else_ends_the_following_and_a_closed_leader_ends_it_too() {
+        let p = play_on().await;
+        let _players = owned(&p, &[("Ann phone", "ann"), ("Bob phone", "bob"), ("Bob tablet", "bob")]);
+        leading(&p, "Ann phone", &["tr-1"], 0).await;
+        let to = FollowTarget { user: "ann".into(), player: "Ann phone".into() };
+        p.follow("bob", "Bob phone", to.clone(), false, true).unwrap();
+        let back = FollowTarget { user: "bob".into(), player: "Bob phone".into() };
+        assert!(p.follow("ann", "Ann phone", back, false, true).is_err(), "no chains");
+        p.command("Bob phone", Command::play(vec![track("tr-7")], 0, 0)).await.unwrap();
+        assert_eq!(p.following_of("Bob phone"), None, "its owner played something else: it follows no one");
+        p.follow("bob", "Bob phone", to.clone(), false, true).unwrap();
+        p.follow("bob", "Bob tablet", to, false, true).unwrap();
+        p.end_following_of("ann");
+        assert_eq!((p.following_of("Bob phone"), p.following_of("Bob tablet")), (None, None), "Others may follow me turned off");
+    }
+
+    #[tokio::test]
+    async fn a_queue_request_waits_for_its_leader_and_goes_where_it_says() {
+        use super::super::queue_requests::{Asker, KEEP_SECS, State as Asked};
+        let p = play_on().await;
+        let mut players = owned(&p, &[("Ann phone", "ann"), ("Bob phone", "bob")]);
+        leading(&p, "Ann phone", &["tr-1", "tr-2"], 0).await;
+        let bob = Asker::User("bob".into());
+        let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-9"), "next", None, false).await.unwrap();
+        assert_eq!(r.state, Asked::Pending);
+        assert_eq!(p.requests.waiting_for("ann", Some("Ann phone")).len(), 1);
+        assert_eq!(p.get("Ann phone").unwrap().queue_requests, 1, "the leader's player carries the count");
+        // Only the leader answers (or an administrator).
+        assert!(matches!(p.accept(&r.id, "carl", false).await, Err(ToggleError::Forbidden(_))));
+        said(&mut players[1]);
+        assert_eq!(p.accept(&r.id, "ann", false).await.unwrap().state, Asked::Accepted);
+        let queue = p.get("Ann phone").unwrap().queue.unwrap();
+        assert_eq!((queue[1].id.as_str(), queue[1].lane.as_deref()), ("tr-9", Some("next")), "played next");
+        let notice = |c: &mut Commands| told(c).into_iter().filter(|m| m["command"] == "notice").map(|m| m["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(notice(&mut players[1]), ["ann added your request: tr-9"], "the asker's app is told");
+        assert_eq!(p.get("Ann phone").unwrap().queue_requests, 0);
+
+        let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-8"), "last", None, false).await.unwrap();
+        assert_eq!(p.decline(&r.id, "ann", false).unwrap().state, Asked::Declined);
+        assert!(p.requests.waiting_for("ann", None).is_empty(), "out of the leader's list at once");
+        assert_eq!(p.requests.of_user("bob")[0].state, Asked::Declined, "the asker sees it declined");
+        assert_eq!(notice(&mut players[1]), ["ann declined: tr-8"]);
+        let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-8"), "last", None, false).await.unwrap();
+        assert!(p.decline(&r.id, "carl", true).is_ok(), "an administrator answers too");
+
+        // Marked by the leader: straight in, at the end as asked.
+        let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-6"), "last", None, true).await.unwrap();
+        assert_eq!(r.state, Asked::Accepted);
+        assert_eq!(p.get("Ann phone").unwrap().queue.unwrap().iter().filter(|t| t.id == "tr-6").count(), 1);
+
+        // Two hours on, a request has expired.
+        let r = p.ask_for(bob, "Ann phone", "ann", track("tr-5"), "next", None, false).await.unwrap();
+        p.requests.age(&r.id, KEEP_SECS);
+        assert!(p.accept(&r.id, "ann", false).await.is_err());
+        assert_eq!(p.get("Ann phone").unwrap().queue_requests, 0);
+    }
 }

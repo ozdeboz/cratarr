@@ -2,6 +2,7 @@
 import type { Announcing } from "./Announcing";
 import type { AudioOutput } from "./AudioOutput";
 import type { AutoplayView } from "./AutoplayView";
+import type { FollowTarget } from "./FollowTarget";
 import type { PlayerLink } from "./PlayerLink";
 import type { QueueItem } from "./QueueItem";
 import type { QueueTrack } from "./QueueTrack";
@@ -149,4 +150,17 @@ queues_version: number,
  * `state` and `position_ms` are that music's, and nothing of Cratarr's queue plays (`track` none, `index` -1,
  * `queue_length` 0; the queue itself waits, as do its queues).
  */
-mode: "cratarr" | "device", track_id: string | null, album_id: string | null, album_artist: string | null, };
+mode: "cratarr" | "device", 
+/**
+ * The player it follows, by its user and name (decision 0079: listening along): what it plays is kept in line
+ * with that player's.
+ */
+following?: FollowTarget, 
+/**
+ * The users following it (decision 0079), by name.
+ */
+followers?: Array<string>, 
+/**
+ * Queue requests waiting for its owner's answer (decision 0079); on the asking account's own players only.
+ */
+queue_requests?: number, track_id: string | null, album_id: string | null, album_artist: string | null, };

@@ -34,7 +34,9 @@ fn text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 
 /// What anyone may load: the sign-in page (and signing out), the web app's manifest, service worker and icons, the
 /// health check, the proxy's check, the OpenSubsonic API, and Last.fm's and Spotify's ways back from a sign-in. Plain paths only: none that a server could read as
-/// another one (`..`, encoded dots or slashes, doubled slashes).
+/// another one (`..`, encoded dots or slashes, doubled slashes). Also the guest portal (decision 0079), whose routes
+/// answer only at home while it is on (`guest`), and the built page's fingerprinted code and styles (`/assets/`), the
+/// open-source app's own, which the guest page loads without a session.
 pub fn public(uri: &str) -> bool {
     let path = path_of(uri);
     let lower = path.to_ascii_lowercase();
@@ -46,7 +48,10 @@ pub fn public(uri: &str) -> bool {
             || path.starts_with("/api/scrobble/lastfm/callback/")
             // Spotify's way back (decision 0073), found by its one-time `state` (`app::spotify::web::take_pending`).
             || path == "/api/spotify/callback"
-            || path.starts_with("/rest/"))
+            || path.starts_with("/rest/")
+            || path == "/guest"
+            || path.starts_with("/api/guest/")
+            || path.starts_with("/assets/"))
 }
 
 /// A browser loading a page (not a script's request, nor a picture's): it can be sent to the sign-in page.

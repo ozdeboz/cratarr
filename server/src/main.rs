@@ -82,8 +82,12 @@ fn healthcheck() -> i32 {
 /// throttle reads it where no proxy names the client. Each request's id around all of it, the sign-in layer's refusals
 /// too (decision 0045). The whole router, as `main` serves it and the tests sweep it (`whole_router`).
 fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -> axum::Router {
+    let on = app.play_on.clone();
     api::router(app)
         .merge(serve::routes::router(served.clone()))
+        // Listening along and the guest portal (decision 0079).
+        .merge(serve::along::router(on.clone(), served.clone()))
+        .merge(serve::guest::router(on, served.clone()))
         // A change sent again with its key (a page's offline changes) made once, inside the access check (whose it is).
         .layer(axum::middleware::from_fn(idempotent::once))
         .layer(axum::middleware::from_fn_with_state(served, serve::access::require))
