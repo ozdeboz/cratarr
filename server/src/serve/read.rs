@@ -796,13 +796,33 @@ impl Library {
         Ok(rows.filter_map(|r| r.ok()).filter(|m| crate::app::discogs::is_mbid(m)).collect())
     }
 
-    /// The albums whose type is not known, or only guessed (0.9.6: asked of Discogs): (id, MusicBrainz release, artist,
-    /// name).
-    pub fn albums_without_type(&self) -> Result<Vec<(String, String, String, String)>> {
+    /// The albums whose type is not known, only guessed, or Discogs' (0.9.6: asked of Discogs; 0.10: Discogs' own asked
+    /// again where an older rule found them): (id, MusicBrainz release, artist, name, tracks, length in ms).
+    pub fn albums_to_type(&self) -> Result<Vec<(String, String, String, String, usize, u64)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, coalesce(mbid, ''), artist, name FROM albums WHERE release_type IS NULL OR type_from = 'guess' ORDER BY n")?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        let mut st = db.prepare(
+            "SELECT id, coalesce(mbid, ''), artist, name, song_count, duration_ms FROM albums
+             WHERE release_type IS NULL OR type_from IN ('guess', 'discogs') ORDER BY n",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)?.max(0) as usize, r.get::<_, i64>(5)?.max(0) as u64)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Each album's tracks and length (ms) by its MusicBrainz release (0.10: an edition compared with its release
+    /// group's first release); of albums sharing a release, the one of more tracks.
+    pub fn release_sizes(&self) -> Result<HashMap<String, (usize, u64)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT mbid, song_count, duration_ms FROM albums WHERE mbid IS NOT NULL AND mbid <> ''")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as usize, r.get::<_, i64>(2)?.max(0) as u64)))?;
+        let mut out: HashMap<String, (usize, u64)> = HashMap::new();
+        for row in rows {
+            let (release, tracks, ms) = row?;
+            let e = out.entry(release).or_insert((tracks, ms));
+            if tracks > e.0 {
+                *e = (tracks, ms);
+            }
+        }
+        Ok(out)
     }
 
     /// Each song's album's release types as the axes show them ("EP", "Live"), primary first (0.9.6); songs of albums of

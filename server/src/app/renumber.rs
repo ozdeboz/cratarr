@@ -269,7 +269,7 @@ pub(super) async fn group_releases(http: &reqwest::Client, rg: &str) -> Result<V
 // ---- Discogs
 
 /// "4:05" as seconds.
-fn duration(s: &str) -> Option<u32> {
+pub(super) fn duration(s: &str) -> Option<u32> {
     let mut secs = 0u32;
     for part in s.trim().split(':') {
         secs = secs * 60 + part.trim().parse::<u32>().ok()?;

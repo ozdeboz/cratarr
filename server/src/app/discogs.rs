@@ -256,19 +256,84 @@ pub fn is_mbid(id: &str) -> bool {
 /// An album's master: MusicBrainz's link from its release group, else Discogs' search by artist and title (with the
 /// key only: Discogs' search needs it), the first whose "Artist - Title" is the album's.
 pub async fn master_of(release_group: Option<&str>, artist: &str, title: &str) -> Result<Option<u64>> {
+    Ok(masters_of(release_group, artist, title).await?.into_iter().next())
+}
+
+/// An album's possible masters: MusicBrainz's link from its release group alone, else every one of Discogs' first five
+/// search results whose "Artist - Title" is the album's, in the search's order (a same-named single or EP among them).
+async fn masters_of(release_group: Option<&str>, artist: &str, title: &str) -> Result<Vec<u64>> {
     if let Some(rg) = release_group
         && let Some(id) = id_in(&mb_links("release-group", rg).await?, "master")
     {
-        return Ok(Some(id));
+        return Ok(vec![id]);
     }
     if artist.trim().is_empty() || title.trim().is_empty() || saved().await.is_none() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let mut q = reqwest::Url::parse("https://x/database/search")?;
     q.query_pairs_mut().append_pair("type", "master").append_pair("artist", artist).append_pair("release_title", title).append_pair("per_page", "5");
-    let Some(v) = get(&format!("/database/search?{}", q.query().unwrap_or_default())).await? else { return Ok(None) };
+    let Some(v) = get(&format!("/database/search?{}", q.query().unwrap_or_default())).await? else { return Ok(Vec::new()) };
     let want = super::import::loose(&format!("{artist} - {title}"));
-    Ok(v["results"].as_array().into_iter().flatten().find(|r| r["title"].as_str().is_some_and(|t| super::import::loose(t) == want)).and_then(|r| r["id"].as_u64()))
+    Ok(v["results"].as_array().into_iter().flatten().filter(|r| r["title"].as_str().is_some_and(|t| super::import::loose(t) == want)).filter_map(|r| r["id"].as_u64()).collect())
+}
+
+/// A Discogs release's tracklist as counted: its tracks (an index track's parts each one, headings none), and their
+/// length (s) where every one has one.
+fn tracklist_size(release: &Value) -> (usize, Option<u64>) {
+    let (mut n, mut secs) = (0usize, Some(0u64));
+    for t in release["tracklist"].as_array().into_iter().flatten() {
+        let parts: Vec<&Value> = match t["type_"].as_str() {
+            Some("heading") => continue,
+            Some("index") => match t["sub_tracks"].as_array() {
+                Some(s) if !s.is_empty() => s.iter().collect(),
+                _ => vec![t],
+            },
+            _ => vec![t],
+        };
+        for p in parts {
+            n += 1;
+            secs = secs.zip(p["duration"].as_str().and_then(super::renumber::duration)).map(|(a, b)| a + u64::from(b));
+        }
+    }
+    (n, secs.filter(|_| n > 0))
+}
+
+/// Whether a Discogs release is the album (0.10, the owner: albums were typed from their same-named single): by length
+/// where Discogs gives every track's, within 15%; else by tracks, within two or a fifth, whichever is more. An empty
+/// tracklist is never the album.
+fn fits((n, length): (usize, Option<u64>), tracks: usize, secs: u64) -> bool {
+    if n == 0 || tracks == 0 {
+        return false;
+    }
+    match length {
+        Some(l) if secs > 0 => l.abs_diff(secs) * 100 <= secs * 15,
+        _ => n.abs_diff(tracks) <= 2 || n.abs_diff(tracks) * 5 <= tracks,
+    }
+}
+
+/// The main release of the first of the album's masters that `fits` it, each asked in turn (`main_release`); none where
+/// none does: the type is then left unknown, never taken from another record.
+async fn fitting_release<F, Fut>(masters: Vec<u64>, tracks: usize, secs: u64, mut main_release: F) -> Result<Option<Value>>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<Value>>>,
+{
+    for m in masters {
+        if let Some(r) = main_release(m).await?
+            && fits(tracklist_size(&r), tracks, secs)
+        {
+            return Ok(Some(r));
+        }
+    }
+    Ok(None)
+}
+
+/// A master's main release as Discogs gives it.
+async fn main_release_of(master_id: u64) -> Result<Option<Value>> {
+    match master(master_id).await?.and_then(|m| m.main_release) {
+        Some(id) => release_raw(id).await,
+        None => Ok(None),
+    }
 }
 
 /// Some of a master's releases (its `main` one left out: the master's images are its), each with what it is
@@ -372,18 +437,19 @@ pub fn start() {
     });
 }
 
-/// Albums whose type MusicBrainz did not give (0.9.6): their master's main release's format descriptions ("EP",
-/// "Single", "LP", "Compilation"), kept by album (`dc:<album id>`). An album with a MusicBrainz release waits until
-/// MusicBrainz was asked about it.
+/// Albums whose type MusicBrainz did not give (0.9.6): the format descriptions ("EP", "Single", "LP", "Compilation")
+/// of the main release of the first of their masters whose tracklist fits the album (0.10), kept by album
+/// (`dc:<album id>`). An album with a MusicBrainz release waits until MusicBrainz was asked about it; one Discogs typed
+/// by an older rule is asked again (`UserData::release_types_asked`).
 async fn types_pass() -> Result<()> {
     let Some(served) = crate::serve::instance() else { return Ok(()) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<(String, String, String, String)> = tokio::task::spawn_blocking(move || -> Result<_> {
+    let due: Vec<(String, String, String, String, usize, u64)> = tokio::task::spawn_blocking(move || -> Result<_> {
         let asked = ud.release_types_asked("dc:", now - GENRES_AGAIN_SECS)?;
         let mb = ud.release_types_asked("mb:", 0)?;
         Ok(lib
-            .albums_without_type()?
+            .albums_to_type()?
             .into_iter()
             .filter(|a| !asked.contains(&a.0) && (!is_mbid(&a.1) || mb.contains(&a.1)))
             .take(GENRES_BATCH)
@@ -395,26 +461,22 @@ async fn types_pass() -> Result<()> {
     }
     let http = super::discover::http()?;
     let mut found = Vec::new();
-    for (album, release, artist, title) in due {
+    for (album, release, artist, title, tracks, duration_ms) in due {
         let rg = match is_mbid(&release) {
             true => release_group_of(&http, &release).await.unwrap_or_default(),
             false => None,
         };
-        let main = match master_of(rg.as_deref(), &artist, &title).await {
-            Ok(Some(id)) => master(id).await?.and_then(|m| m.main_release),
-            Ok(None) => None,
+        let masters = match masters_of(rg.as_deref(), &artist, &title).await {
+            Ok(m) => m,
             Err(e) => {
                 tracing::info!("discogs: {artist} – {title}: {e:#}");
                 continue;
             }
         };
-        let words: Vec<String> = match main {
-            Some(id) => release_raw(id)
-                .await?
-                .map(|v| v["formats"].as_array().into_iter().flatten().flat_map(|f| f["descriptions"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect::<Vec<_>>()).collect())
-                .unwrap_or_default(),
-            None => Vec::new(),
-        };
+        let words: Vec<String> = fitting_release(masters, tracks, duration_ms / 1000, main_release_of)
+            .await?
+            .map(|v| v["formats"].as_array().into_iter().flatten().flat_map(|f| f["descriptions"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect::<Vec<_>>()).collect())
+            .unwrap_or_default();
         let (primary, secondary) = crate::serve::library::release_words(words.iter().map(String::as_str));
         found.push((format!("dc:{album}"), primary, secondary));
     }
@@ -499,6 +561,54 @@ mod tests {
         i.sort_by_key(|i| !i.primary);
         assert_eq!(i.iter().map(|i| i.url.as_str()).collect::<Vec<_>>(), ["https://i.discogs.com/a.jpg", "https://i.discogs.com/b.jpg"]);
         assert_eq!(i[0].width, Some(600));
+    }
+
+    /// A release as Discogs gives it: one track a length ("" for none), and its format descriptions.
+    fn release(lengths: &[&str], descriptions: &[&str]) -> Value {
+        let tracks: Vec<Value> = lengths
+            .iter()
+            .enumerate()
+            .map(|(i, d)| serde_json::json!({ "position": (i + 1).to_string(), "type_": "track", "title": format!("Track {}", i + 1), "duration": d }))
+            .collect();
+        serde_json::json!({ "formats": [{ "name": "CD", "descriptions": descriptions }], "tracklist": tracks })
+    }
+
+    #[test]
+    fn a_tracklist_counts_its_tracks_and_their_length_where_every_one_has_one() {
+        let v = serde_json::json!({ "tracklist": [
+            { "type_": "heading", "title": "Act 1" },
+            { "type_": "index", "title": "Scene 1", "sub_tracks": [{ "type_": "track", "duration": "10:00" }, { "type_": "track", "duration": "5:00" }] },
+            { "type_": "track", "duration": "1:02:03" }
+        ] });
+        assert_eq!(tracklist_size(&v), (3, Some(15 * 60 + 3723)));
+        assert_eq!(tracklist_size(&release(&["4:00", ""], &[])), (2, None), "one without a length: none for all");
+        assert_eq!(tracklist_size(&serde_json::json!({})), (0, None));
+    }
+
+    #[test]
+    fn a_release_fits_the_album_by_length_where_known_else_by_tracks() {
+        assert!(fits((14, None), 12, 3000) && fits((24, None), 20, 3000), "within two, or a fifth");
+        assert!(!fits((16, None), 12, 3000));
+        assert!(fits((13, Some(66 * 60)), 9, 60 * 60), "the length decides where Discogs gives it");
+        assert!(!fits((12, Some(75 * 60)), 12, 60 * 60));
+        assert!(!fits((0, None), 12, 3000), "an empty tracklist never");
+        // Die Walküre, 220 minutes, typed an EP from a four-track release: not the album, with lengths or without.
+        assert!(!fits(tracklist_size(&release(&["6:00"; 4], &["EP"])), 40, 220 * 60));
+        assert!(!fits(tracklist_size(&release(&[""; 4], &["EP"])), 40, 220 * 60));
+    }
+
+    #[tokio::test]
+    async fn a_master_whose_release_does_not_fit_is_passed_over_for_a_later_one_that_does() {
+        // Since I Left You: the title track's single (four tracks, 22 minutes) found first, the album (18, an hour) after.
+        let single = release(&["5:30"; 4], &["Single"]);
+        let album = release(&["3:20"; 18], &["Album"]);
+        let mains: std::collections::HashMap<u64, Value> = [(1, single), (2, album.clone())].into();
+        let ask = |m: u64| {
+            let r = mains.get(&m).cloned();
+            async move { Ok::<_, anyhow::Error>(r) }
+        };
+        assert_eq!(fitting_release(vec![1, 2], 18, 3600, &ask).await.unwrap(), Some(album));
+        assert_eq!(fitting_release(vec![1], 18, 3600, &ask).await.unwrap(), None, "none fits: no type, never the single's");
     }
 }
 
