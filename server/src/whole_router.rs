@@ -79,6 +79,10 @@ async fn every_route_is_behind_the_sign_in_and_is_there() {
                 assert_eq!(status, StatusCode::UNAUTHORIZED, "{m} {path} without a way in");
             }
         }
+        // The guest page and its routes answer only at home (decision 0079): away, as this sweep is, nothing is there.
+        if path == "/guest" || path.starts_with("/api/guest/") {
+            continue;
+        }
         // A method no route has: the path is there (405), not the fallback's.
         let req = Request::builder()
             .method(Method::from_bytes(b"PROPFIND").unwrap())

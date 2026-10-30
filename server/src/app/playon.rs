@@ -4273,7 +4273,7 @@ mod tests {
         let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-8"), "last", None, false).await.unwrap();
         assert_eq!(p.decline(&r.id, "ann", false).unwrap().state, Asked::Declined);
         assert!(p.requests.waiting_for("ann", None).is_empty(), "out of the leader's list at once");
-        assert_eq!(p.requests.of_user("bob")[0].state, Asked::Declined, "the asker sees it declined");
+        assert_eq!(p.requests.of_user("bob").iter().find(|q| q.id == r.id).unwrap().state, Asked::Declined, "the asker sees it declined");
         assert_eq!(notice(&mut players[1]), ["ann declined: tr-8"]);
         let r = p.ask_for(bob.clone(), "Ann phone", "ann", track("tr-8"), "last", None, false).await.unwrap();
         assert!(p.decline(&r.id, "carl", true).is_ok(), "an administrator answers too");

@@ -200,7 +200,9 @@ pub const SETTLE_MS: i64 = 5_000;
 
 /// The notices new requests make (decision 0079): those within [`SETTLE_MS`] of the one before go as one, sent once
 /// none follows for that long: its own line when it is one ("Ann asks for So What"), else how many. Each request as
-/// (when, ms; its line); the notices as (when sent, ms; the line). Pure: the leader's timer runs the same rule.
+/// (when, ms; its line); the notices as (when sent, ms; the line). Pure, for the tests: the leader's timer
+/// (`PlayOn::tell_leader`) runs the same rule as it goes.
+#[cfg(test)]
 pub fn notices(asked: &[(i64, String)]) -> Vec<(i64, String)> {
     let mut sorted: Vec<&(i64, String)> = asked.iter().collect();
     sorted.sort_by_key(|(at, _)| *at);
@@ -219,6 +221,7 @@ pub fn notices(asked: &[(i64, String)]) -> Vec<(i64, String)> {
     out
 }
 
+#[cfg(test)]
 fn told(burst: &[&(i64, String)]) -> (i64, String) {
     let last = burst.last().map_or(0, |(at, _)| *at);
     (last + SETTLE_MS, line_of(&burst.iter().map(|(_, l)| l.clone()).collect::<Vec<_>>()))
