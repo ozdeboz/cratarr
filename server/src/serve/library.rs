@@ -1817,7 +1817,7 @@ mod tests {
 
     #[test]
     fn a_genre_is_found_by_its_aliases_in_search() {
-        // 0.12: one matcher, genre aliases from MusicBrainz; the hand list alone here (nothing is fetched in the tests).
+        // 0.12: one matcher, genre aliases (the rules crate's hand-kept list).
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();
         lib.db().execute("INSERT INTO genres (name, song_count, album_count) VALUES ('Drum and Bass', 4, 1), ('Dub', 9, 2), ('R&B', 2, 1)", []).unwrap();

@@ -175,6 +175,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/artists/related", get(artist_related))
         .route("/api/search", get(search_all))
         .route("/api/search/beyond", get(search_beyond))
+        .route("/api/genres/aliases", get(genre_aliases))
         .route("/api/artists/picks", get(artist_picks))
         .route("/api/crates/fits", get(crate_fits))
         .route("/api/home/heard", post(home_heard))
@@ -5601,6 +5602,12 @@ async fn search_all(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>) -
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(answer))
+}
+
+/// The library's genres with the other names they go by (0.12: one matcher, genre aliases, the hand-kept list), those
+/// with none left out: `{"<genre as in the library>": ["alias", …]}`, each genre's `aliases` for the page's matcher.
+async fn genre_aliases(State(app): State<Arc<App>>) -> Result<Json<std::collections::BTreeMap<String, Vec<String>>>, ApiError> {
+    Ok(Json(crate::app::search::genre_aliases(&app).await.map_err(ToggleError::from)?))
 }
 
 /// Beyond the library (0076, the unindexed universe): MusicBrainz's albums and Discogs' masters for the words, together,

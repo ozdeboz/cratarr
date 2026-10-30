@@ -138,8 +138,8 @@ fn score(title: &str, words: &[String], at: usize, of: usize) -> f32 {
 }
 
 /// The library's words of one kind the words find (0.9.7, `app::words`), in the index's order, each with its score. A
-/// genre or a style by its name or one of its aliases (0.12: one matcher, genre aliases from MusicBrainz, whose genre
-/// list names Cratarr's styles too: "dnb" finds Drum and Bass); a mood, a tag or a label by its name.
+/// genre or a style by its name or one of its aliases (0.12: one matcher, genre aliases, the hand-kept list, which
+/// names Cratarr's styles too: "dnb" finds Drum and Bass); a mood, a tag or a label by its name.
 fn word_hits<'a>(index: &'a [(&'static str, String, usize)], kind: &str, w: &[String]) -> Vec<(&'a (&'static str, String, usize), f32)> {
     let aliased = matches!(kind, "genre" | "style");
     let found: Vec<(&(&'static str, String, usize), Option<cratarr_rules::matcher::Name>)> = index
@@ -166,6 +166,23 @@ fn word_hits<'a>(index: &'a [(&'static str, String, usize)], kind: &str, w: &[St
             (e, s)
         })
         .collect()
+}
+
+/// The library's genres with the other names they go by (0.12: one matcher, genre aliases; `GET /api/genres/aliases`,
+/// what the page's matcher is given as each genre's `aliases`), those with none left out: the genres the library reads
+/// from its files and those its words name (`words::search_index`, the genre crates' and search's), as written there.
+pub async fn genre_aliases(app: &super::App) -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+    let Some(served) = app.served.clone() else { return Ok(BTreeMap::new()) };
+    let cat = app.library.catalogue();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<BTreeMap<String, Vec<String>>> {
+        let mut genres: Vec<String> = served.library.genres()?.into_iter().map(|(g, _, _)| g).collect();
+        match super::words::search_index(&served, &cat) {
+            Ok(index) => genres.extend(index.iter().filter(|(kind, ..)| *kind == "genre").map(|(_, g, _)| g.clone())),
+            Err(e) => tracing::debug!("genre aliases: the library's words not read: {e:#}"),
+        }
+        Ok(crate::search::library_genre_aliases(genres.iter().map(String::as_str)))
+    })
+    .await?
 }
 
 fn matched_name(title: &str) -> Vec<Matched> {
@@ -555,7 +572,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     composers: Vec::new(),
                     id: None,
                     request: None,
-                    // By its name or an alias (0.12: one matcher, genre aliases from MusicBrainz).
+                    // By its name or an alias (0.12: one matcher, genre aliases).
                     score: crate::search::rank_name(&crate::search::genre_name(g), &w, i, n),
                     matched: matched_name(g),
                 })
@@ -823,7 +840,7 @@ mod tests {
 
     #[test]
     fn a_genre_word_is_found_by_its_aliases_and_a_tag_only_by_its_name() {
-        // 0.12: one matcher, genre aliases from MusicBrainz; the hand list alone here (nothing fetched in the tests).
+        // 0.12: one matcher, genre aliases (the rules crate's hand-kept list).
         let index: Vec<(&'static str, String, usize)> =
             vec![("genre", "Dub".into(), 9), ("genre", "Drum and Bass".into(), 3), ("style", "R&B".into(), 2), ("tag", "Drum and Bass".into(), 5), ("tag", "dnb tapes".into(), 1)];
         let w = words("dnb");

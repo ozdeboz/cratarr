@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use cratarr_rules::matcher;
-use cratarr_rules::matcher::aliases::Groups;
+use cratarr_rules::matcher::aliases;
 
 /// The words of a query, as every search reads them (the rules crate's `matcher::words`, 0.12).
 pub fn words(q: &str) -> Vec<String> {
@@ -25,7 +25,7 @@ pub fn matches(text: &str, words: &[String]) -> bool {
     !words.is_empty() && (typos(text, words).is_some() || matcher::score(&words.join(" "), text).is_some())
 }
 
-/// Whether a name or one of its aliases holds the words (0.12: one matcher, genre aliases from MusicBrainz): as
+/// Whether a name or one of its aliases holds the words (0.12: one matcher, genre aliases): as
 /// `matches` for its name, and the matcher's for the name with its aliases ("dnb" finds Drum and Bass, `How::Alias`).
 pub fn matches_name(name: &matcher::Name, words: &[String]) -> bool {
     matches(&name.text, words) || (!name.aliases.is_empty() && !words.is_empty() && matcher::score_name(&words.join(" "), name).is_some())
@@ -35,7 +35,7 @@ pub fn matches_name(name: &matcher::Name, words: &[String]) -> bool {
 /// as whole words, below the name itself.
 const ALIAS_RANK: f32 = 4.9;
 
-/// `rank` for a name with its aliases (0.12: one matcher, genre aliases from MusicBrainz): by its own name as `rank`
+/// `rank` for a name with its aliases (0.12: one matcher, genre aliases): by its own name as `rank`
 /// has it; a name all of one of its aliases (`How::Alias`) at `ALIAS_RANK`, as the matcher puts an alias right after
 /// the name itself; an alias begun or alike as the matcher's trigrams rank (from 0.5, by its score).
 pub fn rank_name(name: &matcher::Name, words: &[String], at: usize, of: usize) -> f32 {
@@ -51,32 +51,22 @@ pub fn rank_name(name: &matcher::Name, words: &[String], at: usize, of: usize) -
     }
 }
 
-/// The other names genres go by (0.12: one matcher, genre aliases from MusicBrainz): the rules crate's hand list
-/// (`aliases::GENRES`, so aliases work before MusicBrainz was asked, and offline) with MusicBrainz's genres and their
-/// aliases as the background pass keeps them (`app::genre_aliases`). Each genre asked keeps its aliases here (only the
-/// library's genres are asked: by search, the words' kinds and the page), until the list changes.
+/// The other names genres go by (0.12: one matcher, genre aliases): the rules crate's hand-kept list
+/// (`aliases::GENRES`; the owner, 2026-10-30: no reading of MusicBrainz's website, the list extended when a gap is
+/// found). Each genre asked keeps its aliases here; only the library's genres are asked (by search, the words' kinds
+/// and the page).
+#[derive(Default)]
 pub struct GenreAliases {
-    groups: Groups,
     of: HashMap<String, Arc<[String]>>,
 }
 
 impl GenreAliases {
-    /// The hand list alone.
-    pub fn seed() -> Self {
-        Self { groups: Groups::seed(), of: HashMap::new() }
-    }
-
-    /// The hand list, then MusicBrainz's genres as kept (each its name first, then its aliases).
-    pub fn with(fetched: &[Vec<String>]) -> Self {
-        Self { groups: Groups::with_seed(fetched), of: HashMap::new() }
-    }
-
     /// A genre's aliases, by the genre as written in the library; none for a genre in no group.
     pub fn of(&mut self, genre: &str) -> Arc<[String]> {
         if let Some(a) = self.of.get(genre) {
             return a.clone();
         }
-        let a: Arc<[String]> = self.groups.of(genre).into();
+        let a: Arc<[String]> = aliases::genre(genre).into();
         self.of.insert(genre.to_string(), a.clone());
         a
     }
@@ -100,19 +90,12 @@ impl GenreAliases {
     }
 }
 
-/// The server's genre aliases: the hand list until the kept list is read (`set_genre_aliases`).
+/// The server's genre aliases, each library genre's worked out once.
 static GENRE_ALIASES: Mutex<Option<GenreAliases>> = Mutex::new(None);
 
 fn genre_aliases<T>(f: impl FnOnce(&mut GenreAliases) -> T) -> T {
     let mut g = GENRE_ALIASES.lock().unwrap_or_else(|p| p.into_inner());
-    f(g.get_or_insert_with(GenreAliases::seed))
-}
-
-/// MusicBrainz's genres with their aliases as kept, after the hand list (each its name first): every genre's aliases
-/// read again from them.
-pub fn set_genre_aliases(fetched: &[Vec<String>]) {
-    let made = GenreAliases::with(fetched);
-    *GENRE_ALIASES.lock().unwrap_or_else(|p| p.into_inner()) = Some(made);
+    f(g.get_or_insert_with(GenreAliases::default))
 }
 
 /// A genre of the library as the matcher takes it (0.12): its name with the other names it goes by.
@@ -354,8 +337,8 @@ mod tests {
 
     #[test]
     fn a_genre_is_found_by_its_aliases_and_ranks_below_its_own_name() {
-        // 0.12: one matcher, genre aliases from MusicBrainz. The hand list alone, nothing fetched.
-        let mut seed = GenreAliases::seed();
+        // 0.12: one matcher, genre aliases (the hand-kept list).
+        let mut seed = GenreAliases::default();
         let dnb = seed.name("Drum and Bass");
         let q = words("dnb");
         assert!(!matches("Drum and Bass", &q) && matches_name(&dnb, &q));
@@ -368,24 +351,16 @@ mod tests {
     }
 
     #[test]
-    fn the_aliases_kept_from_musicbrainz_join_the_hand_list_for_the_librarys_genres_only() {
-        // MusicBrainz's answer as kept (`app::genre_aliases`): each genre its name first, then its aliases.
-        let kept: Vec<Vec<String>> = vec![
-            vec!["hip hop".into(), "hip-hop".into(), "rap".into()],
-            vec!["shoegaze".into(), "shoegazing".into()],
-            vec!["drum and bass".into(), "d'n'b".into(), "dnb".into(), "drumandbass".into()],
-        ];
-        let mut g = GenreAliases::with(&kept);
-        assert_eq!(&*g.of("Hip-Hop"), ["rap"]);
-        assert!(matches_name(&g.name("Hip Hop"), &words("rap")));
-        assert!(matches_name(&g.name("Drum and Bass"), &words("dnb")), "the hand list still there");
-        // The library's genres only, as written there; one in no group is left out, one the library lacks never asked.
-        let library = g.library(["Hip Hop", "Drum & Bass", "Jazz"]);
-        assert_eq!(library.keys().collect::<Vec<_>>(), ["Drum & Bass", "Hip Hop"]);
-        assert_eq!(library["Hip Hop"], ["rap"]);
-        assert!(library["Drum & Bass"].contains(&"DnB".to_string()));
-        assert!(!library.contains_key("Shoegaze") && !library.contains_key("shoegaze"));
-        assert!(GenreAliases::seed().library(["Hip Hop", "Shoegaze"]).is_empty(), "nothing fetched: the hand list knows neither");
+    fn the_page_gets_the_aliases_of_the_librarys_genres_only() {
+        // `GET /api/genres/aliases`: the library's genres as written there; one in no group is left out, and a genre the
+        // library lacks is never there (its aliases with it).
+        let mut g = GenreAliases::default();
+        let library = g.library(["Drum & Bass", "R&B", "Jazz"]);
+        assert_eq!(library.keys().collect::<Vec<_>>(), ["Drum & Bass", "R&B"]);
+        assert_eq!(library["Drum & Bass"], ["Drum and Bass", "Drum 'n' Bass", "DnB", "D&B"]);
+        assert_eq!(library["R&B"], ["Rhythm and Blues", "RnB"]);
+        assert!(!library.contains_key("Drum and Bass") && !library.contains_key("Jazz"));
+        assert!(GenreAliases::default().library(["Jazz", "Shoegaze"]).is_empty(), "no genre of the list: nothing");
     }
 
     #[test]

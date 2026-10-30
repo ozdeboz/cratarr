@@ -736,7 +736,7 @@ impl Library {
         let listed = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
         let mut tracks = pick(&listed, &ranked(listed.iter().map(|t| t.title.as_str()).collect()));
         self.song_artists(&db, &mut tracks)?;
-        // Genres, by their name or one of its aliases (0.12: one matcher, genre aliases from MusicBrainz: "dnb" finds
+        // Genres, by their name or one of its aliases (0.12: one matcher, genre aliases: "dnb" finds
         // Drum and Bass; `search::genre_name`).
         let mut st = db.prepare_cached("SELECT name, song_count FROM genres")?;
         let mut genres: Vec<(f32, String, u32)> = st
