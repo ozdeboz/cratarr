@@ -399,6 +399,10 @@ export const GRID = declared(
     knob('jitter', 'Jitter', 0, 1, 0, 'level'),
     knob('drift', 'Drift', 0, 2, 0.4, 'level'),
     knob('return', 'Return', 0, 3, 0.6, 'level'),
+    // Prototype (2026-10-30): Fit Screen works the spacing (and the rows' columns) out from the count so the points
+    // cover the screen, Cover times it (room to turn and sway); Fit Spacing, the default, as before.
+    choices(knob('fit', 'Fit', 0, 1, 0, 'step'), ['Spacing', 'Screen']),
+    knob('cover', 'Cover', 1, 2, 1.2),
   ],
   // A flow cabled in (a Field's) carries its points along it, at Drift, each pulled back to its place at Return; points
   // cabled into At (a Flame's parts) each get a share of the lattice laid round them.
@@ -430,6 +434,19 @@ export const FOLD = declared(
     // between the cells this wide.
     knob('zoom', 'Zoom', 0.25, 4, 1.5),
     knob('edge', 'Edge', 0, 0.05, 0, 'level'),
+    // With a grid (prototype, 2026-10-30): where each cell looks, its own point (0) to the picture's middle shared by
+    // every cell (1); and how far a kaleidoscope's or mirror's cell reaches into the picture (1: its own cell's size).
+    // Both default to the old behaviour, so saved snapshots keep their look.
+    knob('centre', 'Centre', 0, 1, 0, 'level'),
+    knob('reach', 'Reach', 0.25, 4, 1),
+    // Lift (prototype): a dim picture raised towards a mean lightness, as a camera's exposure; 0, the default, as before.
+    knob('lift', 'Lift', 0, 1, 0, 'level'),
+    // Prototype: each cell's own offset from the light at Centre; the grid's slow turning and breathing; cells blended
+    // across their borders. All 0, the default, as before.
+    knob('vary', 'Vary', 0, 1, 0, 'level'),
+    knob('gridSpin', 'Grid spin', -1, 1, 0),
+    knob('breathe', 'Breathe', 0, 1, 0, 'level'),
+    knob('melt', 'Melt', 0, 1, 0, 'level'),
   ],
   // Windows 2 and 3: with a grid, each cell shows one of the pictures cabled in (stained glass onto separate layers).
   [PICTURE_IN, { id: 'grid', label: 'Grid', type: 'points' }, { id: 'window2', label: 'Window 2', type: 'picture' }, { id: 'window3', label: 'Window 3', type: 'picture' }],
@@ -601,7 +618,7 @@ export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE,
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 // New ones last: a Dice keeps its scope as its place here.
-export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables', 'response', 'macros', 'colours', 'spatial', 'lightness'] as const;
+export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables', 'response', 'macros', 'colours', 'spatial', 'lightness', 'motion'] as const;
 
 /** Dice (0057 §7f, the owner: "same randomize"; named Dice beside Random, the value generator): the panel's dice as a
  *  module. A trigger randomizes every knob in its
@@ -615,6 +632,10 @@ export const DICE = declared(
     { ...choices(knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), RANDOMIZE_SCOPES.map(label)), randomize: false },
     // How far each knob it reaches moves toward its roll: all the way at 1, not at all at 0.
     { ...knob('reach', 'Reach', 0, 1, 1, 'level'), randomize: false },
+    // Glide (prototype, 2026-10-30): how many seconds each roll morphs in, as part of the performance (no undo step):
+    // triggered every phrase with a glide as long, the picture is always on its way somewhere. 0, the default, as before
+    // (a new track's look).
+    { ...knob('glide', 'Glide', 0, 60, 0), randomize: false },
   ],
   [
     { id: 'trigger', label: 'Trigger', type: 'trigger' },
