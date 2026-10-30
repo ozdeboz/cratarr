@@ -152,6 +152,7 @@ few settings Settings can change later (what Settings saves wins):
 |---|---|---|
 | `CRATARR_BIND` | `0.0.0.0:8080` | The address and port the server listens on. |
 | `CRATARR_DATA_DIR` | `/data` in the image | Settings and databases. Without it nothing is kept between starts. |
+| `CRATARR_WEB_DIR` | `/web` in the image | The built web app (`web/dist`). Unset outside the image: `../web/dist` beside the source. |
 | `CRATARR_SNAPCAST_BIND` | `0.0.0.0:1704` | The port for playing in step; empty turns it off. |
 | `CRATARR_SNAPCAST_HOST` | none | The local address players reach that port on (and a Kodi box reaches Cratarr on), when it is not the one they open Cratarr's pages at. Also in Settings → Devices. |
 | `CRATARR_BEAT_THIS` | off | `on`: the server hears new music's beats with the Beat this! model itself (about 650 MB while it runs). Off, they come from `tools/beat_this_pass.py` on another computer. Also in Settings → Libraries. |
@@ -195,7 +196,7 @@ from why things are as they are rather than from guessing:
 ## Stack
 
 - Server: Rust ([axum](https://github.com/tokio-rs/axum), SQLite), one static binary in an otherwise empty image.
-- Web app: Svelte 5 and Vite, built to static files and embedded in the binary.
+- Web app: Svelte 5 and Vite, built to static files that the server serves from a folder beside it (`/web` in the image).
 - Android app: Kotlin and Media3, grown from Jellyfin's Android app.
 - Desktop app: Electron around the web app.
 

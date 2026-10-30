@@ -17,7 +17,8 @@ track that is playing, and no way to keep playlist entries valid when library fi
   only for speed.
 - **Core in Rust** (axum, reqwest, serde, SQLite): small memory footprint, a single static binary, and a strict
   compiler that acts as a reviewer for generated or rarely touched code.
-- **UI in Svelte 5 with Vite**, built to static files and embedded in the binary: fine-grained reactivity suits
+- **UI in Svelte 5 with Vite**, built to static files and embedded in the binary (since 0.11 served from a folder beside it, so a page-only fix needs no
+  Rust build): fine-grained reactivity suits
   a page of many chips that flip as the track changes, and there is no UI runtime to maintain.
 - **Tests from the start:** matching rules, the incoming-path exclusion, the Jellyfin client against saved real
   responses, and a startup self-check that fails loudly when Jellyfin's API shape changes.
