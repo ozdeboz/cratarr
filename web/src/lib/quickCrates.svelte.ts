@@ -34,6 +34,16 @@ export function openQuickCrate(words = '') {
   if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
 }
 
+/** Crates opened on a crate already read (0.12): a menu's "Sounds like this" or "Grab a crate", global search's crate
+ *  card. The one being made is kept among the last few first, as for words. */
+export function grabCrate(chips: Chip[]) {
+  if (quickCrates.chips.length) keepQuick({ chips: quickCrates.chips, min: quickCrates.min });
+  quickCrates.chips = chips.map((c) => ({ ...c }));
+  quickCrates.min = CLOSE;
+  quickCrates.words = '';
+  if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
+}
+
 function readKept(): KeptQuick[] {
   try {
     const kept = JSON.parse(localStorage.getItem(KEY) ?? '[]');

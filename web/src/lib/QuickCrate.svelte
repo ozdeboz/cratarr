@@ -86,7 +86,7 @@
   const name = $derived(nameOf(chips));
   const seeds = $derived(seedsOf(chips));
   const own = $derived(keepsOwn(chips));
-  const likedNames = $derived(chips.filter((c) => c.reading.kind === 'artist' && c.how === 'like' && c.reading.id).map((c) => c.reading.label));
+  const likedNames = $derived(chips.filter((c) => c.how === 'like' && c.reading.id).map((c) => c.reading.label));
 
   // The closeness curve, for the artists "like", counted among the tracks the other terms leave (the owner: "Filtered
   // curve in 0.11"), so its count is the preview's; asked 300 ms after a change, not again when only its cut moves.
@@ -240,7 +240,7 @@
   <p class="sentence" class:empty={!chips.length}>
     {#each parts as p, k (k)}{#if k && !p.tight}{' '}{/if}{#if p.chip !== undefined}{@const c = chips[p.chip]}<button
           class="term"
-          class:like={c?.reading.kind === 'artist' && c.how === 'like'}
+          class:like={!!c?.reading.id && c.how === 'like'}
           onclick={() => (at = p.chip ?? null)}>{p.text}</button
         >{:else}<span class="w">{p.text}</span>{/if}{/each}{#if chips.length}{' '}{/if}<input
       type="search"

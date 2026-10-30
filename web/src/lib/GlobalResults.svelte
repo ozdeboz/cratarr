@@ -5,7 +5,9 @@
   // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
-  // the server makes them (0.11), Grab a crate (the owner, 2026-10-30; was Make a crate of this): Crates, the words read into a quick crate's sentence (lib/QuickCrate).
+  // the server makes them (0.11), Grab a crate (the owner, 2026-10-30; was Make a crate of this): Crates, the words read into a quick crate's sentence (lib/QuickCrate);
+  // where the words read as a crate of two kinds or more, that crate as a card (lib/SearchCrateCard, mockup 1a). A
+  // result's long-press, right-click or ⋮ opens its own menu, as the same thing's does in any list (decision 0058).
   import { fromAction } from 'svelte/attachments';
   import { includeArtist, takeBackExcluded } from './api';
   import { longpress } from './longpress';
@@ -30,6 +32,11 @@
   import { leaveOnArrival } from './navStep.svelte';
   import type { SearchResult } from './search';
   import { toast } from './toast.svelte';
+  import AlbumMenu from './AlbumMenu.svelte';
+  import ArtistRowMenu from './ArtistRowMenu.svelte';
+  import SearchCrateCard from './SearchCrateCard.svelte';
+  import SubjectMenu from './SubjectMenu.svelte';
+  import TrackMenu from './TrackMenu.svelte';
 
   /** The kinds the page already shows: left out here (the browser's, Settings' parts, by their `kind` too). */
   let { except = [] }: { except?: string[] } = $props();
@@ -94,6 +101,30 @@
     }
   }
 
+  // A result's own menu (decision 0058): a track's, an album's, an artist's, a crate's, a genre's or another word's, a
+  // playlist's; the rest (a page, Settings' parts, an album not in the library, Beyond's) have none.
+  type Menu =
+    | { kind: 'track'; track: import('./TrackMenu.svelte').MenuTrack }
+    | { kind: 'album'; source: string; id: string; title: string; artist: string | null }
+    | { kind: 'artist'; source: string; name: string; cover: string | null }
+    | { kind: 'subject'; subject: string };
+  let menu = $state<Menu | null>(null);
+  function menuOf(it: SearchResult & { track?: string }): Menu | null {
+    const album = /^album:([^/]+)\/(.+)$/.exec(it.subject);
+    // A track's line is its artist and its album, as the server writes it.
+    if (it.kind === 'track' && it.track && album) {
+      const [artist, ...rest] = (it.sub ?? '').split(' · ');
+      return { kind: 'track', track: { source: album[1], id: it.track, name: it.title, artist: artist || null, album: rest.join(' · ') || null, album_id: album[2] } };
+    }
+    if (it.kind === 'album' && album) return { kind: 'album', source: album[1], id: album[2], title: it.title, artist: (it.sub ?? '').split(' · ')[0] || null };
+    const artist = /^artist:([^/]+)\/(.+)$/.exec(it.subject);
+    if (it.kind === 'artist' && artist) return { kind: 'artist', source: artist[1], name: artist[2], cover: it.cover ?? null };
+    if (it.subject.startsWith('crate:')) return { kind: 'subject', subject: it.subject };
+    if (it.subject.startsWith('playlist:')) return { kind: 'subject', subject: it.subject.slice('playlist:'.length) };
+    return null;
+  }
+  const press = (it: SearchResult & { track?: string }) => fromAction(longpress, () => () => (menu = menuOf(it)));
+
   /** Show all's end in sight: its next page. */
   function nearEnd(more: () => void) {
     return (el: Element) => {
@@ -112,12 +143,14 @@
 </script>
 
 {#snippet found(it: SearchResult & { track?: string })}
+  {@const has = menuOf(it) !== null}
   <li>
     {#if it.kind === 'work'}{@render work(it)}{:else}
-    <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
+    <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
       {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
+      {#snippet action()}{#if has}<button class="icon" aria-label={`Menu of ${it.title}`} title="More" onclick={() => (menu = menuOf(it))}><Icon name="moreVert" size={22} /></button>{/if}{/snippet}
     </Row>
     {/if}
   </li>
@@ -148,13 +181,17 @@
 {:else if q && (groups.length || asked)}
   <section class="global" aria-label="Everywhere">
     {#if quickOn()}
-      <ul class="rows">
-        <li>
-          <Row size="large" title="Grab a crate" sub={q} label={`Grab a crate of ${q}`} onclick={() => openQuickCrate(q)}>
-            {#snippet front()}<span class="art made"><Icon name="crates" size={24} /></span>{/snippet}
-          </Row>
-        </li>
-      </ul>
+      <SearchCrateCard {q}>
+        {#snippet plain()}
+          <ul class="rows">
+            <li>
+              <Row size="large" title="Grab a crate" sub={q} label={`Grab a crate of ${q}`} onclick={() => openQuickCrate(q)}>
+                {#snippet front()}<span class="art made"><Icon name="crates" size={24} /></span>{/snippet}
+              </Row>
+            </li>
+          </ul>
+        {/snippet}
+      </SearchCrateCard>
     {/if}
     {#if groups.length}
       {#each groups as g (g.kind)}
@@ -177,6 +214,15 @@
   </section>
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding />
+{#if menu?.kind === 'track'}
+  <TrackMenu track={menu.track} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'album'}
+  <AlbumMenu source={menu.source} album={{ id: menu.id, title: menu.title, artist: menu.artist }} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'artist'}
+  <ArtistRowMenu source={menu.source} name={menu.name} cover={menu.cover} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'subject'}
+  <SubjectMenu subject={menu.subject} onclose={() => (menu = null)} />
+{/if}
 {#if leftOut}
   {@const it = leftOut}
   <MenuSheet label={it.title} title={it.title} images={it.cover ? [it.cover] : []} chips={[it.sub ?? '']} onclose={() => (leftOut = null)}>
@@ -233,6 +279,20 @@
     place-items: center;
     background: color-mix(in srgb, var(--accent) 18%, transparent);
     color: var(--accent-ink);
+  }
+
+  /* A result's ⋮ (its menu), as a list row's. */
+  .icon {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
   }
 
   /* The library's dot, as the Library's lists have it. */

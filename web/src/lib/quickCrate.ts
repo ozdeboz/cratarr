@@ -6,7 +6,7 @@
 import type { Condition } from './api';
 import { byRelevance, relevance, words, type SearchResult } from './search';
 
-export type ChipKind = 'artist' | 'album' | 'label' | 'genre' | 'style' | 'mood' | 'tag' | 'year';
+export type ChipKind = 'artist' | 'album' | 'track' | 'label' | 'genre' | 'style' | 'mood' | 'tag' | 'year';
 /** One way a term reads: its kind, what a condition matches (a name, an album's id, a year's span `min-max`), and how
  *  it shows. An artist's `id` (the library's `ar-…`) seeds "sounds like". */
 export type Reading = { kind: ChipKind; value: string; label: string; id?: string };
@@ -194,7 +194,29 @@ export function readAs(chip: Chip, reading: Reading): Chip {
   return { term: chip.term, reading, others, ...artist };
 }
 
-const likes = (c: Chip) => c.reading.kind === 'artist' && c.how === 'like' && !!c.reading.id;
+/** A chip that seeds "sounds like": an artist read that way, or a track or an album a menu's "Sounds like this" handed
+ *  over (0.12; the owner: one way to make a crate), each by its library id. */
+const likes = (c: Chip) => c.how === 'like' && !!c.reading.id;
+
+/** "Sounds like this" from a menu (0.12): the track, album or artist as the crate's "like" term, by its library id
+ *  (`tr-…`, `al-…`, `ar-…`); their own tracks left out, as a typed artist's are. */
+export function likeChip(kind: 'track' | 'album' | 'artist', id: string, label: string): Chip {
+  return { term: label, reading: { kind, value: kind === 'artist' ? label : id, label, id }, others: [], how: 'like', own: false };
+}
+
+/** "Grab a crate" from a genre's, a style's, a mood's, a tag's or a label's own crate (0.12): that word as its term. */
+export function wordChip(kind: 'genre' | 'style' | 'mood' | 'tag' | 'label', word: string): Chip {
+  return { term: word, reading: { kind, value: word, label: word }, others: [] };
+}
+
+/** Global search's words read as a crate (0.12; the owner, 2026-10-30: mockup 1a, the crate card first): its chips
+ *  where they read as two terms or more of two kinds or more (a year and an artist; a genre, a decade and an artist),
+ *  null where they are one thing (a name, a genre), which the plain Grab a crate row stays for. */
+export function crateOfLine(reads: readonly Read[]): Chip[] | null {
+  const chips = reads.flatMap((r) => chipOf(r.term, r.readings) ?? []);
+  const kinds = new Set(chips.map((c) => c.reading.kind));
+  return chips.length >= 2 && kinds.size >= 2 ? chips : null;
+}
 
 /** The seeds of "sounds like": the artists chipped that way. */
 export const seedsOf = (chips: readonly Chip[]): string[] => chips.filter(likes).map((c) => c.reading.id!);
@@ -216,11 +238,10 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE): Condition[] {
   let years: [number, number] | null = null;
   for (const c of chips) {
     const r = c.reading;
+    if (likes(c) || r.kind === 'track') continue;
     if (r.kind === 'year') {
       const [a, b] = r.value.split('-').map(Number);
       years = years ? [Math.min(years[0], a), Math.max(years[1], b)] : [a, b];
-    } else if (r.kind === 'artist') {
-      if (!likes(c)) add('artist', r.value);
     } else add(r.kind, r.value);
   }
   for (const [axis, values] of byAxis) rows.push({ axis, not: false, value: { kind: 'any_of', values } });
@@ -243,7 +264,7 @@ export type Part = { text: string; chip?: number; tight?: boolean };
  *  genre, tags, by, on a label, from an album, the years; last what it feels and sounds like. */
 export function sentenceOf(chips: readonly Chip[]): Part[] {
   const all = chips.map((c, i) => ({ c, i }));
-  const of = (kind: ChipKind) => all.filter(({ c }) => c.reading.kind === kind && !(kind === 'artist' && likes(c)));
+  const of = (kind: ChipKind) => all.filter(({ c }) => c.reading.kind === kind && !likes(c));
   const out: Part[] = [];
   const word = (text: string, tight = false) => out.push(tight ? { text, tight } : { text });
   const term = (i: number, text = chips[i].reading.label) => out.push({ text, chip: i });

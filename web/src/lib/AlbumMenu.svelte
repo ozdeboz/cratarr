@@ -73,7 +73,9 @@
   import { albumOfDownload, albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
-  import { viewGenre, viewLike } from './crates.svelte';
+  import { viewGenre } from './crates.svelte';
+  import { likeChip } from './quickCrate';
+  import { grabCrate } from './quickCrates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player } from './live.svelte';
   import { startRadio, type LocalTrack } from './localPlayer.svelte';
@@ -602,16 +604,16 @@
   {:else if e === 'goGenre'}
     {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
   {:else if e === 'soundsLike'}
-    <!-- Sounds like it: a crate seeded with the album's songs (Cratarr's own, which AudioMuse hears). -->
+    <!-- Sounds like it: the crate search's sentence with the album as its "like" term (0.12: one way to make a crate). -->
     {#if source === 'cratarr'}<MenuEntry
         icon="music"
         label="Sounds like this"
         onclick={() => {
           // Read before closing: closing lets go of the album.
-          const id = a.id;
+          const chip = likeChip('album', a.id, a.title);
           onclose();
           leavePlayer();
-          viewLike(id);
+          grabCrate([chip]);
         }}
       />{/if}
   {:else if e === 'favourite'}

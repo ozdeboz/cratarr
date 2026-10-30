@@ -28,6 +28,7 @@ export type EntryId =
   | 'copyToMine'
   | 'saveAsPlaylist'
   | 'startCrate'
+  | 'grabCrate'
   | 'download'
   | 'keep'
   | 'removeFromDevice'
@@ -106,6 +107,8 @@ export const MENUS: Record<MenuKind, Kind> = {
   artist: {
     actions: ['Play', 'Shuffle', 'Play next', 'Add to queue', 'Start radio'],
     cards: [
+      // Sounds like them: the crate search's sentence with the artist as its "like" term (0.12, one way to make a crate).
+      { group: 'go', entries: ['soundsLike'] },
       // Out everywhere, or out of the crate it is opened from (0.10, decision 0083).
       { group: 'feel', entries: ['favourite', 'excludeArtist', 'notInCrate'] },
       { group: 'collect', entries: ['addToPlaylist'] },
@@ -131,8 +134,9 @@ export const MENUS: Record<MenuKind, Kind> = {
     actions: ['Play', 'Shuffle', 'Start radio'],
     cards: [
       { group: 'go', entries: ['view'] },
-      // A crate of one's own is saved as a playlist; what sounds like something starts a crate of its own.
-      { group: 'collect', entries: ['saveAsPlaylist', 'startCrate'] },
+      // A crate of one's own is saved as a playlist; what sounds like something starts a crate of its own; a word's crate
+      // (a style, a mood, a tag, a label) grabs a crate of that word to refine (0.12).
+      { group: 'collect', entries: ['saveAsPlaylist', 'startCrate', 'grabCrate'] },
       { group: 'take', entries: ['download', 'keep', 'share'] },
       { group: 'change', entries: ['edit'] },
       { group: 'remove', entries: ['deleteCrate'] },
@@ -142,7 +146,8 @@ export const MENUS: Record<MenuKind, Kind> = {
     actions: ['Play', 'Shuffle', 'Start radio'],
     cards: [
       { group: 'go', entries: ['view'] },
-      { group: 'collect', entries: ['startCrate'] },
+      // The genre as a crate search's term to refine (0.12; one way to make a crate: the sentence, its Edit the builder).
+      { group: 'collect', entries: ['grabCrate'] },
       { group: 'take', entries: ['download', 'share'] },
     ],
   },
@@ -196,6 +201,7 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   copyToMine: 'Copy to my playlists',
   saveAsPlaylist: 'Save as playlist',
   startCrate: 'Start a crate from it',
+  grabCrate: 'Grab a crate',
   download: 'Download…',
   keep: 'Sync to this device',
   removeFromDevice: 'Remove from this device',

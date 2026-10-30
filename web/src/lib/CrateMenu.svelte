@@ -21,6 +21,8 @@
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
   import { plural } from './insights.svelte';
+  import { wordChip } from './quickCrate';
+  import { grabCrate } from './quickCrates.svelte';
 
   let { id, onclose, onsave }: { id: string; onclose: () => void; /** Its panel's own Make playlist, where it shows. */ onsave?: () => void } = $props();
 
@@ -74,11 +76,13 @@
     work.making = { for: CRATE + c, state: { name: '', saving: false } };
     viewPlaylist(CRATE + c);
   }
-  function fromGenre() {
-    const g = genre;
-    if (g === null) return;
+  /** A word's crate (a genre, style, mood, tag or label) as the crate search's term, to refine (0.12: one way to make a
+   *  crate; its Edit is the builder). */
+  function grabWord() {
+    const w = word;
+    if (w === null) return;
     onclose();
-    startCrate(g, [{ axis: 'genre', not: false, value: { kind: 'any_of', values: [g] } }]);
+    grabCrate([wordChip(w.kind, w.word)]);
   }
   /** Sounds like's own crate: its seeds and how alike, as the server made them. */
   function fromLike() {
@@ -129,11 +133,9 @@
   {#if e === 'view'}
     {#if !viewed}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={view} />{/if}
   {:else if e === 'startCrate'}
-    {#if genre !== null}
-      <MenuEntry icon="crates" label="Start a crate from it" onclick={fromGenre} />
-    {:else if like !== null}
-      <MenuEntry icon="crates" label="Start a crate from it" onclick={fromLike} />
-    {/if}
+    {#if like !== null}<MenuEntry icon="crates" label="Start a crate from it" onclick={fromLike} />{/if}
+  {:else if e === 'grabCrate'}
+    {#if word !== null}<MenuEntry icon="crates" label="Grab a crate" onclick={grabWord} />{/if}
   {:else if e === 'saveAsPlaylist'}
     {#if genre === null && like === null}<MenuEntry icon="intoBox" label="Save as playlist" onclick={saveAsPlaylist} />{/if}
   {:else if e === 'download'}

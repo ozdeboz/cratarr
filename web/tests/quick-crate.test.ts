@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, CLOSE, LIKE_MOST } = await import(
+const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -235,6 +235,43 @@ test('the sentence: style beside a genre, tags, label, album; the years one span
   assert.equal(said(sentenceOf([c('genre', 'Soul'), year(1985), decade(1970)])), '[Soul] from the [1970s] to [1985]');
   assert.equal(said(sentenceOf([c('genre', 'Soul'), c('year', '1970–1985', { value: '1970-1985' })])), '[Soul] from [1970 to 1985]');
   assert.equal(said(sentenceOf([decade(1960), year(1975), decade(1980)])), 'Tracks from the [1960s], [1975] to the [1980s]');
+});
+
+// One way to make a crate (0.12): a menu's "Sounds like this" hands over a track, an album or an artist as the "like"
+// term, a word's crate its word; global search's words make a crate card only where they read as two kinds or more.
+test('Sounds like this: a track or an album as the like term, by its id; never its own axis', () => {
+  const track = likeChip('track', 'tr-7', 'Rebirth of Slick');
+  assert.deepEqual(seedsOf([track]), ['tr-7']);
+  assert.deepEqual(conditionsOf([track]), [{ axis: 'like', not: false, value: { kind: 'like', of: ['tr-7'], count: LIKE_MOST, min: CLOSE } }]);
+  assert.equal(said(sentenceOf([track])), 'Tracks that sound like [Rebirth of Slick]');
+  const album = likeChip('album', 'al-3', 'Kind of Blue');
+  const rows = conditionsOf([c('genre', 'Jazz'), album]);
+  assert.deepEqual(rows.map((r) => r.axis), ['genre', 'like']);
+  assert.equal(said(sentenceOf([c('genre', 'Jazz'), album])), '[Jazz] that sounds like [Kind of Blue]');
+  const artist = likeChip('artist', 'ar-9', 'Miles Davis');
+  assert.equal(artist.reading.value, 'Miles Davis');
+  assert.deepEqual(seedsOf([artist]), ['ar-9']);
+});
+
+test("Grab a crate from a word's crate: that word as its term", () => {
+  const label = wordChip('label', 'Blue Note');
+  assert.deepEqual(conditionsOf([label]), [{ axis: 'label', not: false, value: { kind: 'any_of', values: ['Blue Note'] } }]);
+  assert.equal(said(sentenceOf([label])), 'Tracks on [Blue Note]');
+  assert.equal(said(sentenceOf([wordChip('genre', 'Soul')])), '[Soul]');
+});
+
+test("global search's crate card: two terms or more of two kinds or more; one thing stays the plain row", () => {
+  const r = (term: string, ...readings: Record<string, unknown>[]) => ({ term, readings });
+  const genre = (v: string) => ({ kind: 'genre', value: v, label: v });
+  const artist = (v: string, id: string) => ({ kind: 'artist', value: v, label: v, id });
+  const nineties = { kind: 'year', value: '1990-1999', label: '1990s' };
+  const chips = crateOfLine([r('hip hop', genre('Hip Hop')), r('90s', nineties), r('miles davis', artist('Miles Davis', 'ar-1'))]);
+  assert.ok(chips);
+  assert.equal(said(sentenceOf(chips!)), '[Hip Hop] from the [1990s] that sounds like [Miles Davis]');
+  assert.equal(crateOfLine([r('miles davis', artist('Miles Davis', 'ar-1'))]), null, 'one name');
+  assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('soul', genre('Soul'))]), null, 'one kind');
+  assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('qwzx')]), null, 'a word read as nothing leaves one term');
+  assert.ok(crateOfLine([r('jazz', genre('Jazz')), r('qwzx'), r('1975', { kind: 'year', value: '1975-1975', label: '1975' })]), 'what reads still makes it');
 });
 
 test('the crates made here and not saved show only once typing starts, those the words may mean', () => {
