@@ -3270,6 +3270,17 @@ mod tests {
         PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal)), None)
     }
 
+    #[tokio::test]
+    async fn a_page_quiet_past_a_heartbeat_gives_its_name_to_the_next() {
+        let p = play_on().await;
+        let _page = p.connect_browser("ThinkPad", Some("tab-1")).unwrap();
+        assert!(matches!(p.connect_browser("ThinkPad", Some("tab-2")), Err(ToggleError::Refused(_))), "still heard from");
+        // The computer slept: the page before is quiet longer than its heartbeat.
+        p.entries().get_mut("ThinkPad").unwrap().heard = Instant::now().checked_sub(QUIET + Duration::from_secs(1)).unwrap();
+        let _woken = p.connect_browser("ThinkPad", Some("tab-2")).unwrap();
+        assert_eq!(p.entries()["ThinkPad"].page.as_deref(), Some("tab-2"));
+    }
+
     /// The commands a player was told since last asked.
     fn told(c: &mut Commands) -> Vec<serde_json::Value> {
         std::iter::from_fn(|| c.rx.try_recv().ok()).map(|m| serde_json::from_str(&m).unwrap()).collect()
@@ -3373,9 +3384,6 @@ mod tests {
         // Another tab may not take that name while this one holds it, nor a name the app holds.
         assert!(matches!(p.connect_browser("Chrome on Android", Some("tab-2")), Err(ToggleError::Refused(_))));
         assert!(matches!(p.connect_browser("tablet", Some("tab-2")), Err(ToggleError::Refused(_))));
-        // Quiet past a heartbeat (the computer slept): another page of the account's takes the name up at once.
-        p.entries().get_mut("Chrome on Android").unwrap().heard = Instant::now().checked_sub(QUIET + Duration::from_secs(1)).unwrap();
-        let _woken = p.connect_browser("Chrome on Android", Some("tab-2")).unwrap();
         said(&mut again);
         p.report("Chrome on Android", Report { index: -1, ..Report::default() }).unwrap();
         let back = told(&mut again);
