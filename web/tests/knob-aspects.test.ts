@@ -38,7 +38,7 @@ test('a knob means what its own module says, not what its name means elsewhere',
   const spatial = scopeNamed('spatial', types)!;
   const motion = scopeNamed('motion', types)!;
   const lightness = scopeNamed('lightness', types)!;
-  // The prototype's one table by id gave these the meaning of a namesake: a roll on Spatial moved a Dice's own reach.
+  // One table by knob id gave these the meaning of a namesake: a roll on Spatial moved a Dice's own reach.
   assert.ok(!spatial(moduleOf('dice'), knobOf('dice', 'reach')), 'a Dice’s Reach is not spatial');
   assert.ok(!motion(moduleOf('dice'), knobOf('dice', 'glide')), 'a Dice’s Glide is not motion');
   assert.ok(!spatial(moduleOf('sequencer'), knobOf('sequencer', 'length')), 'a Sequencer’s Length is not spatial');

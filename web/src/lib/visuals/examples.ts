@@ -65,7 +65,7 @@ function sound(c: Parameters<Parameters<typeof rack>[3]>[0], knobs: Record<strin
 const keep = (amount = 0.9, trails = 0.75) => m('keep', 'keep', { amount, trails });
 
 
-/** The test rack (prototype, 2026-10-30): "Wandering kaleidoscope" with every knob the Everything dice reaches at the
+/** The test rack (2026-10-30): "Wandering kaleidoscope" with every knob the Everything dice reaches at the
  *  middle of its range and every macro at half (the average a held-down Everything hovers around), standing still: the
  *  Wander dice unplugged and the drift off. Does the middle look as good as the pressing, or does the pressing need the
  *  motion? */
@@ -211,7 +211,7 @@ const BUILT: Example[] = [
       ],
     };
   }),
-  // Prototype (2026-10-30, the owner's snapshot "4!!" taken further): a honeycomb of kaleidoscopes filling the screen,
+  // 2026-10-30 (the owner's snapshot "4!!" taken further): a honeycomb of kaleidoscopes filling the screen,
   // every cell on the light with its own variation, the grid slowly turning, breathing and melting, and a Dice on Spatial
   // fired each phrase whose rolls glide in over 15 s, so the space wanders and never stands still. The knobs that step
   // (lattice, fit, fold mode and count) are pinned, so no morph jumps the structure.
@@ -262,7 +262,7 @@ const BUILT: Example[] = [
       };
     }),
   ),
-  // The recipe from the owner's "Damn!!" (prototype, 2026-10-30): a fresh picture every frame (the loop barely keeps
+  // The recipe from the owner's "Damn!!" (2026-10-30): a fresh picture every frame (the loop barely keeps
   // anything), a bright compact source whose form keeps changing quickly, every cell copying only its light (Amount 1,
   // Centre near 1, a wide Reach), and the whole structure moving slowly (the grid turning, breathing, melting).
   rack('sunbursts', 'Sunbursts', 'Crisp sunbursts in every cell: the sound a spoked circle that never keeps its shape.', (c) => {
@@ -410,7 +410,7 @@ function fire(): Example {
   return { id: 'example:fire', label: 'Fire', line: 'Hot light rises by itself, cools as it climbs and burns out at the top.', patch };
 }
 
-/** Flame kaleidoscope (prototype, 2026-10-30): the "Damn!!" recipe on the flame, the best source for it: bright, compact
+/** Flame kaleidoscope (2026-10-30): the "Damn!!" recipe on the flame, the best source for it: bright, compact
  *  and never the same (its evolution at half). The owner's Flame rack (examples-flame.ts) with the flame's trails off,
  *  its picture folded into a honeycomb that covers the screen, every cell on the flame's light. */
 function flameKaleido(): Example {

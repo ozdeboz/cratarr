@@ -5,8 +5,8 @@
 // Each module declares its knobs' meanings where it declares its knobs (`withAspects`), so a renamed knob keeps its
 // meaning and a new one shows as undeclared in tests/knob-aspects.test.ts instead of silently falling out of a scope.
 // A modulator's knobs (how it follows, its dynamics) mean none of the four unless it declares one (a Random's Rate:
-// how fast what it moves moves). (The ThinkPad session's prototype kept one table by knob id; the ids collided across
-// modules: a Dice's Reach, a Sequencer's Length and a Shaper's handles came out spatial.)
+// how fast what it moves moves). (One table by knob id, as these were first kept, gave a knob its namesakes' meaning:
+// a Dice's Reach, a Sequencer's Length and a Shaper's handles came out spatial.)
 
 import type { Knob, KnobAspect } from '../patch';
 

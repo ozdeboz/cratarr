@@ -198,7 +198,7 @@ export class VisualsLoop {
         const t = host.types[m.type];
         const eased = Object.keys(knobs).filter((k) => t?.knobs.find((x) => x.id === k.replace(/\.\d+$/, ''))?.kind !== 'step');
         if (!eased.length) continue;
-        // From where the knob is shown now: mid-morph, between the last roll's start and end (prototype: so a Dice with
+        // From where the knob is shown now: mid-morph, between the last roll's start and end (so a Dice with
         // a Glide that fires again before its morph is done carries on from there, with no jump).
         fromValues[id] = Object.fromEntries(eased.map((k) => [k, shownNow(id, k, m.knobs[k], now)]));
         toValues[id] = Object.fromEntries(eased.map((k) => [k, knobs[k]]));
@@ -438,7 +438,7 @@ export class VisualsLoop {
       for (const r of stepped.dice) {
         if (rolling) break;
         rolling = rollFor(r.seed, r.scope, r.reach);
-        // A Dice with a Glide (prototype): its roll morphs in over that long, a performance (no undo step), from where
+        // A Dice with a Glide: its roll morphs in over that long, a performance (no undo step), from where
         // the knobs are now, mid-morph or not, so one morph flows into the next.
         if (r.glide > 0) {
           rollingAs = { edit: null, ms: r.glide * 1000 };

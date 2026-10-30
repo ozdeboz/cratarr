@@ -1,4 +1,4 @@
-// The Flame rack the Flame kaleidoscope example starts from (prototype, 2026-10-30): the owner's "Flame · drawn by its own
+// The Flame rack the Flame kaleidoscope example starts from (2026-10-30): the owner's "Flame · drawn by its own
 // currents" with its Field, Smear, Contours, Grid and Fold taken out, the flame's trails off, its evolution at half, no flash.
 // Data only.
 import type { PatchV2 } from './ports';

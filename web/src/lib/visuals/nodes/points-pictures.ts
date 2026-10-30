@@ -85,7 +85,7 @@ vec4 cellColour(vec2 p, vec2 c, int ci, bool grid, vec4 lightNow) {
   vec2 q = turned(p - c, -uTurn);
   vec2 f = q;
   // Where the cell looks: its own point, or (Centre) where the picture's light is, every cell the same window, each
-  // moved off it by an offset of its own, Vary far (prototype).
+  // moved off it by an offset of its own, Vary far.
   vec2 own = vec2(fract(sin(float(ci) * 78.233 + 1.7) * 43758.5453), fract(sin(float(ci) * 39.425 + 9.1) * 24634.6345)) * 2.0 - 1.0;
   vec2 base = mix(c, lightNow.xy + uVary * 0.35 * own, uCentre);
   if (uMode == 0) {
@@ -146,18 +146,18 @@ void main() {
   vec4 lightNow = uMeasured == 1 ? texelFetch(uLight, ivec2(0, 0), 0) : vec4(0.0, 0.0, 0.0, 0.18);
   o = cellColour(p, cs, ci, grid, lightNow);
   float gap = 0.5 * (sqrt(d2) - sqrt(d)) * zoom;
-  // Melt (prototype): across the border the next cell's picture blended in, half and half on the border itself.
+  // Melt: across the border the next cell's picture blended in, half and half on the border itself.
   if (grid && uMelt > 0.0 && uCount > 1) {
     float w = 0.5 * (1.0 - smoothstep(0.0, uMelt * 0.2, gap));
     if (w > 0.001) o = mix(o, cellColour(p, cs2, ci2, grid, lightNow), w);
   }
   // Dark seams between a grid's cells, Edge wide: where the nearest point and the next are about as near.
   if (grid && uEdge > 0.0) o.rgb *= smoothstep(0.0, uEdge, gap);
-  // Lift (prototype): a dim picture raised towards a mean lightness of 0.18 (up to 8 times), as a camera's exposure.
+  // Lift: a dim picture raised towards a mean lightness of 0.18 (up to 8 times), as a camera's exposure.
   if (uLift > 0.0) o.rgb *= pow(clamp(0.18 / max(lightNow.w, 1e-4), 1.0, 8.0), uLift);
 }`;
 
-// Where the picture's light is (2026-10-30, from the ThinkPad session's prototype): its brightness-weighted centre over a
+// Where the picture's light is (2026-10-30): its brightness-weighted centre over a
 // coarse grid of samples (24 × 14: 336 reads, once a frame), in Fold's frame (the short side −1..1), and its mean
 // lightness; glided from the last frame's (one texel each, ping-ponged; uGlide the frame's share, from its dt) so
 // Centre's window moves smoothly; with too little light it stays where it was.

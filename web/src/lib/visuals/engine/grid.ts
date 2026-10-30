@@ -75,7 +75,7 @@ function rows(n: number, columns: number, step: number, rowStep: number, shift: 
 /** Columns for `n` points whose rows are `rowStep` apart and points `step` apart, so the whole is about as tall as wide. */
 const columnsFor = (n: number, step: number, rowStep: number) => Math.max(1, Math.min(n, Math.ceil(Math.sqrt((n * rowStep) / step))));
 
-/** Fit to the screen (prototype, 2026-10-30): the spacing and, for the rows lattices, the columns that make `n` points
+/** Fit to the screen (2026-10-30): the spacing and, for the rows lattices, the columns that make `n` points
  *  cover a `w` × `h` area (the screen times Cover, in the short-side −1..1 frame): rows as wide as the screen is,
  *  the round lattices out to the corners. */
 function fitted(lattice: (typeof LATTICES)[number], n: number, w: number, h: number): { s: number; columns?: number } {
