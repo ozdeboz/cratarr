@@ -4,7 +4,8 @@
   // parts; lib/everywhere), as lib/globalSearch holds them. Shown as the page's or the panel's Everywhere (the owner,
   // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
-  // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music.
+  // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
+  // the server makes them (0.11), Make a crate of this: the words read into a quick crate (lib/QuickCrateSheet).
   import { includeArtist, takeBackExcluded } from './api';
   import { loadExcludedArtists } from './excludedArtists.svelte';
   const EVERYWHERE = 'excluded-everywhere:';
@@ -12,6 +13,7 @@
   import CoverStatus from './CoverStatus.svelte';
   import CoverBusy from './CoverBusy.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
+  import Icon from './Icon.svelte';
   import { beyondAlbum, globalAsked, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, showAll } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -20,6 +22,7 @@
   import { viewOver } from './panel.svelte';
   import { libraryDot } from './albums.svelte';
   import { pageView } from './pageView.svelte';
+  import { openQuickCrate, quickOn } from './quickCrates.svelte';
   import { leaveOnArrival } from './navStep.svelte';
   import type { SearchResult } from './search';
   import { toast } from './toast.svelte';
@@ -123,6 +126,15 @@
   </section>
 {:else if q && (groups.length || asked)}
   <section class="global" aria-label="Everywhere">
+    {#if quickOn()}
+      <ul class="rows">
+        <li>
+          <Row size="large" title="Make a crate of this" sub={q} label={`Make a crate of ${q}`} onclick={() => openQuickCrate(q)}>
+            {#snippet front()}<span class="art made"><Icon name="crates" size={24} /></span>{/snippet}
+          </Row>
+        </li>
+      </ul>
+    {/if}
     {#if groups.length}
       {#each groups as g (g.kind)}
         <!-- Its heading opens it whole (decision 0076: every group's results, shown all); Beyond's, Find more music. -->
@@ -176,6 +188,14 @@
 
   .art.round {
     border-radius: 50%;
+  }
+
+  /* Make a crate of this: the crates' icon where a cover would be. */
+  .art.made {
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent-ink);
   }
 
   /* The library's dot, as the Library's lists have it. */

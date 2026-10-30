@@ -25,6 +25,7 @@
   import TempoRange from './TempoRange.svelte';
   import { WORD_AXES, wordShown } from './facts';
   import { changed } from './filterRow';
+  import { countAt, minAt } from './quickCrate';
 
   let {
     condition,
@@ -75,8 +76,9 @@
     const of = v.of.join(',');
     const fresh = !!v.fresh;
     const weights = v.weights;
+    const own = !!v.own;
     let gone = false;
-    likeCurve(of.split(','), undefined, hiddenLibraries(), fresh, weights).then(
+    likeCurve(of.split(','), undefined, hiddenLibraries(), fresh, weights, own).then(
       (c) => !gone && (curve = c.alike),
       () => !gone && (curve = null),
     );
@@ -98,6 +100,8 @@
     const v = condition.value;
     let s = '';
     if (v.kind === 'yes') s = 'yes';
+    // Cut by how alike (a quick crate's, 0.11): its floor, the handle's while dragged.
+    else if (v.kind === 'like' && v.min !== undefined) s = `at least ${dragged !== null && curve ? minAt(curve, dragged) : v.min}% alike`;
     else if (v.kind === 'like') s = `the closest ${dragged ?? v.count}`;
     else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.map(shown).join(', ') : `${v.values.slice(0, 2).map(shown).join(', ')} +${v.values.length - 2}`;
     else {
@@ -157,8 +161,19 @@
         </div>
       {:else if condition.value.kind === 'like'}
         {@const l = condition.value}
-        <!-- How many: the curve of how alike the closest are, cut where the crate ends. -->
-        {#if curve?.length}<div class="near"><LikeCurve {curve} count={l.count} onpreview={(n) => (dragged = n)} onchange={(n) => change({ value: { ...l, count: n } })} /></div>{/if}
+        <!-- How many: the curve of how alike the closest are, cut where the crate ends; one cut by how alike (a quick
+             crate's) moves its floor to where the handle is let go. -->
+        {#if curve?.length}
+          {@const c = curve}
+          <div class="near">
+            <LikeCurve
+              curve={c}
+              count={l.min !== undefined ? countAt(c, l.min) : l.count}
+              onpreview={(n) => (dragged = n)}
+              onchange={(n) => change({ value: l.min !== undefined ? { ...l, min: minAt(c, n) } : { ...l, count: n } })}
+            />
+          </div>
+        {/if}
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
         {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}
