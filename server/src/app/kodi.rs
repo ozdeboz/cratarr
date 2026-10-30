@@ -883,6 +883,9 @@ mod tests {
     #[test]
     fn addresses_and_times() {
         assert_eq!(address("http://h:8081/", &t("tr 1")), "http://h:8081/api/file/cratarr/tr%201");
+        // A Bandcamp preview from Cratarr too, never from Bandcamp (decision 0071, amended).
+        let preview = QueueTrack { source: "bandcamp".into(), id: crate::bandcamp::track_id("https://a.bandcamp.com/album/b", 1), ..QueueTrack::default() };
+        assert_eq!(address("http://h:8081", &preview), format!("http://h:8081/api/file/bandcamp/{}", preview.id));
         assert_eq!(ms_of(&kodi_time(3_723_456)), 3_723_456);
     }
 }

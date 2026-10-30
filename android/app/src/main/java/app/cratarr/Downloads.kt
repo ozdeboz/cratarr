@@ -116,6 +116,7 @@ object Downloads {
             val t = tracks.optJSONObject(i) ?: continue
             if (t.optString("source").isEmpty() || t.optString("id").isEmpty()) continue
             val key = keyOf(t)
+            if (Previews.isPreview(key)) continue
             // Another quality is another file: kept under its own name, so the two never mix.
             val stored = if (copies) "$key#opus" else key
             val uri = Uri.parse("$server/api/file/$key" + if (copies) "?as=opus" else "")
@@ -170,9 +171,10 @@ object Downloads {
 
     /** A track's item, its file from the store when it was downloaded whole, else from Cratarr (`server`): kept ahead
      *  whole in either form, that one; else on mobile data Cratarr's smaller copy (Opus; the owner, 2026-10-24), else
-     *  the file as it is. */
+     *  the file as it is. A Bandcamp preview always from Cratarr, as it is (it has no smaller copy). */
     fun locate(context: Context, item: MediaItem, server: String?): MediaItem {
         val key = item.mediaId
+        if (Previews.isPreview(key)) return if (server == null) item else item.buildUpon().setUri(fileUri(server, key, false)).build()
         val done = try {
             manager(context).downloadIndex.getDownload(key)?.takeIf { it.state == Download.STATE_COMPLETED }
         } catch (e: Exception) {
@@ -203,7 +205,7 @@ object Downloads {
     fun keepAhead(context: Context, queue: List<MediaItem>, playing: Int) {
         val app = context.applicationContext
         val server = Prefs(app).serverUrl?.trimEnd('/') ?: return
-        val wanted = queue.drop(playing.coerceAtLeast(0)).take(UP_NEXT + 1).map { it.mediaId }
+        val wanted = queue.drop(playing.coerceAtLeast(0)).take(UP_NEXT + 1).map { it.mediaId }.filterNot(Previews::isPreview)
         // Near ones are kept in either form (the connection may have changed since).
         val keep = queue.drop((playing - KEEP_PLAYED).coerceAtLeast(0)).take(KEEP_PLAYED + UP_NEXT + 1)
             .flatMap { listOf(it.mediaId, "${it.mediaId}#opus") }.toSet()
@@ -259,4 +261,15 @@ object Downloads {
     private fun saveAutoKept(context: Context, keys: List<String>) {
         Prefs.shared(context).edit().putString(AUTO_KEPT, JSONArray(keys).toString()).apply()
     }
+}
+
+/**
+ * Bandcamp's previews (decision 0071): streamed from Cratarr (`/api/file/bandcamp/{id}`) like any track, never
+ * downloaded, kept ahead or kept by an item. They are bought on Bandcamp.
+ */
+object Previews {
+    const val SOURCE = "bandcamp"
+
+    /** Whether a track's key (its media item's id, `source/id`) is a preview's. */
+    fun isPreview(key: String) = key.startsWith("$SOURCE/")
 }

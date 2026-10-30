@@ -1690,6 +1690,10 @@ impl CrateStore {
         if name.is_empty() || name.chars().count() > 100 {
             return Err("A crate needs a name (at most 100 characters).".into());
         }
+        // A Bandcamp preview seeds no crate kept (decision 0071): it is not Cratarr's to keep.
+        if conditions.iter().any(|c| matches!(&c.value, Value::Like { of, .. } if of.iter().any(|s| crate::bandcamp::is_preview(s)))) {
+            return Err(crate::bandcamp::NOT_KEPT.into());
+        }
         if let Some(c) = conditions.iter().find(|c| !is_axis(&c.axis)) {
             return Err(format!("Unknown axis: {}.", c.axis));
         }

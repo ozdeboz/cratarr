@@ -275,6 +275,10 @@ impl PlayingService {
     /// twice is in it twice when `repeats` (the page asked: Keep repeats), else once (decision 0025, amended
     /// 2026-10-16).
     pub async fn playlist_from_queue(&self, want: Option<&str>, name: &str, ids: Option<Vec<String>>, repeats: bool) -> Result<FromQueue, ToggleError> {
+        // Bandcamp's previews are never in a playlist (decision 0071); among a server's tracks they are left out.
+        if want == Some(crate::bandcamp::SOURCE) {
+            return Err(ToggleError::Refused(crate::bandcamp::NOT_KEPT.into()));
+        }
         let (active, s, ids) = match ids {
             Some(ids) => {
                 let (a, s) = self.source(want.ok_or_else(|| ToggleError::Refused("Which server are the tracks on?".into()))?)?;
@@ -540,6 +544,9 @@ impl PlayingService {
 
     /// Puts a given track in the playlist or takes it out, as `toggle` does for what the server's player plays.
     pub async fn track_toggle(&self, source_id: &str, id: &str, playlist_id: &str, member: Option<bool>) -> Result<TrackStateView, ToggleError> {
+        if source_id == crate::bandcamp::SOURCE {
+            return Err(ToggleError::Refused(crate::bandcamp::NOT_KEPT.into()));
+        }
         let (a, _, track) = self.find(source_id, id).await?;
         self.lib.store()?;
         let entry = a.line(&self.lib.folders(), &track).ok_or(ToggleError::NotInLibrary)?;

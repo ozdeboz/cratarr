@@ -2274,8 +2274,9 @@ struct FileAs {
 /// the app's stream on mobile data and its smaller downloads, kept on the NAS (`opus_copies`) so it has a length and
 /// ranges too.
 async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<FileAs>, headers: HeaderMap) -> Response {
+    // A preview as it is, whatever form was asked: it is lossy already, and never copied (decision 0071).
     if source == crate::bandcamp::SOURCE {
-        return bandcamp_relay(&id, headers.get(header::RANGE).and_then(|v| v.to_str().ok())).await;
+        return bandcamp_relay(&id, headers.get(header::RANGE).and_then(|v| v.to_str().ok()), 0).await;
     }
     let cat = app.library.catalogue();
     let source_id = (source.clone(), id.clone());
@@ -2356,8 +2357,8 @@ struct TrackRefOf {
 /// A track's file as a device keeps it for offline play: where to fetch it, as what, and whether it is ready (a copy
 /// being made has no length yet: the device waits for it).
 async fn offline_file(app: &App, t: &TrackRefOf, form: OfflineAs) -> serde_json::Value {
-    if t.source == crate::bandcamp::SOURCE {
-        return json!({ "source": t.source, "id": t.id, "offline": false });
+    if let Some(refused) = never_offline(t) {
+        return refused;
     }
     let cat = app.library.catalogue();
     let (source, id) = (t.source.clone(), t.id.clone());
@@ -2410,6 +2411,12 @@ async fn offline_file(app: &App, t: &TrackRefOf, form: OfflineAs) -> serde_json:
         _ => "application/octet-stream",
     };
     json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": base, "type": kind, "as": "original", "ready": true, "bytes": bytes } })
+}
+
+/// A track never kept on a device nor copied (a Bandcamp preview, decision 0071): its offline answer, before any file
+/// or Opus copy is looked for.
+fn never_offline(t: &TrackRefOf) -> Option<serde_json::Value> {
+    (t.source == crate::bandcamp::SOURCE).then(|| json!({ "source": t.source, "id": t.id, "offline": false, "error": crate::bandcamp::NOT_KEPT }))
 }
 
 /// A path segment, percent-encoded.
@@ -2543,9 +2550,9 @@ impl std::io::Write for ChannelWriter {
 async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>, headers: HeaderMap) -> Response {
     use crate::stream::{FlacToMp4, Kind};
     if source == crate::bandcamp::SOURCE {
-        // Its MP3 as it is; a moment to start at, as the place in the file it is at (128 kb/s throughout).
-        let range = (q.from_ms > 0).then(|| format!("bytes={}-", q.from_ms * crate::bandcamp::BYTES_PER_SEC / 1000));
-        return bandcamp_relay(&id, range.as_deref()).await;
+        // Its MP3 as it is, whatever form was asked (`as`, `whole`): it is lossy already. A moment to start at, as the
+        // place in the file it is at; else the player's own range.
+        return bandcamp_relay(&id, headers.get(header::RANGE).and_then(|v| v.to_str().ok()), q.from_ms).await;
     }
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
@@ -2789,6 +2796,9 @@ async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(St
     let asked = std::time::Instant::now();
     let since = move || asked.elapsed().as_millis() as u64;
     let what = format!("{source}/{id}");
+    if source == crate::bandcamp::SOURCE {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": crate::bandcamp::NO_TAPE }))).into_response();
+    }
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
     let Some((path, _, duration_ms)) = found else {
@@ -2926,6 +2936,10 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     let since = move || asked.elapsed().as_millis() as u64;
     let what = format!("{source}/{id}");
     let refused = |why: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": why }))).into_response();
+    // Not rendered, as any track Cratarr keeps no file of: the player jumps.
+    if source == crate::bandcamp::SOURCE {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": crate::bandcamp::NO_TAPE }))).into_response();
+    }
     if q.as_.as_deref().is_some_and(|f| f != "wav") {
         return refused("Only WAV winds yet.");
     }
@@ -4138,31 +4152,11 @@ struct BandcampOf {
 /// streamed and its cover shown through Cratarr's own addresses.
 async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json::Value>, ApiError> {
     let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let tracks = preview_tracks(&a);
+    let tracks = a.queue_tracks();
     if tracks.is_empty() {
         return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
     }
     Ok(Json(json!({ "album": a.title, "artist": a.artist, "url": a.url, "tracks": tracks })))
-}
-
-/// A Bandcamp album's tracks that can be heard, as players hold them (`QueueTrack`): previews (decision 0071).
-fn preview_tracks(a: &crate::bandcamp::Album) -> Vec<crate::app::QueueTrack> {
-    let album_id = crate::bandcamp::track_id(&a.url, 0);
-    a.tracks
-        .iter()
-        .filter(|t| t.stream.is_some())
-        .map(|t| crate::app::QueueTrack {
-            source: crate::bandcamp::SOURCE.into(),
-            id: crate::bandcamp::track_id(&a.url, t.n),
-            name: t.title.clone(),
-            artist: Some(t.artist.clone().unwrap_or_else(|| a.artist.clone())),
-            album: Some(a.title.clone()),
-            album_id: Some(album_id.clone()),
-            duration_secs: t.duration_secs,
-            n: Some(t.n),
-            ..Default::default()
-        })
-        .collect()
 }
 
 #[derive(Deserialize)]
@@ -4201,7 +4195,7 @@ async fn preview_bandcamp_artist(Query(q): Query<BandcampArtistOf>) -> Result<Js
     let mut albums = Vec::new();
     for (_, url) in releases.into_iter().take(BANDCAMP_ARTIST_RELEASES) {
         let Ok(a) = bc.album(&url).await else { continue };
-        let tracks = preview_tracks(&a);
+        let tracks = a.queue_tracks();
         if tracks.is_empty() {
             continue;
         }
@@ -4213,27 +4207,63 @@ async fn preview_bandcamp_artist(Query(q): Query<BandcampArtistOf>) -> Result<Js
     Ok(Json(v))
 }
 
-/// A preview's track relayed from Bandcamp as it is sent (nothing kept): its status, length and ranges as Bandcamp
-/// gives them, so a player can seek.
-async fn bandcamp_relay(id: &str, range: Option<&str>) -> Response {
+/// The most of a preview's stream read before it is sent when it starts at a moment, to find its first whole frame
+/// there (a frame is 417 or 418 bytes at 128 kb/s).
+const PREVIEW_HEAD: usize = 4096;
+
+/// A preview's track relayed from Bandcamp as it is sent (nothing kept): its MP3 as it is, whatever form a player asks
+/// for, with its length from its album's page (`x-duration-ms`).
+/// - From its start: its status, length and ranges as Bandcamp gives them (`range`, the player's own, passed on), so a
+///   player can seek in it.
+/// - From a moment (`from_ms`, the page's stream): from the place in the file it is at (128 kb/s throughout), at the
+///   first whole frame there, its time said as a library MP3's is (`x-start-ms`), with no length of its own.
+async fn bandcamp_relay(id: &str, range: Option<&str>, from_ms: u64) -> Response {
     let Some((url, n)) = crate::bandcamp::read_id(id).filter(|(_, n)| *n > 0) else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "No such preview." }))).into_response();
     };
-    let mut resp = match crate::bandcamp::Bandcamp::get().stream(&url, n, range).await {
+    let at = (from_ms > 0).then(|| format!("bytes={}-", from_ms * crate::bandcamp::BYTES_PER_SEC / 1000));
+    let (mut resp, duration) = match crate::bandcamp::Bandcamp::get().stream(&url, n, at.as_deref().or(range)).await {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{e:#}") }))).into_response(),
     };
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    for h in [header::CONTENT_LENGTH, header::CONTENT_RANGE, header::ACCEPT_RANGES] {
-        if let Some(v) = resp.headers().get(&h) {
-            headers.insert(h, v.clone());
+    if let Some(d) = duration {
+        headers.insert("x-duration-ms", HeaderValue::from((d * 1000.0) as u64));
+    }
+    // A moment asked and Bandcamp sent from there: from its first whole frame. Else as Bandcamp sent it (from its start
+    // where it took no range: the player places it as a whole track).
+    let moved = at.is_some() && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let (mut head, mut ended) = (Vec::new(), false);
+    let mut status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+    if moved {
+        while head.len() < PREVIEW_HEAD && !ended {
+            match resp.chunk().await {
+                Ok(Some(b)) => head.extend_from_slice(&b),
+                Ok(None) => ended = true,
+                Err(_) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": "Bandcamp stopped sending it." }))).into_response(),
+            }
+        }
+        let skip = crate::stream::first_frame(&head).unwrap_or(0);
+        head = head.split_off(skip);
+        headers.insert("x-start-ms", HeaderValue::from(from_ms + skip as u64 * 1000 / crate::bandcamp::BYTES_PER_SEC));
+        status = StatusCode::OK;
+    } else {
+        for h in [header::CONTENT_LENGTH, header::CONTENT_RANGE, header::ACCEPT_RANGES] {
+            if let Some(v) = resp.headers().get(&h) {
+                headers.insert(h, v.clone());
+            }
         }
     }
-    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
     tokio::spawn(async move {
+        if !head.is_empty() && tx.send(Ok(axum::body::Bytes::from(head))).await.is_err() {
+            return;
+        }
+        if ended {
+            return;
+        }
         loop {
             match resp.chunk().await {
                 Ok(Some(b)) => {
@@ -6011,6 +6041,96 @@ mod tests {
         assert!(parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[{"source":"s","id":"1"}]},"format":"opus","bitrate":64}"#).is_err(), "a bit rate not offered");
         assert!(parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[]}}"#).is_err(), "no tracks");
         assert!(matches!(serde_json::from_str::<PreviewOf>(r#"{"playlists":["A"],"tracks":true}"#).unwrap(), PreviewOf::Playlists(_)), "the Export tab's body still");
+    }
+
+    /// A fake Bandcamp: an album whose first track streams `frames` MP3 frames (128 kb/s, 417 bytes each) from a server
+    /// of its own, which answers a range as Bandcamp's does. The album is taken as read: no page is asked for.
+    async fn fake_bandcamp(page: &str, frames: usize) -> (String, Vec<u8>) {
+        use axum::http::{HeaderMap, StatusCode, header};
+        use axum::response::IntoResponse;
+        let mut mp3: Vec<u8> = Vec::new();
+        for _ in 0..frames {
+            let mut f = vec![0xFF, 0xFB, 0x90, 0x64];
+            f.resize(417, 0);
+            mp3.extend(f);
+        }
+        let body = mp3.clone();
+        let app = axum::Router::new().route(
+            "/s",
+            axum::routing::get(move |h: HeaderMap| {
+                let body = body.clone();
+                async move {
+                    let from = h.get(header::RANGE).and_then(|v| v.to_str().ok()?.strip_prefix("bytes=")?.strip_suffix('-')?.parse::<usize>().ok());
+                    match from {
+                        Some(f) => {
+                            let range = format!("bytes {f}-{}/{}", body.len() - 1, body.len());
+                            (StatusCode::PARTIAL_CONTENT, [(header::CONTENT_RANGE, range)], body[f..].to_vec()).into_response()
+                        }
+                        None => (StatusCode::OK, [(header::ACCEPT_RANGES, "bytes".to_string())], body).into_response(),
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = format!("http://{}/s", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
+            url: page.into(),
+            title: "Fake".into(),
+            artist: "Faker".into(),
+            cover: None,
+            tracks: vec![crate::bandcamp::Track { n: 1, title: "One".into(), artist: None, duration_secs: Some(12.5), stream: Some(stream), page: None }],
+            released: None,
+            label: None,
+            about: None,
+            credits: None,
+            tags: Vec::new(),
+        });
+        (crate::bandcamp::track_id(page, 1), mp3)
+    }
+
+    async fn body(r: axum::response::Response) -> Vec<u8> {
+        axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap().to_vec()
+    }
+
+    /// What `/api/stream/bandcamp/{id}` and `/api/file/bandcamp/{id}` answer, whatever form a player asks for (`as`,
+    /// `whole`): the preview relayed as it is.
+    #[tokio::test]
+    async fn a_preview_streams_through_cratarr_as_it_is_with_its_ranges() {
+        use axum::http::StatusCode;
+        let page = "https://relay.bandcamp.com/album/fake";
+        let (id, mp3) = fake_bandcamp(page, 60).await;
+        // From its start: its MP3, its length from its page, Bandcamp's own length and ranges.
+        let r = super::bandcamp_relay(&id, None, 0).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.headers()["content-type"], "audio/mpeg");
+        assert_eq!(r.headers()["x-duration-ms"], "12500");
+        assert_eq!(r.headers()["accept-ranges"], "bytes");
+        assert_eq!(body(r).await, mp3);
+        // A player's own range (the app's, Kodi's) passed on, and Bandcamp's answer to it.
+        let r = super::bandcamp_relay(&id, Some("bytes=1000-"), 0).await;
+        assert_eq!(r.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(r.headers()["content-range"], format!("bytes 1000-{}/{}", mp3.len() - 1, mp3.len()).as_str());
+        assert_eq!(body(r).await, &mp3[1000..]);
+        // From a moment (the page's seek, `from_ms`): one second is 16000 bytes in, the next whole frame (the 40th) 263
+        // bytes on, 16 ms later; no length of its own.
+        let r = super::bandcamp_relay(&id, Some("bytes=5-"), 1000).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(r.headers()["x-start-ms"], "1016");
+        assert!(r.headers().get("content-range").is_none());
+        assert_eq!(body(r).await, &mp3[39 * 417..]);
+        // Not a preview's track: nothing asked of Bandcamp.
+        assert_eq!(super::bandcamp_relay("bc.!!", None, 0).await.status(), StatusCode::NOT_FOUND);
+        let album = crate::bandcamp::track_id(page, 0);
+        assert_eq!(super::bandcamp_relay(&album, None, 0).await.status(), StatusCode::NOT_FOUND, "the album is no track");
+    }
+
+    #[test]
+    fn a_preview_is_never_kept_offline_nor_copied() {
+        let t = |source: &str| super::TrackRefOf { source: source.into(), id: "bc.x".into() };
+        let refused = super::never_offline(&t(crate::bandcamp::SOURCE)).unwrap();
+        assert_eq!((refused["offline"].as_bool(), refused["error"].as_str()), (Some(false), Some(crate::bandcamp::NOT_KEPT)));
+        assert!(super::never_offline(&t("cratarr")).is_none(), "a library track goes on to its file or copy");
     }
 
     #[test]

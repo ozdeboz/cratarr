@@ -81,6 +81,11 @@ pub async fn ask(app: &App, ask: Ask) -> Vec<Answer> {
     let mut out = Vec::with_capacity(ask.items.len());
     for item in ask.items {
         let key = item.key();
+        // A Bandcamp album is played, never kept on a device (decision 0071).
+        if item.source == crate::bandcamp::SOURCE {
+            out.push(Answer { key, version: None, tracks: None, error: Some(crate::bandcamp::NOT_KEPT.into()) });
+            continue;
+        }
         match rows_of(app, &item).await {
             Ok((source, rows)) => {
                 let ids: Vec<(&str, Option<&str>)> = rows.iter().filter(|r| !r.missing).filter_map(|r| Some((r.id.as_deref()?, r.album_id.as_deref()))).collect();

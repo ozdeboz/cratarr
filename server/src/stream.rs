@@ -262,6 +262,13 @@ fn mp3_frame(h: [u8; 4]) -> Option<(u64, u64, u64)> {
     Some((samples / 8 * 1000 * kbps / rate + pad, samples, rate))
 }
 
+/// Where the first whole MP3 frame starts in bytes taken from the middle of a file (a range of a Bandcamp preview's
+/// stream): a header whose next frame has one too, as a stray 0xFF is no frame. `None` where none is found in them.
+pub fn first_frame(b: &[u8]) -> Option<usize> {
+    let at = |i: usize| b.get(i..i + 4).and_then(|h| mp3_frame([h[0], h[1], h[2], h[3]]));
+    (0..b.len()).find(|&i| at(i).is_some_and(|(len, _, _)| at(i + len as usize).is_some()))
+}
+
 /// What an MP3's first frame says of the whole (its Xing/Info frame, where it has one): its frame count and its bytes,
 /// each where given; the sample rate and samples a frame; and where its sound begins (after its ID3v2 tag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,6 +468,20 @@ mod mp3_tests {
         let path = std::env::temp_dir().join(format!("cratarr-mp3-{}-{name}.mp3", std::process::id()));
         std::fs::write(&path, &b).unwrap();
         (path, starts)
+    }
+
+    #[test]
+    fn bytes_from_mid_file_start_at_their_first_whole_frame() {
+        let header = [0xFF, 0xFB, 0x90, 0x64];
+        let mut b = vec![0u8; 200];
+        b[10..14].copy_from_slice(&header);
+        for _ in 0..3 {
+            let mut f = header.to_vec();
+            f.resize(417, 0);
+            b.extend(f);
+        }
+        assert_eq!(first_frame(&b), Some(200), "a stray header is no frame");
+        assert_eq!(first_frame(&b[..300]), None, "not enough to tell");
     }
 
     #[test]
