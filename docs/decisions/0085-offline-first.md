@@ -1,0 +1,58 @@
+# 0085: Offline first, in five steps
+
+- Status: accepted as a plan (the owner, 2026-10-30: "This sounds like a pretty good plan"), beside 0.11 to 0.14; not
+  built
+- Date: 2026-10-30
+- Builds on: 0033 (Play On's queues), 0038 (kept on this device), 0052 (local library), 0057 and 0075 (one engine, the
+  rules crate), 0062 (the app owns its controls), and the page's out-of-reach rules (lib/reach, lib/later)
+
+## Context
+
+Cratarr's apps are thin clients, as Jellyfin's are: the Android app and the desktop app show the server's pages, and
+the pages ask the server for everything. What the owner likes in Finamp is its offline-first reliability, not its
+native look. Today the apps already keep music on the device (Sync to this device, Download…), show the last copy of
+what they saw when the server is out of reach (the service worker), and send the changes made meanwhile once it answers
+again (lib/later). But a cold start with no network depends on what was last cached, nothing but the downloads can be
+searched or filtered offline, and an edit made offline is replayed rather than merged.
+
+Offline first is a question of where the data lives, not of the UI's toolkit. So the Svelte pages stay, and the
+apps gain what a thick client has: their own pages, a local store read first, and a sync with the server.
+
+## Decision
+
+Five steps, each useful on its own, so offline use improves with every release rather than at the end:
+
+1. **The apps carry their own pages** (beside 0.11). The APK and the `.deb` hold the web app; the server sends data
+   only. The app opens at once anywhere, a blank page never. An app whose pages are older than the server's takes the
+   server's (the server says its pages' version; the app compares).
+2. **Downloads, an offline shelf** (beside 0.12). What is on the device keeps its metadata and covers in a local store,
+   so Downloads searches, filters and orders with no network.
+3. **Nothing done offline is lost** (beside 0.12). Favourites, playlist edits, plays and scrobbles are written to the
+   device first and synced, with each change's merge rule set (open points below); a small "N to send" shows what
+   waits. What lib/later does today, made the rule.
+4. **The whole library's index on the device** (beside 0.13). Every album's, track's and artist's metadata (a few MB,
+   no audio), kept current by what changed since the last sync; what is not downloaded shows dimmed. Offline the whole
+   library browses, searches and filters; online the pages read the device first, so they are instant. Modes per
+   server (0.12) decide what each mode mirrors, so this comes after them.
+5. **Crates and the queue on the device** (0.14). Crate rules run over the local index through the rules crate (0075's
+   one engine, the shared Rust core: in the app through UniFFI, in the desktop app natively), and the queue is held on
+   the device, synced with Play On. Crates, radio and handovers work without the server in between.
+
+The local store and its sync are one piece of the shared Rust core (SQLite and the sync), built once for the Android
+app and the desktop app; the generated protocol types (lib/generated) are its messages.
+
+## Open points (the owner's)
+
+- How each change merges when it was made in two places: a playlist's tracks (as a set, each addition and removal
+  kept; or the last edit wins), its order, a favourite, a rating, a crate's rules, a queue.
+- How much the device mirrors: the whole library, or what a mode or a user's own music holds; covers at full size or
+  small.
+- What an app with pages older than the server's does when the server is out of reach: its own pages, with the newer
+  server's fields missing.
+
+## Consequences
+
+- Each step is a release's piece of its own and can stop there: after step 3 the apps open anywhere, Downloads is
+  fully offline, and nothing done offline is lost.
+- The desktop app's move from Electron to a Rust shell (Tauri) is natural from step 5, not required before it.
+- The server gains a sync: what changed since a version, per kind, and the merge of what comes back.

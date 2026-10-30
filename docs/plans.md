@@ -24,6 +24,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 - **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)).
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
+- **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
+  apps carry their own pages (beside 0.11); Downloads an offline shelf, and nothing done offline lost (beside 0.12);
+  the whole library's index on the device (beside 0.13); crates and the queue on the device (0.14).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
 
 ## External library
