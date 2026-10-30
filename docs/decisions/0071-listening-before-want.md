@@ -77,3 +77,26 @@ MP3 frames), and its waveform is worked out on the device, a few seconds decoded
 Bandcamp is asked politely: one page or search at a time, at most one a second, server-wide; after a "too many" (429)
 or "unavailable" (503) none for as long as it asks (a minute where it does not say). A new look keeps the pages the
 one before found instead of looking them up again, so what plays stays playable while a sync runs.
+
+## Amended 2026-10-30 (0.9.19): previews in the queue, on every player
+
+The owner, 2026-10-30, for 0.9.19's scope: "All goes in 9.19!": Bandcamp in the queue, on every player.
+
+- **A queue entry as any other.** A preview's track is `QueueTrack { source: "bandcamp", id }`, its id the album's
+  page and the track's number (`bandcamp::track_id`, `bc.` then URL-safe base64 of `n|page`), with its own name,
+  artist, album, album id (`track_id(page, 0)`) and length from the page (`/api/preview/bandcamp` gives them so). Play
+  next and Add to queue take it on the page, in the app and through Play On (`play`, `add`; `add` with `album` a
+  Bandcamp album's id adds its previews, as a library album's tracks are added). One sent by its id alone is named
+  from its album's page.
+- **Every player asks Cratarr, never Bandcamp.** `/api/stream/bandcamp/{id}` (the page) and `/api/file/bandcamp/{id}`
+  (the app, Kodi) relay the MP3 as it is, whatever form is asked for (`as=opus`, the app's mobile-data form,
+  `whole=1`): it is lossy already. A player's range is passed on; a start mid-track (`from_ms`) begins at the first
+  whole frame there, its time said (`x-start-ms`) as a library MP3's is. Kodi plays previews as it plays the library's
+  tracks, from `/api/file`.
+- **No tape.** Tape rewind and winds refuse a preview (404, as for any track Cratarr keeps no file of: the player
+  starts the track over, or jumps): they are rendered from a file, and a preview is relayed as it plays, never kept.
+- **Never kept.** Not in a playlist (adding one is refused; a playlist made from the queue leaves them out), not a
+  saved crate's seed, not downloaded, kept ahead or kept by an item on the app or the installed page, never an Opus
+  copy, not in an export. Refused as "A Bandcamp preview is not kept: buy it on Bandcamp."
+- **Still not listening**, as decided above: never a play, never in the history, never scrobbled. Start radio seeds
+  from the library's tracks only.

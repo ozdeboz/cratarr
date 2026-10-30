@@ -806,6 +806,19 @@ mod undo_tests {
     }
 
     #[tokio::test]
+    async fn a_bandcamp_preview_goes_in_no_playlist_and_seeds_no_crate() {
+        let (d, s) = service().await;
+        s.create("Chill").await.unwrap();
+        let preview = crate::bandcamp::track_id("https://a.bandcamp.com/album/b", 1);
+        let added = s.append_tracks("Chill", crate::bandcamp::SOURCE, std::slice::from_ref(&preview), false).await;
+        assert!(matches!(added, Err(ToggleError::Refused(m)) if m == crate::bandcamp::NOT_KEPT));
+        assert!(s.entries("Chill").await.unwrap().is_empty());
+        let like = crates::like_crate("like", "Like it", vec![preview], crates::LIKE_COUNT).conditions;
+        assert!(matches!(s.crate_save(None, "Like it", like).await, Err(ToggleError::Refused(m)) if m == crate::bandcamp::NOT_KEPT));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
     async fn each_account_has_its_own_playlists_in_a_folder_of_its_own() {
         let (d, s) = service().await;
         let ann = s.lib.store_for(Some("ann")).unwrap();
@@ -2842,6 +2855,10 @@ impl PlaylistService {
     /// tracks into a playlist in one call) those it holds already, and repeats among them, are left out instead. Tracks
     /// outside the library are left out. Returns how many were added and the undo token (none when nothing was).
     pub async fn append_tracks(&self, id: &str, source_id: &str, ids: &[String], only_new: bool) -> Result<(usize, Option<String>), ToggleError> {
+        // A Bandcamp preview is never in a playlist (decision 0071): it is bought on Bandcamp.
+        if source_id == crate::bandcamp::SOURCE {
+            return Err(ToggleError::Refused(crate::bandcamp::NOT_KEPT.into()));
+        }
         let gone = || ToggleError::Refused("Those tracks are not on a connected server.".into());
         let (a, s) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id).ok_or_else(gone)?;
         let (store, name) = self.own(id)?;

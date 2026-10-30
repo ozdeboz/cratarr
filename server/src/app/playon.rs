@@ -2772,16 +2772,27 @@ impl PlayOn {
     }
 
     /// Tracks sent by their ids only (a page sends a playlist's ids and looks their names up later) get their title,
-    /// artist and album from the catalogue, so the player, the pages and Home Assistant all show them.
-    async fn named(&self, tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
+    /// artist and album from the catalogue, so the player, the pages and Home Assistant all show them; a Bandcamp
+    /// preview from its album's page (decision 0071).
+    async fn named(&self, mut tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
+        let bc = crate::bandcamp::SOURCE;
         if tracks.iter().all(|t| !t.name.is_empty()) {
+            return tracks;
+        }
+        for t in tracks.iter_mut().filter(|t| t.source == bc && t.name.is_empty()) {
+            if let Some(d) = super::describe::bandcamp(&t.id).await {
+                (t.name, t.artist, t.album, t.album_id) = (d.name, d.artist, d.album, d.album_id);
+                t.duration_secs = t.duration_secs.or(d.duration_secs);
+            }
+        }
+        if tracks.iter().all(|t| !t.name.is_empty() || t.source == bc) {
             return tracks;
         }
         let (cat, sent) = (self.lib.catalogue(), tracks.clone());
         let named = tokio::task::spawn_blocking(move || {
             let mut tracks = tracks;
             let mut by_source: HashMap<String, Vec<usize>> = HashMap::new();
-            for (i, t) in tracks.iter().enumerate().filter(|(_, t)| t.name.is_empty()) {
+            for (i, t) in tracks.iter().enumerate().filter(|(_, t)| t.name.is_empty() && t.source != bc) {
                 by_source.entry(t.source.clone()).or_default().push(i);
             }
             for (source, at) in by_source {
@@ -3100,9 +3111,15 @@ fn numbered(mut tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
     tracks
 }
 
-/// An album of Cratarr's own library (decision 0032) for `play` and `add`, in its order. `None` when none is asked for.
+/// An album of Cratarr's own library (decision 0032) for `play` and `add`, in its order, or a Bandcamp album by its id
+/// (`track_id(page, 0)`, decision 0071) as its previews. `None` when none is asked for.
 async fn own_album(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
     let Some(album) = from.album.clone() else { return Ok(None) };
+    if crate::bandcamp::is_preview(&album) {
+        let (page, _) = crate::bandcamp::read_id(&album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
+        let a = crate::bandcamp::Bandcamp::get().album(&page).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        return Ok(Some(a.queue_tracks()));
+    }
     let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
     let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
         Ok(served.library.album(&album)?.and_then(|a| a.song).unwrap_or_default())
@@ -3582,6 +3599,58 @@ mod tests {
         // Nothing to clear: nothing to undo.
         p.command("tablet", Command::play(vec![t(1)], 0, 0)).await.unwrap();
         assert_eq!(p.answer("tablet", Command::Clear).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn bandcamp_previews_are_played_and_added_as_any_track_with_their_own_names() {
+        let p = play_on().await;
+        let mut tablet = p.connect("tablet").unwrap();
+        // A Bandcamp album as its page was read a moment ago: nothing is asked of Bandcamp here.
+        let page = "https://playon.bandcamp.com/album/fake";
+        let track = |n: u32, title: &str| crate::bandcamp::Track {
+            n,
+            title: title.into(),
+            artist: None,
+            duration_secs: Some(60.0),
+            stream: Some(format!("http://127.0.0.1:9/{n}")),
+            page: None,
+        };
+        crate::bandcamp::Bandcamp::get().keep(crate::bandcamp::Album {
+            url: page.into(),
+            title: "Fake".into(),
+            artist: "Faker".into(),
+            cover: None,
+            tracks: vec![track(1, "One"), track(2, "Two"), track(3, "Three")],
+            released: None,
+            label: None,
+            about: None,
+            credits: None,
+            tags: Vec::new(),
+        });
+        let id = |n: u32| crate::bandcamp::track_id(page, n);
+        let one = QueueTrack { source: "bandcamp".into(), id: id(1), name: "One".into(), artist: Some("Faker".into()), album: Some("Fake".into()), ..QueueTrack::default() };
+        let own = QueueTrack { source: "cratarr".into(), id: "tr-1".into(), name: "Own".into(), ..QueueTrack::default() };
+        p.command("tablet", Command::play(vec![one, own], 0, 0)).await.unwrap();
+        // Play next with a preview as a page sends it; Add to queue with one by its id alone (Home Assistant's): named
+        // from its album's page.
+        let next: Command = serde_json::from_value(serde_json::json!({ "command": "add", "how": "next", "tracks": [{ "source": "bandcamp", "id": id(2), "name": "Two" }] })).unwrap();
+        p.command("tablet", next).await.unwrap();
+        let last: Command = serde_json::from_value(serde_json::json!({ "command": "add", "how": "last", "tracks": [{ "source": "bandcamp", "id": id(3) }] })).unwrap();
+        p.command("tablet", last).await.unwrap();
+        // A whole Bandcamp album by its id, as an album of the library's is added.
+        let album: Command = serde_json::from_value(serde_json::json!({ "command": "add", "how": "last", "album": id(0) })).unwrap();
+        p.command("tablet", album).await.unwrap();
+
+        let queue = p.get("tablet").unwrap().queue.unwrap();
+        assert_eq!(queue.len(), 7);
+        let mut names: Vec<&str> = queue.iter().filter(|t| t.source == "bandcamp").map(|t| t.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["One", "One", "Three", "Three", "Two", "Two"]);
+        let three = queue.iter().find(|t| t.id == id(3)).unwrap();
+        assert_eq!((three.artist.as_deref(), three.album.as_deref(), three.album_id.clone()), (Some("Faker"), Some("Fake"), Some(id(0))));
+        // The player is told them as they are, and streams them from Cratarr (`/api/stream/bandcamp/…`).
+        let sent = told(&mut tablet).iter().map(|m| m.to_string()).collect::<Vec<_>>().join(" ");
+        assert!(sent.contains(&id(2)) && sent.contains(&id(3)), "{sent}");
     }
 
     #[tokio::test]

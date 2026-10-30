@@ -50,6 +50,8 @@ pub fn ours(serve: &crate::serve::Serve, asked: &[(String, String)], account: Op
         .map(|(source, id)| {
             if source == crate::source::cratarr::KIND.id {
                 Some(id.clone())
+            } else if source == crate::bandcamp::SOURCE {
+                None
             } else {
                 serve.catalogue().track_of_source(source, id).map(crate::serve::ids::song)
             }
@@ -89,7 +91,7 @@ pub fn ours(serve: &crate::serve::Serve, asked: &[(String, String)], account: Op
 
 /// A Bandcamp preview's track from its album's page (read in turn, kept a few minutes): its album is the page's
 /// (`track_id(page, 0)`, decision 0071).
-async fn bandcamp(id: &str) -> Option<Described> {
+pub(crate) async fn bandcamp(id: &str) -> Option<Described> {
     let (page, n) = crate::bandcamp::read_id(id)?;
     let a = crate::bandcamp::Bandcamp::get().album(&page).await.ok()?;
     let t = a.tracks.iter().find(|t| t.n == n)?;

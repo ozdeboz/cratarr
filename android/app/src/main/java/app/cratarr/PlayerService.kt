@@ -773,7 +773,7 @@ class PlayerService : MediaSessionService() {
     private fun windUrl(fromMs: Long, toMs: Long?, fitMs: Long?, back: Boolean, through: String?, speed: Float, gainDb: Float, rise: Boolean): String? {
         val item = player.currentMediaItem ?: return null
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
-        if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
+        if (DeviceMusic.located(item) != null || Previews.isPreview(item.mediaId)) return null
         val to = toMs?.let { "&to_ms=$it" } ?: ""
         val w = prefs.holdWind(back)
         val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${w.attackMs}&release_ms=${w.releaseMs}&piece_ms=${w.pieceMs}" } ?: ""
@@ -794,7 +794,7 @@ class PlayerService : MediaSessionService() {
         if (index !in 0 until player.mediaItemCount) return null
         val item = player.getMediaItemAt(index)
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
-        if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
+        if (DeviceMusic.located(item) != null || Previews.isPreview(item.mediaId)) return null
         val w = prefs.holdWind(back)
         val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
         return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=${w.speed}" +
@@ -811,7 +811,7 @@ class PlayerService : MediaSessionService() {
         for (j in places) {
             if (out.size >= WIND_THROUGH) break
             val item = player.getMediaItemAt(j)
-            if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) break
+            if (DeviceMusic.located(item) != null || Previews.isPreview(item.mediaId)) break
             val ms = trackOf(item)?.optDouble("duration_secs", 0.0)?.takeIf { it > 0 }?.let { (it * 1000).toLong() } ?: break
             out += item.mediaId to ms
         }

@@ -53,6 +53,13 @@ pub fn is_preview(id: &str) -> bool {
     id.starts_with(ID)
 }
 
+/// Why a preview is refused wherever a track would be kept (a playlist, a download, a copy, a kept item): it is
+/// played, never kept, and bought on Bandcamp (decision 0071, amended 2026-10-30).
+pub const NOT_KEPT: &str = "A Bandcamp preview is not kept: buy it on Bandcamp.";
+
+/// Why Tape rewind and a wind refuse a preview: they are rendered from a file Cratarr keeps, and it keeps none.
+pub const NO_TAPE: &str = "A Bandcamp preview does not wind: Cratarr keeps no file of it.";
+
 /// An album as its page gives it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Album {
@@ -71,6 +78,29 @@ pub struct Album {
     pub credits: Option<String>,
     /// Bandcamp's tags for it, as the page lists them.
     pub tags: Vec<String>,
+}
+
+impl Album {
+    /// Its tracks that can be heard, as players hold them (`QueueTrack`): each with its own name, artist, album and
+    /// length from the page, its album's id `track_id(page, 0)`.
+    pub fn queue_tracks(&self) -> Vec<crate::app::QueueTrack> {
+        let album_id = track_id(&self.url, 0);
+        self.tracks
+            .iter()
+            .filter(|t| t.stream.is_some())
+            .map(|t| crate::app::QueueTrack {
+                source: SOURCE.into(),
+                id: track_id(&self.url, t.n),
+                name: t.title.clone(),
+                artist: Some(t.artist.clone().unwrap_or_else(|| self.artist.clone())),
+                album: Some(self.title.clone()),
+                album_id: Some(album_id.clone()),
+                duration_secs: t.duration_secs,
+                n: Some(t.n),
+                ..Default::default()
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -201,8 +231,8 @@ impl Bandcamp {
     }
 
     /// A track's stream, asked for as it is played: the response, its status and headers as Bandcamp sends them
-    /// (`range` passed on, so a player can seek).
-    pub async fn stream(&self, url: &str, n: u32, range: Option<&str>) -> Result<reqwest::Response> {
+    /// (`range` passed on, so a player can seek), and the track's length as its page gives it.
+    pub async fn stream(&self, url: &str, n: u32, range: Option<&str>) -> Result<(reqwest::Response, Option<f64>)> {
         let a = self.album(url).await?;
         let t = a.tracks.iter().find(|t| t.n == n).context("No such track on that album")?;
         let s = t.stream.as_deref().context("That track does not stream on Bandcamp")?;
@@ -216,7 +246,14 @@ impl Bandcamp {
             self.kept.lock().unwrap_or_else(|p| p.into_inner()).remove(&a.url);
             bail!("Bandcamp answered {}", resp.status());
         }
-        Ok(resp)
+        Ok((resp, t.duration_secs))
+    }
+
+    /// An album taken as read, as if its page had just been read (a fake Bandcamp's, in tests).
+    #[cfg(test)]
+    pub fn keep(&self, album: Album) {
+        let url = album_page(&album.url).unwrap_or_else(|| album.url.clone());
+        self.kept.lock().unwrap_or_else(|p| p.into_inner()).insert(url, (Instant::now(), album));
     }
 
     /// Bandcamp's search box asked for albums: (title, artist, album page), its first answers.

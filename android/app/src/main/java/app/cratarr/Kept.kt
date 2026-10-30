@@ -116,6 +116,7 @@ object Kept {
 
     /** Keep an item, or not; then sync. */
     fun set(context: Context, kind: String, source: String, id: String, name: String, on: Boolean) {
+        if (on && source == Previews.SOURCE) return
         val app = context.applicationContext
         worker.execute {
             val items = loadItems(app)
@@ -229,6 +230,7 @@ object Kept {
                 for (i in 0 until item.tracks.length()) {
                     val t = item.tracks.optJSONObject(i) ?: continue
                     val k = keyOf(t)
+                    if (Previews.isPreview(k)) continue
                     tracks[k] = t
                     val held = wanted[k]
                     if (held != null) {
