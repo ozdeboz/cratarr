@@ -5583,8 +5583,8 @@ async fn artist_about(ctx: Ctx, Query(q): Query<AboutQuery>) -> Json<serde_json:
 struct SearchQuery {
     #[serde(default)]
     q: String,
-    /// Which kinds, comma-separated (album, artist, track, genre, playlist, crate; missing, requested, spotify,
-    /// suggested, excluded); all when none.
+    /// Which kinds, comma-separated (album, artist, track, genre, playlist, crate; work, 0.12; missing, requested,
+    /// spotify, suggested, excluded); all when none.
     #[serde(default)]
     kinds: Option<String>,
     #[serde(default)]

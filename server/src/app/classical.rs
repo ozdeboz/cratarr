@@ -326,6 +326,19 @@ pub struct RowWork {
     pub part_number: Option<u32>,
 }
 
+/// A top-level work as search finds it (0.12, decision 0086: works reachable): its MusicBrainz id, title, catalogue
+/// number where its title says one, composers, how many of its recordings the library holds (an album each), and the
+/// oldest one's album (as `Index::work` orders them).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopWork {
+    pub mbid: String,
+    pub title: String,
+    pub catalogue: Option<String>,
+    pub composers: Vec<ComposerRef>,
+    pub recordings: usize,
+    pub oldest: Option<String>,
+}
+
 /// How far up a work's parents are followed (MusicBrainz's are a few deep at most: an aria, its act, its opera).
 const DEPTH: usize = 16;
 
@@ -400,6 +413,8 @@ pub struct Index {
     parent: HashMap<String, (String, Option<u32>)>,
     parts: HashMap<String, Vec<String>>,
     composer_works: HashMap<String, Vec<String>>,
+    /// Every composer's top-level works once, for search (0.12, decision 0086: works reachable; `top_works`).
+    top_works: Vec<TopWork>,
     /// To keep (`composer_keys`): the keys given out now (key, name) not kept yet, and keys found to lead to another.
     noted: (Vec<(String, String)>, Vec<(String, String)>),
 }
@@ -544,6 +559,46 @@ impl Index {
             })
         });
         Some(works.collect())
+    }
+
+    /// The top-level works search finds (0.12, decision 0086: works reachable): every composer's (`composer_works`),
+    /// each once, only those the library holds a recording of; the most recorded first, then by title.
+    pub fn top_works(&self) -> &[TopWork] {
+        &self.top_works
+    }
+
+    /// `top_works` made (at the build's end).
+    fn list_top_works(&self) -> Vec<TopWork> {
+        let mut ids: Vec<&String> = self.composer_works.values().flatten().collect();
+        ids.sort();
+        ids.dedup();
+        let mut out: Vec<TopWork> = ids
+            .into_iter()
+            .filter_map(|w| {
+                let (title, composers) = self.works.get(w)?;
+                let (recordings, oldest) = self.recorded(w);
+                (recordings > 0).then(|| TopWork { mbid: w.clone(), title: title.clone(), catalogue: catalogue_of(title), composers: composers.clone(), recordings, oldest })
+            })
+            .collect();
+        out.sort_by(|a, b| b.recordings.cmp(&a.recordings).then_with(|| super::playlists::natural(&a.title, &b.title)).then_with(|| a.mbid.cmp(&b.mbid)));
+        out
+    }
+
+    /// How many recordings of a work the library holds (an album each, its parts' tracks too), and the oldest one's
+    /// album, as `work` orders them (by year, one without last, then by the album's name).
+    fn recorded(&self, work: &str) -> (usize, Option<String>) {
+        let albums = self.albums_of(work);
+        let first = |songs: &[String]| songs.first().and_then(|s| self.lines.get(s));
+        let year = |album: &str, songs: &[String]| self.records.get(album).and_then(|r| r.year).or_else(|| first(songs).and_then(|l| l.year));
+        let name = |songs: &[String]| first(songs).map(|l| l.album.clone()).unwrap_or_default();
+        let oldest = albums
+            .iter()
+            .min_by(|a, b| {
+                let (ya, yb) = (year(a.0.as_str(), a.1.as_slice()), year(b.0.as_str(), b.1.as_slice()));
+                (ya.is_none(), ya).cmp(&(yb.is_none(), yb)).then_with(|| super::playlists::natural(&name(a.1.as_slice()), &name(b.1.as_slice())))
+            })
+            .map(|a| a.0.clone());
+        (albums.len(), oldest)
     }
 
     /// A work (0.12, decision 0086): its composers, its parent, its parts in order, and the library's recordings of it,
@@ -931,6 +986,8 @@ pub fn build(i: &Inputs) -> Index {
         list.sort_by(|a, b| recorded.get(b).cmp(&recorded.get(a)).then_with(|| super::playlists::natural(t(a), t(b))).then_with(|| a.cmp(b)));
     }
     index.composer_works = by_composer;
+    // Search's works (0.12, decision 0086: works reachable).
+    index.top_works = index.list_top_works();
     index
 }
 
