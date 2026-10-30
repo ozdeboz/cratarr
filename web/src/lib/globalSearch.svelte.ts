@@ -25,6 +25,8 @@ const LIBRARY: { kind: SearchKind; label: string }[] = [
   { kind: 'style', label: 'Styles' },
   { kind: 'mood', label: 'Moods' },
   { kind: 'tag', label: 'Tags' },
+  // The labels (0.11, the owner, 2026-10-30), each opening its crate as a word's; a server before 0.11 finds none.
+  { kind: 'label', label: 'Labels' },
 ];
 /** Known elsewhere (decision 0076): what Cratarr keeps of music not in the library (0.9.13's server adds the last
  *  three; one before it leaves them out). */
