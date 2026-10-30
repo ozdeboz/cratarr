@@ -3,7 +3,8 @@
   // the missing tracks first; one tapped is looked for on Soulseek (one search, never in bulk), its candidates listed
   // lossless first, then free slots, then speed; one tapped is fetched and checked (decoded whole, its length, AcoustID
   // naming that recording), and once it passes, Add to album puts it in the album's folder, tagged from MusicBrainz, with
-  // Undo. `replace`: a track already there, swapped for a better copy (its old file to the trash).
+  // Undo. Or a file already on the server (0.9.19, its download folder: one found on an old drive, put there), checked the
+  // same way and added the same way. `replace`: a track already there, swapped for a better copy (its old file to the trash).
   import { untrack } from 'svelte';
   import { undo } from './api';
   import { on } from './events.svelte';
@@ -17,15 +18,18 @@
     addFetched,
     dropFetch,
     fetchCandidate,
+    fetchFile,
     getFetch,
     getRelease,
     getSearch,
+    getTrackFiles,
     searchTrack,
     type Candidate,
     type Fetch,
     type Release,
     type ReleaseTrack,
     type Search,
+    type TrackFile,
   } from './replaceTrack';
   import { toast } from './toast.svelte';
 
@@ -38,7 +42,10 @@
 
   let release = $state<Release | null>(null);
   let error = $state<string | null>(null);
-  let step = $state<'tracks' | 'search' | 'fetch'>('tracks');
+  let step = $state<'tracks' | 'search' | 'files' | 'fetch'>('tracks');
+  let files = $state<TrackFile[] | null>(null);
+  /** Where the fetch shown came from, to go back to. */
+  let fetchedFrom = $state<'search' | 'files'>('search');
   let wanted = $state<ReleaseTrack | null>(null);
   let searchId = $state<string | null>(null);
   let search = $state<Search | null>(null);
@@ -96,13 +103,40 @@
     }
   }
 
-  async function take(c: Candidate) {
-    if (!searchId) return;
-    step = 'fetch';
-    fetching = { state: 'queued', percent: null };
+  /** Back to Soulseek's candidates: asked on where the search was still running when it was left. */
+  function backToSearch() {
+    step = 'search';
+    const id = searchId;
+    if (!id || search?.state !== 'searching') return;
+    void poll(
+      () => getSearch(id),
+      (v) => (search = v),
+      (v) => v.state !== 'searching',
+      () => searchId === id && step === 'search',
+    );
+  }
+  /** The files on the server, the best match for the wanted track first. */
+  async function fromFiles() {
+    step = 'files';
+    files = null;
     error = null;
     try {
-      const { id } = await fetchCandidate(searchId, c.id);
+      files = await getTrackFiles([wanted?.artist ?? release?.artist ?? '', wanted?.title ?? ''].filter(Boolean).join(' '));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+  /** A Soulseek candidate or a file on the server taken: fetched (or copied) and checked, then the same steps. */
+  async function take(c: Candidate | TrackFile) {
+    const fromFile = 'path' in c;
+    if (!fromFile && !searchId) return;
+    if (fromFile && !wanted) return;
+    fetchedFrom = fromFile ? 'files' : 'search';
+    step = 'fetch';
+    fetching = { state: fromFile ? 'checking' : 'queued', percent: null };
+    error = null;
+    try {
+      const { id } = fromFile ? await fetchFile(c.path, { source, id: album.id }, wanted!.recording, replace ?? (wanted!.have ?? undefined)) : await fetchCandidate(searchId!, c.id);
       fetchId = id;
       void poll(
         () => getFetch(id),
@@ -140,7 +174,8 @@
     const id = fetchId;
     fetchId = null;
     fetching = null;
-    step = 'search';
+    if (fetchedFrom === 'files') step = 'files';
+    else backToSearch();
     if (id) await dropFetch(id).catch(() => {});
   }
   const fetchLabel = (f: Fetch) =>
@@ -164,7 +199,7 @@
   chips={step === 'tracks' && release ? [release.artist ?? '', release.year ? String(release.year) : '', missing.length ? `${plural(missing.length, 'track')} missing` : 'Complete'].filter(Boolean) : []}
   {onclose}
   step={step === 'tracks' ? 'menu' : step}
-  onback={step === 'tracks' || replace ? null : step === 'fetch' ? () => void drop() : () => ((step = 'tracks'), (searchId = null))}
+  onback={step === 'tracks' || (replace && step === 'search') ? null : step === 'fetch' ? () => void drop() : step === 'files' ? backToSearch : () => ((step = 'tracks'), (searchId = null))}
 >
   {#if error}
     <p class="why">{error}</p>
@@ -219,6 +254,31 @@
             <MenuEntry icon="externalLink" label="On Bandcamp" onclick={() => window.open(search!.bandcamp!, '_blank', 'noopener')} />
           </MenuGroup>
         {/if}
+      </MenuCards>
+    {/if}
+    <!-- A file already on the server, whatever Soulseek finds (or while it still looks). -->
+    <MenuCards>
+      <MenuGroup>
+        <MenuEntry icon="intoBox" label="From a file on the server" onclick={() => void fromFiles()} />
+      </MenuGroup>
+    </MenuCards>
+  {:else if step === 'files'}
+    {#if !files && !error}
+      <PageLoading />
+    {:else if files}
+      <MenuCards>
+        <MenuGroup>
+          {#each files as f (f.path)}
+            <MenuEntry
+              icon="intoBox"
+              label={f.title ? `${f.track_no ? `${f.track_no}. ` : ''}${f.title}` : f.name}
+              sub={[f.artist, f.album, f.duration_secs ? clock(f.duration_secs * 1000) : null, mb(f.bytes)].filter(Boolean).join(' · ')}
+              onclick={() => void take(f)}
+            />
+          {:else}
+            <p class="why">No audio files in the server's download folder.</p>
+          {/each}
+        </MenuGroup>
       </MenuCards>
     {/if}
   {:else if fetching}
