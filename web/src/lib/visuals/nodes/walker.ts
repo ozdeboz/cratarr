@@ -26,7 +26,7 @@ import type { FlowField } from './modules';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 
-/** How long a module's choice takes to change (0.9.19; the owner, 2026-10-29: continuous over discrete): its picture
+/** How long a module's choice takes to change (0.10; the owner, 2026-10-29: continuous over discrete): its picture
  *  of the choice before and of the new one crossfaded, eased. */
 export const CHOICE_GLIDE_MS = 600;
 

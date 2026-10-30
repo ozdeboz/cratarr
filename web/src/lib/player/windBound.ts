@@ -1,4 +1,4 @@
-// A wind lives only inside its commitment (0.9.19; the architecture audit, 2026-10-29). The tape's ramp (rampSlot)
+// A wind lives only inside its commitment (0.10; the architecture audit, 2026-10-29). The tape's ramp (rampSlot)
 // and its motion (motionSlot) are tied here: a wind begun is committed to playing from its first moment; a ramp ended
 // outright while a wind sounds (a new queue, a Stop, a seek during a ramp) ends the wind first through its own end
 // (`endWind`, lib/localPlayer's endRewind: its clip stopped, its parts let go), then the ramp. Pure.

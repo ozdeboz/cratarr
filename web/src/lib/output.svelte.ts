@@ -252,7 +252,7 @@ export async function joinTo(output: typeof prefs.output) {
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
 }
 
-/** The screen follows the music (0.9.19; the owner, 2026-10-30: "Every screen showing that player"): moved from the
+/** The screen follows the music (0.10; the owner, 2026-10-30: "Every screen showing that player"): moved from the
  *  player this screen shows to `name` (a handover elsewhere), it shows and drives that one, as if chosen in Play On;
  *  nothing is moved or paused by it. */
 export function followTo(name: string) {

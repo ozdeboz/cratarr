@@ -1,5 +1,5 @@
 // This device's settings, each with one owner (the architecture audit, 2026-10-29: device settings with one owner;
-// 0.9.19). In the app the app keeps its player's (sent with `device-set`, every one of them in its answer, lib/app),
+// 0.10). In the app the app keeps its player's (sent with `device-set`, every one of them in its answer, lib/app),
 // in a browser this browser does (lib/prefs, kept here); a player's speaker delay and its sharing are Cratarr's, for
 // any kind. What one owner keeps is read and changed in one way (lib/device.svelte for the two that both kinds have:
 // Start and stop, and levelling), never from a second copy: the page's copy of Start and stop or levelling in the app

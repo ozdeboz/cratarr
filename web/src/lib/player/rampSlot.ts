@@ -1,4 +1,4 @@
-// The tape's ramp as one value (0.9.19; the architecture audit, 2026-10-29: the tape's two dozen flags made from what
+// The tape's ramp as one value (0.10; the architecture audit, 2026-10-29: the tape's two dozen flags made from what
 // it is doing): a ramp under way has what it committed to (paused or playing) and where it holds the counter, or there
 // is none. The counter is held only by a ramp, so with none there is no counter held: a state the tape's check once
 // had to put right (lib/player/tape) cannot be. lib/localPlayer's `tape.committed` and `tape.heldAt` read and write

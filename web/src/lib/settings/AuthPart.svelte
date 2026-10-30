@@ -38,7 +38,7 @@
   const proxyList = (v: string) => v.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
   // Home (0.9.18-1; the owner, 2026-10-30): where other users may play on, follow or control a device someone shared.
   let editingHome = $state(false);
-  // The guest page's host (0.9.19): a user, or one of the players.
+  // The guest page's host (0.10): a user, or one of the players.
   let choosingHost = $state(false);
   const hostName = (h: { user: string } | { player: string } | null) => (!h ? 'No one' : 'user' in h ? h.user : h.player);
   async function pickHost(host: { user: string } | { player: string }) {
@@ -97,7 +97,7 @@
       <Item name="Home networks" value={r.home_networks.length ? r.home_networks.join(', ') : 'Local addresses'} onclick={() => (editingHome = true)} />
       {#if r.guest}
         {@const g = r.guest}
-        <!-- The guest page (0.9.19): /guest on the home network, its tracks asked of the host's player. -->
+        <!-- The guest page (0.10): /guest on the home network, its tracks asked of the host's player. -->
         <Item name="Guest page" line={g.on ? `${location.origin}/guest` : null} toggle={{ checked: g.on, onchange: (on) => void saveRuntime({ guest: { ...g, on } }) }} />
         {#if g.on}<Item name="Guests ask" value={hostName(g.host)} onclick={() => (choosingHost = true)} />{/if}
       {/if}

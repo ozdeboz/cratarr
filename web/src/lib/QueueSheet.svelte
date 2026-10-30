@@ -221,7 +221,7 @@
   /** A long press on the play button: Start and stop's controls (lib/StartStopSheet; the owner, 2026-10-26). */
   let startStopOpen = $state(false);
 
-  // Tracks asked for (0.9.19; the owner, 2026-10-30), on one's own player: each a row where it would go, its thumbs up
+  // Tracks asked for (0.10; the owner, 2026-10-30), on one's own player: each a row where it would go, its thumbs up
   // (into the queue, a row of it at once) and thumbs down (gone) in place of the heart and the handle, who asked on its
   // third line; shown or hidden from the head's thumb, its count on it (on while others may follow, unless chosen here).
   // One's own asked of the one followed show as rows too, waiting for them, until answered.
@@ -323,7 +323,7 @@
         {:else}
           <span class="title">Queue</span>
           <span class="tools">
-            <!-- The tracks asked for, shown or hidden, how many on it (0.9.19). -->
+            <!-- The tracks asked for, shown or hidden, how many on it (0.10). -->
             {#if follow.served && (mine.followable || askedCount > 0)}
               <button
                 class="asked-toggle"
@@ -448,7 +448,7 @@
               {/if}
             </li>
             {:else}
-            <!-- A track asked for (0.9.19): a row as any, its thumbs up and down in place of the heart and the handle (an
+            <!-- A track asked for (0.10): a row as any, its thumbs up and down in place of the heart and the handle (an
                  accepted one has them back), who asked under its artist. One's own asked: waiting for the one followed. -->
             {@const r = line.r}
             {@const own = ownAsked.has(r.id)}
@@ -1062,7 +1062,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* A track asked for: its thumbs where the heart and the handle are (0.9.19). */
+  /* A track asked for: its thumbs where the heart and the handle are (0.10). */
   .thumb {
     flex: none;
     display: grid;

@@ -133,7 +133,7 @@
     toggleGroup(name).catch((e) => toast.fail(e, group.includes(name) ? "It didn't leave the group" : "It didn't join"));
   }
 
-  // Following (0.9.19; the owner, 2026-10-30): this device's player listening along to another user's, who lets
+  // Following (0.10; the owner, 2026-10-30): this device's player listening along to another user's, who lets
   // others follow them; at the sheet's foot, letting others follow one, and those who do, each accepted at once or not.
   void loadFollow();
   const followed = $derived(followingNow());

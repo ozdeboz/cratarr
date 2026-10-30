@@ -19,7 +19,7 @@ export const COLUMNS: Record<ColumnKind, readonly Column[]> = {
     { id: 'year', label: 'Year', width: 48, end: true },
     { id: 'albumArtist', label: 'Album artist', width: 160, grow: true },
   ],
-  // The Library's and Downloads' Table (lib/AlbumShelf); its length from 0.9.19's server (the owner, 2026-10-30).
+  // The Library's and Downloads' Table (lib/AlbumShelf); its length from 0.10's server (the owner, 2026-10-30).
   albums: [
     { id: 'year', label: 'Year', width: 48, end: true },
     { id: 'tracks', label: 'Tracks', width: 52, end: true },

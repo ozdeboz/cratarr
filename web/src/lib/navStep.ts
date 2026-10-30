@@ -1,4 +1,4 @@
-// Navigation as one step (0.9.19; the owner, 2026-10-30: a search result opening a full-screen panel showed the plain
+// Navigation as one step (0.10; the owner, 2026-10-30: a search result opening a full-screen panel showed the plain
 // Library a moment before the panel, and back brought the results back only after a while): what a tap leaves (the
 // search's words or its scope, the player over the page, a panel's layer) is let go when where it goes SHOWS (App's
 // page and the panel as lib/Hold shows them), not at the tap; where it never shows (gone back before it did, nothing

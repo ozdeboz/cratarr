@@ -46,7 +46,7 @@ test("an older version's choices: one folder kept as the layout; anything not of
   assert.deepEqual(keptExport(null), blankExport());
 });
 
-test("0.9.19's choices kept: MP3 at 320 or V0, where Download… goes; a packaging kept before is let go", () => {
+test("0.10's choices kept: MP3 at 320 or V0, where Download… goes; a packaging kept before is let go", () => {
   assert.deepEqual(keptExport({ format: 'mp3-320', packaging: 'files', where: 'files' }), { ...blankExport(), format: 'mp3-320', where: 'files' });
   assert.equal(keptExport({ format: 'mp3-v0' }).format, 'mp3-v0');
   assert.deepEqual(keptExport({ where: 'cloud' }), blankExport(), 'nothing not offered');

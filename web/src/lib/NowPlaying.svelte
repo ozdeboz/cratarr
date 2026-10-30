@@ -1512,7 +1512,7 @@
     display: none;
   }
 
-  /* Tracks asked for of this player (0.9.19): how many, on the queue button's corner. */
+  /* Tracks asked for of this player (0.10): how many, on the queue button's corner. */
   .asked-count {
     position: absolute;
     top: -4px;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Download… (decision 0058, amended 0.9.19; the owner, 2026-10-30: "Download is not coherently present"): one entry
+  // Download… (decision 0058, amended 0.10; the owner, 2026-10-30: "Download is not coherently present"): one entry
   // on everything that has tracks, one step in its menu sheet. In the app first where: to this device (offline in the
   // app, lib/DownloadEntry: the row fills as they come in) or as files (lib/ExportStep: the format, the layout, one zip
   // or the files one by one); in an installed page to this browser or as files; in the browser files only. Where it

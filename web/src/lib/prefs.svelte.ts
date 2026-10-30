@@ -175,7 +175,7 @@ export type Prefs = {
   /** When Shuffle takes another (the owner, 2026-10-27: the user's to say): each flow that opens, each flow its own
    *  (always the same one for the same flow), each start, or every few minutes. */
   flowShuffleWhen: 'flow' | 'seeded' | 'start' | 'timed';
-  /** The visuals open by themselves (0.9.19; the owner, 2026-10-30): while music plays and the screen is left alone
+  /** The visuals open by themselves (0.10; the owner, 2026-10-30): while music plays and the screen is left alone
    *  this long (ms), full screen, a touch closing them; starting from a snapshot of the library's or as last seen; as it
    *  is, or a new look (the dice's) each track. This device's. */
   visualsAuto: boolean;
@@ -280,7 +280,7 @@ export type Prefs = {
   /** The Playlists page in Quick add (0.9.18; the owner, 2026-10-29): each playlist's circle adds or takes out the
    *  playing track; in Normal the playlists only open. */
   playlistQuickAdd: boolean;
-  /** The queue sheet's tracks asked for shown or hidden (0.9.19), as chosen on this device; null: shown while others
+  /** The queue sheet's tracks asked for shown or hidden (0.10), as chosen on this device; null: shown while others
    *  may follow this account (lib/queueRequests). */
   queueRequestsShown: boolean | null;
   crateOrder: CrateOrder;

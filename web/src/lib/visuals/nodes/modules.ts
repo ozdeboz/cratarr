@@ -141,7 +141,7 @@ void main() {
 }`,
     uniforms: (k) => ({ uAmount: k.amount ?? 0, uScale: k.scale ?? 0.5, uMode: k.mode ?? 0, uZoomTurn: [k.zoom ?? 0, k.turn ?? 0] }),
   },
-  // Lens on a picture (0057 §4f; 0.9.19: it had no pass, and drew black): each pixel read where the lens's warp takes
+  // Lens on a picture (0057 §4f; 0.10: it had no pass, and drew black): each pixel read where the lens's warp takes
   // it (flam3's variations, warps.ts warpOf, in the frame centred, its short side -1..1), as far as Amount; a shape's
   // lens (Cratarr's, Polygon, Star and the set's) sends points into its shape, which a picture has no pixels for: it
   // passes the picture as it is.

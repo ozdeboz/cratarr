@@ -1,7 +1,7 @@
 // The Flame's own stepper in the one engine (decision 0057, §3; graph.ts runs it): its parts' turning, evolution,
 // presence, lights and steps on their band's hits, from what the cables give them (`Given`, routes.ts's shape) and the
 // Envelope's, Clock's and Track's outputs (modules.ts). (The chain's own stepper, the old engine's other half, went
-// with the summary it made in 0.9.19.)
+// with the summary it made in 0.10.)
 
 import { PARTS, type Part } from '../flame';
 import type { Levers } from './sidechain';

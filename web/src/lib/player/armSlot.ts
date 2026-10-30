@@ -1,4 +1,4 @@
-// A stream the tape asks for ahead, as one value with its transitions (0.9.19; the architecture audit, 2026-10-29):
+// A stream the tape asks for ahead, as one value with its transitions (0.10; the architecture audit, 2026-10-29):
 // the wind to a point's, a hold's asked at its touch, the direction knob's backwards one asked at its turn. Asked
 // anew, the one before is let go (its stream dropped); taken, it is the taker's; dropped, its stream goes; one that
 // gave up lets go of itself only if it is still the one held. lib/localPlayer's tape reads them. Pure.

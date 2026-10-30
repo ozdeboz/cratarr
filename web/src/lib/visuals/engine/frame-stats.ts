@@ -1,6 +1,6 @@
 // A frame's numbers for the meters (meters.ts FrameStats, but its tiles, which the GPU reads): how the parts turn and
 // change, the picture's size and colourfulness, what the effects, the waves and the zooms move. From the engine's
-// frame (its Flame's node, its device's stages and meter: 0.9.19, no summary between), for the frame loop
+// frame (its Flame's node, its device's stages and meter: 0.10, no summary between), for the frame loop
 // (visuals-loop.ts) and the golden frames' closed loop (tests/harness/golden.ts) alike.
 import { WAVE_BEND } from '../fluid';
 import type { FrameStats } from '../meters';

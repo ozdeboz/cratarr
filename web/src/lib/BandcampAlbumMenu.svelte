@@ -3,7 +3,7 @@
   // context menu ... Want ... Go to artist"): Go to the artist (their page where the library has them, else theirs from
   // Discover, lib/discoverArtist; theirs on Bandcamp beside Open on Bandcamp), Discover's group (Want, and Not
   // interested where it is a suggestion), Open on Bandcamp, Share, in the table's order (lib/menuTable). Its previews
-  // play and queue as any album's (0.9.19; the owner, 2026-10-30: "Bandcamp files cannot be queued, very annoying!"),
+  // play and queue as any album's (0.10; the owner, 2026-10-30: "Bandcamp files cannot be queued, very annoying!"),
   // on any player: the server streams them. Never downloaded, kept or in a playlist (decision 0071): bought there. The
   // menu's pieces as every menu's; what the server keeps of its own albums (heart, rating, playlists) it has none of.
   import { goToArtist, library, readLibrary } from './albums.svelte';

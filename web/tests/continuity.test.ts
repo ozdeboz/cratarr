@@ -1,4 +1,4 @@
-// The visuals' continuity list (0.9.19, the architecture audit's visuals step 5; the owner, 2026-10-29: continuous
+// The visuals' continuity list (0.10, the architecture audit's visuals step 5; the owner, 2026-10-29: continuous
 // over discrete): what made a picture stand still, jump or go black where it should glide.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

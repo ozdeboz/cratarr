@@ -1,4 +1,4 @@
-// The guest page's calls (0.9.19): open, on the home network only (anywhere else the server answers 404, and the page
+// The guest page's calls (0.10): open, on the home network only (anywhere else the server answers 404, and the page
 // says it is not open), a guest known by the name they gave (a cookie of the server's, no account).
 import type { QueueTrack } from '../lib/generated/QueueTrack';
 

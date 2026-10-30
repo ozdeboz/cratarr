@@ -1,4 +1,4 @@
-// The visuals by themselves (0.9.19; the owner, 2026-10-30): where this device says so, while music plays and the screen
+// The visuals by themselves (0.10; the owner, 2026-10-30): where this device says so, while music plays and the screen
 // is left alone a while, they open full screen, as a screensaver; a touch closes them (and does nothing else). Opened by
 // hand they are as before. Not in local mode (decision 0052: no visuals there).
 import { localMode } from './deviceMusic.svelte';

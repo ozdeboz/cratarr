@@ -1,4 +1,4 @@
-// The one engine's modules for what the old engine (aspects.ts, gone in 0.9.19) did out of sight (decision 0057, §3):
+// The one engine's modules for what the old engine (aspects.ts, gone in 0.10) did out of sight (decision 0057, §3):
 // each a small stepper with its own state, its knobs and its outputs, so the graph can show it and the evaluator can
 // wire it. Pure; the golden frames hold what they give (tests/golden-frames.test.ts).
 

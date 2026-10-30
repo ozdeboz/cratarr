@@ -1,4 +1,4 @@
-// Queue requests in the queue (0.9.19; the owner, 2026-10-30): each track asked for shows where it would go, a row as
+// Queue requests in the queue (0.10; the owner, 2026-10-30): each track asked for shows where it would go, a row as
 // any other with a thumbs up and a thumbs down in place of its heart and handle; one accepted is a row of the queue at
 // once, until the player's next report has it. No runes, so the tests take it as it is.
 import type { QueueRequest } from './api';

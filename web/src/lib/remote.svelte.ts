@@ -286,7 +286,7 @@ function show(command: Transport) {
 }
 
 export const send = (command: Transport) => {
-  // Following someone (0.9.19): their queue is theirs; a track is asked of them instead (lib/following).
+  // Following someone (0.10): their queue is theirs; a track is asked of them instead (lib/following).
   const f = followingNow();
   if (f && (command === 'next' || command === 'previous')) return void toast.show({ text: `Following ${f.user}: ask for a track instead.` });
   return port().send(command, show);

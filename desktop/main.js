@@ -250,7 +250,7 @@ if (first) {
   app.on('second-instance', show);
   app.on('before-quit', () => (quitting = true));
   app.whenReady().then(() => {
-    // Woken or unlocked (0.9.19; the owner, 2026-10-30: the ThinkPad's player came back a minute after its Wi-Fi): the
+    // Woken or unlocked (0.10; the owner, 2026-10-30: the ThinkPad's player came back a minute after its Wi-Fi): the
     // page reconnects at once instead of waiting out a dead connection or its retry.
     for (const e of ['resume', 'unlock-screen']) powerMonitor.on(e, () => win?.webContents.send('wake'));
     session.defaultSession.setPermissionRequestHandler((_wc, permission, done, details) => done(ALLOWED.has(permission) && sameOrigin(details.requestingUrl)));

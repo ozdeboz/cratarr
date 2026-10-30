@@ -1,4 +1,4 @@
-// The player that plays, as the page drives it (0.9.19; the architecture audit, 2026-10-29: one Player port instead of
+// The player that plays, as the page drives it (0.10; the architecture audit, 2026-10-29: one Player port instead of
 // a fork at each use). Two sides: the page's own queue (this browser's or app's player, lib/localPlayer, which also
 // drives one of Cratarr's players, decision 0031) and the media server's player (live's state, its transport). Which
 // one is `port()`'s to say, here only (lib/player/commands' holdsQueue); everything else asks the port. What each side
@@ -113,7 +113,7 @@ export type PlayerPort = {
   enqueue(tracks: LocalTrack[], how: 'next' | 'last', source: string): Promise<void> | void;
   /** One track put next or added (the server's player takes it by its id alone). */
   enqueueOne(track: LocalTrack, how: 'next' | 'last'): Promise<void> | void;
-  /** One way to play tracks in hand (0.9.19, the audit: one way to play): played from `index`, shuffled, put next or
+  /** One way to play tracks in hand (0.10, the audit: one way to play): played from `index`, shuffled, put next or
    *  added to the queue, as the queue named `name`. Here the page queues them; the server's player is given them by
    *  their ids (`source` theirs), the server queuing them itself, as a collection it picked. */
   playTracks(tracks: LocalTrack[], how: PlayHow, name: string | null, source: string, index?: number): Promise<void> | void;

@@ -1,4 +1,4 @@
-// The rest of the tape's state, each part one value with its transitions (0.9.19; the architecture audit, 2026-10-29).
+// The rest of the tape's state, each part one value with its transitions (0.10; the architecture audit, 2026-10-29).
 // Read from every write in lib/localPlayer: the tape's own ramp (quiet, and the turn's own ramp) may stand together
 // or apart (a turn sets both, a skip's quiet only, a handover the turn's ramp with or without quiet); a Next kept for a
 // pause's standstill and one kept for Autoplay's picks may both be waiting (Next on the last track while Autoplay

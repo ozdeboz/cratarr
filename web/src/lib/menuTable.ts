@@ -79,7 +79,7 @@ export const MENUS: Record<MenuKind, Kind> = {
       { group: 'collect', entries: ['addToPlaylist'] },
       { group: 'take', entries: ['download', 'share'] },
       { group: 'know', entries: ['info', 'webSearch', 'geniusSearch'] },
-      // A track asked for of one's own player (0.9.19): whoever asked, accepted at once from now on or not.
+      // A track asked for of one's own player (0.10): whoever asked, accepted at once from now on or not.
       { group: 'change', entries: ['adjustBpm', 'betterCopy', 'alwaysAccept'] },
       { group: 'remove', entries: ['removeFromQueue', 'removeFromList'] },
     ],

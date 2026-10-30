@@ -1,4 +1,4 @@
-// Golden frames (0.9.19, the architecture audit's visuals step 1): every rack the references cover (the standard
+// Golden frames (0.10, the architecture audit's visuals step 1): every rack the references cover (the standard
 // rack, the library's examples, Fire among them) draws today what it drew when they were made: what the frame loop
 // hands the renderer, frame by frame over a recorded track (harness/golden.ts). A change of the picture that is meant
 // makes them again (harness/golden-make.ts); any other fails here.

@@ -1,4 +1,4 @@
-// The rack's edits, all of them through one reducer (0.9.19, the architecture audit: "one edit reducer"): the
+// The rack's edits, all of them through one reducer (0.10, the architecture audit: "one edit reducer"): the
 // graph's (patchgraph.ts `applyV2`: a knob, a connection, cables removed, a cable's end moved, a pin, modules removed,
 // a category pinned, a module added, a device made or unmade), the panel's (a cable's amount, depth and channel; a
 // module removed; a device added; a level's macros: decision 0077) and the visuals' own (the values a roll or a step's

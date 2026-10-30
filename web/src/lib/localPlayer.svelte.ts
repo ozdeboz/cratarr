@@ -58,7 +58,7 @@ export type LocalTrack = {
   addable?: boolean;
   /** Its length (s), where the list it came from said: the queue's lengths and when it ends. */
   duration_secs?: number | null;
-  /** Who asked for it, a queue request accepted (0.9.19). */
+  /** Who asked for it, a queue request accepted (0.10). */
   asked_by?: string;
 };
 
@@ -4138,7 +4138,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       applyVolume();
       return false;
     case 'notice':
-      // A word for whoever plays here (0.9.19: a track asked for, accepted or declined; one asked of this player).
+      // A word for whoever plays here (0.10: a track asked for, accepted or declined; one asked of this player).
       if (typeof m.text === 'string' && m.text) toast.show({ text: m.text });
       return false;
     default:
