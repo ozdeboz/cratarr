@@ -671,6 +671,10 @@ pub struct PlaylistRow {
     pub album_id: Option<String>,
     /// No such file in the Music folder.
     pub missing: bool,
+    /// The library holds another recording of its work (0.10, Other versions): an album's rows on Cratarr's own
+    /// library; absent where not, or not said.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_versions: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1832,6 +1836,7 @@ impl PlaylistService {
                     play_count: None,
                     last_played: None,
                     added: None,
+                    has_versions: None,
                 })
                 .collect())
         })

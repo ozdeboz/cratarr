@@ -252,7 +252,8 @@ impl UserData {
 
     /// The marks, cheaply: a mark counts at once.
     pub fn marks_stamp(&self) -> Result<i64> {
-        let (n, at): (i64, i64) = self.db().query_row("SELECT count(*), coalesce(sum(at), 0) FROM classical_marks", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let (n, at): (i64, i64) =
+            self.db().query_row("SELECT count(*), coalesce(sum(at + length(mark) * 1000003), 0) FROM classical_marks", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(n.wrapping_mul(1_000_003).wrapping_add(at))
     }
 }

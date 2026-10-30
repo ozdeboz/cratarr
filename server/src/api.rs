@@ -131,6 +131,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
+        // Classical (0.10): its composers, a composer's records, a track's other versions; everyone's.
+        .route("/api/classical/composers", get(classical_composers))
+        .route("/api/classical/composers/{key}", get(classical_composer))
+        .route("/api/tracks/{source}/{id}/versions", get(track_versions))
         .route("/api/status", get(status))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
@@ -263,6 +267,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/intake", get(album_intake))
             .route("/api/albums/{source}/{album}/release", get(album_release))
             .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
+            // A record marked classical or not (0.10), library-wide.
+            .route("/api/albums/{source}/{album}/classical", put(mark_classical))
             .route("/api/artists/discogs", get(artist_discogs))
             .route("/api/track-search", post(start_track_search))
             .route("/api/track-search/{id}", get(track_search))
@@ -871,6 +877,86 @@ async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
         Ok(t) => Json(json!({ "id": t.id, "name": t.title, "artist": t.artist, "album": t.album, "album_id": t.album_id }))
             .into_response(),
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
+}
+
+/// Classical's index (0.10), off the request's thread.
+async fn classical_index(served: Arc<crate::serve::Serve>) -> Result<Arc<crate::app::classical::Index>, ToggleError> {
+    tokio::task::spawn_blocking(move || crate::app::classical::index(&served))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))
+}
+
+/// The composers of the library's classical records (0.10): `[{key, name, sort_name, records, photo?}]`, every
+/// spelling of one composer one.
+async fn classical_composers(ctx: Ctx) -> Result<Json<Vec<crate::app::classical::Composer>>, ApiError> {
+    let ix = classical_index(ctx.serve()?).await?;
+    Ok(Json(ix.composers.clone()))
+}
+
+/// A composer's classical records (0.10): `{key, name, records: [album id]}`, by their key or one given out before
+/// that leads to them; 404 for none.
+async fn classical_composer(ctx: Ctx, Path(key): Path<String>) -> Response {
+    let found = match ctx.serve() {
+        Ok(s) => classical_index(s).await,
+        Err(e) => Err(e),
+    };
+    match found {
+        Ok(ix) => match ix.composer(&key) {
+            Some(c) => Json(json!({ "key": c.key, "name": c.name, "records": c.albums })).into_response(),
+            None => (StatusCode::NOT_FOUND, Json(json!({ "error": "No such composer." }))).into_response(),
+        },
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ClassicalMark {
+    #[serde(default)]
+    mark: Option<String>,
+}
+
+/// A record marked classical or not by hand (0.10; `null`: as Cratarr finds it), library-wide, outlasting every pass:
+/// `{classical, classical_mark}`. The pages showing albums are told.
+async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<ClassicalMark>) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::app::classical::Mark;
+    if source != crate::source::cratarr::KIND.id {
+        return Err(ToggleError::Refused("Only Cratarr's own library's records are marked.".into()).into());
+    }
+    let mark = match b.mark.as_deref() {
+        None => None,
+        Some(m) => Some(Mark::of(m).ok_or_else(|| ToggleError::BadSettings("A mark is classical or not.".into()))?),
+    };
+    let s = ctx.serve()?;
+    let (classical, kept) = tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, Option<&'static str>)> {
+        let base = s.library.album_base(&album)?.ok_or_else(|| anyhow::anyhow!("That record is not in the library."))?;
+        s.userdata.set_classical_mark(&base, mark.map(Mark::as_str), crate::app::moment::now_secs())?;
+        let ix = crate::app::classical::index(&s)?;
+        let r = ix.records.get(&album);
+        Ok((r.is_some_and(|r| r.classical), r.and_then(|r| r.mark).map(Mark::as_str)))
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    ctx.app.collection.tell_changed();
+    Ok(Json(json!({ "classical": classical, "classical_mark": kept })))
+}
+
+/// A track's Other versions (0.10): its MusicBrainz work, the work's composers, and the library's other tracks of it,
+/// with their performers; 404 where the track has no work linked.
+async fn track_versions(ctx: Ctx, Path((source, id)): Path<(String, String)>) -> Response {
+    let none = || (StatusCode::NOT_FOUND, Json(json!({ "error": "This track has no work linked." }))).into_response();
+    if source != crate::source::cratarr::KIND.id {
+        return none();
+    }
+    let Ok(served) = ctx.serve() else { return none() };
+    match classical_index(served).await {
+        Ok(ix) => match ix.versions(&id, &source) {
+            Some(v) => Json(v).into_response(),
+            None => none(),
+        },
+        Err(e) => ApiError::from(e).into_response(),
     }
 }
 
