@@ -35,6 +35,12 @@ pub async fn serve(uri: Uri) -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
+/// The page's build as its `build.json` says (decision 0085, step 1: `{version, build}`), for apps that carry their own
+/// copy of the page; none when the page was built without it.
+pub fn page_build() -> Option<serde_json::Value> {
+    Assets::get("build.json").and_then(|f| serde_json::from_slice(&f.data).ok())
+}
+
 /// The guest portal's page (decision 0079), the build's second entry: none until it is built.
 pub fn guest_page() -> Response {
     match Assets::get("guest.html") {

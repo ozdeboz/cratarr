@@ -30,11 +30,13 @@ class CratarrWebViewClient(
     private val deviceCover: (String) -> ByteArray?,
 ) : WebViewClientCompat() {
 
-    /** Local mode's covers (decision 0052): `/__device/cover/{album_id}` on Cratarr's pages, from Android. */
+    /** Local mode's covers (decision 0052): `/__device/cover/{album_id}` on Cratarr's pages, from Android; the page's
+     *  own files from the app's copy of it ([BundledPage]). */
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         val url = request.url
-        val album = url.path?.takeIf { it.startsWith(DEVICE_COVER) }?.removePrefix(DEVICE_COVER) ?: return null
         if (Prefs.originOf(url.toString()) !in origins) return null
+        val album = url.path?.takeIf { it.startsWith(DEVICE_COVER) }?.removePrefix(DEVICE_COVER)
+            ?: return BundledPage.answer(view.context, request.method, url)
         val jpeg = deviceCover(album) ?: return WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
         return WebResourceResponse("image/jpeg", null, 200, "OK", mapOf("Cache-Control" to "max-age=86400"), ByteArrayInputStream(jpeg))
     }

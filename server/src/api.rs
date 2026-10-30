@@ -469,12 +469,13 @@ fn new_request_id() -> String {
 }
 
 /// Open to anyone: that Cratarr answers, and which install it is (the app checks its local address is the same
-/// Cratarr as its public one before the page there may talk to it).
+/// Cratarr as its public one before the page there may talk to it), and its page's build (`web`, decision 0085: an app
+/// with its own copy of the page serves the newer).
 async fn health(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let n = app.playlists.count().await.map_err(ToggleError::from)?;
     let instance = ctx.served.as_ref().and_then(|s| s.sessions.instance_id().ok());
-    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance })))
+    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance, "web": crate::web::page_build() })))
 }
 
 /// `?source=<id>`: follow that source; absent (or unknown): whichever started playing most recently.

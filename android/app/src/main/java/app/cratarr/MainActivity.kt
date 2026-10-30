@@ -28,6 +28,8 @@ import android.util.Log
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebView
 import android.widget.EditText
@@ -49,6 +51,8 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.ScriptHandler
+import androidx.webkit.ServiceWorkerClientCompat
+import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.Dispatchers
@@ -364,6 +368,15 @@ class MainActivity : AppCompatActivity() {
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
         )
+        // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)
+        ) {
+            ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
+                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
+                    if (Prefs.originOf(request.url.toString()) in origins) BundledPage.answer(app, request.method, request.url) else null
+            })
+        }
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
