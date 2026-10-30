@@ -1379,6 +1379,13 @@ export type ListedAlbum = {
   artists?: string[];
   /** Its length (s), its tracks' together; null where one of them is not known (0.10; a server before it gives none). */
   duration_secs?: number | null;
+  /** Classical (0.10): the server's word (a classical genre and one confirmation, or a mark), a kind beside its release
+   *  type; `classical_mark` where someone marked it; its works' composers (`key`: a MusicBrainz artist, or `name:…`); its
+   *  performers, conductor, orchestra and soloists first. A server before it gives none. */
+  classical?: boolean;
+  classical_mark?: 'classical' | 'not';
+  composers?: { key: string; name: string }[];
+  performers?: string[];
 };
 
 /** One server's album list. */
@@ -1419,6 +1426,22 @@ export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: s
 /** Every album of each server's used libraries (the Library page). `fresh` asks past the service worker's copy (which
  *  answers at once, see sw.js) for the server's latest. */
 export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>(`/api/albums${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+
+// Classical (0.10): its composers, each one's records, a record's mark, and a track's other versions (the library's
+// recordings of the same work, by MusicBrainz's work links).
+export const getClassicalComposers = () => quietly<import('./recordKindRules').Composer[]>('/api/classical/composers');
+export const getClassicalComposer = (key: string) => quietly<{ key: string; name: string; records: string[] }>(`/api/classical/composers/${encodeURIComponent(key)}`);
+/** Marks a record classical or not, library-wide (administrators'); null: as Cratarr finds it. */
+export const markClassical = (source: string, id: string, mark: 'classical' | 'not' | null) =>
+  request<{ classical: boolean; classical_mark?: 'classical' | 'not' | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(id)}/classical`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mark }),
+  });
+export type TrackVersion = { source: string; id: string; title: string; artist: string | null; album: string | null; album_id: string | null; year: number | null; performers?: string[] };
+export type TrackVersions = { work: { mbid: string; title: string }; composers: { key: string; name: string }[]; versions: TrackVersion[] };
+/** A track's work and the library's other recordings of it; 404 where it has no work link. */
+export const getTrackVersions = (source: string, id: string) => quietly<TrackVersions>(`/api/tracks/${encodeURIComponent(source)}/${encodeURIComponent(id)}/versions`);
 /** Play an album of a connected server on the followed player; answers with the player's label. */
 export const playAlbum = (source: string, album: string) =>
   request<{ player: string }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/play`, { method: 'POST' });

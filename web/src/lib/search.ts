@@ -15,6 +15,8 @@ export type SearchResult = {
   bandcamp?: string | null;
   /** An album not in the library, asked for: where it stands (lib/CoverStatus). */
   request?: import('./api').RequestMark | null;
+  /** A classical record's or track's composers (0.10), said on its line. */
+  composers?: { key: string; name: string }[];
   /** Known elsewhere (decision 0076): why Cratarr knows it (on your Spotify, missing from an artist you have,
    *  suggested, requested). */
   known?: string[];

@@ -14,6 +14,7 @@
   import ConditionList from './ConditionList.svelte';
   import type { ListAxis } from './ConditionCard.svelte';
   import { activeConditions, filterOf, filtersOn, hiddenLibraries, inView, resetFilter, setConditions, setSwitch, switchOn } from './listFilter.svelte';
+  import { classicalListed } from './recordKinds';
   import { SWITCHES } from './pageView.svelte';
   import { startCrate } from './crates.svelte';
   import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
@@ -50,7 +51,7 @@
   const CONDITIONED = ['library', 'playlists', 'playlist'];
   const conditioned = $derived(CONDITIONED.includes(list));
   const items = $derived(list === 'library' ? 'album' : list === 'playlists' ? 'playlist' : null);
-  const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
+  const switches = $derived((SWITCHES[list] ?? []).filter((w) => (!w.incoming || hasIncoming) && (!w.classical || classicalListed())));
   /** The switches by section, in the order the sections first come; switches without one in a section of no title. */
   const sections = $derived.by(() => {
     const out: { title: string | null; switches: typeof switches }[] = [];

@@ -56,7 +56,7 @@
   import GlobalResults from './lib/GlobalResults.svelte';
   import RecordsPicker from './lib/RecordsPicker.svelte';
   import DiscoverPicker from './lib/DiscoverPicker.svelte';
-  import { chooseKind, kindNow, RECORD_KINDS } from './lib/recordKinds';
+  import { chooseKind, kindNow, recordKinds } from './lib/recordKinds';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
   import { globalSearch, pageKinds } from './lib/globalSearch.svelte';
   import { leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
@@ -840,7 +840,7 @@
   loadSpotify();
   type Sub = { id: string; label: string; on: boolean; pick: () => void };
   const kindShown = $derived(kindNow());
-  const librarySubs = $derived<Sub[]>(RECORD_KINDS.map((k) => ({ id: k.id, label: k.label, on: kindShown === k.id, pick: () => chooseKind(k.id) })));
+  const librarySubs = $derived<Sub[]>(recordKinds().map((k) => ({ id: k.id, label: k.label, on: kindShown === k.id, pick: () => chooseKind(k.id) })));
   const discoverSubs = $derived<Sub[]>([
     ...DISCOVER_MODES.map((m) => ({ id: m.value, label: m.label, on: prefs.discoverMode === m.value, pick: () => (prefs.discoverMode = m.value) })),
     ...(spotify.state?.shown
