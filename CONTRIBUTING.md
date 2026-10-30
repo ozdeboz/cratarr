@@ -47,12 +47,24 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 ## How the repository is kept
 
 - `main` is what was released, and moves only at a release.
-- Work happens on branches named for it, each from `trunk`, the development branch, which holds all of Cratarr: the
-  server, the web app, the Android and desktop apps and the docs. A branch comes back with a merge, never as a copy of
-  its files, so the history tells what is where; there the pieces are checked together and run on a real install
-  before they are released, and a working branch takes `trunk` back in whenever it needs what landed there. A pull
-  request against `main` is brought onto `trunk` the same way.
-- A release is `trunk`, checked as a whole, with the version raised in one commit (`server/Cargo.toml` and its lock,
-  `web/package.json`, the Android and desktop apps), tagged `vX.Y.Z` and brought onto `main` (a fast-forward). The tag builds the image for amd64 and arm64
-  and makes the GitHub release ([.github/workflows/release.yml](.github/workflows/release.yml)), so what runs can always
-  be found again. Builds before 0.8 were tagged `preview-N`.
+- `trunk` is the development branch: the next feature release (0.11 while 0.10 is out). It holds all of Cratarr: the
+  server, the web app, the Android and desktop apps and the docs.
+- `release/X.Y` holds a released version and its fixes only (`release/0.10`: 0.10.0, 0.10.1, …). It is cut from `trunk`
+  at the very commit released as X.Y.0, and nothing of `trunk` ever comes into it.
+- Work happens on branches named for it:
+  - a feature from `trunk`, and back into `trunk`;
+  - a fix from the oldest `release/X.Y` it belongs in, back into that, released from there as X.Y.Z+1; then that
+    release branch is merged forward into `trunk`, so the next version has every fix.
+
+  A branch comes back with a merge, never as a copy of its files (no cherry-picks either), so the history tells what is
+  where. There the pieces are checked together and run on a real install before they are released. A working branch
+  takes its own base (`trunk` or its release branch) back in whenever it needs what landed there. A pull request
+  against `main` is brought onto `trunk` (a feature) or the release branch (a fix) the same way.
+- A release is its branch checked as a whole, with the version raised in one commit (`scripts/version.sh`: plain
+  `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and brought onto `main`.
+  - A new version (X.Y.0) is made on `trunk`, and `release/X.Y` is cut there.
+  - A fix (X.Y.Z) is made on `release/X.Y`.
+  - The tag builds the image for amd64 and arm64 and makes the GitHub release
+    ([.github/workflows/release.yml](.github/workflows/release.yml)), so what runs can always be found again.
+  - Once X.Y+1.0 is out, `release/X.Y` gets no more fixes.
+  - Builds before 0.8 were tagged `preview-N`.
