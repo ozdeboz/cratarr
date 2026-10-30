@@ -29,6 +29,7 @@ import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
 import { rampSlot } from './player/rampSlot';
+import { motionSlot } from './player/motionSlot';
 import { tapeRules, type Since } from './player/tape';
 import { brakeLengthMs, brakeSpeed, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
@@ -232,6 +233,10 @@ let errorIndex = -1;
 // at once where something new begins (a jump, a new queue, a stop).
 /** The ramp under way, one value (lib/player/rampSlot): what it committed to, where it holds the counter. */
 const rampNow = rampSlot();
+/** The tape's motion, one value (lib/player/motionSlot): a wind here, a plain hold, or a driven player's glide. */
+type PlainHold = { dir: 1 | -1; speeding: boolean };
+type Glide = { from: number; to: number; at: number; span: number };
+const motionNow = motionSlot<Winding, PlainHold, Glide>();
 const tape = {
   /** What a ramp under way has committed to (paused or playing), shown at once on every device. A press of play or pause
    *  during one turns it round from where it has got to (decision 0075's first step). Null: no ramp. */
@@ -258,8 +263,13 @@ const tape = {
   set heldAt(v: number | null) {
     rampNow.heldAt = v;
   },
-  /** The wind sounding, or about to; null: none. */
-  rewinding: null as Winding | null,
+  /** The wind sounding, or about to; null: none. One of the tape's motions (`motionNow`). */
+  get rewinding() {
+    return motionNow.rewinding;
+  },
+  set rewinding(v: Winding | null) {
+    motionNow.rewinding = v;
+  },
   /** Where the counter stands while it sounds (s into the track). */
   rewindPos: null as number | null,
   /** The wind's own fetch of where it goes: it does not end the wind. */
@@ -267,7 +277,12 @@ const tape = {
   /** A hold under way (its press), before and while it winds: let go, it plays on. */
   holding: null as { dir: 1 | -1; released: boolean } | null,
   /** A hold on a track that cannot be wound (Bandcamp's, the device's own). */
-  plainHold: null as { dir: 1 | -1; speeding: boolean } | null,
+  get plainHold() {
+    return motionNow.plainHold;
+  },
+  set plainHold(v: PlainHold | null) {
+    motionNow.plainHold = v;
+  },
   /** The forward wind to a point being armed (a newer one replaces it). */
   pointArmed: null as Armed | null,
   /** A hold's stream asked at the touch, for where the hold will start from. */
@@ -284,7 +299,12 @@ const tape = {
   heldThere: false,
   heldLetGo: false,
   /** A wind on the player driven: the counter gliding between its reports. */
-  glide: null as { from: number; to: number; at: number; span: number } | null,
+  get glide() {
+    return motionNow.glide;
+  },
+  set glide(v: Glide | null) {
+    motionNow.glide = v;
+  },
 };
 /** Something new begins (a jump, a new queue, a stop): every transient part of the tape cleared at once, so nothing of
  *  what went before lingers (a hold, a pending Next, an armed stream, a quiet rest, a ramp's hold on the counter). A
