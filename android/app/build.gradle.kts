@@ -141,7 +141,6 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.work.runtime)
-    implementation(libs.androidx.documentfile)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
 }

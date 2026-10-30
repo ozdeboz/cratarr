@@ -101,13 +101,22 @@ to export playlists … and albums and tracks, not crates"):
 
 One zip, streamed as it is made (0007's export, which now takes any tracks and a format).
 
-Amendment (2026-10-30, 0.9.19): **MP3 and loose files.** Two more formats: MP3 at a constant 320 kb/s and MP3 V0
-(LAME's best variable rate), lossless files converted and lossy ones as they are, as with Opus; each file with its
-tags and cover in ID3v2 and LAME's header frame (its length and seek table, so V0 seeks). And an export may come as
-loose files instead of one zip (`package: "files"`), for the app's folder and offline downloads: the server lists
-every file under the names the zip would give them (the formats' treatment chosen from each file's header, so the
-names are known before anything is converted), and each is fetched on its own, converted as it is asked for. A
-Bandcamp preview (0071) is never exported: it is left out as missing.
+Amendment (2026-10-30, 0.9.19): **MP3, and one file or a zip.** Two more formats: MP3 at a constant 320 kb/s and MP3
+V0 (LAME's best variable rate), lossless files converted and lossy ones as they are, as with Opus; each file with its
+tags and cover in ID3v2 and LAME's header frame (its length and seek table, so V0 seeks). A Bandcamp preview (0071) is
+never exported: it is left out as missing.
+
+How an export arrives is not a choice. The owner (2026-10-30): "Multiple files should always be a zip. A single file,
+always a single file, not a zip." The files an export holds are counted (its tracks, its playlist files, the report of
+missing tracks): two or more come as one zip; exactly one comes as that file, under its own name (the last part of
+its name inside the zip: `01 So What.mp3`), with its own type and length. One track with a playlist file, or with one
+missing beside it (the report), is two files and so a zip; a playlist without its tracks is its `.m3u`, as before.
+One place decides it (`export::download` in server/src/export.rs) for the name the download is given when it is
+prepared and for what is sent; for a lone track it reads the file's header, so a track to be converted is named with
+its new extension before it is made. That track is converted in full first, then sent with its length and removed.
+If it cannot be converted the download is refused with a short error: the zip keeps such a file as it was and its
+report says why, but a file alone has no report, and its name already promised the format asked for. This replaces
+the loose files built earlier the same day (a folder picked in the app, filled file by file).
 
 ## Consequences
 
@@ -137,8 +146,8 @@ context menu population rules." Chosen in a question set, for 0.9.19:
   was) or as files; in an installed page to this browser or as files; in the browser files only. **Sync to this
   device** (the table's Keep, renamed by the owner 2026-10-24) stays the switch beside it.
 - **Formats:** MP3 at 320 kb/s and MP3 V0 join the original files, FLAC at CD quality and Opus ("Keep them, add MP3").
-  **Packaging:** one zip or the files one by one ("One zip or loose files"); the files one by one only in the app,
-  which writes them into a folder picked there. The layout switch stays; no new folder or file-name patterns.
+  **Packaging:** no choice (the owner, the same day, replacing "One zip or loose files"): several files are a zip, one
+  file is that file (the amendment above). The layout switch stays; no new folder or file-name patterns.
 - **Bandcamp's previews** queue as any track ("Every player"): Play, Shuffle, Play next and Add to queue on a
   Bandcamp album's menu and its tracks', on this page, the app and Play On, the server streaming the preview. Never
   Download or Keep ("No Download on Bandcamp"): they are previews, bought on Bandcamp; never in a playlist (0071).
