@@ -30,6 +30,7 @@
   import { tuneOf } from './bandTune.svelte';
   import BandGlass from './BandGlass.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
+  import { port } from './player/port.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
   import { holdWind, holdsHere, type Hold } from './holdWind';
@@ -93,10 +94,10 @@
   const memberCount = $derived(shownPlaylists().filter((p) => p.member).length);
   const src = $derived(shownCover());
   /** Start and stop on for this device's player: a start winds up (the play button's fill stays empty while paused). */
-  const armed = $derived(isLocal() && (inApp ? appInfo.startStop.mode : prefs.startStop.mode) !== 'off');
+  const armed = $derived(port().ramps && (inApp ? appInfo.startStop.mode : prefs.startStop.mode) !== 'off');
   /** A ramp of this device's player under way, its way. */
   // The fill follows play and pause only, never the tape's own stops (the owner, 2026-10-27).
-  const ramp = $derived(isLocal() && ramping.effect ? ramping.dir : null);
+  const ramp = $derived(port().ramps && ramping.effect ? ramping.dir : null);
   /** Paused with Start and stop on: how much of the wind-up the fill already shows, from where it would start (as it
    *  is held while seeking too): near the track's start the wind-up is shorter (lib/localPlayer windUpMs). */
   const pre = $derived.by(() => {

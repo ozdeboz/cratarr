@@ -6,7 +6,6 @@ import {
   getAlbums,
   getAlbumUses,
   playAlbum,
-  queueTracks,
   setAlbumRating,
   type AlbumsView,
   type AlbumUse,
@@ -15,9 +14,10 @@ import {
   ApiError,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
-import { player, refresh, untilNewTrack } from './live.svelte';
-import { enqueue, type LocalTrack } from './localPlayer.svelte';
-import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
+import { player, untilNewTrack } from './live.svelte';
+import type { LocalTrack } from './localPlayer.svelte';
+import { playAlbumHere, playPlaylistFrom } from './output.svelte';
+import { port } from './player/port.svelte';
 import { artistSubject, viewOver } from './panel.svelte';
 import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
@@ -142,15 +142,7 @@ export async function playAlbums(list: { source: string; a: ListedAlbum }[], mod
   if (!tracks.length) throw new Error('Those albums have no tracks.');
   const source = tracks[0].source;
   if (mode === 'play') await playPlaylistFrom(list.length === 1 ? list[0].a.title : `${list.length} albums`, source, tracks, 0);
-  else if (isLocal()) enqueue(tracks, mode);
-  else {
-    await queueTracks(
-      tracks.map((t) => t.id),
-      mode,
-      source,
-    );
-    setTimeout(refresh, 700);
-  }
+  else await port().enqueue(tracks, mode, source);
 }
 
 /** An album artist's credits, lower case: "A & B, C feat. D" is a, b, c and d (and the credit whole). */

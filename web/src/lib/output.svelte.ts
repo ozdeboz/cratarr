@@ -5,37 +5,19 @@
 // other side, which plays from there, and the side that played stops.
 import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
-import {
-  albumView,
-  handover,
-  playPlaylist,
-  playlistRows,
-  playlistTrackIds,
-  queueTracks,
-  setMember,
-  setTrackMember,
-  trackDetails,
-  reportPlays,
-  trackState,
-  transport,
-  type HeardEvent,
-  type NowPlaying,
-  type PlayMode,
-  type Playlist,
-  type TrackState,
-} from './api';
+import { albumView, handover, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
 import { untrack } from 'svelte';
-import { live, refresh, untilNewTrack } from './live.svelte';
-import { canPlayHere, keptHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
+import { live, refresh } from './live.svelte';
+import { canPlayHere, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { rewindNow } from './ramping.svelte';
-import { drivenName, follow, outputName, playOn, pointAt } from './playOn.svelte';
+import { follow, playOn, pointAt } from './playOn.svelte';
+import { port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
-// Whether the page holds the queue: it plays here, or on one of Cratarr's players it drives. A browser that cannot play
-// here (no stream for audio) plays on a player, whatever was chosen elsewhere.
-export const isLocal = () => (prefs.output === 'local' && canPlayHere) || drivenName() !== null;
+// Which player the page drives, and what this device's queue shows of what plays: the port's (lib/player/port).
+export { isLocal, localNowPlaying, localState, tookLocal } from './player/port.svelte';
 
 // "The server's player" while one of Cratarr's own players plays: that player, driven. Cratarr's own source has no
 // server-side player; such a page only showed what that player played, without seek or queue edits, while its output
@@ -66,112 +48,15 @@ addEventListener('beforeunload', (e) => {
   e.returnValue = '';
 });
 
-/** What comes after the playing track, as the player shows it: made once per change of the queue or its place, not
- *  at every read (the tablet, 2026-10-28: every read of the player mapped the rest of a 273-track queue, many times a
- *  frame). */
-const upcomingLocal = $derived(
-  local.queue.slice(local.index + 1).map((u) => ({
-    id: u.id,
-    name: u.name || '…',
-    artist: u.artist,
-    album: u.album,
-    album_id: u.album_id,
-    addable: u.addable ?? true,
-    duration_secs: u.duration_secs ?? null,
-    lane: u.lane,
-  })),
-);
-/** The local queue's playing track as a now-playing view (the shape the player shows), made once per change. */
-const nowLocal = $derived.by((): NowPlaying | null => {
-  const t = local.queue[local.index];
-  if (!t) return null;
-  return {
-    source: t.source,
-    id: t.id,
-    name: t.name || '…',
-    artist: t.artist,
-    album: t.album,
-    album_id: t.album_id,
-    addable: localState.view?.addable ?? t.addable ?? true,
-    progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, starting: local.starting, estimated: false },
-    player: outputName(),
-    favorite: localState.view?.favorite ?? null,
-    // As the heart, the chips stay until the new track's arrive (no row coming and going between tracks).
-    info: localState.view?.info ?? null,
-    upcoming: upcomingLocal,
-  };
-});
-export const localNowPlaying = (): NowPlaying | null => nowLocal;
-
-// The local track's playlists and favourite: the server's state covers only its own player's track, so they are
-// asked for this one (on each new track, and when the playlists change).
-// `loading`: the playing track's are asked for. Meanwhile the track before's stay shown (the heart, the playlists),
-// disabled: the same answer, as between tracks of one album, then shows no change at all.
-export const localState = $state<{ key: string | null; view: TrackState | null; loading: boolean }>({
-  key: null,
-  view: null,
-  loading: false,
-});
-const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
-async function loadState(t: LocalTrack) {
-  try {
-    const view = await trackState(t.source, t.id);
-    if (localState.key !== keyOf(t)) return;
-    localState.view = view;
-  } catch {
-    /* shown as in no playlist, without a heart */
-    if (localState.key === keyOf(t)) localState.view = null;
-  } finally {
-    if (localState.key === keyOf(t)) localState.loading = false;
-  }
-}
-$effect.root(() => {
-  $effect(() => {
-    const t = local.queue[local.index];
-    const key = t ? keyOf(t) : null;
-    if (key === localState.key) return;
-    localState.key = key;
-    if (!t) localState.view = null;
-    localState.loading = !!t;
-    if (t) loadState(t);
-  });
-  // Playlists made, renamed or changed elsewhere: the server's state says so (by their counts and names).
-  let seen = '';
-  $effect(() => {
-    const sig = (live.view?.playlists ?? []).map((p) => `${p.id}:${p.count}`).join('|');
-    const t = local.queue[local.index];
-    if (sig === seen) return;
-    const first = !seen;
-    seen = sig;
-    if (!first && t && isLocal()) loadState(t);
-  });
-});
 
 /** The playlists as shown with what plays: membership of the server's player's track, or of the local one. */
-export function shownPlaylists(): Playlist[] {
-  if (!isLocal()) return live.view?.playlists ?? [];
-  return localState.view?.playlists ?? (live.view?.playlists ?? []).map((p) => ({ ...p, member: false }));
-}
+export const shownPlaylists = (): Playlist[] => port().playlists();
 /** Whether `shownPlaylists` has been read: until then its [] is not known to be empty, and a count says nothing
  *  rather than "0 tracks" (the owner, 2026-10-24). */
-export const playlistsKnown = () => !!live.view || (isLocal() && !!localState.view);
+export const playlistsKnown = () => port().playlistsKnown();
 
 /** Puts what plays in the playlist or takes it out, where the output is. */
-export async function setPlayingMember(playlistId: string, member: boolean) {
-  if (!isLocal()) {
-    live.view = await setMember(playlistId, member, prefs.source || undefined);
-    return;
-  }
-  const t = local.queue[local.index];
-  if (!t) throw new Error('Nothing is playing.');
-  const view = await setTrackMember(t.source, t.id, playlistId, member);
-  if (localState.key === keyOf(t)) localState.view = view;
-}
-
-/** The local favourite changed: the answer, if it is still about the playing track. */
-export function tookLocal(source: string, id: string, view: TrackState) {
-  if (localState.key === `${source}/${id}`) localState.view = view;
-}
+export const setPlayingMember = (playlistId: string, member: boolean) => port().setMember(playlistId, member);
 
 // A track the engine could not play is skipped (as a player does); it says which and why, once. The line goes once a
 // later track plays (the engine clears the error), unless another toast replaced it meanwhile.
@@ -196,6 +81,7 @@ $effect.root(() => {
 // before that is told when it is left: skipped for another track, stopped when the queue ends; one heard for less than
 // a second is not. The server keeps it for the account it plays as.
 const PLAYED_AT = 0.9;
+const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
 /** The queue place being heard (index and track), from when, how far it got, and whether it was told as counted. */
 type Hearing = { at: string; track: LocalTrack; started: number; heard: number; length: number | null; counted: boolean };
 let hearing: Hearing | null = null;
@@ -279,26 +165,15 @@ $effect.root(() => {
 
 /** Plays a playlist where the output is: the server's player, or here (its tracks fetched, then the details). */
 export async function playPlaylistHere(id: string, mode: PlayMode): Promise<boolean> {
-  if (!isLocal()) return false;
-  // With their names: a player elsewhere (the app, a Cratarr player) shows them at once, on its lock screen too.
-  const { source, rows } = await playlistRows(id, prefs.source || undefined);
-  const named: LocalTrack[] = rows
-    .filter((r) => r.id && !r.missing)
-    .map((r) => ({ source, id: r.id!, name: r.name ?? '', artist: r.artist, album: r.album, album_id: null }));
-  if (!named.length) throw new Error('None of its tracks can be found.');
-  if (mode === 'next' || mode === 'last') enqueue(named, mode);
-  else playQueue(named, 0, id, 0, mode === 'shuffle');
+  const p = port();
+  if (!p.holdsQueue) return false;
+  await p.playPlaylist(id, mode);
   return true;
 }
 
 /** Plays a playlist where the output is (its menu's Play, Shuffle, Play next and Add to queue; its view's buttons):
  *  here, or on the server's player, showing the new track once it is there for Play and Shuffle. */
-export async function startPlaylist(id: string, mode: PlayMode) {
-  if (await playPlaylistHere(id, mode)) return;
-  await playPlaylist(id, mode, prefs.source || undefined);
-  if (mode === 'play' || mode === 'shuffle') await untilNewTrack();
-  else refresh();
-}
+export const startPlaylist = async (id: string, mode: PlayMode) => port().playPlaylist(id, mode);
 
 /** Several playlists (the selection's ⋮, decision 0025): their tracks one playlist after another, in the order given,
  *  each once, here or on the server's player. */
@@ -322,21 +197,12 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
 
 /** Plays a playlist from one of its tracks (a tap on a row of its view, decision 0023): these tracks from `index`, here
  *  or on the server's player. */
-export async function playPlaylistFrom(name: string, source: string, tracks: LocalTrack[], index: number, position = 0) {
-  if (isLocal()) return playQueue(tracks, index, name, position);
-  await handover(
-    tracks.map((t) => t.id),
-    index,
-    position,
-    source,
-  );
-  setTimeout(refresh, 700);
-}
+export const playPlaylistFrom = async (name: string, source: string, tracks: LocalTrack[], index: number, position = 0) => port().playFrom(name, source, tracks, index, position);
 
 /** Plays an album here when the output is this browser. Whether its tracks can go in a playlist (in Music, not
  *  Incoming) the server says with each track's state. */
 export async function playAlbumHere(source: string, album: string, title?: string): Promise<boolean> {
-  if (!isLocal()) return false;
+  if (!port().holdsQueue) return false;
   // Out of reach (lib/away): its tracks on this device alone.
   if (away()) {
     const got = await pickHere({ kind: 'album', source, id: album }, 'play', undefined, source);
@@ -355,35 +221,14 @@ export async function playAlbumHere(source: string, album: string, title?: strin
 }
 
 /** What plays where the output is now, to move it: the queue, the place in it and the position (s). */
-function current(): { tracks: LocalTrack[]; index: number; position: number } | null {
-  if (isLocal()) return local.index < 0 ? null : { tracks: [...local.queue], index: local.index, position: local.position };
-  const np = live.view?.now_playing ?? null;
-  if (!np) return null;
-  const tracks: LocalTrack[] = [np, ...np.upcoming].map((t) => ({
-    source: np.source,
-    id: t.id,
-    name: t.name,
-    artist: t.artist,
-    album: t.album,
-    album_id: t.album_id,
-  }));
-  return { tracks, index: 0, position: np.progress?.position_secs ?? 0 };
-}
+const current = () => port().current();
 
 /** Plays on `output` from now on, and moves what plays there: the queue from the playing track, at its position; the
  *  side that played stops. */
 export async function moveTo(output: typeof prefs.output) {
   if (output === prefs.output) return;
   const was = current();
-  if (isLocal()) {
-    stop();
-  } else if (was) {
-    try {
-      await transport('stop', was.tracks[0].source);
-    } catch {
-      /* it may have stopped already */
-    }
-  }
+  await port().leave(was);
   pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
   if (!was) return;
@@ -402,18 +247,7 @@ export const hasMusic = () => current() !== null;
  *  (the owner chose not to take that player over). */
 export async function joinTo(output: typeof prefs.output) {
   if (output === prefs.output) return;
-  if (isLocal()) {
-    if (local.index >= 0 && !local.paused) togglePlay(true);
-  } else {
-    const np = live.view?.now_playing ?? null;
-    if (np && !np.progress?.paused) {
-      try {
-        await transport('play-pause', np.source);
-      } catch {
-        /* it may have stopped already */
-      }
-    }
-  }
+  await port().pauseToJoin();
   pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
 }

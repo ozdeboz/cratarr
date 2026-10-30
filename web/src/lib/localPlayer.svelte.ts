@@ -18,7 +18,8 @@ import { playback } from './deviceLog';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type PlayerCommand, type QueueItem, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type QueueItem, type TrackGain } from './api';
+import { commandOf } from './player/commands';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
@@ -1323,23 +1324,15 @@ export function handSleep(s: Sleep | null) {
   hand('sleep', { atMs: s?.atMs ?? null, endOfTrack: s?.endOfTrack ?? false });
 }
 
-/** A call for the player that plays: the app's own, or the one driven (its command, as /api/players takes it). */
+/** A call for the player that plays: the app's own (its op, which every app takes), or the one driven (the server's
+ *  PlayerCommand for the op, lib/player/commands). */
 function hand(op: string, args: Record<string, unknown> = {}) {
   if (driven === null) return toApp({ type: 'player', op, ...args });
-  const command: Record<string, unknown> =
-    op === 'queue'
-      ? { command: 'play', tracks: args.tracks, index: args.index, position_ms: args.positionMs, ...(args.name ? { name: args.name } : {}) }
-      : op === 'seek'
-        ? { command: 'seek', position_ms: args.positionMs, ...(args.wind ? { wind: true } : {}) }
-        : op === 'play'
-          ? { command: 'resume' }
-          : op === 'sleep'
-            ? { command: 'sleep', at_ms: args.atMs, ...(args.endOfTrack ? { end_of_track: true } : {}) }
-            : { command: op, ...args };
+  const command = commandOf(op, args);
+  if (!command) return;
   // A failed command is a toast of its own: `local.error` is the playing track's, and the player's next report clears it
   // (the architecture audit, 2026-10-29: the toast went within a second).
-  // Shaped from the app's op until the Player port gives both one command (0.9.19); the server checks it as it comes.
-  playerCommand(driven, command as PlayerCommand).catch((e) => toast.fail(e, "The player didn't take it"));
+  playerCommand(driven, command).catch((e) => toast.fail(e, "The player didn't take it"));
 }
 
 /** The position now, to the frame (the visuals' beats, decision 0046), where `local.position` moves four times a

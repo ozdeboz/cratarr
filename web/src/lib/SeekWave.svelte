@@ -11,6 +11,7 @@
   import { appInfo, inApp } from './app.svelte';
   import { deckNow, local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
+  import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
   import { aimPainted, holdNow, ramping, tapeDir } from './ramping.svelte';
   import { reducedMotion } from './motion';
@@ -77,7 +78,7 @@
   /** How long after its ramp the colour waits for the player to say it paused or plays. */
   const AFTER_WAIT_MS = 2500;
   $effect(() => {
-    if (isLocal() && ramping.dir && ramping.effect) after = ramping.dir;
+    if (port().ramps && ramping.dir && ramping.effect) after = ramping.dir;
   });
   $effect(() => {
     if ((after === 'out' && paused) || (after === 'in' && !paused)) after = null;
@@ -90,7 +91,7 @@
     return () => clearTimeout(t);
   });
   // Only an effect that stops the music greys it (the owner, 2026-10-27), not the tape's own stops (lib/ramping).
-  const grey = $derived(isLocal() && ramping.dir && ramping.effect ? ramping.dir === 'out' : after ? after === 'out' : paused);
+  const grey = $derived(port().ramps && ramping.dir && ramping.effect ? ramping.dir === 'out' : after ? after === 'out' : paused);
   // A hold's zoom on the playhead (the owner, 2026-10-28): the stretch the tape covers in ZOOM_S at its speed, at least
   // ZOOM_MIN_S, at most the whole: in as it winds up, out again as it gets faster, back to the whole when it ends; eased.
   // The playhead keeps the place it had on the bar when the hold began, the track sliding under it.
@@ -458,7 +459,7 @@
   class:cancelling={seek.overCancel}
   class:paused={grey}
   class:estimated
-  style:--ramp-ms={isLocal() && ramping.dir ? `${ramping.ms}ms` : '0ms'}
+  style:--ramp-ms={port().ramps && ramping.dir ? `${ramping.ms}ms` : '0ms'}
   bind:this={el}
   role={canSeek ? 'slider' : 'progressbar'}
   tabindex={canSeek ? 0 : undefined}
