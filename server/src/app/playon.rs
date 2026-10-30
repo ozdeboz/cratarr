@@ -28,6 +28,9 @@ use super::{PlaylistService, ToggleError};
 /// A player not heard from (a report, the 30 s heartbeat) for this long is offline, even if its connection still looks
 /// open: a device that lost power or the network leaves the connection open until a write fails, minutes later.
 const LEASE: Duration = Duration::from_secs(75);
+/// A player not heard from for this long (longer than its 30 s heartbeat) gives way to another page of the same
+/// account taking up its name.
+const QUIET: Duration = Duration::from_secs(35);
 /// Changes reaching the webhooks within this long go out as one.
 const SETTLE: Duration = Duration::from_millis(300);
 /// How long a webhook may take to answer.
@@ -1490,9 +1493,12 @@ impl PlayOn {
     /// two players under one name pushed each other off every few seconds (2026-10-16, two tabs both "Chrome on
     /// Android"). The same page coming back (a reload, a new connection) takes its name back.
     pub fn connect_browser(self: &Arc<Self>, name: &str, page: Option<&str>) -> Result<Commands, ToggleError> {
+        // Another page of the account's under this name, quiet longer than a heartbeat, is gone (a computer that
+        // slept, a page closed without a word): this one takes its place at once (the owner, 2026-10-30: a fast
+        // reconnect after waking). One still heard from keeps its name.
         if let Some(e) = self.entries().get(name)
             && e.online()
-            && (e.kind != PlayerKind::Browser || e.page.as_deref() != page)
+            && (e.kind != PlayerKind::Browser || (e.page.as_deref() != page && e.heard.elapsed() < QUIET))
         {
             return Err(ToggleError::Refused(format!("{name} is another player's name.")));
         }
@@ -3367,6 +3373,9 @@ mod tests {
         // Another tab may not take that name while this one holds it, nor a name the app holds.
         assert!(matches!(p.connect_browser("Chrome on Android", Some("tab-2")), Err(ToggleError::Refused(_))));
         assert!(matches!(p.connect_browser("tablet", Some("tab-2")), Err(ToggleError::Refused(_))));
+        // Quiet past a heartbeat (the computer slept): another page of the account's takes the name up at once.
+        p.entries().get_mut("Chrome on Android").unwrap().heard = Instant::now().checked_sub(QUIET + Duration::from_secs(1)).unwrap();
+        let _woken = p.connect_browser("Chrome on Android", Some("tab-2")).unwrap();
         said(&mut again);
         p.report("Chrome on Android", Report { index: -1, ..Report::default() }).unwrap();
         let back = told(&mut again);
