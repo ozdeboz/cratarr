@@ -71,6 +71,8 @@ mod shelf;
 mod sync;
 pub mod together;
 pub mod originals;
+pub mod works;
+pub mod classical;
 pub mod discogs;
 pub mod covers;
 pub mod cover_cache;

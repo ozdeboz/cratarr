@@ -432,6 +432,10 @@ pub fn start() {
             if let Err(e) = types_pass().await {
                 tracing::info!("discogs: release types not asked now: {e:#}");
             }
+            // Classical's (0.10): only through MusicBrainz's links.
+            if let Err(e) = super::works::discogs_pass().await {
+                tracing::info!("discogs: the works' genres and names not asked now: {e:#}");
+            }
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });
@@ -785,6 +789,26 @@ pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<Option<Artis
     let Some(id) = id else { return Ok(None) };
     let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok(None) };
     Ok(Some(artist_of(id, &v)))
+}
+
+/// Discogs' genres and styles of a release or master MusicBrainz links (0.10, `app::works`: `release:<id>`,
+/// `master:<id>`); empty where Discogs has none. Never a search: the link is MusicBrainz's.
+pub async fn linked_genres(link: &str) -> Result<Vec<String>> {
+    let path = match link.split_once(':') {
+        Some(("release", id)) if id.chars().all(|c| c.is_ascii_digit()) => format!("/releases/{id}"),
+        Some(("master", id)) if id.chars().all(|c| c.is_ascii_digit()) => format!("/masters/{id}"),
+        _ => return Ok(Vec::new()),
+    };
+    let Some(v) = get(&path).await? else { return Ok(Vec::new()) };
+    Ok(strings(&v["genres"]).into_iter().chain(strings(&v["styles"])).collect())
+}
+
+/// A Discogs artist's real name and aliases, by the id MusicBrainz links (0.10, `app::works`); none where Discogs has no
+/// such artist.
+pub async fn artist_names(id: u64) -> Result<Option<(Option<String>, Vec<String>)>> {
+    let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok(None) };
+    let a = artist_of(id, &v);
+    Ok(Some((a.real_name, a.aliases)))
 }
 
 fn artist_of(id: u64, v: &Value) -> ArtistFacts {

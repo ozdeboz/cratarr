@@ -21,6 +21,42 @@ const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.ge
 /// index, in the query that reads the album's format and bitrate.
 const ALBUM_LENGTH: &str = "(SELECT CASE WHEN count(*) = count(nullif(s.duration_ms, 0)) THEN sum(s.duration_ms) END FROM songs s WHERE s.album_id = a.id)";
 
+/// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id and Music-form id (what its
+/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkAlbum {
+    pub id: String,
+    pub base: String,
+    pub name: String,
+    pub artist: String,
+    pub year: Option<u32>,
+    pub release: Option<String>,
+    pub genres: Vec<String>,
+    pub artists: Vec<WorkArtist>,
+}
+
+/// One of an album's album artists: their library id, name, and MusicBrainz id where the files carry one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkArtist {
+    pub id: String,
+    pub name: String,
+    pub mbid: Option<String>,
+}
+
+/// A song as Other versions reads it (0.10, `Library::work_songs`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkSong {
+    pub id: String,
+    pub album: String,
+    /// Its MusicBrainz recording (the files' `musicbrainz_trackid`).
+    pub recording: Option<String>,
+    pub disc: Option<u32>,
+    pub track: Option<u32>,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<u32>,
+}
+
 /// A song in Cratarr's ids, with its album's name and album artist (see `Library::song_ids`).
 #[allow(dead_code)] // for the pushed player state (decision 0031), which comes next
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -785,6 +821,59 @@ impl Library {
         let db = self.db();
         let mut st = db.prepare("SELECT id, coalesce(mbid, ''), artist, name FROM albums WHERE genres = '' ORDER BY n")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every album as Classical and Other versions read it (0.10, `app::classical`): its ids, name, artist, year,
+    /// MusicBrainz release, its files' genres and its album artists, in the library's order.
+    pub fn work_albums(&self) -> Result<Vec<WorkAlbum>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres FROM albums ORDER BY n")?;
+        let mut out: Vec<WorkAlbum> = st
+            .query_map([], |r| {
+                let genres: String = r.get(6)?;
+                Ok(WorkAlbum {
+                    id: r.get(0)?,
+                    base: r.get(1)?,
+                    name: r.get(2)?,
+                    artist: r.get(3)?,
+                    year: r.get::<_, Option<i64>>(4)?.and_then(|y| u32::try_from(y).ok()),
+                    release: r.get::<_, Option<String>>(5)?.filter(|m| !m.is_empty()),
+                    genres: genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect(),
+                    artists: Vec::new(),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let at: HashMap<String, usize> = out.iter().enumerate().map(|(i, a)| (a.id.clone(), i)).collect();
+        let mut st = db.prepare("SELECT album_id, artist_id, name, mbid FROM album_artists ORDER BY album_id, position")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?)))?;
+        for row in rows {
+            let (album, id, name, mbid) = row?;
+            if let Some(i) = at.get(&album) {
+                out[*i].artists.push(WorkArtist { id, name, mbid: mbid.filter(|m| !m.is_empty()) });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every song as Other versions reads it (0.10): its id, album, MusicBrainz recording, disc and track, title,
+    /// artist and year.
+    pub fn work_songs(&self) -> Result<Vec<WorkSong>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, album_id, mbid, disc_no, track_no, title, coalesce(artist, ''), year FROM songs ORDER BY n")?;
+        let number = |v: Option<i64>| v.and_then(|n| u32::try_from(n).ok());
+        let rows = st.query_map([], |r| {
+            Ok(WorkSong {
+                id: r.get(0)?,
+                album: r.get(1)?,
+                recording: r.get::<_, Option<String>>(2)?.filter(|m| !m.is_empty()),
+                disc: number(r.get(3)?),
+                track: number(r.get(4)?),
+                title: r.get(5)?,
+                artist: r.get(6)?,
+                year: number(r.get(7)?),
+            })
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

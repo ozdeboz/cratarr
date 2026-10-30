@@ -1,0 +1,116 @@
+{
+  "id": "rel-arrau-brahms",
+  "title": "Brahms: Piano Concerto No. 1 / Piano Sonata No. 3",
+  "status": "Official",
+  "date": "1990",
+  "artist-credit": [
+    { "name": "Johannes Brahms", "joinphrase": "; ", "artist": { "id": "a-brahms", "name": "Johannes Brahms", "sort-name": "Brahms, Johannes" } },
+    { "name": "Claudio Arrau", "joinphrase": "", "artist": { "id": "a-arrau", "name": "Claudio Arrau", "sort-name": "Arrau, Claudio" } }
+  ],
+  "genres": [{ "id": "g-classical", "name": "classical", "count": 2, "disambiguation": "" }],
+  "relations": [
+    { "type": "discogs", "target-type": "url", "direction": "forward", "url": { "id": "u1", "resource": "https://www.discogs.com/release/1234567" } },
+    { "type": "producer", "target-type": "artist", "direction": "backward", "artist": { "id": "a-prod", "name": "Volker Straus", "sort-name": "Straus, Volker" } }
+  ],
+  "release-group": {
+    "id": "rg-arrau-brahms",
+    "title": "Brahms: Piano Concerto No. 1 / Piano Sonata No. 3",
+    "primary-type": "Album",
+    "secondary-types": [],
+    "first-release-date": "1990",
+    "genres": [
+      { "id": "g-classical", "name": "classical", "count": 3, "disambiguation": "" },
+      { "id": "g-romantic", "name": "romantic", "count": 1, "disambiguation": "" }
+    ],
+    "relations": [
+      { "type": "discogs", "target-type": "url", "direction": "forward", "url": { "id": "u2", "resource": "https://www.discogs.com/master/76543-Brahms-Arrau" } }
+    ]
+  },
+  "media": [
+    {
+      "position": 1,
+      "format": "CD",
+      "track-count": 2,
+      "tracks": [
+        {
+          "id": "t-1-1",
+          "position": 1,
+          "number": "1",
+          "title": "Piano Sonata no. 3 in F minor, op. 5",
+          "length": 2340000,
+          "artist-credit": [{ "name": "Claudio Arrau", "joinphrase": "", "artist": { "id": "a-arrau", "name": "Claudio Arrau", "sort-name": "Arrau, Claudio" } }],
+          "recording": {
+            "id": "rec-1",
+            "title": "Piano Sonata no. 3 in F minor, op. 5",
+            "artist-credit": [{ "name": "Claudio Arrau", "joinphrase": "", "artist": { "id": "a-arrau", "name": "Claudio Arrau", "sort-name": "Arrau, Claudio" } }],
+            "relations": [
+              { "type": "instrument", "target-type": "artist", "direction": "backward", "attributes": ["piano"], "artist": { "id": "a-arrau", "name": "Claudio Arrau", "sort-name": "Arrau, Claudio" } },
+              {
+                "type": "performance",
+                "target-type": "work",
+                "direction": "forward",
+                "work": {
+                  "id": "w-sonata-3",
+                  "title": "Piano Sonata no. 3 in F minor, op. 5",
+                  "type": "Sonata",
+                  "relations": [
+                    { "type": "composer", "target-type": "artist", "direction": "backward", "artist": { "id": "a-brahms", "name": "Johannes Brahms", "sort-name": "Brahms, Johannes" } }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "t-1-2",
+          "position": 2,
+          "number": "2",
+          "title": "Applause",
+          "length": 45000,
+          "recording": { "id": "rec-2", "title": "Applause", "relations": [] }
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "format": "CD",
+      "track-count": 1,
+      "tracks": [
+        {
+          "id": "t-2-1",
+          "position": 1,
+          "number": "1",
+          "title": "Piano Concerto no. 1 in D minor, op. 15",
+          "length": 2880000,
+          "recording": {
+            "id": "rec-3",
+            "title": "Piano Concerto no. 1 in D minor, op. 15",
+            "artist-credit": [
+              { "name": "Claudio Arrau", "joinphrase": ", ", "artist": { "id": "a-arrau", "name": "Claudio Arrau", "sort-name": "Arrau, Claudio" } },
+              { "name": "Concertgebouw Orchestra", "joinphrase": ", ", "artist": { "id": "a-rco", "name": "Royal Concertgebouw Orchestra", "sort-name": "Royal Concertgebouw Orchestra" } },
+              { "name": "Haitink", "joinphrase": "", "artist": { "id": "a-haitink", "name": "Bernard Haitink", "sort-name": "Haitink, Bernard" } }
+            ],
+            "relations": [
+              { "type": "performing orchestra", "target-type": "artist", "direction": "backward", "artist": { "id": "a-rco", "name": "Royal Concertgebouw Orchestra", "sort-name": "Royal Concertgebouw Orchestra" } },
+              { "type": "instrument", "target-type": "artist", "direction": "backward", "attributes": ["piano"], "artist": { "id": "a-arrau", "name": "Claudio Arrau", "sort-name": "Arrau, Claudio" } },
+              { "type": "conductor", "target-type": "artist", "direction": "backward", "artist": { "id": "a-haitink", "name": "Bernard Haitink", "sort-name": "Haitink, Bernard" } },
+              {
+                "type": "performance",
+                "target-type": "work",
+                "direction": "forward",
+                "work": {
+                  "id": "w-concerto-1",
+                  "title": "Piano Concerto no. 1 in D minor, op. 15",
+                  "type": "Concerto",
+                  "relations": [
+                    { "type": "composer", "target-type": "artist", "direction": "backward", "artist": { "id": "a-brahms", "name": "Johannes Brahms", "sort-name": "Brahms, Johannes" } }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

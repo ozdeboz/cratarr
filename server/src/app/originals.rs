@@ -37,6 +37,14 @@ pub fn start() {
                 tracing::info!("original years: MusicBrainz could not be asked now: {e:#}");
                 0
             });
+            // Nothing left of these: the works (0.10, `works`), in turn with them, so the two keep one pace.
+            let asked = match asked {
+                0 => super::works::pass().await.unwrap_or_else(|e| {
+                    tracing::info!("works: MusicBrainz could not be asked now: {e:#}");
+                    0
+                }),
+                n => n,
+            };
             super::musicbrainz::PASS_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
             // Settings shows when it asks next (0.9.6).
             let wait = if asked == 0 { IDLE } else { Duration::ZERO };
