@@ -107,6 +107,7 @@ pub fn router(app: Arc<App>) -> Router {
         )
         .route("/api/playlists/{id}/favorite", post(playlist_favorite))
         .route("/api/playlists/{id}/entries", put(edit_playlist))
+        .route("/api/playlists/{id}/ops", post(playlist_ops))
         .route("/api/playlists/{id}/repeats", delete(remove_repeats))
         .route("/api/playlists/{id}/append", post(append_tracks))
         .route("/api/playlists/{id}/toggle", post(toggle))
@@ -2436,6 +2437,17 @@ struct Edit {
 async fn edit_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(e): Json<Edit>) -> Result<Json<serde_json::Value>, ApiError> {
     let undo = app.playlists.edit(&id, &e.expected, &e.entries).await?;
     Ok(Json(json!({ "playlist": id, "entries": e.entries.len(), "undo": undo })))
+}
+
+/// A playlist's edits made offline, as operations on its entries (decision 0087): merged on it as it is now; answers
+/// the change log's rev and the playlist's entries with their tracks on `?source=`.
+async fn playlist_ops(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Query(f): Query<Follow>,
+    Json(b): Json<crate::app::PlaylistOps>,
+) -> Result<Json<crate::app::OpsAnswer>, ApiError> {
+    Ok(Json(app.playlists.apply_ops(&id, f.source.as_deref(), b.ops).await?))
 }
 
 /// Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16).

@@ -1709,6 +1709,9 @@ impl UserData {
         tx.execute("DELETE FROM playlist_alias WHERE old = ?1", [to])?;
         tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1", [to])?;
         tx.execute("UPDATE playlist_entry SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        // Its entry ids go with it (decision 0087).
+        tx.execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [to])?;
+        tx.execute("UPDATE playlist_entry_id SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         tx.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [to])?;
         tx.execute("UPDATE playlist_shared SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         // Logged again now its sharing moved with it (the store logged it before), so those it is shared with see it.
@@ -1732,6 +1735,7 @@ impl UserData {
     pub fn playlist_gone(&self, name: &str) -> Result<()> {
         self.db().execute("DELETE FROM playlist_alias WHERE name = ?1 OR old = ?1", [name])?;
         self.db().execute("DELETE FROM playlist_entry WHERE playlist = ?1", [name])?;
+        self.db().execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [name])?;
         self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [name])?;
         Ok(())
     }

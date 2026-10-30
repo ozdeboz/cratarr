@@ -59,6 +59,10 @@ pub fn set_instance(serve: Arc<Serve>) {
         if let Err(e) = s.userdata.entries_written(id, before, after) {
             tracing::warn!("playlist {id}: when its entries came not kept: {e:#}");
         }
+        // Its lines keep their entry ids through Cratarr's own edits (decision 0087).
+        if let Err(e) = s.userdata.entries_of(id, after) {
+            tracing::warn!("playlist {id}: its entry ids not kept: {e:#}");
+        }
         if let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::Changed) {
             tracing::warn!("playlist {id}: its change not logged: {e:#}");
         }

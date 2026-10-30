@@ -37,6 +37,7 @@ mod placement;
 mod playlist_rewrite;
 #[allow(dead_code)] // the playlist sync uses it (decision 0012)
 mod playlist_merge;
+mod playlist_ops;
 mod ports;
 mod playlists;
 mod retag;

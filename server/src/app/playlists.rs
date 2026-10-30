@@ -17,6 +17,9 @@ use crate::playlists::{Edited, PlaylistView, Repair, Repairs, Store};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
 use crate::sync_state::Kind;
 
+mod ops;
+pub use ops::{OpsAnswer, PlaylistOps};
+
 /// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
 pub const PLAY_MAX: usize = 100;
 
@@ -727,6 +730,10 @@ pub struct CrateCounts {
 #[derive(Debug, Default, Serialize, PartialEq)]
 pub struct PlaylistRow {
     pub entry: String,
+    /// Its entry id (0.12, decision 0087): what the playlist's operations name it by (`entry` stays the line). Absent
+    /// (a crate's row, or ids not kept): no operations for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
     pub file: String,
     /// The server's track id, when the file is matched to one.
     pub id: Option<String>,
@@ -2003,14 +2010,10 @@ impl PlaylistService {
     pub async fn rows(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<PlaylistRow>), ToggleError> {
         let r = self.reach(id)?;
         let entries = r.store.entries(&r.name).await?;
-        let sources = self.lib.connected();
-        let source = want
-            .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
-            .or_else(|| sources.first())
-            .map(|(a, _)| a.cfg.id.clone())
-            .unwrap_or_default();
+        let source = self.rows_source(want);
         let mut rows = self.rows_of(entries.clone(), &source).await?;
-        // The user's plays of each track and when each entry came, as the user data keeps them (the panel's orders).
+        // The user's plays of each track and when each entry came, as the user data keeps them (the panel's orders),
+        // and each entry's id (decision 0087: what operations name it by).
         if let Some(serve) = self.served.clone() {
             let (id, rs) = (r.key(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
             let me = serve.current_user();
@@ -2020,20 +2023,34 @@ impl PlaylistService {
                     None => Default::default(),
                 };
                 let added = serve.userdata.entries_added(&id, &entries).unwrap_or_default();
-                (plays, added)
+                let ids = serve.userdata.entries_of(&id, &entries).map(|e| e.ids()).unwrap_or_else(|e| {
+                    tracing::warn!("playlist {id}: its entry ids not read: {e:#}");
+                    Vec::new()
+                });
+                (plays, added, ids)
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let (plays, added) = facts;
+            let (plays, added, ids) = facts;
             for (i, row) in rows.iter_mut().enumerate() {
                 if let Some((count, last)) = row.id.as_ref().and_then(|t| plays.get(t)) {
                     row.play_count = Some(*count);
                     row.last_played = *last;
                 }
                 row.added = added.get(i).copied().flatten();
+                row.entry_id = ids.get(i).cloned();
             }
         }
         Ok((source, rows))
+    }
+
+    /// The server a playlist's rows name their tracks on: `want`, else the first connected.
+    pub(super) fn rows_source(&self, want: Option<&str>) -> String {
+        let sources = self.lib.connected();
+        want.and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
+            .or_else(|| sources.first())
+            .map(|(a, _)| a.cfg.id.clone())
+            .unwrap_or_default()
     }
 
     /// Rows for these lines (a playlist's, or a page of a crate's), with what the catalogue knows of their files.
@@ -2061,6 +2078,7 @@ impl PlaylistService {
                 .into_iter()
                 .zip(facts)
                 .map(|(entry, f)| PlaylistRow {
+                    entry_id: None,
                     album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
                     album_tracks: f.track_id.as_ref().and_then(|t| albums.get(t)).and_then(|a| album_tracks.get(a).copied()),
                     missing: !line_exists(&c, dir.as_deref(), &entry),

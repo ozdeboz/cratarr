@@ -39,6 +39,8 @@ pub const CODE: &[&str] = &[
     // (0.12, decision 0087).
     "offline_writes",
     "other_versions",
+    // A playlist's edits as operations on entry ids, merged (0.12, decision 0087): `/api/playlists/{id}/ops`.
+    "playlist_ops",
     "queue_requests",
     // Quick crates (0.11): Sounds like an artist, the closeness cutoff, the label and album axes.
     "quick_crates",
