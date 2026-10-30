@@ -176,7 +176,7 @@ async fn rest(
         }
     };
     // As its account (decision 0051): its own players, favourites and plays. An app controls; it administers nothing.
-    let who = super::who::Who { user: user.name.clone(), admin: user.admin, scope: super::who::Scope::Control };
+    let who = super::who::Who { user: user.name.clone(), admin: user.admin, scope: super::who::Scope::Control, home: super::proxy::at_home(&client) };
     match super::who::acting_as(who, handle(&serve, &user, &method, &params, &headers)).await {
         Ok(Answer::Json(body)) => json_response(api::ok(body)),
         Ok(Answer::Raw(r)) => r,

@@ -1,7 +1,8 @@
 //! Settings that were the environment's only (0.9.8, the owner: what blocks others from running Cratarr): the proxies
 //! whose forwarded headers are believed, the analysis pass, Beat this!, and the host players reach sync play on. The
 //! environment seeds them; a value saved in Settings wins from then on (kept as server choices, `runtime:*`). Each one
-//! applies at once: the proxies' screen, the analysis pass (woken), sync play's address (Play On's).
+//! applies at once: the proxies' screen, the analysis pass (woken), sync play's address (Play On's). The home networks
+//! a shared device works from (`serve::proxy::at_home`) are Settings' only, none by default.
 
 use std::sync::{OnceLock, RwLock};
 
@@ -15,6 +16,7 @@ const PROXIES: &str = "runtime:proxies";
 const ANALYSIS: &str = "runtime:analysis";
 const BEAT_THIS: &str = "runtime:beat_this";
 const SNAPCAST_HOST: &str = "runtime:snapcast_host";
+const HOME_NETWORKS: &str = "runtime:home_networks";
 
 /// The settings in force.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +26,8 @@ pub struct Runtime {
     pub analysis: Mode,
     pub beat_this: bool,
     pub snapcast_host: Option<String>,
+    /// Home besides the local addresses.
+    pub home_networks: Vec<IpNet>,
 }
 
 /// What the environment said at the start (none: it said nothing).
@@ -55,6 +59,7 @@ struct Saved {
     analysis: Option<Mode>,
     beat_this: Option<bool>,
     snapcast_host: Option<Option<String>>,
+    home_networks: Vec<IpNet>,
 }
 
 static SEED: OnceLock<Seed> = OnceLock::new();
@@ -78,6 +83,7 @@ fn combine(seed: Seed, saved: &Saved) -> Runtime {
         analysis: saved.analysis.or(seed.analysis).unwrap_or(Mode::Keep),
         beat_this: saved.beat_this.or(seed.beat_this).unwrap_or(false),
         snapcast_host: saved.snapcast_host.clone().unwrap_or(seed.snapcast_host),
+        home_networks: saved.home_networks.clone(),
     }
 }
 
@@ -97,6 +103,7 @@ fn read_saved(ud: &crate::userdata::UserData) -> Result<Saved> {
         analysis: ud.import_choice(ANALYSIS)?.map(|v| Mode::from_env(Some(&v))),
         beat_this: ud.import_choice(BEAT_THIS)?.map(|v| v == "1"),
         snapcast_host: ud.import_choice(SNAPCAST_HOST)?.map(|h| Some(h.trim().to_string()).filter(|h| !h.is_empty())),
+        home_networks: ud.import_choice(HOME_NETWORKS)?.as_deref().and_then(|p| crate::serve::proxy::parse(Some(p))).unwrap_or_default(),
     })
 }
 
@@ -107,6 +114,7 @@ pub fn start(seed: Seed, ud: Option<&crate::userdata::UserData>, bind: &str) -> 
     let saved = ud.and_then(|u| read_saved(u).map_err(|e| tracing::warn!("settings: the saved server settings could not be read: {e:#}")).ok()).unwrap_or_default();
     let r = combine(seed, &saved);
     crate::serve::proxy::set(r.proxies.clone());
+    crate::serve::proxy::set_home(r.home_networks.clone());
     *NOW.write().unwrap_or_else(|p| p.into_inner()) = Some(r.clone());
     r
 }
@@ -123,6 +131,7 @@ pub struct View {
     pub analysis: &'static str,
     pub beat_this: bool,
     pub snapcast_host: Option<String>,
+    pub home_networks: Vec<String>,
     /// What the environment set and Settings has not saved over.
     pub from_env: serde_json::Map<String, serde_json::Value>,
     /// Those that wait for a restart (none: each applies at once).
@@ -148,6 +157,7 @@ pub fn view(ud: &crate::userdata::UserData) -> Result<View> {
         analysis: mode_name(r.analysis),
         beat_this: r.beat_this,
         snapcast_host: r.snapcast_host,
+        home_networks: r.home_networks.iter().map(ToString::to_string).collect(),
         from_env,
         restart: Vec::new(),
     })
@@ -165,6 +175,8 @@ pub struct Change {
     /// Some(None) or Some("") clears it.
     #[serde(default, deserialize_with = "some_or_null")]
     pub snapcast_host: Option<Option<String>>,
+    #[serde(default)]
+    pub home_networks: Option<Vec<String>>,
 }
 
 fn some_or_null<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Option<String>>, D::Error> {
@@ -184,6 +196,7 @@ pub fn proxies_of(list: &[String]) -> std::result::Result<Vec<IpNet>, String> {
 /// Blocking.
 pub fn save(ud: &crate::userdata::UserData, c: &Change) -> std::result::Result<Runtime, String> {
     let proxies = c.proxies.as_deref().map(proxies_of).transpose()?;
+    let home = c.home_networks.as_deref().map(proxies_of).transpose()?;
     let analysis = match c.analysis.as_deref() {
         None => None,
         Some(a @ ("keep" | "all" | "off")) => Some(a),
@@ -208,8 +221,12 @@ pub fn save(ud: &crate::userdata::UserData, c: &Change) -> std::result::Result<R
     if let Some(h) = &host {
         ud.set_import_choice(SNAPCAST_HOST, h.as_deref().unwrap_or("")).map_err(fail)?;
     }
+    if let Some(n) = &home {
+        ud.set_import_choice(HOME_NETWORKS, &n.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")).map_err(fail)?;
+    }
     let r = combine(SEED.get().cloned().unwrap_or_default(), &read_saved(ud).map_err(fail)?);
     crate::serve::proxy::set(r.proxies.clone());
+    crate::serve::proxy::set_home(r.home_networks.clone());
     *NOW.write().unwrap_or_else(|p| p.into_inner()) = Some(r.clone());
     CHANGED.notify_waiters();
     Ok(r)
@@ -231,7 +248,7 @@ mod tests {
         let r = combine(seed.clone(), &Saved::default());
         assert_eq!((r.analysis, r.beat_this, r.snapcast_host.as_deref()), (Mode::All, true, Some("nas")));
         assert_eq!(r.proxies.unwrap().len(), 1);
-        let saved = Saved { proxies_set: true, proxies: None, analysis: Some(Mode::Off), beat_this: Some(false), snapcast_host: Some(None) };
+        let saved = Saved { proxies_set: true, proxies: None, analysis: Some(Mode::Off), beat_this: Some(false), snapcast_host: Some(None), home_networks: Vec::new() };
         let r = combine(seed, &saved);
         assert_eq!((r.proxies, r.analysis, r.beat_this, r.snapcast_host), (None, Mode::Off, false, None), "saved [] is local peers only, over the environment's");
     }

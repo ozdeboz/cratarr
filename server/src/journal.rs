@@ -444,7 +444,7 @@ mod tests {
         use crate::serve::who::{Scope, Who, acting_as};
         let j = Journal::open(None).unwrap();
         let id = done_by(Some("ann".into()), async { j.intend(100, &rejected("A")).unwrap() }).await;
-        let bob = Who { user: "bob".into(), admin: true, scope: Scope::Full };
+        let bob = Who { user: "bob".into(), admin: true, scope: Scope::Full, home: true };
         acting_as(bob, async { j.mark_undone(id, 200).unwrap() }).await;
         let who: (Option<String>, Option<String>) =
             j.db().query_row("SELECT account, undone_by FROM events WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
