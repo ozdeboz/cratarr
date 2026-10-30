@@ -228,7 +228,7 @@
   }
 </script>
 
-<section class="quick" aria-label="Make a crate">
+<section class="quick" aria-label="Grab a crate">
   <p class="sentence" class:empty={!chips.length}>
     {#each parts as p, k (k)}{#if k && !p.tight}{' '}{/if}{#if p.chip !== undefined}{@const c = chips[p.chip]}<button
           class="term"
