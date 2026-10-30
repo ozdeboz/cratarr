@@ -240,3 +240,7 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0085: Offline first, in five steps](0085-offline-first.md): accepted as a plan, beside 0.11 to 0.14. The apps
   carry their own pages; Downloads an offline shelf; nothing done offline lost; the whole library's index on the
   device; crates and the queue on the device, through the shared Rust core. The merge rules are the owner's to set.
+- [0087: Offline writes: ids, times and the change log](0087-offline-writes.md): accepted, for 0.12. A change's time
+  in `X-Cratarr-At`, favourites and ratings the last change winning; `Idempotency-Key` and play ids kept 30 days; one
+  change log per server (`/api/changes`); playlist edits as operations on entry ids, merged as a set, the last move
+  winning.
