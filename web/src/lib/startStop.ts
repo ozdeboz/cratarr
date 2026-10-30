@@ -51,15 +51,31 @@ export const PIECE_MS = 350;
  *  a slow wind's as before. Its shape stays the raised cosine. The app's Plan.lengthMs is the same rule
  *  (0.9.15-2); taps, seeks and the tape's own stop keep the Brake. */
 export const DECEL_X = 64;
-export const brakeLengthMs = (v0: number, to: number, brakeMs: number) => Math.max(brakeMs, Math.round((Math.abs(v0 - to) / DECEL_X) * 1000));
-/** Such a brake's speed `t` ms into it (×): a raised cosine from `v0` to `to` over `ms`, then `to`. */
-export const brakeSpeed = (v0: number, to: number, ms: number, t: number) => to + ((v0 - to) * (1 + Math.cos(Math.PI * Math.min(1, Math.max(0, t / ms))))) / 2;
+/** The brake's three rules as one set (the 0075 spike, 2026-10-30: the same rules from the Rust rules crate, as
+ *  WebAssembly, lib/wasm/brake.ts): its length, its speed `t` ms in, and its way (track s) after `s` seconds. */
+export type BrakeRules = {
+  lengthMs: (v0: number, to: number, brakeMs: number) => number;
+  speed: (v0: number, to: number, ms: number, t: number) => number;
+  travel: (v: number, ms: number, s: number, to: number) => number;
+};
+/** This page's own: a raised cosine from `v0` to `to` over `ms`, then `to`. */
+export const JS_BRAKE: BrakeRules = {
+  lengthMs: (v0, to, brakeMs) => Math.max(brakeMs, Math.round((Math.abs(v0 - to) / DECEL_X) * 1000)),
+  speed: (v0, to, ms, t) => to + ((v0 - to) * (1 + Math.cos(Math.PI * Math.min(1, Math.max(0, t / ms))))) / 2,
+  travel: (v, ms, s, to) => {
+    const T = ms / 1000;
+    const u = Math.min(s, T);
+    return to * u + ((v - to) / 2) * (u + (T / Math.PI) * Math.sin((Math.PI * u) / T)) + to * Math.max(0, s - T);
+  },
+};
+let brake: BrakeRules = JS_BRAKE;
+/** The rules in use from now on (the spike's switch: lib/wasm/brake.ts sets the WebAssembly's once it is ready). */
+export const useBrake = (b: BrakeRules) => void (brake = b);
+export const brakeLengthMs = (v0: number, to: number, brakeMs: number) => brake.lengthMs(v0, to, brakeMs);
+/** Such a brake's speed `t` ms into it (×). */
+export const brakeSpeed = (v0: number, to: number, ms: number, t: number) => brake.speed(v0, to, ms, t);
 /** How far such a brake from `v`× to `to`× over `ms` has gone after `s` seconds (track s). */
-export function brakeTravel(v: number, ms: number, s: number, to = 1): number {
-  const T = ms / 1000;
-  const u = Math.min(s, T);
-  return to * u + ((v - to) / 2) * (u + (T / Math.PI) * Math.sin((Math.PI * u) / T)) + to * Math.max(0, s - T);
-}
+export const brakeTravel = (v: number, ms: number, s: number, to = 1) => brake.travel(v, ms, s, to);
 
 /** `mode`, `ms`, `stopMs`: Start and stop's effect, its start (the wind-up) and its stop (the wind-down; its own, the
  *  tape's Brake being the tape's only: the owner, 2026-10-27); `skips`: it for next and previous too; `rewind`: the tape
