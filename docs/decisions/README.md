@@ -225,3 +225,6 @@ by a later record that says so in its header. A new decision takes the next numb
   accepted; amended 2026-10-30. An album's type is its MusicBrainz release group's, else its Discogs release's when
   that release fits the album's tracks or length; an EP's edition far longer than its group's first release is an
   Album.
+- [0083: Excluding an artist: not in this crate, or everywhere](0083-excluding-an-artist.md): accepted. Not in this
+  crate adds "Artist is not" to the crate's own filter (a fixed crate's added conditions, per account); Exclude
+  everywhere is one list per account that every pick reads, by any credit; Discover's Not interested stays Discover's.

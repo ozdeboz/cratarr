@@ -962,7 +962,7 @@ impl Catalogue {
             tag_keys.entry(place).or_insert(value);
         }
         let mut st = db.prepare(
-            "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist', 'mood', 'style', 'grouping') ORDER BY folder, rel, n",
+            "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist', 'artists', 'mood', 'style', 'grouping') ORDER BY folder, rel, n",
         )?;
         let mut by: HashMap<Place, Vec<(String, String)>> = HashMap::new();
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
@@ -999,6 +999,8 @@ impl Catalogue {
                 let first: BTreeMap<&str, &str> =
                     tags.iter().rev().map(|(n, v)| (n.as_str(), v.as_str())).collect::<BTreeMap<_, _>>();
                 let (mut genres, mut artists): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+                // The tags' own artists list (ARTISTS), where the file has one: credited, not shown (decision 0083).
+                let mut listed: Vec<String> = Vec::new();
                 // The file's own moods, styles and grouping (0.9.7, the library's words), each value split where it
                 // holds several ("Chill; Dreamy").
                 let (mut file_moods, mut file_styles, mut file_tags): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
@@ -1007,6 +1009,7 @@ impl Catalogue {
                         "genre" => (&mut genres, vec![v.as_str()]),
                         // A compilation's album artist is no artist (as the radio has it).
                         "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, vec![v.as_str()]),
+                        "artists" if !crate::crates::various(v) => (&mut listed, vec![v.as_str()]),
                         "mood" => (&mut file_moods, v.split([';', ',', '/']).collect()),
                         "style" => (&mut file_styles, v.split([';', ',', '/']).collect()),
                         "grouping" => (&mut file_tags, v.split([';', ',', '/']).collect()),
@@ -1054,6 +1057,7 @@ impl Catalogue {
                     styles,
                     track,
                     sound,
+                    credits: crate::app::excluded_artists::credits_keys(&artists.iter().chain(&listed).collect::<Vec<_>>()),
                     artists,
                     clap_moods,
                     length: duration_ms.filter(|d| *d > 0).map(|d| d as f64 / 1000.0),
@@ -3212,6 +3216,27 @@ mod tests {
         cat.set_folders(vec![m.clone()]).unwrap();
         assert_eq!(cat.crate_facts().unwrap().iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["A/01.mp3"]);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_files_credits_are_every_artist_it_names_featured_ones_too() {
+        // Decision 0083: its artist and album artist tags and its artists list, each credit split where it joins several;
+        // a compilation's album artist is no one.
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        let one = "A - B (2020)/01 One.mp3".to_string();
+        let db = cat.db();
+        let tags = [(0, "artist", "Air feat. Beck"), (1, "albumartist", "Various Artists"), (2, "artists", "Air"), (3, "artists", "Jarvis Cocker")];
+        for (n, name, value) in tags {
+            db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, ?2, ?3, ?3, ?4)", params![one, n, name, value]).unwrap();
+        }
+        drop(db);
+        let facts = cat.crate_facts().unwrap();
+        let f = facts.iter().find(|f| f.rel == one).unwrap();
+        assert_eq!(f.artists, ["Air feat. Beck"], "shown as tagged");
+        assert_eq!(f.credits, ["air", "beck", "jarviscocker"]);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

@@ -219,9 +219,16 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
 }
 
 /// What Discover leaves out for the account that the words name: albums (`excluded:<key>`, Not interested or Hidden)
-/// and artists (`excluded-artist:<their key>`, what Take back takes), the best first, the newest among equals.
-fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::app::discover::LeftOutArtist], w: &[String]) -> Vec<Item> {
-    let n = albums.len() + artists.len();
+/// and artists (`excluded-artist:<their key>`, what Take back takes); and the artists it excluded everywhere, a kind of
+/// their own (`excluded-everywhere:<their key>`, decision 0083: what DELETE /api/me/excluded-artists/{key} takes back).
+/// The best first, the newest among equals.
+fn excluded_items(
+    albums: &[crate::app::discover::Excluded],
+    artists: &[crate::app::discover::LeftOutArtist],
+    everywhere: &[crate::userdata::ExcludedArtist],
+    w: &[String],
+) -> Vec<Item> {
+    let n = albums.len() + artists.len() + everywhere.len();
     let mut out: Vec<Item> = albums
         .iter()
         .enumerate()
@@ -255,6 +262,20 @@ fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::a
             request: None,
             score: score(&a.artist, w, i, n),
             matched: matched_name(&a.artist),
+        }))
+        .chain(everywhere.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.name, w)).map(|(i, a)| Item {
+            kind: "excluded",
+            subject: format!("excluded-everywhere:{}", a.key),
+            title: a.name.clone(),
+            sub: "Excluded everywhere".to_string(),
+            cover: None,
+            track: None,
+            artist: Some(a.name.clone()),
+            bandcamp: None,
+            known: Vec::new(),
+            request: None,
+            score: score(&a.name, w, i, n),
+            matched: matched_name(&a.name),
         }))
         .collect();
     out.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -544,8 +565,12 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
             && let Some(account) = served.current_user()
         {
             let s = served.clone();
-            let (albums, artists) = tokio::task::spawn_blocking(move || crate::app::discover::exclusions(&s, &account)).await??;
-            groups.insert("excluded", excluded_items(&albums, &artists, &w));
+            let (albums, artists, everywhere) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let (albums, artists) = crate::app::discover::exclusions(&s, &account)?;
+                Ok((albums, artists, s.userdata.excluded_artist_list(&account)?))
+            })
+            .await??;
+            groups.insert("excluded", excluded_items(&albums, &artists, &everywhere, &w));
         }
         // The rest of the indexed universe (0076): the account's requests, its Spotify lists, Discover's suggestions.
         if let Some(account) = served.current_user()
@@ -675,10 +700,16 @@ mod tests {
         let found = excluded_items(
             &[x("k1", "Talkie Walkie", "Air", "no"), x("k2", "Pocket Symphony", "Air", "hidden")],
             &[LeftOutArtist { artist: "Airbag".into(), key: "airbag".into(), at: 0 }],
+            &[],
             &words("air"),
         );
         let got: Vec<_> = found.iter().map(|i| (i.subject.as_str(), i.sub.as_str())).collect();
         assert_eq!(got, [("excluded:k1", "Not interested"), ("excluded:k2", "Hidden"), ("excluded-artist:airbag", "Artist left out")]);
+        // The artists excluded everywhere (decision 0083): a kind of their own beside Discover's.
+        let everywhere = [crate::userdata::ExcludedArtist { key: "airsupply".into(), name: "Air Supply".into(), at: 0 }];
+        let found = excluded_items(&[], &[LeftOutArtist { artist: "Airbag".into(), key: "airbag".into(), at: 0 }], &everywhere, &words("air supply"));
+        let got: Vec<_> = found.iter().map(|i| (i.subject.as_str(), i.sub.as_str())).collect();
+        assert_eq!(got, [("excluded-everywhere:airsupply", "Excluded everywhere")]);
     }
 
     #[test]

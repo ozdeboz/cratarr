@@ -886,6 +886,19 @@ fn key_of(c: &Candidate) -> String {
     c.release_group.clone().unwrap_or_else(|| format!("{}|{}", key(&c.artist), key(&c.album)))
 }
 
+/// What Discover leaves out for an account: the albums it answered and the artists it said no to (Discover's own,
+/// `UserData::discover_answered`), and the artists it excluded everywhere (decision 0083), their keys.
+pub fn leaves_out(ud: &crate::userdata::UserData, account: &str) -> Result<(HashSet<String>, HashSet<String>, HashSet<String>)> {
+    let (albums, no_artists) = ud.discover_answered(account)?;
+    Ok((albums, no_artists, ud.excluded_artists(account)?))
+}
+
+/// Whether a suggestion credits an artist excluded everywhere (decision 0083): its artist, by any credit ("A feat. B",
+/// "A & B").
+pub fn excluded_everywhere(s: &Suggestion, out: &HashSet<String>) -> bool {
+    super::excluded_artists::credits_excluded(&[s.artist.as_str()], out)
+}
+
 /// The candidates as one list: the library's albums and the ones answered left out (and every album of an artist said
 /// no to twice), the same album once with every reason, ranked by its sources' scores (a second source counting
 /// extra), the most `MOST`.
@@ -1437,8 +1450,9 @@ pub async fn look(
     }
     progress("Leaving out what you have", 0, None);
     let (ud, a) = (serve.userdata.clone(), account.to_string());
-    let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
+    let (answered, no_artists, everywhere) = tokio::task::spawn_blocking(move || leaves_out(&ud, &a)).await??;
     let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.known, &answered, &no_artists);
+    albums.retain(|s| !excluded_everywhere(s, &everywhere));
     weigh(&mut albums, &artists.iter().map(|a| (loose(&a.name), a.plays)).collect());
     // What each is and its genres, from ListenBrainz in a few calls, so the cards show them from the first.
     progress("Reading what each album is", 0, None);
@@ -2012,8 +2026,8 @@ pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate
 pub fn kept(serve: &crate::serve::Serve, account: &str) -> Result<Option<Found>> {
     let Some((_, json)) = serve.userdata.discover_found(account)? else { return Ok(None) };
     let mut found: Found = serde_json::from_str(&json).unwrap_or_default();
-    let (answered, no_artists) = serve.userdata.discover_answered(account)?;
-    found.albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key));
+    let (answered, no_artists, everywhere) = leaves_out(&serve.userdata, account)?;
+    found.albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key) && !excluded_everywhere(s, &everywhere));
     // A look kept before 0.9 said ", which you play" after each reason: read without it.
     for w in found.albums.iter_mut().flat_map(|s| s.why.iter_mut()) {
         if let Some(short) = w.strip_suffix(", which you play") {
@@ -2347,6 +2361,33 @@ mod tests {
             &HashSet::from([loose("Twice")]),
         );
         assert_eq!(list.iter().map(|s| s.album.as_str()).collect::<Vec<_>>(), ["Kept"]);
+    }
+
+    #[test]
+    fn an_artist_excluded_everywhere_is_suggested_by_no_credit_and_not_interested_stays_discovers() {
+        // Decision 0083: the everywhere list reaches Discover by any credit; Discover's own Not interested in an artist
+        // stays Discover's alone, and is no exclusion everywhere.
+        let ud = crate::userdata::UserData::open(None).unwrap();
+        ud.exclude_artist("me", &crate::app::excluded_artists::key("Beck"), "Beck").unwrap();
+        ud.answer_discover("me", "artist:bonobo", "bonobo", ARTIST_ANSWER).unwrap();
+        let (answered, no_artists, everywhere) = leaves_out(&ud, "me").unwrap();
+        assert_eq!(everywhere, HashSet::from(["beck".to_string()]), "Not interested is not everywhere");
+        assert!(no_artists.contains("bonobo") && !no_artists.contains("beck"), "nor is everywhere Discover's Not interested");
+        let mut list = one_list(
+            vec![
+                c("Odelay", "Beck", Some("rg-1"), "lastfm", "w", 1.0),
+                c("Together", "Air feat. Beck", Some("rg-2"), "lastfm", "w", 1.0),
+                c("Black Sands", "Bonobo", Some("rg-3"), "lastfm", "w", 1.0),
+                c("Moon Safari", "Air", Some("rg-4"), "lastfm", "w", 1.0),
+            ],
+            &|_: &Candidate| false,
+            &HashSet::new(),
+            &answered,
+            &no_artists,
+        );
+        list.retain(|s| !excluded_everywhere(s, &everywhere));
+        assert_eq!(list.iter().map(|s| s.album.as_str()).collect::<Vec<_>>(), ["Moon Safari"]);
+        assert!(leaves_out(&ud, "you").unwrap().2.is_empty(), "each account its own");
     }
 
     #[test]

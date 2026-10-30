@@ -95,7 +95,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/favourite-albums", put(crate_favourite_albums))
         .route("/api/crates/{id}/left-out", get(crate_left_out).post(crate_leave_out).delete(crate_put_back))
         .route("/api/crates/{id}/fit", get(crate_fit).put(set_crate_fit))
+        .route("/api/crates/{id}/not-artist", post(crate_not_artist))
+        .route("/api/crates/{id}/not-artist/{key}", delete(crate_not_artist_back))
         .route("/api/excluded", get(excluded).post(exclude).delete(include_again))
+        .route("/api/me/excluded-artists", get(excluded_artists))
+        .route("/api/me/excluded-artists/{key}", put(exclude_artist).delete(include_artist))
         .route(
             "/api/crates/{id}/image",
             get(crate_image).put(crate_image_set).delete(crate_image_remove).layer(axum::extract::DefaultBodyLimit::max(32 << 20)),
@@ -1933,13 +1937,68 @@ async fn crate_update(State(app): State<Arc<App>>, Path(id): Path<String>, Json(
     Ok(Json(json!({ "id": id, "undo": undo })))
 }
 
-async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::crates::CrateDef>, ApiError> {
+/// A crate as its view shows it, with the artists it leaves out by "Artist is not" (decision 0083: Not in this crate),
+/// each with the key that takes them back.
+#[derive(serde::Serialize)]
+struct CrateGot {
+    #[serde(flatten)]
+    def: crate::crates::CrateDef,
+    not_artists: Vec<crate::app::NotArtist>,
+}
+
+async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<CrateGot>, ApiError> {
     let mut def = app.playlists.crate_def(&id).await?;
-    // Home's crates are a list of lines (Value::Within), not conditions anyone sets: sent without them.
+    // Home's crates are a list of lines (Value::Within), not conditions anyone sets: sent without them (those the
+    // account added to them stay, decision 0083).
     if crate::crates::home_crate(&id) {
-        def.conditions.clear();
+        def.conditions.retain(|c| !matches!(c.value, crate::crates::Value::Within { .. }));
     }
-    Ok(Json(def))
+    let not_artists = app.playlists.crate_not_artists(&id).await?;
+    Ok(Json(CrateGot { def, not_artists }))
+}
+
+/// An artist, by their name as the page shows it.
+#[derive(Deserialize)]
+struct ArtistNamed {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Not in this crate (decision 0083, the owner 2026-10-30): "Artist is not `name`" added to the crate, once (one's own
+/// crate's filter, as set by hand; a fixed crate's conditions the account added). The artists it leaves out so, and
+/// the undo token (null when it left them out already).
+async fn crate_not_artist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<ArtistNamed>) -> Result<Json<serde_json::Value>, ApiError> {
+    let name = b.name.unwrap_or_default();
+    let (not_artists, undo) = app.playlists.crate_not_artist(&id, &name).await?;
+    Ok(Json(json!({ "crate": id, "not_artists": not_artists, "undo": undo })))
+}
+
+/// An artist a crate leaves out taken back, by their key: what it still leaves out, and the undo token (null when it
+/// named them nowhere).
+async fn crate_not_artist_back(State(app): State<Arc<App>>, Path((id, key)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (not_artists, undo) = app.playlists.crate_not_artist_back(&id, &key).await?;
+    Ok(Json(json!({ "crate": id, "not_artists": not_artists, "undo": undo })))
+}
+
+/// The artists the account excluded everywhere (decision 0083), the newest first: `[{key, name, at}]`.
+async fn excluded_artists(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::userdata::ExcludedArtist>>, ApiError> {
+    Ok(Json(app.playlists.excluded_artist_list().await?))
+}
+
+/// Exclude everywhere (decision 0083): the artist left out of every automatic pick of the account's, by any credit.
+/// The key kept is their name's (`app::excluded_artists::key`; without a name, the path's is read as the name). Them as
+/// listed, and the undo token (null when listed already).
+async fn exclude_artist(State(app): State<Arc<App>>, Path(key): Path<String>, Json(b): Json<ArtistNamed>) -> Result<Json<serde_json::Value>, ApiError> {
+    let name = b.name.filter(|n| !n.trim().is_empty()).unwrap_or(key);
+    let (a, undo) = app.playlists.exclude_artist(&name).await?;
+    Ok(Json(json!({ "key": a.key, "name": a.name, "at": a.at, "undo": undo })))
+}
+
+/// An artist taken back off the account's everywhere list: picked again. Their key, and the undo token (null when they
+/// were not on it).
+async fn include_artist(State(app): State<Arc<App>>, Path(key): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (key, undo) = app.playlists.include_artist(&key).await?;
+    Ok(Json(json!({ "key": key, "undo": undo })))
 }
 
 async fn crate_delete(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -4165,6 +4224,15 @@ async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError>
     let app = ctx.app.clone();
     let serve = ctx.serve()?;
     let (mut albums, artists) = crate::app::discover::all_missing(&serve, app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    // None by an artist the account excluded everywhere (decision 0083).
+    if let Some(account) = ctx.account() {
+        let s = serve.clone();
+        let out = tokio::task::spawn_blocking(move || s.userdata.excluded_artists(&account))
+            .await
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        albums.retain(|a| !crate::app::excluded_artists::credits_excluded(&[a.artist.as_str()], &out));
+    }
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
             a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), &a.artist, &a.title);
