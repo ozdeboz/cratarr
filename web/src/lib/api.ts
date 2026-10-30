@@ -199,104 +199,19 @@ const follow = (source?: string) => (source ? `?source=${encodeURIComponent(sour
 
 export const getState = (source?: string) => quietly<State>(`/api/state${follow(source)}`);
 
-/** A track as Cratarr's players hold it (decision 0031): the local player's own description. */
-export type QueueTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null };
-
-/** One of Cratarr's own players (Play On, decision 0031): the Android app on a tablet or a phone. */
-export type PlayOnPlayer = {
-  name: string;
-  /** Connected now: it takes commands. */
-  online: boolean;
-  /** Last heard from, epoch seconds. */
-  seen: number;
-  playing: boolean;
-  /** The playing track's name and artist, as the server's view of it says (none while it holds no track). */
-  title?: string | null;
-  artist?: string | null;
-  index: number;
-  position_ms: number;
-  duration_ms: number | null;
-  volume: number;
-  ducked: boolean;
-  /** Level the volume on it (decision 0035 over Play On; the owner, 2026-10-27): on or off, what a track not measured
-   *  yet gets, and how far it turns the playing track down now (dB, 0 or less). Players from before leave them out. */
-  levelling?: boolean;
-  /** Winding (0074): its position goes back and forth as reported, not counted on. */
-  rewinding?: boolean;
-  /** Its tape deck's direction knob (the owner, 2026-10-27): R forwards, L backwards; left out: R. */
-  direction?: 'L' | 'R';
-  level_unknown?: 'typical' | 'untouched';
-  level_db?: number;
-  queue_length: number;
-  /** Goes up when the queue changes: read the player by name for the new one. */
-  queue_version: number;
-  /** Off, one or all (decision 0033, amended). */
-  repeat?: 'off' | 'one' | 'all';
-  shuffled?: boolean;
-  /** Its sleep timer, while one is set: it pauses at `at_ms` (epoch ms) or when the playing track ends. */
-  sleep?: { at_ms: number | null; end_of_track: boolean } | null;
-  /** Radio's switch (decision 0036, amended), what its inserts are like and how many follow each own track. */
-  radio?: boolean;
-  radio_by?: 'track' | 'artist' | 'era';
-  radio_count?: number;
-  /** Radio's and Autoplay's picks leave the owner's favourites out. */
-  skip_favourites?: boolean;
-  /** Autoplay while on: its mode and switches. */
-  autoplay?: { mode: string; albums: boolean; restart: boolean } | null;
-  /** The group it plays in, by its leader (decision 0037): a player of a group shows what the group plays. */
-  group?: string | null;
-  /** How late its speaker sounds (ms): in a group it plays that much earlier. */
-  delay_ms?: number;
-  /** `app` (the Android app), `kodi` (a Kodi Cratarr drives: it follows a group, never leads one) or `browser` (a page
-   *  that plays in a browser, a player while it is open: never in a group). */
-  kind?: 'app' | 'kodi' | 'browser';
-  /** It has been in a group (only such players need a speaker delay). */
-  grouped?: boolean;
-  /** Shared with everyone on this Cratarr, for Play On (0.9.8). */
-  shared?: boolean;
-  /** The asking account's own (a server before 0.9.8 says nothing: then it is); another's, shared, names its owner. */
-  mine?: boolean;
-  owner?: string | null;
-  /** Its link to Cratarr (decision 0045). */
-  link?: PlayerLink;
-  track: QueueTrack | null;
-  queue?: QueueTrack[];
-  /** Why it does not play what it was told to (its device would not let it, decision 0031 amended); null otherwise. */
-  held?: string | null;
-  /** Its queues (decision 0033, amended: queue history), the one that plays marked, newest first; by name only. */
-  queues?: QueueItem[];
-  /** Goes up when that list changes: read the player by name for the new one. */
-  queues_version?: number;
-  /** Where its device sounds now, as its app says (decision 0033, amended 2026-10-19); null for a page or Kodi. */
-  output?: AudioOutput | null;
-};
-
-/** A device's audio output: `name` the device's own (a car's Bluetooth: "JVC KW-M560BT"); null for its speaker or
- *  when not known. */
-export type AudioOutput = { type: 'bluetooth' | 'speaker' | 'wired' | 'usb' | 'hdmi' | 'remote' | 'other'; name: string | null };
-
-/** A queue in a player's list (decision 0033, amended): `tracks` how many, `from` what it was started from
- *  (`playlist`, `album`, `favourites`, `library`, `tracks`, `player`), `updated` when it was left (epoch s);
- *  `played_on` where it was heard, oldest first, up to four (amended 2026-10-19). */
-export type QueueItem = {
-  id: string;
-  name: string;
-  tracks: number;
-  from: string | null;
-  updated: number;
-  playing: boolean;
-  /** Kodi's has no `type`. */
-  played_on?: { player: string; type: AudioOutput['type'] | null; name: string | null }[];
-};
-
-/** A player's link as Cratarr knows it, and as the player last told (decision 0045); times epoch seconds, the
- *  player's own epoch ms. */
-export type PlayerLink = {
-  offline_since: number | null;
-  ended: 'replaced' | 'gone quiet' | 'closed' | 'server stopping' | null;
-  ended_at: number | null;
-  own: { connected_since?: number; failed: number; last_error?: string; address?: string; wait_until?: number; wait_why?: string } | null;
-};
+// Cratarr's players' messages (Play On, decision 0031), as the server's own types say them (0.9.19: one protocol,
+// generated from the Rust by ts-rs into lib/generated): a track as they hold it, a player's view, a device's audio
+// output, a queue in its list and its link (decision 0045); what can be asked of one and what one reports.
+export type { QueueTrack } from './generated/QueueTrack';
+export type { PlayOnPlayer } from './generated/PlayOnPlayer';
+export type { AudioOutput } from './generated/AudioOutput';
+export type { QueueItem } from './generated/QueueItem';
+export type { PlayerLink } from './generated/PlayerLink';
+export type { PlayerCommand } from './generated/PlayerCommand';
+export type { PlayerReport } from './generated/PlayerReport';
+import type { PlayerCommand } from './generated/PlayerCommand';
+import type { QueueTrack } from './generated/QueueTrack';
+import type { PlayOnPlayer } from './generated/PlayOnPlayer';
 
 export const getPlayers = () => quietly<{ players: PlayOnPlayer[] }>('/api/players');
 export const getPlayer = (name: string) => quietly<PlayOnPlayer>(`/api/players/${encodeURIComponent(name)}`);
@@ -351,8 +266,8 @@ export const setPlayerShared = (name: string, shared: boolean) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ shared }),
   });
-/** A command for one of Cratarr's players (`{ command: 'play', tracks, index, position_ms }`, `{ command: 'pause' }`…). */
-export const playerCommand = (name: string, command: Record<string, unknown>) =>
+/** A command for one of Cratarr's players (the server's PlayerCommand). */
+export const playerCommand = (name: string, command: PlayerCommand) =>
   request<void>(`/api/players/${encodeURIComponent(name)}/command`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -413,7 +328,7 @@ export type Picking =
  *  first, how many it has that can be played, and the player that took them when the server queued them. */
 export type Picked = {
   source: string;
-  tracks: (QueueTrack & { n?: number; duration_secs?: number | null })[];
+  tracks: LocalTrack[];
   index: number;
   total: number;
   player?: string;

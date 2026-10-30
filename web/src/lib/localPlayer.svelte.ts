@@ -18,7 +18,7 @@ import { playback } from './deviceLog';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type PlayerCommand, type QueueItem, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
@@ -1338,7 +1338,8 @@ function hand(op: string, args: Record<string, unknown> = {}) {
             : { command: op, ...args };
   // A failed command is a toast of its own: `local.error` is the playing track's, and the player's next report clears it
   // (the architecture audit, 2026-10-29: the toast went within a second).
-  playerCommand(driven, command).catch((e) => toast.fail(e, "The player didn't take it"));
+  // Shaped from the app's op until the Player port gives both one command (0.9.19); the server checks it as it comes.
+  playerCommand(driven, command as PlayerCommand).catch((e) => toast.fail(e, "The player didn't take it"));
 }
 
 /** The position now, to the frame (the visuals' beats, decision 0046), where `local.position` moves four times a
@@ -2124,11 +2125,11 @@ function keepLocal(left: KeptQueue | null, id: string) {
 }
 
 /** This browser's list as the queue sheet shows it: the queue that plays (marked), then those left, newest first. */
-export function localQueues(): { id: string; name: string; tracks: number; from: string | null; updated: number; playing: boolean }[] {
+export function localQueues(): QueueItem[] {
   const now = local.queue.length
-    ? [{ id: keptHere.id, name: local.from ?? nameOf(local.queue), tracks: local.queue.length, from: null, updated: Math.floor(Date.now() / 1000), playing: true }]
+    ? [{ id: keptHere.id, name: local.from ?? nameOf(local.queue), tracks: local.queue.length, from: null, updated: Math.floor(Date.now() / 1000), playing: true, played_on: [] }]
     : [];
-  return [...now, ...keptHere.list.map((k) => ({ id: k.id, name: k.name, tracks: k.tracks.length, from: null, updated: k.updated, playing: false }))];
+  return [...now, ...keptHere.list.map((k) => ({ id: k.id, name: k.name, tracks: k.tracks.length, from: null, updated: k.updated, playing: false, played_on: [] }))];
 }
 
 /** Takes up queue `id` of this browser's where it was left, playing if it played; the one it leaves is kept. */
