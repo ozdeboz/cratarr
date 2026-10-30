@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Download once, in a menu (the owner, 2026-10-24): a one-time copy on this device, as against Sync to this device
-  // (decision 0038), which follows the item. The menu stays open and the row itself fills as the tracks come in, its
+  // Download… to this device (the owner, 2026-10-24; in Download…'s step since 0.9.19, lib/DownloadStep): a one-time
+  // copy on this device, as against Sync to this device (decision 0038), which follows the item. The step stays open
+  // and the row itself fills as the tracks come in, its
   // label counting them ("Downloading 3 of 12"); opened again later, it shows the same. Some tracks failed: Retry; some
   // not there yet: the rest; all there: no row (Remove from this device stays last in the menu). In the installed page
   // (0.9.8, lib/offline) the same, kept in this browser, and all there: Remove from this browser.
@@ -59,10 +60,13 @@
   {:else if failed.length}
     <MenuEntry icon="arrowDownToLine" label={`Retry ${plural(failed.length, 'failed track')}`} onclick={() => get([...failed, ...missing])} />
   {:else if missing.length === tracks.length}
-    <MenuEntry icon="arrowDownToLine" label="Download once" onclick={() => get(tracks)} />
+    <MenuEntry icon="arrowDownToLine" label={`Download ${plural(tracks.length, 'track')}`} onclick={() => get(tracks)} />
   {:else if missing.length}
-    <MenuEntry icon="arrowDownToLine" label={`Download the other ${plural(missing.length, 'track')} once`} onclick={() => get(missing)} />
+    <MenuEntry icon="arrowDownToLine" label={`Download the other ${plural(missing.length, 'track')}`} onclick={() => get(missing)} />
   {:else if pwa}
     <MenuEntry icon="trash" label="Remove from this browser" onclick={() => void forgetOffline(tracks)} />
+  {:else}
+    <!-- All there already: said, so the step is never empty (Remove from this device is the menu's). -->
+    <MenuEntry icon="check" label="All on this device" disabled onclick={() => {}} />
   {/if}
 {/if}

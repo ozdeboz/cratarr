@@ -28,7 +28,7 @@
 </script>
 
 {#if !groups.length}
-  <p class="empty">Nothing kept in this browser yet. Download once, in an album's or a playlist's menu, keeps it here.</p>
+  <p class="empty">Nothing kept in this browser yet. Download…, in an album's or a playlist's menu, keeps it here.</p>
 {:else}
   <ul>
     {#each groups as g (g.key)}

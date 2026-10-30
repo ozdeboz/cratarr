@@ -17,7 +17,7 @@
   // Playlists show in tabs (decision 0025): Tracks, Info, Export, Repair, Sync, under the header, for the selection: one
   // playlist as above, or several (the Playlists page's Select): their covers and count in the header, and on Tracks a
   // section per playlist, in the order ticked, each folding, read-only. A crate has no tabs.
-  // An album (`?view=album:<server>/<id>`, from the Incoming page or a track's View album) shows as a crate does, its
+  // An album (`?view=album:<server>/<id>`, from the Incoming page or a track's Go to album) shows as a crate does, its
   // tracks in play order, with all four actions: an album, like a crate, is a list of tracks but no playlist file.
   import {
     albumResume,
@@ -1828,7 +1828,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <span class="grow"></span>
         {#if crate}
           <!-- What shows the crate stays here (its favourites filters); what is done with it is its menu's (decision
-               0058: Keep on this device, Edit, Save as playlist, Start a crate from a genre). -->
+               0058: Sync to this device, Edit, Save as playlist, Start a crate from a genre). -->
           {#if favState}
             <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button
@@ -2130,7 +2130,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <button class="icon" class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
           ><Icon name="heart" size={24} /></button
         >
-        <!-- The menu of what is ticked, at the far right (decision 0058: Add to playlist, Download, Export…; Remove from
+        <!-- The menu of what is ticked, at the far right (decision 0058: Add to playlist, Download…; Remove from
              or Exclude from where the rows' own menus have them). -->
         <button class="icon" aria-label="Menu of the ticked tracks" title="More" disabled={!ticked.length} onclick={() => (tickedMenu = { rows: ticked, tracks: tracksOf(ticked) })}
           ><Icon name="moreVert" size={24} /></button
@@ -2348,7 +2348,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   <AlbumMenu {source} album={m} onclose={() => (flowMenu = null)} />
 {/if}
 {#if bandcampMenuOpen && album && albumHead}
-  <BandcampAlbumMenu album={{ id: album.id, title: albumHead.title, artist: albumHead.artist }} onclose={() => (bandcampMenuOpen = false)} />
+  <BandcampAlbumMenu album={{ id: album.id, title: albumHead.title, artist: albumHead.artist }} tracks={tracksOf((rows ?? []).filter((r) => r.id && !r.missing), BANDCAMP)} onclose={() => (bandcampMenuOpen = false)} />
 {/if}
 {#if albumMenuOpen && album}
   <AlbumMenu

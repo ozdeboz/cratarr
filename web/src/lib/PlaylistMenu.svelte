@@ -2,13 +2,14 @@
   // The playlists' menu (docs/ui-conventions.md, decisions 0021, 0025), the same wherever it opens: a long-press on a
   // playlist, the panel's ⋮, or the ⋮ for the ticked ones (one or several). A sheet as Finamp's track menu: the
   // playlist on its card (a mosaic of its first albums' covers; for several, their covers and "3 playlists"), Play,
-  // Shuffle, Play next and Add to queue as the large actions (several: one playlist after another, each track once),
-  // then View, the favourite, Pin, Download once and Sync to this device (in the app: all their tracks, each once; each
-  // of them), Export… and Sync… (they show the panel on that tab), Spoken as… and Rename (one playlist only), and Delete
-  // (one Undo for all), each done inside the sheet. Since several users (decision 0051): one's own playlist can be
-  // shared with the other users; another user's shared one shows whose it is, and is copied rather than changed (nor
-  // repaired); Sync… is the administrators'. Ticked with others' (the owner, 2026-10-27: what one has, several have):
-  // Copy to my playlists copies the others' (one Undo), Repair…, Sync… and Delete take one's own.
+  // Shuffle and Start radio as the large actions (several: one playlist after another, each track once), then in the
+  // table's order (lib/menuTable) View, the favourite, Pin, Download… (to this device in the app: all their tracks, each
+  // once; or as files) and Sync to this device (each of them), Info, Repair… and Sync… (they show the panel on that tab),
+  // Rename and Spoken as… (one playlist only), and Delete (one Undo for all), each done inside the sheet.
+  // Since several users (decision 0051): one's own playlist can be shared with the other users; another user's shared
+  // one shows whose it is, and is copied rather than changed (nor repaired); Sync… is the administrators'. Ticked with
+  // others' (the owner, 2026-10-27: what one has, several have): Copy to my playlists copies the others' (one Undo),
+  // Repair…, Sync… and Delete take one's own.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
   import { batchDelete, batchRows, missingCall, playlistRows, type PlaylistRow } from './api';
@@ -20,12 +21,12 @@
   import { me } from './me.svelte';
   import { startRadio } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
-  import ExportStep from './ExportStep.svelte';
-  import MenuCards from './MenuCards.svelte';
   import type { Downloadable } from './app.svelte';
-  import DownloadEntry from './DownloadEntry.svelte';
+  import DownloadStep from './DownloadStep.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import MenuGroup from './MenuGroup.svelte';
+  import MenuTable from './MenuTable.svelte';
+  import { inOrder, type EntryId } from './menuTable';
+  import { installed } from './offline.svelte';
   import { isLocal, startPlaylists } from './output.svelte';
   import { openTab, viewSelection, panel, type Tab } from './panel.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
@@ -53,14 +54,15 @@
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
-    /** Its tracks, for Download once (in the app, by an opener that has its rows: one playlist viewed); else asked for. */
+    /** Its tracks, for Download… to this device (in the app, by an opener that has its rows: one playlist viewed); else
+     *  asked for. */
     downloadable?: Downloadable[] | null;
     /** The server its tracks are kept from (Sync to this device, decision 0038), given with `downloadable`; else as the
      *  rows asked for say. */
     keepFrom?: string | null;
   } = $props();
 
-  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken' | 'export'>(untrack(() => start));
+  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken' | 'download'>(untrack(() => start));
   $effect(() => void loadPlaylistFavorites());
 
   /** The one playlist, when the menu is for one. */
@@ -113,7 +115,7 @@
     }
   }
 
-  /** View, Export… and Sync…: the panel shows these playlists, on that tab (decision 0025). */
+  /** View, Info, Repair… and Sync…: the panel shows these playlists, on that tab (decision 0025). */
   function viewTab(tab: Tab, which = ids) {
     if (tab === 'tracks') viewSelection([...which]);
     else openTab([...which], tab);
@@ -162,13 +164,13 @@
   const theirs = $derived(playlists.filter((x) => x.mine === false));
   const ownIds = $derived(own.map((x) => x.id));
 
-  // In the app, where the opener has not their rows (several, the Playlists page): asked for once (one call where the
-  // server has it, 0.9.4), for Download once (all their tracks, each once) and Sync to this device (each from its
-  // own server).
+  // In the app (and an installed page), where the opener has not their rows (several, the Playlists page): asked for
+  // once (one call where the server has it, 0.9.4), for Download… to this device (all their tracks, each once) and Sync
+  // to this device (each from its own server).
   let asked = $state<{ id: string; source: string; rows: PlaylistRow[] }[] | null>(null);
   const idsKey = $derived(ids.join('\n'));
   $effect(() => {
-    if (!inApp || downloadable) return;
+    if (!(inApp || installed) || downloadable) return;
     const want = idsKey.split('\n');
     const from = prefs.source || undefined;
     let gone = false;
@@ -276,7 +278,7 @@
     const gone: string[] = [];
     const tokens: (string | null)[] = [];
     try {
-      // One call where the server has it (0.9.4): one Undo for them all; else one by one.
+      // One call where the server has it (a5, 0.9.4): one Undo for them all; else one by one.
       let batched = false;
       try {
         const r = await batchDelete(list.map((x) => x.id));
@@ -314,6 +316,96 @@
   }
 </script>
 
+{#snippet entry(e: EntryId)}
+  {#if e === 'view'}
+    {#if !shown}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => viewTab('tracks')} />{/if}
+  {:else if e === 'favourite'}
+    <MenuEntry
+      icon="heart"
+      label="Favourite"
+      switched={allFav}
+      onclick={() => {
+        setPlaylistFavorites([...ids], !allFav);
+        onclose();
+      }}
+    />
+  {:else if e === 'pin'}
+    <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
+  {:else if e === 'copyToMine'}
+    {#if theirs.length}
+      <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(theirs.map((x) => x.id))} />
+    {/if}
+  {:else if e === 'download'}
+    <MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (mode = 'download')} />
+  {:else if e === 'keep'}
+    {#if keepable.length && keepable.length === n}
+      <!-- All of them on, or all off when all are. -->
+      <MenuEntry
+        icon="download"
+        label="Sync to this device"
+        switched={allKept}
+        onclick={() => {
+          const on = !allKept;
+          for (const k of keepable) setKept('playlist', k.from, k.p.id, on, k.p.name);
+        }}
+      />
+    {/if}
+  {:else if e === 'share'}
+    {#if one}
+      <!-- Titled by its name; linked by its id (another user's shared one is "owner/name"). -->
+      {@const pid = one.id}
+      {@const name = one.name}
+      <MenuEntry
+        icon="share"
+        label="Share"
+        onclick={() => {
+          onclose();
+          share(name, name, linkTo('playlists', pid));
+        }}
+      />
+    {/if}
+  {:else if e === 'sharedWithUsers'}
+    <!-- Sharing needs the permission to share; one shared before can always be unshared. -->
+    {#if shareable && (me.permissions.share || allShared)}
+      <MenuEntry icon="users" label="Shared with other users" switched={allShared} onclick={() => setShared(ids, !allShared)} />
+    {/if}
+  {:else if e === 'info'}
+    <!-- The panel's other views of them (back returns to their tracks). -->
+    <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
+  {:else if e === 'rename'}
+    {#if one && !others}
+      <MenuEntry
+        icon="pencil"
+        label="Rename"
+        onclick={() => {
+          nameField = one.id;
+          mode = 'rename';
+        }}
+      />
+    {/if}
+  {:else if e === 'spokenAs'}
+    {#if one && !others}
+      <MenuEntry
+        icon="mic"
+        label="Spoken as…"
+        onclick={() => {
+          spokenField = (one.spoken ?? []).join(', ');
+          mode = 'spoken';
+        }}
+      />
+    {/if}
+  {:else if e === 'repair'}
+    <!-- With others' ticked: one's own only. -->
+    {#if own.length}<MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair', ownIds)} />{/if}
+  {:else if e === 'sync'}
+    {#if own.length && me.admin}<MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync', ownIds)} />{/if}
+  {:else if e === 'deletePlaylist'}
+    {#if own.length}
+      <MenuEntry icon="trash" label={others ? `Delete ${own.length} of mine` : one ? 'Delete playlist' : `Delete ${n} playlists`} danger onclick={() => (mode = 'delete')} />
+    {/if}
+  {/if}
+{/snippet}
+
 <MenuSheet
   label={title}
   {onclose}
@@ -328,108 +420,20 @@
       ]
     : [tracks(playlists.reduce((k, x) => k + x.count, 0)), ...playlists.slice(0, 3).map((x) => x.name), ...(n > 3 ? [`and ${n - 3} more`] : [])]}
   actions={mode === 'menu'
-    ? [
+    ? inOrder('playlist', [
         { icon: 'play', label: 'Play', onclick: () => play('play'), disabled: working },
         { icon: 'shuffle', label: 'Shuffle', onclick: () => play('shuffle'), disabled: working },
         ...(isLocal() ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
-      ]
+      ])
     : []}
   onback={mode === 'menu' ? null : () => (mode = 'menu')}
   step={mode}
 >
   {#if mode === 'menu'}
-    <!-- The shared groups, in their order (decision 0058). -->
-    <MenuCards>
-      <MenuGroup>
-        {#if !shown}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => viewTab('tracks')} />{/if}
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry
-          icon="heart"
-          label="Favourite"
-          switched={allFav}
-          onclick={() => {
-            setPlaylistFavorites([...ids], !allFav);
-            onclose();
-          }}
-        />
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
-        {#if theirs.length}
-          <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(theirs.map((x) => x.id))} />
-        {/if}
-      </MenuGroup>
-      <MenuGroup>
-        {#if tracksToGet}<DownloadEntry tracks={tracksToGet} />{/if}
-        {#if keepable.length && keepable.length === n}
-          <!-- All of them on, or all off when all are. -->
-          <MenuEntry
-            icon="download"
-            label="Sync to this device"
-            switched={allKept}
-            onclick={() => {
-              const on = !allKept;
-              for (const k of keepable) setKept('playlist', k.from, k.p.id, on, k.p.name);
-            }}
-          />
-        {/if}
-        <MenuEntry icon="export" label="Export…" onclick={() => (mode = 'export')} />
-        {#if one}
-          <!-- Titled by its name; linked by its id (another user's shared one is "owner/name"). -->
-          {@const pid = one.id}
-          {@const name = one.name}
-          <MenuEntry
-            icon="share"
-            label="Share"
-            onclick={() => {
-              onclose();
-              share(name, name, linkTo('playlists', pid));
-            }}
-          />
-        {/if}
-        <!-- Sharing needs the permission to share; one shared before can always be unshared. -->
-        {#if shareable && (me.permissions.share || allShared)}
-          <MenuEntry icon="users" label="Shared with other users" switched={allShared} onclick={() => setShared(ids, !allShared)} />
-        {/if}
-      </MenuGroup>
-      <MenuGroup>
-        <!-- The panel's other views of them (back returns to their tracks). -->
-        <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
-      </MenuGroup>
-      <MenuGroup>
-        {#if one && !others}
-          <MenuEntry
-            icon="pencil"
-            label="Rename"
-            onclick={() => {
-              nameField = one.id;
-              mode = 'rename';
-            }}
-          />
-          <MenuEntry
-            icon="mic"
-            label="Spoken as…"
-            onclick={() => {
-              spokenField = (one.spoken ?? []).join(', ');
-              mode = 'spoken';
-            }}
-          />
-        {/if}
-        {#if own.length}
-          <!-- With others' ticked: one's own only. -->
-          <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair', ownIds)} />
-          {#if me.admin}<MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync', ownIds)} />{/if}
-        {/if}
-      </MenuGroup>
-      <MenuGroup>
-        {#if own.length}
-          <MenuEntry icon="trash" label={others ? `Delete ${own.length} of mine` : one ? 'Delete playlist' : `Delete ${n} playlists`} danger onclick={() => (mode = 'delete')} />
-        {/if}
-      </MenuGroup>
-    </MenuCards>
-  {:else if mode === 'export'}
-    <ExportStep what={{ kind: 'playlists', names: [...ids] }} {onclose} />
+    <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
+    <MenuTable kind="playlist" {entry} />
+  {:else if mode === 'download'}
+    <DownloadStep what={{ kind: 'playlists', names: [...ids] }} tracks={tracksToGet} {onclose} />
   {:else if mode === 'rename' && one}
     <form
       class="form"

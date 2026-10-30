@@ -1,6 +1,6 @@
 // Export's choices (decision 0058, lib/ExportStep): the format, the layout and what goes along, as the step offers
 // them; the request they make; and the line saying what the export will hold. No runes, so the tests take it as it is.
-import type { ExportFormat, ExportLayout, ExportPreview, ExportRequest, ExportWhat } from './api';
+import type { ExportFormat, ExportLayout, ExportPackage, ExportPreview, ExportRequest, ExportWhat } from './api';
 
 export type ExportOptions = {
   /** Playlists: with their tracks, else only the playlist files. */
@@ -16,12 +16,19 @@ export type ExportOptions = {
   /** Opus's, kb/s. */
   bitrate: number;
   layout: ExportLayout;
+  /** One .zip or the files one by one (only the app offers the files: the browser always makes a zip). */
+  packaging: ExportPackage;
+  /** Download…'s first choice in the app (and an installed page): to this device, or as files (0.9.19). */
+  where: 'device' | 'files';
 };
 
 export const FORMATS: { value: ExportFormat; label: string }[] = [
   { value: 'original', label: 'Original files' },
   { value: 'flac-cd', label: 'FLAC at CD quality' },
   { value: 'opus', label: 'Opus' },
+  // 0.9.19 (the owner, 2026-10-30): MP3 too, beside the ones before.
+  { value: 'mp3-320', label: 'MP3 at 320 kb/s' },
+  { value: 'mp3-v0', label: 'MP3 V0' },
 ];
 export const BITRATES = [96, 128, 160, 256];
 export const LAYOUTS: { value: ExportLayout; label: string }[] = [
@@ -38,6 +45,8 @@ export const blankExport = (): ExportOptions => ({
   format: 'original',
   bitrate: 160,
   layout: 'folders',
+  packaging: 'zip',
+  where: 'device',
 });
 
 /** The choices as kept in this browser, each that is not one of today's left at its default; an older version's "All
@@ -52,6 +61,8 @@ export function keptExport(k: unknown): ExportOptions {
   if (typeof o.bitrate === 'number' && BITRATES.includes(o.bitrate)) out.bitrate = o.bitrate;
   if (LAYOUTS.some((l) => l.value === o.layout)) out.layout = o.layout as ExportLayout;
   else if (o.flat === true) out.layout = 'flat';
+  if (o.packaging === 'zip' || o.packaging === 'files') out.packaging = o.packaging;
+  if (o.where === 'device' || o.where === 'files') out.where = o.where;
   return out;
 }
 
@@ -61,7 +72,8 @@ export const withTracks = (what: ExportWhat, o: ExportOptions) => what.kind === 
 /** Several playlists, which may be combined into one. */
 export const several = (what: ExportWhat) => what.kind === 'playlists' && what.names.length > 1;
 
-export function exportRequest(what: ExportWhat, o: ExportOptions): ExportRequest {
+/** `files`: the files one by one may be asked for (the app); else always one zip. */
+export function exportRequest(what: ExportWhat, o: ExportOptions, files = false): ExportRequest {
   return {
     what,
     format: o.format,
@@ -70,6 +82,7 @@ export function exportRequest(what: ExportWhat, o: ExportOptions): ExportRequest
     tracks: withTracks(what, o),
     combine: several(what) && o.combine ? o.name.trim() : null,
     m3u: what.kind === 'tracks' && o.m3u,
+    package: files ? o.packaging : 'zip',
   };
 }
 
