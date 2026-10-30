@@ -1283,6 +1283,11 @@ impl PlaylistService {
         Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default(), served }
     }
 
+    /// Cratarr's own library, as the services built on this one (Play On, Playing, Insights) read it.
+    pub(crate) fn served(&self) -> Option<Arc<crate::serve::Serve>> {
+        self.served.clone()
+    }
+
     /// The account whose playlists and crates the running request's are (`asking_account`).
     pub(crate) fn asking_account(&self) -> Option<String> {
         asking_account(self.served.as_deref())

@@ -75,8 +75,8 @@ fn now() -> i64 {
 }
 
 /// The albums without a cover, of Cratarr's own library (Home shows none of them).
-async fn coverless() -> HashSet<String> {
-    let Some(served) = crate::serve::instance() else { return HashSet::new() };
+async fn coverless(served: Option<&crate::serve::Serve>) -> HashSet<String> {
+    let Some(served) = served else { return HashSet::new() };
     let lib = served.library.clone();
     tokio::task::spawn_blocking(move || lib.coverless()).await.ok().and_then(Result::ok).unwrap_or_default()
 }
@@ -123,7 +123,7 @@ impl App {
         let own = crate::source::cratarr::KIND.id;
         let ids: Vec<String> = candidates.iter().filter(|c| c.source == own).map(|c| c.album.id.clone()).collect();
         let heard: HashSet<String> = if ids.is_empty() { HashSet::new() } else { self.playlists.heard_albums(ids).await?.into_iter().collect() };
-        let coverless = coverless().await;
+        let coverless = coverless(self.served.as_deref()).await;
         candidates.retain(|c| c.source != own || (!heard.contains(&c.album.id) && !coverless.contains(&c.album.id)));
         candidates.truncate(NEWEST);
         Ok(candidates)
@@ -133,7 +133,7 @@ impl App {
     pub async fn home_back(&self, player: Option<&str>) -> Result<Vec<Back>, ToggleError> {
         let at = now();
         let own = crate::source::cratarr::KIND.id;
-        let coverless = coverless().await;
+        let coverless = coverless(self.served.as_deref()).await;
         let view = self.albums(None).await;
         // The albums played last, each server's plays.
         let mut albums: Vec<Back> = Vec::new();
@@ -163,7 +163,7 @@ impl App {
         let mut queues: Vec<Back> = Vec::new();
         if !left.is_empty() {
             let ids: Vec<String> = left.iter().flat_map(|(_, t)| t.iter().filter(|(s, _)| s == own).map(|(_, id)| id.clone())).collect();
-            let found = match crate::serve::instance() {
+            let found = match self.served.clone() {
                 Some(served) => {
                     let lib = served.library.clone();
                     tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -217,7 +217,7 @@ impl App {
         if page.total == 0 {
             return Ok(None);
         }
-        let coverless = coverless().await;
+        let coverless = coverless(self.served.as_deref()).await;
         let mut seen = HashSet::new();
         let mut covers = Vec::new();
         for r in &page.rows {

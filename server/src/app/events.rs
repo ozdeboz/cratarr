@@ -82,15 +82,15 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut players = app.play_on.subscribe();
     let mut tasks = super::tasks::tasks().subscribe();
     // The account's favourites as they change, by any way (userdata `Starred`), where Cratarr's own library is open.
-    let mut starred = crate::serve::instance().map(|s| s.userdata.subscribe_starred());
+    let mut starred = app.served.as_ref().map(|s| s.userdata.subscribe_starred());
     // Albums' covers as they change (0.9.7): their new stamps.
-    let mut covers = crate::serve::instance().map(|s| s.subscribe_covers());
+    let mut covers = app.served.as_ref().map(|s| s.subscribe_covers());
     // Single-track replacement's downloads as they go (0.9.8).
     let mut fetches = super::track_fetch::subscribe();
     let app = app.clone();
     tokio::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
-        let account = crate::serve::instance().and_then(|s| s.current_user());
+        let account = app.served.as_ref().and_then(|s| s.current_user());
         for t in account.as_deref().map(|a| super::tasks::tasks().of(a)).unwrap_or_default() {
             if let Some(m) = Message::of("task", &t)
                 && out.send(m).await.is_err()

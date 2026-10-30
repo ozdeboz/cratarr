@@ -78,7 +78,7 @@ impl InsightsService {
         let incoming: std::collections::HashSet<i64> =
             folders.iter().enumerate().filter(|(_, f)| incoming_paths.iter().any(|p| std::path::Path::new(p) == f.as_path())).map(|(i, _)| i as i64).collect();
         // The overview's figures from Cratarr's own library and the asking account's plays and stars, where it is open.
-        let served = crate::serve::instance();
+        let served = self.playlists.served();
         // Whose plays: the request's account, read here (the blocking task below is not the request's).
         let user = served.as_ref().and_then(|s| s.current_user());
         let since = period.since(epoch_now());

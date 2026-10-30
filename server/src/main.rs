@@ -230,6 +230,7 @@ async fn main() -> Result<()> {
     // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
     let lan_base = app::runtime::lan_base(&runtime);
     let app = app::App::new(cfg, saved, origin, Some(served.clone())).await.context("cannot open the catalogue")?;
+    served.set_play_on(app.play_on.clone());
     app.play_on.set_lan_base(lan_base);
     // Sync play (decision 0037): groups' sound on Snapcast's protocol; Cratarr runs on without it if the port is taken.
     if let Some(bind) = snapcast_bind {

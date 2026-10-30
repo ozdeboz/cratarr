@@ -102,6 +102,8 @@ pub struct Serve {
     pub now_playing: queues::Sessions,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
     incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
+    /// Cratarr's players, once the app is up (`set_play_on`): an account's devices, and what plays for getNowPlaying.
+    play_on: std::sync::OnceLock<Arc<crate::app::PlayOn>>,
     /// Each album's cover stamp (0.9.7, `cover_stamps`), as of the last build; read from the library when first asked.
     stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
     /// The covers a build changed (`subscribe_covers`).
@@ -169,6 +171,7 @@ impl Serve {
             held: Default::default(),
             now_playing: Default::default(),
             incoming: Default::default(),
+            play_on: Default::default(),
             stamps: Default::default(),
             covers: tokio::sync::broadcast::channel(16).0,
         }))
@@ -257,6 +260,14 @@ impl Serve {
 
     pub fn incoming(&self) -> Option<&Arc<crate::app::IncomingService>> {
         self.incoming.get()
+    }
+
+    pub fn set_play_on(&self, on: Arc<crate::app::PlayOn>) {
+        let _ = self.play_on.set(on);
+    }
+
+    pub fn play_on(&self) -> Option<&Arc<crate::app::PlayOn>> {
+        self.play_on.get()
     }
 
     /// Changes each time the library is built (to the time it was): for views kept from the built-in source.

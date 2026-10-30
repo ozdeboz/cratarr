@@ -193,7 +193,7 @@ pub async fn choose(
 
 /// Plays a collection (see the module's notes). `want`: the server to use (the page's), else the first connected.
 pub async fn play(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Played, ToggleError> {
-    let owner = crate::serve::instance().and_then(|s| s.current_user());
+    let owner = app.served.as_ref().and_then(|s| s.current_user());
     let most = r.limit.unwrap_or(QUEUE_MOST);
     let c = choose(app, want, &r.what, r.how, r.from.map(Start::Track), most, owner.as_deref()).await?;
     let player = match r.on {
@@ -252,7 +252,7 @@ pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
 
 /// The favourites of `owner`, or all of Cratarr's own library, less what `owner` excluded from automatic picks.
 async fn own_candidates(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
-    let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+    let Some(served) = app.served.clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
     let excluded = app.playlists.excluded_songs_of(owner).await?;
     let favourites = matches!(what, Collection::Favourites);
     let owner = owner.map(str::to_string);
@@ -389,7 +389,7 @@ async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usiz
     let found: Vec<Option<QueueTrack>> = if let Some(named) = &c.named {
         chosen.iter().map(|&i| Some(numbered(named[i].clone(), i))).collect()
     } else if c.own {
-        let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+        let Some(served) = app.served.clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
         let ids: Vec<String> = chosen.iter().map(|&i| c.ids[i].clone()).collect();
         let mut songs: std::collections::HashMap<String, crate::serve::api::Song> =
             blocking(move || served.library.songs_by_id(&ids)).await?.into_iter().map(|s| (s.id.clone(), s)).collect();
