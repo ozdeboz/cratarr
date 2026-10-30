@@ -8,6 +8,7 @@
 // What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
 import type { AspectsNow } from '../aspects';
+import { throughMacros } from '../macro-map';
 import { hazeOf } from '../aspects';
 import { heightOf, shapeOf, type Shape } from '../evaluate';
 import { seedOf } from '../flame';
@@ -571,9 +572,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
    *  `unset`). */
   // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
   const macroedKnob = (x: Module | undefined, knob: string, or: number) => {
-    let base = knobOf(x, knob, or);
-    for (const g of (x && plan.targetsOf.get(x.id)?.get(knob)) || []) base = g.from + (g.to - g.from) * finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1));
-    return base;
+    return throughMacros(knobOf(x, knob, or), (x && plan.targetsOf.get(x.id)?.get(knob)) || [], (g) => finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1)));
   };
   const chainSettings = {
     flash: macroedKnob(ofType('accent'), 'accent', unset(ofType('accent'), 'accent', 'accent')),
@@ -1247,11 +1246,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
   function macroed(module: string, knob: Knob | undefined, base: number): number {
-    for (const g of (knob && plan.targetsOf.get(module)?.get(knob.id)) || []) {
-      const at = macroOf(g.macro);
-      base = knob?.taper === 'exp' && g.from > 0 && g.to > 0 ? g.from * (g.to / g.from) ** at : g.from + (g.to - g.from) * at;
-    }
-    return base;
+    return throughMacros(base, (knob && plan.targetsOf.get(module)?.get(knob.id)) || [], (g) => macroOf(g.macro), knob?.taper === 'exp');
   }
   /** A Flame's parts on the screen and its outputs: its node's, as last found, where the engine runs with a view; else
    *  as the caller gives them (a lab, a test). */

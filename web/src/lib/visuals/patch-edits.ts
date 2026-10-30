@@ -7,6 +7,7 @@
 import { applyV2, patchAt, type V2Edit } from './patchgraph';
 import { isDevice, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import type { ModuleType } from './patch';
+import { mapped } from './macro-map';
 
 export type PanelEdit =
   | V2Edit
@@ -40,8 +41,8 @@ export function freeMacro(macros: readonly { id: string }[]): { id: string; labe
   return { id: `macro-${n}`, label: `Macro ${n}` };
 }
 
-/** What a target of a macro is set to at the macro's value (along the knob's taper). */
-const setTo = (t: { from: number; to: number }, value: number, exp: boolean) => (exp && t.from > 0 && t.to > 0 ? t.from * (t.to / t.from) ** value : t.from + (t.to - t.from) * value);
+/** What a target of a macro is set to at the macro's value (along the knob's taper: the one rule, macro-map.ts). */
+const setTo = mapped;
 
 /** The store's key for an edit: a knob's turns, a cable's curve drawn, one undo step each. */
 export function panelKey(e: PanelEdit): string | null {
