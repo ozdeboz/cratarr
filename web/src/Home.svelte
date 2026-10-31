@@ -32,6 +32,7 @@
   import { addedOn, library, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl, crateRows, getCrate } from './lib/api';
   import Cover from './lib/Cover.svelte';
+  import CoverCard from './lib/CoverCard.svelte';
   import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeStatus from './lib/HomeStatus.svelte';
@@ -586,16 +587,11 @@
     <section aria-label="Sounds like your week">
       <SectionHead title="Sounds like your week" onplay={() => playWeek('play')} busy={starting} />
       <div class="week">
-        {#if weekCovers.length >= 4}
-          <button class="mosaic" onclick={() => viewLike('week')} aria-label="Open {week.name}">
-            {#each weekCovers as src (src)}<span><Cover {src} /></span>{/each}
-          </button>
-        {/if}
-        <div class="about">
+        <CoverCard covers={weekCovers} label={week.name} onopen={() => viewLike('week')}>
           <h3>{week.total.toLocaleString()} tracks you didn't play this week</h3>
           {#if week.played}<p>like the {week.played.toLocaleString()} tracks you played in the last 7 days</p>{/if}
-          {#if week.genres.length}<p class="genres">{#each week.genres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
-        </div>
+          {#if week.genres.length}<p class="pills">{#each week.genres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
+        </CoverCard>
       </div>
     </section>
   {/if}
@@ -924,62 +920,9 @@
     white-space: nowrap;
   }
 
+  /* Its card is Home's and the crate card's one piece (lib/CoverCard). */
   .week {
     margin: 4px 16px 0;
-    overflow: hidden;
-    border-radius: 16px;
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-  }
-
-  .mosaic {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    width: 100%;
-    padding: 0;
-    border: 0;
-    background: none;
-    cursor: pointer;
-  }
-
-  .mosaic span {
-    display: block;
-    aspect-ratio: 1;
-    /* Square whatever the image's shape: without it a portrait cover stretched its box, and its card (the owner,
-       2026-10-24). */
-    overflow: hidden;
-  }
-
-  .about {
-    padding: 14px 16px 16px;
-  }
-
-  h3 {
-    margin: 0;
-    font-size: 1.1rem;
-  }
-
-  .about p {
-    margin: 4px 0 0;
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
-
-  .about p.genres {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 10px;
-  }
-
-  .genres button {
-    padding: 2px 10px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
   }
 
   .back {

@@ -9,6 +9,8 @@ import { prefs } from './prefs.svelte';
 import { byRelevance, provided, relevance, words, type SearchResult } from './search';
 import { leaveOnArrival, onArrival } from './navStep.svelte';
 import { keep } from './searchKept';
+import { untrack } from 'svelte';
+import { TERM_KINDS, answerOfTerms, crateOfLine, modesFrom, readLine, type Chip, type Found as Finds, type Modes } from './quickCrate';
 
 export type Found = SearchResult & { track?: string };
 export type FoundGroup = { kind: string; label: string; items: Found[]; total: number };
@@ -52,6 +54,8 @@ const PAGE_KINDS: Record<string, string[]> = {
 };
 /** A few of each kind. */
 const EACH = 5;
+/** All the server's kinds, as everywhere asks them. */
+const KINDS = [...LIBRARY, ...ELSEWHERE].map((k) => k.kind);
 
 export const globalSearch = $state({
   /** What the page or the panel shows while searching: its own results, or everywhere's. */
@@ -66,7 +70,15 @@ export const globalSearch = $state({
   /** Show all (decision 0076): the one kind shown whole, as far as it has come. */
   all: null as string | null,
   allFound: null as { q: string; kind: string; items: Found[]; total: number; done: boolean } | null,
+  /** The words read as a crate (0.13; the owner, 2026-10-31), once for the crate card (lib/SearchCrateCard), the
+   *  field's dimmed joining words (lib/TopPill) and the results: its terms, their joins, and what its terms find
+   *  (`r`), which the results show instead of what the whole line finds. Null where the words are no crate; the last
+   *  one kept while new words are read (its `q` says whose). */
+  crate: null as { q: string; chips: Chip[]; modes: Modes; r: ServerSearch } | null,
 });
+
+/** How many of each kind a phrase's readings offer (lib/quickCrate's crate search asks as many). */
+const READINGS = 3;
 
 /** Beyond is asked once the words settle (decision 0076: about half a second, three letters at least), each query's
  *  answer kept, so typing back and forth asks nothing again. */
@@ -91,7 +103,7 @@ $effect.root(() => {
     if (kept) globalSearch.found = { q, r: kept };
     let gone = false;
     const t = setTimeout(() => {
-      search(q, [...LIBRARY, ...ELSEWHERE].map((k) => k.kind), EACH).then(
+      search(q, KINDS, EACH).then(
         (r) => {
           keep(foundKept, q, r);
           if (!gone) globalSearch.found = { q, r };
@@ -103,6 +115,34 @@ $effect.root(() => {
       gone = true;
       clearTimeout(t);
     };
+  });
+  // The words read as a crate, once the server's answer for them is in: the whole line from that answer, its phrases
+  // asked as the results ask (each answer kept, so the terms' finds need no second asking).
+  $effect(() => {
+    const f = globalSearch.found;
+    const q = pageView.query.trim();
+    if (words(q).length < 2) return void (globalSearch.crate = null);
+    if (!f || f.q !== q) return;
+    let gone = false;
+    const whole = words(q).join(' ');
+    const answers = new Map<string, ServerSearch>();
+    const finds = (r: ServerSearch): Finds => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, READINGS) ?? []);
+    const ask = (phrase: string): Promise<Finds> => {
+      const key = words(phrase).join(' ');
+      const got = key === whole ? Promise.resolve(f.r) : search(phrase, KINDS, EACH);
+      return got.then((r) => (answers.set(key, r), finds(r)));
+    };
+    untrack(() =>
+      readLine(q, ask).then(
+        (reads) => {
+          if (gone) return;
+          const chips = crateOfLine(reads);
+          globalSearch.crate = chips ? { q, chips, modes: modesFrom(reads), r: answerOfTerms(q, chips.map((c) => c.term), answers) as ServerSearch } : null;
+        },
+        () => {},
+      ),
+    );
+    return () => (gone = true);
   });
   $effect(() => {
     const q = pageView.query.trim();
@@ -181,8 +221,9 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
   const q = pageView.query.trim();
   const query = words(q);
   if (!query.length) return [];
-  // The last answer, the words' own once it is in.
-  const f = globalSearch.found?.r ?? null;
+  // The last answer, the words' own once it is in; where they read as a crate, what its terms find (the owner,
+  // 2026-10-31: a typed sentence still lists its artists, genres and their tracks).
+  const f = (globalSearch.crate?.q === q ? globalSearch.crate.r : null) ?? globalSearch.found?.r ?? null;
   const server = (kinds: typeof LIBRARY): FoundGroup[] =>
     f
       ? kinds
