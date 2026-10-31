@@ -222,6 +222,17 @@ fn choose<'a>(tracks: &[Track], releases: &'a [Release]) -> Option<(&'a Release,
         .min_by_key(|(r, _)| (r.kind(), r.media.iter().map(|m| m.tracks.len()).sum::<usize>().abs_diff(tracks.len())))
 }
 
+/// The discs Renumber would number the album's tracks on from these releases (0.13, Health's Disc numbers): its own
+/// choice of release, and the discs only where it keeps them (a double LP stays one disc); none where no release holds
+/// every track.
+pub(super) fn discs_from(tracks: &[Track], releases: &[Release]) -> Option<u32> {
+    let (r, places) = choose(tracks, releases)?;
+    if !keeps_discs(r, releases).0 {
+        return Some(1);
+    }
+    Some(places.iter().map(|(m, _)| *m).collect::<std::collections::HashSet<_>>().len() as u32)
+}
+
 // ---- MusicBrainz
 
 fn mb_release(v: &Value) -> Release {
@@ -636,6 +647,16 @@ mod tests {
         assert_eq!(off(&[(Some(1), Some(1)), (Some(2), Some(1)), (Some(2), Some(1))], true).as_deref(), Some("Disc 2: track 1 twice"));
         assert_eq!(off(&[(None, Some(1)), (None, Some(4))], false), None, "matched to a release: its gaps are tracks not held");
         assert_eq!(off(&[(None, Some(1)), (None, Some(4)), (None, None)], false).as_deref(), Some("1 unnumbered"));
+    }
+
+    #[test]
+    fn health_s_discs_are_the_ones_renumber_would_number_on() {
+        let tracks = [track("a", "One", 200), track("b", "Two", 181), track("c", "Three", 240), track("d", "Four", 100)];
+        let sides: &[&[(&str, u32)]] = &[&[("One", 201), ("Two", 180)], &[("Three", 240), ("Four", 99)]];
+        assert_eq!(discs_from(&tracks, &[release("CD", sides)]), Some(2), "a CD keeps its discs");
+        assert_eq!(discs_from(&tracks, &[release("12\" Vinyl", sides)]), Some(1), "a double LP stays one disc");
+        assert_eq!(discs_from(&tracks[..2], &[release("CD", sides)]), Some(1), "its tracks on one of them");
+        assert_eq!(discs_from(&tracks, &[]), None, "no release holds it");
     }
 
     #[test]
