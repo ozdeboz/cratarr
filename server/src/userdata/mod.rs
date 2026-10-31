@@ -664,6 +664,7 @@ impl UserData {
         add_plays_followed(&conn)?;
         add_annotation_own(&conn).context("keeping one's own plays apart from followed ones")?;
         add_release_types_rule(&conn)?;
+        words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
