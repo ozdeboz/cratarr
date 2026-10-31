@@ -44,7 +44,7 @@
   import MarkLoader from './MarkLoader.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
-  import { excludeGlobally } from './exclusions.svelte';
+  import { excludedGloballyOf, loadExcludedIds, setExcludedGlobally } from './exclusions.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
@@ -101,6 +101,11 @@
   loadExcludedArtists();
   $effect(() => {
     if (crate) loadCrateArtists(crate);
+  });
+  // The track's own, from its source's list of tracks excluded everywhere (its switch, the owner 2026-10-31).
+  $effect(() => {
+    const source = t?.source;
+    if (source && source !== 'device') loadExcludedIds(source);
   });
   /** Following someone (0.10): Play next and Add to queue ask them instead. */
   const followed = $derived(followingNow());
@@ -235,12 +240,6 @@
     const words = [t.artist, t.name].filter(Boolean).join(' ');
     window.open(`https://duckduckgo.com/?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
     onclose();
-  }  // Feel (decision 0058): Exclude everywhere, as the heart's long-press has it (decision 0024, amended).
-  function excludeEverywhere() {
-    const one = t;
-    if (!one) return;
-    onclose();
-    excludeGlobally(one.source, [one.id]).catch((e) => toast.fail(e, "It wasn't excluded"));
   }
   function geniusSearch() {
     if (!t) return;
@@ -447,7 +446,12 @@
   {:else if e === 'favourite'}
     {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
   {:else if e === 'excludeEverywhere'}
-    {#if !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
+    <!-- Feel (decision 0058): this track out everywhere, a switch beside its artists' (the owner, 2026-10-31), shown once
+         its source's list says which way it stands. -->
+    {#if !onDevice && excludedGloballyOf(t.source, t.id) !== null}
+      {@const out = !!excludedGloballyOf(t.source, t.id)}
+      <MenuEntry icon="ban" label="Exclude this track everywhere" switched={out} onclick={() => setExcludedGlobally(t.source, t.id, !out)} />
+    {/if}
   {:else if e === 'excludeArtist'}
     {#if !onDevice && t.source !== BANDCAMP && excludedArtists.everywhere !== null}
       {#each credited as a (a)}
