@@ -11,11 +11,11 @@ const genre = (v: string) => ({ kind: 'genre' as const, value: v, label: v });
 const artist = (v: string, id: string) => ({ kind: 'artist' as const, value: v, label: v, id });
 const year = (v: string, label: string) => ({ kind: 'year' as const, value: v, label });
 
-test('Leave out: a genre becomes "but not", a year and a track cannot be left out', () => {
+test('Leave out: a genre becomes "but not", a year too; a track cannot be left out', () => {
   const jazz = chipOf('jazz', [genre('Jazz')])!;
   const hipHop = chipOf('hip hop', [genre('Hip Hop')])!;
   assert.equal(canLeaveOut(jazz), true);
-  assert.equal(canLeaveOut(chipOf('90s', [year('1990-1999', '1990s')])!), false);
+  assert.equal(canLeaveOut(chipOf('90s', [year('1990-1999', '1990s')])!), true);
   const out = leftOut(jazz, true);
   assert.equal(out.not, true);
   assert.deepEqual(
@@ -32,7 +32,7 @@ test('Leave out: a genre becomes "but not", a year and a track cannot be left ou
     'Hip Hop , but not Jazz',
   );
   const years = chipOf('90s', [year('1990-1999', '1990s')])!;
-  assert.equal(leftOut(years, true), years, 'a year stays as it is');
+  assert.equal(leftOut(years, true).not, true, 'a year left out too');
   assert.equal(leftOut(jazz, false), jazz, 'already in: unchanged');
 });
 

@@ -476,16 +476,19 @@ export const updateCrate = (id: string, name: string, conditions: Condition[]) =
   });
 export const deleteCrate = (id: string) => request<{ deleted: string } & Undo>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The builder's live preview: how many tracks unsaved conditions select, and the first of them. */
-export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> = {}, offset = 0) => {
+/** A crate's card's covers (0.13): a record's, by its first playable track. */
+export type CrateCover = { track: string; album_id?: string | null };
+/** `look.covers`: its first records' covers asked too, as many (at most 6; the search crate card's strip). */
+export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> & { covers?: number } = {}, offset = 0) => {
   const q = new URLSearchParams({ limit: String(limit) });
   if (offset) q.set('offset', String(offset));
   if (source) q.set('source', source);
   if (look.order && look.order !== 'own') q.set('order', look.order);
   if (look.down) q.set('down', 'true');
-  return quietly<{ source: string; total: number; rows: PlaylistRow[]; names?: Record<string, CrateName> }>(`/api/crates/preview?${q}`, {
+  return quietly<{ source: string; total: number; rows: PlaylistRow[]; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}) }),
+    body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}), ...(look.covers ? { covers: look.covers } : {}) }),
   });
 };
 /** The list in view a filter is on (decision 0061): the Library's albums (on `source`) or its artists, the playlists,
