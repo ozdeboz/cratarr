@@ -16,7 +16,7 @@
   import { fit } from './columns.svelte';
   import { headCells as headCellsOf, headSort, type Order } from './columnHead';
   import { plural } from './insights.svelte';
-  import { libraryLayout } from './layouts';
+  import { libraryLayoutShown } from './layouts';
   import { ALBUM_WIDTHS, COMPOSER_ORDERS, howMany, matchesSearch, pageView } from './pageView.svelte';
   import { prefs, type ComposerOrder } from './prefs.svelte';
   import { composersInOrder } from './recordKindRules';
@@ -29,7 +29,8 @@
   $effect(() => {
     pageView.width = width;
   });
-  const layout = $derived(libraryLayout('composers'));
+  // As chosen in View, as it can be here; the table while the page's search has words (lib/layouts).
+  const layout = $derived(libraryLayoutShown('composers'));
   const table = $derived(layout === 'table');
   const minPx = $derived(table ? width : ALBUM_WIDTHS[layout][prefs.albumZoom]);
 

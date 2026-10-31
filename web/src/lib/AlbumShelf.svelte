@@ -19,7 +19,7 @@
   import Asking from './Asking.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
-  import { libraryLayout } from './layouts';
+  import { libraryLayoutShown } from './layouts';
   import ViewSheet from './ViewSheet.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
@@ -87,8 +87,9 @@
 
   // Only what is near is made (lib/nearBlocks). Each server's albums are cut into blocks of whole grid rows, each its
   // own grid, so the columns line up from block to block.
-  /** As chosen in View, as it can be here (lib/layouts: no table on a phone's screen). */
-  const layout = $derived(libraryLayout('albums'));
+  /** As chosen in View, as it can be here (lib/layouts: no table on a phone's screen); the table while the page's
+   *  search has words, a phone's too. */
+  const layout = $derived(libraryLayoutShown('albums'));
   const table = $derived(layout === 'table');
   // A table's lines touch, as a table's do.
   const GAP = $derived(table ? 0 : 10);

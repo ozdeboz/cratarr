@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { playlistLayout } from './lib/layouts';
+  import { playlistLayoutShown } from './lib/layouts';
   import { port } from './lib/player/port.svelte';
   import { askIfMany } from './lib/many.svelte';
   import { plural } from './lib/insights.svelte';
@@ -133,8 +133,9 @@
 
   // The table (decision 0042): a playlist a line, its facts in columns, as many as the page's width allows in the
   // owner's order (View). The facts are asked for while the table shows, again when the playlists change.
-  /** As chosen in View, as it can be here (lib/layouts: chips on a phone's screen). */
-  const table = $derived(playlistLayout() === 'table');
+  /** As chosen in View, as it can be here (lib/layouts: chips on a phone's screen); the table while the page's search
+   *  has words, a phone's too. */
+  const table = $derived(playlistLayoutShown() === 'table');
   const cols = $derived(table ? fit('playlists', gridWidth) : []);
   // Its head orders by Name and Tracks on a tap, as every table's (lib/columnHead); its other columns are not orders.
   const now = $derived<Order<PlaylistOrder>>({ key: prefs.playlistOrder, down: prefs.playlistDown });

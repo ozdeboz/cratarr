@@ -445,6 +445,14 @@ export const crateShows = (chips: readonly Chip[] | null, total: number | null |
 const CRATE_CARD_PAGES = new Set(['library', 'playlists', 'downloads', 'discover', 'requests', 'crates']);
 export const crateCardOn = (page: string) => CRATE_CARD_PAGES.has(page);
 
+/** What a page's own list is matched by (0.13; the owner, 2026-10-31: a typed sentence found nothing under its card):
+ *  where the search's words read as a crate, each of its terms (a left-out one aside), an item matching any of them,
+ *  the joining words never asked; else the whole line, as ever. */
+export function pageQueries(q: string, chips: readonly Chip[] | null): string[][] {
+  const terms = (chips ?? []).filter((c) => !c.not).map((c) => words(c.term)).filter((w) => w.length);
+  return terms.length ? terms : [words(q)];
+}
+
 /** A line read onto a crate's terms (the crate search's words, lib/quickCrates): the terms not in it yet as chips, how
  *  an "and" or "or" joins them with what it has (modesFrom), and the phrases that read as nothing. */
 export function readOnto(chips: readonly Chip[], read: readonly Read[]): { add: Chip[]; modes: Modes; missed: string[] } {
