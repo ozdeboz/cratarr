@@ -14,7 +14,7 @@ const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.art
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
   s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak, s.genres";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
-  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary, a.type_why, a.set_fields";
+  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary, a.type_why, a.set_fields, a.whole_tracks";
 
 /// An album's length in milliseconds, for a query over `albums a`: its songs' lengths summed, NULL when any song's is
 /// unknown or nothing (`albums.duration_ms` counts those as nothing), as `source::total_secs`. Over the songs' album
@@ -133,6 +133,7 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     let id: String = r.get(1)?;
     let mut release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref(), r.get(17)?);
     release.set = r.get::<_, String>(18)?.split('\u{1f}').filter(|f| !f.is_empty()).map(str::to_string).collect();
+    release.whole_tracks = r.get::<_, Option<i64>>(19)?.map(|t| t.max(0) as u32);
     Ok(Album {
         cover_art: r.get::<_, Option<String>>(13)?.unwrap_or_else(|| id.clone()),
         id,

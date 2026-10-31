@@ -32,13 +32,32 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
     let copy = track.with_file_name(format!(".{stem}.cratarr-tags.{ext}"));
     std::fs::write(&copy, &original)?;
     let checked = (|| -> Result<()> {
-        let mut file = lofty::probe::Probe::open(&copy)?.options(ParseOptions::new().read_properties(false)).read()?;
-        if file.primary_tag_mut().is_none() {
-            let kind = file.primary_tag_type();
-            file.insert_tag(Tag::new(kind));
+        // Only what `edit` changed is written (0.13): `edit` sees the format's own tag as lofty's generic one, and
+        // the fields of each key it changed are replaced in the format's own tag; every other field stays as it was.
+        // Through the generic tag alone, every field lofty has no key for was dropped (Vorbis STYLE,
+        // MUSICBRAINZ_ALBUMTYPE, RELEASESTATUS…), and a key's second spelling folded into its first (ORIGINALYEAR into
+        // ORIGINALDATE).
+        let options = ParseOptions::new().read_properties(false);
+        match kind {
+            Kind::Flac => {
+                let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&copy)?, options)?;
+                let own = file.remove_vorbis_comments().unwrap_or_default();
+                let (_, before) = own.clone().split_tag();
+                let mut after = before.clone();
+                edit(&mut after);
+                file.set_vorbis_comments(vorbis_edited(own, &before, &after)?);
+                file.save_to_path(&copy, WriteOptions::default())?;
+            }
+            Kind::Mp3 => {
+                let mut file = lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(&copy)?, options)?;
+                let own = file.remove_id3v2().unwrap_or_default();
+                let (_, before) = own.clone().split_tag();
+                let mut after = before.clone();
+                edit(&mut after);
+                file.set_id3v2(id3_edited(own, &before, &after));
+                file.save_to_path(&copy, WriteOptions::default())?;
+            }
         }
-        edit(file.primary_tag_mut().context("no tag to write to")?);
-        file.save_to_path(&copy, WriteOptions::default())?;
         let after = std::fs::read(&copy)?;
         if audio_of(&after, kind).context("its audio could not be found after writing")? != before {
             bail!("writing the tag would have changed the audio");
@@ -52,6 +71,79 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
     std::fs::set_permissions(&copy, std::fs::metadata(track)?.permissions())?;
     std::fs::rename(&copy, track)?;
     Ok(())
+}
+
+/// The keys an edit changed: each whose values differ before and after.
+fn changed_keys(before: &Tag, after: &Tag) -> Vec<ItemKey> {
+    let values = |t: &Tag, k: ItemKey| t.items().filter(|i| i.key() == k).map(|i| i.value().clone()).collect::<Vec<_>>();
+    let mut out: Vec<ItemKey> = Vec::new();
+    for k in before.items().chain(after.items()).map(|i| i.key()) {
+        if !out.contains(&k) && values(before, k) != values(after, k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// A FLAC's own comments with what an edit changed: every field of a changed key goes, however it is spelled, and the
+/// edited values come in under the key's own name; the pictures replaced where they changed.
+fn vorbis_edited(mut own: lofty::ogg::tag::VorbisComments, before: &Tag, after: &Tag) -> Result<lofty::ogg::tag::VorbisComments> {
+    use lofty::ogg::OggPictureStorage;
+    use lofty::tag::{ItemValue, TagType};
+    let changed = changed_keys(before, after);
+    let gone: Vec<String> = own
+        .items()
+        .map(|(k, _)| k)
+        .filter(|k| ItemKey::from_key(TagType::VorbisComments, k).is_some_and(|i| changed.contains(&i)))
+        .map(str::to_string)
+        .collect();
+    for k in gone {
+        own.remove(&k).for_each(drop);
+    }
+    for item in after.items().filter(|i| changed.contains(&i.key())) {
+        if let (Some(k), ItemValue::Text(v)) = (item.key().map_key(TagType::VorbisComments), item.value()) {
+            own.push(k.to_string(), v.clone());
+        }
+    }
+    if before.pictures() != after.pictures() {
+        own.remove_pictures();
+        for p in after.pictures() {
+            own.insert_picture(p.clone(), None)?;
+        }
+    }
+    Ok(own)
+}
+
+/// An MP3's own ID3v2 tag with what an edit changed: every frame of a changed key goes (the pictures where they
+/// changed), and the edited values come in as lofty makes their frames; every other frame stays as it was.
+fn id3_edited(mut own: lofty::id3::v2::Id3v2Tag, before: &Tag, after: &Tag) -> lofty::id3::v2::Id3v2Tag {
+    use lofty::id3::v2::Id3v2Tag;
+    use lofty::prelude::*;
+    use lofty::tag::TagType;
+    let changed = changed_keys(before, after);
+    let pictures = before.pictures() != after.pictures();
+    let of_changed = |f: &lofty::id3::v2::Frame<'static>| {
+        if f.id().as_str() == "APIC" {
+            return pictures;
+        }
+        let mut one = Id3v2Tag::new();
+        one.insert(f.clone());
+        one.split_tag().1.items().any(|i| changed.contains(&i.key()))
+    };
+    own.retain(|f| !of_changed(f));
+    let mut only = Tag::new(TagType::Id3v2);
+    for item in after.items().filter(|i| changed.contains(&i.key())) {
+        only.push_unchecked(item.clone());
+    }
+    if pictures {
+        for p in after.pictures() {
+            only.push_picture(p.clone());
+        }
+    }
+    for f in Id3v2Tag::from(only) {
+        own.insert(f);
+    }
+    own
 }
 
 /// A track's BPM tag as written (none: it has none).
@@ -208,6 +300,58 @@ mod tests {
             assert_eq!(audio_of(&std::fs::read(t).unwrap(), kind), audio_of(&before, kind), "the audio as it was");
         }
         assert!(std::fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with('.')), "no copy left");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn fields_lofty_has_no_key_for_are_kept() {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::prelude::*;
+        let d = dir("retag-keep");
+        let f = flac(&d, "one");
+        let read = |f: &Path| lofty::flac::FlacFile::read_from(&mut std::fs::File::open(f).unwrap(), ParseOptions::new()).unwrap();
+        let mut file = read(&f);
+        let mut vc = file.remove_vorbis_comments().unwrap_or_default();
+        vc.push("STYLE".into(), "Dub Techno".into());
+        vc.push("MUSICBRAINZ_ALBUMTYPE".into(), "album".into());
+        vc.push("RELEASESTATUS".into(), "official".into());
+        vc.push("ARTIST".into(), "Ott".into());
+        vc.push("ORIGINALDATE".into(), "2010-05-03".into());
+        vc.push("ORIGINALYEAR".into(), "2010".into());
+        file.set_vorbis_comments(vc);
+        file.save_to_path(&f, WriteOptions::default()).unwrap();
+        set_bpm(&f, Some(120)).unwrap();
+        let vc = read(&f).remove_vorbis_comments().unwrap();
+        for (k, v) in [("STYLE", "Dub Techno"), ("MUSICBRAINZ_ALBUMTYPE", "album"), ("RELEASESTATUS", "official"), ("ARTIST", "Ott"), ("BPM", "120")] {
+            assert_eq!(vc.get(k), Some(v), "{k}");
+        }
+        // A key's two spellings stay apart, each as it was.
+        assert_eq!(vc.get_all("ORIGINALDATE").collect::<Vec<_>>(), ["2010-05-03"]);
+        assert_eq!(vc.get_all("ORIGINALYEAR").collect::<Vec<_>>(), ["2010"]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn an_mp3_s_frames_lofty_does_not_map_are_kept() {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::prelude::*;
+        let d = dir("retag-keep-mp3");
+        let m = d.join("two.mp3");
+        mp3(&m);
+        let read = |m: &Path| lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(m).unwrap(), ParseOptions::new()).unwrap();
+        let mut file = read(&m);
+        let mut tag = file.remove_id3v2().unwrap_or_default();
+        tag.insert_user_text("Fancy Field".into(), "kept".into());
+        tag.insert_user_text("MusicBrainz Album Status".into(), "official".into());
+        tag.set_artist("Ott".into());
+        file.set_id3v2(tag);
+        file.save_to_path(&m, WriteOptions::default()).unwrap();
+        set_bpm(&m, Some(120)).unwrap();
+        let tag = read(&m).remove_id3v2().unwrap();
+        assert_eq!(tag.get_user_text("Fancy Field"), Some("kept"));
+        assert_eq!(tag.get_user_text("MusicBrainz Album Status"), Some("official"));
+        assert_eq!(tag.artist().as_deref(), Some("Ott"));
+        assert_eq!(bpm(&m).as_deref(), Some("120"));
         std::fs::remove_dir_all(&d).ok();
     }
 }

@@ -114,30 +114,8 @@ impl Mark {
     }
 }
 
-/// The kinds named on their own, by the owner's precedence: Classical, then Compilation (a Best Of is one, above
-/// Album), then Album, EP, Single and Incomplete (0.13: a release with tracks missing); Other is every other.
-fn rank(kind: &str) -> Option<u8> {
-    if kind.eq_ignore_ascii_case(CLASSICAL) {
-        Some(0)
-    } else if kind.eq_ignore_ascii_case("Compilation") {
-        Some(1)
-    } else if ["Album", "EP", "Single", "Incomplete"].iter().any(|k| kind.eq_ignore_ascii_case(k)) {
-        Some(2)
-    } else {
-        None
-    }
-}
-
-/// A record's kinds in its primary view only (the owner: each record in one kind, on by default): the named kinds
-/// below its first left out, the rest (Live, Soundtrack…) kept. So each record is in one named kind or in none (Other),
-/// and the kinds' counts add up to the records.
-pub fn primary_kinds(kinds: &[String]) -> Vec<String> {
-    let best = kinds.iter().filter_map(|k| rank(k)).min();
-    kinds.iter().filter(|k| rank(k).is_none_or(|r| Some(r) == best)).cloned().collect()
-}
-
-/// A record's kinds as the filter's Type axis names them: its release type's ("Album", "Live"), and Classical where it
-/// is one.
+/// A record's types as the filter's Type axis names them: its release type's ("Album", "Live"), and Classical where it
+/// is one (the layers, `crates::type_layer`).
 pub fn kinds_of(release: &crate::source::ReleaseType) -> Vec<String> {
     let mut out: Vec<String> = release.kind.iter().chain(&release.secondary).map(|w| crate::serve::library::type_label(w)).collect();
     if release.classical == Some(true) {
@@ -1338,24 +1316,6 @@ mod tests {
         i.marks.insert("al-syro".into(), Mark::Classical);
         let ix = build(&i);
         assert_eq!(ix.records["al-syro"].composers, [ComposerRef { key: "a-rdj".into(), name: "Richard D. James".into() }]);
-    }
-
-    #[test]
-    fn each_record_is_in_one_kind_in_its_primary_view_and_the_kinds_add_up() {
-        let k = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(primary_kinds(&k(&["Album", "Compilation", "Classical"])), ["Classical"]);
-        assert_eq!(primary_kinds(&k(&["Album", "Compilation", "Live"])), ["Compilation", "Live"], "a Best Of is a Compilation; Live kept");
-        assert_eq!(primary_kinds(&k(&["EP", "Live"])), ["EP", "Live"]);
-        assert_eq!(primary_kinds(&k(&["Live"])), ["Live"]);
-        let records = [k(&["Album"]), k(&["Album", "Compilation"]), k(&["Album", "Classical"]), k(&["EP"]), k(&["Single", "Compilation", "Classical"]), k(&["Live"]), k(&[])];
-        let named = ["Classical", "Compilation", "Album", "EP", "Single"];
-        let primary: Vec<Vec<String>> = records.iter().map(|r| primary_kinds(r)).collect();
-        let count = |kind: &str| primary.iter().filter(|p| p.iter().any(|x| x == kind)).count();
-        let other = primary.iter().filter(|p| !p.iter().any(|x| named.contains(&x.as_str()))).count();
-        assert_eq!(named.iter().map(|n| count(n)).sum::<usize>() + other, records.len());
-        assert_eq!((count("Classical"), count("Compilation"), count("Album"), other), (2, 1, 1, 2));
-        // Without it, a record is under each kind it has.
-        assert_eq!(records.iter().filter(|r| r.iter().any(|x| x == "Album")).count(), 3);
     }
 
     #[test]
