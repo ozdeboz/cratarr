@@ -2145,6 +2145,8 @@ struct LikeCurveQuery {
     own: Option<bool>,
     /// How much each seed counts, by `of`'s order, comma-separated (Sounds like your week); none, all alike.
     weights: Option<String>,
+    /// How several seeds are read, `blend` or `either` (0.13, decision 0088); none, blended.
+    mode: Option<crate::crates::LikeMode>,
 }
 
 /// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
@@ -2152,7 +2154,7 @@ async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
+    Ok(Json(app.playlists.like_curve(&of, &weights, q.mode.unwrap_or_default(), q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
 }
 
 /// The Sounds like curve within a crate's other conditions (0.11, quick crates; the owner: "Filtered curve in 0.11"):
@@ -2168,12 +2170,15 @@ struct LikeCurveWithin {
     own: Option<bool>,
     #[serde(default)]
     weights: Vec<f32>,
+    /// As the query's (0.13, decision 0088).
+    #[serde(default)]
+    mode: Option<crate::crates::LikeMode>,
     #[serde(default)]
     conditions: Vec<crate::crates::Condition>,
 }
 
 async fn like_curve_within(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(b): Json<LikeCurveWithin>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
-    Ok(Json(app.playlists.like_curve(&b.of, &b.weights, f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
+    Ok(Json(app.playlists.like_curve(&b.of, &b.weights, b.mode.unwrap_or_default(), f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
 }
 
 #[derive(serde::Deserialize)]
@@ -2220,12 +2225,14 @@ async fn crate_update(State(app): State<Arc<App>>, Path(id): Path<String>, Json(
 }
 
 /// A crate as its view shows it, with the artists it leaves out by "Artist is not" (decision 0083: Not in this crate),
-/// each with the key that takes them back.
+/// each with the key that takes them back, and the names of the library ids its conditions hold (0.13, decision 0088:
+/// `{"<id>": {"name", "kind"}}`, kind `artist`, `album` or `track`; an id the library lacks left out).
 #[derive(serde::Serialize)]
 struct CrateGot {
     #[serde(flatten)]
     def: crate::crates::CrateDef,
     not_artists: Vec<crate::app::NotArtist>,
+    names: std::collections::BTreeMap<String, crate::crates::Named>,
 }
 
 async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<CrateGot>, ApiError> {
@@ -2236,7 +2243,8 @@ async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Resul
         def.conditions.retain(|c| !matches!(c.value, crate::crates::Value::Within { .. }));
     }
     let not_artists = app.playlists.crate_not_artists(&id).await?;
-    Ok(Json(CrateGot { def, not_artists }))
+    let names = app.playlists.condition_names(&def.conditions).await?;
+    Ok(Json(CrateGot { def, not_artists, names }))
 }
 
 /// An artist, by their name as the page shows it.
@@ -2327,10 +2335,21 @@ struct Preview {
     without: Vec<String>,
 }
 
+/// The preview's answer: the page, and the names of the library ids its conditions hold (0.13, decision 0088), as the
+/// crate view has them (`CrateGot`).
+#[derive(serde::Serialize)]
+struct Previewed {
+    #[serde(flatten)]
+    page: crate::app::CratePage,
+    names: std::collections::BTreeMap<String, crate::crates::Named>,
+}
+
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, ..Default::default() };
-    Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?).into_response())
+    let page = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?;
+    let names = app.playlists.condition_names(&p.conditions).await?;
+    Ok(Json(Previewed { page, names }).into_response())
 }
 
 /// The Filter sheet (decision 0061): which of the list in view's items pass these conditions, how many of how many,
@@ -6467,6 +6486,7 @@ impl IntoResponse for ApiError {
             | ToggleError::NothingToUndo
             | ToggleError::Exists => StatusCode::CONFLICT,
             ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
+            ToggleError::Unanswerable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder | ToggleError::NameTaken(_) => {
                 StatusCode::CONFLICT
             }
@@ -6493,6 +6513,14 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, PreviewOf, attachment, form_decode};
+
+    #[test]
+    fn a_condition_that_cannot_be_answered_is_unprocessable() {
+        // 0.13, decision 0088: all of on a year.
+        use axum::response::IntoResponse;
+        let r = super::ApiError(crate::app::ToggleError::Unanswerable("Year takes one value, not all of several.".into())).into_response();
+        assert_eq!(r.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
 
     #[test]
     fn an_answer_says_whether_the_change_was_made_only_where_the_device_sent_its_time() {

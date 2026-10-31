@@ -891,6 +891,31 @@ impl Library {
         Ok(st.query_row([id], |r| r.get(0)).optional()?)
     }
 
+    /// The names of library ids (0.13, decision 0088: what a crate's conditions name), by id: an artist's (`ar-`) name,
+    /// an album's (`al-`) or a track's (`tr-`) title. Ids it does not have, or of no such kind, are left out.
+    pub fn names_of(&self, wanted: &[String]) -> Result<HashMap<String, String>> {
+        let db = self.db();
+        let mut artist = db.prepare_cached("SELECT name FROM artists WHERE id = ?1 LIMIT 1")?;
+        let mut album = db.prepare_cached("SELECT name FROM albums WHERE id = ?1 LIMIT 1")?;
+        let mut song = db.prepare_cached("SELECT title FROM songs WHERE id = ?1 LIMIT 1")?;
+        let mut out = HashMap::new();
+        for id in wanted {
+            let st = if id.starts_with(ids::ARTIST) {
+                &mut artist
+            } else if id.starts_with(ids::ALBUM) {
+                &mut album
+            } else if id.starts_with(ids::SONG) {
+                &mut song
+            } else {
+                continue;
+            };
+            if let Some(name) = st.query_row([id], |r| r.get::<_, String>(0)).optional()? {
+                out.insert(id.clone(), name);
+            }
+        }
+        Ok(out)
+    }
+
     /// An artist by name, as the library writes it (any case): their id and MusicBrainz id.
     pub fn artist_by_name(&self, name: &str) -> Result<Option<(String, Option<String>)>> {
         let db = self.db();
@@ -1651,6 +1676,19 @@ mod tests {
         assert_eq!(lib.album_facts(&homogenic.id).unwrap().unwrap().3, None);
         let (_, _, _, _, orb) = listed.iter().find(|(a, ..)| a.name == "Adventures Beyond the Ultraworld").unwrap();
         assert_eq!(*orb, Some(200.0), "another album's is its own");
+    }
+
+    #[test]
+    fn a_crates_ids_are_named_as_the_library_has_them_and_one_it_lacks_left_out() {
+        // 0.13, decision 0088: an artist's name, an album's and a track's title.
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        let homogenic: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
+        let (bjork, hunter) = (ids::artist("Björk"), ids::song(1));
+        let asked = [bjork.clone(), homogenic.clone(), hunter.clone(), "tr-999".to_string(), "ar-nobody".to_string(), "al-none".to_string(), "Björk".to_string()];
+        let names = lib.names_of(&asked).unwrap();
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert_eq!((names[&bjork].as_str(), names[&homogenic].as_str(), names[&hunter].as_str()), ("Björk", "Homogenic", "Hunter"));
     }
 
     #[test]
