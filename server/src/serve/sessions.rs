@@ -308,7 +308,7 @@ pub struct ApiKey {
     pub owner: Option<String>,
     /// `read`, or `control` (reading and the players).
     pub scope: String,
-    /// What uses it: `home_assistant`, shown with its connection; none for a key made before keys had one.
+    /// What uses it: `home_assistant`, `mcp` (0.13), shown with its connection; none for a key made before keys had one.
     pub purpose: Option<String>,
 }
 
