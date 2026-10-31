@@ -6,7 +6,8 @@
   import { prefs, type CrateOrder } from './lib/prefs.svelte';
   import type { Crate } from './lib/api';
   import ListHead from './lib/ListHead.svelte';
-  import { CRATE_ORDERS, howMany, matchesSearch, usePageAction } from './lib/pageView.svelte';
+  import { CRATE_ORDERS, howMany, matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
+  import { listShows } from './lib/search';
   import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
   import CrateCard from './lib/CrateCard.svelte';
   import CrateMenu from './lib/CrateMenu.svelte';
@@ -15,6 +16,7 @@
   import { switchOn } from './lib/listFilter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
+  import Asking from './lib/Asking.svelte';
   import { deepMatches } from './lib/deepSearch.svelte';
   import { quickCrates, quickOn } from './lib/quickCrates.svelte';
   import { reach } from './lib/reach.svelte';
@@ -56,6 +58,7 @@
   const grabbing = $derived(quickOn() && !reach.away && quickCrates.chips.length > 0);
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
+  const shows = $derived(listShows(sorted.length, pageView.query, deepOf.answeredFor()));
 </script>
 
 <main>
@@ -69,7 +72,10 @@
     <Notice text={crates.error} />
   {:else if !crates.list}
     <PageLoading />
-  {:else if sorted.length === 0}
+  {:else if shows === 'asking'}
+    <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
+    <Asking />
+  {:else if shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     <p class="empty">No crates match.</p>
   {:else}
