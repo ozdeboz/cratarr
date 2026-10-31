@@ -50,9 +50,8 @@
   import { inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, fromLabel, playFromHere, snippetable, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, fromLabel, snippetable, snippetOn, startOf, toggleSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import { prefs } from './prefs.svelte';
-  import { untrack } from 'svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
@@ -271,8 +270,9 @@
       },
     );
   });
-  // Its snippet as the menu opens (0.12, lib/snippetPlayer; Settings › This device › Snippets in menus): not the playing
-  // track's, nor the device's own music; its length as listed, else as its file says.
+  // Its snippet (0.12, lib/snippetPlayer; Settings › This device › Snippets in menus): not the playing track's, nor the
+  // device's own music; its length as listed, else as its file says. Heard only from Play snippet (the owner,
+  // 2026-10-31: the menu plays nothing by itself), ended as the menu closes or shows another track.
   const snip = $derived.by((): SnippetTrack | null => {
     if (!t || forPlaying || !prefs.snippetsInMenus || !snippetable(t)) return null;
     const duration_secs = t.duration_secs ?? (details?.duration_ms ? details.duration_ms / 1000 : null);
@@ -281,16 +281,8 @@
   const snipKey = $derived(snip ? `${snip.source}/${snip.id}/${snip.duration_secs ?? ''}` : null);
   $effect(() => {
     if (!snipKey) return;
-    untrack(() => snip && startSnippet(snip));
     return () => endSnippet();
   });
-  function fromHere() {
-    const s = snip;
-    if (!s) return;
-    const at = startOf(s);
-    onclose();
-    playFromHere(s, at).catch((e) => toast.fail(e, "It didn't play"));
-  }
   function showDetails() {
     step = 'details';
   }
@@ -555,9 +547,10 @@
   >
     {#if step === 'menu'}
       {#if snip}
-        <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and the track from there. -->
+        <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and Play snippet from there (again, it
+             stops). -->
         <SnippetStrip track={snip} />
-        <MenuEntry icon="play" label={fromLabel(startOf(snip))} onclick={fromHere} />
+        <MenuEntry icon={snippetOn(snip) ? 'pause' : 'play'} label={fromLabel(startOf(snip))} onclick={() => toggleSnippet(snip)} />
       {/if}
       <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
       <MenuTable kind="track" {entry} />

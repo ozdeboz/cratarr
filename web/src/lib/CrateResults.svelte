@@ -20,7 +20,7 @@
   import Seg from './Seg.svelte';
   import { shuffled } from './shuffle';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, fromLabel, playFromHere, snippet, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, snippet, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import { matcherModule } from './matcherLoad';
   import { spreadRecords } from './spread';
   import { toast } from './toast.svelte';
@@ -173,11 +173,6 @@
     });
   });
   onDestroy(() => openRow !== null && endSnippet());
-  function fromHere(t: SnippetTrack) {
-    const at = startOf(t);
-    openRow = null;
-    playFromHere(t, at).catch((e) => toast.fail(e, "It didn't play"));
-  }
 </script>
 
 <div class="sum">
@@ -243,7 +238,6 @@
     {#if openRow === i && st}
       <div class="snipped">
         <SnippetStrip track={st} />
-        <button class="from" onclick={() => fromHere(st)}>{fromLabel(startOf(st))}</button>
       </div>
     {/if}
   </li>
@@ -327,18 +321,6 @@
   .snipped {
     display: grid;
     padding: 0 16px 8px;
-  }
-
-  .from {
-    justify-self: start;
-    padding: 6px 0;
-    border: 0;
-    background: none;
-    color: var(--accent-ink);
-    font: inherit;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
   }
 
   .preview {
