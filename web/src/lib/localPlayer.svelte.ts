@@ -2837,7 +2837,7 @@ const lengthOf = (i: number) => local.queue[i]?.duration_secs ?? null;
  *  stopping at one the server cannot wind (a Bandcamp preview, the device's own music) or whose length is unknown (the
  *  counter goes by lengths: the page cannot read the stream's map). */
 const WIND_THROUGH = 64;
-function throughOf(index: number, dir: 1 | -1): number[] {
+export function throughOf(index: number, dir: 1 | -1): number[] {
   const out: number[] = [];
   for (let i = index + dir; i >= 0 && i < local.queue.length && out.length < WIND_THROUGH; i += dir) {
     const t = local.queue[i];
