@@ -97,6 +97,9 @@
   // own (it led to Health too), and often the problem's name again (the owner, 2026-10-26: "Health › Analysis ›
   // Analysis").
   const top = $derived(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }]);
+  /** The findings Renumber fixes (it writes disc and track numbers): track numbers, and disc numbers (0.13, a5's
+   *  `library:discs`). */
+  const RENUMBERS = new Set(['library:track-numbers', 'library:discs']);
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
@@ -131,7 +134,7 @@
       {#if item.playlist}<HealthMissing playlist={item.playlist} />{/if}
       {#if incoming && item.album}<HealthIncoming source={item.album[0]} album={item.album[1]} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- Track numbers off (unnumbered ones too): renumbered as a release has them (lib/HealthRenumber). -->
-      {#if problem === 'library:track-numbers' && item.album?.[0] === 'cratarr' && offers('renumber')}<HealthRenumber album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
+      {#if RENUMBERS.has(problem) && item.album?.[0] === 'cratarr' && offers('renumber')}<HealthRenumber album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- Year, genre, album artist, MusicBrainz release, a rule's names: the fix proposed, Apply (lib/HealthFixes). -->
       {#if fixable && item.album?.[0] === 'cratarr'}<HealthFixes finding={problem} album={item.album[1]} track={item.track ?? null} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- No cover: Change cover, straight on its choices (Upload and an address in its corner). -->
