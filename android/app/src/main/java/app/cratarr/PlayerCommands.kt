@@ -97,8 +97,9 @@ class PlayerCommands(
                 resume(From.PAGE)
             } else {
                 placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let {
-                    startStop.forwards()
-                    p.seekTo(it, 0)
+                    // The knob's way, the knob left as set (0.12.4: pure directions, the owner 2026-10-31): at L the
+                    // track backwards from its end (`StartStop.jump`); before, forwards with the knob at R.
+                    startStop.jump { p.seekTo(it, 0) }
                     resume(From.PLAY_ON)
                 }
             }
@@ -227,7 +228,8 @@ class PlayerCommands(
         }
         // A queue given back after the app came back without one waits for a play.
         link()?.release()
-        // Switching devices bypasses every play effect (the owner, 2026-10-27): no wind-up, no wind under way.
+        // Switching devices bypasses every play effect (the owner, 2026-10-27): no wind-up, no wind under way. A new
+        // queue: forwards, the knob at R.
         startStop.forwards()
         if (m.optBoolean("paused")) p.pause() else {
             link()?.asked()
@@ -250,6 +252,9 @@ class PlayerCommands(
             Autoplay.newPlay(service, m.optJSONArray("tracks"))
             prefs.newQueue(m.optString("name"))
         }
+        // A new queue starts forwards, the knob at R, any backwards play dropped (0.12.4: pure directions, the owner
+        // 2026-10-31: the one moment the setting changes but by the user's turn; the page's the same).
+        startStop.forwards()
         p.setMediaItems(mediaItems(only(m.optJSONArray("tracks"), mode)).map(service::located), m.optInt("index", 0), m.optLong("position_ms", 0))
         p.prepare()
         shown.playWhenReady = !m.optBoolean("paused")

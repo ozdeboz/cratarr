@@ -209,7 +209,16 @@ class StartStop(
     private var tapeReverse = false
     /** A ramp of the tape's own (a stop before a wind, a knob turn, the wind-up after): shown as playing, no ramp told. */
     private var quietRamp = false
+    /** What follows the knob's backwards play braked: `rest`, `forward` (the knob turned to R) or `hold` (a hold begun
+     *  while it played: [pendingHold], from where it stops). */
     private var reverseNext = "rest"
+    /** A hold begun while playing backwards (0.12.4: pure directions, the owner 2026-10-31), waiting for the backwards
+     *  play to stop; [PendingHold.released]: let go meanwhile. */
+    private class PendingHold(val back: Boolean, val plain: () -> Unit, var released: Boolean = false)
+    private var pendingHold: PendingHold? = null
+    /** The hold under way began from playing backwards: its let-go returns to the knob's way ([Knob.letGoTo],
+     *  [Knob.afterLetGo]; the page's `backTo`). */
+    private var tapeBackTo = false
     /** A hold that could not wind: the plain press its letting go makes instead. */
     private var holdPlain: (() -> Unit)? = null
 
@@ -426,10 +435,11 @@ class StartStop(
                     quietStop { play(true) { player.play() } }
                 }
             }
-        } else if (tapeReverse && tapeListener != null) {
+        } else if (tapeReverse && tapeListener != null && reverseNext != "hold") {
             reverseNext = "forward"
             windStop()
         }
+        // A hold begun from playing backwards (stopping for it, or winding): its let-go reads the knob as it is then.
     }
 
     /**
@@ -471,23 +481,24 @@ class StartStop(
 
     /**
      * The knob at L as a play starts (a wind landing, a play from rest): backwards from here; where it cannot (at the
-     * start already, a track Cratarr has no file of), the knob back at R and told. True where it played backwards.
+     * start already, a track Cratarr has no file of), the tape's way forward, the knob left at L (0.12.4: pure
+     * directions, the owner 2026-10-31: only the user's turn changes it; before, it went back to R). True where it played
+     * backwards.
      */
     private fun knobBack(): Boolean {
         if (playBack()) return true
-        note("direction", "to" to "R", "why" to "backwards could not start")
-        deckDirection = "R"
-        changed()
+        note("direction", "way" to "forward", "why" to "backwards could not start", "setting" to deckDirection)
         return false
     }
 
-    /** A wind's landing plays on ([start]), or backwards where the knob was turned to L meanwhile. */
+    /** A wind's landing plays on ([start]), or backwards where the knob is at L. */
     private fun landPlay(start: () -> Unit) {
         if (deckDirection == "L" && knobBack()) return
         start()
     }
 
-    /** Back to forwards, the knob at R, any backwards play dropped (another track, a new queue, a seek). */
+    /** A new queue (a fresh play): forwards, the knob back at R, any backwards play dropped. The one moment the setting
+     *  changes but by the user's turn (0.12.4: pure directions, the owner 2026-10-31; the page's the same). */
     fun forwards() {
         if (tapeReverse) {
             tapeRestart = null
@@ -500,17 +511,68 @@ class StartStop(
         changed()
     }
 
-    /** Plays backwards from where it is (the knob at L): a wind at 1×, as loud as the track, spun up from still; false
-     *  where it cannot (a track Cratarr has no file of, at the start already, in a group). */
-    private fun playBack(from: Long = player.currentPosition, waits: Boolean = false): Boolean {
+    /** The knob's backwards play dropped at once for another way on (a skip, a seek, a jump in the queue), the track's
+     *  own player where the deck had got to; the knob left as set (0.12.4: pure directions, the owner 2026-10-31). */
+    private fun dropBackwards() {
+        val d = deck()
+        tapeRestart = null
+        tapeThen = null
+        stopTape()
+        reset()
+        if (d.index in 0 until player.mediaItemCount) player.seekTo(d.index, d.ms)
+    }
+
+    /** A track's length (ms): the file's as the player has read it, else Cratarr's; null where neither is known. */
+    private fun trackLength(index: Int): Long? {
+        if (index !in 0 until player.mediaItemCount) return null
+        val tl = player.currentTimeline
+        if (index < tl.windowCount) tl.getWindow(index, Timeline.Window()).durationMs.takeIf { it != C.TIME_UNSET && it > 0 }?.let { return it }
+        return trackOf(player.getMediaItemAt(index))?.optDouble("duration_secs", 0.0)?.takeIf { it > 0 }?.let { (it * 1000).toLong() }
+    }
+
+    /**
+     * Another track (a skip: Next, Previous, a jump in the queue; [go] has put the track's player at its start) the way
+     * the knob is set (0.12.4: pure directions, the owner 2026-10-31; [Knob.skipWay]): at L it stands a moment before its
+     * end, paused there, so the play that follows ([landPlay], [play]) goes backwards from there. True where it stood
+     * there; false at R, where the skip went nowhere (not at a track's start), or where its length is not known or it
+     * cannot be played backwards (it plays forwards from its start then, the knob left at L).
+     */
+    private fun standAtEnd(): Boolean {
+        if (Knob.skipWay(deckDirection) != Knob.BACKWARDS) return false
+        val i = player.currentMediaItemIndex
+        if (player.currentPosition > FROM_START_MS) return false
+        val at = Knob.fromEnd(trackLength(i)) ?: return false
+        if (windUrl(at, null, null, true, null, 1f, 0f, false) == null) return false
+        note("direction", "skip" to "backwards from its end", "track" to i, "at_ms" to at)
+        player.pause()
+        player.seekTo(i, at)
+        return true
+    }
+
+    /** Plays backwards from where it is (the knob at L): a wind at 1×, as loud as the track, spun up from still, or at 1×
+     *  from its first sound ([moving]: a hold's let-go braked to 1× backwards hands over to it); false where it cannot (a
+     *  track Cratarr has no file of, at the start already, in a group). */
+    private fun playBack(from: Long = player.currentPosition, waits: Boolean = false, moving: Boolean = false): Boolean {
         if (tapeListener != null) return false
         if (from <= 0L) return false
         val way = if (prefs.windEdges == "queue") windWay(true) else emptyList()
         val url = windUrl(from, null, null, true, way.joinToString(",") { it.first }.ifEmpty { null }, 1f, 0f, false) ?: return false
         reverseNext = "rest"
+        pendingHold = null
         wind(hold = true, from = from, to = 0L, url = url, restart = null, chain = way.map { it.second }, speed = 1f, reverse = true, waits = waits) { i, at ->
             player.seekTo(i, at)
-            if (reverseNext == "forward") play(true) { player.play() }
+            when (reverseNext) {
+                "forward" -> play(true) { player.play() }
+                "hold" -> pendingHold?.let {
+                    pendingHold = null
+                    holdAfterBackwards(it)
+                }
+            }
+        }
+        if (moving) {
+            // On at 1× from its first sound, as loud as the track: no spin-up from still.
+            tapeFlying = true
+            tapeFloor = 1f
         }
         return true
     }
@@ -820,6 +882,8 @@ class StartStop(
         // Playing backwards: braked to rest where it gets, the knob still at L.
         if (tapeReverse && tapeListener != null) {
             reverseNext = "rest"
+            // A hold waiting for it to stop is dropped: the pause is the last word.
+            pendingHold = null
             windStop()
             return
         }
@@ -903,20 +967,21 @@ class StartStop(
      * Either way the ramp ends now and the position is no longer held. Without a ramp, a seek as ever.
      */
     fun seek(go: () -> Unit) {
-        // During backwards play: there, forwards.
+        // During backwards play: there, and on the way the knob is set, the knob left as it is (0.12.4: pure directions,
+        // the owner 2026-10-31; before, forwards with the knob at R).
         if (tapeReverse) {
-            forwards()
+            dropBackwards()
             go()
-            player.play()
+            landPlay { player.play() }
             return
         }
-        // During Tape rewind: the clip stops, the track goes where it was sent and plays on.
+        // During Tape rewind: the clip stops, the track goes where it was sent and plays on (the knob's way).
         if (tapeListener != null) {
             note("seek", "during" to "rewind")
             val started = stopTape()
             reset()
             go()
-            if (started) player.play()
+            if (started) landPlay { player.play() }
             return
         }
         val dir = running
@@ -944,14 +1009,25 @@ class StartStop(
         }
     }
 
-    /** Next or previous ([go]) where the device asks it: out, then on, the next one as it is. */
+    /** To another track of the queue from its start ([go]: a jump, the page's or Cratarr's), as a seek; it goes the way
+     *  the knob is set (0.12.4: pure directions, the owner 2026-10-31): at L standing before its end, so the play that
+     *  follows goes backwards from there ([standAtEnd]), the knob left as it is (before, it went back to R). */
+    fun jump(go: () -> Unit) = seek {
+        go()
+        standAtEnd()
+    }
+
+    /** Next or previous ([go]) where the device asks it: out, then on, the next one as it is. The other track plays the
+     *  way the knob is set ([standAtEnd]: at L backwards from its end), the knob left as it is. */
     fun skip(go: () -> Unit) {
-        note("skip", "busy" to busy, "skips" to prefs.startStopSkips)
-        // Another track plays forwards, the knob back at R.
+        note("skip", "busy" to busy, "skips" to prefs.startStopSkips, "direction" to deckDirection)
+        // Playing backwards: another track the knob's way, at L backwards from its end (0.12.4: pure directions, the
+        // owner 2026-10-31; before, forwards with the knob at R).
         if (tapeReverse) {
-            forwards()
+            dropBackwards()
             go()
-            player.play()
+            standAtEnd()
+            landPlay { player.play() }
             return
         }
         // During a wind-down (a skip's, a pause's brake) Next and Previous are not taken, from anywhere (the owner: one
@@ -959,8 +1035,11 @@ class StartStop(
         if (busy) return note("skip ignored", "ramp" to running)
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !prefs.startStopSkips || !player.isPlaying || grouped()) {
+            val plays = player.playWhenReady
             reset()
             go()
+            // At L: standing before its end, backwards from there if it plays; paused, the next play goes from there.
+            if (standAtEnd() && plays) landPlay { player.play() }
             return
         }
         heldPosition = player.currentPosition
@@ -971,6 +1050,7 @@ class StartStop(
             // Full speed and volume first: the next one starts as it is.
             reset()
             go()
+            if (standAtEnd()) landPlay { player.play() }
         }
     }
 
@@ -986,11 +1066,13 @@ class StartStop(
      * ever ([restart]).
      */
     fun rewind(restartAfterMs: Long, restart: () -> Unit): Boolean {
-        // During backwards play Previous is a skip: forwards, and playing.
+        // During backwards play Previous is a skip, the knob's way (0.12.4: pure directions, the owner 2026-10-31; before,
+        // forwards with the knob at R): from where the deck had got to, the track again past the restart point, else the
+        // one before; at L backwards from its end ([skip], [standAtEnd]), and playing.
         if (tapeReverse) {
-            forwards()
+            dropBackwards()
             restart()
-            player.play()
+            if (tapeListener == null) landPlay { player.play() }
             return true
         }
         note("rewind", "busy" to busy, "rewind" to prefs.startStopRewind, "at_ms" to player.currentPosition, "again" to tapePrevious)
@@ -1014,8 +1096,9 @@ class StartStop(
             return true
         }
         if (busy) return true
-        // Back to the start off: Previous goes there plainly.
-        if (!prefs.windsBy("toStart") || !player.isPlaying) return false
+        // Back to the start off: Previous goes there plainly. At L, a skip the knob's way: the track again backwards from
+        // its end, never wound to its start (0.12.4: pure directions, the owner 2026-10-31; [skip]).
+        if (!prefs.windsBy("toStart") || !player.isPlaying || Knob.skipWay(deckDirection) == Knob.BACKWARDS) return false
         val from = player.currentPosition
         if (from <= restartAfterMs) return false
         val w = prefs.pointWind("toStart")
@@ -1031,7 +1114,8 @@ class StartStop(
      * end already, at the queue's end, a track Cratarr has no file of): the caller skips as ever.
      */
     fun fastForward(jump: () -> Unit): Boolean {
-        if (tapeReverse) return false
+        // At L Next is a skip the knob's way, the next track backwards from its end (0.12.4: pure directions; [skip]).
+        if (tapeReverse || Knob.skipWay(deckDirection) == Knob.BACKWARDS) return false
         note("fast forward", "busy" to busy, "on" to prefs.startStopRewind, "at_ms" to player.currentPosition)
         // During a wind-down: not taken (as [skip]).
         if (busy) return true
@@ -1046,6 +1130,8 @@ class StartStop(
         // Never sounding: the plain jump, still playing.
         wind(hold = false, from = from, to = end, url = url, restart = jump, flying = true, jump = jump, motion = "toEnd") { _, _ ->
             jump()
+            // The knob turned to L meanwhile: the next track backwards from its end.
+            standAtEnd()
             landPlay { player.play() }
         }
         return true
@@ -1082,9 +1168,14 @@ class StartStop(
      * forward as long as held, to the edge at the latest; let go ([windStop]), braked, then on from where it got with
      * the wind-up. False where it cannot wind (in a group, a track Cratarr has no file of): the caller skips as ever.
      */
-    fun windStart(back: Boolean, plain: () -> Unit): Boolean {
-        note("wind", "phase" to "start", "back" to back, "busy" to busy, "on" to prefs.startStopRewind)
+    fun windStart(back: Boolean, plain: () -> Unit): Boolean = windStart(back, plain, false)
+
+    /** As [windStart]; [backTo]: a hold begun from playing backwards ([holdFromBackwards]), whose let-go returns to the
+     *  knob's way. */
+    private fun windStart(back: Boolean, plain: () -> Unit, backTo: Boolean): Boolean {
+        note("wind", "phase" to "start", "back" to back, "busy" to busy, "on" to prefs.startStopRewind, "direction" to deckDirection, "reverse" to tapeReverse)
         holdPlain = null
+        if (tapeReverse && tapeListener != null) return holdFromBackwards(back, plain)
         if (busy || tapeListener != null) return busy
         // Winding off here, in a group, a track Cratarr has no file of: nothing now, a plain press on letting go (a page
         // driving this player offers the hold whatever this device says).
@@ -1113,10 +1204,20 @@ class StartStop(
             if (u != null) {
                 wind(hold = true, from = at, to = edge, url = u, restart = { play { player.play() } }, chain = way.map { it.second }, flying = flying, speed = speed, waits = waits) { i, land ->
                     player.seekTo(i, land)
-                    // A flying one hands back while still moving; one from still winds up, quietly (the tape's own).
-                    // Landing at 1× (a forward let-go's plan, a flying one before it) plays on as it is; from still, it spins up.
-                    if (landsMoving || (flying && !landsStill)) landPlay { player.play() } else play(true) { player.play() }
+                    if (backTo && Knob.afterLetGo(if (back) -1 else 1, true, deckDirection, "play") == Knob.BACKWARDS) {
+                        // A hold flown from playing backwards, the knob still at L (0.12.4: pure directions, the owner
+                        // 2026-10-31): backwards again at 1×, on from a let-go braked to 1× backwards, or spun up from its
+                        // stand; where that cannot start, forwards, the knob left at L.
+                        if (!landsMoving) play(true) { player.play() } else if (!playBack(moving = true)) player.play()
+                    } else if (landsMoving || (flying && !landsStill)) {
+                        // A flying one hands back while still moving; one from still winds up, quietly (the tape's own).
+                        // Landing at 1× (a forward let-go's plan, a flying one before it) plays on as it is; from still, it spins up.
+                        landPlay { player.play() }
+                    } else {
+                        play(true) { player.play() }
+                    }
                 }
+                tapeBackTo = backTo
             }
         }
         // Back from play: the tape's own quiet stop first (shown as playing), the wind armed meanwhile from where the
@@ -1132,6 +1233,49 @@ class StartStop(
             go(from, false)
         }
         return true
+    }
+
+    /**
+     * Previous or Next held while the knob's backwards play goes on (0.12.4: pure directions, the owner 2026-10-31:
+     * "continuous hold winding should never alter the direction from what it was before initiating it"; before, the
+     * hold did nothing and its letting go stopped the backwards play): the backwards play brakes to a stop, the knob
+     * staying at L, and the hold winds from there, back or forward ([holdAfterBackwards]); let go, it returns to the
+     * knob's way ([Knob.letGoTo], [Knob.afterLetGo]): a hold back brakes to 1× backwards and plays on that way, a hold
+     * forward brakes to a stand and plays backwards at 1× from there; the knob turned to R meanwhile, forwards. The
+     * page flies a hold back on from the backwards play without a stop (a second stream armed just behind it); here
+     * both stop first, as the page does where it cannot fly.
+     */
+    private fun holdFromBackwards(back: Boolean, plain: () -> Unit): Boolean {
+        // That hold off: nothing while held, a plain press on letting go (as from anywhere).
+        if (!prefs.windsBy(if (back) "holdBack" else "holdFwd")) return false.also { holdPlain = plain }
+        // Braking already (a pause, the knob turned to R): taken, nothing more.
+        if (tapeReleased != 0L) return true
+        val h = PendingHold(back, plain)
+        note("wind", "phase" to "from backwards", "back" to back, "started" to tapeStarted)
+        if (!tapeStarted) {
+            // Not sounding yet: dropped, the hold from where it stands.
+            tapeRestart = null
+            stopTape()
+            reset()
+            return holdAfterBackwards(h)
+        }
+        reverseNext = "hold"
+        pendingHold = h
+        // Its brake to a stop, as the knob's backwards play is let go ([letGo]: to still).
+        tapeReleased = SystemClock.elapsedRealtime()
+        tapeReleaseFrom = tapeRate
+        letGo()
+        return true
+    }
+
+    /** The backwards play stopped for a hold [h]: the hold from there, marked as flown from it ([tapeBackTo]); let go
+     *  meanwhile, the knob's way from there at once. False where it cannot wind (a plain press on letting go). */
+    private fun holdAfterBackwards(h: PendingHold): Boolean {
+        if (h.released) {
+            play(true) { player.play() }
+            return true
+        }
+        return windStart(h.back, h.plain, backTo = true)
     }
 
     /** A held Next on a track that cannot wind: its own speed up to [FAST]× over the spin-up, eased, the pitch following;
@@ -1182,6 +1326,11 @@ class StartStop(
         holdPlain?.let {
             holdPlain = null
             it()
+            return
+        }
+        // A hold let go while the backwards play still stops for it: the knob's way from where it stops.
+        pendingHold?.takeIf { tapeReverse && tapeListener != null && reverseNext == "hold" }?.let {
+            it.released = true
             return
         }
         if (!tapeHold || tapeListener == null) return
@@ -1256,6 +1405,7 @@ class StartStop(
         tapeFloor = if (flying && !hold) 1f / speed.coerceAtLeast(1f) else LOW
         tapeInChain = flying && !hold
         tapeReverse = reverse
+        tapeBackTo = false
         tapeChain = chain
         tapeIndex = player.currentMediaItemIndex
         tapeStop = null
@@ -1372,7 +1522,11 @@ class StartStop(
                 player.seekTo(got.index, got.ms)
                 rest?.invoke()
             }
-            jumped -> player.play()
+            // On in the next track; the knob turned to L meanwhile, backwards from its end ([standAtEnd]).
+            jumped -> {
+                standAtEnd()
+                landPlay { player.play() }
+            }
             else -> then?.invoke(got.index, got.ms)
         }
         unsaid = false
@@ -1442,7 +1596,8 @@ class StartStop(
     /** Where the wind's own stream had got (ms of track along its way) as it was let go. */
     private var planGone0 = 0.0
     /** A hold let go lands moving at 1× (forwards; the owner, 2026-10-28: "In the app it should also go to 1 not 0 on
-     *  forward let go"), or still (backwards, a pause), then spins up. */
+     *  forward let go"; backwards for a hold back flown from playing backwards, the knob at L, 0.12.4), or still
+     *  (against the knob's way, a pause), then spins up ([Knob.letGoTo]). */
     private var landsStill = false
     private var landsMoving = false
     /** The brake stream's own player (made the first time), its listener, and whether it carries the plan now. */
@@ -1450,11 +1605,13 @@ class StartStop(
     private var brakeListener: Player.Listener? = null
     private var brakeSounding = false
 
-    /** The plan letting go now makes: from the deck's place at its speed, forwards to 1× ([moving]: not a pause), else
-     *  to still, over as long as its speed takes to come down ([Plan.lengthMs]). */
+    /** The plan letting go now makes: from the deck's place at its speed, to 1× where it goes on the way the knob is set
+     *  ([moving]: not a pause; [Knob.letGoTo]: forwards, or backwards for a hold flown from playing backwards with the
+     *  knob still at L), else to still (a hold against the knob's way, a pause, the knob's own backwards play), over as
+     *  long as its speed takes to come down ([Plan.lengthMs]). */
     private fun planNow(now: Long, moving: Boolean): Plan {
         val d = deck(now)
-        val to = if (moving && tapeSign > 0 && !tapeReverse) 1.0 else 0.0
+        val to = if (moving && !tapeReverse) Knob.letGoTo(tapeSign, tapeBackTo, deckDirection).toDouble() else 0.0
         val v0 = kotlin.math.abs(d.speed)
         return Plan(now, d.index, d.ms, tapeSign, v0, to, Plan.lengthMs(v0, to, tapeRelease))
     }
@@ -1464,7 +1621,8 @@ class StartStop(
 
     /**
      * A hold let go (or braked by a pause): one plan from where the deck is, at its speed, over the Brake, forwards to
-     * 1× (the owner, 2026-10-28, as the web page), backwards and for a pause to still. What shows is the plan's place; the
+     * 1× (the owner, 2026-10-28, as the web page), backwards and for a pause to still; one flown from playing backwards
+     * to the knob's way ([planNow], [Knob.letGoTo]: 1× backwards, a stand forwards). What shows is the plan's place; the
      * track is readied where it ends; the wind follows it as far as its own rate reaches, and where that is not far enough (a
      * fast stream can sound no slower than a quarter of its speed) Cratarr's brake stream takes over at [BRAKE_LEAD_MS],
      * played at 1× (the owner: "let the stream carry the motion").
