@@ -17,12 +17,14 @@
   import { headCells as headCellsOf, headSort, type Order } from './columnHead';
   import { plural } from './insights.svelte';
   import { libraryLayoutShown } from './layouts';
-  import { ALBUM_WIDTHS, COMPOSER_ORDERS, howMany, matchesSearch, pageView } from './pageView.svelte';
+  import { ALBUM_WIDTHS, COMPOSER_ORDERS, howMany, matchesSearch, pageView, searchNone } from './pageView.svelte';
   import { prefs, type ComposerOrder } from './prefs.svelte';
   import { composersInOrder } from './recordKindRules';
 
   $effect(() => loadComposers());
   const shown = $derived(composersInOrder((classical.composers ?? []).filter((c) => matchesSearch(c.name, c.sort_name)), prefs.composerOrder, prefs.composerDown));
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() => (classical.composers?.length && !shown.length ? 'composers' : null));
 
   let width = $state(0);
   // View's size steps depend on the width the list has.
@@ -54,7 +56,8 @@
 {:else if !classical.composers}
   <PageLoading />
 {:else if !shown.length}
-  <p class="empty">{classical.composers.length ? 'No composers match.' : 'No classical records yet.'}</p>
+  {#if !classical.composers.length}<p class="empty">No classical records yet.</p>
+  {:else if !pageView.none}<p class="empty">No composers match.</p>{/if}
 {:else}
   <div class="list" bind:clientWidth={width}>
     <ListHead fields={COMPOSER_ORDERS} bind:value={prefs.composerOrder} bind:down={prefs.composerDown} count={howMany(shown.length, 'composer')} />

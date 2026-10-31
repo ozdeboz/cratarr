@@ -28,7 +28,7 @@
   import { crates, loadCrates } from './lib/crates.svelte';
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
   import { SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
-  import { pageView, usePageAction } from './lib/pageView.svelte';
+  import { pageView, searchNone, usePageAction } from './lib/pageView.svelte';
   import { about } from './lib/AboutSheet.svelte';
   import { loadSettingsWords, settingsMatches } from './lib/settingsSearch.svelte';
   import { words as searchWords } from './lib/search';
@@ -217,6 +217,8 @@
     { kept: 'device', title: 'Device' },
     { kept: 'server', title: 'Server' },
   ] as const;
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() => (words.length && !shown.length ? 'settings' : null));
   const groups = $derived(GROUPS.map((g) => ({ ...g, parts: shown.filter((x) => keptOf(x) === g.kept) })));
 </script>
 
@@ -224,7 +226,7 @@
   <!-- The mode switch where the bar does not have it (This device › Mode switch in the bar, off by default; the owner,
        2026-10-25): the very top of Settings. -->
   {#if switchable() && !prefs.modeSwitchInBar && !words.length}<div class="mode"><ModeSwitcher connection={serverConnection.value} /></div>{/if}
-  {#if words.length && !shown.length}<p class="none">No settings match.</p>{/if}
+  {#if words.length && !shown.length && !pageView.none}<p class="none">No settings match.</p>{/if}
   {#each groups as group, g (g)}
     {#if group.parts.length}
       <section class="group" aria-labelledby="settings-g{g}">

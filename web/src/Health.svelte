@@ -12,13 +12,15 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { HEALTH, healthOf, panel, viewPlaylist } from './lib/panel.svelte';
-  import { matchesSearch } from './lib/pageView.svelte';
+  import { matchesSearch, pageView, searchNone } from './lib/pageView.svelte';
   import Group from './lib/settings/Group.svelte';
   import Item from './lib/settings/Item.svelte';
 
   $effect(loadHealth);
   // The pill's search (the owner, 2026-10-25): a problem whose words, or one of its items', hold every word.
   const list = $derived(problems().filter((p) => matchesSearch(p.domain, p.title, p.line, ...p.items.map((x) => `${x.title} ${x.line ?? ''}`))));
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() => (health.loaded && problems().length && !list.length ? 'problems' : null));
   const groups = $derived(byDomain(list));
   /** How many: the finding's count, else its items. */
   const countOf = (p: ReturnType<typeof problems>[number]) => (p.finding?.count ?? p.items.length).toLocaleString();
@@ -29,7 +31,7 @@
   {#if !health.loaded}
     <PageLoading />
   {:else if !list.length}
-    <p class="empty">{problems().length ? 'None of them match.' : 'All good.'}</p>
+    {#if !problems().length}<p class="empty">All good.</p>{:else if !pageView.none}<p class="empty">None of them match.</p>{/if}
   {:else}
     <div class="groups">
       {#each groups as g (g.domain)}

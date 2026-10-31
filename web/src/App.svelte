@@ -963,6 +963,19 @@
   /** Everywhere's results in the page's place: on a page's Everywhere tab, and on Home whenever it searches (it has
    *  nothing of its own to find; the owner, 2026-10-25: its results came after all of Home, out of sight). */
   const everywhereShown = $derived(pageView.query.trim() !== '' && (page === 'home' || (scoped && globalSearch.scope === 'everywhere')));
+  // Everywhere follows only as far as the next page (0.13; the owner, 2026-10-31: "when using the global search from
+  // anywhere and navigating to another page, it should switch to a normal search"): another page opens on its own
+  // results for the same words, the globe its count. Not back to a search: that step keeps its own scope, which it
+  // restores (lib/globalSearch rememberSearch).
+  let scopedOn = untrack(() => page);
+  $effect(() => {
+    const p = page;
+    if (p === scopedOn) return;
+    scopedOn = p;
+    untrack(() => {
+      if (!history.state?.search) globalSearch.scope = 'page';
+    });
+  });
   /** A page's own search leads with the crate its words make (0.13; the owner, 2026-10-31: one card, as global search's,
    *  lib/SearchCrateCard), on the pages that list music or crates; everywhere's results have their own. */
   const pageCrate = $derived(quickOn() && !reach.away && crateCardOn(page) && pageView.query.trim() !== '' && !everywhereShown);

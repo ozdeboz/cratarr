@@ -188,7 +188,24 @@ export const pageView = $state({
   action: null as PageAction | null,
   /** The page's mode button (usePageMode), while it shows. */
   mode: null as PageMode | null,
+  /** What the page lists ("records"), while its own search finds none of it (searchNone). */
+  none: null as string | null,
 });
+
+/** The calling page's own search finding none (0.13; the owner, 2026-10-31: A2, "an overlay pointing at the search
+ *  glass with a button to clear"): `what` it lists ("records") while its words leave none of it, else null. The page's
+ *  pill says it, from its lit magnifier, the words a chip whose ✕ clears (lib/TopPill); the page itself says nothing
+ *  then. An effect: it follows what `what` reads. */
+export function searchNone(what: () => string | null) {
+  $effect(() => {
+    const mine = pageView.query.trim() ? what() : null;
+    pageView.none = mine;
+    // Gone with the page, unless the next page has said its own already.
+    return () => {
+      if (untrack(() => pageView.none) === mine) pageView.none = null;
+    };
+  });
+}
 
 /** Gives the pill's last button to the calling page while it shows (an effect: it follows what `get` reads). */
 export function usePageAction(get: () => PageAction | null) {
