@@ -258,7 +258,7 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0090: Cratarr as an MCP server](0090-mcp-server.md): accepted, for 0.13. `/mcp` in the server (the MCP Rust SDK's
   streamable HTTP), for API keys only and read only: search, records with their type and classical and why, one record,
   classical composers and works, the health findings, the account's crates.
-- [0091: Scrobbling from the device](0091-scrobbling-from-the-device.md): proposed, for 0.13. Each user's choice:
+- [0091: Scrobbling from the device](0091-scrobbling-from-the-device.md): accepted, for 0.13. Each user's choice:
   from each device (the start: the player that sounds a track tells the services, its sign-ins its own, the server
   holding no keys) or through the server (sign in once, other servers' plays handed to it); Subsonic apps and Kodi
   follow it; a play told once, by its id.

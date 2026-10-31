@@ -1,8 +1,8 @@
 # 0091: Scrobbling from the device
 
-- Status: proposed (the owner, 2026-10-31: "scrobbling should indeed move to the device! This also makes more sense
-  privacy wise", and the choices below, by question set); for 0.13, with modes per server. The server's parts are for
-  a5 to review.
+- Status: accepted (the owner, 2026-10-31: "scrobbling should indeed move to the device! This also makes more sense
+  privacy wise", and the choices below, by question set; the server's parts reviewed by a5 the same day); for 0.13,
+  with modes per server.
 - Date: 2026-10-31
 - Builds on: 0068 (one way in for listening; its scrobbler), 0064 (the listening history), 0085 and 0087 (offline
   first; plays with an id and a time), 0051 (several users), modes per server (docs/plans.md, 0.13)
@@ -48,7 +48,9 @@ The owner wants the device to scrobble, but did not want to lose the convenience
 
 **What stays.** Cratarr's own listening history (0064), its counts (0022) and the imports (0067) do not change: a play
 of Cratarr's tracks is reported to Cratarr's server as now, whichever way it is scrobbled. Tracking off (0068's
-amendment) stops scrobbling on every path: a device asks the account's `tracking` before it sends.
+amendment) stops scrobbling on every path. A device goes by the account's `tracking` as it last read it (offline it
+cannot ask), and reads it again before it sends its queue; what it queued while tracking was off is dropped, never
+sent later.
 
 ## Server (for review)
 
@@ -56,14 +58,17 @@ amendment) stops scrobbling on every path: a device asks the account's `tracking
 - `device`: the account's `scrobble_target` rows are removed, and nothing is queued for it in `heard`. Connections
   shows the services as each device's (no keys, no "broken" from the server).
 - Switching to `device`: what the server has queued for the account is sent first; the keys go once it is empty. Until
-  then Connections says how many are still to go.
+  then Connections says how many are still to go. The keys are gone for good: back to `server` means signing in to
+  each service again, which Connections says before the switch.
 - Switching to `server`: the devices hand over what they have not sent yet (below); from then on the server's queue
   fills as 0068 has it.
 - Other servers' plays, through the server: `POST /api/scrobbles` `{plays: [{id, at, artist, title, album,
-  album_artist?, duration_secs?, mbid?}]}`, queued as the server's own are (one row per connected service, the id kept
-  as 0087's are, so a play sent again is counted once), never written to the history. "Now playing" for them:
-  `POST /api/scrobbles/now` `{artist, title, album, duration_secs?}`, sent best effort, never queued. Both are refused
-  while the account is `device`, or has tracking off.
+  album_artist?, duration_secs?, mbid?}]}`, queued as the server's own are (one row per connected service), never
+  written to the history. Its limits: at most 500 plays a call; `id` required, kept per account as 0087's ids are, so
+  a play a device sends again is queued once; `at` not in the future (a few minutes' slack); a play older than 14
+  days queued for ListenBrainz only (Last.fm refuses it). "Now playing" for them: `POST /api/scrobbles/now`
+  `{artist, title, album, duration_secs?}`, one per account at a time, the latest winning, sent best effort, never
+  queued. Both are refused while the account is `device`, or has tracking off.
 
 ## Device
 
@@ -76,6 +81,8 @@ amendment) stops scrobbling on every path: a device asks the account's `tracking
     sign-in, coming back to the page; the session key traded for (`auth.getSession`) and calls signed on the device.
 - Under `server`, the device sends no scrobbles of its own: its plays of Cratarr's tracks are the reports it already
   makes, its plays of other servers' tracks go to `/api/scrobbles`.
+- Switched to `server` while it holds a queue: it hands the plays of other servers' tracks to `/api/scrobbles` and
+  drops those of Cratarr's own (the server has counted them, and sends them itself), then stops.
 
 ## Consequences
 
