@@ -1436,6 +1436,12 @@ export type ListedAlbum = {
   classical_mark?: 'classical' | 'not';
   composers?: { key: string; name: string }[];
   performers?: string[];
+  /** Its release type (Cratarr's own library's): "album", "ep", "single", "incomplete", "other"; none where not known.
+   *  `secondary`: MusicBrainz's secondary types ("compilation", "live"…). */
+  type?: string | null;
+  secondary?: string[];
+  /** The fields an administrator set by hand (0.13, per-record overrides; lib/recordEdit). */
+  set?: import('./recordEdit').OverrideField[];
 };
 
 /** One server's album list. */
@@ -1501,6 +1507,10 @@ export type WorkView = {
   recordings: WorkRecording[];
 };
 export const getWork = (mbid: string) => quietly<WorkView>(`/api/works/${encodeURIComponent(mbid)}`);
+/** Sets records' own values by hand, household-wide (0.13, administrators'; lib/recordEdit): a field present sets it,
+ *  null puts it back to what Cratarr finds, one absent is left alone. One call for one record or a selection. */
+export const setAlbumOverrides = (albums: string[], set: import('./recordEdit').OverrideSet) =>
+  request<unknown>('/api/albums/overrides', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ albums, set }) });
 /** Marks a record classical or not, library-wide (administrators'); null: as Cratarr finds it. */
 export const markClassical = (source: string, id: string, mark: 'classical' | 'not' | null) =>
   request<{ classical: boolean; classical_mark?: 'classical' | 'not' | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(id)}/classical`, {

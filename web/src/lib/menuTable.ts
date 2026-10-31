@@ -44,7 +44,6 @@ export type EntryId =
   | 'edit'
   | 'changeCover'
   | 'missingTracks'
-  | 'classical'
   | 'deviceCover'
   | 'serverCover'
   | 'devicePicture'
@@ -99,7 +98,7 @@ export const MENUS: Record<MenuKind, Kind> = {
       // Remove from this device beside what put it there (the owner, 2026-10-26: last in the menu it was out of sight).
       { group: 'take', entries: ['download', 'keep', 'removeFromDevice', 'share'] },
       { group: 'know', entries: ['webSearch', 'geniusSearch'] },
-      { group: 'change', entries: ['changeCover', 'missingTracks', 'classical', 'deviceCover', 'serverCover'] },
+      { group: 'change', entries: ['edit', 'changeCover', 'missingTracks', 'deviceCover', 'serverCover'] },
       { group: 'library', label: 'Library', entries: ['cancelConversion', 'moveTo', 'replaceIn'] },
       { group: 'remove', entries: ['removeResume', 'deleteAlbum'] },
     ],
@@ -215,7 +214,6 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   edit: 'Edit',
   changeCover: 'Change cover',
   missingTracks: 'Missing tracks…',
-  classical: 'Classical…',
   deviceCover: 'Change cover on this device',
   serverCover: "Use the server's cover",
   devicePicture: 'Change picture on this device',
