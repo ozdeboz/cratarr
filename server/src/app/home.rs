@@ -9,8 +9,14 @@
 //!   of them or more, nothing else) is that album.
 //! - **Sounds like your week**: the week's crate, its first albums for the mosaic, its size, its genres and how many
 //!   of the week's tracks it is drawn from.
+//!
+//! Jump back in is built once for those asking at once and kept 20 seconds for each asker (`BackKeep`), and a play
+//! reported builds it again at the next ask (0.12.3: Home's Jump back in asked dozens of times a minute, 2026-10-31).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::future::Future;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -26,6 +32,10 @@ const ALBUM_SHARE: f64 = 0.9;
 /// Sounds like your week's crate, and how many of its rows are read for its mosaic.
 const WEEK: &str = "like:week";
 const WEEK_ROWS: usize = 40;
+/// How long one asker's Jump back in is kept (0.12.3: Home's Jump back in asked dozens of times a minute, 2026-10-31:
+/// up to 59 a minute, two pages often in the same second, each build 1.3 to 3 seconds and the memory 256 to 408 MB).
+/// What it shows changes as albums are played, minutes apart.
+const BACK_KEEP: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Serialize)]
 pub struct NewAlbum {
@@ -93,6 +103,88 @@ fn latest(mut list: Vec<Back>, (days, most): (i64, usize), now: i64) -> Vec<Back
     list
 }
 
+/// Each server's listed albums as the Library's one list has them (`App::albums`), from Music's lists (`music`) and the
+/// other libraries' (`other`): the servers of Music's lists, then those of the others' alone; a server's Music albums,
+/// then its other libraries'. Only what Jump back in reads of that list, without what it adds (classical facts,
+/// verdicts, what may be deleted) or a copy of every album (0.12.3: Home's Jump back in asked dozens of times a
+/// minute, 2026-10-31).
+fn listed<'a>(music: &[(&'a str, &'a [source::Album])], other: &[(&'a str, &'a [source::Album])]) -> Vec<(&'a str, Vec<&'a source::Album>)> {
+    let mut ids: Vec<&'a str> = music.iter().map(|(id, _)| *id).collect();
+    for (id, _) in other {
+        if !ids.contains(id) {
+            ids.push(*id);
+        }
+    }
+    ids.into_iter()
+        .map(|id| {
+            let m: &'a [source::Album] = music.iter().find(|(s, _)| *s == id).map(|(_, a)| *a).unwrap_or_default();
+            let o: &'a [source::Album] = other.iter().find(|(s, _)| *s == id).map(|(_, a)| *a).unwrap_or_default();
+            (id, m.iter().chain(o.iter()).collect())
+        })
+        .collect()
+}
+
+/// Who Jump back in is built for: the asking account, whether it asks from away from home (the players it reaches,
+/// `PlayOn::left_queues`), and the asking player.
+type BackKey = (Option<String>, bool, Option<String>);
+
+/// One asker's Jump back in as last built, and when.
+type BackSlot = tokio::sync::Mutex<Option<(Instant, Arc<Vec<Back>>)>>;
+
+/// Jump back in, built once for those asking at once and kept a while for each asker (0.12.3: Home's Jump back in
+/// asked dozens of times a minute, 2026-10-31), as `import::Matcher::library_albums` keeps the library's albums.
+struct BackKeep {
+    keep: Duration,
+    slots: std::sync::Mutex<BTreeMap<BackKey, Arc<BackSlot>>>,
+}
+
+static BACK: BackKeep = BackKeep::new(BACK_KEEP);
+
+impl BackKeep {
+    const fn new(keep: Duration) -> Self {
+        Self { keep, slots: std::sync::Mutex::new(BTreeMap::new()) }
+    }
+
+    /// `key`'s answer while it is young enough, else `build`'s, kept. The asker's slot is held while building, so those
+    /// asking the same meanwhile wait and share the one answer; other askers build alongside. One that fails is not
+    /// kept.
+    async fn kept_or_built<F, Fut>(&self, key: BackKey, build: F) -> Result<Arc<Vec<Back>>, ToggleError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Vec<Back>, ToggleError>>,
+    {
+        let slot = {
+            let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
+            // Those gone stale and not in use go: an account's players come and go.
+            slots.retain(|k, s| {
+                *k == key || Arc::strong_count(s) > 1 || s.try_lock().is_ok_and(|kept| matches!(&*kept, Some((at, _)) if at.elapsed() < self.keep))
+            });
+            slots.entry(key).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None))).clone()
+        };
+        let mut kept = slot.lock().await;
+        if let Some((at, answer)) = &*kept
+            && at.elapsed() < self.keep
+        {
+            return Ok(answer.clone());
+        }
+        *kept = None;
+        let answer = Arc::new(build().await?);
+        *kept = Some((Instant::now(), answer.clone()));
+        Ok(answer)
+    }
+
+    /// `account`'s answers built again at their next ask (a play of theirs reported).
+    fn forget(&self, account: Option<&str>) {
+        self.slots.lock().unwrap_or_else(|p| p.into_inner()).retain(|(a, _, _), _| a.as_deref() != account);
+    }
+}
+
+/// The running request's asker of Jump back in (`BackKey`).
+fn back_key(served: Option<&crate::serve::Serve>, player: Option<&str>) -> BackKey {
+    let away = crate::serve::who::current().is_some_and(|w| !w.home);
+    (served.and_then(|s| s.current_user()), away, player.map(str::to_string))
+}
+
 /// The album a queue's tracks are, when they are (nine in ten of its tracks or more, and nothing else): (id, title,
 /// artist).
 fn album_of_queue(tracks: &[(String, String)], albums_of: &HashMap<String, String>, albums: &HashMap<String, crate::serve::api::Album>) -> Option<(String, String, String)> {
@@ -132,22 +224,39 @@ impl App {
         Ok(shelf_of(&picks, listed.into_iter().chain(late)).into_iter().map(|album| NewAlbum { source: own.to_string(), album }).collect())
     }
 
-    /// Home's Jump back in, for the asking `player` (its queues).
+    /// Home's Jump back in, for the asking `player` (its queues): built once for those asking at once, kept 20 seconds
+    /// for each account and player (0.12.3: Home's Jump back in asked dozens of times a minute, 2026-10-31).
     pub async fn home_back(&self, player: Option<&str>) -> Result<Vec<Back>, ToggleError> {
+        let key = back_key(self.served.as_deref(), player);
+        let answer = BACK.kept_or_built(key, || self.build_back(player)).await?;
+        Ok((*answer).clone())
+    }
+
+    /// A play of the running request's account was reported: its Jump back in is built again at the next ask.
+    pub fn home_back_heard(&self) {
+        BACK.forget(self.served.as_deref().and_then(|s| s.current_user()).as_deref());
+    }
+
+    /// Jump back in, built.
+    async fn build_back(&self, player: Option<&str>) -> Result<Vec<Back>, ToggleError> {
         let at = now();
         let own = crate::source::cratarr::KIND.id;
         let coverless = coverless(self.served.as_deref()).await;
-        let view = self.albums(None).await;
+        // The Library's one list's servers and albums, read from Music's and the other libraries' kept lists without
+        // making that whole list (`listed`; 0.12.3: Home's Jump back in asked dozens of times a minute, 2026-10-31).
+        let (collection, incoming) = tokio::join!(self.collection.list(None), self.incoming.list(None));
+        let music: Vec<(&str, &[source::Album])> = collection.sources.iter().map(|s| (s.id.as_str(), s.albums.as_slice())).collect();
+        let other: Vec<(&str, &[source::Album])> = incoming.sources.iter().map(|s| (s.id.as_str(), s.albums.as_slice())).collect();
         // The albums played last, each server's plays.
         let mut albums: Vec<Back> = Vec::new();
-        for s in &view.sources {
-            let Ok(uses) = self.playing.album_uses(&s.id).await else { continue };
-            for a in &s.albums {
-                if s.id == own && coverless.contains(&a.id) {
+        for (server, list) in listed(&music, &other) {
+            let Ok(uses) = self.playing.album_uses(server).await else { continue };
+            for a in list {
+                if server == own && coverless.contains(&a.id) {
                     continue;
                 }
                 if let Some(played) = uses.get(&a.id).and_then(|u| u.played) {
-                    albums.push(Back::Album { at: played, source: s.id.clone(), id: a.id.clone(), title: a.title.clone(), by: a.artist.clone() });
+                    albums.push(Back::Album { at: played, source: server.to_string(), id: a.id.clone(), title: a.title.clone(), by: a.artist.clone() });
                 }
             }
         }
@@ -281,5 +390,71 @@ mod tests {
         let ids: Vec<String> = shelf_of(&picks, listed.into_iter().chain(late)).into_iter().map(|a| a.id).collect();
         assert_eq!(ids, picks);
         assert!(shelf_of(&picks, Vec::<source::Album>::new()).is_empty(), "none the lists or the library have");
+    }
+
+    /// Jump back in reads the Library's one list's servers and albums in that list's order (`App::albums`): Music's
+    /// servers, then the other libraries' alone; a server's Music albums, then its others'.
+    #[test]
+    fn jump_back_in_reads_the_servers_and_albums_in_the_librarys_order() {
+        let card = |id: &str| crate::source::cratarr::card(album(id, 3));
+        let (own_music, jf_music, own_other, more_other) = ([card("m1"), card("m2")], [card("j1")], [card("i1")], [card("o1")]);
+        let music = [("cratarr", &own_music[..]), ("jellyfin", &jf_music[..])];
+        let other = [("other", &more_other[..]), ("cratarr", &own_other[..])];
+        let got: Vec<(&str, Vec<&str>)> = listed(&music, &other).into_iter().map(|(s, l)| (s, l.into_iter().map(|a| a.id.as_str()).collect())).collect();
+        assert_eq!(got, [("cratarr", vec!["m1", "m2", "i1"]), ("jellyfin", vec!["j1"]), ("other", vec!["o1"])]);
+    }
+
+    fn back(id: &str) -> Back {
+        Back::Album { at: 1, source: "cratarr".into(), id: id.into(), title: id.into(), by: None }
+    }
+
+    fn asker(account: &str, player: &str) -> BackKey {
+        (Some(account.into()), false, Some(player.into()))
+    }
+
+    /// Jump back in is built once for those asking at once and shared; again for another player or account, after a
+    /// play of the account's, and once its keep has run out; one that failed is not kept (0.12.3: Home's Jump back in
+    /// asked dozens of times a minute, 2026-10-31).
+    #[tokio::test]
+    async fn those_asking_jump_back_in_at_once_share_one_build_kept_a_while() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let keep = &BackKeep::new(Duration::from_millis(400));
+        let builds = &AtomicUsize::new(0);
+        let build = move || async move {
+            builds.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok::<_, ToggleError>(vec![back("x")])
+        };
+        let ask = move |account: &str, player: &str| keep.kept_or_built(asker(account, player), build);
+        let built = || builds.load(Ordering::SeqCst);
+        // Two pages in the same second, twice over: one build, the same answer for all.
+        let (a, b, c, d) = tokio::join!(ask("ann", "web"), ask("ann", "web"), ask("ann", "web"), ask("ann", "web"));
+        let (a, b, c, d) = (a.unwrap(), b.unwrap(), c.unwrap(), d.unwrap());
+        assert_eq!(built(), 1);
+        for x in [&b, &c, &d] {
+            assert!(Arc::ptr_eq(&a, x));
+        }
+        assert_eq!(a.len(), 1);
+        // Another player, another account: their own builds.
+        ask("ann", "phone").await.unwrap();
+        ask("bob", "web").await.unwrap();
+        assert_eq!(built(), 3);
+        // The first again within its keep: kept.
+        assert!(Arc::ptr_eq(&ask("ann", "web").await.unwrap(), &a));
+        assert_eq!(built(), 3);
+        // A play of ann's reported: hers built again, bob's kept.
+        keep.forget(Some("ann"));
+        assert!(!Arc::ptr_eq(&ask("ann", "web").await.unwrap(), &a));
+        ask("bob", "web").await.unwrap();
+        assert_eq!(built(), 4);
+        // Its keep run out: built again.
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        ask("bob", "web").await.unwrap();
+        assert_eq!(built(), 5);
+        // One that failed is not kept.
+        let failing = || async { Err::<Vec<Back>, _>(ToggleError::Refused("away".into())) };
+        assert!(keep.kept_or_built(asker("cy", "web"), failing).await.is_err());
+        ask("cy", "web").await.unwrap();
+        assert_eq!(built(), 6);
     }
 }
