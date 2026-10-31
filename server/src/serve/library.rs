@@ -250,6 +250,25 @@ fn release_type_of(
     (Some(kind.into()), from, (said != Some(kind)).then_some(why), secondary)
 }
 
+/// Another server's album typed by the owner's rule (0.13, the owner: a record's type is always known): its track
+/// count, length and name as its shape (its longest track not known there), nothing said of it.
+pub fn type_by_rule(album: &mut crate::source::Album) {
+    if album.release.kind.is_some() {
+        return;
+    }
+    let shape = Shape {
+        tracks: album.tracks as usize,
+        duration_ms: album.duration_secs.map_or(0, |s| (s.max(0.0) * 1000.0) as u64),
+        longest_ms: 0,
+        name: &album.title,
+        various: album.artist.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("Various Artists")),
+    };
+    let (kind, _, why, secondary) = release_type_of(None, None, &shape);
+    album.release.kind = kind;
+    album.release.type_why = why.map(str::to_string);
+    album.release.secondary = secondary;
+}
+
 /// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case).
 fn named(name: &str) -> Option<&'static str> {
     name.split(|c: char| !c.is_alphanumeric()).rev().find_map(|w| match w.to_ascii_lowercase().as_str() {
@@ -329,6 +348,37 @@ mod release_type_tests {
         let counted = Whole { tracks: 8, duration_ms: None, longest_ms: None };
         assert_eq!(typed(None, shape("Odd", 3, 12.0, 4.0).whole(Some(&counted))), ("album".into(), Some("tracks")));
         assert_eq!(typed(Some(&said("ep")), shape("Speed Dembow Vol.II", 1, 4.0, 4.0)).0, "single", "not found missing: as it is");
+    }
+
+    #[test]
+    fn another_server_s_album_is_typed_by_the_rule() {
+        let album = |title: &str, tracks: u32, secs: f64, artist: &str| crate::source::Album {
+            id: "x".into(),
+            title: title.into(),
+            artist: Some(artist.into()),
+            year: None,
+            added: None,
+            path: None,
+            tracks,
+            format: None,
+            bitrate_kbps: None,
+            duration_secs: Some(secs),
+            tags: Vec::new(),
+            library: None,
+            artists: Vec::new(),
+            release: Default::default(),
+        };
+        let typed = |mut a: crate::source::Album| {
+            type_by_rule(&mut a);
+            (a.release.kind, a.release.secondary)
+        };
+        assert_eq!(typed(album("Odd", 10, 2700.0, "Ott")), (Some("album".into()), Vec::<String>::new()));
+        assert_eq!(typed(album("Odd", 5, 1300.0, "Ott")), (Some("ep".into()), Vec::new()));
+        assert_eq!(typed(album("Odd", 2, 420.0, "Ott")), (Some("single".into()), Vec::new()));
+        assert_eq!(typed(album("Hits", 14, 3600.0, "Various Artists")), (Some("album".into()), vec!["compilation".to_string()]));
+        let mut said = album("Odd", 2, 420.0, "Ott");
+        said.release.kind = Some("album".into());
+        assert_eq!(typed(said).0.as_deref(), Some("album"), "what is known stays");
     }
 
     #[test]
@@ -1245,7 +1295,7 @@ fn album_src(album: &str, base: &str, folder: i64, dir: &str, first: &ServedRow,
     use md5::Digest;
     let release = first.first("musicbrainz_albumid");
     let said = format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         facts.added.get(album),
         release.and_then(|m| facts.originals.get(m)),
         facts.extra_genres.get(album),

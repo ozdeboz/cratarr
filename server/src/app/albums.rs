@@ -128,9 +128,13 @@ impl App {
                 }
             })
             .collect();
-        // Classical (0.10): Cratarr's own albums say whether they are, their composers and performers.
+        // Classical (0.10): Cratarr's own albums say whether they are, their composers and performers. Another server's
+        // are typed by the owner's rule (0.13: a type is always known).
         for s in &mut sources {
             super::classical::tell(&s.id, &mut s.albums).await;
+            if s.id != crate::source::cratarr::KIND.id {
+                s.albums.iter_mut().for_each(crate::serve::library::type_by_rule);
+            }
         }
         AlbumsView { sources, trash_days: incoming.trash_days, music: incoming.music }
     }
