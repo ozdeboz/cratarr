@@ -1593,7 +1593,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (kept) {
       const { sentence, words, ...draft } = kept;
       crateStart = { sentence, words };
-      crateRead++;
+      // Untracked: read here, the count made this effect run again with each count, a thousand times, the builder
+      // made anew each (its tracks never asked; the owner, 2026-10-31: a grabbed crate showed no tracks).
+      untrack(() => crateRead++);
       return void (crateDraft = draft);
     }
     crateStart = {};

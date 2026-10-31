@@ -50,6 +50,21 @@ const loose = (s: string | null | undefined) => (s ?? '').normalize('NFKD').repl
 /** The record a row belongs to: its album's id, else its album's name and album artist, loosely. */
 export const recordKey = (r: RecordRow) => (r.album_id ? `id:${r.album_id}` : `name:${loose(r.album)}\n${loose(r.album_artist ?? r.artist)}`);
 
+/** The first playable track of each of the first `n` records, in the crate's order: a crate's covers (its card's), each
+ *  a track's own, so a crate of any server shows them (an album's id comes with Cratarr's own only). */
+export function recordFirsts<R extends RecordRow & { id?: string | null; missing?: boolean }>(rows: readonly R[], n: number): R[] {
+  const seen = new Set<string>();
+  const out: R[] = [];
+  for (const r of rows) {
+    if (out.length === n) break;
+    const key = recordKey(r);
+    if (!r.id || r.missing || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
 /** The rows (each with its place in the crate, `i`) grouped by album, in the order the first of each comes. */
 export function recordsOf<R extends RecordRow>(rows: readonly { r: R; i: number }[]): CrateRecord[] {
   const out = new Map<string, CrateRecord>();
