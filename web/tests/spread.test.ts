@@ -1,9 +1,14 @@
-// A record's tracks kept apart in a play order (lib/spread; the owner, 2026-10-31: a grabbed crate's Play "had too much
+// A record's tracks kept apart in a play order (lib/spread, the rules crate's spread in matcher.wasm since 0.13; the owner, 2026-10-31: a grabbed crate's Play "had too much
 // repetition of records in the queue").
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { spreadRecords } = await import('../src/lib/spread.ts');
+const { readFileSync } = await import('node:fs');
+const { instantiateMatcher } = await import('../src/lib/matcher.ts');
+const { spreadRecords: spreadWith } = await import('../src/lib/spread.ts');
+// The matcher's module, as the page has it once loaded: the spread is the rules crate's (0.13, "One spread").
+const module = await instantiateMatcher(readFileSync(new URL('../src/lib/wasm/matcher.wasm', import.meta.url)));
+const spreadRecords = <T,>(items: readonly T[], recordOf: (t: T) => string, gap?: number) => spreadWith(module, items, recordOf, gap);
 
 const rec = (s: string) => s[0];
 /** How few other tracks came between two of one record, at least, over the whole order. */
@@ -51,4 +56,21 @@ test("when one record's tracks are all that is left, they come in their order", 
 test('distinct records keep the order exactly', () => {
   const order = ['A1', 'B1', 'C1', 'D1', 'E1', 'F1'];
   assert.deepEqual(spreadRecords(order, rec), order);
+});
+
+// The rules crate's own worked cases (server/rules/tests/vectors/spread.json), straight on the module.
+const vectors: { about: string; records: string[]; gap: number; order: number[] }[] = JSON.parse(
+  readFileSync(new URL('../../server/rules/tests/vectors/spread.json', import.meta.url), 'utf8'),
+);
+
+test("the matcher module's spread gives the rules crate's own cases", () => {
+  assert.ok(vectors.length > 0);
+  for (const v of vectors) {
+    const numbers = new Map<string, number>();
+    const keys = v.records.map((r) => {
+      if (!numbers.has(r)) numbers.set(r, numbers.size);
+      return numbers.get(r)!;
+    });
+    assert.deepEqual(module.spread(keys, v.gap), v.order, v.about);
+  }
 });
