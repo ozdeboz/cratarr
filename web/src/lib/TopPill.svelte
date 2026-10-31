@@ -20,6 +20,7 @@
   import type { PanelKind } from './prefs.svelte';
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
   import { inSpotify, SPOTIFY_FILTER } from './spotify.svelte';
+  import { dimmedIn } from './quickCrate';
 
   let {
     page = null,
@@ -210,6 +211,34 @@
   $effect(() => {
     if (pageView.query.trim() === '') typedHere = false;
   });
+  // The field's words read as a crate (0.13; the owner, 2026-10-31): the text as typed, only its joining words lighter,
+  // as the sentence's. A layer behind the field draws them (the field's own text clear above it, its caret and editing
+  // its own); only for the words read, none while new ones are read.
+  const dims = $derived.by(() => {
+    const c = globalSearch.crate;
+    const value = pageView.query;
+    return c && c.q === value.trim() ? dimmedIn(value, c.chips.map((x) => x.term)) : [];
+  });
+  const layered = $derived.by(() => {
+    if (!dims.length) return null;
+    const value = pageView.query;
+    const out: { text: string; dim: boolean }[] = [];
+    let at = 0;
+    for (const [a, b] of dims) {
+      if (a > at) out.push({ text: value.slice(at, a), dim: false });
+      out.push({ text: value.slice(a, b), dim: true });
+      at = b;
+    }
+    if (at < value.length) out.push({ text: value.slice(at), dim: false });
+    return out;
+  });
+  let mirror = $state<HTMLElement>();
+  /** The layer scrolled as the field is. */
+  const follow = () => mirror && field && (mirror.scrollLeft = field.scrollLeft);
+  $effect(() => {
+    void layered;
+    follow();
+  });
   const globe = $derived(!!words && pageView.query.trim() !== '' && (page ? page !== 'home' && page !== 'find' : typedHere));
   const found = $derived(globe ? globalGroups(page ? pageKinds(page) : []).reduce((n, g) => n + g.total, 0) : 0);
   const globeOn = $derived(globalSearch.scope === 'everywhere');
@@ -276,16 +305,22 @@
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
         <span class="field" role="search" transition:paced|global>
-          <input
-            bind:this={field}
-            type="search"
-            placeholder={words}
-            aria-label={words}
-            bind:value={pageView.query}
-            oninput={() => (typedHere = true)}
-            onkeydown={(e) => e.key === 'Escape' && (searching = false)}
-            onblur={() => pageView.query.trim() === '' && (searching = false)}
-          />
+          <span class="typed" class:layered={!!layered}>
+            {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
+            <input
+              bind:this={field}
+              type="search"
+              placeholder={words}
+              aria-label={words}
+              bind:value={pageView.query}
+              oninput={() => ((typedHere = true), follow())}
+              onscroll={follow}
+              onkeyup={follow}
+              onselect={follow}
+              onkeydown={(e) => e.key === 'Escape' && (searching = false)}
+              onblur={() => pageView.query.trim() === '' && (searching = false)}
+            />
+          </span>
           <button aria-label="Clear the search" title="Clear" onmousedown={(e) => e.preventDefault()} onclick={clear}><Icon name="close" size={20} /></button>
         </span>
       {/if}
@@ -428,17 +463,52 @@
     overflow: hidden;
   }
 
-  .field input {
+  /* The field and, behind it while its words read as a crate, the layer that draws them: the same box, font and
+     letters, so each glyph lies on its own; the field's letters clear then, its caret (the text's colour) still drawn. */
+  .typed {
+    position: relative;
+    display: flex;
     flex: 1;
     min-width: 0;
+  }
+
+  .field input,
+  .mirror {
     height: 44px;
     padding: 0;
     border: 0;
-    background: none;
-    color: inherit;
     font: inherit;
     font-size: 16px;
+    letter-spacing: normal;
+  }
+
+  .field input {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    color: inherit;
     outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .mirror {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    line-height: 44px;
+    white-space: pre;
+    pointer-events: none;
+  }
+
+  .layered input {
+    position: relative;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* Its joining words, as the sentence's (lib/CrateSentence .w). */
+  .mirror .dim {
+    opacity: 0.55;
   }
 
   /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour; as wide

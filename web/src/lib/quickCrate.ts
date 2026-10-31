@@ -94,6 +94,46 @@ const MARKERS: [string[], Want][] = (
   ] as [string[], Want][]
 ).sort((a, b) => b[0].length - a[0].length);
 const isJoin = (t: string) => JOINS.has(t.toLowerCase());
+
+/** The words a typed sentence joins its terms with: the join words and the kind words ("and", "from the", "like", "by",
+ *  "but not"…). */
+const SENTENCE_WORDS = new Set([...JOINS, ...MARKERS.flatMap(([ws]) => ws)]);
+/** A typed word as compared: its accents and case gone, the punctuation around it too ("Davis," is "davis"). */
+const foldWord = (w: string) =>
+  w
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/^[^\p{L}\p{N}&]+|[^\p{L}\p{N}&]+$/gu, '');
+
+/** Where the glass's field dims what it holds (0.13; the owner, 2026-10-31: the typed text as typed, only its joining
+ *  words lighter, as the sentence's, once the words read as a crate): the joining words typed between its terms, each
+ *  run one range [start, end) of `text`. A term's own words are never dimmed ("The Roots", "Earth, Wind & Fire"): the
+ *  terms, in the order typed, are found first. */
+export function dimmedIn(text: string, terms: readonly string[]): [number, number][] {
+  const tokens = [...text.matchAll(/\S+/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, w: foldWord(m[0]) }));
+  const inTerm = new Array<boolean>(tokens.length).fill(false);
+  const at = (j: number, ws: string[]) => ws.every((w, k) => tokens[j + k]?.w === w && !inTerm[j + k]);
+  let from = 0;
+  for (const term of terms) {
+    const ws = term.split(/\s+/).map(foldWord).filter(Boolean);
+    if (!ws.length) continue;
+    let j = tokens.findIndex((_, k) => k >= from && at(k, ws));
+    if (j < 0) j = tokens.findIndex((_, k) => at(k, ws));
+    if (j < 0) continue;
+    ws.forEach((_, k) => (inTerm[j + k] = true));
+    from = j + ws.length;
+  }
+  const out: [number, number][] = [];
+  tokens.forEach((t, k) => {
+    if (inTerm[k] || !SENTENCE_WORDS.has(t.w)) return;
+    const last = out[out.length - 1];
+    // A run ("from the", "that sounds like") one range, the spaces in it too.
+    if (last && k > 0 && last[1] === tokens[k - 1].end && !inTerm[k - 1]) last[1] = t.end;
+    else out.push([t.start, t.end]);
+  });
+  return out;
+}
 /** A phrase without its join words ("earth wind and fire" → "earth wind fire", as "Earth, Wind & Fire" reads). */
 const stripped = (phrase: string) =>
   phrase
@@ -356,6 +396,17 @@ export function readAs(chip: Chip, reading: Reading): Chip {
   const others = [chip.reading, ...chip.others].filter((r) => !(r.kind === reading.kind && r.value === reading.value));
   const artist = reading.kind === 'artist' ? { how: reading.id ? (chip.how ?? 'like') : ('by' as const), own: chip.own ?? false } : {};
   return { term: chip.term, reading, others, ...artist };
+}
+
+/** Whether a term can be left out (0.13, the term's Leave out; the owner, 2026-10-31): what a crate's conditions can
+ *  negate as the sentence says it. Not a year (the years are one span) nor a track (no condition names one). */
+export const canLeaveOut = (chip: Chip) => chip.reading.kind !== 'year' && chip.reading.kind !== 'track';
+
+/** The term left out ("but not …") or taken back in: read again from its own readings, so an artist left out is "by"
+ *  them and, back in, sounds like them again where it can. */
+export function leftOut(chip: Chip, not: boolean): Chip {
+  if (!!chip.not === not || (not && !canLeaveOut(chip))) return chip;
+  return chipOf(chip.term, [chip.reading, ...chip.others], undefined, not) ?? chip;
 }
 
 /** A chip that seeds "sounds like": an artist read that way, or a track or an album a menu's "Sounds like this" handed
@@ -696,3 +747,24 @@ export const countAt = (curve: readonly number[], min: number) => curve.filter((
  *  (0.12.1: the curve's own value, 25.37, was refused with 422), rounded down so the track at `count` stays in. */
 export const minAt = (curve: readonly number[], count: number) =>
   count > 0 && count <= curve.length ? Math.max(0, Math.min(100, Math.floor(curve[count - 1]))) : 0;
+
+/** A search answer, as far as a crate's terms need it (lib/api ServerSearch). */
+type Answer<I extends { subject: string }> = { q: string; groups: Partial<Record<string, { total: number; items: I[] }>>; top: I[] };
+/** What a search's terms find, together (0.13; the owner, 2026-10-31: the results under a crate's card are what its
+ *  understood terms find, not the whole line): each term's own answer (`answers`, by its words as `words` gives them),
+ *  each kind's finds one after another, a find once, the totals added. The terms not asked add nothing. */
+export function answerOfTerms<I extends { subject: string }>(q: string, terms: readonly string[], answers: ReadonlyMap<string, Answer<I>>): Answer<I> {
+  const groups: Record<string, { total: number; items: I[] }> = {};
+  const seen = new Set<string>();
+  for (const term of terms) {
+    const a = answers.get(words(term).join(' '));
+    if (!a) continue;
+    for (const [kind, g] of Object.entries(a.groups)) {
+      if (!g) continue;
+      const into = (groups[kind] ??= { total: 0, items: [] });
+      into.total += g.total;
+      for (const it of g.items) if (!seen.has(`${kind}\n${it.subject}`)) (seen.add(`${kind}\n${it.subject}`), into.items.push(it));
+    }
+  }
+  return { q, groups, top: [] };
+}
