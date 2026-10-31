@@ -11,6 +11,8 @@
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
+  import Asking from './lib/Asking.svelte';
+  import { listShows } from './lib/search';
   import { toast } from './lib/toast.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import SelectBar from './lib/SelectBar.svelte';
@@ -87,6 +89,7 @@
       return pa === Infinity ? turn * by(a, b) : pa - pb;
     });
   });
+  const shows = $derived(listShows(items.length, pageView.query, deepOf.answeredFor()));
 
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
@@ -206,7 +209,10 @@
 
   {#if (!view || waiting) && !error}
     <PageLoading />
-  {:else if items.length === 0}
+  {:else if shows === 'asking'}
+    <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
+    <Asking />
+  {:else if shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     <p class="empty">No playlists match.</p>
   {:else}
