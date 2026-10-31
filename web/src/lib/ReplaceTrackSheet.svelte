@@ -19,6 +19,7 @@
   import PageLoading from './PageLoading.svelte';
   import {
     addFetched,
+    copyLine,
     dropFetch,
     fetchCandidate,
     fetchFile,
@@ -330,14 +331,7 @@
             <MenuEntry
               icon="arrowDownToLine"
               label={c.file.split(/[\\/]/).pop() ?? c.file}
-              sub={[
-                c.lossless ? [c.format, c.bitDepth && c.sampleRate ? `${c.bitDepth}/${Math.round(c.sampleRate / 100) / 10}` : null].filter(Boolean).join(' ') : `${c.format} ${c.bitrate ?? ''} kbps`,
-                mb(c.size),
-                c.freeSlot ? 'free slot' : c.queue !== null ? `${c.queue} waiting` : null,
-                c.user,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
+              sub={copyLine(c)}
               onclick={() => void take(c)}
             />
           {:else}

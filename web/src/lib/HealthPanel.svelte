@@ -6,15 +6,26 @@
   // 2026-10-31, mockup C: "the flow from page to panel to extra panel is crappy"): a row opens in place, one at a time,
   // what can be done with it under it (its missing tracks each with Search, its numbers, its fixes, its files), and where
   // its tracks are looked for one at a time, Work through takes them in turn in one sheet (lib/ReplaceTrackSheet
-  // `through`, decision 0080: each still its own choice). Beside the list on a roomy window (no ✕ there), over it on a
-  // phone.
+  // `through`, decision 0080: each still its own choice). Many at once (mockup D; the owner, 2026-10-31: "Bulk search,
+  // you approve", 0080 amended): albums ticked, their missing tracks looked for in turn, each found one's best copy
+  // chosen, and a review list over the albums where nothing goes in until it is ticked and added (lib/trackIntake).
+  // Beside the list on a roomy window (no ✕ there), over it on a phone.
+  import { untrack } from 'svelte';
   import { findsTracks, offers } from './capabilities.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import MoreInfo from './MoreInfo.svelte';
-  import { albumCoverUrl, wantAlbum, type HealthItem } from './api';
+  import { albumCoverUrl, undo, wantAlbum, type HealthItem } from './api';
+  import { plural } from './insights.svelte';
+  import MenuCards from './MenuCards.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
+  import MenuSheet from './MenuSheet.svelte';
+  import SelectBar from './SelectBar.svelte';
+  import { approveIntake, clearIntake, copyLine, dropIntake, getIntake, startIntake, type Intake, type IntakeItem } from './replaceTrack';
+  import { anyOver, approvePayload, copyOf, foundIds, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } from './trackIntake';
   import { toast } from './toast.svelte';
   import { openFinding } from './health';
   import { health, loadHealth, problems } from './healthReport.svelte';
@@ -108,6 +119,123 @@
     if (!p || !kind) return;
     const stops = kind === 'missing' ? missingStops(p.items) : damagedStops(p.items);
     if (stops.length) working = { stops, total: throughTotal(stops) };
+  }
+
+  // Many at once (mockup D): albums ticked (as Downloads' Select, its bar's All and None), their missing tracks looked
+  // for by Cratarr one search at a time; the review list over the albums while there is one.
+  const bulk = $derived(kind === 'missing');
+  const albumsOf = $derived(p && bulk ? p.items.filter((x) => x.album?.[0] === 'cratarr' && !!x.missing?.length) : []);
+  let selecting = $state<Set<string> | null>(null);
+  // Another problem: Select ends.
+  $effect(() => {
+    void problem;
+    selecting = null;
+  });
+  const pickedAlbums = $derived(selecting ? albumsOf.filter((x) => selecting!.has(x.album![1])) : []);
+  const pickedTracks = $derived(pickedAlbums.reduce((n, x) => n + (x.missing?.length ?? 0), 0));
+  function tickAlbum(id: string) {
+    if (!selecting) return;
+    const s = new Set(selecting);
+    if (s.has(id)) s.delete(id);
+    else s.add(id);
+    selecting = s;
+  }
+  let starting = $state(false);
+  async function find() {
+    if (!selecting?.size || starting) return;
+    starting = true;
+    try {
+      intake = await startIntake([...selecting]);
+      selecting = null;
+    } catch (e) {
+      toast.fail(e, "They weren't looked for");
+    } finally {
+      starting = false;
+    }
+  }
+
+  /** The review list as Cratarr has it; ticks start off (nothing goes in without one), a copy picked per track. */
+  let intake = $state<Intake | null>(null);
+  let ticks = $state<Set<string>>(new Set());
+  let picks = $state<Record<string, string>>({});
+  let undone = $state<Set<string>>(new Set());
+  async function readIntake() {
+    try {
+      const r = await getIntake();
+      intake = r;
+      ticks = keptTicks(untrack(() => ticks), r.items);
+    } catch {
+      /* none yet, or a Cratarr that cannot: no list */
+    }
+  }
+  // Read once where it applies, then every couple of seconds while it is under way; the panel closing stops it.
+  $effect(() => {
+    if (bulk) untrack(() => void readIntake());
+  });
+  const polling = $derived(bulk && underWay(intake));
+  $effect(() => {
+    if (!polling) return;
+    const t = setInterval(() => void readIntake(), 2000);
+    return () => clearInterval(t);
+  });
+  // Done (looked for, the approved ones added): the report read again, its albums as they are now.
+  let wasPolling = false;
+  $effect(() => {
+    const now = polling;
+    if (wasPolling && !now) loadHealth();
+    wasPolling = now;
+  });
+  const found = $derived(intake ? foundIds(intake.items) : []);
+  const allTicked = $derived(found.length > 0 && found.every((id) => ticks.has(id)));
+  const payload = $derived(intake ? approvePayload(intake.items, ticks, picks) : []);
+  function tickItem(id: string) {
+    const s = new Set(ticks);
+    if (s.has(id)) s.delete(id);
+    else s.add(id);
+    ticks = s;
+  }
+  let approving = $state(false);
+  async function addTicked() {
+    if (!payload.length || approving) return;
+    approving = true;
+    try {
+      await approveIntake(payload);
+      ticks = new Set();
+      await readIntake();
+    } catch (e) {
+      toast.fail(e, "They weren't added");
+    } finally {
+      approving = false;
+    }
+  }
+  async function clearFinished() {
+    try {
+      await clearIntake();
+      await readIntake();
+    } catch (e) {
+      toast.fail(e, "The list wasn't cleared");
+    }
+  }
+  async function undoItem(i: IntakeItem) {
+    if (!i.undo) return;
+    try {
+      await undo([i.undo]);
+      undone = new Set([...undone, i.id]);
+      loadHealth();
+    } catch (e) {
+      toast.fail(e, "It wasn't undone");
+    }
+  }
+  /** A track of the review list tapped: its copies to pick from, looking for it by hand, or out of the list. */
+  let pickOf = $state<IntakeItem | null>(null);
+  async function dropItem(i: IntakeItem) {
+    pickOf = null;
+    try {
+      await dropIntake(i.id);
+      await readIntake();
+    } catch (e) {
+      toast.fail(e, "It wasn't removed");
+    }
   }
 
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
@@ -242,9 +370,48 @@
               <button class="primary" onclick={workThrough}>Start</button>
             </Item>
           {/if}
+          {#if bulk && albumsOf.length}
+            {#if selecting}
+              <Item name="Find missing tracks" line={`${plural(pickedAlbums.length, 'album')} · ${plural(pickedTracks, 'track')} · each approved by you`} />
+            {:else}
+              <Item name="Find missing tracks" line="Many at once, each approved by you" onclick={() => ((openKey = null), (selecting = new Set()))} />
+            {/if}
+          {/if}
           {#if certain > 0}
             <Item name={`Apply all certain (${certain.toLocaleString()})`} busy={applyingAll} disabled={applyingAll} onclick={() => (askAll = true)} />
           {/if}
+        </Group>
+      {/if}
+      <!-- The review list (mockup D): each track looked for, its chosen copy or where it stands; ticked ones added. -->
+      {#if bulk && intake?.items.length}
+        {@const look = lookedFor(intake.items)}
+        <Group title={intake.running ? `Looking for ${plural(look.total, 'missing track')}` : `Found ${found.length} of ${look.total}`}>
+          {#snippet tail()}{#if intake && anyOver(intake.items)}<button class="tailact" onclick={() => void clearFinished()}>Clear finished</button>{/if}{/snippet}
+          {#if intake.running}<Item name="Looking for them" line={`${look.done} of ${look.total}`} progress={look.total ? look.done / look.total : 0} />{/if}
+          {#if found.length}
+            <Item name={`${ticks.size} of ${found.length} ticked`}>
+              <button onclick={() => (ticks = allTicked ? new Set() : new Set(found))}>{allTicked ? 'None' : 'Tick all found'}</button>
+              <button class="primary" disabled={!payload.length || approving} aria-busy={approving || undefined} onclick={() => void addTicked()}>{payload.length ? `Add ${payload.length}` : 'Add'}</button>
+            </Item>
+          {/if}
+          {#each intake.items as i (i.id)}
+            <ReleaseRow
+              cover={albumCoverUrl(i.album.source, i.album.id)}
+              title={`${i.title} · ${i.album.title}`}
+              line={undone.has(i.id) ? 'Undone' : itemLine(i, picks[i.id])}
+              tone={undone.has(i.id) ? null : itemTone(i)}
+              onclick={() => (pickOf = i)}
+            >
+              {#if tickable(i)}
+                {@const on = ticks.has(i.id)}
+                <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.title}`} onclick={() => tickItem(i.id)}
+                  ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                >
+              {:else if i.state === 'added' && i.undo && !undone.has(i.id)}
+                <button onclick={() => void undoItem(i)}>Undo</button>
+              {/if}
+            </ReleaseRow>
+          {/each}
         </Group>
       {/if}
       <!-- The things it is about, one by one: an album a release row (lib/ReleaseRow), anything else a settings row; a tap
@@ -255,7 +422,15 @@
             {#if !matchesSearch(x.title, x.line)}<!-- left out by the search -->
             {:else}
               {@const open = openKey === keyOf(x)}
-              {#if x.album}
+              {#if x.album && selecting && x.album[0] === 'cratarr' && x.missing?.length}
+                {@const id = x.album[1]}
+                {@const on = selecting.has(id)}
+                <ReleaseRow cover={albumCoverUrl(x.album[0], id)} title={x.title} line={x.line ?? null} onclick={() => tickAlbum(id)}>
+                  <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Select ${x.title}`} onclick={() => tickAlbum(id)}
+                    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                  >
+                </ReleaseRow>
+              {:else if x.album}
                 <ReleaseRow cover={albumCoverUrl(x.album[0], x.album[1])} title={x.title} line={x.line ?? null} expanded={open} onclick={() => toggle(x)} />
               {:else}
                 <Item name={x.title} line={x.line ?? null} expanded={open} onclick={() => toggle(x)} />
@@ -291,6 +466,46 @@
     through={working}
     onclose={() => ((working = null), readAgain++, loadHealth())}
   />
+{/if}
+{#if selecting}
+  <SelectBar
+    label="Selected albums"
+    count="{pickedAlbums.length}/{albumsOf.length}"
+    onclose={() => (selecting = null)}
+    every={{
+      all: albumsOf.length > 0 && pickedAlbums.length === albumsOf.length,
+      onall: () => (selecting = new Set(albumsOf.map((x) => x.album![1]))),
+      onnone: () => (selecting = new Set()),
+    }}
+  >
+    <button aria-label="Find missing tracks" title="Find missing tracks" disabled={!pickedAlbums.length || starting} aria-busy={starting || undefined} onclick={() => void find()}
+      ><Icon name="search" size={24} /></button
+    >
+  </SelectBar>
+{/if}
+{#if pickOf}
+  {@const i = pickOf}
+  <MenuSheet label="A missing track" icon="search" title={i.title} chips={[i.album.title, itemLine(i, picks[i.id])]} onclose={() => (pickOf = null)}>
+    <MenuCards>
+      {#if tickable(i)}
+        <!-- Its copies, the best first: the one picked goes in once it is ticked and added. -->
+        <MenuGroup>
+          {#each i.candidates as c (c.id)}
+            <MenuEntry
+              icon={copyOf(i, picks[i.id])?.id === c.id ? 'check' : 'arrowDownToLine'}
+              label={c.file.split(/[\\/]/).pop() ?? c.file}
+              sub={copyLine(c)}
+              onclick={() => ((picks = { ...picks, [i.id]: c.id }), (pickOf = null))}
+            />
+          {/each}
+        </MenuGroup>
+      {/if}
+      <MenuGroup>
+        {#if finds && i.state !== 'added'}<MenuEntry icon="search" label="Look for it yourself" onclick={() => ((searchOf = { album: i.album.id, title: i.album.title, recording: i.recording }), (pickOf = null))} />{/if}
+        <MenuEntry icon="close" label="Remove from the list" danger onclick={() => void dropItem(i)} />
+      </MenuGroup>
+    </MenuCards>
+  </MenuSheet>
 {/if}
 {#if askAll}
   <ConfirmSheet
@@ -429,6 +644,34 @@
     display: grid;
     gap: 12px;
     padding: 12px 16px 12px 0;
+  }
+
+  /* A row's tick (as Downloads' and Requests' Select). */
+  .tick {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .tick.on {
+    color: var(--accent);
+  }
+
+  /* Clear finished, at the review list's heading's end. */
+  .tailact {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-ink);
+    font: inherit;
+    cursor: pointer;
   }
 
   .count b {
