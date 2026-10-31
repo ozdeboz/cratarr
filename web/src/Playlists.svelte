@@ -13,6 +13,7 @@
   import Notice from './lib/Notice.svelte';
   import Asking from './lib/Asking.svelte';
   import { keepWhile } from './lib/keepWhile.svelte';
+  import { BY_FACTS, PLAYLIST_ORDER_OF } from './lib/playlistOrder';
   import { listShows } from './lib/search';
   import { toast } from './lib/toast.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
@@ -68,6 +69,11 @@
   // The playlists the server finds by their tracks, with why (the owner, 2026-10-25: "Gardner" found none of those
   // holding his tracks).
   const deepOf = deepMatches('playlist', 'playlist:');
+  // Their facts (length, genres, last played…; GET /api/playlists/stats): asked for while the table shows or the order goes
+  // by one (Length, Last played), again when the playlists change; `statsIn` once answered (or failed: none, by name).
+  let stats = $state<Record<string, PlaylistStats>>({});
+  let statsIn = $state(false);
+  const byFacts = $derived(BY_FACTS.includes(prefs.playlistOrder));
   const items = $derived.by(() => {
     let list = shownPlaylists().map((p) => {
       const member = optimistic[p.id] ?? p.member;
@@ -82,17 +88,23 @@
       const i = prefs.pinned.indexOf(id);
       return i < 0 ? Infinity : i;
     };
-    const by = playlistBy<Playlist>(prefs.playlistOrder, (p) => p.member);
-    const turn = prefs.playlistDown ? -1 : 1;
+    const by = playlistBy<Playlist>(prefs.playlistOrder, prefs.playlistDown, (p) => p.member, (p) => stats[p.id]);
     return [...list].sort((a, b) => {
       const [pa, pb] = [pin(a.id), pin(b.id)];
       if ((pa === Infinity) !== (pb === Infinity)) return pa === Infinity ? 1 : -1;
-      return pa === Infinity ? turn * by(a, b) : pa - pb;
+      return pa === Infinity ? by(a, b) : pa - pb;
     });
   });
   const shows = $derived(listShows(items.length, pageView.query, deepOf.answeredFor()));
-  // None by name and the server's finds not in (lib/loader, the one rule): the list as it was, then the loader.
-  const kept = keepWhile(() => ({ shows, list: items }), () => shows === 'asking', () => pageView.query.trim());
+  // None by name and the server's finds not in, or an order by facts not in yet (lib/loader, the one rule): the list as it
+  // was, then the loader; opened by such an order, nothing to keep: the loader's wait, then it.
+  const factsWait = $derived(byFacts && !statsIn);
+  const kept = keepWhile(
+    () => (factsWait ? { shows: 'asking' as const, list: [] } : { shows, list: items }),
+    () => shows === 'asking' || factsWait,
+    () => `${pageView.query.trim()}
+${prefs.playlistOrder}`,
+  );
   const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
 
   // How many the filter lets through, of how many (the Filter sheet's count).
@@ -141,20 +153,25 @@
    *  has words, a phone's too. */
   const table = $derived(playlistLayoutShown() === 'table');
   const cols = $derived(table ? fit('playlists', gridWidth) : []);
-  // Its head orders by Name and Tracks on a tap, as every table's (lib/columnHead); its other columns are not orders.
+  // Its head orders by Name and Tracks on a tap, and by Length, Last played and Missing (lib/playlistOrder), as every
+  // table's (lib/columnHead); Genres, Changed and Unplayed are not orders.
   const now = $derived<Order<PlaylistOrder>>({ key: prefs.playlistOrder, down: prefs.playlistDown });
   const setOrder = (o: Order<PlaylistOrder>) => ((prefs.playlistOrder = o.key), (prefs.playlistDown = o.down));
   const heads = $derived({ title: headSort<PlaylistOrder>('name', now, PLAYLIST_ORDERS, setOrder), count: headSort<PlaylistOrder>('tracks', now, PLAYLIST_ORDERS, setOrder) });
-  let stats = $state<Record<string, PlaylistStats>>({});
   const listsKey = $derived(shownPlaylists().map((p) => `${p.id}:${p.count}`).join('|'));
   $effect(() => {
-    if (!table || !cols.length) return;
+    if (!(table && cols.length) && !byFacts) return;
     void listsKey;
-    playlistStats()
-      .then((s) => (stats = s))
-      .catch(() => {});
+    let current = true;
+    playlistStats().then(
+      (s) => current && ((stats = s), (statsIn = true)),
+      () => current && (statsIn = true),
+    );
+    return () => (current = false);
   });
-  function cellText(id: string, st: PlaylistStats | undefined): string {
+  function cellText(id: string, p: Playlist, st: PlaylistStats | undefined): string {
+    // Its missing entries: on a line only where it has some.
+    if (id === 'missing') return p.dead ? p.dead.toLocaleString() : '';
     if (!st) return '';
     if (id === 'length') return st.seconds ? clockText(st.seconds) : '';
     if (id === 'genres') return st.genres.join(', ');
@@ -163,7 +180,7 @@
     if (id === 'unplayed') return st.unplayed ? st.unplayed.toLocaleString() : '';
     return '';
   }
-  const cellsOf = (id: string): Cell[] | undefined => (cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, stats[id]) })) : undefined);
+  const cellsOf = (p: Playlist): Cell[] | undefined => (cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, p, stats[p.id]) })) : undefined);
 
   // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
@@ -235,7 +252,7 @@
       <!-- The table's column names, a row of the same shape so they line up. -->
       <div class="table-head">
         {#snippet room()}<span></span>{/snippet}
-        <Row size="large" as="div" head title="Name" count="Tracks" cells={headCells(cols, () => undefined, now, PLAYLIST_ORDERS, setOrder)} sorts={heads} action={quick ? room : undefined} />
+        <Row size="large" as="div" head title="Name" count="Tracks" cells={headCells(cols, (id) => PLAYLIST_ORDER_OF[id], now, PLAYLIST_ORDERS, setOrder)} sorts={heads} action={quick ? room : undefined} />
       </div>
     {/if}
     <ul class="grid" class:table class:pending={quick && pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
@@ -257,7 +274,7 @@
             {p}
             sub={deepOf(p.id)}
             size={table ? 'large' : 'medium'}
-            cells={table ? cellsOf(p.id) : undefined}
+            cells={table ? cellsOf(p) : undefined}
             class={quick ? ['chip', busy[p.id] && 'busy', live.queued.includes(p.id) && 'queued', !np && 'idle', !!np && !np.addable && !p.member && 'blocked'].filter(Boolean).join(' ') : 'chip'}
             strong={quick && p.member}
             action={quick ? addTo : undefined}

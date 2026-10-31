@@ -308,8 +308,10 @@ export const VISUALS_AFTER = [30_000, 60_000, 120_000, 300_000, 600_000];
 export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating' | 'quality' | 'tracks' | 'length';
 export type ComposerOrder = 'name' | 'records';
 const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating', 'quality', 'tracks', 'length'];
-export type PlaylistOrder = 'name' | 'tracks' | 'playing' | 'missing';
-const PLAYLIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'playing', 'missing'];
+/** The Playlists page's orders (lib/playlistOrder); `playing` (those holding the item first) is a menu's only. */
+export type PlaylistOrder = 'name' | 'tracks' | 'length' | 'lastPlayed' | 'missing' | 'playing';
+const PLAYLIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'length', 'lastPlayed', 'missing'];
+const LIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'playing'];
 export type CrateOrder = 'own' | 'name' | 'tracks' | 'length' | 'unplayed' | 'newWeek';
 const CRATE_ORDERS: readonly CrateOrder[] = ['own', 'name', 'tracks', 'length', 'unplayed', 'newWeek'];
 /** The panel's kinds of track list, each with its own remembered order and filter (decision 0060: per kind, not per
@@ -549,10 +551,8 @@ function read(): Prefs {
       if (saved.playlistLayout === 'chips' || saved.playlistLayout === 'table') p.playlistLayout = saved.playlistLayout;
       if (typeof saved.playlistQuickAdd === 'boolean') p.playlistQuickAdd = saved.playlistQuickAdd;
       if (typeof saved.queueRequestsShown === 'boolean') p.queueRequestsShown = saved.queueRequestsShown;
-      if (PLAYLIST_ORDERS.includes(saved.listOrder) && saved.listOrder !== 'missing') p.listOrder = saved.listOrder;
+      if (LIST_ORDERS.includes(saved.listOrder)) p.listOrder = saved.listOrder;
       if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
-      // Before the list header: "✓ first" was the playlists' only other order.
-      else if (saved.membersFirst === true) p.playlistOrder = 'playing';
       if (CRATE_ORDERS.includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
       for (const k of ['libraryDown', 'composerDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];

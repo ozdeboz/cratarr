@@ -7,7 +7,7 @@ import { keepWhile, type Kept } from './keepWhile.svelte';
 import { matches } from './search';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
-import type { AlbumLayout, CollectionOrder, ComposerOrder, CrateOrder, PanelKind, PlaylistOrder } from './prefs.svelte';
+import type { AlbumLayout, CollectionOrder, ComposerOrder, CrateOrder, PanelKind } from './prefs.svelte';
 
 /** A list's order field (decision 0060: one name per fact). `most`: it starts most (or newest, or best) first when
  *  chosen, a count or a date of how it was used; the list's arrow still turns it round. */
@@ -65,18 +65,6 @@ export const COMPOSER_ORDERS: OrderField<ComposerOrder>[] = [
   { value: 'name', label: 'Name' },
   { value: 'records', label: 'Records', most: true },
 ];
-export const TRACK_ORDERS: OrderField<'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed'>[] = [
-  { value: 'album', label: 'Album' },
-  { value: 'title', label: 'Title' },
-  { value: 'artist', label: 'Artist' },
-  { value: 'year', label: 'Year' },
-  { value: 'added', label: 'Added' },
-  { value: 'plays', label: 'Plays', most: true },
-  { value: 'duration', label: 'Length' },
-  { value: 'tempo', label: 'Tempo' },
-  { value: 'albumArtist', label: 'Album artist' },
-  { value: 'lastPlayed', label: 'Last played', most: true },
-];
 /** The orders by how you used the albums (lib/albums albumUses): read when chosen. */
 export const USE_ORDERS: readonly CollectionOrder[] = ['plays', 'played', 'rating'];
 /** An album's quality, to order by: lossless above lossy, then its lowest bit rate (decision 0060). */
@@ -91,27 +79,8 @@ export const PLAYLIST_LAYOUTS = [
   { value: 'table' as const, label: 'Table', icon: 'table' as const },
 ];
 
-export const PLAYLIST_ORDERS: OrderField<PlaylistOrder>[] = [
-  { value: 'name', label: 'Name' },
-  { value: 'tracks', label: 'Tracks' },
-  { value: 'playing', label: 'Playing first' },
-  { value: 'missing', label: 'Missing', most: true },
-];
-
-/** A menu's Add to playlist (lib/PlaylistToggles): the same orders, those the item is in ticked first. */
-export const LIST_ORDERS: OrderField<PlaylistOrder>[] = PLAYLIST_ORDERS.filter((o) => o.value !== 'missing').map((o) =>
-  o.value === 'playing' ? { ...o, label: 'Ticked first' } : o,
-);
-
-/** The playlists' order (the Playlists page's, a menu's Add to playlist): by name, by size, or those holding the item
- *  first (the playing track, or the menu's: `holds`); equals by name. */
-export function playlistBy<T extends { name: string; count: number; dead?: number }>(order: PlaylistOrder, holds: (p: T) => boolean) {
-  const byName = (a: T, b: T) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
-  return (a: T, b: T) =>
-    order === 'tracks' ? a.count - b.count || byName(a, b)
-    : order === 'missing' ? (a.dead ?? 0) - (b.dead ?? 0) || byName(a, b)
-    : order === 'playing' ? Number(holds(b)) - Number(holds(a)) || byName(a, b) : byName(a, b);
-}
+// The playlists' orders and their order (lib/playlistOrder, pure for the tests).
+export { LIST_ORDERS, PLAYLIST_ORDERS, playlistBy } from './playlistOrder';
 
 export const CRATE_ORDERS: OrderField<CrateOrder>[] = [
   { value: 'own', label: 'As made' },
