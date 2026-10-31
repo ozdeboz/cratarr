@@ -120,3 +120,38 @@ mod matcher_exports {
         }
     }
 }
+
+// A crate's records kept apart (0.13, one spread: the page's own copy goes): numbers in and out, the page giving each
+// record a small number. `spread_alloc` room for `n` of them, `spread_order` the places in their play order (room the
+// page frees with `spread_free`, as it frees its own).
+#[cfg(feature = "wasm-spread")]
+mod spread_exports {
+    /// Room for `n` numbers (u32), zeroed.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn spread_alloc(n: u32) -> *mut u32 {
+        Box::into_raw(vec![0u32; n as usize].into_boxed_slice()).cast::<u32>()
+    }
+
+    /// Frees room from `spread_alloc` or an order from `spread_order`: its pointer and its length.
+    ///
+    /// # Safety
+    /// `ptr` and `n` as given out here, once.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn spread_free(ptr: *mut u32, n: u32) {
+        if !ptr.is_null() {
+            drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, n as usize)) });
+        }
+    }
+
+    /// `n` records' keys at `keys` in their order: their places in play order (`crate::spread`), `n` of them.
+    ///
+    /// # Safety
+    /// `keys` holds `n` numbers (room from `spread_alloc`).
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn spread_order(keys: *const u32, n: u32, gap: u32) -> *mut u32 {
+        let keys = unsafe { std::slice::from_raw_parts(keys, n as usize) };
+        let order: Vec<u32> = crate::spread(keys, gap as usize).into_iter().map(|i| i as u32).collect();
+        Box::into_raw(order.into_boxed_slice()).cast::<u32>()
+    }
+}
+

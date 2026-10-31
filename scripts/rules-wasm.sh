@@ -14,6 +14,6 @@ docker run --rm -v "$(pwd):/src" -w /src/server -e CARGO_TARGET_DIR=/tmp/t "$ima
     cp /tmp/t/wasm32-unknown-unknown/wasm/cratarr_rules.wasm "/src/web/src/lib/wasm/$2"
   }
   build wasm-brake rules.wasm
-  build wasm-matcher matcher.wasm
+  build wasm-matcher,wasm-spread matcher.wasm
 '
 ls -l web/src/lib/wasm/rules.wasm web/src/lib/wasm/matcher.wasm
