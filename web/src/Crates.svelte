@@ -6,7 +6,7 @@
   import { prefs, type CrateOrder } from './lib/prefs.svelte';
   import type { Crate } from './lib/api';
   import ListHead from './lib/ListHead.svelte';
-  import { CRATE_ORDERS, howMany, matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
+  import { CRATE_ORDERS, howMany, matchesSearch, pageView, searchNone, usePageAction } from './lib/pageView.svelte';
   import { listShows } from './lib/search';
   import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
   import CrateCard from './lib/CrateCard.svelte';
@@ -58,6 +58,8 @@
   // None by name and the server's finds not in (lib/loader, the one rule): the list as it was, then the loader.
   const kept = keepWhile(() => ({ shows, list: sorted }), () => shows === 'asking', () => pageView.query.trim());
   const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() => (listed.shows === 'empty' ? 'crates' : null));
 </script>
 
 <main>
@@ -70,7 +72,7 @@
     <Asking now={kept.loader} />
   {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
-    <p class="empty">No crates match.</p>
+    {#if !pageView.none}<p class="empty">No crates match.</p>{/if}
   {:else}
     <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(listed.list.length, 'crate')} />
     <ul class="grid">

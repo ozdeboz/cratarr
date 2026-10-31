@@ -11,7 +11,7 @@
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import Meter from './Meter.svelte';
-  import { slide } from 'svelte/transition';
+  import { fade, slide } from 'svelte/transition';
   import { untrack } from 'svelte';
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
@@ -253,12 +253,35 @@
   // something, so no empty glass comes and goes while typing. An answer comes 300 ms after the last key at the
   // earliest (lib/globalSearch), past the owner's 100 ms. Gone while lit: the page's own results again.
   const globeShown = $derived(globe && (badge ?? 0) > 0);
+
+  // The page's own search finding none (0.13; the owner, 2026-10-31: A2): said under the pill, its tip on the
+  // magnifier (lit, folded, after another page; or the field open), the words a chip whose ✕ clears; everywhere's
+  // count stays the globe's alone. Not while everywhere's results show.
+  const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn);
+  let row = $state<HTMLElement>();
+  let lens = $state<HTMLElement>();
+  /** The magnifier's middle, from the row's right end: where the callout's tip points. */
+  let tip = $state(24);
+  $effect(() => {
+    const [r, l] = [row, lens];
+    if (!noneShown || !r || !l) return;
+    const place = () => {
+      const a = r.getBoundingClientRect();
+      const b = l.getBoundingClientRect();
+      tip = a.right - (b.left + b.width / 2);
+    };
+    place();
+    // The pill's buttons slide in and out (the field opening): the tip follows.
+    const seen = new ResizeObserver(place);
+    seen.observe(r);
+    return () => seen.disconnect();
+  });
   $effect(() => {
     if (!globeShown && untrack(() => globalSearch.scope) === 'everywhere') globalSearch.scope = 'page';
   });
 </script>
 
-<span class="pill-row" class:wide={showing}>
+<span class="pill-row" class:wide={showing} bind:this={row}>
   {#if globeShown}
     <span class="globe" transition:paced|global>
       <button
@@ -293,6 +316,7 @@
          page's button while the search is open (the owner, 2026-10-24). -->
     {#if words && !(showing && page && pageAction)}
       <button
+        bind:this={lens}
         class:lit={!searching && pageView.query.trim() !== ''}
         aria-label={words}
         title={words}
@@ -345,6 +369,12 @@
     {/if}
     {/if}
   </div>
+  {#if noneShown}
+    <div class="none" role="status" style:--tip="{tip}px" transition:fade={{ duration: 150 }}>
+      <span class="said">No {pageView.none} for</span>
+      <span class="words"><span class="q">{pageView.query.trim()}</span><button class="clear" aria-label="Clear the search" title="Clear" onclick={clear}><Icon name="close" size={14} /></button></span>
+    </div>
+  {/if}
 </span>
 {#if filterOpen}
   <FilterSheet {page} {kind} {tempos} counted={page ? pageView.counted : counted} onclose={() => (filterOpen = false)} />
@@ -359,9 +389,69 @@
 <style>
   /* The pill and the globe left of it, the pill's round end over the globe's glass. */
   .pill-row {
+    position: relative;
     display: flex;
     align-items: center;
     min-width: 0;
+  }
+
+  /* The page's search finding none (A2): one slim line hanging from the pill, its tip on the magnifier, the words a
+     chip whose ✕ clears. */
+  .none {
+    position: absolute;
+    top: calc(100% + 12px);
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100vw - 24px);
+    padding: 6px 6px 6px 14px;
+    border-radius: 999px;
+    background: var(--surface);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 9%, transparent), 0 12px 32px rgb(0 0 0 / 0.4);
+    white-space: nowrap;
+  }
+
+  .none::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    right: calc(var(--tip) - 6px);
+    width: 12px;
+    height: 12px;
+    transform: rotate(45deg);
+    background: var(--surface);
+    box-shadow: -1px -1px 0 color-mix(in srgb, var(--text) 9%, transparent);
+  }
+
+  .said {
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .words {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 4px 4px 4px 12px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+    font-size: 14px;
+  }
+
+  .words .q {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .words .clear {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text);
   }
 
   /* Thinner glass than the pill's (as the title's, App's .lead): more light through. */

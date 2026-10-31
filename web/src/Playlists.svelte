@@ -4,7 +4,7 @@
   import { askIfMany } from './lib/many.svelte';
   import { plural } from './lib/insights.svelte';
   import ListHead from './lib/ListHead.svelte';
-  import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction, usePageMode } from './lib/pageView.svelte';
+  import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, searchNone, usePageAction, usePageMode } from './lib/pageView.svelte';
   import { passing } from './lib/listFilter.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { deepMatches } from './lib/deepSearch.svelte';
@@ -106,6 +106,8 @@
 ${prefs.playlistOrder}`,
   );
   const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() => (listed.shows === 'empty' ? 'playlists' : null));
 
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
@@ -236,7 +238,7 @@ ${prefs.playlistOrder}`,
     <Asking now={kept.loader} />
   {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
-    <p class="empty">No playlists match.</p>
+    {#if !pageView.none}<p class="empty">No playlists match.</p>{/if}
   {:else}
     <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the
          ticked ones are the select bar's: played, favoured, viewed in the panel, their menu). -->

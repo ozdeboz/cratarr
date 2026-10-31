@@ -44,7 +44,7 @@
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
-  import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, USE_ORDERS } from './pageView.svelte';
+  import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, searchNone, USE_ORDERS } from './pageView.svelte';
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
@@ -216,6 +216,12 @@
   const none = (l: typeof found) => l.every((x) => !x.albums.length);
   const kept = keepWhile(() => found, () => pending && none(found), () => pageView.query.trim());
   const shown = $derived(kept.loader ? found : kept.value);
+  // Its words leave no record, every library answered: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() =>
+    shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor) !== 'asking'
+      ? 'records'
+      : null,
+  );
   // How you used them, read when such an order is chosen (and each time again: plays change).
   $effect(() => {
     if (!USE_ORDERS.includes(order)) return;
@@ -424,7 +430,8 @@
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). Words that match no record say so, not the libraries (under a
            crate card of 229 tracks it read as a contradiction; the owner, 2026-10-31). -->
-      <p class="empty">{!s.albums.length ? empty : pageView.query.trim() ? 'No records match.' : 'None in the libraries switched on match.'}</p>
+      {#if !s.albums.length}<p class="empty">{empty}</p>
+      {:else if !pageView.none}<p class="empty">{pageView.query.trim() ? 'No records match.' : 'None in the libraries switched on match.'}</p>{/if}
     {:else}
       <ListHead
         fields={ALBUM_ORDERS}
