@@ -13,8 +13,12 @@
 // - Its walls, edges it does not pass, the focus leaving the middle toward them: a track's edge the tape stops at, and
 //   on a hold through the queue the edge of the track it began in that it goes away from (the owner: "Wherever a
 //   direction doesn't need the neighbour, it's not shown, and the edge never moves"). Going on through the queue the
-//   way it goes there is no wall: forward from a track's start the start stays the left edge, the crosshair moving
-//   right from it until it can stand in the middle; back from there the window moves on into the track before.
+//   way it goes there is no wall; back from a track's start the window moves on into the track before.
+// - Centring by them (0.13, the owner: "the rightmost end of the window is moving too far ahead, so it's zooming out too
+//   quickly"; a wall held one edge, and all the zoom's growth went to the other): held, the window is no wider than
+//   twice the crosshair's distance from the nearer wall (wallCap), at the least the 1× window. So the crosshair stands
+//   in the middle by a wall too, and the zoom catches up with the speed as it moves away; forward from a track's start
+//   the start is the left edge only at the 1× window.
 // - The queue's own ends (0.12.3, the owner: "during the continuous hold, the window shouldn't allow viewing empty
 //   waveforms"): through the queue, the start of the first track a hold can wind back into and the end of the last it
 //   can wind on into are walls too, as a track's edges are on its own; a window wider than what they hold is no wider.
@@ -55,6 +59,18 @@ export function place(focus: number, width: number, walls: Walls): { from: numbe
   if (Number.isFinite(walls.lo)) from = above(from, walls.lo, z);
   if (walls.hi - walls.lo <= width) from = Number.isFinite(walls.lo) ? walls.lo : walls.hi - width;
   return { from, to: from + width };
+}
+
+/** The widest a held window may be with its middle on `focus` between `walls` (0.13, the owner: at a wall "the rightmost
+ *  end of the window is moving too far ahead, so it's zooming out too quickly"; a wall held one edge, and all the zoom's
+ *  growth went to the other): twice the focus's distance from the nearer wall, less the soft bend a window leaving a
+ *  wall takes (WALL_SOFT, place), so that it stands in the middle exactly and both edges move as centring needs. No wall:
+ *  none. Below the 1× window (ZOOM_MIN_S) the caller keeps that, the crosshair against the wall as at 1×. */
+/** How gradually the cap takes hold and lets go (a share of the width): the window's edges change speed over that. */
+export const CAP_SOFT = 0.1;
+export function wallCap(focus: number, walls: Walls): number {
+  const d = Math.min(focus - walls.lo, walls.hi - focus);
+  return d === Infinity ? Infinity : Math.max(0, (2 * d) / (1 + 2 * WALL_SOFT));
 }
 
 /** `cur` eased toward `target` over `dt` ms with time constant `tau` ms: never past it, and exactly on it once within
@@ -229,10 +245,17 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   let w = target;
   let wv = 0;
   if (!i.holding) [w, wv] = spring(w0, s && !s.held ? s.wv : 0, target, dt, target > w0 ? ZOOM_OUT_MS : ZOOM_EASE_MS, settleOf(target));
-  // Held, no wider than the walls hold: nothing past the queue's ends ever shows.
-  else w = Math.min(w, walls.hi - walls.lo);
   // The middle on the crosshair exactly; a crosshair that moved at once (AIM_JUMP) is the offset's to ease away.
   const rel = leadOf(i.holding, i.dir, i.pos, i.aim, s?.rel ?? 0);
+  // Held, no wider than centring by its walls allows (wallCap), the 1× window at the least: the crosshair stays in the
+  // middle and the far end never runs ahead. Each bound bends in over CAP_SOFT of what it bounds (above), so an edge's
+  // pace changes over a few frames as the cap takes hold or lets go, not in one; never wider than the cap but in that
+  // bend at the 1× window. And no wider than the walls hold: nothing past the queue's ends ever shows.
+  if (i.holding) {
+    const least = Math.min(w, ZOOM_MIN_S);
+    const capped = above(wallCap(i.pos + rel, walls), least, CAP_SOFT * least);
+    w = Math.min(-above(-w, -capped, CAP_SOFT * w), walls.hi - walls.lo);
+  }
   const jumped = !!s && !starting && i.moved !== null && Math.abs(rel - s.rel) > AIM_JUMP * w;
   const placed = place(i.pos + rel, w, walls);
   let off: Offset | null = null;

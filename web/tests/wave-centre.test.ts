@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { stepWindow, AIM_JUMP } = await import('../src/lib/waveView.ts');
+const { stepWindow, AIM_JUMP, ZOOM_MIN_S, CAP_SOFT } = await import('../src/lib/waveView.ts');
 const { planStrip } = await import('../src/lib/waveStrip.ts');
 
 const FRAME = 1000 / 60;
@@ -138,5 +138,69 @@ test('a crosshair known only later in the hold is come to by the offset, eased: 
     const [p, q] = [full[i - 1], full[i]];
     if (!p.held || !q.held) continue;
     assert.ok(Math.abs(q.aim! - q.pos - (p.aim! - p.pos)) < AIM_JUMP * (q.to - q.from), `t ${q.t.toFixed(3)}`);
+  }
+});
+
+// At a wall (0.13, the owner: "the rightmost end of the window is moving too far ahead, so it's zooming out too
+// quickly"): a wall held one edge and all the zoom's growth went to the other. The window is no wider than centring by
+// the wall allows (lib/waveView wallCap), at the least the 1× window: the crosshair in the middle, both edges as far from
+// it, the far one never ahead.
+/** The 1× window and the cap's bend into it (CAP_SOFT): there the crosshair may stand off the middle, against the wall. */
+const FLOOR = ZOOM_MIN_S * (1 + CAP_SOFT) + 1e-6;
+/** The held frames once the hold has come to its crosshair (the hand-over's offset gone). */
+const heldIn = (run: Frame[]) => {
+  const held = run.filter((f) => f.held && f.aim !== null);
+  return held.slice(held.findIndex((f) => !f.off));
+};
+function assertCentredByWall(run: Frame[], wall: { lo: number; hi: number }) {
+  let floor = 0;
+  let wide = 0;
+  for (const f of heldIn(run)) {
+    assert.ok(f.from >= wall.lo - 1e-9 && f.to <= wall.hi + 1e-9, `t ${f.t.toFixed(3)}: past the wall`);
+    if (f.to - f.from <= FLOOR) {
+      floor++;
+      continue;
+    }
+    wide++;
+    assert.ok(Math.abs(mid(f) - f.aim!) <= bar(f) / 2, `t ${f.t.toFixed(3)}: the crosshair ${(mid(f) - f.aim!).toFixed(3)} s off the middle`);
+    // Both edges as far from the crosshair: the far one never ahead of what centring needs.
+    assert.ok(Math.abs(f.to - f.aim! - (f.aim! - f.from)) <= bar(f), `t ${f.t.toFixed(3)}: one edge ahead`);
+  }
+  // (Its first frames at the 1× window are the hold's hand-over's, eased in: those are the offset's.)
+  assert.ok(wide > 100, `wider than the 1× window, centred (${wide}; ${floor} at it)`);
+}
+
+test("forward from near a track's start through the queue: the crosshair in the middle once wider than the 1× window", () => {
+  // Through the queue a hold forward keeps the start of the track it began in as a wall (0.10.1).
+  assertCentredByWall(wind({ pos0: 2, heldS: 6 }), { lo: 0, hi: Infinity });
+});
+
+test("back from near a track's end: the same, mirrored", () => {
+  assertCentredByWall(wind({ pos0: LEN - 2, dir: -1, heldS: 6 }), { lo: -Infinity, hi: LEN });
+});
+
+test("on into the queue's last end: centred while it can be, narrowing to the 1× window at the end, never past it", () => {
+  // The last track's end, the queue's.
+  const ends = { lo: -Infinity, hi: LEN };
+  const run = wind({ pos0: LEN - 500, heldS: 8, ends });
+  for (const f of run) assert.ok(f.to <= ends.hi + 1e-9, `t ${f.t.toFixed(3)}: past the queue's end`);
+  const held = heldIn(run);
+  // Wide, the crosshair in the middle; the window narrowing only as it nears the end.
+  for (const f of held.filter((x) => x.to - x.from > FLOOR)) assert.ok(Math.abs(mid(f) - f.aim!) <= bar(f) / 2, `t ${f.t.toFixed(3)}: off the middle`);
+  assert.ok(held.some((f) => f.to - f.from <= FLOOR), 'at the end, the 1× window');
+});
+
+test('at a wall the zoom changes pace over a few frames: no edge lurches as the cap takes hold or lets go', () => {
+  for (const run of [wind({ pos0: 2, heldS: 6 }), wind({ pos0: LEN - 2, dir: -1, heldS: 6 })]) {
+    const f = heldIn(run);
+    for (let k = 2; k < f.length; k++) {
+      // The crosshair's own change of pace (its lead stops growing as the top speed is reached) the window follows, its
+      // far edge twice over by the cap; beyond that, no more than a hold's wind-up gives a frame.
+      const dAim = Math.abs(f[k].aim! - 2 * f[k - 1].aim! + f[k - 2].aim!);
+      for (const e of ['from', 'to'] as const) {
+        const d = Math.abs(f[k][e] - 2 * f[k - 1][e] + f[k - 2][e]);
+        assert.ok(d <= 2 * dAim + 0.15, `t ${f[k].t.toFixed(3)}: its ${e} changed pace by ${d.toFixed(3)} s in a frame`);
+      }
+    }
   }
 });

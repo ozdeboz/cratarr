@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { holdWalls, place, ease, settleOf, offsetOf, easeOffset, shownOf, waveColours, stepWindow, ZOOM_S, ZOOM_KEEP_MS } = await import('../src/lib/waveView.ts');
+const { holdWalls, place, ease, settleOf, offsetOf, easeOffset, shownOf, waveColours, stepWindow, ZOOM_S, ZOOM_MIN_S, ZOOM_KEEP_MS, CAP_SOFT } = await import('../src/lib/waveView.ts');
 
 const LEN = 240;
 const FRAME = 1000 / 60;
@@ -289,8 +289,21 @@ test('on one track (Start and stop at its edges): no wider than the track, both 
   }
 });
 
-test('held forward from 0: the start stays the left edge until the crosshair can stand in the middle', () => {
-  const f = run([240, 200], 0, 0, () => 6, 5, 5, true, 12);
+test('held forward from 0: never the track before; the start the left edge only at the 1× window, else the crosshair in the middle', () => {
+  // 0.13 (lib/waveView wallCap): the window no wider than centring by the wall allows, so the zoom never pushes the far
+  // edge on ahead of the crosshair; at the least the 1× window (ZOOM_MIN_S), resting on the start.
+  const f = run([240, 200], 0, 0, () => 6, 5, 5, true, 12).slice(0, 5 * 60);
   for (const x of f) assert.ok(x!.from >= 0, 'never the track before');
-  for (const x of f.filter((x) => x!.pos + 3 < (x!.to - x!.from) / 2 - 1)) assert.equal(x!.from, 0);
+  const settled = f.filter((x) => x && !x.off);
+  assert.ok(settled.length > 200);
+  let floor = 0;
+  for (const x of settled) {
+    const aim = x!.pos + 3;
+    // At the 1× window, and the cap's bend into it (CAP_SOFT), the start may hold the left edge.
+    if (x!.w <= ZOOM_MIN_S * (1 + CAP_SOFT) + 1e-6) {
+      floor++;
+      assert.ok(x!.from <= 0.03 * x!.w, 'at the 1× window the start is the left edge');
+    } else assert.ok(Math.abs((x!.from + x!.to) / 2 - aim) <= (x!.to - x!.from) / 130 / 2 + 1e-6, `${aim.toFixed(2)}: off the middle`);
+  }
+  assert.ok(floor > 0 && floor < settled.length, 'first at the 1× window, then wider');
 });
