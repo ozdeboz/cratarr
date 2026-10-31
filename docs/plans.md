@@ -29,7 +29,8 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 - **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and modes per server** (the External
   library below, taken up). Cratarr's mode is Cratarr's own library, its libraries (Music, Incoming, each user's own)
   still switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
-  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests.
+  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. With modes,
+  scrobbling from the device (each user's choice, through the server for one sign-in; below, under External library).
   With it (the owner, 2026-10-30): **scrolling to what a link leads to, and every automatic scroll clear of the
   chrome.** Arriving through a link or a search result (an album in a list, a track in a playlist or crate, an
   artist's place) scrolls to that item and marks it; and every scroll the page makes by itself (that one, the
@@ -193,9 +194,14 @@ server can reach the others. Not decided; written down as the step after modes.
 more sense privacy wise"): the device that plays a track tells ListenBrainz and Last.fm itself, its own queue of them
 kept while offline (Last.fm takes them up to 14 days late, ListenBrainz any time). So it works the same for every
 server's tracks, and the server never sends anyone's listening out nor holds the services' keys. Today the server
-does it (0068's outbox, Connections). Catches: a sign-in to each service on each device; one play told once, by the
-player that sounded it (a group's leader, not its followers); Subsonic apps and Kodi, which play from Cratarr without
-Cratarr's app, scrobble themselves or not at all.
+does it (0068's outbox, Connections). Settled the same day (the owner, question set), for 0.13 with modes:
+- Each user's choice: **from each device** (the start) or **through the server**, to sign in to a service once and
+  have it everywhere. Through the server, the devices hand it their plays of every server's tracks (the track's
+  artist, title, album and when), which it scrobbles as now.
+- Subsonic apps and Kodi, which play from Cratarr without Cratarr's app, follow the user's choice: through the server,
+  it scrobbles them as now; from each device, the server holds no keys, and those apps scrobble themselves.
+- Catches: from each device, a sign-in to each service on each one; a play told once, by the player that sounded it (a
+  group's leader, not its followers); the switch between the two neither losing a play nor telling one twice.
 
 ## Local library
 
