@@ -96,6 +96,8 @@ test("the deck's L and R are the way the tape goes, frame by frame; standing, th
 test('a hold back from forwards play is as before: braked to a stand, then forwards', () => {
   assert.equal(letGoTo(-1, false, 'R'), 0);
   assert.equal(afterLetGo(-1, false, 'R', 'play'), 'forwards');
-  // The knob at L but the hold not flown from backwards play (paused at L): a stand, as any hold back.
-  assert.equal(letGoTo(-1, false, 'L'), 0);
+  // The knob at L, the hold from a pause (0.12.4: it ended forwards; the app ended backwards, by the owner's rule):
+  // the knob's way, backwards at 1×.
+  assert.equal(letGoTo(-1, false, 'L'), 1);
+  assert.equal(afterLetGo(-1, false, 'L', 'play'), 'backwards');
 });
