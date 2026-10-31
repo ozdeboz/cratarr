@@ -115,6 +115,32 @@ export function byRelevance(a: number[], b: number[]): number {
   return 0;
 }
 
+/** What a result's match line calls each place its words were found (the owner, 2026-10-31: "Hip Hop Music · 5 tracks"
+ *  said neither that it was a track nor why another line had no count). */
+const MATCHED_ON: Record<string, string> = { track: 'Track', album: 'Album', artist: 'Artist', composer: 'Composer' };
+/** A result's match line: where the words were found and how many (its first match not on its own name), the count
+ *  always said when the server gives one: its tracks for a playlist, a crate or an album found by a track, its albums
+ *  for an artist found by an album. Null when it was found by its name. */
+export function matchLine(matched: readonly Matched[], kind = ''): string | null {
+  const m = matched.find((x) => x.on !== 'name');
+  if (!m) return null;
+  const on = MATCHED_ON[m.on] ?? m.on.charAt(0).toUpperCase() + m.on.slice(1);
+  if (m.count === undefined || m.count === null) return `${on}: ${m.text}`;
+  const unit = kind === 'artist' && m.on === 'album' ? 'album' : 'track';
+  return `${on}: ${m.text} · ${m.count.toLocaleString()} ${unit}${m.count === 1 ? '' : 's'}`;
+}
+
+/** How long a list still asking the server shows nothing before its loader (lib/Asking), so a quick answer shows none. */
+export const ASK_DELAY = 300;
+/** What a searched list shows (the owner, 2026-10-31: never "no X found" before the answer is in): its rows if it has
+ *  any; else, while the server's answer for the words as they are now (`words`) is not in (`answeredFor`: the words
+ *  last answered, or failed), the wait (lib/Asking); its empty line only after. */
+export function listShows(rows: number, words: string, answeredFor: string | null | undefined): 'rows' | 'asking' | 'empty' {
+  if (rows > 0) return 'rows';
+  const q = words.trim();
+  return q && answeredFor !== q ? 'asking' : 'empty';
+}
+
 /** Whether `texts` match the query (`match`). */
 export const matches = (query: string[], ...texts: (string | null | undefined)[]) => match(query, ...texts) !== null;
 

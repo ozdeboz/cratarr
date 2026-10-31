@@ -30,7 +30,8 @@
   import { pageView } from './pageView.svelte';
   import { openQuickCrate, quickOn } from './quickCrates.svelte';
   import { leaveOnArrival } from './navStep.svelte';
-  import type { SearchResult } from './search';
+  import { matchLine, type SearchResult } from './search';
+  import Asking from './Asking.svelte';
   import { toast } from './toast.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import ArtistRowMenu from './ArtistRowMenu.svelte';
@@ -51,10 +52,6 @@
     const m = /^album:([^/]+)\/(.+)$/.exec(it.subject);
     return m ? libraryDot(m[1], { id: m[2] }) : null;
   }
-  const why = (m: { on: string; text: string; count?: number }[]) => {
-    const t = m.find((x) => x.on !== 'name');
-    return t ? `${t.on === 'track' ? 'Track' : t.on === 'album' ? 'Album' : t.on === 'artist' ? 'By' : t.on}: ${t.text}${t.count && t.count > 1 ? ` · ${t.count}` : ''}` : null;
-  };
 
   // A tap: a page or a part where it shows (the words kept, so it narrows to them), an album not in the library on
   // Bandcamp or its menu, what Discover left out its menu (Take back), the rest in the panel.
@@ -151,7 +148,7 @@
     <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)} attach={has ? press(it) : undefined}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
-      {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
+      {#snippet sub()}{it.sub ?? ''}{#if it.composers?.length}<span class="why">{it.sub ? ' · ' : ''}{it.composers.map((c) => c.name).join(', ')}</span>{/if}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if matchLine(it.matched, it.kind)}<span class="why">{it.sub ? ' · ' : ''}{matchLine(it.matched, it.kind)}</span>{/if}{/snippet}
       {#snippet action()}{#if has}<button class="icon" aria-label={`Menu of ${it.title}`} title="More" onclick={() => (menu = menuOf(it))}><Icon name="moreVert" size={22} /></button>{/if}{/snippet}
     </Row>
     {/if}
@@ -214,6 +211,9 @@
       </div>
     {/if}
   </section>
+{:else if q}
+  <!-- Nothing yet, the server's answer for these words not in: the wait, not "nothing" (lib/search listShows). -->
+  <Asking />
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if menu?.kind === 'track'}
