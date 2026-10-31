@@ -30,6 +30,7 @@
   import { countAt, minAt, SEEDS_LISTED, type Named } from './quickCrate';
   import Seg from './Seg.svelte';
   import { search } from './api';
+  import { layerIn, typesSaid } from './recordTypeRules';
 
   let {
     condition,
@@ -120,6 +121,8 @@
     // Cut by how alike (a quick crate's, 0.11): its floor, the handle's while dragged.
     else if (v.kind === 'like' && v.min !== undefined) s = `at least ${dragged !== null && curve ? minAt(curve, dragged) : v.min}% alike`;
     else if (v.kind === 'like') s = `the closest ${dragged ?? v.count}`;
+    // The Library's types (0.13): or within the release types, and across (lib/recordTypeRules).
+    else if (v.kind === 'any_of' && axis?.key === 'type' && v.values.length) s = typesSaid(v.values, layerIn(axis), shown);
     else if (v.kind === 'any_of' || v.kind === 'all_of') {
       // All of them (0.13): joined "and", as the sentence says it.
       const sep = v.kind === 'all_of' ? ' and ' : ', ';

@@ -413,6 +413,14 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Phone check** (`npm run check:phone`, decided 2026-10-16): every page, every part of the settings and an album in
   the panel at 390 px must not scroll sideways (the page, or any box that scrolls up and down); run it after a layout
   change.
+- **Scrolling to a thing** (0.13; the owner, 2026-10-30): every scroll the app makes to a thing goes through
+  `lib/reveal` (scrollIntoView), and every box that scrolls up and down keeps what is drawn over it as its
+  scroll-padding (app.css `html`: the bar, the mini-player and the glass; PlaylistView's `.scroll`: those and a sticky
+  action bar), from the same properties its room is made with. So a thing stops whole in sight, never under the chrome;
+  no place counts its own offset. A link for one of a list's tracks (a track's Go to album, a track found by global
+  search, the player's album) opens the list with `viewFor`: it scrolls to the track, in the middle, and marks it as
+  the viewed one is (a border). Beside the panel, the page's list (records, crates, playlists: `data-subject`) brings
+  what the panel opened into sight; a list that makes only what is near (lib/nearBlocks) says where with `nearFor`.
 
 ## Rows
 

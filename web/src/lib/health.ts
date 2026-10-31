@@ -36,9 +36,10 @@ export function openFinding(f: HealthFinding) {
 /** Health with this finding open in its panel (Home's System status, the owner 2026-10-23); a files' finding is its kind's
  *  problem there (lib/healthReport's `files-<kind>`). */
 export function openInHealth(f: HealthFinding) {
-  const key = f.domain === 'files' ? `files-${f.key.split(':')[1]}` : f.key;
-  location.hash = `#/health?view=${encodeURIComponent(`health:${key}`)}`;
+  openHealth(f.domain === 'files' ? `files-${f.key.split(':')[1]}` : f.key);
 }
+/** Health with one of its problems open (`library:incomplete`). */
+export const openHealth = (key: string) => (location.hash = `#/health?view=${encodeURIComponent(`health:${key}`)}`);
 
 /** Its icon: its domain's. */
 export const iconOf = (f: HealthFinding): IconName => DOMAINS[f.domain]?.icon ?? 'info';

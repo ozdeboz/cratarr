@@ -77,7 +77,7 @@
     <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(listed.list.length, 'crate')} />
     <ul class="grid">
       {#each listed.list as c (c.id)}
-        <li>
+        <li data-subject={CRATE + c.id}>
           <CrateCard crate={c} active={panelBeside() && (panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id)} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
         </li>
       {/each}

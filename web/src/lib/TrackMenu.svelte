@@ -60,7 +60,7 @@
   import { setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
-  import { albumSubject, artistOf, panel, viewOver } from './panel.svelte';
+  import { albumSubject, artistOf, panel, viewFor } from './panel.svelte';
   import { linkTo, share } from './share';
   import { crateOf, genreOf, viewGenre } from './crates.svelte';
   import { likeChip } from './quickCrate';
@@ -158,7 +158,7 @@
     onclose();
     // From the full-screen player: it closes once the album shows (lib/navStep), or it would cover it.
     leavePlayer();
-    viewOver(subject);
+    viewFor(subject, t.id);
   }
   const heartOn = $derived(forPlaying ? favorite() : !!other?.favorite);
   const heartKnown = $derived(forPlaying ? np?.favorite !== null : other !== null && other.favorite !== null);

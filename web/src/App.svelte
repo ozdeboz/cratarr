@@ -57,14 +57,15 @@
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
-  import { glass } from './lib/glass.svelte';
+  import { glass, panelBeside } from './lib/glass.svelte';
+  import { reveal, subjectIn } from './lib/reveal';
   import GlobalResults from './lib/GlobalResults.svelte';
   import SearchCrateCard from './lib/SearchCrateCard.svelte';
   import { quickOn } from './lib/quickCrates.svelte';
   import { crateCardOn } from './lib/quickCrate';
   import RecordsPicker from './lib/RecordsPicker.svelte';
   import DiscoverPicker from './lib/DiscoverPicker.svelte';
-  import { chooseKind, kindNow, recordKinds } from './lib/recordKinds';
+  import { chooseType, loadTypes, typeNow, typesOffered } from './lib/recordTypes.svelte';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
   import { globalSearch, pageKinds, readingPending } from './lib/globalSearch.svelte';
   import { leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
@@ -547,6 +548,14 @@
     requestAnimationFrame(go);
     return () => clearTimeout(t);
   });
+  // What the panel opened beside the page, by a link or from a list of the page's own, is brought into sight in the
+  // page's list, which marks it (lib/reveal; the owner, 2026-10-30); in sight already, nothing moves.
+  $effect(() => {
+    const v = panel.viewed;
+    const el = pageEl;
+    if (!v || !el || !panelBeside()) return;
+    return reveal(() => subjectIn(el, v), { key: v });
+  });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
   const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown && !downloadsShown);
   const pillDevice = $derived(!playing() && !playerInPanel && !panelDevice);
@@ -886,8 +895,9 @@
   // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
   loadSpotify();
   type Sub = { id: string; label: string; on: boolean; pick: () => void };
-  const kindShown = $derived(kindNow());
-  const librarySubs = $derived<Sub[]>(recordKinds().map((k) => ({ id: k.id, label: k.label, on: kindShown === k.id, pick: () => chooseKind(k.id) })));
+  $effect(() => loadTypes());
+  const typeShown = $derived(typeNow());
+  const librarySubs = $derived<Sub[]>(typesOffered().map((k) => ({ id: k.id, label: k.label, on: typeShown === k.id, pick: () => chooseType(k.id, page === LIBRARY.id) })));
   const discoverSubs = $derived<Sub[]>([
     ...DISCOVER_MODES.map((m) => ({ id: m.value, label: m.label, on: prefs.discoverMode === m.value, pick: () => (prefs.discoverMode = m.value) })),
     ...(spotify.state?.shown

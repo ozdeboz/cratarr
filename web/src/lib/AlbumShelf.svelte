@@ -9,6 +9,7 @@
   import CoverPlay from './CoverPlay.svelte';
   import CoverWait from './CoverWait.svelte';
   import { NearBlocks } from './nearBlocks.svelte';
+  import { nearFor } from './reveal';
   import { panelBeside } from './glass.svelte';
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
@@ -216,6 +217,17 @@
   const none = (l: typeof found) => l.every((x) => !x.albums.length);
   const kept = keepWhile(() => found, () => pending && none(found), () => pageView.query.trim());
   const shown = $derived(kept.loader ? found : kept.value);
+  // An album the panel opened beside the page is brought into sight here (lib/reveal, App): one in a block not made
+  // yet is that block first.
+  $effect(() =>
+    nearFor((subject) => {
+      for (const { s, albums } of shown) {
+        const at = albums.findIndex((a) => albumSubject(s.id, a.id) === subject);
+        if (at >= 0) return document.querySelector(`[data-key="${CSS.escape(`${s.id}:${perBlock}:${layout}:${Math.floor(at / perBlock)}`)}"]`);
+      }
+      return null;
+    }),
+  );
   // Its words leave no record, every library answered: the pill says so, from its magnifier (pageView searchNone).
   searchNone(() =>
     shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor) !== 'asking'
@@ -479,7 +491,7 @@
           {@const here = playing?.album_id === a.id}
           {@const viewed = panelBeside() && panel.viewed === albumSubject(s.id, a.id)}
           {@const on = !!selecting && selecting.has(keyOf(s, a))}
-          <li class:playing={here} class:ticked={on}>
+          <li class:playing={here} class:ticked={on} data-subject={albumSubject(s.id, a.id)}>
             {#if layout === 'grid'}
               <Tile
                 title={a.title}

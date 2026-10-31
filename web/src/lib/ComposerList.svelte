@@ -19,7 +19,7 @@
   import { libraryLayoutShown } from './layouts';
   import { ALBUM_WIDTHS, COMPOSER_ORDERS, howMany, matchesSearch, pageView, searchNone } from './pageView.svelte';
   import { prefs, type ComposerOrder } from './prefs.svelte';
-  import { composersInOrder } from './recordKindRules';
+  import { composersInOrder } from './composers';
 
   $effect(() => loadComposers());
   const shown = $derived(composersInOrder((classical.composers ?? []).filter((c) => matchesSearch(c.name, c.sort_name)), prefs.composerOrder, prefs.composerDown));

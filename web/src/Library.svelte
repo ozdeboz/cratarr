@@ -25,7 +25,8 @@
   import ComposerWorks from './lib/ComposerWorks.svelte';
   import { can } from './lib/capabilities.svelte';
   import { classical, followAddress } from './lib/classical.svelte';
-  import { classicalListed, kindNow } from './lib/recordKinds';
+  import { CLASSICAL } from './lib/recordTypeRules';
+  import { classicalListed, typeNow } from './lib/recordTypes.svelte';
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
@@ -129,7 +130,7 @@
   // nothing. One engine: the server, which holds what each switch means (the owner, 2026-10-29), says which records pass.
   const pass = passing(() => 'library', () => ({ list: { kind: 'library' }, source: prefs.source || undefined }));
   // Classical (0.10): its composers first; a composer's records, the list narrowed to them (lib/classical).
-  const inClassical = $derived(kindNow() === 'Classical' && classicalListed());
+  const inClassical = $derived(typeNow() === CLASSICAL && classicalListed());
   $effect(() => {
     if (inClassical) followAddress();
   });

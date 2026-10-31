@@ -136,6 +136,7 @@
   import SectionHead from './SectionHead.svelte';
   import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
+  import { openHealth } from './health';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
   import { inApp } from './app.svelte';
@@ -145,6 +146,7 @@
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
   import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
+  import { reveal } from './reveal';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
   import { coverKey, localCovers } from './localCovers.svelte';
@@ -986,7 +988,20 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let scroller = $state<HTMLElement>();
   $effect(() => {
     void panel.again;
+    // Viewed again for one of its tracks: that track's place instead (below).
+    if (untrack(() => panel.mark?.subject === id)) return;
     scroller?.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  // Opened for one of its tracks (lib/reveal; a track's Go to album, a track found by global search, the player's
+  // album): the list scrolls to it, in the middle, and marks it as the page marks what the panel shows.
+  const marked = $derived(panel.mark?.subject === id ? panel.mark.track : null);
+  const listed = $derived(!!shown);
+  $effect(() => {
+    const m = panel.mark;
+    if (!m || m.subject !== id || !listed) return;
+    void m.n;
+    const sc = scroller;
+    return reveal(() => sc?.querySelector(`[data-track="${CSS.escape(m.track)}"]`), { block: 'center' });
   });
 
   let menuOpen = $state(false);
@@ -1855,7 +1870,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {/if}
   {/if}
 
-  <div class="scroll" class:away={(handed || full) && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
+  <div class="scroll" class:away={(handed || full) && everywhere()} class:own style:--act-h={prefs.stickyActions ? '52px' : '0px'} bind:this={scroller} onscroll={onScroll}>
     {#if making}
       <header class="head">
         <div class="top">
@@ -2073,6 +2088,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
           {#if details}<p class="details">{#if albumDot}<i class="dot" style:background={albumDot.colour} role="img" aria-label={albumDot.name}></i>{/if}{details}</p>{/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
+          <!-- A record missing tracks (0.13): how many of its release's it holds, to Health's albums missing tracks. -->
+          {#if album && listedHere?.a.whole_tracks}<button class="details left-out" onclick={() => openHealth('library:incomplete')}><Icon name="health" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></button>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy, album.source === BANDCAMP ? { id: album.id, title } : null)}
               >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
@@ -2385,11 +2402,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
   {@const out = selecting ? null : outOf(r, name)}
-  <li class:now={here} class:ticked={!!selecting && i !== null && selecting.has(i)}>
+  <li class:now={here} class:ticked={!!selecting && i !== null && selecting.has(i)} data-track={r.id || undefined}>
     <SwipeBehind right={ok ? PLAY_NEXT : null} left={out ? (crate ? OUT_OF_CRATE : OUT_OF_PLAYLIST) : null} />
     <Row
       size="large"
       title={r.name ?? r.file}
+      active={ok && !selecting && marked === r.id}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       cells={columns ? cellsOf(r) : undefined}
       off={!ok || awayDim(r, src)}
@@ -2458,11 +2476,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#snippet albumRow(r: PlaylistRow, i: number, list: PlaylistRow[], movement: string | null = null)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
-  <li class:now={here} class:ticked={!!selecting && selecting.has(i)} class:movement={movement !== null}>
+  <li class:now={here} class:ticked={!!selecting && selecting.has(i)} class:movement={movement !== null} data-track={r.id || undefined}>
     <SwipeBehind right={PLAY_NEXT} />
     <Row
       size="large"
       title={movement ?? r.name ?? r.file}
+      active={ok && !selecting && marked === r.id}
       sub={r.missing ? 'Missing file' : r.artist && r.artist !== albumHead?.artist ? r.artist : undefined}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}
@@ -2909,6 +2928,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     overscroll-behavior: contain;
     /* On a phone the mini-player floats over the end of the list (as Finamp's now-playing bar): room to scroll past it. */
     padding-bottom: calc(32px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
+    /* What scrolls to a track stops clear of what is drawn over the list (lib/reveal): the bar and a mini-player along
+       the top, the action bar where it sticks, the glass under it; the mini-player and the glass along the foot. */
+    scroll-padding-top: calc(var(--bar-top, 0px) + var(--mini-top, 0px) + var(--act-h, 0px) + var(--glass-top) + var(--gutter-y));
+    scroll-padding-bottom: calc(var(--mini-h, 0px) + var(--glass-bottom) + env(safe-area-inset-bottom) + var(--gutter-y));
   }
 
   /* Never wider than the panel (as the tabs and their content below): its one column is the panel's width at most,
@@ -3200,6 +3223,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /* With no cover to start under, the list starts under the glass. */
   .scroll.own {
     padding-top: calc(var(--bar-room, 0px) + var(--mini-top, 0px) + var(--glass-top) + 4px);
+    scroll-padding-top: calc(var(--bar-room, 0px) + var(--mini-top, 0px) + var(--glass-top) + var(--gutter-y));
   }
 
   .hero {
