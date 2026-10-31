@@ -1,6 +1,7 @@
 /*
- * Track snippets (0.12, snippets: the owner chose them, 2026-10-30): opening a track's menu plays its liveliest 20 s,
- * and the music that plays meanwhile goes down under it. The page picks the stretch and asks (`{"type": "snippet",
+ * Track snippets (0.12, snippets: the owner chose them, 2026-10-30): a track menu's "Play snippet from …" plays 20 s
+ * of it (opening the menu plays nothing: the owner, 2026-10-31), and the music that plays meanwhile goes down under it.
+ * The page picks the stretch (the first one about as lively as its liveliest) and asks (`{"type": "snippet",
  * "play": {source, id, from_ms, to_ms, fade_ms, duck}}` or `{"type": "snippet", "stop": true}`); a small player of its
  * own plays it from Cratarr's stream, faded in and out, while the app's own player is eased to `duck` by volume (a
  * factor [PlayOnLink.applyVolume] multiplies in, beside levelling and Start and stop's), never by audio focus: a focus

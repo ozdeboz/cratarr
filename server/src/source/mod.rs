@@ -214,14 +214,18 @@ pub struct AlbumTrack {
 }
 
 /// An album's release type (0.9.6, the owner: the Library can hide EPs and singles): its primary type ("album", "ep",
-/// "single", "other"; none: not known), where that came from ("musicbrainz", "discogs", "guess"), and its secondary
-/// types ("compilation", "live"…). Cratarr's own library's; other servers' albums say none.
+/// "single", "incomplete", "other"; none: not known), the source that said one ("musicbrainz", "discogs"; none where
+/// none did), the owner's rule that decided it where it is not the one said (0.13, decision 0081: "incomplete", "name",
+/// "tracks", "length", "one song"), and its secondary types ("compilation", "live"…). Cratarr's own library's; other
+/// servers' albums say none.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
 pub struct ReleaseType {
     #[serde(rename = "type", default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub type_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_why: Option<String>,
     #[serde(default)]
     pub secondary: Vec<String>,
     /// Classical (0.10, the owner, 2026-10-30), a kind beside the release type: Cratarr's own library's records say

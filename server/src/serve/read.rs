@@ -14,7 +14,7 @@ const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.art
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
   s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak, s.genres";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
-  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary";
+  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary, a.type_why";
 
 /// An album's length in milliseconds, for a query over `albums a`: its songs' lengths summed, NULL when any song's is
 /// unknown or nothing (`albums.duration_ms` counts those as nothing), as `source::total_secs`. Over the songs' album
@@ -128,7 +128,7 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     let genres: String = r.get(7)?;
     let artist: String = r.get(3)?;
     let id: String = r.get(1)?;
-    let release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref());
+    let release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref(), r.get(17)?);
     Ok(Album {
         cover_art: r.get::<_, Option<String>>(13)?.unwrap_or_else(|| id.clone()),
         id,
@@ -150,11 +150,12 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     })
 }
 
-/// An album's release type as kept (0.9.6).
-fn release_of(kind: Option<String>, from: Option<String>, secondary: Option<&str>) -> crate::source::ReleaseType {
+/// An album's release type as kept (0.9.6; the rule that decided it, 0.13).
+fn release_of(kind: Option<String>, from: Option<String>, secondary: Option<&str>, why: Option<String>) -> crate::source::ReleaseType {
     crate::source::ReleaseType {
         kind,
         type_from: from,
+        type_why: why,
         secondary: secondary.unwrap_or_default().split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect(),
         ..Default::default()
     }
@@ -965,33 +966,16 @@ impl Library {
         Ok(rows.filter_map(|r| r.ok()).filter(|m| crate::app::discogs::is_mbid(m)).collect())
     }
 
-    /// The albums whose type is not known, only guessed, or Discogs' (0.9.6: asked of Discogs; 0.10: Discogs' own asked
+    /// The albums MusicBrainz said no type of: none said, or Discogs' (0.9.6: asked of Discogs; 0.10: Discogs' own asked
     /// again where an older rule found them): (id, MusicBrainz release, artist, name, tracks, length in ms).
     pub fn albums_to_type(&self) -> Result<Vec<(String, String, String, String, usize, u64)>> {
         let db = self.db();
         let mut st = db.prepare(
             "SELECT id, coalesce(mbid, ''), artist, name, song_count, duration_ms FROM albums
-             WHERE release_type IS NULL OR type_from IN ('guess', 'discogs') ORDER BY n",
+             WHERE type_from IS NULL OR type_from = 'discogs' ORDER BY n",
         )?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)?.max(0) as usize, r.get::<_, i64>(5)?.max(0) as u64)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// Each album's tracks and length (ms) by its MusicBrainz release (0.10: an edition compared with its release
-    /// group's first release); of albums sharing a release, the one of more tracks.
-    pub fn release_sizes(&self) -> Result<HashMap<String, (usize, u64)>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT mbid, song_count, duration_ms FROM albums WHERE mbid IS NOT NULL AND mbid <> ''")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as usize, r.get::<_, i64>(2)?.max(0) as u64)))?;
-        let mut out: HashMap<String, (usize, u64)> = HashMap::new();
-        for row in rows {
-            let (release, tracks, ms) = row?;
-            let e = out.entry(release).or_insert((tracks, ms));
-            if tracks > e.0 {
-                *e = (tracks, ms);
-            }
-        }
-        Ok(out)
     }
 
     /// Each song's album's release types as the axes show them ("EP", "Live"), primary first (0.9.6); songs of albums of
