@@ -2382,6 +2382,9 @@ struct Preview {
     conditions: Vec<crate::crates::Condition>,
     #[serde(default)]
     without: Vec<String>,
+    /// Its first records' covers asked too (the search crate card, 0.13): how many, at most `CRATE_COVERS`.
+    #[serde(default)]
+    covers: usize,
 }
 
 /// The preview's answer: the page, and the names of the library ids its conditions hold (0.13, decision 0088), as the
@@ -2391,6 +2394,8 @@ struct Previewed {
     #[serde(flatten)]
     page: crate::app::CratePage,
     names: std::collections::BTreeMap<String, crate::crates::Named>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    covers: Vec<crate::app::home::WeekCover>,
 }
 
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
@@ -2398,7 +2403,9 @@ async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(
     let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, ..Default::default() };
     let page = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?;
     let names = app.playlists.condition_names(&p.conditions).await?;
-    Ok(Json(Previewed { page, names }).into_response())
+    let n = p.covers.min(crate::app::home::CRATE_COVERS);
+    let covers = if n > 0 { app.crate_covers(&p.conditions, q.source.as_deref(), &look, n).await? } else { Vec::new() };
+    Ok(Json(Previewed { page, names, covers }).into_response())
 }
 
 /// The Filter sheet (decision 0061): which of the list in view's items pass these conditions, how many of how many,
