@@ -33,6 +33,7 @@
   import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordKey, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
   import { shuffled } from './shuffle';
   import { spreadRecords } from './spread';
+  import { matcherModule } from './matcherLoad';
   import ListHead from './ListHead.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import SectionHead from './SectionHead.svelte';
@@ -208,7 +209,7 @@
     try {
       const p = await previewCrate(conditions, 500, prefs.source || undefined, { without: hiddenLibraries() });
       const playable = p.rows.filter((r) => r.id && !r.missing);
-      const ids = spreadRecords(how === 'shuffle' ? shuffled(playable) : playable, (r) => recordKey(r)).map((r) => r.id!);
+      const ids = spreadRecords(await matcherModule(), how === 'shuffle' ? shuffled(playable) : playable, (r) => recordKey(r)).map((r) => r.id!);
       if (ids.length) await playCollection({ kind: 'tracks', source: p.source, ids }, 'play', name);
     } catch (e) {
       toast.fail(e, "It couldn't be played");

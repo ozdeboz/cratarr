@@ -23,6 +23,9 @@ type Exports = {
   matcher_index(ptr: number, len: number): number;
   matcher_query(handle: number, ptr: number, len: number): number;
   matcher_drop(handle: number): void;
+  spread_alloc(n: number): number;
+  spread_free(ptr: number, n: number): void;
+  spread_order(keys: number, n: number, gap: number): number;
 };
 
 const encoder = new TextEncoder();
@@ -87,6 +90,21 @@ export class Matcher {
 
   drop(handle: number) {
     this.x.matcher_drop(handle);
+  }
+
+  /** The rules crate's record spread (0.13, "One spread": the server's crate Play and Shuffle use the same): the places
+   *  of `keys` (each track's record as a number) in their spread order, `gap` records apart where they can be. */
+  spread(keys: readonly number[], gap: number): number[] {
+    const n = keys.length;
+    if (n === 0) return [];
+    const at = this.x.spread_alloc(n);
+    new Uint32Array(this.x.memory.buffer, at, n).set(keys);
+    const out = this.x.spread_order(at, n, gap);
+    // Read after the call: the module's memory may have grown, and the old view gone with it.
+    const order = Array.from(new Uint32Array(this.x.memory.buffer, out, n));
+    this.x.spread_free(at, n);
+    this.x.spread_free(out, n);
+    return order;
   }
 }
 
