@@ -1,10 +1,12 @@
 // A hold's window on the waveform (lib/SeekWave; 0.10.1, the owner: "I really do need this perfect. So pure continuous
 // transitions."), pure so the tests drive it frame by frame. The window is placed from three things that each move
 // continuously, so nothing in it can step:
-// - Its focus: the crosshair (where letting go lands), converged on so that it settles exactly in the middle (the owner,
-//   2026-10-30: "it should converge on the crosshair being exactly in the center that aims the easiest"). The focus is
-//   the playhead plus a lead eased toward the crosshair's lead on it: the tape's own motion followed exactly, however
-//   fast, only the lead eased; never past it, and exactly on it once within a pixel's fraction.
+// - Its focus: the crosshair (where letting go lands), exactly, every frame (0.13, the owner: "It should be quite fast,
+//   set the crosshair in the center to keep it stable"; eased toward it, the window grew faster than its middle caught
+//   up, and lagged behind it through a whole wind-up). Let go, the crosshair it aimed at while the tape is short of it,
+//   then the playhead. The crosshair is of the same moment as the playhead (lib/SeekWave), so its lead on it moves on
+//   continuously; where the crosshair itself moves at once (it comes to be known, it is given up), that move is the
+//   offset's, eased away, never the window's in a frame.
 // - Its width, eased by lib/SeekWave.
 // - An offset from that place, set where the place itself moves at once (a hold beginning from the window shown, a let
 //   go handing over to the track's own view, a track change then) so that what shows does not, and eased away.
@@ -116,9 +118,23 @@ export const ZOOM_EASE_MS = 250;
 export const ZOOM_OUT_MS = 700;
 /** Let go, the window stays this long before it eases back to the whole track (the owner, 2026-10-28). */
 export const ZOOM_KEEP_MS = 2000;
-/** The crosshair's lead eased toward where it is; an offset eased away. */
-export const FOCUS_MS = 300;
+/** An offset eased away; as a hold begins, from the whole track to its crosshair in the middle, quickly (0.13, the
+ *  owner: "it should be quite fast, set the crosshair in the center"). */
 export const OFFSET_MS = 400;
+export const HOLD_IN_MS = 150;
+/** A crosshair moving further in a frame than this share of the window (a quarter of a bar of 130) moved at once (it
+ *  came to be known, or was given up): its move is taken up by the offset, eased away. Its own run, a wind-up to the
+ *  top speed included, moves it a twentieth of that a frame. */
+export const AIM_JUMP = 0.002;
+
+/** The crosshair's lead on the playhead the window is centred by: held, where letting go lands (not known: as it was);
+ *  let go, where it aimed while the tape is short of it the way it goes, then none. */
+export function leadOf(holding: boolean, dir: WaveDir, pos: number, aim: number | null, had: number): number {
+  if (aim === null) return holding ? had : 0;
+  const d = aim - pos;
+  if (holding) return d;
+  return dir !== 0 && d * dir > 0 ? d : 0;
+}
 
 /** What a frame of the window goes by. Places in s from the playing track's start. */
 export type HoldWindowIn = {
@@ -148,10 +164,12 @@ export type HoldWindow = {
   span: number;
   rel: number;
   off: Offset | null;
-  /** How fast the width, the lead and the offset move (per ms): each eased on as it moved (lib/waveView's spring). */
+  /** How fast the width and the offset move (per ms): each eased on as it moved (lib/waveView's spring). `rel`: the
+   *  crosshair's lead on the playhead (leadOf), the window's middle. */
   wv: number;
-  relv: number;
   offv: Offset;
+  /** The offset's easing: quick as a hold begins (HOLD_IN_MS), else OFFSET_MS. */
+  offMs: number;
   /** How fast what shows moved last frame (per ms), each edge: a hand-over goes on from where it was heading, at that
    *  speed. Its focus (the playhead plus the lead), for where it would have been placed by the new rules. */
   sv: Offset;
@@ -213,16 +231,31 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   if (!i.holding) [w, wv] = spring(w0, s && !s.held ? s.wv : 0, target, dt, target > w0 ? ZOOM_OUT_MS : ZOOM_EASE_MS, settleOf(target));
   // Held, no wider than the walls hold: nothing past the queue's ends ever shows.
   else w = Math.min(w, walls.hi - walls.lo);
-  const lead = i.holding ? (i.aim !== null ? i.aim - i.pos : (s?.rel ?? 0)) : 0;
-  let rel = lead;
-  let relv = 0;
-  if (!starting && s) [rel, relv] = spring(s.rel, s.relv, lead, dt, FOCUS_MS, settleOf(w));
+  // The middle on the crosshair exactly; a crosshair that moved at once (AIM_JUMP) is the offset's to ease away.
+  const rel = leadOf(i.holding, i.dir, i.pos, i.aim, s?.rel ?? 0);
+  const jumped = !!s && !starting && i.moved !== null && Math.abs(rel - s.rel) > AIM_JUMP * w;
   const placed = place(i.pos + rel, w, walls);
   let off: Offset | null = null;
   let offv: Offset = { a: 0, b: 0 };
-  if (rebase) {
+  // Let go, the crosshair stands where it aimed and the middle with it: no hand-over of the hold's speed to the window.
+  const lettingGo = !!s?.held && !i.holding;
+  let offMs = s?.offMs ?? OFFSET_MS;
+  // Let go with its crosshair kept (where it aimed), the middle stays on it; let go with none (the middle back to the
+  // playhead at once), the window goes on as it was going, the rebase's.
+  if ((jumped && !rebase) || (rebase && lettingGo && !jumped)) {
+    // What showed kept, the window placed by the crosshair moving as it does, the change eased away (an offset's own
+    // easing goes on as it went). Let go, from where it stood: the crosshair stops where it aimed, and the window with
+    // it, not on at the hold's speed a frame.
+    const here = lettingGo && s && i.moved !== null ? { from: s.shown.from + i.moved, to: s.shown.to + i.moved } : last;
+    const o = offsetOf(here, placed);
+    off = o.a === 0 && o.b === 0 ? null : o;
+    if (off && s?.off) offv = s.offv;
+    if (!s?.off) offMs = OFFSET_MS;
+  } else if (rebase) {
     const o = offsetOf(last, placed);
     off = o.a === 0 && o.b === 0 ? null : o;
+    // A hold beginning comes to its crosshair quickly (HOLD_IN_MS); other changes ease (OFFSET_MS).
+    offMs = starting ? HOLD_IN_MS : OFFSET_MS;
     // On at the speed it showed: the offset takes the difference from how fast the window placed by the new rules
     // moves (against a wall, standing), and springs away from there.
     if (off && s && i.moved !== null && dt > 0) {
@@ -231,8 +264,8 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
     }
   } else if (s?.off) {
     const eps = settleOf(w);
-    const [a, va] = spring(s.off.a, s.offv.a, 0, dt, OFFSET_MS, eps);
-    const [b, vb] = spring(s.off.b, s.offv.b, 0, dt, OFFSET_MS, eps);
+    const [a, va] = spring(s.off.a, s.offv.a, 0, dt, offMs, eps);
+    const [b, vb] = spring(s.off.b, s.offv.b, 0, dt, offMs, eps);
     off = a === 0 && b === 0 && va === 0 && vb === 0 ? null : { a, b };
     offv = { a: va, b: vb };
   }
@@ -242,7 +275,7 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   if (!i.holding && since! >= ZOOM_KEEP_MS && !off && rel === 0 && w === i.len && shown.from === 0 && shown.to === i.len) return null;
   const sv =
     s && i.moved !== null && dt > 0 ? { a: (shown.from - (s.shown.from + i.moved)) / dt, b: (shown.to - (s.shown.to + i.moved)) / dt } : { a: 0, b: 0 };
-  return { w, span, rel, off, wv, relv, offv, sv, focus: i.pos + rel, walls, hold, held: i.holding, since, shown };
+  return { w, span, rel, off, wv, offv, offMs, sv, focus: i.pos + rel, walls, hold, held: i.holding, since, shown };
 }
 
 /**

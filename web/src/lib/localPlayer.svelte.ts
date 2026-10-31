@@ -3946,6 +3946,16 @@ function letGoLanding(w: Winding, place: { index: number; pos: number }): { inde
 /** `d` s on from `place` the way a held wind goes: past its track's edge on through the queue places it winds through
  *  (the owner, 2026-10-28: a brake past the track's end landed in the next one, the look-ahead stuck at the end). */
 const onThrough = (w: Winding, place: Place, d: number): Place => along([w.seg.index, ...w.through], w.dir, place, d);
+/** A held wind's place and, held, where letting go now lands, at `now` (lib/SeekWave reads it every frame): the
+ *  window, the playhead and the crosshair go by one clock, the music's, not the wind's WIND_STEP_MS steps that set the
+ *  counter (0.13, the owner: the window "lags behind and it also glitches a bit"). null: no wind of this page's own
+ *  sounding as a hold (the counter and holdNow say it then). */
+export function windFrame(now: number): { place: Place; landing: Place | null } | null {
+  const w = tape.rewinding;
+  if (!w || w.at === null || w.edge || w.to !== null || (w.reverse && w.startAt === null)) return null;
+  const place = w.letGo ? planAt(w.letGo, now) : windPlace(w, now);
+  return { place, landing: tape.holding ? letGoLanding(w, place) : null };
+}
 /** Let go: the look-ahead kept where it aimed until the tape is there (the owner, 2026-10-28), at most AIM_KEEP_MS. */
 const AIM_KEEP_MS = 4000;
 let aimTimer: ReturnType<typeof setTimeout> | undefined;
