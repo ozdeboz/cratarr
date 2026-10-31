@@ -222,9 +222,10 @@ by a later record that says so in its header. A new decision takes the next numb
   accepted; amended 2026-10-30. One track at a time from a Soulseek search or, since 0.9.19, a file in Cratarr's
   slskd folder, gated by a whole decode, the recording's length and AcoustID, then added to the album with Undo.
 - [0081: Release types: MusicBrainz's release group, else the Discogs release that is the album](0081-release-types.md):
-  accepted; amended 2026-10-30. An album's type is its MusicBrainz release group's, else its Discogs release's when
-  that release fits the album's tracks or length; an EP's edition far longer than its group's first release is an
-  Album.
+  accepted; amended 2026-10-30 and 2026-10-31. What MusicBrainz's release group, else the Discogs release that fits
+  the album, says is read by the owner's rule: an album found missing tracks is Incomplete; the name's "EP" or "LP"
+  wins; seven tracks or more, or over 45 minutes, an Album; four to six an EP; one to three an EP when long, else a
+  Single; a Single said is an EP at most. Various Artists is a Compilation besides.
 - [0082: Classical as a kind of record, and a track's Other versions](0082-classical-and-other-versions.md): accepted.
   A record is classical by a genre gate and one confirmation (MusicBrainz works with performers, a composer confirmed
   elsewhere, or a mark); composers by MusicBrainz artist; each record in its primary kind by default; a track's other

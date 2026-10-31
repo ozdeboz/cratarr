@@ -594,10 +594,10 @@ fn add_annotation_own(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// The rule release types are found by (0.10: a Discogs release must fit the album's tracks or length; an EP or single
-/// far longer than its release group's first release is an album). Rows an older rule wrote that this one could find
-/// otherwise are asked again (`release_types_asked`).
-pub const RELEASE_TYPES_RULE: i64 = 1;
+/// The rule release types are found by (0.10: a Discogs release must fit the album's tracks or length; 0.13: a release
+/// group's type kept as said, the owner's rule applied as the library is built, decision 0081's second amendment).
+/// Rows an older rule wrote that this one could find otherwise are asked again (`release_types_asked`).
+pub const RELEASE_TYPES_RULE: i64 = 2;
 
 /// Release types from before their rule was kept get the column: rule 0. Safe to repeat.
 fn add_release_types_rule(conn: &Connection) -> Result<()> {
@@ -1998,13 +1998,14 @@ impl UserData {
     }
 
     /// The keys starting `prefix` not to ask about again: those with a primary type, and those asked since `since`;
-    /// without their prefix. Those an older rule found where `RELEASE_TYPES_RULE` changed it (every one of Discogs', an
-    /// EP or single of MusicBrainz's) are asked again, kept as they are until then.
+    /// without their prefix. Those an older rule found where `RELEASE_TYPES_RULE` changed it (Discogs' before rule 1; every
+    /// one of MusicBrainz's before rule 2, which kept a long EP's or single's edition as an album) are asked again, kept
+    /// as they are until then.
     pub fn release_types_asked(&self, prefix: &str, since: i64) -> Result<std::collections::HashSet<String>> {
         let db = self.db();
         let mut st = db.prepare(
             "SELECT key FROM release_types WHERE substr(key, 1, length(?1)) = ?1 AND (primary_type IS NOT NULL OR at >= ?2)
-             AND NOT (rule < ?3 AND (substr(key, 1, 3) = 'dc:' OR coalesce(primary_type, '') IN ('ep', 'single')))",
+             AND NOT (rule < ?3 AND substr(key, 1, 3) = 'mb:') AND NOT (rule < 1 AND substr(key, 1, 3) = 'dc:')",
         )?;
         let rows = st.query_map(params![prefix, since, RELEASE_TYPES_RULE], |r| r.get::<_, String>(0))?;
         Ok(rows.filter_map(|k| k.ok().map(|k| k[prefix.len()..].to_string())).collect())
@@ -2171,20 +2172,20 @@ mod tests {
     #[test]
     fn release_types_an_older_rule_found_are_asked_again_where_the_rule_changed_and_kept_until_then() {
         let u = UserData::open(None).unwrap();
-        let found: [(String, Option<String>, Vec<String>); 5] = [
+        let found: [(String, Option<String>, Vec<String>); 3] = [
             ("mb:ep".into(), Some("ep".into()), Vec::new()),
-            ("mb:none".into(), None, Vec::new()),
-            ("mb:single".into(), Some("single".into()), Vec::new()),
             ("mb:album".into(), Some("album".into()), Vec::new()),
             ("dc:al-1".into(), Some("single".into()), Vec::new()),
         ];
         u.set_release_types(&found, 100).unwrap();
+        u.db().execute("UPDATE release_types SET rule = 1", []).unwrap();
+        assert!(u.release_types_asked("mb:", 0).unwrap().is_empty(), "every one of MusicBrainz's asked again (an edition kept an album)");
+        assert_eq!(u.release_types_asked("dc:", 0).unwrap().len(), 1, "Discogs' as rule 1 found them");
         u.db().execute("UPDATE release_types SET rule = 0", []).unwrap();
-        assert_eq!(u.release_types_asked("mb:", 0).unwrap(), ["album".to_string(), "none".to_string()].into(), "an EP or single of MusicBrainz's asked again");
-        assert!(u.release_types_asked("dc:", 0).unwrap().is_empty(), "every one of Discogs' asked again");
+        assert!(u.release_types_asked("dc:", 0).unwrap().is_empty(), "Discogs' before rule 1 asked again");
         assert_eq!(u.release_types().unwrap().get("dc:al-1"), Some(&(Some("single".to_string()), Vec::new())), "kept until then");
         u.set_release_types(&found, 200).unwrap();
-        assert_eq!(u.release_types_asked("mb:", 0).unwrap().len(), 4, "asked by this rule: done");
+        assert_eq!(u.release_types_asked("mb:", 0).unwrap().len(), 2, "asked by this rule: done");
         assert_eq!(u.release_types_asked("dc:", 0).unwrap().len(), 1);
     }
 

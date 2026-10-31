@@ -93,13 +93,13 @@ impl Mark {
 }
 
 /// The kinds named on their own, by the owner's precedence: Classical, then Compilation (a Best Of is one, above
-/// Album), then Album, EP and Single; Other is every other.
+/// Album), then Album, EP, Single and Incomplete (0.13: a release with tracks missing); Other is every other.
 fn rank(kind: &str) -> Option<u8> {
     if kind.eq_ignore_ascii_case(CLASSICAL) {
         Some(0)
     } else if kind.eq_ignore_ascii_case("Compilation") {
         Some(1)
-    } else if ["Album", "EP", "Single"].iter().any(|k| kind.eq_ignore_ascii_case(k)) {
+    } else if ["Album", "EP", "Single", "Incomplete"].iter().any(|k| kind.eq_ignore_ascii_case(k)) {
         Some(2)
     } else {
         None
