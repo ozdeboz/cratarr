@@ -274,6 +274,9 @@ export type Prefs = {
    *  Crates' own order. */
   libraryOrder: CollectionOrder;
   libraryDown: boolean;
+  /** Classical's composers' order (lib/ComposerList), and turned round. */
+  composerOrder: ComposerOrder;
+  composerDown: boolean;
   /** Downloads' order (the Library's orders), and turned round. */
   downloadsOrder: CollectionOrder;
   downloadsDown: boolean;
@@ -303,6 +306,7 @@ export type AlbumLayout = 'rows' | 'grid' | 'table' | 'flow';
 /** How long the screen is left alone before the visuals open by themselves (ms). */
 export const VISUALS_AFTER = [30_000, 60_000, 120_000, 300_000, 600_000];
 export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating' | 'quality' | 'tracks' | 'length';
+export type ComposerOrder = 'name' | 'records';
 const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating', 'quality', 'tracks', 'length'];
 export type PlaylistOrder = 'name' | 'tracks' | 'playing' | 'missing';
 const PLAYLIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'playing', 'missing'];
@@ -498,6 +502,8 @@ export const DEFAULTS: Prefs = {
   // Newest first, as Incoming always showed, so a new arrival is on top.
   libraryOrder: 'added',
   libraryDown: true,
+  composerOrder: 'name',
+  composerDown: false,
   downloadsOrder: 'artist',
   downloadsDown: false,
   playlistOrder: 'name',
@@ -537,6 +543,7 @@ function read(): Prefs {
       if (['rows', 'grid', 'table', 'flow'].includes(saved.albumLayout)) p.albumLayout = saved.albumLayout;
       if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
       if (COLLECTION_ORDERS.includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
+      if (saved.composerOrder === 'name' || saved.composerOrder === 'records') p.composerOrder = saved.composerOrder;
       if (COLLECTION_ORDERS.includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (PLAYLIST_ORDERS.includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
       if (saved.playlistLayout === 'chips' || saved.playlistLayout === 'table') p.playlistLayout = saved.playlistLayout;
@@ -547,7 +554,7 @@ function read(): Prefs {
       // Before the list header: "✓ first" was the playlists' only other order.
       else if (saved.membersFirst === true) p.playlistOrder = 'playing';
       if (CRATE_ORDERS.includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
-      for (const k of ['libraryDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
+      for (const k of ['libraryDown', 'composerDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
