@@ -282,6 +282,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
             // A record marked classical or not (0.10), library-wide.
             .route("/api/albums/{source}/{album}/classical", put(mark_classical))
+            // A record's facts set by hand (0.13): one record or a selection.
+            .route("/api/albums/overrides", put(set_overrides))
             .route("/api/artists/discogs", get(artist_discogs))
             .route("/api/track-search", post(start_track_search))
             .route("/api/track-search/{id}", get(track_search))
@@ -1056,6 +1058,49 @@ async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>,
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     ctx.app.collection.tell_changed();
     Ok(Json(json!({ "classical": classical, "classical_mark": kept })))
+}
+
+#[derive(Deserialize)]
+struct SetOverrides {
+    albums: Vec<String>,
+    set: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Records' facts set by hand (0.13, the owner; decision 0089): `{albums: [ids], set: {field: value
+/// or null}}`, Cratarr's own library's albums. A field given is set (null: reset to what Cratarr finds), one left out
+/// is left as it is; the fields are `type`, `secondary`, `year`, `genres` and `classical` (`userdata::overrides`). Kept
+/// by each record's Music-form id, household-wide; the library is built again with them before the answer, and the
+/// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now.
+async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.albums.is_empty() || b.set.is_empty() {
+        return Err(ToggleError::BadSettings("Name the records and what to set.".into()).into());
+    }
+    let mut facts: Vec<(String, Option<serde_json::Value>)> = Vec::with_capacity(b.set.len());
+    for (field, value) in &b.set {
+        let kept = crate::userdata::overrides::check(field, value).map_err(ToggleError::BadSettings)?;
+        facts.push((field.clone(), kept));
+    }
+    let s = ctx.serve()?;
+    let albums = b.albums;
+    let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
+        let mut bases = Vec::with_capacity(albums.len());
+        for album in &albums {
+            bases.push(s.library.album_base(album)?.ok_or_else(|| anyhow::anyhow!("That record is not in the library."))?);
+        }
+        s.userdata.set_overrides(&bases, &facts, crate::app::moment::now_secs())?;
+        s.refresh()?;
+        let mut out = serde_json::Map::new();
+        for (album, base) in albums.iter().zip(&bases) {
+            out.insert(album.clone(), serde_json::to_value(s.userdata.overrides_of(base)?)?);
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    ctx.app.collection.refresh().await;
+    ctx.app.collection.tell_changed();
+    Ok(Json(json!({ "albums": set })))
 }
 
 /// A track's Other versions (0.10): its MusicBrainz work, the work's composers, and the library's other tracks of it,

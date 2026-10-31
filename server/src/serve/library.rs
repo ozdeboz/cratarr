@@ -21,6 +21,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::userdata::overrides::Overrides;
+
 use super::ids;
 use crate::catalogue::{Rules, ServedRow};
 
@@ -48,7 +50,8 @@ CREATE TABLE IF NOT EXISTS albums (
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
   folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
-  format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', type_why TEXT);
+  format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', type_why TEXT,
+  set_fields TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
@@ -115,13 +118,15 @@ fn add_trigrams(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The secondary types kept (MusicBrainz's names, lower case; 0.13: the ones a record can be set to).
+pub const SECONDARY: [&str; 12] =
+    ["compilation", "soundtrack", "spokenword", "interview", "audiobook", "audio drama", "live", "remix", "dj-mix", "mixtape/street", "demo", "field recording"];
+
 /// A release's types as kept (0.9.6): its primary type ("album", "ep", "single", "other") and its secondary ones
 /// ("compilation", "live", "remix", "soundtrack"…), lower case, from MusicBrainz's names ("Album", "EP",
 /// "Broadcast" as other) or Discogs' format descriptions ("LP", "EP", "Single", "Compilation"). Words of neither kind
 /// are left out.
 pub fn release_words<'a>(words: impl IntoIterator<Item = &'a str>) -> (Option<String>, Vec<String>) {
-    const SECONDARY: [&str; 12] =
-        ["compilation", "soundtrack", "spokenword", "interview", "audiobook", "audio drama", "live", "remix", "dj-mix", "mixtape/street", "demo", "field recording"];
     let (mut primary, mut secondary): (Option<String>, Vec<String>) = (None, Vec::new());
     for w in words {
         let w = w.trim().to_lowercase();
@@ -365,6 +370,8 @@ pub struct Library {
     release_types: Mutex<HashMap<String, Kept>>,
     /// The albums found missing tracks (0.13: typed incomplete), by album id (user data `album_complete`).
     incomplete: Mutex<HashSet<String>>,
+    /// A record's facts set by hand (0.13), by its Music-form id (user data `record_overrides`).
+    overrides: Mutex<HashMap<String, Overrides>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
     extra_genres: Mutex<HashMap<String, Vec<String>>>,
     /// One build at a time (0.9.8): a check's build reads every row first, and must not write over the albums Cratarr's
@@ -540,6 +547,7 @@ impl Library {
             extra_genres: Mutex::default(),
             release_types: Mutex::default(),
             incomplete: Mutex::default(),
+            overrides: Mutex::default(),
             building: Mutex::new(()),
         })
     }
@@ -557,6 +565,11 @@ impl Library {
     /// The release types found on MusicBrainz and Discogs (0.9.6); a change builds the library again.
     pub fn set_release_types(&self, types: HashMap<String, Kept>) {
         *self.release_types.lock().unwrap_or_else(|p| p.into_inner()) = types;
+    }
+
+    /// The records' facts set by hand (by Music-form id, 0.13); a change builds the library again.
+    pub fn set_overrides(&self, overrides: HashMap<String, Overrides>) {
+        *self.overrides.lock().unwrap_or_else(|p| p.into_inner()) = overrides;
     }
 
     /// The albums found missing tracks (by album id, 0.13); a change builds the library again.
@@ -580,15 +593,19 @@ impl Library {
         use md5::Digest;
         let mut i: Vec<String> = self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect();
         i.sort_unstable();
+        // And the facts set by hand (0.13).
+        let set: BTreeMap<String, Overrides> =
+            self.overrides.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         format!(
-            "{}/{} genres {}/{} types {}/{} incomplete {:x}",
+            "{}/{} genres {}/{} types {}/{} incomplete {:x} set {:x}",
             o.len(),
             o.values().fold(0u64, |a, v| a.wrapping_add(u64::from(*v))),
             g.len(),
             g.values().map(Vec::len).sum::<usize>(),
             t.len(),
             t.values().map(|v| usize::from(v.0.is_some()) + v.1.len()).sum::<usize>(),
-            md5::Md5::digest(i.join("\n").as_bytes())
+            md5::Md5::digest(i.join("\n").as_bytes()),
+            md5::Md5::digest(serde_json::to_string(&set).unwrap_or_default().as_bytes())
         )
     }
 
@@ -710,6 +727,7 @@ impl Library {
             extra_genres: self.extra_genres.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             release_types: self.release_types.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             incomplete: self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            overrides: self.overrides.lock().unwrap_or_else(|p| p.into_inner()).clone(),
         }
     }
 
@@ -763,9 +781,9 @@ impl Library {
             }
         }
         // Albums whose kept facts or cover files changed.
-        for (album, (folder, dir, src, first)) in self.built_albums()? {
+        for (album, (folder, dir, src, first, base)) in self.built_albums()? {
             let Some(r) = now.get(&(folder, first.as_str())) else { continue };
-            if album_src(&album, folder, &dir, r, &facts, covers) != src {
+            if album_src(&album, &base, folder, &dir, r, &facts, covers) != src {
                 dirs.extend(built.values().filter(|b| b.album == album).map(|b| (b.folder, b.dir.clone())));
             }
         }
@@ -881,13 +899,18 @@ impl Library {
     }
 
     /// Each album as built: its folder and folder there, its print, and the file of its first song.
-    fn built_albums(&self) -> Result<Vec<(String, (i64, String, String, String))>> {
+    fn built_albums(&self) -> Result<Vec<(String, (i64, String, String, String, String))>> {
         let db = self.db();
         let mut st = db.prepare(
-            "SELECT a.id, a.folder, a.dir, a.src, (SELECT s.rel FROM songs s WHERE s.album_id = a.id ORDER BY s.n LIMIT 1) FROM albums a",
+            "SELECT a.id, a.folder, a.dir, a.src, (SELECT s.rel FROM songs s WHERE s.album_id = a.id ORDER BY s.n LIMIT 1), a.base_id
+             FROM albums a",
         )?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?))))?;
-        Ok(rows.filter_map(|r| r.map(|(a, (f, d, s, first))| first.map(|first| (a, (f, d, s, first)))).transpose()).collect::<rusqlite::Result<_>>()?)
+        let rows = st.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?)))
+        })?;
+        Ok(rows
+            .filter_map(|r| r.map(|(a, (f, d, s, first, base))| first.map(|first| (a, (f, d, s, first, base)))).transpose())
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     /// The albums whose songs are in these folders, as built.
@@ -1161,6 +1184,7 @@ struct Facts {
     extra_genres: HashMap<String, Vec<String>>,
     release_types: HashMap<String, Kept>,
     incomplete: HashSet<String>,
+    overrides: HashMap<String, Overrides>,
 }
 
 /// A song as built: its folder there, its album and its row's print.
@@ -1179,12 +1203,13 @@ fn row_src(r: &ServedRow) -> String {
 }
 
 /// The print of what an album is built from besides its songs' rows: its kept facts (added date, original year,
-/// Discogs' genres, release types) and its folder's cover files.
-fn album_src(album: &str, folder: i64, dir: &str, first: &ServedRow, facts: &Facts, covers: &Covers) -> String {
+/// Discogs' genres, release types, missing tracks, what is set by hand by its Music-form id `base`) and its folder's
+/// cover files.
+fn album_src(album: &str, base: &str, folder: i64, dir: &str, first: &ServedRow, facts: &Facts, covers: &Covers) -> String {
     use md5::Digest;
     let release = first.first("musicbrainz_albumid");
     let said = format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}",
         facts.added.get(album),
         release.and_then(|m| facts.originals.get(m)),
         facts.extra_genres.get(album),
@@ -1192,6 +1217,7 @@ fn album_src(album: &str, folder: i64, dir: &str, first: &ServedRow, facts: &Fac
         facts.release_types.get(&format!("dc:{album}")),
         covers.get(&(folder, dir.to_string())),
         facts.incomplete.contains(album),
+        facts.overrides.get(base),
     );
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
 }
@@ -1224,7 +1250,13 @@ fn write_albums(
     facts: &Facts,
     covers: &Covers,
 ) -> Result<(Vec<String>, BTreeSet<String>)> {
-    let songs = songs_of(rows, rules);
+    let mut songs = songs_of(rows, rules);
+    // Genres set by hand (0.13) are its tracks' too: the axes and crates read the tracks'.
+    for s in songs.iter_mut() {
+        if let Some(g) = facts.overrides.get(&s.album_base).and_then(|o| o.genres.clone()) {
+            s.genres = g;
+        }
+    }
     let mut credited: BTreeSet<String> = BTreeSet::new();
     let mut albums: BTreeMap<String, Vec<&Song>> = BTreeMap::new();
     {
@@ -1288,9 +1320,9 @@ fn write_albums(
     let mut ins_album = tx.prepare_cached(
         "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
            size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps, cover,
-           release_type, type_from, secondary, src, type_why)
+           release_type, type_from, secondary, src, type_why, set_fields)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23, ?24, ?25, ?26, ?27)",
+           ?23, ?24, ?25, ?26, ?27, ?28)",
     )?;
     let mut ins_fts = tx.prepare_cached("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
     let mut ins_tri = tx.prepare_cached("INSERT INTO albums_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
@@ -1305,9 +1337,18 @@ fn write_albums(
             .filter_map(|s| s.row.first("originaldate").and_then(year_of))
             .min()
             .or_else(|| first.row.first("musicbrainz_albumid").and_then(|m| facts.originals.get(m)).copied());
-        let album_year = match (original, years.iter().max().copied()) {
+        let mut album_year = match (original, years.iter().max().copied()) {
             (Some(o), Some(d)) => Some(o.min(d)),
             (o, d) => o.or(d),
+        };
+        // What is set by hand wins (0.13): a year set is its original year and the one shown.
+        let set = facts.overrides.get(&first.album_base);
+        let original = match set.and_then(|o| o.year) {
+            Some(y) => {
+                album_year = Some(y);
+                Some(y)
+            }
+            None => original,
         };
         let mut genres: Vec<String> = Vec::new();
         for s in songs.iter() {
@@ -1345,11 +1386,17 @@ fn write_albums(
             various: first.album_artist.eq_ignore_ascii_case("Various Artists"),
             incomplete: facts.incomplete.contains(album_id),
         };
-        let (kind, type_from, type_why, secondary) = release_type_of(
+        let (mut kind, mut type_from, mut type_why, mut secondary) = release_type_of(
             first.row.first("musicbrainz_albumid").and_then(|m| facts.release_types.get(&format!("mb:{m}"))),
             facts.release_types.get(&format!("dc:{album_id}")),
             &shape,
         );
+        if let Some(k) = set.and_then(|o| o.kind.clone()) {
+            (kind, type_from, type_why) = (Some(k), Some("set"), None);
+        }
+        if let Some(s) = set.and_then(|o| o.secondary.clone()) {
+            secondary = s;
+        }
         ins_album.execute(params![
             album_id,
             first.album,
@@ -1376,8 +1423,9 @@ fn write_albums(
             kind,
             type_from,
             secondary.join("\u{1f}"),
-            album_src(album_id, first.folder, &dir, first.row, facts, covers),
+            album_src(album_id, &first.album_base, first.folder, &dir, first.row, facts, covers),
             type_why,
+            set.map(|o| o.fields().join("\u{1f}")).unwrap_or_default(),
         ])?;
         let n = tx.last_insert_rowid();
         ins_fts.execute(params![n, first.album, first.album_artist])?;
@@ -1973,6 +2021,43 @@ mod tests {
             })
             .unwrap();
         assert_eq!(t, (Some("incomplete".into()), Some("musicbrainz".into()), "live".into(), Some("incomplete".into())), "found missing tracks");
+    }
+
+    #[test]
+    fn facts_set_by_hand_win_over_the_files_and_the_rule() {
+        let track = |t: i64| {
+            let tags = [("title", "A"), ("artist", "Ott"), ("albumartist", "Ott"), ("album", "Skylon"), ("date", "2012"), ("genre", "Dub")];
+            row(t, &format!("Ott/Skylon/0{t} A.flac"), &tags)
+        };
+        let folders = || vec![FolderRows { folder: 0, root: "/music".into(), rows: vec![track(1), track(2)] }];
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&folders(), &Rules::default()).unwrap();
+        let base: String = lib.db().query_row("SELECT base_id FROM albums", [], |r| r.get(0)).unwrap();
+        let set = Overrides {
+            kind: Some("album".into()),
+            secondary: Some(vec!["live".into()]),
+            year: Some(2008),
+            genres: Some(vec!["Psybient".into()]),
+            classical: None,
+        };
+        let before = lib.originals_print();
+        lib.set_overrides([(base, set)].into());
+        assert_ne!(lib.originals_print(), before, "what is set builds the library again");
+        lib.build(&folders(), &Rules::default()).unwrap();
+        let album: (String, Option<String>, Option<String>, String, i64, i64, String, String) = lib
+            .db()
+            .query_row("SELECT release_type, type_from, type_why, secondary, year, original_year, genres, set_fields FROM albums", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            })
+            .unwrap();
+        let f = '\u{1f}';
+        assert_eq!(album, ("album".into(), Some("set".into()), None, "live".into(), 2008, 2008, "Psybient".into(), format!("type{f}secondary{f}year{f}genres")));
+        let songs: Vec<String> = lib.db().prepare("SELECT genres FROM songs").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(songs, ["Psybient", "Psybient"], "its tracks' genres too");
+        lib.set_overrides(HashMap::new());
+        lib.build(&folders(), &Rules::default()).unwrap();
+        let kind: (String, Option<String>) = lib.db().query_row("SELECT release_type, type_why FROM albums", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(kind, ("single".into(), Some("tracks".into())), "reset: as the rule finds it");
     }
 
     #[test]

@@ -15,6 +15,7 @@
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
 pub mod offline;
+pub mod overrides;
 pub mod tags;
 pub mod words;
 pub mod works;
@@ -649,6 +650,9 @@ impl UserData {
         conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;
         conn.execute_batch(words::SCHEMA).context("creating the words' tables")?;
         conn.execute_batch(works::SCHEMA).context("creating the works' tables")?;
+        // A record's facts set by hand (0.13), the classical marks among them.
+        conn.execute_batch(overrides::SCHEMA).context("creating the records' facts set by hand")?;
+        overrides::move_classical_marks(&conn).context("moving the classical marks to the facts set by hand")?;
         // Offline writes (0.12, decision 0087): what is counted and made once, kept 30 days.
         conn.execute_batch(offline::SCHEMA).context("keeping the plays counted and the changes made")?;
         offline::migrate(&conn).context("bringing the change log up to date")?;
