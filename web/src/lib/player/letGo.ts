@@ -24,6 +24,17 @@ export const releaseOf = (w: { sounding: boolean; braking: boolean; handing: boo
   !w.sounding ? 'fallback' : w.braking || w.handing ? 'nothing' : 'brake';
 /** The volume a let-go's brake sounds at on every head (× the music's): the wind's, from its gain (dB). */
 export const brakeGain = (gainDb: number) => 10 ** (gainDb / 20);
+/** A backward let-go's brake handed from the wind's stream to the backwards player, whose stream begins at `armed`
+ *  (lib/localPlayer handBack): once the wind is heard there (`heard` within 0.02 s short of it), from where it is heard,
+ *  its stream sought on by what the wind has played past its start (`seek`, s); missed where the wind is in another
+ *  track or past what the stream has loaded (`room`, s past its start; at least 0.25). The mirror of handOver: the
+ *  stretch the wind played never played again (the owner, 2026-10-31). */
+export function takeBack(heard: Place, armed: Place, room: number): 'wait' | 'missed' | { at: Place; seek: number } {
+  if (heard.index !== armed.index || armed.pos - heard.pos > Math.max(0.25, room)) return 'missed';
+  if (heard.pos > armed.pos + 0.02) return 'wait';
+  const seek = Math.max(0, armed.pos - heard.pos);
+  return { at: { index: armed.index, pos: armed.pos - seek }, seek };
+}
 
 /** The plan's ways over the queue, each queue place's length from `len` (null: unknown). */
 export function letGoPlans(len: (index: number) => number | null) {
