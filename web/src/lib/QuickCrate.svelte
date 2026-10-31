@@ -126,7 +126,6 @@
       await loadCrates();
       // Its words stay until the crate shows (lib/quickCrates; the owner, 2026-10-31: never the page between).
       text = '';
-      missed = [];
       leaveOnArrival({ quick: true });
       viewPlaylist(CRATE + made.id);
     } catch (e) {
@@ -142,7 +141,6 @@
     forgetQuick(chips);
     // As Save: the words stay until the builder shows.
     text = '';
-    missed = [];
     leaveOnArrival({ quick: true });
     startCrate(n, c);
   }
