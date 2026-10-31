@@ -26,6 +26,7 @@
   import { COLUMNS, fit, LIBRARY_TRACK_COLUMNS } from './columns.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { ALBUM_WIDTHS, DATES, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
+  import { composersShown } from './classical.svelte';
   import { libraryLayout, libraryLayouts, playlistLayout, playlistLayouts, type LibraryList } from './layouts';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
@@ -33,9 +34,9 @@
   import SizeControl from './SizeControl.svelte';
 
   // `order`: the panel list's own order instead of a page's (`page` null). The Library's columns are its list's: its
-  // records' (`kind`: a list of the device's, lib/layouts).
+  // records' (`kind`: a list of the device's, lib/layouts), or Classical's composers while they show.
   let { page = null, order = null, kind, onclose }: { page?: string | null; order?: ListOrder | null; kind?: LibraryList; onclose: () => void } = $props();
-  const listKind = $derived<LibraryList>(kind ?? 'albums');
+  const listKind = $derived<LibraryList>(kind ?? (page === 'library' && composersShown() ? 'composers' : 'albums'));
   const offered = $derived(listKind === 'tracks' ? LIBRARY_TRACK_COLUMNS : COLUMNS[listKind].map((c) => c.id));
 </script>
 
@@ -68,7 +69,8 @@
   {:else}
     <SettingRow card label="Size"><SizeControl widths={ALBUM_WIDTHS[libraryLayout(listKind)]} width={pageView.width} bind:value={prefs.albumZoom} /></SettingRow>
   {/if}
-  <SettingRow card label="Dates"><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></SettingRow>
+  <!-- Composers have no dates. -->
+  {#if listKind !== 'composers'}<SettingRow card label="Dates"><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></SettingRow>{/if}
 {/snippet}
 
 <style>

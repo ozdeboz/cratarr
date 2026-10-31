@@ -5,7 +5,7 @@
 import { matches, words } from './search';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
-import type { AlbumLayout, CollectionOrder, CrateOrder, PanelKind, PlaylistOrder } from './prefs.svelte';
+import type { AlbumLayout, CollectionOrder, ComposerOrder, CrateOrder, PanelKind, PlaylistOrder } from './prefs.svelte';
 
 /** A list's order field (decision 0060: one name per fact). `most`: it starts most (or newest, or best) first when
  *  chosen, a count or a date of how it was used; the list's arrow still turns it round. */
@@ -58,11 +58,10 @@ export const ALBUM_ORDERS: OrderField<CollectionOrder>[] = [
   // Its length (0.10; the owner, 2026-10-30): the longest first.
   { value: 'length', label: 'Length', most: true },
 ];
-/** The Library's Artists and Tracks (the owner, 2026-10-25): their orders, as the albums' header has them. */
-export const ARTIST_ORDERS: OrderField<'name' | 'albums' | 'tracks'>[] = [
+/** Classical's composers (lib/ComposerList): what the server says of them, their name and how many records. */
+export const COMPOSER_ORDERS: OrderField<ComposerOrder>[] = [
   { value: 'name', label: 'Name' },
-  { value: 'albums', label: 'Albums', most: true },
-  { value: 'tracks', label: 'Tracks', most: true },
+  { value: 'records', label: 'Records', most: true },
 ];
 export const TRACK_ORDERS: OrderField<'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed'>[] = [
   { value: 'album', label: 'Album' },
