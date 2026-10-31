@@ -251,3 +251,6 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0088: One crate, two views; and or or](0088-one-crate-two-views.md): accepted, for 0.13. Every crate opens with a
   Sentence / Conditions switch over the same conditions, names for ids from the server; Sounds like blended or near
   any one seed, genre, style, mood and tag any or all of their values.
+- [0089: A record's facts set by hand](0089-facts-set-by-hand.md): accepted, for 0.13. A record's type, secondary
+  types, year, genres and classical can be set by hand, household-wide by Music-form id, winning until reset; one call
+  for one record or a selection; the classical marks are its `classical`; a file's own words stay in its tags.

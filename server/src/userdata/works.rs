@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 
 use super::UserData;
 
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS discogs_names (discogs INTEGER PRIMARY KEY, realname 
 -- U+001F, empty: none), and when.
 CREATE TABLE IF NOT EXISTS discogs_link_genres (link TEXT PRIMARY KEY, genres TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID;
 -- A record marked by hand (0.10, the owner): `classical` or `not`, by its Music-form id (as its tags), library-wide; no
--- pass changes it.
+-- pass changes it. Moved to `record_overrides` (0.13) as it opens; kept so an older file's marks are found.
 CREATE TABLE IF NOT EXISTS classical_marks (album TEXT PRIMARY KEY, mark TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID;
 -- Every composer key the page was given (0.10): a MusicBrainz artist or `name:<loose name>`, the name shown, and the key
 -- it is now (`alias_of`, once a name was found to be a MusicBrainz artist); kept, so an address keeps leading there.
@@ -222,26 +222,22 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// A record's mark (`classical` or `not`), by its Music-form id; none takes it away.
+    /// A record's mark (`classical` or `not`), by its Music-form id; none takes it away. Kept since 0.13 as the
+    /// record's `classical` fact set by hand (`overrides`).
     pub fn set_classical_mark(&self, album: &str, mark: Option<&str>, at: i64) -> Result<()> {
-        match mark {
-            Some(m) => self.db().execute("INSERT OR REPLACE INTO classical_marks (album, mark, at) VALUES (?1, ?2, ?3)", params![album, m, at])?,
-            None => self.db().execute("DELETE FROM classical_marks WHERE album = ?1", [album])?,
-        };
-        Ok(())
+        let value = mark.map(|m| serde_json::Value::from(m == "classical"));
+        self.set_overrides(&[album.to_string()], &[("classical".into(), value)], at)
     }
 
     /// Every record's mark, by its Music-form id.
     pub fn classical_marks(&self) -> Result<HashMap<String, String>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT album, mark FROM classical_marks")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let all = self.overrides()?;
+        Ok(all.into_iter().filter_map(|(a, o)| Some((a, mark_of(o.classical?)))).collect())
     }
 
     /// One record's mark.
     pub fn classical_mark(&self, album: &str) -> Result<Option<String>> {
-        Ok(self.db().query_row("SELECT mark FROM classical_marks WHERE album = ?1", [album], |r| r.get(0)).optional()?)
+        Ok(self.overrides_of(album)?.classical.map(mark_of))
     }
 
     /// Every composer key given out: key → (name, the key it is now).
@@ -284,10 +280,13 @@ impl UserData {
 
     /// The marks, cheaply: a mark counts at once.
     pub fn marks_stamp(&self) -> Result<i64> {
-        let (n, at): (i64, i64) =
-            self.db().query_row("SELECT count(*), coalesce(sum(at + length(mark) * 1000003), 0) FROM classical_marks", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(n.wrapping_mul(1_000_003).wrapping_add(at))
+        self.overrides_stamp(Some("classical"))
     }
+}
+
+/// A mark as kept before 0.13: `classical` or `not`.
+fn mark_of(classical: bool) -> String {
+    if classical { "classical" } else { "not" }.to_string()
 }
 
 #[cfg(test)]

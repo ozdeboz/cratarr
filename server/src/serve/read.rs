@@ -14,7 +14,7 @@ const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.art
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
   s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak, s.genres";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
-  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary, a.type_why";
+  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary, a.type_why, a.set_fields";
 
 /// An album's length in milliseconds, for a query over `albums a`: its songs' lengths summed, NULL when any song's is
 /// unknown or nothing (`albums.duration_ms` counts those as nothing), as `source::total_secs`. Over the songs' album
@@ -22,7 +22,8 @@ const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.ge
 const ALBUM_LENGTH: &str = "(SELECT CASE WHEN count(*) = count(nullif(s.duration_ms, 0)) THEN sum(s.duration_ms) END FROM songs s WHERE s.album_id = a.id)";
 
 /// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id and Music-form id (what its
-/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists.
+/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists; and
+/// (0.13) its tracks, and whether it is a mix of others' (a compilation or a soundtrack).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkAlbum {
     pub id: String,
@@ -33,6 +34,8 @@ pub struct WorkAlbum {
     pub release: Option<String>,
     pub genres: Vec<String>,
     pub artists: Vec<WorkArtist>,
+    pub tracks: u32,
+    pub mixed: bool,
 }
 
 /// One of an album's album artists: their library id, name, and MusicBrainz id where the files carry one.
@@ -128,7 +131,8 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     let genres: String = r.get(7)?;
     let artist: String = r.get(3)?;
     let id: String = r.get(1)?;
-    let release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref(), r.get(17)?);
+    let mut release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref(), r.get(17)?);
+    release.set = r.get::<_, String>(18)?.split('\u{1f}').filter(|f| !f.is_empty()).map(str::to_string).collect();
     Ok(Album {
         cover_art: r.get::<_, Option<String>>(13)?.unwrap_or_else(|| id.clone()),
         id,
@@ -908,10 +912,12 @@ impl Library {
     /// MusicBrainz release, its files' genres and its album artists, in the library's order.
     pub fn work_albums(&self) -> Result<Vec<WorkAlbum>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres FROM albums ORDER BY n")?;
+        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres, song_count, secondary, compilation FROM albums ORDER BY n")?;
         let mut out: Vec<WorkAlbum> = st
             .query_map([], |r| {
                 let genres: String = r.get(6)?;
+                let secondary: String = r.get(8)?;
+                let mixed = r.get::<_, bool>(9)? || secondary.split('\u{1f}').any(|s| s == "compilation" || s == "soundtrack");
                 Ok(WorkAlbum {
                     id: r.get(0)?,
                     base: r.get(1)?,
@@ -921,6 +927,8 @@ impl Library {
                     release: r.get::<_, Option<String>>(5)?.filter(|m| !m.is_empty()),
                     genres: genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect(),
                     artists: Vec::new(),
+                    tracks: r.get::<_, i64>(7)?.clamp(0, i64::from(u32::MAX)) as u32,
+                    mixed,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;

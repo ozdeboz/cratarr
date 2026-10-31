@@ -226,6 +226,10 @@ pub struct ReleaseType {
     pub type_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_why: Option<String>,
+    /// The facts set by hand (0.13: "type", "secondary", "year", "genres", "classical"); `type_from` is "set" where
+    /// the type is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set: Vec<String>,
     #[serde(default)]
     pub secondary: Vec<String>,
     /// Classical (0.10, the owner, 2026-10-30), a kind beside the release type: Cratarr's own library's records say
@@ -236,6 +240,9 @@ pub struct ReleaseType {
     pub classical: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classical_mark: Option<String>,
+    /// Why a record is classical or not (0.13, for administrators and the MCP server; `app::classical::Why`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classical_why: Option<crate::app::classical::Why>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub composers: Vec<ComposerRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
