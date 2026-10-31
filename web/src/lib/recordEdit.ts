@@ -24,6 +24,8 @@ export const SECONDARY_TYPES = [
   'field recording',
 ] as const;
 const SECONDARY_LABEL: Record<string, string> = { 'dj-mix': 'DJ-mix', 'mixtape/street': 'Mixtape/Street', spokenword: 'Spoken word' };
+/** One of the twelve. */
+export const isSecondary = (v: string): boolean => (SECONDARY_TYPES as readonly string[]).includes(v);
 export const secondaryLabel = (v: string) => SECONDARY_LABEL[v] ?? v.charAt(0).toUpperCase() + v.slice(1);
 
 export type OverrideField = 'type' | 'secondary' | 'year' | 'genres' | 'classical';

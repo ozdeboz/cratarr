@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { classicalChoiceOf, classicalOfChoice, editableOf, sharedOf, shownOf, toSend, yearOf } = await import('../src/lib/recordEdit.ts');
+const { classicalChoiceOf, classicalOfChoice, editableOf, isSecondary, sharedOf, shownOf, toSend, yearOf } = await import('../src/lib/recordEdit.ts');
 
 const rec = (o: Partial<ReturnType<typeof editableOf>> = {}) => ({ type: 'album', secondary: [], year: 1994, genres: ['Jazz'], classical: false, set: [], ...o });
 
@@ -63,4 +63,11 @@ test("a listed record read: its set fields, a 0.10 classical mark as set; a year
   assert.equal(yearOf(' 1977 '), 1977);
   assert.equal(yearOf('77'), null);
   assert.equal(yearOf('19.5'), null);
+});
+
+test("only MusicBrainz's twelve secondary types are offered and sent", () => {
+  assert.equal(isSecondary('dj-mix'), true);
+  assert.equal(isSecondary('audio drama'), true);
+  assert.equal(isSecondary('Live'), false);
+  assert.equal(isSecondary('bootleg'), false);
 });
