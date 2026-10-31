@@ -4,7 +4,8 @@
   // rows (lib/settings/Group, which draws the block and the lines between): its cover, its title, one line under it
   // (`tone`: bad or warn), filled behind as far as work on it has come (`fill`, 0 to 1), and at its end either › (a tap
   // acts: `onclick`) or something of its own (`children`: a tick in a select mode, a count). `open`: the one shown
-  // beside. `rank`: its place in a top list, before its cover.
+  // beside. `rank`: its place in a top list, before its cover. `expanded` (0.13, Health's panel): it opens what it holds
+  // under itself, in place, its › turned down while it does.
   import type { Snippet } from 'svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
@@ -17,6 +18,7 @@
     tone = null,
     fill = null,
     open = false,
+    expanded = null,
     onclick = null,
     children,
   }: {
@@ -27,6 +29,7 @@
     tone?: 'bad' | 'warn' | null;
     fill?: number | null;
     open?: boolean;
+    expanded?: boolean | null;
     onclick?: (() => void) | null;
     children?: Snippet;
   } = $props();
@@ -47,11 +50,12 @@
     class:open
     class:filling={fill !== null}
     style:--fill={fill === null ? null : `${Math.min(1, Math.max(0, fill)) * 100}%`}
-    aria-pressed={open}
+    aria-pressed={expanded === null ? open : undefined}
+    aria-expanded={expanded ?? undefined}
     {onclick}
   >
     {@render body()}
-    <span class="end"><Icon name="chevronRight" size={20} /></span>
+    <span class="end"><Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={20} /></span>
   </button>
 {:else}
   <div class="release still" class:open class:filling={fill !== null} style:--fill={fill === null ? null : `${Math.min(1, Math.max(0, fill)) * 100}%`}>
