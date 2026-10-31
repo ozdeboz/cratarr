@@ -61,6 +61,43 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   the queue on the device (0.14).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
 
+## Soulseek in Cratarr, not through Lidarr (explored 2026-10-31)
+
+The owner: "I want to explore whether it's time we left SoulSeek in the hands of Cratarr altogether instead of using
+Lidarr. But I'm not sure about this." Not decided; written down to read first. Only the bulk intake of missing
+tracks below is being built (the owner, 2026-10-31: "Bulk search, you approve").
+
+**What happens now.** Lidarr keeps the wanted list (its monitored artists and albums, Cratarr's Requests among them)
+and grabs through qBittorrent and, via soularr, through slskd. soularr picks a whole folder from one Soulseek user by
+its name and hands it to Lidarr, which imports what lands, unchecked. Its 72 hours to 2026-10-31: about 40 albums
+imported; 34 albums failed outright after retries (half of them Brahms: "Ein deutsches Requiem op. 45" and "A German
+Requiem" are one work under many names), 6,869 enqueues and 945 folder looks refused by users gone or unwilling, 109
+downloads broken off. Cratarr's own Requests did fine: all 82 approved arrived, within six days.
+
+**What Cratarr would do instead.** Search by MusicBrainz release, recording by recording, as single-track intake
+(0080) does now: a folder chosen because its files are the release's tracks (title and length), not because its name
+looks right; every file gated (decoded whole, the recording's length, AcoustID at 0.9); into Incoming (0034), where
+the owner keeps it, never straight into Music. The administrator approves what is fetched, many at once (the bulk
+intake below), so March 2026's unattended batches cannot happen again.
+
+**Two ways.**
+
+- *Cratarr does Soulseek, Lidarr stays.* soularr goes. Cratarr takes Lidarr's wanted albums (Lidarr's API) and its own
+  Requests, and fetches them from Soulseek its way. Lidarr keeps watching artists for new releases and grabbing
+  torrents. The smaller step, and the same engine as the bulk intake of missing tracks.
+- *Cratarr replaces Lidarr.* Cratarr also watches artists (MusicBrainz's new releases) and grabs torrents. Lidarr and
+  soularr go. Several versions of work; Lidarr does those two things well.
+
+**Catches.**
+
+- Soulseek manners: one search at a time, paced; never a chat room (the owner's rule); slskd's own limits (its 409s
+  when searches pile up).
+- AcoustID's rate (three lookups a second) paces the gate on a big batch.
+- Lidarr's own folder (`lidarr-music`, 813 albums) is not in Health's checks or the missing-tracks pass, which look
+  at Music only; if Cratarr fetches, where its albums land decides what Health sees.
+- Found while looking: Cratarr's analysis says "no sound" for Roll the Dice (2010), whose MP3s play fine (−15 dB);
+  the decoder gets no frames from them (a large cover in the tag, perhaps). To be fixed on its own.
+
 ## External library
 
 Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood.
