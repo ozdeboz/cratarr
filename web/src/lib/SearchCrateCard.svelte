@@ -29,8 +29,10 @@
   const EACH = 3;
   const ask = (phrase: string): Promise<Found> =>
     search(phrase, [...TERM_KINDS], EACH).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
-  /** Its first tracks asked: enough for six covers of six records. */
-  const FIRST = 24;
+  /** Its first tracks asked: enough for six covers of six records. A crate's own order comes a record at a time, its
+   *  tracks together: 24 were two hip hop albums, fewer than the strip's four, and the card showed no covers (the
+   *  owner, 2026-10-31). */
+  const FIRST = 200;
   const previewOf = (c: readonly Chip[], m: Modes) =>
     previewCrate(conditionsOf(c, undefined, m), FIRST, prefs.source || undefined, { without: hiddenLibraries() });
 
