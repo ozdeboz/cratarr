@@ -21,6 +21,7 @@
   import { shuffled } from './shuffle';
   import SnippetStrip from './SnippetStrip.svelte';
   import { endSnippet, fromLabel, playFromHere, snippet, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { matcherModule } from './matcherLoad';
   import { spreadRecords } from './spread';
   import { toast } from './toast.svelte';
   import TrackCover from './TrackCover.svelte';
@@ -130,14 +131,14 @@
   const none = $derived(!conditions.length || preview?.total === 0);
   let starting = $state<'play' | 'shuffle' | null>(null);
   /** Played or shuffled: the server's first 500 of it (a queue's most), here or where the output is; in the crate's
-   *  order or a fair shuffle's draw, a record's tracks kept apart either way (lib/spread; the owner, 2026-10-31: "too
+   *  order or a fair shuffle's draw, a record's tracks kept apart either way (lib/spread, the rules crate's from matcher.wasm; the owner, 2026-10-31: "too
    *  much repetition of records in the queue"). */
   async function play(how: 'play' | 'shuffle') {
     starting = how;
     try {
       const p = await previewCrate([...conditions], 500, prefs.source || undefined, { without: hiddenLibraries() });
       const playable = p.rows.filter((r) => r.id && !r.missing);
-      const ids = spreadRecords(how === 'shuffle' ? shuffled(playable) : playable, (r) => recordKey(r)).map((r) => r.id!);
+      const ids = spreadRecords(await matcherModule(), how === 'shuffle' ? shuffled(playable) : playable, (r) => recordKey(r)).map((r) => r.id!);
       if (ids.length) await playCollection({ kind: 'tracks', source: p.source, ids }, 'play', name);
     } catch (e) {
       toast.fail(e, "It couldn't be played");

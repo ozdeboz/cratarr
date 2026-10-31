@@ -1052,6 +1052,27 @@ mod undo_tests {
     }
 
     #[tokio::test]
+    async fn all_of_where_a_track_has_one_value_is_refused_saved_previewed_or_drawn() {
+        // 0.13, decision 0088: refused as unanswerable (422), naming the axis; on the axes of several values, kept.
+        let (d, s) = service().await;
+        let years = vec![crates::Condition::new("year", false, crates::Value::AllOf { values: vec!["1994".into(), "2005".into()] })];
+        let said = |e: Option<ToggleError>| match e {
+            Some(ToggleError::Unanswerable(m)) => m,
+            other => panic!("not refused as unanswerable: {other:?}"),
+        };
+        assert!(said(s.crate_save(None, "Years", years.clone()).await.err()).contains("Year"));
+        assert!(said(s.crate_page(&years, None, 0, 50, &CrateLook::default()).await.err()).contains("Year"));
+        assert!(said(s.crate_lines_in_order(&years, None, &CrateLook::default()).await.err()).contains("Year"), "what Play plays");
+        let curve = s.like_curve(&["tr-1".to_string()], &[], crates::LikeMode::Either, None, &[], false, None, &years).await;
+        assert!(said(curve.err()).contains("Year"));
+        let jazz_funk = vec![crates::Condition::new("genre", false, crates::Value::AllOf { values: vec!["Jazz".into(), "Funk".into()] })];
+        let (id, _) = s.crate_save(None, "Jazz-funk", jazz_funk.clone()).await.unwrap();
+        assert_eq!(s.crate_def(&id).await.unwrap().conditions, jazz_funk);
+        assert!(s.condition_names(&jazz_funk).await.unwrap().is_empty(), "no library ids, no names");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
     async fn not_in_this_crate_goes_in_ones_own_crates_filter_once_and_is_taken_back() {
         // Decision 0083: one's own crate's "Artist is not", as set by hand; its undo the crate's.
         let (d, s) = service().await;
@@ -2432,6 +2453,22 @@ impl PlaylistService {
         Ok(def)
     }
 
+    /// The names of the library ids in conditions (0.13, decision 0088: `crates::named_ids`, a Sounds like's seeds, the
+    /// Album axis' values), by id: an artist's name, an album's or a track's title, as the library has them, in one
+    /// lookup. An id the library does not have is left out; none without Cratarr's own library.
+    pub async fn condition_names(&self, conditions: &[crates::Condition]) -> Result<std::collections::BTreeMap<String, crates::Named>, ToggleError> {
+        let ids = crates::named_ids(conditions);
+        let Some(serve) = self.served.clone().filter(|_| !ids.is_empty()) else { return Ok(Default::default()) };
+        let found = tokio::task::spawn_blocking(move || serve.library.names_of(&ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        Ok(found
+            .into_iter()
+            .filter_map(|(id, name)| {
+                let kind = crates::NameKind::of(&id)?;
+                Some((id, crates::Named { name, kind }))
+            })
+            .collect())
+    }
+
     /// The permanent crates, each with the conditions the account added to it (decision 0083).
     async fn permanent_crates(&self) -> Result<Vec<CrateDef>, ToggleError> {
         let store = self.own_crates()?;
@@ -2572,6 +2609,9 @@ impl PlaylistService {
         if let Some(c) = fit.rules.iter().find(|c| !crates::is_axis(&c.axis)) {
             return Err(ToggleError::Refused(format!("Unknown axis: {}.", c.axis)));
         }
+        if let Some(why) = crates::not_taken(&fit.rules) {
+            return Err(ToggleError::Unanswerable(why));
+        }
         Ok(self.own_crates()?.set_fit(&format!("{}{item}", crates::LIKE), fit).await?)
     }
 
@@ -2591,6 +2631,10 @@ impl PlaylistService {
     /// The library these conditions are worked out on, with what they need of the favourites (refused when those
     /// cannot be read): a crate's, a filter's (decision 0061).
     pub(super) async fn crate_library_for(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<CrateLibrary, ToggleError> {
+        // Refused before any work (0.13, decision 0088): all of on an axis a track has one value on.
+        if let Some(why) = crates::not_taken(conditions) {
+            return Err(ToggleError::Unanswerable(why));
+        }
         let lib = self.crate_library(want, crates::needs_favourites(conditions), crates::needs_favourite_albums(conditions), without).await?;
         if crates::needs_favourites(conditions) && lib.favourites.is_none() {
             return Err(ToggleError::CannotPlay("The server's favourites could not be read.".into()));
@@ -3001,6 +3045,9 @@ impl PlaylistService {
         if id.is_some_and(crates::is_permanent) {
             return Err(ToggleError::Refused("A permanent crate cannot be changed.".into()));
         }
+        if let Some(why) = crates::not_taken(&conditions) {
+            return Err(ToggleError::Unanswerable(why));
+        }
         let before = match id {
             Some(id) => self.own_crate(id).await?,
             None => None,
@@ -3031,9 +3078,20 @@ impl PlaylistService {
     /// `without`, less the tracks excluded everywhere. With the profile at every step its handle can stop at
     /// (`crates::profiles_along`), so the profile follows a drag (the owner, 2026-10-23). Among only the tracks that pass
     /// the crate's other `conditions` (0.11, quick crates; the owner: "Filtered curve in 0.11"), as its Sounds like picks
-    /// its closest among them, so the curve counts what the crate's preview counts.
+    /// its closest among them, so the curve counts what the crate's preview counts. Its seeds read by `mode` (0.13,
+    /// decision 0088), as the crate's Sounds like reads them (`crates::closest_fit`).
     #[allow(clippy::too_many_arguments)]
-    pub async fn like_curve(&self, of: &[String], weights: &[f32], want: Option<&str>, without: &[String], fresh: bool, own: Option<bool>, conditions: &[crates::Condition]) -> Result<LikeCurve, ToggleError> {
+    pub async fn like_curve(
+        &self,
+        of: &[String],
+        weights: &[f32],
+        mode: crates::LikeMode,
+        want: Option<&str>,
+        without: &[String],
+        fresh: bool,
+        own: Option<bool>,
+        conditions: &[crates::Condition],
+    ) -> Result<LikeCurve, ToggleError> {
         let lib = self.crate_library_for(conditions, want, without).await?;
         let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
         let artists = self.artists_out().await?;
@@ -3047,7 +3105,7 @@ impl PlaylistService {
                 .files()
                 .filter(|f| !excluded.contains(&f.rel) && !crates::credits_out(f, &artists) && !out.holds(f) && crates::holds_besides_like(&conditions, f, &w))
                 .collect();
-            let closest = crates::closest_weighted(&of, &weights, lib.alike(), &among, lib.by());
+            let closest = crates::closest_weighted(&of, &weights, mode, lib.alike(), &among, lib.by());
             let alike = closest.iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect();
             let tracks: Vec<&crates::Facts> = closest.iter().map(|(f, _)| *f).collect();
             let scales = crates::Scales::of(&lib.files().collect::<Vec<_>>());

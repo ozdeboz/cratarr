@@ -3,11 +3,13 @@
 // file of the build), before the network may go. Until it is in, a search leaves nothing out (lib/search), and the
 // lists read again when it arrives (`ready`).
 import url from './wasm/matcher.wasm?url';
-import { instantiateMatcher, TextMatcher } from './matcher';
+import { instantiateMatcher, TextMatcher, type Matcher } from './matcher';
 import { onMatcherWanted, useMatcher } from './search';
 
 let state: 'idle' | 'loading' | 'in' = 'idle';
 let done: (() => void) | undefined;
+let module: Matcher | null = null;
+const waiting: { resolve: (m: Matcher) => void; reject: (e: unknown) => void }[] = [];
 
 function start() {
   if (state !== 'idle') return;
@@ -20,13 +22,27 @@ function start() {
     .then(
       (m) => {
         state = 'in';
+        module = m;
+        for (const w of waiting.splice(0)) w.resolve(m);
         onMatcherWanted(null);
         useMatcher(new TextMatcher(m));
         done?.();
       },
-      // Out of reach (offline before it was ever kept): asked again by the next search.
-      () => (state = 'idle'),
+      // Out of reach (offline before it was ever kept): asked again by the next search; who waits is told.
+      (e) => {
+        state = 'idle';
+        for (const w of waiting.splice(0)) w.reject(e);
+      },
     );
+}
+
+/** The matcher's module itself, for what else it holds (the record spread, lib/spread): at once once in, else loaded
+ *  now and awaited. */
+export function matcherModule(): Promise<Matcher> {
+  if (module) return Promise.resolve(module);
+  const p = new Promise<Matcher>((resolve, reject) => waiting.push({ resolve, reject }));
+  start();
+  return p;
 }
 
 /** Loads the matcher when the page is idle (a few seconds on at most), or at the first search before then; `ready`
