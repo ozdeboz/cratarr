@@ -1089,10 +1089,14 @@ export const setSignInRequired = (on: boolean, password: string) =>
  *  decision 0051 it acts for its owner, and only reads (`read`) or also plays and changes (`control`); kept with what
  *  uses it (`purpose`, the owner, 2026-10-24: under Connections, not Authentication). */
 export type KeyScope = 'read' | 'control';
-export type ApiKey = { id: string; name: string; created: number; last_used: number | null; owner?: string; scope?: KeyScope; purpose?: 'home_assistant' | null };
+/** What uses a key: Home Assistant, or an assistant over MCP (0.13, decision 0090: only ever reads). */
+export type KeyPurpose = 'home_assistant' | 'mcp';
+export type ApiKey = { id: string; name: string; created: number; last_used: number | null; owner?: string; scope?: KeyScope; purpose?: KeyPurpose | null };
 /** A new key: `key` is shown in this answer only, never again. */
-export const newApiKey = (name: string, password: string, owner?: string, scope?: KeyScope, purpose?: 'home_assistant') =>
+export const newApiKey = (name: string, password: string, owner?: string, scope?: KeyScope, purpose?: KeyPurpose) =>
   post<{ key: string; id: string; name: string }>('/api/auth/keys', { name, password, owner, scope, purpose });
+/** Every key (an administrator's list); what uses each is its `purpose`. */
+export const getApiKeys = () => quietly<{ keys: ApiKey[] }>('/api/auth/keys');
 /** The weather Home Assistant last told (its weather entity's `condition`, °C, `at` epoch s). */
 export type Weather = { condition?: string | null; cloud?: number | null; temperature?: number | null; at: number };
 /** Connections' Home Assistant: its keys (their last use is when it last called) and the weather it last told. */
