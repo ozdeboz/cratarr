@@ -6,7 +6,8 @@
 //! (`harvest`), a batch at a time, each album's result kept (`UserData::album_complete`) and looked at again after
 //! `AGAIN`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,16 @@ const SLACK_SECS: i64 = 5;
 const BATCH: usize = 200;
 /// An album is looked at again after this long.
 const AGAIN: i64 = 60 * 86_400;
+/// An album whose look failed (its files not read, MusicBrainz not answering) waits this long (s) before it is tried
+/// again, the others going first: one such album stopped every pass after twelve albums, from 2026-10-27 until 0.13.
+const FAILED_WAIT: i64 = 86_400;
+
+/// The albums whose look failed, and when (kept while the server runs).
+static FAILED: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
+
+fn failed<T>(f: impl FnOnce(&mut HashMap<String, i64>) -> T) -> T {
+    f(FAILED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new))
+}
 
 /// What an album lacks of its smallest release that holds it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -97,7 +108,7 @@ pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::
                 continue;
             }
             let at = checked.get(&l.id).copied();
-            if at.is_some_and(|at| now - at < AGAIN) {
+            if at.is_some_and(|at| now - at < AGAIN) || failed(|f| f.get(&l.id).is_some_and(|t| now - t < FAILED_WAIT)) {
                 continue;
             }
             let own = s.library.album_place(&l.id)?.and_then(|p| p.2).filter(|m| super::discogs::is_mbid(m));
@@ -114,27 +125,29 @@ pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::
     })
     .await??;
     for (album, release) in due {
-        let looked = async {
-            let Some(rg) = super::discogs::release_group_of(http, &release).await? else { return anyhow::Ok(None) };
-            Ok(Some((super::renumber::group_releases(http, &rg).await?, rg)))
-        };
-        let (releases, rg) = match looked.await {
-            Ok(Some(r)) => r,
-            Ok(None) => (Vec::new(), String::new()),
-            Err(e) => {
-                tracing::debug!("incomplete: {album}: {e:#}");
-                continue;
-            }
-        };
-        let a = album.clone();
-        let tracks = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a)).await??.0;
-        let files: Vec<(String, i64)> = tracks.iter().map(|t| (t.title.clone(), i64::from(t.secs))).collect();
-        let found = check(&files, &releases).map(|i| serde_json::to_string(&Incomplete { release_group: Some(rg.clone()).filter(|g| !g.is_empty()), ..i })).transpose()?;
-        // The discs Renumber would put its tracks on (0.13, Health's Disc numbers).
-        let on = super::renumber::discs_from(&tracks, &releases);
-        let ud = served.userdata.clone();
-        tokio::task::spawn_blocking(move || ud.set_album_complete(&album, found.as_deref(), on, super::moment::now_secs())).await??;
+        // One album failing is set aside (`FAILED_WAIT`), never the end of the pass.
+        if let Err(e) = look(served, http, &album, &release).await {
+            tracing::info!("incomplete: {album} not looked at, tried again in a day: {e:#}");
+            failed(|f| f.insert(album, super::moment::now_secs()));
+        }
     }
+    Ok(())
+}
+
+/// One album held against its release group's releases, what it misses and the discs its tracks are on kept.
+async fn look(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::Client, album: &str, release: &str) -> Result<()> {
+    let (releases, rg) = match super::discogs::release_group_of(http, release).await? {
+        Some(rg) => (super::renumber::group_releases(http, &rg).await?, rg),
+        None => (Vec::new(), String::new()),
+    };
+    let a = album.to_string();
+    let tracks = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a)).await??.0;
+    let files: Vec<(String, i64)> = tracks.iter().map(|t| (t.title.clone(), i64::from(t.secs))).collect();
+    let found = check(&files, &releases).map(|i| serde_json::to_string(&Incomplete { release_group: Some(rg.clone()).filter(|g| !g.is_empty()), ..i })).transpose()?;
+    // The discs Renumber would put its tracks on (0.13, Health's Disc numbers).
+    let on = super::renumber::discs_from(&tracks, &releases);
+    let (ud, album) = (served.userdata.clone(), album.to_string());
+    tokio::task::spawn_blocking(move || ud.set_album_complete(&album, found.as_deref(), on, super::moment::now_secs())).await??;
     Ok(())
 }
 
