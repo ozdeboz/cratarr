@@ -31,7 +31,13 @@
   import { withUndo } from './undo.svelte';
 
   type Ticked = { s: ShelfSource; a: ListedAlbum };
-  let { list, tracks, close, onask }: { list: Ticked[]; tracks: LocalTrack[]; close: () => void; onask: (ask: Ask) => void } = $props();
+  let {
+    list,
+    tracks,
+    close,
+    onask,
+    onedit,
+  }: { list: Ticked[]; tracks: LocalTrack[]; close: () => void; onask: (ask: Ask) => void; onedit: (albums: ListedAlbum[]) => void } = $props();
 
   // The device's own albums have none of these (local mode's menu is its own).
   const items = $derived(list.filter((x) => x.s.id !== DEVICE));
@@ -78,6 +84,15 @@
   /** Their tracks kept on this device (the app's downloads), as one album's: Remove from this device. */
   const keys = $derived(new Set(items.map((x) => `${x.s.id}/${x.a.id}`)));
   const keptIds = $derived(inApp ? downloads.tracks.filter((t) => keys.has(`${t.source}/${albumOfDownload(t)}`)).map((t) => t.download.id) : []);
+
+  // Edit (0.13, administrators'): the ticked records of Cratarr's own library, their values set by hand at once
+  // (lib/RecordEdit), once the menu has closed.
+  const editable = $derived(me.admin ? items.filter((x) => x.s.id === 'cratarr').map((x) => x.a) : []);
+  function edit() {
+    const them = editable;
+    close();
+    onedit(them);
+  }
 
   // What their libraries allow (administrators): a job in the conversion queue only Cancel, else Move and Delete.
   const converting = $derived(me.admin ? offers.filter((x) => x.o?.job != null) : []);
@@ -225,6 +240,9 @@
       }}
     />
   {/if}
+</MenuGroup>
+<MenuGroup>
+  {#if editable.length}<MenuEntry icon="pencil" label="Edit" onclick={edit} />{/if}
 </MenuGroup>
 <MenuGroup label="Library">
   {#if converting.length}<MenuEntry icon="close" label="Cancel conversion" onclick={cancelAll} />{/if}

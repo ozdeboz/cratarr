@@ -1,7 +1,6 @@
 <script lang="ts" module>
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
-  import ChoiceSheet from './settings/ChoiceSheet.svelte';
-  import { markClassical } from './api';
+  import RecordEdit from './RecordEdit.svelte';
   import { leavePlayer } from './navStep.svelte';
   import { port } from './player/port.svelte';
   import { untrack } from 'svelte';
@@ -242,24 +241,9 @@
   const listed = () => [{ source, a: a as ListedAlbum }];
   /** Missing tracks open (lib/ReplaceTrackSheet), in the menu's place. */
   let missingOpen = $state(false);
-  // Classical… (0.10; administrators'): the record marked classical or not, library-wide, or left to Cratarr's finding;
-  // a server that says nothing of it (no `classical`) offers none.
-  let classicalOpen = $state(false);
-  const CLASSICAL_MARKS: { value: 'auto' | 'classical' | 'not'; label: string }[] = [
-    { value: 'auto', label: 'As Cratarr finds it' },
-    { value: 'classical', label: 'Classical' },
-    { value: 'not', label: 'Not classical' },
-  ];
-  async function markIt(v: 'auto' | 'classical' | 'not') {
-    const album = a as ListedAlbum;
-    try {
-      const r = await markClassical(source, album.id, v === 'auto' ? null : v);
-      album.classical = r.classical;
-      album.classical_mark = r.classical_mark ?? undefined;
-    } catch (e) {
-      toast.fail(e, 'Could not mark it');
-    }
-  }
+  // Edit (0.13, administrators'; the owner, 2026-10-31: per-record overrides): its type, year, secondary types, genres
+  // and classical set by hand (lib/RecordEdit), in the menu's place; the 0.10 Classical… sheet is its Classical row now.
+  let editOpen = $state(false);
   const actions = $derived.by<SheetAction[]>(() => {
     if (ask || exporting || step !== 'menu') return [];
     const t = tracks;
@@ -662,10 +646,8 @@
   {:else if e === 'missingTracks'}
     <!-- Its release's tracks, the missing ones found one at a time (0.9.8, single-track replacement). -->
     {#if me.admin && source === 'cratarr' && missingOffered}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
-  {:else if e === 'classical'}
-    {#if me.admin && offers('classical') && (a as ListedAlbum).classical !== undefined}
-      <MenuEntry icon="music" label="Classical…" onclick={() => (classicalOpen = true)} />
-    {/if}
+  {:else if e === 'edit'}
+    {#if me.admin && source === 'cratarr'}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
   {:else if e === 'deviceCover'}
     {#if !(me.admin && source === 'cratarr') && deviceCovers}<MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />{/if}
   {:else if e === 'serverCover'}
@@ -692,14 +674,8 @@
 
 {#if missingOpen}
   <ReplaceTrackSheet {source} album={{ id: a.id, title: a.title }} {onclose} />
-{:else if classicalOpen}
-  <ChoiceSheet
-    title="Classical"
-    options={CLASSICAL_MARKS}
-    value={(a as ListedAlbum).classical_mark ?? 'auto'}
-    onchange={(v) => void markIt(v)}
-    onclose={() => ((classicalOpen = false), onclose())}
-  />
+{:else if editOpen}
+  <RecordEdit {source} albums={[a as ListedAlbum]} {onclose} />
 {:else}
 <MenuSheet
   label={a.title}

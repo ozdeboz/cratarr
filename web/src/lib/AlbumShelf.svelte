@@ -29,6 +29,7 @@
   import { toast } from './toast.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
   import SeveralAlbums, { type Ask } from './SeveralAlbums.svelte';
+  import RecordEdit from './RecordEdit.svelte';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
@@ -383,6 +384,8 @@
   let several = $state<{ title: string; tracks: LocalTrack[]; list: { s: ShelfSource; a: ListedAlbum }[] } | null>(null);
   /** Delete's or Move's question for several, once their menu has closed. */
   let asking = $state<Ask | null>(null);
+  /** Several records' Edit (lib/RecordEdit), once their menu has closed. */
+  let editing = $state<ListedAlbum[] | null>(null);
   async function menuOfTicked(e: MouseEvent) {
     const x = ticked[0];
     if (!x) return;
@@ -609,7 +612,7 @@
 {/snippet}
 
 {#snippet severalExtra(close: () => void)}
-  {#if several}<SeveralAlbums list={several.list} tracks={several.tracks} {close} onask={(q) => (asking = q)} />{/if}
+  {#if several}<SeveralAlbums list={several.list} tracks={several.tracks} {close} onask={(q) => (asking = q)} onedit={(them) => (editing = them)} />{/if}
 {/snippet}
 
 {#if several}
@@ -620,6 +623,9 @@
     extra={severalExtra}
     onclose={() => ((several = null), (selecting = null))}
   />
+{/if}
+{#if editing}
+  <RecordEdit source="cratarr" albums={editing} onclose={() => (editing = null)} />
 {/if}
 {#if asking}
   {@const q = asking}
