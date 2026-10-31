@@ -1,6 +1,7 @@
 <script lang="ts" module>
-  /** One choice; `group`: a heading it comes under (a menu's group), named once before the first of it. */
-  export type PickerOption = { id: string; label: string; group?: string };
+  /** One choice; `group`: a heading it comes under (a menu's group), named once before the first of it; `count`: how
+   *  many it shows (the Library's types), at its end. */
+  export type PickerOption = { id: string; label: string; group?: string; count?: number };
 </script>
 
 <script lang="ts">
@@ -20,6 +21,8 @@
   }: { shown: string; menuLabel: string; options: readonly PickerOption[]; chosen: string | null; onchoose: (id: string) => void } = $props();
 
   let open = $state(false);
+  // Counts in a column of their own, the tick's room kept beside them so they line up.
+  const counted = $derived(options.some((o) => o.count !== undefined));
   let el = $state<HTMLElement>();
   // Under the button, in the glass menu (lib/GlassMenu).
   let at = $state<{ top: number; left: number; minWidth: number }>({ top: 0, left: 0, minWidth: 0 });
@@ -42,7 +45,7 @@
       {#each options as o, i (o.id)}
         {#if o.group && o.group !== options[i - 1]?.group}<span class="group" role="presentation">{o.group}</span>{/if}
         <button class="option" role="option" aria-selected={o.id === chosen} aria-label={o.group ? `${o.group} ${o.label.toLowerCase()}` : undefined} onclick={() => choose(o.id)}
-          >{o.label}{#if o.id === chosen}<Icon name="check" size={18} />{/if}</button
+          >{o.label}{#if counted}<span class="end">{#if o.count !== undefined}<span class="count">{o.count.toLocaleString()}</span>{/if}<span class="tick">{#if o.id === chosen}<Icon name="check" size={18} />{/if}</span></span>{:else if o.id === chosen}<Icon name="check" size={18} />{/if}</button
         >
       {/each}
     </GlassMenu>
@@ -80,6 +83,24 @@
 
   .open .shown :global(svg) {
     transform: rotate(180deg);
+  }
+
+  .end {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .count {
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tick {
+    display: flex;
+    width: 18px;
   }
 
   /* A group's heading (Spotify's lists in Discover's), named once, as a menu's group. */

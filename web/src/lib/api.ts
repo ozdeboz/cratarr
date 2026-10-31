@@ -1492,7 +1492,7 @@ export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>
 
 // Classical (0.10): its composers, each one's records, a record's mark, and a track's other versions (the library's
 // recordings of the same work, by MusicBrainz's work links).
-export const getClassicalComposers = () => quietly<import('./recordKindRules').Composer[]>('/api/classical/composers');
+export const getClassicalComposers = () => quietly<import('./composers').Composer[]>('/api/classical/composers');
 export const getClassicalComposer = (key: string) => quietly<{ key: string; name: string; records: string[] }>(`/api/classical/composers/${encodeURIComponent(key)}`);
 // Works and movements (0.12, decision 0086, when the server says `works`): a composer's works, and a work with its
 // movements and the library's recordings of it (Cratarr's own library).

@@ -7,6 +7,7 @@ import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
+import { layeredRows } from './recordTypeRules';
 import { savedOutput } from './player/commands';
 
 /** The bands' Speed (lib/BandSlider): Ultra slow to Radical, times each look's own pace (Radical: four times the first
@@ -647,7 +648,7 @@ function read(): Prefs {
       if (saved.filters && typeof saved.filters === 'object')
         for (const [k, v] of Object.entries(saved.filters) as [string, ListFilter][])
           if (Array.isArray(v?.conditions) && Array.isArray(v.on))
-            p.filters[k] = { conditions: v.conditions.filter((c) => typeof c?.axis === 'string' && c.value), on: v.on.filter((x) => typeof x === 'string') };
+            p.filters[k] = { conditions: layeredRows(v.conditions.filter((c) => typeof c?.axis === 'string' && c.value)), on: v.on.filter((x) => typeof x === 'string') };
       // The tabs' names before decision 0065: Statistics is Collection, Related is Map.
       const tab = saved.insightsTab === 'statistics' ? 'collection' : saved.insightsTab === 'related' ? 'map' : saved.insightsTab;
       if (tab === 'collection' || tab === 'listening' || tab === 'map') p.insightsTab = tab;

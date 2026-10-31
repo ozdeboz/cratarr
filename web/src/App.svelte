@@ -65,7 +65,7 @@
   import { crateCardOn } from './lib/quickCrate';
   import RecordsPicker from './lib/RecordsPicker.svelte';
   import DiscoverPicker from './lib/DiscoverPicker.svelte';
-  import { chooseKind, kindNow, recordKinds } from './lib/recordKinds';
+  import { chooseType, loadTypes, typeNow, typesOffered } from './lib/recordTypes.svelte';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
   import { globalSearch, pageKinds, readingPending } from './lib/globalSearch.svelte';
   import { leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
@@ -895,8 +895,9 @@
   // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
   loadSpotify();
   type Sub = { id: string; label: string; on: boolean; pick: () => void };
-  const kindShown = $derived(kindNow());
-  const librarySubs = $derived<Sub[]>(recordKinds().map((k) => ({ id: k.id, label: k.label, on: kindShown === k.id, pick: () => chooseKind(k.id) })));
+  $effect(() => loadTypes());
+  const typeShown = $derived(typeNow());
+  const librarySubs = $derived<Sub[]>(typesOffered().map((k) => ({ id: k.id, label: k.label, on: typeShown === k.id, pick: () => chooseType(k.id, page === LIBRARY.id) })));
   const discoverSubs = $derived<Sub[]>([
     ...DISCOVER_MODES.map((m) => ({ id: m.value, label: m.label, on: prefs.discoverMode === m.value, pick: () => (prefs.discoverMode = m.value) })),
     ...(spotify.state?.shown

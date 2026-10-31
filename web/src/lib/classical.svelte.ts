@@ -3,8 +3,9 @@
 // list narrowed to them. The composer rides in the address (`#/library?composer=<key>`, kept as the panel opens over
 // it, lib/panel), so back returns to the composers as any step does.
 import { getClassicalComposer, getClassicalComposers } from './api';
-import { classicalListed, kindNow } from './recordKinds';
-import { byComposer, type Composer } from './recordKindRules';
+import { CLASSICAL } from './recordTypeRules';
+import { classicalListed, typeNow } from './recordTypes.svelte';
+import { byComposer, type Composer } from './composers';
 
 export const classical = $state({
   composers: null as Composer[] | null,
@@ -14,7 +15,7 @@ export const classical = $state({
 });
 
 /** Whether the Library shows the composers now (Classical chosen, no composer open): its View is theirs. */
-export const composersShown = () => kindNow() === 'Classical' && classicalListed() && !classical.composer;
+export const composersShown = () => typeNow() === CLASSICAL && classicalListed() && !classical.composer;
 
 let asked = false;
 /** The composers, read once (again with `fresh`). */
