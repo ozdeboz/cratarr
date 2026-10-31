@@ -1,5 +1,5 @@
-// A track's snippet heard (0.12, the owner's mockup A2; lib/snippet picks it): from a track's menu as it opens, or from
-// a crate search row's button. On this device only, never on a Play On player, never touching the queue: in its own
+// A track's snippet heard (0.12, the owner's mockup A2; lib/snippet picks it): from a track's menu's Play snippet (never
+// by itself as the menu opens: the owner, 2026-10-31), or from a crate search row's button. On this device only, never on a Play On player, never touching the queue: in its own
 // audio element, from the stream at its start, faded in and out; what plays here eased under it (DUCK) and back. In
 // the app the app plays it (the page's own sound beside the app's player would take Android's audio focus from it).
 // One at a time: a new one ends the one before.
@@ -7,10 +7,9 @@ import { BANDCAMP } from './bandcampPreview';
 import { inApp, onAppSnippet, toApp } from './app.svelte';
 import { local, pageVolume, setSnippetDuck } from './localPlayer.svelte';
 import { playsHere } from './output.svelte';
-import { playCollection } from './play.svelte';
-import { clockText, playing, seekTo } from './remote.svelte';
+import { clockText } from './remote.svelte';
 import { reach } from './reach.svelte';
-import { DUCK, FADE_MS, SNIPPET_S, START_DELAY_MS, duckGain, snippetGain, snippetOf, type Stretch } from './snippet';
+import { DUCK, FADE_MS, SNIPPET_S, duckGain, snippetGain, snippetOf, type Stretch } from './snippet';
 import { decode } from './visuals/beats';
 import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
 
@@ -70,7 +69,6 @@ export function stretchOf(t: SnippetTrack, beats = false): Stretch | null {
   return snippetOf(waveformOf(t.source, t.id) ?? null, duration, b);
 }
 
-let timer: ReturnType<typeof setTimeout> | null = null;
 let element: HTMLAudioElement | null = null;
 let raf = 0;
 /** The duck as it stands, and where it goes. */
@@ -96,26 +94,29 @@ function setDuck(down: boolean) {
   duckRaf = requestAnimationFrame(step);
 }
 
-/** Plays `t`'s snippet in START_DELAY_MS, unless it is ended before (a quick ⋮ and away plays nothing). */
+/** Plays `t`'s snippet now (the owner, 2026-10-31: a menu plays nothing by itself; its Play snippet does), from its
+ *  stretch as known now: the menu's strip has asked for its waveform and beats as it opened (prepareSnippet). */
 export function startSnippet(t: SnippetTrack) {
   if (!snippetable(t)) return;
   const key = keyOf(t);
-  if (snippet.key === key && (timer || snippet.sounding)) return;
+  if (snippet.key === key && (element || snippet.sounding)) return;
   endNow();
   snippet.key = key;
   snippet.at = 0;
   prepareSnippet(t);
-  const s = stretchOf(t);
-  if (s) Object.assign(snippet, { from: s.from, to: s.to, at: s.from });
-  timer = setTimeout(() => {
-    timer = null;
-    if (snippet.key !== key) return;
-    // Its stretch again: the waveform and the beats may have come meanwhile.
-    const now = stretchOf(t, true);
-    if (!now || now.to <= now.from) return;
-    Object.assign(snippet, { from: now.from, to: now.to, at: now.from });
-    sound(t, now);
-  }, START_DELAY_MS);
+  const s = stretchOf(t, true);
+  if (!s || s.to <= s.from) return void (snippet.key = null);
+  Object.assign(snippet, { from: s.from, to: s.to, at: s.from });
+  sound(t, s);
+}
+
+/** Whether `t`'s snippet is on (starting or sounding). */
+export const snippetOn = (t: SnippetTrack | null | undefined) => !!t && snippet.key === keyOf(t);
+
+/** Play snippet: on, or off again. */
+export function toggleSnippet(t: SnippetTrack) {
+  if (snippetOn(t)) endSnippet();
+  else startSnippet(t);
 }
 
 function sound(t: SnippetTrack, s: Stretch) {
@@ -148,14 +149,14 @@ function sound(t: SnippetTrack, s: Stretch) {
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(step);
   });
-  a.addEventListener('error', () => element === a && endNow());
-  a.play().catch(() => element === a && endNow());
+  // Not heard after all: off, so its button shows Play again.
+  const failed = () => element === a && (endNow(), (snippet.key = null));
+  a.addEventListener('error', failed);
+  a.play().catch(failed);
 }
 
 /** Ends the snippet, faded out (FADE_MS) and what plays here back up. */
 export function endSnippet() {
-  if (timer) clearTimeout(timer);
-  timer = null;
   snippet.key = null;
   if (inApp) {
     if (snippet.sounding) toApp({ type: 'snippet', stop: true });
@@ -180,8 +181,6 @@ export function endSnippet() {
 
 /** Ends it at once (another snippet comes, or the track plays for real). */
 function endNow() {
-  if (timer) clearTimeout(timer);
-  timer = null;
   cancelAnimationFrame(raf);
   const a = element;
   element = null;
@@ -205,27 +204,12 @@ onAppSnippet((atMs) => {
   } else snippet.at = atMs / 1000;
 });
 
-/** Plays `t` for real from `secs` in (the snippet's moment): the snippet ended, the track played as any track, then
- *  moved there once it plays. */
-/** Where Play from here starts the track (s): its snippet's start while it sounds, else its stretch's as known now; 0
- *  when not known. */
+/** Where Play snippet starts (s): its snippet's start while it sounds, else its stretch's as known now; 0 when not
+ *  known. */
 export function startOf(t: SnippetTrack): number {
   return snippet.key === keyOf(t) && snippet.to > snippet.from ? snippet.from : (stretchOf(t)?.from ?? 0);
 }
 
-/** Play from here's words: from when (the owner's audit, 2026-10-30: say from when), else plainly. */
-export const fromLabel = (secs: number) => (secs > 0 ? `Play from ${clockText(secs)}` : 'Play from here');
-
-export async function playFromHere(t: SnippetTrack, secs: number) {
-  endNow();
-  await playCollection({ kind: 'tracks', source: t.source, ids: [t.id] }, 'play', t.name ?? '');
-  const until = performance.now() + 5000;
-  while (performance.now() < until) {
-    const np = playing();
-    if (np && np.source === t.source && np.id === t.id && np.progress) {
-      seekTo(secs);
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-}
+/** Play snippet's words: from when (the owner's audit, 2026-10-30: say from when; 2026-10-31: it is the snippet that
+ *  plays from there, not the track). */
+export const fromLabel = (secs: number) => (secs > 0 ? `Play snippet from ${clockText(secs)}` : 'Play snippet');

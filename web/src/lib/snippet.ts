@@ -1,7 +1,9 @@
-// A track's snippet (0.12, the owner's mockup A2): its liveliest SNIPPET_S seconds, heard from its menu and from the
-// crate search's rows. Found in its waveform (decision 0035's bins, each its RMS): the window of the highest mean,
-// leaving out the first and last EDGE of the track (an intro's or an outro's swell is not the track), its start on the
-// nearest beat where the track's beats are known. A track under SHORT_S: the whole of it.
+// A track's snippet (0.12, the owner's mockup A2): its first lively SNIPPET_S seconds, heard from its menu and from the
+// crate search's rows. Found in its waveform (decision 0035's bins, each its RMS): the first window whose mean reaches
+// NEAR of the liveliest window's (the owner, 2026-10-31: the liveliest was often the last chorus, two thirds in; the
+// first near it is the first chorus, about a third in), leaving out the first and last EDGE of the track (an intro's or
+// an outro's swell is not the track), its start on the nearest beat where the track's beats are known. A track under
+// SHORT_S: the whole of it.
 
 /** How long a snippet is (s). */
 export const SNIPPET_S = 20;
@@ -9,7 +11,9 @@ export const SNIPPET_S = 20;
 export const EDGE = 0.08;
 /** Where a snippet starts in a track whose waveform is not stored (its share of the track): no energy to go by, and
  *  nothing worked out for it (2026-10-30: a menu never asks the server to work anything out). */
-export const FIXED_AT = 0.35;
+export const FIXED_AT = 1 / 3;
+/** How near the liveliest window's energy (its share) the first window chosen must come. */
+export const NEAR = 0.9;
 /** A track shorter than this (s) is its own snippet. */
 export const SHORT_S = 30;
 /** How far a start may move to a beat (s): further, it stays where the energy put it. */
@@ -18,12 +22,9 @@ export const SNAP_S = 1.5;
 export const DUCK = 0.2;
 /** A snippet's fade in and out, and the duck's way down and up (ms). */
 export const FADE_MS = 300;
-/** A menu opened and closed within this (ms) plays nothing: a quick ⋮ and away does not blip. */
-export const START_DELAY_MS = 300;
-
 export type Stretch = { from: number; to: number };
 
-/** The liveliest SNIPPET_S of a track `duration` s long whose waveform is `bins` (null: none stored, then from FIXED_AT
+/** The first lively SNIPPET_S of a track `duration` s long whose waveform is `bins` (null: none stored, then from FIXED_AT
  *  of it). */
 export function pickSnippet(bins: ArrayLike<number> | null, duration: number): Stretch {
   if (!(duration > 0)) return { from: 0, to: 0 };
@@ -37,22 +38,27 @@ export function pickSnippet(bins: ArrayLike<number> | null, duration: number): S
   }
   const n = bins.length;
   const per = duration / n;
-  // The window in whole bins, each bin's energy once; the best start by its mean, the earliest on a tie.
+  // The window in whole bins, each bin's energy once: every start's sum, the liveliest's, then the first that comes NEAR it.
   const w = Math.max(1, Math.round(span / per));
   const first = Math.ceil(lo / per);
   const last = Math.floor(hi / per) - w;
   if (last < first) return { from: lo, to: lo + span };
+  const sums: number[] = [];
   let sum = 0;
   for (let i = first; i < first + w; i++) sum += bins[i];
-  let best = sum;
-  let at = first;
-  for (let i = first + 1; i <= last; i++) {
-    sum += bins[i + w - 1] - bins[i - 1];
-    if (sum > best) {
-      best = sum;
-      at = i;
-    }
+  sums.push(sum);
+  for (let i = first + 1; i <= last; i++) sums.push((sum += bins[i + w - 1] - bins[i - 1]));
+  let best = 0;
+  for (const x of sums) best = Math.max(best, x);
+  // The first run of windows NEAR the liveliest is the first lively passage; its own liveliest window (the earliest on a
+  // tie), so the snippet lies in that passage and does not start in the quieter bars before it.
+  let k = sums.findIndex((x) => x >= best * NEAR);
+  let top = k;
+  while (k < sums.length && sums[k] >= best * NEAR) {
+    if (sums[k] > sums[top]) top = k;
+    k++;
   }
+  const at = first + top;
   const from = Math.max(lo, at * per);
   return { from, to: Math.min(hi, from + span) };
 }
