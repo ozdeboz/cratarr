@@ -119,6 +119,44 @@ pub fn pick(n: usize, how: How, at: Option<usize>, most: usize, rng: &mut Rng) -
     }
 }
 
+/// A crate's play order with each record's tracks kept apart (0.12.2; the owner, 2026-10-31: a crate's play button
+/// "had too much repetition of records in the queue"): the order given stays the base (the crate's own, or a shuffle's
+/// draw); each step takes the first track left whose record has not come in the last `gap` tracks (`gap` at most one
+/// less than how many records there are); when none may come, the one whose record came longest ago. As the page's
+/// lib/spread.ts. Returns places in `records` (each track's record, in the order given).
+pub fn spread<K: Eq + std::hash::Hash>(records: &[K], gap: usize) -> Vec<usize> {
+    let kinds = records.iter().collect::<std::collections::HashSet<_>>().len();
+    let keep = gap.min(kinds.saturating_sub(1));
+    if keep == 0 || records.len() < 3 {
+        return (0..records.len()).collect();
+    }
+    let mut left: Vec<usize> = (0..records.len()).collect();
+    let mut last: std::collections::HashMap<&K, usize> = std::collections::HashMap::new();
+    let mut out = Vec::with_capacity(records.len());
+    while !left.is_empty() {
+        let step = out.len();
+        let free = left.iter().position(|&i| last.get(&records[i]).is_none_or(|&at| step - at > keep));
+        // None may come yet: the record heard longest ago, the first of its tracks left.
+        let pick = free.unwrap_or_else(|| {
+            let mut best = 0;
+            let mut oldest = usize::MAX;
+            for (k, &i) in left.iter().enumerate() {
+                let at = last.get(&records[i]).copied();
+                let age = at.map_or(0, |a| a + 1);
+                if age < oldest {
+                    oldest = age;
+                    best = k;
+                }
+            }
+            best
+        });
+        let i = left.remove(pick);
+        last.insert(&records[i], step);
+        out.push(i);
+    }
+    out
+}
+
 /// A queue entry's lane (decisions 0033 and 0036, amended): the queue's own tracks (the album, playlist or collection
 /// played), added by hand (Play next, Add to queue), Radio's inserts, Autoplay's tail, or one this does not know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -378,4 +416,23 @@ mod tests {
         assert_eq!(take(&before, &[2, 0]), ["e", "c"]);
         assert_eq!(take(&before, &[7]), Vec::<&str>::new(), "a place not there is left out");
     }
+
+    #[test]
+    fn a_crates_records_are_kept_apart_where_they_can_be() {
+        // Three records, their tracks together: each record's tracks at least two others apart (one less than three).
+        let r = ["a", "a", "a", "b", "b", "c", "c"];
+        let order = super::spread(&r, 4);
+        let got: Vec<&str> = order.iter().map(|&i| r[i]).collect();
+        assert_eq!(got, ["a", "b", "c", "a", "b", "c", "a"]);
+        assert_eq!(order[0], 0, "the first stays first");
+        // One record: the order as given; two tracks: as given.
+        assert_eq!(super::spread(&["a", "a", "a"], 4), vec![0, 1, 2]);
+        assert_eq!(super::spread(&["a", "b"], 4), vec![0, 1]);
+        // Many records: none again within four.
+        let many = ["a", "a", "b", "c", "d", "e", "f"];
+        let got: Vec<&str> = super::spread(&many, 4).iter().map(|&i| many[i]).collect();
+        let a: Vec<usize> = got.iter().enumerate().filter(|(_, r)| **r == "a").map(|(k, _)| k).collect();
+        assert!(a[1] - a[0] > 4, "{got:?}");
+    }
+
 }
