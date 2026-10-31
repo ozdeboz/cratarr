@@ -26,6 +26,8 @@ mod trash;
 mod userdata;
 mod jellyfin;
 mod m3u;
+// Cratarr as an MCP server (0.13).
+mod mcp;
 mod memwatch;
 mod mounts;
 mod moves;
@@ -86,8 +88,10 @@ fn healthcheck() -> i32 {
 fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -> axum::Router {
     let on = app.play_on.clone();
     let kept = Some(served.userdata.clone());
-    api::router(app)
+    api::router(app.clone())
         .merge(serve::routes::router(served.clone()))
+        // Cratarr as an MCP server (0.13): for API keys only, read only.
+        .merge(mcp::router(app))
         // Listening along and the guest portal (decision 0079).
         .merge(serve::along::router(on.clone(), served.clone()))
         .merge(serve::guest::router(on, served.clone()))

@@ -254,3 +254,6 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0089: A record's facts set by hand](0089-facts-set-by-hand.md): accepted, for 0.13. A record's type, secondary
   types, year, genres and classical can be set by hand, household-wide by Music-form id, winning until reset; one call
   for one record or a selection; the classical marks are its `classical`; a file's own words stay in its tags.
+- [0090: Cratarr as an MCP server](0090-mcp-server.md): accepted, for 0.13. `/mcp` in the server (the MCP Rust SDK's
+  streamable HTTP), for API keys only and read only: search, records with their type and classical and why, one record,
+  classical composers and works, the health findings, the account's crates.
