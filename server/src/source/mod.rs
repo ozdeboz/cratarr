@@ -240,6 +240,9 @@ pub struct ReleaseType {
     pub classical: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classical_mark: Option<String>,
+    /// Why a record is classical or not (0.13, for administrators and the MCP server; `app::classical::Why`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classical_why: Option<crate::app::classical::Why>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub composers: Vec<ComposerRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

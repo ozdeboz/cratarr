@@ -22,7 +22,8 @@ const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.ge
 const ALBUM_LENGTH: &str = "(SELECT CASE WHEN count(*) = count(nullif(s.duration_ms, 0)) THEN sum(s.duration_ms) END FROM songs s WHERE s.album_id = a.id)";
 
 /// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id and Music-form id (what its
-/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists.
+/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists; and
+/// (0.13) its tracks, and whether it is a mix of others' (a compilation or a soundtrack).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkAlbum {
     pub id: String,
@@ -33,6 +34,8 @@ pub struct WorkAlbum {
     pub release: Option<String>,
     pub genres: Vec<String>,
     pub artists: Vec<WorkArtist>,
+    pub tracks: u32,
+    pub mixed: bool,
 }
 
 /// One of an album's album artists: their library id, name, and MusicBrainz id where the files carry one.
@@ -909,10 +912,12 @@ impl Library {
     /// MusicBrainz release, its files' genres and its album artists, in the library's order.
     pub fn work_albums(&self) -> Result<Vec<WorkAlbum>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres FROM albums ORDER BY n")?;
+        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres, song_count, secondary, compilation FROM albums ORDER BY n")?;
         let mut out: Vec<WorkAlbum> = st
             .query_map([], |r| {
                 let genres: String = r.get(6)?;
+                let secondary: String = r.get(8)?;
+                let mixed = r.get::<_, bool>(9)? || secondary.split('\u{1f}').any(|s| s == "compilation" || s == "soundtrack");
                 Ok(WorkAlbum {
                     id: r.get(0)?,
                     base: r.get(1)?,
@@ -922,6 +927,8 @@ impl Library {
                     release: r.get::<_, Option<String>>(5)?.filter(|m| !m.is_empty()),
                     genres: genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect(),
                     artists: Vec::new(),
+                    tracks: r.get::<_, i64>(7)?.clamp(0, i64::from(u32::MAX)) as u32,
+                    mixed,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
