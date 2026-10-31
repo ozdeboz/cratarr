@@ -4,9 +4,9 @@
 // (lib/RecordEdit) shows for one record or several (a value they share, or mixed; whether it is set by hand), and what
 // it sends: only the fields changed, a value to set, null to go back to what Cratarr finds.
 
-export const RECORD_TYPES = ['album', 'ep', 'single', 'incomplete', 'other'] as const;
+export const RECORD_TYPES = ['album', 'ep', 'single', 'broadcast', 'other'] as const;
 export type RecordType = (typeof RECORD_TYPES)[number];
-export const TYPE_LABEL: Record<RecordType, string> = { album: 'Album', ep: 'EP', single: 'Single', incomplete: 'Incomplete', other: 'Other' };
+export const TYPE_LABEL: Record<RecordType, string> = { album: 'Album', ep: 'EP', single: 'Single', broadcast: 'Broadcast', other: 'Other' };
 
 /** MusicBrainz's secondary types, as Cratarr keeps them (lower case). */
 export const SECONDARY_TYPES = [

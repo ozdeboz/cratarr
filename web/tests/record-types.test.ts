@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { ALL, SELECTED, layeredRows, rowsOfType, typeLabel, typeOfRows, typeOptions, typesSaid, typesShown } = await import('../src/lib/recordTypeRules.ts');
+const { ALL, SELECTED, layerIn, layeredRows, rowsOfType, typeLabel, typeOfRows, typeOptions, typesSaid, typesShown } = await import('../src/lib/recordTypeRules.ts');
 
 const row = (values: string[], not = false) => ({ axis: 'type', not, value: { kind: 'any_of' as const, values } });
 
@@ -53,9 +53,12 @@ test('rows saved before the layers: Incomplete leaves them, the old Other become
   assert.deepEqual(layeredRows([row(['Live'])]), [row(['Live'])]);
 });
 
-test('the Filter sheet says the release types joined "or", the rest "and"', () => {
-  assert.equal(typesSaid(['Album', 'EP']), 'Album or EP');
-  assert.equal(typesSaid(['Album', 'Live']), 'Album and Live');
-  assert.equal(typesSaid(['Live', 'Album', 'Classical', 'EP']), 'Album or EP and Live and Classical');
-  assert.equal(typesSaid(['Compilation']), 'Compilation');
+test('the Filter sheet says "or" within a layer and "and" across, as the server reads them', () => {
+  const axis = { values: ['Album', 'Live', 'Classical', 'EP', 'Compilation'], layers: [1, 2, 3, 1, 2] };
+  const said = (v: string[]) => typesSaid(v, layerIn(axis));
+  assert.equal(said(['Album', 'EP']), 'Album or EP');
+  assert.equal(said(['Album', 'Live']), 'Album and Live');
+  assert.equal(said(['Live', 'Album', 'Classical', 'EP']), 'Album or EP and Live and Classical');
+  assert.equal(said(['Compilation', 'Live']), 'Compilation or Live', 'one layer: either');
+  assert.equal(typesSaid(['Album', 'EP'], layerIn(null)), 'Album and EP', 'no layers known: each its own');
 });
