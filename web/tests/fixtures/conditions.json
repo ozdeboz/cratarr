@@ -16,6 +16,10 @@
     { "condition": { "axis": "like", "not": false, "value": { "kind": "like", "of": [], "count": 20 } }, "complete": false },
     { "condition": { "axis": "like", "not": false, "value": { "kind": "like", "of": ["tr-1"], "count": 20 } }, "complete": true },
     { "condition": { "axis": "favourite", "not": false, "value": { "kind": "yes" } }, "complete": true },
-    { "condition": { "axis": "favourite_album", "not": true, "value": { "kind": "yes" } }, "complete": true }
+    { "condition": { "axis": "favourite_album", "not": true, "value": { "kind": "yes" } }, "complete": true },
+    { "condition": { "axis": "genre", "not": false, "value": { "kind": "all_of", "values": [] } }, "complete": false },
+    { "condition": { "axis": "genre", "not": true, "value": { "kind": "all_of", "values": [] } }, "complete": false },
+    { "condition": { "axis": "genre", "not": false, "value": { "kind": "all_of", "values": ["Jazz", "Soul"] } }, "complete": true },
+    { "condition": { "axis": "mood", "not": true, "value": { "kind": "all_of", "values": ["Calm"] } }, "complete": true }
   ]
 }

@@ -1587,7 +1587,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (!b.id) return void (crateDraft = { name: '', conditions: [] });
     const which = b.id;
     getCrate(which).then(
-      (c) => builder?.id === which && (crateDraft = { name: c.name, conditions: c.conditions }),
+      (c) => builder?.id === which && (crateDraft = { name: c.name, conditions: c.conditions, names: c.names ?? {} }),
       (e) => (error = e instanceof Error ? e.message : 'Unexpected error'),
     );
   });
@@ -2132,7 +2132,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {/each}
     {:else if crateEditing}
       {#if crateDraft}
-        <CrateEditor bind:conditions={crateDraft.conditions} bind:total={crateTotal} />
+        <CrateEditor bind:conditions={crateDraft.conditions} bind:total={crateTotal} names={crateDraft.names ?? {}} crate={builder?.id ?? null} name={crateDraft.name} />
       {:else if error}
         <p class="error" role="alert">{error}</p>
       {:else}

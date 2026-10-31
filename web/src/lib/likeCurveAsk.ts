@@ -13,6 +13,8 @@ export type CurveAsk = {
   fresh?: boolean;
   weights?: readonly number[];
   own?: boolean;
+  /** Either (0.13, decision 0088): near any one seed, the curve as the crate counts them; left out, blended. */
+  mode?: 'blend' | 'either';
 };
 
 /** The conditions a curve counts within: those switched on, a Sounds like left out (its own curve; its cut moving
@@ -31,6 +33,7 @@ export function curveQuery(a: CurveAsk, source?: string): URLSearchParams {
     ...(a.fresh ? { fresh: 'true' } : {}),
     ...(a.own ? { own: 'true' } : {}),
     ...(a.weights?.length ? { weights: weightsOf(a.weights).join(',') } : {}),
+    ...(a.mode === 'either' ? { mode: 'either' } : {}),
   });
 }
 
@@ -43,6 +46,7 @@ export function curveBody(a: CurveAsk) {
     ...(a.fresh ? { fresh: true } : {}),
     ...(a.own ? { own: true } : {}),
     ...(a.weights?.length ? { weights: weightsOf(a.weights) } : {}),
+    ...(a.mode === 'either' ? { mode: 'either' as const } : {}),
   };
 }
 

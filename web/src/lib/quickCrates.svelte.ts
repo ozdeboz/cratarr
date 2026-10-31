@@ -3,10 +3,11 @@
 // owner's mockup B: lib/QuickCrate reads it as a sentence), words handed to it from elsewhere (a search's "Grab a crate"),
 // and the last few made here and not saved, kept in this browser to come back to.
 import { can } from './capabilities.svelte';
-import { CLOSE, type Chip } from './quickCrate';
+import type { Condition } from './api';
+import { CLOSE, type Chip, type Modes } from './quickCrate';
 
-/** One not saved: its chips and its cut. */
-export type KeptQuick = { chips: Chip[]; min: number };
+/** One not saved: its chips, its cut and how its kinds join (0.13). */
+export type KeptQuick = { chips: Chip[]; min: number; modes?: Modes };
 
 /** How many not saved are kept. */
 const KEPT_MOST = 5;
@@ -20,6 +21,16 @@ export const quickCrates = $state({
   /** The crate being made: its chips and its cut (kept while the page is left and come back to). */
   chips: [] as Chip[],
   min: CLOSE,
+  /** How its kinds' terms join, where not the default (0.13, decision 0088). */
+  modes: {} as Modes,
+  /** What its conditions view made that the sentence cannot say (0.13), and a Sounds like said briefly: kept as they
+   *  are, not among the last few. */
+  rest: [] as Condition[],
+  brief: null as { text: string; condition: Condition } | null,
+  /** A new crate started (Crates' New crate, 0.13: the sentence, focused): its view shows with nothing in it yet. */
+  making: false,
+  /** Asks the sentence's field for the caret (counted: each New crate asks again). */
+  focus: 0,
   /** Words to read into it (a search's), taken by lib/QuickCrate as it shows. */
   words: '',
   recent: readKept(),
@@ -27,9 +38,12 @@ export const quickCrates = $state({
 
 /** Crates opened on `words` read into a new crate (the one being made, unsaved, kept among the last few first). */
 export function openQuickCrate(words = '') {
-  if (quickCrates.chips.length) keepQuick({ chips: quickCrates.chips, min: quickCrates.min });
+  if (quickCrates.chips.length) keepQuick({ chips: quickCrates.chips, min: quickCrates.min, modes: quickCrates.modes });
   quickCrates.chips = [];
   quickCrates.min = CLOSE;
+  quickCrates.modes = {};
+  quickCrates.rest = [];
+  quickCrates.brief = null;
   quickCrates.words = words;
   if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
 }
@@ -37,17 +51,28 @@ export function openQuickCrate(words = '') {
 /** Crates opened on a crate already read (0.12): a menu's "Sounds like this" or "Grab a crate", global search's crate
  *  card. The one being made is kept among the last few first, as for words. */
 export function grabCrate(chips: Chip[]) {
-  if (quickCrates.chips.length) keepQuick({ chips: quickCrates.chips, min: quickCrates.min });
+  if (quickCrates.chips.length) keepQuick({ chips: quickCrates.chips, min: quickCrates.min, modes: quickCrates.modes });
   quickCrates.chips = chips.map((c) => ({ ...c }));
   quickCrates.min = CLOSE;
+  quickCrates.modes = {};
+  quickCrates.rest = [];
+  quickCrates.brief = null;
   quickCrates.words = '';
   if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
+}
+
+/** Crates' New crate (0.13; the owner, 2026-10-31: "one start, one list"): a new crate's sentence, its field
+ *  focused, its Conditions one switch away. */
+export function newQuickCrate() {
+  openQuickCrate('');
+  quickCrates.making = true;
+  quickCrates.focus++;
 }
 
 function readKept(): KeptQuick[] {
   try {
     const kept = JSON.parse(localStorage.getItem(KEY) ?? '[]');
-    return Array.isArray(kept) ? kept.filter((k) => Array.isArray(k?.chips) && k.chips.length).map((k) => ({ chips: k.chips, min: k.min ?? CLOSE })) : [];
+    return Array.isArray(kept) ? kept.filter((k) => Array.isArray(k?.chips) && k.chips.length).map((k) => ({ chips: k.chips, min: k.min ?? CLOSE, modes: k.modes ?? {} })) : [];
   } catch {
     return [];
   }

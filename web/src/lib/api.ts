@@ -397,15 +397,21 @@ export type CrateStats = {
 export type CrateValue =
   | { kind: 'yes' }
   | { kind: 'any_of'; values: string[] }
+  // All of them (0.13, decision 0088): a track carrying every one; genre, style, mood and tag only.
+  | { kind: 'all_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
   // Sounds like its seeds (song ids; 0.11 albums' and artists', `al-…`, `ar-…`): the `count` tracks that sound most
   // like them, at least `min` alike (0–100, the curve's scale), an artist seed's own tracks out unless `own`.
-  | { kind: 'like'; of: string[]; count: number; min?: number; own?: boolean; fresh?: boolean; weights?: number[] };
+  // `mode` (0.13, decision 0088): either, near any one seed (each judged on its own); left out, blended from them all.
+  | { kind: 'like'; of: string[]; count: number; min?: number; own?: boolean; fresh?: boolean; weights?: number[]; mode?: 'blend' | 'either' };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 /** `not_artists`: the artists left out of it by hand (0.10, decision 0083: "Not in this crate", an Artist-is-not row of
  *  its filter); none from a server before it. */
-export type CrateDef = { id: string; name: string; conditions: Condition[]; not_artists?: ExcludedArtist[] };
+export type CrateDef = { id: string; name: string; conditions: Condition[]; not_artists?: ExcludedArtist[]; names?: Record<string, CrateName> };
+/** A name for an id a crate's conditions hold (0.13, decision 0088: Sounds like's seeds, an album axis's values): an id
+ *  the library no longer has is left out. */
+export type CrateName = { name: string; kind: 'artist' | 'album' | 'track' };
 /** An axis the builder draws a control for, with its domain in this library. */
 export type Axis = {
   key: string;
@@ -476,7 +482,7 @@ export const previewCrate = (conditions: Condition[], limit: number, source?: st
   if (source) q.set('source', source);
   if (look.order && look.order !== 'own') q.set('order', look.order);
   if (look.down) q.set('down', 'true');
-  return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/preview?${q}`, {
+  return quietly<{ source: string; total: number; rows: PlaylistRow[]; names?: Record<string, CrateName> }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}) }),
