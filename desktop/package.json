@@ -1,7 +1,7 @@
 {
   "name": "cratarr-desktop",
   "productName": "Cratarr",
-  "version": "0.12.0",
+  "version": "0.12.2",
   "description": "Cratarr's pages in a window of their own: a player that starts at login and keeps playing.",
   "homepage": "https://github.com/ozdeboz/cratarr",
   "license": "AGPL-3.0-or-later",

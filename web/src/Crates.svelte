@@ -16,7 +16,8 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { deepMatches } from './lib/deepSearch.svelte';
-  import { quickOn } from './lib/quickCrates.svelte';
+  import { quickCrates, quickOn } from './lib/quickCrates.svelte';
+  import { reach } from './lib/reach.svelte';
   import QuickCrate from './lib/QuickCrate.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
@@ -50,6 +51,9 @@
     else if (of) list.sort((a, b) => (of(a) ?? -1) - (of(b) ?? -1) || byName(a, b));
     return prefs.crateDown ? list.reverse() : list;
   });
+  // A crate being grabbed (0.12.1, the owner: "Results replace the list"): the page is that crate alone, its tracks or
+  // records; the crates come back once its words are cleared or it is saved.
+  const grabbing = $derived(quickOn() && !reach.away && quickCrates.chips.length > 0);
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
 </script>
@@ -59,7 +63,9 @@
     <!-- A quick crate (0.11; 0.12 the owner's mockup B): words typed at the top read as a crate's sentence (lib/QuickCrate). -->
     <QuickCrate />
   {/if}
-  {#if crates.error && !crates.list}
+  {#if grabbing}
+    <!-- The grabbed crate's results are QuickCrate's own. -->
+  {:else if crates.error && !crates.list}
     <Notice text={crates.error} />
   {:else if !crates.list}
     <PageLoading />

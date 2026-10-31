@@ -121,6 +121,14 @@ test('the cut on the closeness curve: how many at least that alike, and back', (
   assert.equal(minAt(curve, 99), 0);
 });
 
+test('the cut is a whole number, as the server takes it, rounded down so the track at the handle stays in', () => {
+  const curve = [97.6, 61.9, 25.37, 0.4];
+  assert.equal(minAt(curve, 3), 25);
+  assert.ok(Number.isInteger(minAt(curve, 2)));
+  assert.ok(countAt(curve, minAt(curve, 3)) >= 3);
+  assert.equal(minAt(curve, 4), 0);
+});
+
 // A line read whole (the owner, 2026-10-30: "Read the whole line"). A small library, searched as the server does for
 // a phrase: every word of it in a name (lib/search's `match`); `asked` what was asked, to count it.
 const LIBRARY = [
@@ -272,6 +280,72 @@ test("global search's crate card: two terms or more of two kinds or more; one th
   assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('soul', genre('Soul'))]), null, 'one kind');
   assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('qwzx')]), null, 'a word read as nothing leaves one term');
   assert.ok(crateOfLine([r('jazz', genre('Jazz')), r('qwzx'), r('1975', { kind: 'year', value: '1975-1975', label: '1975' })]), 'what reads still makes it');
+});
+
+// The sentence's own words typed back (0.12.x; the owner, 2026-10-31: "and" did not work): joins dropped where no name
+// holds them, kind words making what follows that kind, and whatever sentenceOf writes reading back to its terms.
+const WORDS_LIBRARY = [
+  hit('genre', 'Hip Hop'),
+  hit('genre', 'Jazz'),
+  hit('genre', 'Soul'),
+  hit('genre', 'Funk'),
+  hit('style', 'Boom Bap'),
+  hit('tag', 'Sampled'),
+  hit('mood', 'Calm'),
+  hit('label', 'Blue Note'),
+  hit('artist', 'Miles Davis', { id: 'ar-md' }),
+  hit('artist', 'Al Green', { id: 'ar-ag' }),
+  hit('artist', 'The Roots', { id: 'ar-tr' }),
+  hit('artist', 'Earth, Wind & Fire', { id: 'ar-ewf' }),
+  hit('album', 'Like a Rolling Stone'),
+  hit('album', 'Kind of Blue'),
+];
+const typedBack = async (line: string) => {
+  const asked: string[] = [];
+  const reads = await readLine(line, async (p) => (asked.push(p), WORDS_LIBRARY.filter((h) => match(words(p), h.title))), 2026);
+  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? []);
+  return { chips, terms: chips.map((ch) => `${ch.reading.kind}:${ch.reading.label}${ch.how ? `/${ch.how}` : ''}`), asked };
+};
+
+test("the sentence's joins: and, or, the, from dropped between terms; kept where a name holds them", async () => {
+  assert.deepEqual((await typedBack('hip hop and jazz from the 90s')).terms, ['genre:Hip Hop', 'genre:Jazz', 'year:1990s']);
+  assert.deepEqual((await typedBack('jazz or soul')).terms, ['genre:Jazz', 'genre:Soul']);
+  assert.deepEqual((await typedBack('The Roots')).terms, ['artist:The Roots/like']);
+  assert.deepEqual((await typedBack('Earth Wind and Fire')).terms, ['artist:Earth, Wind & Fire/like'], "a name's & typed as and");
+  assert.deepEqual((await typedBack('soul from 1970 to 1985')).terms, ['genre:Soul', 'year:1970–1985'], 'a span as the sentence writes it');
+});
+
+test("the sentence's kind words: sounds like, by, on, tagged, feels, from the album, style; a name that begins with one stays the name", async () => {
+  assert.deepEqual((await typedBack('sounds like Miles Davis on Blue Note')).terms, ['artist:Miles Davis/like', 'label:Blue Note']);
+  assert.deepEqual((await typedBack('soul by Al Green')).terms, ['genre:Soul', 'artist:Al Green/by']);
+  assert.deepEqual((await typedBack('jazz tagged sampled that feels calm')).terms, ['genre:Jazz', 'tag:Sampled', 'mood:Calm']);
+  assert.deepEqual((await typedBack('jazz from the album kind of blue')).terms, ['genre:Jazz', 'album:Kind of Blue']);
+  assert.deepEqual((await typedBack('hip hop, style boom bap')).terms, ['genre:Hip Hop', 'style:Boom Bap']);
+  assert.deepEqual((await typedBack('like a rolling stone')).terms, ['album:Like a Rolling Stone'], 'not "like" a rolling stone');
+  const like = (await typedBack('jazz that sounds like kind of blue')).chips[1];
+  assert.equal(like.how, 'like');
+  assert.deepEqual(seedsOf([like]), ['al-kind of blue'], 'an album sounded like seeds by its id');
+});
+
+test('whatever the sentence writes reads back to the same terms', async () => {
+  const crates = [
+    [c('genre', 'Hip Hop'), decade(1990), c('artist', 'Miles Davis', { id: 'ar-md' })],
+    [c('genre', 'Soul'), c('artist', 'Al Green', { id: 'ar-ag', how: 'by' })],
+    [c('genre', 'Jazz'), c('label', 'Blue Note'), c('year', '1970–1985', { value: '1970-1985' })],
+    [c('genre', 'Hip Hop'), c('style', 'Boom Bap'), c('tag', 'Sampled'), c('label', 'Blue Note')],
+    [c('mood', 'Calm'), c('artist', 'Miles Davis', { id: 'ar-md' }), c('artist', 'Al Green', { id: 'ar-ag' })],
+    [c('genre', 'Jazz'), c('genre', 'Soul'), c('genre', 'Funk')],
+    [c('genre', 'Soul'), year(1985), decade(1970)],
+  ];
+  const key = (ch: { reading: { kind: string; label: string }; how?: string }) => `${ch.reading.kind}:${ch.reading.label}${ch.how ? `/${ch.how}` : ''}`;
+  for (const chips of crates) {
+    const line = sentenceOf(chips as never)
+      .map((p, k) => (k && !p.tight ? ' ' : '') + p.text)
+      .join('');
+    const back = await typedBack(line);
+    assert.deepEqual([...back.terms].sort(), chips.map(key).sort(), line);
+    assert.deepEqual(conditionsOf(back.chips as never), conditionsOf(chips as never), `${line}: the same crate`);
+  }
 });
 
 test('the crates made here and not saved show only once typing starts, those the words may mean', () => {

@@ -44,8 +44,44 @@ export function splitTerms(text: string): string[] {
 export type Found = readonly (SearchResult & { id?: string })[];
 /** Asks search for a phrase (the sheet's: the term kinds, a few of each). */
 export type Ask = (phrase: string) => Promise<Found>;
-/** A phrase read off a line: the words it took, and their readings, the best first (none: nothing found). */
-export type Read = { term: string; readings: Reading[] };
+/** A phrase read off a line: the words it took, and their readings, the best first (none: nothing found); `how` an
+ *  artist (or an album) asked for as "like" or "by" by the sentence's own words before it ("sounds like", "by"). */
+export type Read = { term: string; readings: Reading[]; how?: 'like' | 'by' };
+
+/** What the sentence's own words ask of the terms after them (0.12.x; the owner, 2026-10-31: "and" did not work): a
+ *  kind ("on" a label, "tagged" a tag…), or an artist "like" or "by". */
+type Want = { kind?: ChipKind; how?: 'like' | 'by' };
+/** The words the sentence joins its terms with (sentenceOf's, and what people type between them): dropped between
+ *  terms, never where a name holds them ("The Roots", "Earth, Wind & Fire", "The Dark Side of the Moon"). */
+const JOINS = new Set(['and', 'or', '&', 'the', 'from', 'with', 'in', 'of', 'that', 'to', 'tracks', 'a']);
+/** The sentence's kind words, longest first: what follows them reads as that kind where it can. */
+const MARKERS: [string[], Want][] = (
+  [
+    [['that', 'sounds', 'like'], { how: 'like' }],
+    [['that', 'sound', 'like'], { how: 'like' }],
+    [['sounds', 'like'], { how: 'like' }],
+    [['sound', 'like'], { how: 'like' }],
+    [['like'], { how: 'like' }],
+    [['that', 'feels'], { kind: 'mood' }],
+    [['that', 'feel'], { kind: 'mood' }],
+    [['feels'], { kind: 'mood' }],
+    [['feel'], { kind: 'mood' }],
+    [['from', 'the', 'album'], { kind: 'album' }],
+    [['the', 'album'], { kind: 'album' }],
+    [['album'], { kind: 'album' }],
+    [['tagged'], { kind: 'tag' }],
+    [['style'], { kind: 'style' }],
+    [['by'], { how: 'by' }],
+    [['on'], { kind: 'label' }],
+  ] as [string[], Want][]
+).sort((a, b) => b[0].length - a[0].length);
+const isJoin = (t: string) => JOINS.has(t.toLowerCase());
+/** A phrase without its join words ("earth wind and fire" → "earth wind fire", as "Earth, Wind & Fire" reads). */
+const stripped = (phrase: string) =>
+  phrase
+    .split(' ')
+    .filter((t) => !isJoin(t))
+    .join(' ');
 
 /** The longest phrase tried past a line's whole run (the owner, 2026-10-30: "Read the whole line"): names of up to
  *  three words read together, a longer one where the whole run is it ("the dark side of the moon"). */
@@ -69,9 +105,13 @@ export function fits(phrase: string, found: Found): boolean {
 }
 
 /** A line read as the owner types it (2026-10-30: "hip hop 90s miles davis"): apart at commas and semicolons
- *  (`splitTerms`); in each piece the years and decades first, by rule; the words between them read longest first,
- *  the whole run, then three words, two, one, a phrase taken where one of its hits fits it (`fits`); where none fits,
- *  the one word, read by its best hit as a term always was. Each phrase asked once; the shorter ones at a place
+ *  (`splitTerms`); in each piece the years and decades first, by rule ("1970 to 1985" one span); the words between
+ *  them read longest first, the whole run, then three words, two, one, a phrase taken where one of its hits fits it
+ *  (`fits`, a name's "&" an "and"); where none fits, the one word, read by its best hit as a term always was. The
+ *  sentence's own words (0.12.x; the owner, 2026-10-31: "and" did not work) are read as it writes them: a join
+ *  ("and", "or", "the", "from"…) dropped where no name holds it; a kind word ("sounds like", "by", "on", "tagged",
+ *  "feels", "from the album", "style") making what follows that kind where it reads so, until the next; so whatever
+ *  sentenceOf writes, typed back, reads to the same terms. Each phrase asked once; the shorter ones at a place
  *  together, after the longest did not fit. In the order typed. */
 export async function readLine(text: string, ask: Ask, now?: number): Promise<Read[]> {
   const asked = new Map<string, Promise<Found>>();
@@ -81,46 +121,127 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
     if (!a) asked.set(key, (a = ask(phrase).catch(() => [] as Found)));
     return a;
   };
-  const read = (term: string, found: Found): Read => ({ term, readings: readingsFor(term, found, now) });
+  // A phrase's finds where they fit it, as typed or without its join words (asked so too, for "Earth, Wind & Fire").
+  const fitting = async (phrase: string): Promise<Found | null> => {
+    const found = await once(phrase);
+    if (fits(phrase, found)) return found;
+    const bare = stripped(phrase);
+    if (bare && bare !== phrase && words(bare).length) {
+      const again = await once(bare);
+      if (fits(bare, again)) return again;
+    }
+    return null;
+  };
+  // The term read, the kind its sentence's words asked for first where one of its finds is that and fits it.
+  const read = (term: string, found: Found, want: Want | null): Read => {
+    let readings = readingsFor(term, found, now);
+    if (want) {
+      const kinds: ChipKind[] = want.kind ? [want.kind] : want.how === 'like' ? ['artist', 'album'] : ['artist'];
+      const bare = stripped(term) || term;
+      const first = found
+        .filter((h) => {
+          const r = readingOf(h);
+          return !!r && kinds.includes(r.kind) && (fits(term, [h]) || fits(bare, [h]));
+        })
+        .map((h) => readingOf(h)!);
+      const key = (r: Reading) => `${r.kind}\n${r.value}`;
+      if (first.length) readings = [...first, ...readings.filter((r) => !first.some((f) => key(f) === key(r)))];
+      if (want.how && readings[0] && kinds.includes(readings[0].kind)) return { term, readings, how: want.how };
+    }
+    return { term, readings };
+  };
+  const markerAt = (tokens: string[], i: number) =>
+    MARKERS.find(([ws]) => ws.every((w, k) => tokens[i + k]?.toLowerCase() === w)) ?? null;
 
-  async function segment(tokens: string[]): Promise<Read[]> {
+  // One run of words between years: its terms, and the kind asked for at its end (it carries over a comma: "sounds
+  // like Bonobo, Floating Points and …").
+  async function segment(tokens: string[], carried: Want | null): Promise<{ reads: Read[]; want: Want | null }> {
     const out: Read[] = [];
+    let want: Want | null = carried;
     for (let i = 0; i < tokens.length; ) {
       const phrase = (n: number) => tokens.slice(i, i + n).join(' ');
-      const longest = i === 0 ? tokens.length : Math.min(MOST_WORDS, tokens.length - i);
-      const first = await once(phrase(longest));
-      let took = longest;
-      let found = first;
-      if (!fits(phrase(longest), first) && longest > 1) {
-        const shorter = Array.from({ length: Math.min(MOST_WORDS, longest - 1) }, (_, k) => Math.min(MOST_WORDS, longest - 1) - k);
-        const tries = await Promise.all(shorter.map(async (n) => ({ n, found: await once(phrase(n)) })));
-        const fit = tries.find((x) => fits(phrase(x.n), x.found)) ?? tries[tries.length - 1];
-        took = fit.n;
-        found = fit.found;
+      const marker = markerAt(tokens, i);
+      if (marker) {
+        // A name that begins with the word ("Like a Rolling Stone", "On the Corner") stays the name.
+        const next = tokens.slice(i).findIndex((_, k) => k > 0 && markerAt(tokens, i + k));
+        const whole = next < 0 ? tokens.length - i : next;
+        // Its own name holds the word: the matcher forgives a word too many ("by al green" for Al Green), so that's no name.
+        const found = whole > marker[0].length ? await fitting(phrase(whole)) : null;
+        const name = found?.filter((h) => words(h.title).includes(marker[0][0]) && fits(phrase(whole), [h])) ?? [];
+        if (name.length) {
+          out.push(read(phrase(whole), name, null));
+          i += whole;
+          continue;
+        }
+        want = marker[1];
+        i += marker[0].length;
+        continue;
       }
-      out.push(read(phrase(took), found));
+      const room = tokens.length - i;
+      const longest = i === 0 ? room : Math.min(MOST_WORDS, room);
+      // A phrase that may be a name: not begun or ended by a join word unless that is how the name reads as typed.
+      const tryAt = async (n: number): Promise<Found | null> => {
+        const p = phrase(n);
+        if (!isJoin(tokens[i]) && !isJoin(tokens[i + n - 1])) return fitting(p);
+        const f = await once(p);
+        return fits(p, f) ? f : null;
+      };
+      let took = 0;
+      let found: Found = [];
+      const whole = await tryAt(longest);
+      if (whole) [took, found] = [longest, whole];
+      else if (longest > 1) {
+        // The shorter ones at this place together, the longest that fits taken.
+        const shorter = Array.from({ length: Math.min(MOST_WORDS, longest - 1) }, (_, k) => Math.min(MOST_WORDS, longest - 1) - k);
+        const tries = await Promise.all(shorter.map(async (n) => ({ n, f: await tryAt(n) })));
+        const fit = tries.find((x) => x.f);
+        if (fit) [took, found] = [fit.n, fit.f!];
+      }
+      if (!took) {
+        // No name here: a join word goes, any other word is a term of its own, read by its best find.
+        if (isJoin(tokens[i])) {
+          i += 1;
+          continue;
+        }
+        took = 1;
+        found = await once(phrase(1));
+      }
+      out.push(read(phrase(took), found, want));
       i += took;
     }
-    return out;
+    return { reads: out, want };
   }
 
-  const pieces = await Promise.all(
-    splitTerms(text).map(async (piece) => {
-      const tokens = piece.replace(/(\d{4})\s*[-–]\s*(\d{4})/g, '$1-$2').split(' ');
-      const parts: (Read | string[])[] = [];
-      for (const t of tokens) {
-        if (!words(t).length) continue;
-        const year = yearOf(t, now);
-        if (year) parts.push({ term: t, readings: [year] });
-        else if (Array.isArray(parts.at(-1))) (parts.at(-1) as string[]).push(t);
-        else parts.push([t]);
+  const reads: Read[] = [];
+  let carried: Want | null = null;
+  for (const piece of splitTerms(text)) {
+    const tokens = piece.replace(/(\d{4})\s*(?:[-–]|\bto\b)\s*(\d{4})/gi, '$1-$2').split(' ');
+    const parts: (Read | string[])[] = [];
+    for (const t of tokens) {
+      if (!words(t).length && t !== '&') continue;
+      const year = yearOf(t, now);
+      if (year) parts.push({ term: t, readings: [year] });
+      else if (Array.isArray(parts.at(-1))) (parts.at(-1) as string[]).push(t);
+      else parts.push([t]);
+    }
+    let want: Want | null = carried;
+    let wanted = false;
+    for (const p of parts) {
+      if (!Array.isArray(p)) {
+        reads.push(p);
+        want = null;
+        continue;
       }
-      const reads = await Promise.all(parts.map((p) => (Array.isArray(p) ? segment(p) : Promise.resolve([p]))));
-      return reads.flat();
-    }),
-  );
+      const s = await segment(p, want);
+      reads.push(...s.reads);
+      want = s.want;
+      wanted = !!s.want && s.reads.length > 0;
+    }
+    // A kind carried over a comma only where the piece ended on a term of it.
+    carried = wanted ? want : null;
+  }
   const seen = new Set<string>();
-  return pieces.flat().filter((r) => {
+  return reads.filter((r) => {
     const key = r.term.toLowerCase();
     return !seen.has(key) && (seen.add(key), true);
   });
@@ -180,11 +301,15 @@ export function readingsFor(term: string, found: readonly (SearchResult & { id?:
   return out;
 }
 
-/** A chip from a term's readings (none: no chip); an artist "sounds like" by default where it can seed (its id). */
-export function chipOf(term: string, readings: readonly Reading[]): Chip | null {
+/** A chip from a term's readings (none: no chip); an artist "sounds like" by default where it can seed (its id), or
+ *  as the sentence's words asked (`how`). */
+export function chipOf(term: string, readings: readonly Reading[], how?: 'like' | 'by'): Chip | null {
   const [reading, ...others] = readings;
   if (!reading) return null;
-  return { term, reading, others, ...(reading.kind === 'artist' ? { how: reading.id ? ('like' as const) : ('by' as const), own: false } : {}) };
+  // An album asked for as "like" by the sentence's words ("sounds like Kind of Blue") seeds by its id, as a menu's does.
+  if (how === 'like' && reading.kind === 'album') return { term, reading: { ...reading, id: reading.value }, others, how, own: false };
+  if (reading.kind !== 'artist') return { term, reading, others };
+  return { term, reading, others, how: reading.id && how !== 'by' ? 'like' : 'by', own: false };
 }
 
 /** The chip read another way (a tap on another reading): the one it read becomes one of the others. */
@@ -213,7 +338,7 @@ export function wordChip(kind: 'genre' | 'style' | 'mood' | 'tag' | 'label', wor
  *  where they read as two terms or more of two kinds or more (a year and an artist; a genre, a decade and an artist),
  *  null where they are one thing (a name, a genre), which the plain Grab a crate row stays for. */
 export function crateOfLine(reads: readonly Read[]): Chip[] | null {
-  const chips = reads.flatMap((r) => chipOf(r.term, r.readings) ?? []);
+  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? []);
   const kinds = new Set(chips.map((c) => c.reading.kind));
   return chips.length >= 2 && kinds.size >= 2 ? chips : null;
 }
@@ -336,4 +461,7 @@ export function recentFor<T extends { chips: readonly Chip[] }>(recent: readonly
 
 /** Where a cut at closeness `min` falls on the closeness curve (how many are at least that alike), and back. */
 export const countAt = (curve: readonly number[], min: number) => curve.filter((a) => a >= min).length;
-export const minAt = (curve: readonly number[], count: number) => (count > 0 && count <= curve.length ? curve[count - 1] : 0);
+/** The cutoff at `count`: the curve's closeness there, a whole number 0 to 100 as the server's Like `min` takes it
+ *  (0.12.1: the curve's own value, 25.37, was refused with 422), rounded down so the track at `count` stays in. */
+export const minAt = (curve: readonly number[], count: number) =>
+  count > 0 && count <= curve.length ? Math.max(0, Math.min(100, Math.floor(curve[count - 1]))) : 0;

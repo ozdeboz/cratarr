@@ -470,8 +470,9 @@ export const updateCrate = (id: string, name: string, conditions: Condition[]) =
   });
 export const deleteCrate = (id: string) => request<{ deleted: string } & Undo>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The builder's live preview: how many tracks unsaved conditions select, and the first of them. */
-export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> = {}) => {
+export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> = {}, offset = 0) => {
   const q = new URLSearchParams({ limit: String(limit) });
+  if (offset) q.set('offset', String(offset));
   if (source) q.set('source', source);
   if (look.order && look.order !== 'own') q.set('order', look.order);
   if (look.down) q.set('down', 'true');

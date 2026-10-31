@@ -184,7 +184,15 @@ pub async fn choose(
         None => None,
     };
     let picked = cratarr_rules::pick(total, how, at, most.clamp(1, QUEUE_MOST), &mut rng());
-    let (tracks, index) = tracks_of(app, &c, &picked.chosen, picked.index).await?;
+    let (mut tracks, index) = tracks_of(app, &c, &picked.chosen, picked.index).await?;
+    // A crate's Play and Shuffle keep a record's tracks apart from the track that plays first on (0.12.2, the owner;
+    // as the page's grabbed crates): cratarr-rules' `spread`.
+    if matches!(what, Collection::Crate { .. }) && matches!(how, How::Play | How::Shuffle) && index < tracks.len() {
+        let tail = tracks.split_off(index);
+        let records: Vec<String> = tail.iter().map(|t| t.album_id.clone().or_else(|| t.album.clone()).unwrap_or_else(|| t.id.clone())).collect();
+        let order = cratarr_rules::spread(&records, 4);
+        tracks.extend(order.into_iter().map(|i| tail[i].clone()));
+    }
     if tracks.is_empty() {
         return Err(ToggleError::CannotPlay("Nothing in it can be played.".into()));
     }
