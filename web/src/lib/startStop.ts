@@ -23,11 +23,12 @@ export type Motion = PointMotion | HoldMotion;
 export const RESTART_AFTER = 5;
 /** A wind to a point's longest (holding has no end but the edge). */
 export const WIND_CAP_MS = 12_000;
-/** Each setting's range, step and starting value. */
+/** Each setting's range, step and starting value (the owner, 2026-10-31: "better defaults": spin-up and brake 0.8 s,
+ *  the wind at -6 dB). */
 export const TAPE = {
-  attackMs: { min: 100, max: 1500, step: 50, start: 400 },
-  brakeMs: { min: 100, max: 1500, step: 50, start: 250 },
-  gainDb: { min: -24, max: 0, step: 1, start: -12 },
+  attackMs: { min: 100, max: 1500, step: 50, start: 800 },
+  brakeMs: { min: 100, max: 1500, step: 50, start: 800 },
+  gainDb: { min: -24, max: 0, step: 1, start: -6 },
 } as const;
 const POINT = { min: 0, max: 2, step: 0.05, start: 1 } as const;
 const HOLD = { min: 0, max: 12, step: 0.5, start: 4.5 } as const;

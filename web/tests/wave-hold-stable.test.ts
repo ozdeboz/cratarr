@@ -11,7 +11,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { stepWindow, markShows } = await import('../src/lib/waveView.ts');
-const { planStrip, gridBars, placeOf, trackBars, STRIP_SPAN, SPAN_SLACK } = await import('../src/lib/waveStrip.ts');
+const { planStrip, gridBars, placeOf, trackBars, barTracks, playedRuns, STRIP_SPAN, SPAN_SLACK } = await import('../src/lib/waveStrip.ts');
+const { waveColours } = await import('../src/lib/waveView.ts');
+type StripTrack = import('../src/lib/waveStrip.ts').StripTrack;
 
 const LENS = [212, 187, 245, 301, 176, 233, 198, 264];
 const STARTS = LENS.map((_, i) => LENS.slice(0, i).reduce((a, b) => a + b, 0));
@@ -44,6 +46,8 @@ type Seen = {
   cur1: number;
   progress: number;
   strip: Strip;
+  /** The tracks the strip is drawn from, in the hold's frame. */
+  tracks: StripTrack[];
   bars: number[];
   /** The strip drawn anew this frame. */
   redrawn: boolean;
@@ -107,7 +111,7 @@ function hold(q0: number, heldS: number, afterS: number, through = true, o: Opts
     const redrawn = s !== had;
     had = s;
     if (!bars.has(s)) bars.set(s, gridBars(tracks, s));
-    out.push({ t, held: holding, from, to, pos: pos - fa, cur0, cur1, progress: pos / LENS[i], strip: s, bars: bars.get(s)!, redrawn, plain: false, track: i, qfrom: from + STARTS[base!], qto: to + STARTS[base!] });
+    out.push({ t, held: holding, from, to, pos: pos - fa, cur0, cur1, progress: pos / LENS[i], strip: s, tracks, bars: bars.get(s)!, redrawn, plain: false, track: i, qfrom: from + STARTS[base!], qto: to + STARTS[base!] });
   }
   return out;
 }
@@ -322,3 +326,53 @@ test("a boundary on a wall shows no marker: from a track's start going forward, 
   for (const x of resting) assert.equal(markShows((STARTS[1] - x.qfrom) / (x.qto - x.qfrom), N), 0);
 });
 
+// 0.12.4, the owner: "on letting go a short pulse of that previous track's waveform is shown prior to showing the owner's
+// track waveform color again" (a hold back inside one track, the track before in view, let go before reaching it).
+/**
+ * A hold's played colours frame by frame as lib/Waveform draws them: one path a run of bars (lib/waveStrip's
+ * playedRuns), filled with its track's colour (lib/waveView's waveColours, each track its cover's). A path's fill eases
+ * from the colour it had over a Start and stop ramp (--ramp-ms; a hold back let go, the track spins up), so a bar shows
+ * its path's last colour on the frame that changes it. On every frame every bar shows its own track's colour.
+ */
+function ownColours(frames: Seen[]): number {
+  const cover = (key: string) => `cover of ${key}`;
+  const fills = new Map<string, string | null>();
+  let checked = 0;
+  for (const f of frames.filter((x) => !x.plain)) {
+    const colours = waveColours(f.tracks.map((t) => t.key), `t${f.track}`, true, cover);
+    const owners = barTracks(f.tracks, f.strip);
+    const now = new Map<string, string | null>();
+    for (const r of playedRuns(owners, f.tracks)) {
+      const fill = r.owner >= 0 ? colours[r.owner] : null;
+      assert.ok(!now.has(r.id), `${f.t.toFixed(2)} s: two paths for ${r.id}`);
+      now.set(r.id, fill);
+      // What its bars show this frame: where the path's fill changed, the colour it eases from.
+      const shown = fills.has(r.id) ? fills.get(r.id)! : fill;
+      for (let i = r.from; i < r.to; i++) {
+        const own = owners[i] >= 0 ? cover(f.tracks[owners[i]].key) : null;
+        assert.equal(shown, own, `${f.t.toFixed(2)} s: bar ${f.strip.g0 + i} of ${f.tracks[owners[i]]?.key} in ${shown}`);
+        checked++;
+      }
+    }
+    for (const [id, fill] of now) fills.set(id, fill);
+  }
+  return checked;
+}
+
+test("a hold back inside a track, the track before in view, let go: every bar in its own track's colour, every frame", () => {
+  const f = hold(STARTS[3] + 60, 2, 8, true, { dir: -1 });
+  assert.ok(f.every((x) => x.track === 3), 'it crossed a boundary');
+  assert.ok(f.some((x) => !x.plain && x.from < x.cur0), 'the track before never in view');
+  assert.ok(f.some((x) => !x.plain && !x.held && x.from >= x.cur0), 'the track before never out of view again');
+  assert.ok(f.at(-1)!.plain, "it came back to the track's own view");
+  assert.ok(ownColours(f) > 10000);
+});
+
+test("a hold on inside a track, the next track in view, let go: every bar in its own track's colour, every frame", () => {
+  const f = hold(STARTS[4] - 60, 2, 8, true, { dir: 1 });
+  assert.ok(f.every((x) => x.track === 3), 'it crossed a boundary');
+  assert.ok(f.some((x) => !x.plain && x.to > x.cur1), 'the next track never in view');
+  assert.ok(f.some((x) => !x.plain && !x.held && x.to <= x.cur1), 'the next track never out of view again');
+  assert.ok(f.at(-1)!.plain, "it came back to the track's own view");
+  assert.ok(ownColours(f) > 10000);
+});

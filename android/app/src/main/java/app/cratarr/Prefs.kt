@@ -506,9 +506,9 @@ class Prefs(context: Context) {
          *  (and shared/rules.json, which the tests check this against). */
         internal val TAPE_SETTINGS: Map<String, Map<String, Range>> = mapOf(
             "tape" to mapOf(
-                "attackMs" to Range(100f, 1500f, 400f),
-                "brakeMs" to Range(100f, 1500f, 250f),
-                "gainDb" to Range(-24f, 0f, -12f),
+                "attackMs" to Range(100f, 1500f, 800f),
+                "brakeMs" to Range(100f, 1500f, 800f),
+                "gainDb" to Range(-24f, 0f, -6f),
             ),
             // Six motions, one setting each, 0: off (2026-10-28).
             "motions" to mapOf(

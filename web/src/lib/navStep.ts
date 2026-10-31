@@ -7,12 +7,14 @@
 /** What a step leaves, let go when it arrives. `search`: its words emptied, or only its scope back to the page's
  *  (found deep: the place opens narrowed to the words, decision 0072); `restore`: back to a search (lib/globalSearch),
  *  its words and scope as they were, which wins over emptying them; `player`: the player over the page closes;
- *  `layer`: a closed panel's layer stays over the page until the page gone to shows (a breadcrumb's). */
+ *  `layer`: a closed panel's layer stays over the page until the page gone to shows (a breadcrumb's); `quick`: the
+ *  crate being made (lib/quickCrates) is emptied, saved as the crate that opens (its words stay until that shows). */
 export type Leave = {
   search?: 'clear' | 'page';
   restore?: { q: string; scope: 'page' | 'everywhere' };
   player?: boolean;
   layer?: boolean;
+  quick?: boolean;
 };
 /** Where the page is, as asked (the address, `hash` its page's part) or as shown (lib/Hold): its page and what its
  *  panel views. */
@@ -35,6 +37,7 @@ export function merge(a: Leave, b: Leave): Leave {
   if (out.restore) delete out.search;
   if (a.player || b.player) out.player = true;
   if (a.layer || b.layer) out.layer = true;
+  if (a.quick || b.quick) out.quick = true;
   return out;
 }
 

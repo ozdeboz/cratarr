@@ -17,6 +17,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { viewPlaylist } from './panel.svelte';
+  import { leaveOnArrival } from './navStep.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
   import { CLOSE, TERM_KINDS, chipOf, conditionsOf, countAt, keepsOwn, minAt, nameOf, readLine, recentFor, seedsOf, sentenceOf, type Chip, type Found } from './quickCrate';
@@ -91,7 +92,10 @@
     }
   }
 
-  const parts = $derived(sentenceOf(chips));
+  // Nothing read yet: "Grab a crate" leads, not the sentence's "Tracks" (the owner, 2026-10-31); the example after it
+  // shows the sentence's own words at work.
+  const parts = $derived(chips.length ? sentenceOf(chips) : [{ text: 'Grab a crate' }]);
+  const EXAMPLE = 'hip hop and jazz from the 90s like Miles Davis';
   const conditions = $derived(conditionsOf(chips, min));
   const name = $derived(nameOf(chips));
   const seeds = $derived(seedsOf(chips));
@@ -228,9 +232,12 @@
     try {
       const made = await createCrate(name, conditions);
       forgetQuick(chips);
-      clear();
       withUndo(`Created ${name}.`, [made.undo], { after: () => loadCrates() });
       await loadCrates();
+      // Its words stay until the crate shows (lib/quickCrates; the owner, 2026-10-31: never the page between).
+      text = '';
+      missed = [];
+      leaveOnArrival({ quick: true });
       viewPlaylist(CRATE + made.id);
     } catch (e) {
       toast.fail(e, "The crate wasn't saved");
@@ -243,7 +250,10 @@
     menuOpen = false;
     const [n, c] = [name, conditions];
     forgetQuick(chips);
-    clear();
+    // As Save: the words stay until the builder shows.
+    text = '';
+    missed = [];
+    leaveOnArrival({ quick: true });
     startCrate(n, c);
   }
   function startOver() {
@@ -301,9 +311,9 @@
           class="term"
           class:like={!!c?.reading.id && c.how === 'like'}
           onclick={() => (at = p.chip ?? null)}>{p.text}</button
-        >{:else}<span class="w">{p.text}</span>{/if}{/each}{#if chips.length}{' '}{/if}<input
+        >{:else}<span class="w">{p.text}</span>{/if}{/each}{' '}<input
       type="search"
-      placeholder={chips.length ? 'and…' : 'hip hop 90s Miles Davis'}
+      placeholder={chips.length ? 'and…' : EXAMPLE}
       aria-label={chips.length ? 'More words for the crate' : 'Words for a crate'}
       bind:value={text}
       oninput={typed}
@@ -512,11 +522,9 @@
     outline: none;
   }
 
-  /* Nothing typed yet: the line alone, its field the list's width. */
+  /* Nothing typed yet: "Grab a crate" and the example after it, the field as wide as the example. */
   .empty input[type='search'] {
-    box-sizing: border-box;
-    width: 100%;
-    field-sizing: fixed;
+    min-width: min(100%, 12ch);
   }
 
   .near {

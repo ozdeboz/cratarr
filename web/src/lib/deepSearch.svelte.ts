@@ -2,16 +2,20 @@
 // with why; asked a moment after the pill's words stop changing. A page lets these through beside its own name filter.
 import { search, type SearchKind } from './api';
 import { pageView } from './pageView.svelte';
-import type { Matched } from './search';
+import { matchLine, type Matched } from './search';
 
+/** One's why line (lib/search matchLine), or nothing; `answeredFor()`: the words the server last answered (or failed)
+ *  for, for lib/search listShows. */
+export type Deep = ((id: string) => string | undefined) & { answeredFor: () => string };
 /** Called in a page's script: the subjects of `kind` the server finds not by their name, keyed by what follows `prefix`
- *  (`playlist:` → the playlist's id); the returned function gives one's why line, or nothing. */
-export function deepMatches(kind: SearchKind, prefix: string): (id: string) => string | undefined {
-  const found = $state({ by: new Map<string, Matched>() });
+ *  (`playlist:` → the playlist's id). */
+export function deepMatches(kind: SearchKind, prefix: string): Deep {
+  const found = $state({ by: new Map<string, Matched>(), q: '' });
   $effect(() => {
     const q = pageView.query.trim();
     if (!q) {
       found.by = new Map();
+      found.q = '';
       return;
     }
     let gone = false;
@@ -25,8 +29,9 @@ export function deepMatches(kind: SearchKind, prefix: string): (id: string) => s
             if (on && it.subject.startsWith(prefix)) m.set(it.subject.slice(prefix.length), on);
           }
           found.by = m;
+          found.q = q;
         },
-        () => {},
+        () => !gone && (found.q = q),
       );
     }, 250);
     return () => {
@@ -34,8 +39,10 @@ export function deepMatches(kind: SearchKind, prefix: string): (id: string) => s
       clearTimeout(t);
     };
   });
-  return (id) => {
+  const deep = ((id: string) => {
     const d = pageView.query.trim() ? found.by.get(id) : undefined;
-    return d ? `${d.text}${d.count && d.count > 1 ? ` · ${d.count} tracks` : ''}` : undefined;
-  };
+    return d ? (matchLine([d]) ?? undefined) : undefined;
+  }) as Deep;
+  deep.answeredFor = () => found.q;
+  return deep;
 }

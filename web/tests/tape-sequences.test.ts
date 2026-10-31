@@ -134,3 +134,53 @@ test('a ramp shown while nothing runs ends after its grace (the app has not said
   assert.deepEqual(u.settle(0), []);
   assert.deepEqual(u.settle(GRACE_MS.shownRamp * 5), [], 'a ramp running: shown as it is');
 });
+
+// Directions are pure (0.12.4; the owner, 2026-10-31): a hold never moves the knob's setting; the deck's L and R follow
+// the way the tape goes. The two holds the owner met, step by step, through lib/player/knob's rules.
+const knobRules = await import('../src/lib/player/knob.ts');
+
+test('the knob at L, a forward hold and its let-go: the setting L throughout, backwards at 1× after', () => {
+  const k = knobRules;
+  const want: 'L' | 'R' = 'L';
+  const seen: { want: string; way: 'L' | 'R' }[] = [];
+  let way: 'L' | 'R' = 'L';
+  // Playing backwards at 1×, then braked through a stop for the forward hold, wound forwards, let go to a stand,
+  // backwards again (lib/localPlayer windHold with stopBackwards, letGo, arrive's backTo).
+  assert.equal(k.holdInReverse(1), 'turn');
+  for (const v of [-1, -0.4, 0, 2, 8, 3, 0, -0.5, -1]) seen.push({ want, way: (way = k.travelOf(v, way)) });
+  assert.equal(k.letGoTo(1, true, want), 0);
+  assert.equal(k.afterLetGo(1, true, want, 'play'), 'backwards');
+  assert.ok(seen.every((s) => s.want === 'L'), 'the setting never moved');
+  assert.deepEqual(seen.map((s) => s.way), ['L', 'L', 'L', 'R', 'R', 'R', 'R', 'L', 'L'], 'the deck said the way it went');
+});
+
+test('the knob at R, a back hold and its let-go: forwards at 1× after, the setting R throughout', () => {
+  const k = knobRules;
+  assert.equal(k.letGoTo(-1, false, 'R'), 0);
+  assert.equal(k.afterLetGo(-1, false, 'R', 'play'), 'forwards');
+  let way: 'L' | 'R' = 'R';
+  const ways = [1, 0, -3, -6, -1, 0, 1].map((v) => (way = k.travelOf(v, way)));
+  assert.deepEqual(ways, ['R', 'R', 'L', 'L', 'L', 'L', 'R']);
+});
+
+test("the knob at L, paused: a hold Next let go plays backwards, the knob's way (as the app does)", () => {
+  const k = knobRules;
+  // From a pause, not from playing backwards: what follows is as at R (here it plays on), its way the knob's.
+  assert.equal(k.letGoTo(1, false, 'L'), 0, 'the forward hold brakes to a stand');
+  assert.equal(k.afterLetGo(1, false, 'L', 'play'), 'backwards', 'then backwards at 1×');
+  assert.equal(k.afterLetGo(1, false, 'L', 'pause'), 'rest', 'or resting there, as at R');
+  assert.equal(k.afterLetGo(1, false, 'R', 'play'), 'forwards', 'at R: forwards, as before');
+});
+
+test('the knob at L, paused: a hold Previous let go plays on backwards at 1×', () => {
+  const k = knobRules;
+  assert.equal(k.letGoTo(-1, false, 'L'), 1, 'braked to 1× on its own way');
+  assert.equal(k.afterLetGo(-1, false, 'L', 'play'), 'backwards');
+  assert.equal(k.letGoTo(-1, false, 'R'), 0, 'at R: a stand, then forwards, as before');
+  assert.equal(k.afterLetGo(-1, false, 'R', 'play'), 'forwards');
+});
+
+test("a skip in either setting: the new track the setting's way, the setting kept", () => {
+  assert.equal(knobRules.skipWay('L'), 'backwards');
+  assert.equal(knobRules.skipWay('R'), 'forwards');
+});

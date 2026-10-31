@@ -129,6 +129,24 @@ export function barTracks(tracks: readonly StripTrack[], s: GridStrip): number[]
   });
 }
 
+/** A strip's bars track by track (lib/Waveform's played layer, one path each): each run of bars with the track they are
+ *  in (`owner`, by its index in `tracks`; -1: none, before the queue or past it) and an `id` that is that track's alone,
+ *  its key and its start in the hold's frame, whatever else the strip covers. A path drawn for one track is never drawn
+ *  for another (0.12.4, the owner: "a short pulse of that previous track's waveform": the paths went by their order in
+ *  the strip, so a strip drawn anew with a track more or less before the playing one handed one track's path to
+ *  another, and its fill eased from the one colour to the other over a Start and stop ramp, a hold back's let go
+ *  spinning the track up). */
+export function playedRuns(owners: readonly number[], tracks: readonly StripTrack[]): { owner: number; id: string; from: number; to: number }[] {
+  const out: { owner: number; id: string; from: number; to: number }[] = [];
+  owners.forEach((o, i) => {
+    const t = tracks[o];
+    const id = t ? `${t.key}@${t.start}` : out.some((r) => r.owner >= 0) ? 'past' : 'before';
+    if (out.at(-1)?.id === id) out.at(-1)!.to = i + 1;
+    else out.push({ owner: o, id, from: i, to: i + 1 });
+  });
+  return out;
+}
+
 /** Where a strip stands for the stretch on a waveform `width` px wide, drawn as wide as the waveform: scaled by `k` from
  *  its left, then slid by `x` px, so that `from` is at the waveform's left and `to` at its right. */
 export function placeOf(s: GridStrip, from: number, to: number, width: number): { x: number; k: number } {

@@ -9,19 +9,19 @@
       "min": 100,
       "max": 1500,
       "step": 50,
-      "start": 400
+      "start": 800
     },
     "brake_ms": {
       "min": 100,
       "max": 1500,
       "step": 50,
-      "start": 250
+      "start": 800
     },
     "gain_db": {
       "min": -24,
       "max": 0,
       "step": 1,
-      "start": -12
+      "start": -6
     },
     "point": {
       "min": 0,

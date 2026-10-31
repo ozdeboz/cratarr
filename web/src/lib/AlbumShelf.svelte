@@ -15,7 +15,8 @@
   import { albumCoverUrl, search, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { plural } from './insights.svelte';
-  import type { Matched } from './search';
+  import { listShows, matchLine, type Matched } from './search';
+  import Asking from './Asking.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
   import { libraryLayout } from './layouts';
@@ -402,9 +403,9 @@
 </script>
 
 {#snippet why(s: ShelfSource, a: ListedAlbum)}
-  <!-- Found by a track (the server's deep search, decision 0072): which, and how many of its tracks match. -->
+  <!-- Found by a track (the server's deep search, decision 0072): which, and how many of its tracks match (lib/search matchLine). -->
   {@const d = deepOf(s, a)}
-  {#if d}<span class="why"><Icon name="music" size={12} /> {d.text}{#if d.count && d.count > 1} · {d.count} tracks{/if}</span>{/if}
+  {#if d}<span class="why">{matchLine([d], 'album')}</span>{/if}
 {/snippet}
 
 <div class="lists" class:table bind:clientWidth={width}>
@@ -414,8 +415,9 @@
       <p class="empty">{s.label} can't list albums.</p>
     {:else if s.error && s.albums.length === 0}
       <p class="error" role="alert">{s.error}</p>
-    {:else if albums.length === 0 && pageView.query.trim() && deepFor !== pageView.query.trim()}
-      <!-- Searching: the server's finds not in yet, so nothing said. -->
+    {:else if listShows(albums.length, pageView.query, deepFor) === 'asking'}
+      <!-- Searching: the server's finds not in yet, so nothing said before the answer (lib/search listShows). -->
+      <Asking />
     {:else if albums.length === 0}
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). -->

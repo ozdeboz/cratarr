@@ -15,6 +15,7 @@
   import { drivenName, playOn } from './playOn.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
   import { hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
+  import { travelOf } from './player/knob';
   import { downbeatAt } from './visuals/downbeat';
 
   /** Radians a second a wheel of radius 1 turns at 1× (as the mock looked right). */
@@ -64,6 +65,9 @@
 
   /** The tape's speed now (× the track's; negative: backwards). */
   let speed = 0;
+  /** The way the tape goes now, its L or R lit (directions are pure, 0.12.4; the owner, 2026-10-31: the deck's L and R
+   *  did not turn while it went backwards): the knob's pointer shows how it is set, the letters which way it goes. */
+  let travel = $state<'L' | 'R'>(tapeDir.want);
   let lastPos: number | null = null;
   let lastAt = 0;
   function speedNow(now: number, pos: number): number {
@@ -117,6 +121,8 @@
       const pos = position();
       speed = speedNow(now, pos);
       const v = Math.max(-MOST, Math.min(MOST, speed));
+      const way = travelOf(v, travel);
+      if (way !== travel) travel = way;
       if (now - placedAt >= PLACE_EVERY) {
         placedAt = now;
         const dur = duration();
@@ -183,8 +189,8 @@
       {/each}
       <path class="hill" d={hill(-1)} />
       <path class="hill" d={hill(1)} />
-      {#if turnable}<text class="side" class:on={tapeDir.want === 'L'} x={KNOB.x - 6.5} y={KNOB.y + 3.6} text-anchor="end">L</text>
-      <text class="side" class:on={tapeDir.want === 'R'} x={KNOB.x + 6.5} y={KNOB.y + 3.6} text-anchor="start">R</text>{/if}
+      {#if turnable}<text class="side" class:on={travel === 'L'} x={KNOB.x - 6.5} y={KNOB.y + 3.6} text-anchor="end">L</text>
+      <text class="side" class:on={travel === 'R'} x={KNOB.x + 6.5} y={KNOB.y + 3.6} text-anchor="start">R</text>{/if}
     </svg>
     <!-- The direction knob (the owner, 2026-10-27): R forwards, L backwards; turned while playing, the tape slows to a
          stop before it goes the other way (lib/localPlayer turnTape). -->
