@@ -27,7 +27,7 @@
   import TempoRange from './TempoRange.svelte';
   import { WORD_AXES, wordShown } from './facts';
   import { changed } from './filterRow';
-  import { countAt, minAt, type Named } from './quickCrate';
+  import { countAt, minAt, SEEDS_LISTED, type Named } from './quickCrate';
   import Seg from './Seg.svelte';
   import { search } from './api';
 
@@ -168,6 +168,8 @@
   const gone = (id: string) => `${id.startsWith('al-') ? 'an album' : id.startsWith('tr-') ? 'a track' : 'an artist'} no longer in the library`;
   const seedName = (id: string) => names[id]?.name ?? gone(id);
   let seedFind = $state('');
+  /** Many seeds, or weighted (a built-in crate's, Sounds like your week): summed up, listed on a tap. */
+  let seedsShown = $state(false);
   let seedHits = $state<{ id: string; named: Named }[]>([]);
   $effect(() => {
     const q = seedFind.trim();
@@ -241,6 +243,13 @@
       {:else if condition.value.kind === 'like'}
         {@const l = condition.value}
         <!-- Who or what it sounds like, by name (0.13): one taken out, one added; how they join; their own tracks. -->
+        {@const many = l.of.length > SEEDS_LISTED || !!l.weights?.length}
+        {#if many && !seedsShown}
+          <p class="seedsum">
+            {l.of.length.toLocaleString()} {l.of.length === 1 ? 'track' : 'tracks'}{l.weights?.length && l.fresh ? ' you played' : ''}
+            <button class="showall" onclick={() => (seedsShown = true)}>Show them</button>
+          </p>
+        {:else}
         <div class="chips seeds">
           {#each l.of as id (id)}
             <button class="chip" aria-pressed="true" disabled={l.of.length < 2} aria-label="Take {seedName(id)} out" onclick={() => change({ value: { ...l, of: l.of.filter((x) => x !== id) } })}
@@ -248,6 +257,7 @@
             >
           {/each}
         </div>
+        {/if}
         <input class="find" type="search" placeholder="Add an artist, album or track" aria-label="Add to what it sounds like" bind:value={seedFind} />
         {#if seedHits.length}
           <div class="chips">
@@ -379,6 +389,24 @@
   .join,
   .own {
     padding: 8px 0 0;
+  }
+
+  .seedsum {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 4px 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .showall {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-ink);
+    font: inherit;
+    cursor: pointer;
   }
 
   /* What the condition is tested on, a sentence under the card's controls; any or all inside it. */

@@ -21,6 +21,9 @@
     rest = [],
     onmore,
     text = $bindable(''),
+    brief = null,
+    excluded = [],
+    onexcluded,
   }: {
     chips: Chip[];
     min: number;
@@ -31,12 +34,23 @@
     onmore?: () => void;
     /** What is typed and not read yet. */
     text?: string;
+    /** A Sounds like said in a few words (a built-in crate's, lib/quickCrate chipsOf `brief`: "your week", "Air"). */
+    brief?: string | null;
+    /** The crate's artists left out by hand (Not in this crate, decision 0083): said "but not <artist>", one tapped
+     *  taken back (`onexcluded`). Their own mechanism underneath; the sentence only says them. */
+    excluded?: readonly string[];
+    onexcluded?: (name: string) => void;
   } = $props();
 
   /** Words that read as nothing. */
   let missed = $state<string[]>([]);
   /** The term whose sheet shows. */
   let at = $state<number | null>(null);
+  let field = $state<HTMLInputElement>();
+  /** The caret into its field (a new crate's start). */
+  export function focus() {
+    field?.focus();
+  }
 
   /** How many of each kind a phrase's readings offer (the owner, 2026-10-30: the right one could not be chosen with one). */
   const EACH = 3;
@@ -51,7 +65,7 @@
     missed = read.filter((r) => !r.readings.length).map((r) => r.term);
     const have = chips.flatMap((c) => joinKindOf(c) ?? []);
     modes = { ...modes, ...modesFrom(read, have) };
-    chips = [...chips, ...read.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? [])];
+    chips = [...chips, ...read.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? [])];
   }
 
   /** A comma (or a semicolon) ends what is before it: read, the rest stays in the field; Enter reads it all. */
@@ -73,7 +87,9 @@
   }
   const flip = (kind: JoinKind) => (modes = { ...modes, [kind]: flipped(joinOf(modes, kind)) });
 
-  const parts = $derived(sentenceOf(chips, modes));
+  const parts = $derived(sentenceOf(chips, modes, brief));
+  /** The sentence already leaves something out: the crate's own exclusions follow with "not", else "but not". */
+  const saysBut = $derived(parts.some((p) => p.text === 'but not'));
   const seeds = $derived(seedsOf(chips));
   const own = $derived(keepsOwn(chips));
   const likedNames = $derived(chips.filter((c) => c.how === 'like' && c.reading.id).map((c) => c.reading.label));
@@ -106,12 +122,20 @@
   {#each parts as p, k (k)}{#if k && !p.tight}{' '}{/if}{#if p.chip !== undefined}{@const c = chips[p.chip]}<button
         class="term"
         class:like={!!c?.reading.id && c.how === 'like'}
+        class:not={!!c?.not}
         onclick={() => (at = p.chip ?? null)}>{p.text}</button
       >{:else if p.flip}{@const kind = p.flip}<button class="w join" aria-label="Joined by {p.text}: tap for {flipped(p.text as 'and' | 'or')}" onclick={() => flip(kind)}>{p.text}</button
-      >{:else}<span class="w">{p.text}</span>{/if}{/each}{#if chips.length}{' '}{/if}<input
+      >{:else}<span class="w">{p.text}</span>{/if}{/each}{#if excluded.length}{#if parts.length}<span class="w">,</span>{' '}{/if}<span class="w"
+        >{saysBut || !parts.length ? 'not by' : 'but not by'}</span
+      >{#each excluded as name, k (name)}{' '}{#if k}<span class="w">{k === excluded.length - 1 ? 'or' : ','}</span>{' '}{/if}<button
+          class="term not"
+          aria-label="Take {name} back into this crate"
+          onclick={() => onexcluded?.(name)}>{name}</button
+        >{/each}{/if}{#if parts.length || excluded.length}{' '}{/if}<input
     type="search"
     placeholder={chips.length ? 'and…' : 'hip hop 90s Miles Davis'}
     aria-label={chips.length ? 'More words for the crate' : 'Words for a crate'}
+    bind:this={field}
     bind:value={text}
     oninput={typed}
     onkeydown={entered}
@@ -175,6 +199,12 @@
 
   .term.like {
     border-bottom-color: var(--accent);
+  }
+
+  /* Left out ("but not"): struck through lightly, as a crossed-out word. */
+  .term.not {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--danger-ink) 60%, transparent);
   }
 
   /* A kind's "and" or "or": muted as the words between, dotted as something a tap changes. */

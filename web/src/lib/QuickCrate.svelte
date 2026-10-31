@@ -1,41 +1,32 @@
 <script lang="ts">
   // A quick crate at the top of Crates (0.12; the owner, 2026-10-30: the crate search's mockup B, "B with A's graph"):
-  // the crate read as a sentence (lib/quickCrate sentenceOf), its terms underlined, the words between muted, ending in
-  // the field where more is typed ("and…"; the whole line read, a comma or Enter). A term tapped reads another way
-  // (lib/QuickTermSheet). Where an artist is "like", the closeness curve (lib/LikeCurve) under it; then its count with
-  // Save, Shuffle and Play, its menu (Edit in the crate builder, Start over), and the crate itself: its tracks or its
-  // records (0.12.1, the owner: "Results replace the list": Crates shows this crate alone meanwhile), paged as a crate's,
-  // the Records / Tracks switch a saved crate has. Nothing typed: the last few not saved, to come back to. Its state is
+  // the crate read as a sentence (lib/CrateSentence), its terms underlined, the words between muted, ending in the field
+  // where more is typed. Then the crate itself (lib/CrateResults, a crate's one list: 0.12.1, the owner: "Results
+  // replace the list": Crates shows this crate alone meanwhile), its count with Save, Shuffle and Play and its menu (Edit
+  // in the crate builder, Start over). Nothing typed: the last few not saved, to come back to. Its state is
   // lib/quickCrates': it stays while the page is left.
+  // One crate, two views (0.13, decision 0088; the owner, 2026-10-31: "one start, one list"): New crate starts here, the
+  // sentence's field focused, a Sentence / Conditions switch over the same crate. The conditions are the crate builder's
+  // cards (lib/ConditionList); what they make is read back as the sentence's terms (lib/quickCrate chipsOf, as typed
+  // where the same: keptChips), what it cannot say kept as it is.
   import { onDestroy, untrack } from 'svelte';
-  import { coverUrl, createCrate, previewCrate, type PlaylistRow } from './api';
+  import { createCrate, getCrateAxes, type Axis, type Condition } from './api';
+  import ConditionList from './ConditionList.svelte';
   import { CRATE, loadCrates, startCrate } from './crates.svelte';
+  import CrateResults from './CrateResults.svelte';
+  import CrateSentence from './CrateSentence.svelte';
   import Icon from './Icon.svelte';
-  import { hiddenLibraries } from './listFilter.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { viewPlaylist } from './panel.svelte';
-  import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
-  import { CLOSE, conditionsOf, nameOf, recentFor } from './quickCrate';
+  import { chipsOf, CLOSE, conditionsOf, keptChips, nameOf, namesOf, recentFor, type Named } from './quickCrate';
   import { forgetQuick, keepQuick, quickCrates } from './quickCrates.svelte';
-  import CrateSentence from './CrateSentence.svelte';
-  import { clockText } from './remote.svelte';
-  import Row from './Row.svelte';
-  import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, fromLabel, playFromHere, snippet, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
-  import { toast } from './toast.svelte';
-  import TrackCover from './TrackCover.svelte';
-  import { withUndo } from './undo.svelte';
   import { reach } from './reach.svelte';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordKey, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
-  import { shuffled } from './shuffle';
-  import { spreadRecords } from './spread';
-  import ListHead from './ListHead.svelte';
-  import MarkLoader from './MarkLoader.svelte';
-  import SectionHead from './SectionHead.svelte';
+  import Row from './Row.svelte';
   import Seg from './Seg.svelte';
-  import { plural } from './insights.svelte';
+  import { toast } from './toast.svelte';
+  import { withUndo } from './undo.svelte';
 
   const chips = $derived(quickCrates.chips);
   const min = $derived(quickCrates.min);
@@ -44,7 +35,7 @@
   let menuOpen = $state(false);
   let saving = $state(false);
   /** The sentence (lib/CrateSentence): the terms, their cut and joins are quickCrates'. */
-  let sentence = $state<{ add: (words: string) => Promise<void> }>();
+  let sentence = $state<{ add: (words: string) => Promise<void>; focus: () => void }>();
 
   // A search's words (lib/quickCrates openQuickCrate), read as they come.
   $effect(() => {
@@ -56,112 +47,74 @@
       void s.add(words);
     });
   });
-
-  const conditions = $derived(conditionsOf(chips, min, quickCrates.modes));
-  const name = $derived(nameOf(chips));
-
-  // The crate as it is: its count and its tracks a page at a time, as a saved crate's, asked 300 ms after a change
-  // (none without a term: that would be the whole library); more as the list's end comes into sight.
-  const PAGE = 50;
-  let preview = $state<{ source: string; total: number; rows: PlaylistRow[] } | null>(null);
-  let previewError = $state<string | null>(null);
-  const key = $derived(JSON.stringify(conditions));
+  // New crate: the caret in the sentence's field.
   $effect(() => {
-    const k = key;
-    if (!untrack(() => conditions.length)) {
-      preview = null;
-      previewError = null;
-      return;
-    }
-    let gone = false;
-    const t = setTimeout(() => {
-      previewCrate(JSON.parse(k), PAGE, prefs.source || undefined, { without: hiddenLibraries() }).then(
-        (p) => {
-          if (gone) return;
-          preview = p;
-          previewError = null;
-        },
-        (e) => !gone && (previewError = e instanceof Error ? e.message : 'Unexpected error'),
-      );
-    }, 300);
-    return () => {
-      gone = true;
-      clearTimeout(t);
-    };
+    const s = sentence;
+    if (!quickCrates.focus || !s) return;
+    untrack(() => {
+      view = 'sentence';
+      s.focus();
+    });
   });
 
-  let more = $state<HTMLElement>();
-  let loadingMore = false;
-  $effect(() => {
-    const el = more;
-    if (!el) return;
-    const seen = new IntersectionObserver(
-      async ([e]) => {
-        const p = preview;
-        if (!e.isIntersecting || loadingMore || !p || p.rows.length >= p.total) return;
-        const k = key;
-        loadingMore = true;
-        try {
-          const next = await previewCrate(JSON.parse(k), PAGE, prefs.source || undefined, { without: hiddenLibraries() }, p.rows.length);
-          if (key === k && preview === p) preview = { ...p, total: next.total, rows: [...p.rows, ...next.rows] };
-        } catch (err) {
-          if (key === k) previewError = err instanceof Error ? err.message : 'Unexpected error';
-        } finally {
-          loadingMore = false;
-        }
-      },
-      { rootMargin: '400px' },
-    );
-    seen.observe(el);
-    return () => seen.disconnect();
-  });
+  const conditions = $derived([...conditionsOf(chips, min, quickCrates.modes), ...(quickCrates.brief ? [quickCrates.brief.condition] : []), ...quickCrates.rest]);
+  const name = $derived(nameOf(chips) || 'New crate');
+  /** Being made: its view (and the crate) shows, the crates' list not. */
+  const open = $derived(quickCrates.making || chips.length > 0 || conditions.length > 0);
 
-  // Records or tracks, as a saved crate (lib/crateRecords): kept for this device as the crates' own views are.
-  const QUICK = 'quick';
-  const VIEWS: { value: CrateView; label: string }[] = [
-    { value: 'records', label: 'Records' },
-    { value: 'tracks', label: 'Tracks' },
+  // Sentence or conditions; the cards are the conditions as they were when it switched, edited there in place.
+  const VIEWS = [
+    { value: 'sentence', label: 'Sentence' },
+    { value: 'conditions', label: 'Conditions' },
   ];
-  const view = $derived(crateViewOf(QUICK, prefs.crateViews));
-  const setView = (v: CrateView) => (prefs.crateViews = { ...prefs.crateViews, [QUICK]: v });
-  const records = $derived(
-    view === 'records' && preview ? orderRecords(recordsOf(preview.rows.map((r, i) => ({ r, i }))), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : [],
-  );
-  /** A record opened: the crate's tracks of it, back to the records. */
-  let recordOpen = $state<string | null>(null);
-  const openRecord = $derived(view === 'records' && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
+  let view = $state<'sentence' | 'conditions'>('sentence');
+  let cards = $state<Condition[]>([]);
+  function show(v: 'sentence' | 'conditions') {
+    if (v === 'conditions') cards = $state.snapshot(conditions) as Condition[];
+    view = v;
+  }
+  /** Names learnt here: a seed added on a card, the server's with the crate's tracks. */
+  let added = $state<Record<string, Named>>({});
+  const allNames = $derived({ ...namesOf(chips), ...added });
+  // The cards' edits are the crate: read back as its terms, what the sentence cannot say kept.
   $effect(() => {
-    void key;
-    untrack(() => (recordOpen = null));
+    if (view !== 'conditions') return;
+    const r = chipsOf(cards, allNames);
+    untrack(() => {
+      const next = keptChips(r.chips, quickCrates.chips);
+      if (JSON.stringify(next) !== JSON.stringify(quickCrates.chips)) quickCrates.chips = next;
+      if (quickCrates.min !== r.min) quickCrates.min = r.min;
+      if (JSON.stringify(r.modes) !== JSON.stringify(quickCrates.modes)) quickCrates.modes = r.modes;
+      if (JSON.stringify(r.rest) !== JSON.stringify(quickCrates.rest)) quickCrates.rest = r.rest;
+      if (JSON.stringify(r.brief) !== JSON.stringify(quickCrates.brief)) quickCrates.brief = r.brief;
+    });
+  });
+  // The axes: their kinds and domains in this library, once the conditions show.
+  let axes = $state<Axis[] | null>(null);
+  $effect(() => {
+    if (view !== 'conditions' || axes) return;
+    getCrateAxes(prefs.source || undefined).then(
+      (a) => (axes = a),
+      (e) => {
+        axes ??= [];
+        toast.fail(e, "The crate's axes couldn't be loaded");
+      },
+    );
   });
 
-  const none = $derived(!chips.length || preview?.total === 0);
   // The empty page is the regular one (the owner, 2026-10-30): the crates made here and not saved show only once typing
   // starts, those the words may mean.
-  const recentShown = $derived(chips.length ? [] : recentFor(quickCrates.recent, text));
-  let starting = $state<'play' | 'shuffle' | null>(null);
-  /** Played or shuffled: the server's first 500 of it (a queue's most), here or where the output is; in the crate's
-   *  order or a fair shuffle's draw, a record's tracks kept apart either way (lib/spread; the owner, 2026-10-31: "too
-   *  much repetition of records in the queue"). */
-  async function play(how: 'play' | 'shuffle') {
-    starting = how;
-    try {
-      const p = await previewCrate(conditions, 500, prefs.source || undefined, { without: hiddenLibraries() });
-      const playable = p.rows.filter((r) => r.id && !r.missing);
-      const ids = spreadRecords(how === 'shuffle' ? shuffled(playable) : playable, (r) => recordKey(r)).map((r) => r.id!);
-      if (ids.length) await playCollection({ kind: 'tracks', source: p.source, ids }, 'play', name);
-    } catch (e) {
-      toast.fail(e, "It couldn't be played");
-    } finally {
-      starting = null;
-    }
-  }
+  const recentShown = $derived(open ? [] : recentFor(quickCrates.recent, text));
   /** Gone from the top (saved, edited, started over): nothing being made. */
   function clear() {
     quickCrates.chips = [];
     quickCrates.min = CLOSE;
     quickCrates.modes = {};
+    quickCrates.rest = [];
+    quickCrates.brief = null;
+    quickCrates.making = false;
     text = '';
+    view = 'sentence';
   }
   async function save() {
     saving = true;
@@ -198,37 +151,6 @@
     return () => removeEventListener('pagehide', keep);
   });
   onDestroy(keep);
-  // A row's snippet (0.12, the owner: "as buttons which when pressed expand a waveform as A2"): its round button plays
-  // the track's liveliest 20 s and opens the row on its waveform (lib/SnippetStrip), with Play from here; again, it stops
-  // and folds. One row open at a time; leaving the page ends it.
-  let openRow = $state<number | null>(null);
-  const snipOf = (src: string, r: PlaylistRow): SnippetTrack | null =>
-    r.id && !r.missing ? { source: src, id: r.id, name: r.name ?? r.file, duration_secs: r.duration_secs ?? null } : null;
-  const isOn = (t: SnippetTrack | null) => !!t && snippet.key === `${t.source}/${t.id}`;
-  function snipTap(i: number, t: SnippetTrack) {
-    if (openRow === i) {
-      openRow = null;
-      return endSnippet();
-    }
-    openRow = i;
-    startSnippet(t);
-  }
-  /** How far its snippet has sounded, 0..1 (its button's ring). */
-  const heardShare = $derived(snippet.sounding && snippet.to > snippet.from ? Math.min(1, Math.max(0, (snippet.at - snippet.from) / (snippet.to - snippet.from))) : 0);
-  // Other words: nothing open (more of the same rows leave it be).
-  $effect(() => {
-    void key;
-    untrack(() => {
-      if (openRow !== null) endSnippet();
-      openRow = null;
-    });
-  });
-  onDestroy(() => openRow !== null && endSnippet());
-  function fromHere(t: SnippetTrack) {
-    const at = startOf(t);
-    openRow = null;
-    playFromHere(t, at).catch((e) => toast.fail(e, "It didn't play"));
-  }
 </script>
 
 <section class="quick" aria-label="Grab a crate">
@@ -236,50 +158,31 @@
   {#if reach.away}
   <p class="note">Grabbing a crate needs Cratarr.</p>
   {:else}
-  <CrateSentence bind:this={sentence} bind:chips={quickCrates.chips} bind:min={quickCrates.min} bind:modes={quickCrates.modes} bind:text />
+  {#if open}
+    <div class="views"><Seg label="Show the crate as" options={VIEWS} bind:value={() => view, show} /></div>
+  {/if}
+  {#if view === 'sentence' || !open}
+    <CrateSentence
+      bind:this={sentence}
+      bind:chips={quickCrates.chips}
+      bind:min={quickCrates.min}
+      bind:modes={quickCrates.modes}
+      bind:text
+      rest={quickCrates.rest}
+      brief={quickCrates.brief?.text ?? null}
+      onmore={() => show('conditions')}
+    />
+  {:else}
+    <ConditionList bind:conditions={cards} {axes} crate names={allNames} onnamed={(id, n) => (added = { ...added, [id]: n })} />
+  {/if}
 
-  {#if chips.length}
-    <div class="sum">
-      <b>{preview ? `${preview.total.toLocaleString()} ${preview.total === 1 ? 'track' : 'tracks'}` : ''}</b>
-      <button class="icon" aria-label="Save as a crate" title="Save" disabled={none || saving} onclick={save}><Icon name="save" size={22} /></button>
-      <button class="icon" aria-label="Shuffle" title="Shuffle" disabled={none || !!starting} onclick={() => play('shuffle')}><Icon name="shuffle" size={22} /></button>
-      <button class="icon play" aria-label="Play" title="Play" disabled={none || !!starting} onclick={() => play('play')}><Icon name="play" size={22} /></button>
-      <button class="icon" aria-label="The crate's menu" onclick={() => (menuOpen = true)}><Icon name="moreVert" size={22} /></button>
-    </div>
-    {#if previewError}
-      <p class="error" role="alert">{previewError}</p>
-    {:else if preview}
-      {@const src = preview.source}
-      <div class="views"><Seg label="Show the crate as" options={VIEWS} bind:value={() => view, setView} /></div>
-      {#if view === 'records' && openRecord}
-        <SectionHead title={`${openRecord.title || 'Unknown album'} · ${holdsLine(openRecord.at.length, openRecord.of)}`} onback={() => (recordOpen = null)} />
-        <ol class="preview" aria-label={`The crate's tracks of ${openRecord.title || 'an unknown album'}`}>
-          {#each openRecord.at as i (i)}{@render trackRow(src, preview.rows[i], i)}{/each}
-        </ol>
-      {:else if view === 'records'}
-        <ListHead
-          fields={RECORD_ORDERS}
-          bind:value={() => prefs.crateRecordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: prefs.crateRecordSort.down })}
-          bind:down={() => prefs.crateRecordSort.down, (d) => (prefs.crateRecordSort = { key: prefs.crateRecordSort.key, down: d })}
-          count={plural(records.length, 'record')}
-        />
-        <ol class="preview" aria-label="The crate's records">
-          {#each records as rec (rec.key)}
-            {@const first = preview.rows[rec.at[0]]}
-            <li>
-              <Row size="large" title={rec.title || 'Unknown album'} sub={[rec.artist, holdsLine(rec.at.length, rec.of)].filter(Boolean).join(' · ')} label={`Open ${rec.title || 'an unknown album'}`} onclick={() => (recordOpen = rec.key)}>
-                {#snippet lead()}<TrackCover src={first?.id && !first.missing ? coverUrl({ source: src, id: first.id }) : null} />{/snippet}
-              </Row>
-            </li>
-          {/each}
-        </ol>
-      {:else}
-        <ol class="preview" aria-label="The crate's tracks">
-          {#each preview.rows as r, i (i)}{@render trackRow(src, r, i)}{/each}
-        </ol>
-      {/if}
-      {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
-    {/if}
+  {#if open}
+    <CrateResults {conditions} {name} onnames={(n) => (added = { ...added, ...n })}>
+      {#snippet actions()}
+        <button class="icon" aria-label="Save as a crate" title="Save" disabled={!conditions.length || saving} onclick={save}><Icon name="save" size={22} /></button>
+        <button class="icon" aria-label="The crate's menu" onclick={() => (menuOpen = true)}><Icon name="moreVert" size={22} /></button>
+      {/snippet}
+    </CrateResults>
   {:else if recentShown.length}
     <ul class="recent" aria-label="Made here, not saved">
       {#each recentShown as k (nameOf(k.chips))}
@@ -309,34 +212,6 @@
   </MenuSheet>
 {/if}
 
-<!-- A track of the crate: its cover, name, artist and length, its round snippet button opening it on its waveform. -->
-{#snippet trackRow(src: string, r: PlaylistRow, i: number)}
-  {@const st = snipOf(src, r)}
-  <li>
-    <Row size="large" title={r.name ?? r.file} sub={r.artist ?? ''} count={r.duration_secs ? clockText(r.duration_secs) : undefined} off={!r.id || !!r.missing}>
-      {#snippet lead()}<TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} />{/snippet}
-      {#snippet action()}
-        {#if st}
-          {@const on = openRow === i && isOn(st) && snippet.sounding}
-          <button class="snip" aria-label={openRow === i ? `Stop ${r.name ?? r.file}` : `Hear ${r.name ?? r.file}`} aria-pressed={openRow === i} onclick={() => snipTap(i, st)}>
-            <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
-              <circle class="ring" cx="18" cy="18" r="16" />
-              {#if on}<circle class="fill" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{heardShare * 100} 100" transform="rotate(-90 18 18)" />{/if}
-              {#if openRow === i}<rect x="13" y="12" width="3.5" height="12" /><rect x="19.5" y="12" width="3.5" height="12" />{:else}<path d="M14 11v14l11-7z" />{/if}
-            </svg>
-          </button>
-        {/if}
-      {/snippet}
-    </Row>
-    {#if openRow === i && st}
-      <div class="snipped">
-        <SnippetStrip track={st} />
-        <button class="from" onclick={() => fromHere(st)}>{fromLabel(startOf(st))}</button>
-      </div>
-    {/if}
-  </li>
-{/snippet}
-
 <style>
   .quick {
     display: grid;
@@ -344,98 +219,10 @@
     margin: 4px 0 14px;
   }
 
-  /* Records or tracks, as a saved crate's (lib/crateRecords). */
   .views {
     display: flex;
   }
 
-  .loading {
-    display: grid;
-    place-items: center;
-    padding: 16px 0;
-  }
-
-  .sum {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .sum b {
-    flex: 1;
-    font-size: 16px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* As a crate's action bar (lib/PlaylistView): round buttons, Play the accent one. */
-  .icon {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: none;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .icon.play {
-    background: var(--accent);
-    color: var(--accent-text);
-  }
-
-  .icon:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  /* A row's snippet button (the owner's mockup C2) and its open row (A2's strip). */
-  .snip {
-    display: grid;
-    place-items: center;
-    padding: 4px;
-    border: 0;
-    background: none;
-    color: var(--text);
-    cursor: pointer;
-  }
-
-  .snip svg {
-    fill: currentColor;
-  }
-
-  .snip .ring {
-    fill: none;
-    stroke: var(--border);
-    stroke-width: 3;
-  }
-
-  .snip .fill {
-    fill: none;
-    stroke: var(--art-accent, var(--accent));
-    stroke-width: 3;
-  }
-
-  .snipped {
-    display: grid;
-    padding: 0 16px 8px;
-  }
-
-  .from {
-    justify-self: start;
-    padding: 6px 0;
-    border: 0;
-    background: none;
-    color: var(--accent-ink);
-    font: inherit;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .preview,
   .recent {
     margin: 0 -8px;
     padding: 0;
@@ -453,10 +240,5 @@
     margin: 0;
     color: var(--muted);
     font-size: 13px;
-  }
-
-  .error {
-    margin: 0;
-    color: var(--danger-ink);
   }
 </style>

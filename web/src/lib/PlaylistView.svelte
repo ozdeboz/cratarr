@@ -2132,7 +2132,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {/each}
     {:else if crateEditing}
       {#if crateDraft}
-        <CrateEditor bind:conditions={crateDraft.conditions} bind:total={crateTotal} names={crateDraft.names ?? {}} />
+        <CrateEditor bind:conditions={crateDraft.conditions} bind:total={crateTotal} names={crateDraft.names ?? {}} crate={builder?.id ?? null} name={crateDraft.name} />
       {:else if error}
         <p class="error" role="alert">{error}</p>
       {:else}

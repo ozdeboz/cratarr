@@ -16,7 +16,7 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { deepMatches } from './lib/deepSearch.svelte';
-  import { quickCrates, quickOn } from './lib/quickCrates.svelte';
+  import { newQuickCrate, quickCrates, quickOn } from './lib/quickCrates.svelte';
   import { reach } from './lib/reach.svelte';
   import QuickCrate from './lib/QuickCrate.svelte';
 
@@ -28,9 +28,10 @@
     loadCrates();
   });
 
-  // New crate: named in the same sheet as a new playlist, then built in the panel.
-  // New crate: the panel's crate edit mode, empty, the caret in its name (as New playlist).
-  usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => startCrate('') }));
+  // New crate (0.13; the owner, 2026-10-31: "one start, one list"): a new crate's sentence at the top, the caret in it,
+  // its Conditions one switch away (lib/QuickCrate). A server that makes no quick crates, or out of reach: the panel's
+  // crate edit mode, empty, the caret in its name (as New playlist).
+  usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => (quickOn() && !reach.away ? newQuickCrate() : startCrate('')) }));
   // The list's order (its header): as made, by name, or by what its cards show (decision 0060); either way round. A
   // crate whose card is not known yet (favourites not read) comes first, as made.
   const byName = (a: Crate, b: Crate) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
@@ -53,7 +54,9 @@
   });
   // A crate being grabbed (0.12.1, the owner: "Results replace the list"): the page is that crate alone, its tracks or
   // records; the crates come back once its words are cleared or it is saved.
-  const grabbing = $derived(quickOn() && !reach.away && quickCrates.chips.length > 0);
+  const grabbing = $derived(
+    quickOn() && !reach.away && (quickCrates.making || quickCrates.chips.length > 0 || quickCrates.rest.length > 0 || !!quickCrates.brief),
+  );
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
 </script>
@@ -64,7 +67,7 @@
     <QuickCrate />
   {/if}
   {#if grabbing}
-    <!-- The grabbed crate's results are QuickCrate's own. -->
+    <!-- The grabbed crate's results are QuickCrate's own (lib/CrateResults, a crate's one list). -->
   {:else if crates.error && !crates.list}
     <Notice text={crates.error} />
   {:else if !crates.list}

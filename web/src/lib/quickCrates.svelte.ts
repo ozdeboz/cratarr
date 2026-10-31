@@ -3,6 +3,7 @@
 // owner's mockup B: lib/QuickCrate reads it as a sentence), words handed to it from elsewhere (a search's "Grab a crate"),
 // and the last few made here and not saved, kept in this browser to come back to.
 import { can } from './capabilities.svelte';
+import type { Condition } from './api';
 import { CLOSE, type Chip, type Modes } from './quickCrate';
 
 /** One not saved: its chips, its cut and how its kinds join (0.13). */
@@ -22,6 +23,14 @@ export const quickCrates = $state({
   min: CLOSE,
   /** How its kinds' terms join, where not the default (0.13, decision 0088). */
   modes: {} as Modes,
+  /** What its conditions view made that the sentence cannot say (0.13), and a Sounds like said briefly: kept as they
+   *  are, not among the last few. */
+  rest: [] as Condition[],
+  brief: null as { text: string; condition: Condition } | null,
+  /** A new crate started (Crates' New crate, 0.13: the sentence, focused): its view shows with nothing in it yet. */
+  making: false,
+  /** Asks the sentence's field for the caret (counted: each New crate asks again). */
+  focus: 0,
   /** Words to read into it (a search's), taken by lib/QuickCrate as it shows. */
   words: '',
   recent: readKept(),
@@ -33,6 +42,8 @@ export function openQuickCrate(words = '') {
   quickCrates.chips = [];
   quickCrates.min = CLOSE;
   quickCrates.modes = {};
+  quickCrates.rest = [];
+  quickCrates.brief = null;
   quickCrates.words = words;
   if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
 }
@@ -44,8 +55,18 @@ export function grabCrate(chips: Chip[]) {
   quickCrates.chips = chips.map((c) => ({ ...c }));
   quickCrates.min = CLOSE;
   quickCrates.modes = {};
+  quickCrates.rest = [];
+  quickCrates.brief = null;
   quickCrates.words = '';
   if (!location.hash.startsWith(CRATES)) location.hash = CRATES;
+}
+
+/** Crates' New crate (0.13; the owner, 2026-10-31: "one start, one list"): a new crate's sentence, its field
+ *  focused, its Conditions one switch away. */
+export function newQuickCrate() {
+  openQuickCrate('');
+  quickCrates.making = true;
+  quickCrates.focus++;
 }
 
 function readKept(): KeptQuick[] {

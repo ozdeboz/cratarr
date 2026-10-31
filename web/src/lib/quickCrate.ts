@@ -12,7 +12,7 @@ export type ChipKind = 'artist' | 'album' | 'track' | 'label' | 'genre' | 'style
 export type Reading = { kind: ChipKind; value: string; label: string; id?: string };
 /** A typed term made a chip: its reading, the other ways it could read, and for an artist "like" or "by" them and
  *  whether their own tracks stay. */
-export type Chip = { term: string; reading: Reading; others: Reading[]; how?: 'like' | 'by'; own?: boolean };
+export type Chip = { term: string; reading: Reading; others: Reading[]; how?: 'like' | 'by'; own?: boolean; not?: boolean };
 
 /** Where the cut starts: a close fit (0–100, the closeness curve's scale; the owner: "Close, adjustable"). Provisional
  *  until measured on a library. */
@@ -61,11 +61,11 @@ export type Found = readonly (SearchResult & { id?: string })[];
 export type Ask = (phrase: string) => Promise<Found>;
 /** A phrase read off a line: the words it took, and their readings, the best first (none: nothing found); `how` an
  *  artist (or an album) asked for as "like" or "by" by the sentence's own words before it ("sounds like", "by"). */
-export type Read = { term: string; readings: Reading[]; how?: 'like' | 'by'; join?: Join };
+export type Read = { term: string; readings: Reading[]; how?: 'like' | 'by'; join?: Join; not?: boolean };
 
 /** What the sentence's own words ask of the terms after them (0.12.x; the owner, 2026-10-31: "and" did not work): a
  *  kind ("on" a label, "tagged" a tag…), or an artist "like" or "by". */
-type Want = { kind?: ChipKind; how?: 'like' | 'by' };
+type Want = { kind?: ChipKind; how?: 'like' | 'by'; not?: boolean };
 /** The words the sentence joins its terms with (sentenceOf's, and what people type between them): dropped between
  *  terms, never where a name holds them ("The Roots", "Earth, Wind & Fire", "The Dark Side of the Moon"). */
 const JOINS = new Set(['and', 'or', '&', 'the', 'from', 'with', 'in', 'of', 'that', 'to', 'tracks', 'a']);
@@ -88,6 +88,9 @@ const MARKERS: [string[], Want][] = (
     [['style'], { kind: 'style' }],
     [['by'], { how: 'by' }],
     [['on'], { kind: 'label' }],
+    // "But not" (0.13): what follows is left out, through a kind word after it ("but not on Def Jam").
+    [['but', 'not'], { not: true }],
+    [['not'], { not: true }],
   ] as [string[], Want][]
 ).sort((a, b) => b[0].length - a[0].length);
 const isJoin = (t: string) => JOINS.has(t.toLowerCase());
@@ -150,7 +153,8 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
   // The term read, the kind its sentence's words asked for first where one of its finds is that and fits it.
   const read = (term: string, found: Found, want: Want | null): Read => {
     let readings = readingsFor(term, found, now);
-    if (want) {
+    const not = want?.not ? { not: true } : {};
+    if (want && (want.kind || want.how)) {
       const kinds: ChipKind[] = want.kind ? [want.kind] : want.how === 'like' ? ['artist', 'album'] : ['artist'];
       const bare = stripped(term) || term;
       const first = found
@@ -161,9 +165,9 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
         .map((h) => readingOf(h)!);
       const key = (r: Reading) => `${r.kind}\n${r.value}`;
       if (first.length) readings = [...first, ...readings.filter((r) => !first.some((f) => key(f) === key(r)))];
-      if (want.how && readings[0] && kinds.includes(readings[0].kind)) return { term, readings, how: want.how };
+      if (want.how && readings[0] && kinds.includes(readings[0].kind)) return { term, readings, how: want.how, ...not };
     }
-    return { term, readings };
+    return { term, readings, ...not };
   };
   const markerAt = (tokens: string[], i: number) =>
     MARKERS.find(([ws]) => ws.every((w, k) => tokens[i + k]?.toLowerCase() === w)) ?? null;
@@ -194,7 +198,8 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
           i += whole;
           continue;
         }
-        want = marker[1];
+        const m = marker[1];
+        want = m.not ? { not: true } : m.how === 'like' || !want?.not ? m : { ...m, not: true };
         i += marker[0].length;
         continue;
       }
@@ -332,9 +337,14 @@ export function readingsFor(term: string, found: readonly (SearchResult & { id?:
 
 /** A chip from a term's readings (none: no chip); an artist "sounds like" by default where it can seed (its id), or
  *  as the sentence's words asked (`how`). */
-export function chipOf(term: string, readings: readonly Reading[], how?: 'like' | 'by'): Chip | null {
+export function chipOf(term: string, readings: readonly Reading[], how?: 'like' | 'by', not?: boolean): Chip | null {
   const [reading, ...others] = readings;
   if (!reading) return null;
+  // Left out (0.13, "but not"): a kind a crate can leave out, an artist "by" them; a year or "like" cannot be.
+  if (not) {
+    if (reading.kind === 'year' || reading.kind === 'track') return null;
+    return reading.kind === 'artist' ? { term, reading, others, how: 'by', own: false, not: true } : { term, reading, others, not: true };
+  }
   // An album asked for as "like" by the sentence's words ("sounds like Kind of Blue") seeds by its id, as a menu's does.
   if (how === 'like' && reading.kind === 'album') return { term, reading: { ...reading, id: reading.value }, others, how, own: false };
   if (reading.kind !== 'artist') return { term, reading, others };
@@ -350,7 +360,7 @@ export function readAs(chip: Chip, reading: Reading): Chip {
 
 /** A chip that seeds "sounds like": an artist read that way, or a track or an album a menu's "Sounds like this" handed
  *  over (0.12; the owner: one way to make a crate), each by its library id. */
-const likes = (c: Chip) => c.how === 'like' && !!c.reading.id;
+const likes = (c: Chip) => c.how === 'like' && !!c.reading.id && !c.not;
 
 /** "Sounds like this" from a menu (0.12): the track, album or artist as the crate's "like" term, by its library id
  *  (`tr-…`, `al-…`, `ar-…`); their own tracks left out, as a typed artist's are. */
@@ -367,7 +377,7 @@ export function wordChip(kind: 'genre' | 'style' | 'mood' | 'tag' | 'label', wor
  *  where they read as two terms or more of two kinds or more (a year and an artist; a genre, a decade and an artist),
  *  null where they are one thing (a name, a genre), which the plain Grab a crate row stays for. */
 export function crateOfLine(reads: readonly Read[]): Chip[] | null {
-  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? []);
+  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []);
   const kinds = new Set(chips.map((c) => c.reading.kind));
   return chips.length >= 2 && kinds.size >= 2 ? chips : null;
 }
@@ -392,7 +402,7 @@ export function modesFrom(reads: readonly Read[], have: Iterable<JoinKind> = [])
   const seen = new Set<JoinKind>(have);
   const out: Modes = {};
   for (const r of reads) {
-    const k = joinKindOfRead(r);
+    const k = r.not ? null : joinKindOfRead(r);
     if (!k) continue;
     if (r.join && seen.has(k)) out[k] = r.join;
     seen.add(k);
@@ -417,9 +427,18 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
     if (!vs.includes(v)) vs.push(v);
     byAxis.set(axis, vs);
   };
+  // What is left out (0.13, "but not"): each kind's one row, negated (none of them).
+  const notAxis = new Map<string, string[]>();
   let years: [number, number] | null = null;
   for (const c of chips) {
     const r = c.reading;
+    if (c.not) {
+      if (r.kind === 'year' || r.kind === 'track') continue;
+      const vs = notAxis.get(r.kind) ?? [];
+      if (!vs.includes(r.value)) vs.push(r.value);
+      notAxis.set(r.kind, vs);
+      continue;
+    }
     if (likes(c) || r.kind === 'track') continue;
     if (r.kind === 'year') {
       const [a, b] = r.value.split('-').map(Number);
@@ -432,6 +451,7 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
     rows.push({ axis, not: false, value: { kind: all ? 'all_of' : 'any_of', values } });
   }
   if (years) rows.push({ axis: 'year', not: false, value: { kind: 'range', min: years[0], max: years[1] } });
+  for (const [axis, values] of notAxis) rows.push({ axis, not: true, value: { kind: 'any_of', values } });
   const seeds = seedsOf(chips);
   if (seeds.length) {
     const either = seeds.length > 1 && joinOf(modes, 'like') === 'or';
@@ -453,9 +473,10 @@ export type Part = { text: string; chip?: number; tight?: boolean; flip?: JoinKi
  *  ("or"), the kinds all of them; the years one span from the earliest to the latest; the artists "like" one Sounds
  *  like of them all ("and", as the server names it). Genres lead (else styles, else "Tracks"); then a style beside a
  *  genre, tags, by, on a label, from an album, the years; last what it feels and sounds like. */
-export function sentenceOf(chips: readonly Chip[], modes: Modes = {}): Part[] {
+export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: string | null = null): Part[] {
+  if (!chips.length && !brief) return [];
   const all = chips.map((c, i) => ({ c, i }));
-  const of = (kind: ChipKind) => all.filter(({ c }) => c.reading.kind === kind && !likes(c));
+  const of = (kind: ChipKind) => all.filter(({ c }) => c.reading.kind === kind && !likes(c) && !c.not);
   const out: Part[] = [];
   const word = (text: string, tight = false) => out.push(tight ? { text, tight } : { text });
   const term = (i: number, text = chips[i].reading.label) => out.push({ text, chip: i });
@@ -505,15 +526,70 @@ export function sentenceOf(chips: readonly Chip[], modes: Modes = {}): Part[] {
   const plural = !head.length;
   const moods = of('mood');
   const like = all.filter(({ c }) => likes(c));
-  if (moods.length || like.length) word('that');
+  // A Sounds like said in a few words (a built-in crate's: "your week", "Air", "27 tracks"; chipsOf `brief`).
+  const sounds = like.length || brief;
+  if (moods.length || sounds) word('that');
   if (moods.length) (word(plural ? 'feel' : 'feels'), list(moods, 'mood'));
-  if (moods.length && like.length) word('and');
-  if (like.length) (word(plural ? 'sound like' : 'sounds like'), list(like, 'like'));
+  if (moods.length && sounds) word('and');
+  if (sounds) word(plural ? 'sound like' : 'sounds like');
+  if (like.length) list(like, 'like');
+  if (brief) (like.length && word('and'), word(brief));
+
+  // What is left out, last: "but not Trap or Drill, not on Def Jam, not by Ann Quartet" (0.13).
+  const left = (kind: ChipKind) => all.filter(({ c }) => c.not && c.reading.kind === kind);
+  const groups: [string, { i: number }[]][] = [
+    ['', left('genre')],
+    ['', left('style')],
+    ['tagged', left('tag')],
+    ['feeling', left('mood')],
+    ['by', left('artist')],
+    ['on', left('label')],
+    ['from the album', left('album')],
+  ];
+  let first = true;
+  for (const [lead, items] of groups) {
+    if (!items.length) continue;
+    if (first) (out.length && word(',', true), word('but not'));
+    else (word(',', true), word('not'));
+    first = false;
+    if (lead) word(lead);
+    list(items);
+  }
   return out;
 }
 
 /** What `names` says of an id (the server's, with a crate's conditions; decision 0088). */
 export type Named = { name: string; kind: 'artist' | 'album' | 'track' };
+/** The names a crate's chips hold, by the id (or album key) its conditions use: a term read in the sentence, named for
+ *  the conditions' cards. */
+export function namesOf(chips: readonly Chip[]): Record<string, Named> {
+  const out: Record<string, Named> = {};
+  for (const c of chips)
+    if (c.reading.kind === 'album' || c.reading.id)
+      out[c.reading.id ?? c.reading.value] = { name: c.reading.label, kind: c.reading.kind === 'album' ? 'album' : c.reading.kind === 'track' ? 'track' : 'artist' };
+  return out;
+}
+/** Chips read back from conditions (`chipsOf`) as they were typed where they are the same term: its words and other
+ *  readings kept. */
+export function keptChips(next: readonly Chip[], had: readonly Chip[]): Chip[] {
+  const key = (c: Chip) => `${c.reading.kind}|${c.reading.id ?? c.reading.value}|${c.how ?? ''}|${c.not ? '!' : ''}`;
+  const old = new Map(had.map((c) => [key(c), c]));
+  return next.map((c) => {
+    const o = old.get(key(c));
+    return o ? { ...o, own: c.own } : c;
+  });
+}
+/** How many seeds a sentence lists; more, or weighted, or fresh (a built-in crate's), are said briefly. */
+export const SEEDS_LISTED = 6;
+/** A Sounds like said briefly (0.13; the owner: a built-in crate "says itself briefly"): from the crate's own name
+ *  ("Sounds like your week" → "your week", "Sounds like Air" → "Air"), else its one seed's name, else how many. */
+export function briefOf(of: readonly string[], names: Readonly<Record<string, Named>>, crateName = ''): string {
+  const m = /^sounds like (.+)$/i.exec(crateName.trim());
+  if (m) return m[1];
+  if (of.length === 1 && names[of[0]]) return names[of[0]].name;
+  return `${of.length} ${of.length === 1 ? 'track' : 'tracks'}`;
+}
+
 /** A crate's conditions read back as its terms (0.13, decision 0088: one crate, two views): the chips, how they join,
  *  the cut, and `rest`, the conditions a sentence cannot say (negated, switched off, an open range, a Sounds like by
  *  how many or weighted, a second row of one kind, any other axis), kept as they are. `names`: the server's for the
@@ -521,33 +597,42 @@ export type Named = { name: string; kind: 'artist' | 'album' | 'track' };
 export function chipsOf(
   conditions: readonly Condition[],
   names: Readonly<Record<string, Named>> = {},
-): { chips: Chip[]; modes: Modes; min: number; rest: Condition[] } {
+  crateName = '',
+): { chips: Chip[]; modes: Modes; min: number; rest: Condition[]; brief: { text: string; condition: Condition } | null } {
   const chips: Chip[] = [];
   const modes: Modes = {};
   const rest: Condition[] = [];
   const done = new Set<string>();
+  let brief: { text: string; condition: Condition } | null = null;
   let min = CLOSE;
   const kindOfId = (id: string): Named['kind'] => names[id]?.kind ?? (id.startsWith('al-') ? 'album' : id.startsWith('tr-') ? 'track' : 'artist');
   const gone = (k: Named['kind']) => `${k === 'album' ? 'an album' : k === 'track' ? 'a track' : 'an artist'} no longer in the library`;
   for (const c of conditions) {
     const v = c.value;
-    const plain = !c.not && c.enabled !== false && !c.quantifier && !done.has(c.axis);
+    const at = `${c.axis}${c.not ? '!' : ''}`;
+    const plain = c.enabled !== false && !c.quantifier && !done.has(at);
     const several = v.kind === 'any_of' || v.kind === 'all_of';
     const sayable = isMulti(c.axis) || ((c.axis === 'label' || c.axis === 'artist' || c.axis === 'album') && v.kind === 'any_of');
-    if (plain && several && v.values.length && sayable) {
+    // Left out, "but not": any of them only (none of them); "not all of" is the conditions' to say.
+    if (plain && several && v.values.length && sayable && (!c.not || v.kind === 'any_of')) {
+      const not = c.not ? { not: true } : {};
       for (const value of v.values) {
-        if (c.axis === 'artist') chips.push({ term: value, reading: { kind: 'artist', value, label: value }, others: [], how: 'by', own: false });
+        if (c.axis === 'artist') chips.push({ term: value, reading: { kind: 'artist', value, label: value }, others: [], how: 'by', own: false, ...not });
         else if (c.axis === 'album') {
           const label = names[value]?.name ?? gone('album');
-          chips.push({ term: label, reading: { kind: 'album', value, label }, others: [] });
-        } else chips.push(wordChip(c.axis as 'genre' | 'style' | 'mood' | 'tag' | 'label', value));
+          chips.push({ term: label, reading: { kind: 'album', value, label }, others: [], ...not });
+        } else chips.push({ ...wordChip(c.axis as 'genre' | 'style' | 'mood' | 'tag' | 'label', value), ...not });
       }
-      if (isMulti(c.axis) && v.values.length > 1) modes[c.axis] = v.kind === 'all_of' ? 'and' : 'or';
-    } else if (plain && c.axis === 'year' && v.kind === 'range' && v.min !== null && v.max !== null) {
+      if (!c.not && isMulti(c.axis) && v.values.length > 1) modes[c.axis] = v.kind === 'all_of' ? 'and' : 'or';
+    } else if (plain && !c.not && c.axis === 'year' && v.kind === 'range' && v.min !== null && v.max !== null) {
       const [a, z] = [v.min, v.max];
       const label = a === z ? String(a) : a % 10 === 0 && z === a + 9 ? `${a}s` : `${a}–${z}`;
       chips.push({ term: label, reading: { kind: 'year', value: `${a}-${z}`, label }, others: [] });
-    } else if (plain && v.kind === 'like' && v.min !== undefined && !v.fresh && !v.weights?.length && v.of.length) {
+    } else if (plain && !c.not && v.kind === 'like' && !brief && (v.min === undefined || v.fresh || !!v.weights?.length || v.of.length > SEEDS_LISTED)) {
+      // A built-in crate's (by how many, weighted, fresh) or a long list: said briefly, kept as it is.
+      brief = { text: briefOf(v.of, names, crateName), condition: c };
+      continue;
+    } else if (plain && !c.not && v.kind === 'like' && v.min !== undefined && !v.fresh && !v.weights?.length && v.of.length) {
       v.of.forEach((id, k) => {
         const kind = kindOfId(id);
         chips.push({ ...likeChip(kind, id, names[id]?.name ?? gone(kind)), own: k === 0 && !!v.own });
@@ -558,9 +643,9 @@ export function chipsOf(
       rest.push(c);
       continue;
     }
-    done.add(c.axis);
+    done.add(at);
   }
-  return { chips, modes, min, rest };
+  return { chips, modes, min, rest, brief };
 }
 
 /** A name for it, from its chips: "Jazz · like Bonobo · 1970s". */

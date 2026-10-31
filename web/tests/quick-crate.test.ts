@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf } = await import(
+const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -286,6 +286,8 @@ test("global search's crate card: two terms or more of two kinds or more; one th
 // holds them, kind words making what follows that kind, and whatever sentenceOf writes reading back to its terms.
 const WORDS_LIBRARY = [
   hit('genre', 'Hip Hop'),
+  hit('genre', 'Trap'),
+  hit('label', 'Def Jam'),
   hit('genre', 'Jazz'),
   hit('genre', 'Soul'),
   hit('genre', 'Funk'),
@@ -303,7 +305,7 @@ const WORDS_LIBRARY = [
 const typedBack = async (line: string) => {
   const asked: string[] = [];
   const reads = await readLine(line, async (p) => (asked.push(p), WORDS_LIBRARY.filter((h) => match(words(p), h.title))), 2026);
-  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? []);
+  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []);
   return { chips, terms: chips.map((ch) => `${ch.reading.kind}:${ch.reading.label}${ch.how ? `/${ch.how}` : ''}`), asked };
 };
 
@@ -367,7 +369,7 @@ test('the crates made here and not saved show only once typing starts, those the
 
 // One crate, two views (0.13, decision 0088): how a kind's terms join, and a crate's conditions read back as its terms.
 const reads = (line: string) => readLine(line, async (p) => WORDS_LIBRARY.filter((h) => match(words(p), h.title)), 2026);
-const chipsOfLine = async (line: string) => (await reads(line)).flatMap((r) => chipOf(r.term, r.readings, r.how) ?? []);
+const chipsOfLine = async (line: string) => (await reads(line)).flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []);
 
 test('and or or between two terms of one kind sets how they join; the defaults: Sounds like and, the others or', async () => {
   assert.deepEqual(modesFrom(await reads('jazz and soul')), { genre: 'and' });
@@ -418,18 +420,69 @@ test("a crate's conditions read back as its terms, named from the server's names
   }
 });
 
-test('what a sentence cannot say stays as it is, and an id the library no longer has reads as gone', () => {
+test('what a sentence cannot say stays as it is (an open range, a second row of a kind), and an id the library no longer has reads as gone', () => {
   const not = { axis: 'genre', not: true, value: { kind: 'any_of' as const, values: ['Jazz'] } };
   const open = { axis: 'year', not: false, value: { kind: 'range' as const, min: 1990, max: null } };
   const counted = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['ar-x'], count: 50 } };
   const second = { axis: 'genre', not: false, value: { kind: 'any_of' as const, values: ['Soul'] } };
   const first = { axis: 'genre', not: false, value: { kind: 'any_of' as const, values: ['Funk'] } };
   const r = chipsOf([first, not, open, counted, second]);
-  assert.deepEqual(r.chips.map((c) => c.reading.label), ['Funk']);
-  assert.deepEqual(r.rest, [not, open, counted, second]);
+  // A negated row is "but not"; one by how many is said briefly (both said since the sentence's "but not").
+  assert.deepEqual(r.chips.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Funk', 'Jazz!']);
+  assert.deepEqual(r.rest, [open, second]);
+  assert.equal(r.brief?.condition, counted);
   const gone = chipsOf([{ axis: 'like', not: false, value: { kind: 'like', of: ['ar-gone', 'al-x'], count: LIKE_MOST, min: 30, own: true } }]);
   assert.deepEqual(gone.chips.map((c) => c.reading.label), ['an artist no longer in the library', 'an album no longer in the library']);
   assert.equal(gone.chips[0].own, true);
   assert.equal(gone.min, 30);
   assert.equal(gone.modes.like, 'and');
+});
+
+// "But not" (0.13): what a crate leaves out, said, typed and read back.
+const plain = (parts: { text: string; tight?: boolean }[]) => parts.map((p, k) => (k && !p.tight ? ' ' : '') + p.text).join('');
+
+test('"but not" typed leaves out what follows, through a kind word after it; a "like" ends it', async () => {
+  const trap = await chipsOfLine('hip hop but not trap');
+  assert.deepEqual(trap.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Hip Hop', 'Trap!']);
+  assert.equal(plain(sentenceOf(trap)), 'Hip Hop, but not Trap');
+  assert.deepEqual(conditionsOf(trap), [
+    { axis: 'genre', not: false, value: { kind: 'any_of', values: ['Hip Hop'] } },
+    { axis: 'genre', not: true, value: { kind: 'any_of', values: ['Trap'] } },
+  ]);
+  const label = await chipsOfLine('jazz but not on def jam');
+  assert.equal(plain(sentenceOf(label)), 'Jazz, but not on Def Jam');
+  const by = await chipsOfLine('soul but not by al green');
+  assert.deepEqual(by.map((c) => `${c.reading.kind}:${c.reading.label}/${c.how ?? ''}${c.not ? '!' : ''}`), ['genre:Soul/', 'artist:Al Green/by!']);
+  assert.equal(plain(sentenceOf(by)), 'Soul, but not by Al Green');
+  const like = await chipsOfLine('jazz but not trap that sounds like miles davis');
+  assert.equal(like.at(-1)!.how, 'like');
+  assert.equal(like.at(-1)!.not, undefined, 'a like after "but not" is liked, not left out');
+});
+
+test('"but not" reads back from the conditions and round-trips; "not all of" stays the conditions\' to say', async () => {
+  for (const line of ['hip hop but not trap', 'jazz but not on def jam', 'soul but not by al green', 'hip hop from the 90s but not trap or jazz']) {
+    const chips = await chipsOfLine(line);
+    const conditions = conditionsOf(chips);
+    const back = chipsOf(conditions);
+    assert.deepEqual(back.rest, [], line);
+    assert.deepEqual(conditionsOf(back.chips, back.min, back.modes), conditions, line);
+  }
+  const notAll = { axis: 'genre', not: true, value: { kind: 'all_of' as const, values: ['Jazz', 'Soul'] } };
+  assert.deepEqual(chipsOf([notAll]).rest, [notAll]);
+});
+
+test("a built-in crate's Sounds like said briefly, kept as it is: its own name, else its one seed, else how many", () => {
+  const week = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['tr-1', 'tr-2'], count: 50, fresh: true, weights: [1, 0.5] } };
+  const r = chipsOf([week], {}, 'Sounds like your week');
+  assert.deepEqual(r.chips, []);
+  assert.deepEqual(r.rest, []);
+  assert.deepEqual(r.brief, { text: 'your week', condition: week });
+  assert.equal(plain(sentenceOf([], {}, r.brief!.text)), 'Tracks that sound like your week');
+  const air = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['al-1'], count: 40 } };
+  assert.equal(chipsOf([air], {}, 'Sounds like Air').brief?.text, 'Air');
+  assert.equal(briefOf(['ar-1'], { 'ar-1': { name: 'Ann Quartet', kind: 'artist' } }), 'Ann Quartet');
+  const many = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['tr-1', 'tr-2', 'tr-3', 'tr-4', 'tr-5', 'tr-6', 'tr-7'], count: 1000, min: 40 } };
+  assert.equal(chipsOf([many]).brief?.text, '7 tracks');
+  const jazz = chipsOf([{ axis: 'genre', not: false, value: { kind: 'any_of', values: ['Jazz'] } }, week], {}, 'Sounds like your week');
+  assert.equal(plain(sentenceOf(jazz.chips, jazz.modes, jazz.brief!.text)), 'Jazz that sounds like your week');
 });
