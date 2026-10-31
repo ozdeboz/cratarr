@@ -290,6 +290,10 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/track-search/{id}/fetch", post(start_track_fetch))
             .route("/api/track-fetch/{id}", get(track_fetch).delete(drop_track_fetch))
             .route("/api/track-fetch/{id}/add", post(add_fetched_track))
+            // Bulk intake of missing tracks (0.13): searched in turn, approved many at once.
+            .route("/api/track-intake", get(track_intake).post(track_intake_add).delete(track_intake_clear))
+            .route("/api/track-intake/approve", post(track_intake_approve))
+            .route("/api/track-intake/{id}", axum::routing::delete(track_intake_drop))
             .route("/api/track-files", get(track_files))
             .route("/api/track-files/fetch", post(start_file_fetch))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
@@ -6224,6 +6228,56 @@ async fn start_file_fetch(Json(b): Json<FileFetch>) -> Result<Json<serde_json::V
 async fn add_fetched_track(Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
     let token = crate::app::track_fetch::add(&id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "undo": [token] })))
+}
+
+/// The bulk intake's queue (0.13, decision 0080 amended): each missing track, its state, its candidates (best first) and
+/// the one preselected; `running` while it searches or fetches.
+async fn track_intake() -> Json<crate::app::track_intake::View> {
+    Json(crate::app::track_intake::view())
+}
+
+#[derive(Deserialize)]
+struct IntakeAlbums {
+    albums: Vec<String>,
+}
+
+/// These albums' missing tracks queued, searched in turn (paced); the queue.
+async fn track_intake_add(Json(b): Json<IntakeAlbums>) -> Result<Json<crate::app::track_intake::View>, ApiError> {
+    if b.albums.is_empty() || b.albums.iter().any(|a| a.trim().is_empty()) {
+        return Err(ToggleError::BadSettings("Name the albums.".into()).into());
+    }
+    let view = crate::app::track_intake::add_albums(&b.albums).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+struct IntakePick {
+    id: String,
+    #[serde(default)]
+    candidate: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct IntakeApprove {
+    items: Vec<IntakePick>,
+}
+
+/// Found items approved (a candidate given, else the one preselected): fetched, gated and added in turn; the queue.
+async fn track_intake_approve(Json(b): Json<IntakeApprove>) -> Json<crate::app::track_intake::View> {
+    let picked: Vec<(String, Option<usize>)> = b.items.into_iter().map(|p| (p.id, p.candidate)).collect();
+    Json(crate::app::track_intake::approve(&picked))
+}
+
+/// One item dropped, its staged file with it.
+async fn track_intake_drop(Path(id): Path<String>) -> StatusCode {
+    crate::app::track_intake::drop_item(&id);
+    StatusCode::NO_CONTENT
+}
+
+/// The finished items cleared.
+async fn track_intake_clear() -> StatusCode {
+    crate::app::track_intake::clear_finished();
+    StatusCode::NO_CONTENT
 }
 
 /// slskd as set (never its key) and whether it answers: its version, or why not.

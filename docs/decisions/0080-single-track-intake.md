@@ -3,7 +3,8 @@
 - Status: accepted (the owner, 2026-10-26, for 0.9.8: single-track replacement as planned; the AcoustID gate at 0.9)
 - Date: 2026-10-26, written down 2026-10-30
 - Builds on: 0010 (one writable mount), 0013 (Incoming: hi-res made CD format), 0053 (covers inside the files)
-- Amended by: the amendments of 2026-10-30 below (a file already on the server as a second source; the gate hears
+- Amended by: the amendment of 2026-10-31 below (bulk search, approved many at once); the amendments of 2026-10-30
+  below (a file already on the server as a second source; the gate hears
   the sound: fake lossless, re-encoded MP3s, clicks, pops and clipping)
 
 ## Context
@@ -98,3 +99,19 @@ decoded twice. They come after the damaged-frame and length checks and before Ac
     …", "A pop at the very end", "Clipped at 2:41"; several at once are joined with "; ".
 - **The cost**: one FFT of 2,048 every 2,048 samples, a few sums a sample, and four numbers kept a hop (about 2.8 KB a
   second of sound), on the decode the gate made anyway.
+
+## Amendment (2026-10-31): bulk search, approved many at once
+
+The owner, on Health's missing tracks: "there is no way to mass handle this volume of missing tracks". One track at
+a time, every step by hand, does not reach a library with hundreds missing. Asked how far to go, the owner chose
+"Bulk search, you approve" (not unattended intake).
+
+- **The search goes in bulk; the decision does not.** Albums are named (Health's Albums missing tracks, ticked); each
+  of their missing tracks is searched in turn, one slskd search at a time, paced (`app::track_intake`), and the best
+  file preselected (lossless first, then a free slot, a short queue, the fastest).
+- **Approved many at once.** The administrator ticks what to take, in one list, a preselected file or another of the
+  five shown; nothing is fetched or added without a tick, so March 2026's unattended batches cannot happen again.
+- **The same gate, the same add, the same Undo**, each approved file in turn: decoded whole, the recording's length,
+  AcoustID at 0.9, else refused with why; added with its own Undo.
+- **In memory**, as single-track intake's searches: a restart forgets the queue (`GET/POST/DELETE /api/track-intake`,
+  `POST /api/track-intake/approve`).
