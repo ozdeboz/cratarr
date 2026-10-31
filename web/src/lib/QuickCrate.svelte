@@ -17,6 +17,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { viewPlaylist } from './panel.svelte';
+  import { leaveOnArrival } from './navStep.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
   import { CLOSE, TERM_KINDS, chipOf, conditionsOf, countAt, keepsOwn, minAt, nameOf, readLine, recentFor, seedsOf, sentenceOf, type Chip, type Found } from './quickCrate';
@@ -231,9 +232,12 @@
     try {
       const made = await createCrate(name, conditions);
       forgetQuick(chips);
-      clear();
       withUndo(`Created ${name}.`, [made.undo], { after: () => loadCrates() });
       await loadCrates();
+      // Its words stay until the crate shows (lib/quickCrates; the owner, 2026-10-31: never the page between).
+      text = '';
+      missed = [];
+      leaveOnArrival({ quick: true });
       viewPlaylist(CRATE + made.id);
     } catch (e) {
       toast.fail(e, "The crate wasn't saved");
@@ -246,7 +250,10 @@
     menuOpen = false;
     const [n, c] = [name, conditions];
     forgetQuick(chips);
-    clear();
+    // As Save: the words stay until the builder shows.
+    text = '';
+    missed = [];
+    leaveOnArrival({ quick: true });
     startCrate(n, c);
   }
   function startOver() {
