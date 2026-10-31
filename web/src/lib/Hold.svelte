@@ -12,13 +12,15 @@
 
   // `seeThrough`: opening, the place is not there at all until its content is ready (the phone's panel over the page):
   // what was tapped shows the loading sign meanwhile (lib/panel `opening`); after HOLD_MAX_MS the place, empty, with the
-  // sign.
+  // sign. `onshown`: each time what it holds shows (its opening too), after the frame it shows in has been drawn: where
+  // a place hands over to another (lib/handover), the one it took over from may go then.
   let {
     key,
     shown = $bindable(),
     seeThrough = false,
+    onshown,
     children,
-  }: { key: unknown; shown?: unknown; seeThrough?: boolean; children: Snippet } = $props();
+  }: { key: unknown; shown?: unknown; seeThrough?: boolean; onshown?: () => void; children: Snippet } = $props();
 
   /** The sign a moment after (a page there at once shows no flash of it). */
   const HOLD_SIGN_MS = 100;
@@ -110,6 +112,8 @@
     holding = false;
     shown = key;
     dropSign();
+    // Once the frame that shows it is drawn: what it took over from goes in the next (never a frame between).
+    if (onshown) requestAnimationFrame(() => requestAnimationFrame(() => r === round && onshown?.()));
   }
 
   /** A hold begins: the place empty but for its background, the sign on it, until ready. */
