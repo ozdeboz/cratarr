@@ -637,6 +637,10 @@ pub fn chain_map(winds: &[Wind]) -> Vec<(u64, usize, u64)> {
     out
 }
 
+/// A wind's volume when a player asks none (dB): the tape's start (shared/rules.json `tape.gain_db.start`; the owner,
+/// 2026-10-31: -6, was -12).
+pub const GAIN_DB_START: f64 = -6.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,6 +656,7 @@ mod tests {
         let r = rules();
         assert_eq!(r["wind_cap_ms"].as_u64(), Some(LONGEST_FIT_MS));
         assert_eq!(r["wind_shortest_ms"].as_u64(), Some(SHORTEST_FIT_MS));
+        assert_eq!(r["tape"]["gain_db"]["start"].as_f64(), Some(GAIN_DB_START));
         for (i, b) in r["brake"].as_array().unwrap().iter().enumerate() {
             let brake = Brake { v0: b["v0"].as_f64().unwrap(), to: b["to"].as_f64().unwrap(), secs: b["length_ms"].as_f64().unwrap() / 1000.0, at: 0.0 };
             for p in b["at"].as_array().unwrap() {
