@@ -18,6 +18,9 @@ nfkd = ["dep:unicode-normalization"]
 # The WebAssembly modules (scripts/rules-wasm.sh): the brake for the page's first view, the matcher fetched later.
 wasm-brake = []
 wasm-matcher = []
+# A crate's records kept apart, for the page (0.13): in matcher.wasm, which has an allocator already (in rules.wasm it
+# took it from 9 to 38 KB).
+wasm-spread = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
