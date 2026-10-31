@@ -20,6 +20,7 @@
     classicalOfChoice,
     editableOf,
     secondaryLabel,
+    isSecondary,
     shownOf,
     toSend,
     yearOf,
@@ -74,10 +75,11 @@
   }
   const yearOk = $derived(yearOf(yearTyped) !== null);
 
-  // Secondary types: MusicBrainz's, and any other the records carry.
+  // Secondary types: MusicBrainz's twelve only, the ones Cratarr keeps (a5, 2026-10-31: any other is refused); one a
+  // record carries from elsewhere is not offered and not sent back.
   const secondary = $derived(shownOf(records, draft, 'secondary'));
-  const secondaryNow = $derived<string[]>((secondary.mixed || secondary.reset ? [] : (secondary.value as string[] | null)) ?? []);
-  const secondaryOffered = $derived([...new Set([...SECONDARY_TYPES, ...records.flatMap((r) => r.secondary)])]);
+  const secondaryNow = $derived<string[]>(((secondary.mixed || secondary.reset ? [] : (secondary.value as string[] | null)) ?? []).filter(isSecondary));
+  const secondaryOffered = SECONDARY_TYPES;
   const toggleSecondary = (v: string) => (draft.secondary = secondaryNow.includes(v) ? secondaryNow.filter((x) => x !== v) : [...secondaryNow, v]);
 
   // Genres: the library's (the crate builder's genre values, most common first), the chosen first; a typed one added.
