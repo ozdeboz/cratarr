@@ -91,7 +91,10 @@
     }
   }
 
-  const parts = $derived(sentenceOf(chips));
+  // Nothing read yet: "Grab a crate" leads, not the sentence's "Tracks" (the owner, 2026-10-31); the example after it
+  // shows the sentence's own words at work.
+  const parts = $derived(chips.length ? sentenceOf(chips) : [{ text: 'Grab a crate' }]);
+  const EXAMPLE = 'hip hop and jazz from the 90s like Miles Davis';
   const conditions = $derived(conditionsOf(chips, min));
   const name = $derived(nameOf(chips));
   const seeds = $derived(seedsOf(chips));
@@ -301,9 +304,9 @@
           class="term"
           class:like={!!c?.reading.id && c.how === 'like'}
           onclick={() => (at = p.chip ?? null)}>{p.text}</button
-        >{:else}<span class="w">{p.text}</span>{/if}{/each}{#if chips.length}{' '}{/if}<input
+        >{:else}<span class="w">{p.text}</span>{/if}{/each}{' '}<input
       type="search"
-      placeholder={chips.length ? 'and…' : 'hip hop 90s Miles Davis'}
+      placeholder={chips.length ? 'and…' : EXAMPLE}
       aria-label={chips.length ? 'More words for the crate' : 'Words for a crate'}
       bind:value={text}
       oninput={typed}
@@ -512,11 +515,9 @@
     outline: none;
   }
 
-  /* Nothing typed yet: the line alone, its field the list's width. */
+  /* Nothing typed yet: "Grab a crate" and the example after it, the field as wide as the example. */
   .empty input[type='search'] {
-    box-sizing: border-box;
-    width: 100%;
-    field-sizing: fixed;
+    min-width: min(100%, 12ch);
   }
 
   .near {
