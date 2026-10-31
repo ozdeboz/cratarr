@@ -1,5 +1,5 @@
 <script lang="ts">
-  // A quick crate's term, tapped in its sentence (lib/QuickCrate): the other ways its word reads, an artist's Sounds
+  // A quick crate's term, tapped in its sentence (lib/CrateSentence): the other ways its word reads, an artist's Sounds
   // like or By and their own tracks, another word for it, Remove. As the 0.11 sheet's chip step was.
   import { chipOf, readAs, readingsFor, type Chip, type Found, type Reading } from './quickCrate';
   import MenuEntry from './MenuEntry.svelte';

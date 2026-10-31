@@ -10,12 +10,15 @@
   // conditions. The sentence (lib/CrateSentence) says what it can of them (lib/quickCrate chipsOf, named by the server's
   // `names`), the rest as how many more; the conditions are the cards. An edit in either is the crate's conditions, so
   // the other shows it. It opens on the sentence where the sentence can say all of it.
+  // The one place a crate is built (0.13; the owner, 2026-10-31: "one place where to show contents or building of a
+  // crate, and that is in the panel"): a crate grabbed (a search's card, a menu's Sounds like this) opens here with its
+  // sentence as it was read (`sentence`) or its words still to read (`words`); a new one empty, the caret in its field.
   import { untrack } from 'svelte';
   import { getCrateAxes, type Axis, type Condition } from './api';
   import ConditionList from './ConditionList.svelte';
   import CrateResults from './CrateResults.svelte';
   import CrateSentence from './CrateSentence.svelte';
-  import { chipsOf, conditionsOf, namesOf, type Chip, type Modes, type Named } from './quickCrate';
+  import { chipsOf, conditionsOf, nameOf, namesOf, type Chip, type Modes, type Named } from './quickCrate';
   import { excludedArtists, loadCrateArtists, setNotInCrate } from './excludedArtists.svelte';
   import Seg from './Seg.svelte';
   import { prefs, type FilterCondition } from './prefs.svelte';
@@ -27,6 +30,9 @@
     names = {},
     crate = null,
     name = '',
+    sentence = null,
+    words = '',
+    named = $bindable(''),
   }: {
     conditions: FilterCondition[];
     total?: number | null;
@@ -36,6 +42,12 @@
     crate?: string | null;
     /** Its name: a built-in crate's says its Sounds like briefly ("Sounds like your week"). */
     name?: string;
+    /** A grabbed crate's terms as they were read, its sentence as it starts. */
+    sentence?: { chips: Chip[]; min: number; modes: Modes } | null;
+    /** Words to read into its sentence as it opens. */
+    words?: string;
+    /** The name its sentence gives it (lib/quickCrate nameOf), for a crate not named yet. */
+    named?: string;
   } = $props();
 
   // Its artists left out by hand (Not in this crate, decision 0083): "but not <artist>" in the sentence, a row of them
@@ -68,7 +80,23 @@
   }
   let view = $state<'sentence' | 'conditions'>('conditions');
   untrack(() => {
-    if (!chipsOf(conditions, allNames, name).rest.length) toSentence();
+    if (sentence) [chips, min, modes, view] = [sentence.chips, sentence.min, sentence.modes, 'sentence'];
+    else if (!chipsOf(conditions, allNames, name).rest.length) toSentence();
+  });
+  $effect(() => {
+    named = nameOf(chips);
+  });
+  /** The sentence (lib/CrateSentence): its words read in, the caret put in its field. */
+  let said = $state<{ add: (words: string) => Promise<void>; focus: () => void }>();
+  let started = false;
+  $effect(() => {
+    const s = said;
+    if (!s || started) return;
+    started = true;
+    untrack(() => {
+      if (words.trim()) void s.add(words);
+      else if (!crate && !conditions.length) s.focus();
+    });
   });
   // The sentence's edits are the crate's conditions (what it cannot say after them), its terms' names learnt.
   $effect(() => {
@@ -100,7 +128,7 @@
   </div>
   {#if view === 'sentence'}
     <div class="sentence">
-      <CrateSentence bind:chips bind:min bind:modes {rest} brief={brief?.text ?? null} {excluded} onexcluded={takeBack} onmore={() => (view = 'conditions')} />
+      <CrateSentence bind:this={said} bind:chips bind:min bind:modes {rest} brief={brief?.text ?? null} {excluded} onexcluded={takeBack} onmore={() => (view = 'conditions')} />
     </div>
   {:else}
     <ConditionList bind:conditions {axes} crate names={allNames} onnamed={(id, n) => (added = { ...added, [id]: n })} />

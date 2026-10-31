@@ -137,8 +137,15 @@ export const builderOf = (viewed: string | null): { id: string | null } | null =
 
 /** A crate being made or changed, kept in this browser under its own address until Save or Cancel (it survives the
  *  player over it, a page change and a reload). */
-/** `names`: the server's for the ids its conditions hold (0.13, decision 0088). */
-export type CrateDraft = { name: string; conditions: Condition[]; names?: Record<string, import('./quickCrate').Named> };
+/** `names`: the server's for the ids its conditions hold (0.13, decision 0088). A crate grabbed (0.13, lib/quickCrates):
+ *  `sentence` its terms as they were read, `words` words still to read into it. */
+export type CrateDraft = {
+  name: string;
+  conditions: Condition[];
+  names?: Record<string, import('./quickCrate').Named>;
+  sentence?: { chips: import('./quickCrate').Chip[]; min: number; modes: import('./quickCrate').Modes };
+  words?: string;
+};
 const draftKey = (id: string | null) => `cratarr-crate-draft:${id ?? 'new'}`;
 export function keptDraft(id: string | null): CrateDraft | null {
   try {
@@ -238,9 +245,9 @@ export const seeded = (crate: string | null) => wordOf(crate) !== null || likeOf
 /** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
  *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a
  *  genre's own, from the genre's view). */
-export function startCrate(name: string, conditions: Condition[] = []) {
+export function startCrate(name: string, conditions: Condition[] = [], more: Omit<CrateDraft, 'name' | 'conditions'> = {}) {
   try {
-    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions }));
+    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions, ...more }));
   } catch {
     /* the builder starts empty */
   }

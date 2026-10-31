@@ -18,9 +18,6 @@
   import PageLoading from './lib/PageLoading.svelte';
   import Asking from './lib/Asking.svelte';
   import { deepMatches } from './lib/deepSearch.svelte';
-  import { newQuickCrate, quickCrates, quickOn } from './lib/quickCrates.svelte';
-  import { reach } from './lib/reach.svelte';
-  import QuickCrate from './lib/QuickCrate.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
   // And when a library is switched on or off: a crate fills from every library switched on.
@@ -30,10 +27,9 @@
     loadCrates();
   });
 
-  // New crate (0.13; the owner, 2026-10-31: "one start, one list"): a new crate's sentence at the top, the caret in it,
-  // its Conditions one switch away (lib/QuickCrate). A server that makes no quick crates, or out of reach: the panel's
-  // crate edit mode, empty, the caret in its name (as New playlist).
-  usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => (quickOn() && !reach.away ? newQuickCrate() : startCrate('')) }));
+  // New crate: the panel's builder, empty (0.13; the owner, 2026-10-31: "one place where to show contents or building of
+  // a crate, and that is in the panel"): its sentence first, "Grab a crate" and an example, the caret in its field.
+  usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => startCrate('') }));
   // The list's order (its header): as made, by name, or by what its cards show (decision 0060); either way round. A
   // crate whose card is not known yet (favourites not read) comes first, as made.
   const byName = (a: Crate, b: Crate) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
@@ -44,6 +40,7 @@
     newWeek: (c) => c.stats?.new_week,
   };
   // The pill's search (the owner, 2026-10-25): a crate whose name holds every word, or one the server finds by its tracks.
+  // Words that make a crate lead with its card, as on every page (App, lib/SearchCrateCard).
   const deepOf = deepMatches('crate', 'crate:');
   const sorted = $derived.by(() => {
     // The filter's Hide built-in crates (0.9.3): only one's own.
@@ -54,24 +51,13 @@
     else if (of) list.sort((a, b) => (of(a) ?? -1) - (of(b) ?? -1) || byName(a, b));
     return prefs.crateDown ? list.reverse() : list;
   });
-  // A crate being grabbed (0.12.1, the owner: "Results replace the list"): the page is that crate alone, its tracks or
-  // records; the crates come back once its words are cleared or it is saved.
-  const grabbing = $derived(
-    quickOn() && !reach.away && (quickCrates.making || quickCrates.chips.length > 0 || quickCrates.rest.length > 0 || !!quickCrates.brief),
-  );
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
   const shows = $derived(listShows(sorted.length, pageView.query, deepOf.answeredFor()));
 </script>
 
 <main>
-  {#if quickOn()}
-    <!-- A quick crate (0.11; 0.12 the owner's mockup B): words typed at the top read as a crate's sentence (lib/QuickCrate). -->
-    <QuickCrate />
-  {/if}
-  {#if grabbing}
-    <!-- The grabbed crate's results are QuickCrate's own (lib/CrateResults, a crate's one list). -->
-  {:else if crates.error && !crates.list}
+  {#if crates.error && !crates.list}
     <Notice text={crates.error} />
   {:else if !crates.list}
     <PageLoading />

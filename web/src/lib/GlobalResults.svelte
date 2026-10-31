@@ -5,8 +5,8 @@
   // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
-  // the server makes them (0.11), Grab a crate (the owner, 2026-10-30; was Make a crate of this): Crates, the words read into a quick crate's sentence (lib/QuickCrate);
-  // where the words read as a crate of two kinds or more, that crate as a card (lib/SearchCrateCard, mockup 1a). A
+  // the server makes them (0.11) and the words read as a crate of two kinds or more that holds a track, that crate as a
+  // card (lib/SearchCrateCard, mockup 1a; every page's own search leads with it too, App); else no crate at all. A
   // result's long-press, right-click or ⋮ opens its own menu, as the same thing's does in any list (decision 0058).
   import { fromAction } from 'svelte/attachments';
   import { includeArtist, takeBackExcluded } from './api';
@@ -28,7 +28,7 @@
   import { viewOver } from './panel.svelte';
   import { libraryDot } from './albums.svelte';
   import { pageView } from './pageView.svelte';
-  import { openQuickCrate, quickOn } from './quickCrates.svelte';
+  import { quickOn } from './quickCrates.svelte';
   import { leaveOnArrival } from './navStep.svelte';
   import { matchLine, type SearchResult } from './search';
   import Asking from './Asking.svelte';
@@ -180,17 +180,7 @@
 {:else if q && (groups.length || asked)}
   <section class="global" aria-label="Everywhere">
     {#if quickOn()}
-      <SearchCrateCard {q}>
-        {#snippet plain()}
-          <ul class="rows">
-            <li>
-              <Row size="large" title="Grab a crate" sub={q} label={`Grab a crate of ${q}`} onclick={() => openQuickCrate(q)}>
-                {#snippet front()}<span class="art made"><Icon name="crates" size={24} /></span>{/snippet}
-              </Row>
-            </li>
-          </ul>
-        {/snippet}
-      </SearchCrateCard>
+      <SearchCrateCard {q} />
     {/if}
     {#if groups.length}
       {#each groups as g (g.kind)}
@@ -273,14 +263,6 @@
 
   .art.round {
     border-radius: 50%;
-  }
-
-  /* Grab a crate: the crates' icon where a cover would be. */
-  .art.made {
-    display: grid;
-    place-items: center;
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-    color: var(--accent-ink);
   }
 
   /* A result's ⋮ (its menu), as a list row's. */

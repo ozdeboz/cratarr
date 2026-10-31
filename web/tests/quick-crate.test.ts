@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf } = await import(
+const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -268,7 +268,7 @@ test("Grab a crate from a word's crate: that word as its term", () => {
   assert.equal(said(sentenceOf([wordChip('genre', 'Soul')])), '[Soul]');
 });
 
-test("global search's crate card: two terms or more of two kinds or more; one thing stays the plain row", () => {
+test("a search's crate card: two terms or more of two kinds or more; one thing makes no crate", () => {
   const r = (term: string, ...readings: Record<string, unknown>[]) => ({ term, readings });
   const genre = (v: string) => ({ kind: 'genre', value: v, label: v });
   const artist = (v: string, id: string) => ({ kind: 'artist', value: v, label: v, id });
@@ -496,4 +496,34 @@ test("the conditions' edits come back to the sentence as typed: a term's words a
   assert.deepEqual(back.slice(0, typed.length), typed);
   assert.deepEqual(back.slice(typed.length).map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Trap!']);
   assert.deepEqual(conditionsOf(back), conditionsOf(chipsOf(edited, names).chips));
+});
+
+// One crate card (0.13; the owner, 2026-10-31): global search's and every page's own search, only for words that read as
+// a crate of two kinds or more that holds a track, and nothing while its count is not in.
+test('the crate card shows only for a crate of two kinds that holds a track, once its count is in', () => {
+  const r = (term: string, ...readings: Record<string, unknown>[]) => ({ term, readings });
+  const genre = (v: string) => ({ kind: 'genre', value: v, label: v });
+  const nineties = { kind: 'year', value: '1990-1999', label: '1990s' };
+  const crate = crateOfLine([r('hip hop', genre('Hip Hop')), r('90s', nineties)]);
+  assert.equal(crateShows(crate, 12), true);
+  assert.equal(crateShows(crate, 0), false, 'an empty crate');
+  assert.equal(crateShows(crate, null), false, 'its count not in yet');
+  assert.equal(crateShows(crate, undefined), false);
+  assert.equal(crateShows(crateOfLine([r('hip hop', genre('Hip Hop'))]), 40), false, 'one kind: no crate');
+  assert.equal(crateShows([], 40), false);
+});
+
+test("the crate card leads the search of the pages that list music or crates, not Home's or the finders'", () => {
+  for (const p of ['library', 'playlists', 'downloads', 'discover', 'requests', 'crates']) assert.equal(crateCardOn(p), true, p);
+  for (const p of ['home', 'find', 'settings', 'insights', 'health', 'local-albums']) assert.equal(crateCardOn(p), false, p);
+});
+
+test('a line read onto a crate: new terms as chips, a term already in it once, the joins and what read as nothing', () => {
+  const r = (term: string, ...readings: Record<string, unknown>[]) => ({ term, readings });
+  const genre = (v: string) => ({ kind: 'genre', value: v, label: v });
+  const had = crateOfLine([r('jazz', genre('Jazz')), r('1975', { kind: 'year', value: '1975-1975', label: '1975' })])!;
+  const out = readOnto(had, [r('Jazz', genre('Jazz')), { ...r('soul', genre('Soul')), join: 'and' }, r('qwzx')]);
+  assert.deepEqual(out.add.map((c) => c.reading.label), ['Soul']);
+  assert.deepEqual(out.modes, { genre: 'and' }, "an 'and' between two genres joins them");
+  assert.deepEqual(out.missed, ['qwzx']);
 });

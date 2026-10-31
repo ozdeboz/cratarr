@@ -2,8 +2,8 @@
   // A crate's tracks, as conditions select them (0.13, decision 0088; the owner, 2026-10-31: one start, one list): its
   // count with Shuffle and Play (and what the place adds, `actions`), the Records / Tracks switch a saved crate has
   // (lib/crateRecords), its tracks a page at a time, more as the list's end comes into sight, each with its round
-  // snippet button opening it on its waveform (lib/SnippetStrip). A crate being grabbed (lib/QuickCrate) and one being
-  // made or changed (lib/CrateEditor) show this one list.
+  // snippet button opening it on its waveform (lib/SnippetStrip). A crate grabbed, made or changed (the panel's builder,
+  // lib/CrateEditor) shows this one list.
   import { onDestroy, untrack, type Snippet } from 'svelte';
   import { coverUrl, previewCrate, type Condition, type CrateName, type PlaylistRow } from './api';
   import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordKey, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
