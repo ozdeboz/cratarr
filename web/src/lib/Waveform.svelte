@@ -17,7 +17,7 @@
   // One path per layer, redrawn per frame only while something moves (hundreds of animated shapes ran poorly).
   import { untrack } from 'svelte';
   import { reducedMotion } from './motion';
-  import { barTracks, gridBars, placeOf, planStrip, trackBars, type GridStrip, type StripTrack } from './waveStrip';
+  import { barTracks, gridBars, placeOf, planStrip, playedRuns, trackBars, type GridStrip, type StripTrack } from './waveStrip';
   import { markShows } from './waveView';
 
   let {
@@ -170,8 +170,8 @@
   );
   /** A strip as drawn (lib/waveStrip's GridStrip): what it was drawn from (`src`), its paths as made and as heard (at
    *  `level`), the boundaries in it, and its heard path track by track (`played`: each its own colour, by the track's
-   *  key, none crossing a boundary). */
-  type Strip = GridStrip & { id: number; src: string; level: number; made: string; heard: string; marks: number[]; played: { key: string; d: string }[] };
+   *  key, none crossing a boundary; `id` the track's own, lib/waveStrip's playedRuns). */
+  type Strip = GridStrip & { id: number; src: string; level: number; made: string; heard: string; marks: number[]; played: { key: string; id: string; d: string }[] };
   /** The strip shown (null: none, the plain waveform). */
   let shownStrip = $state<Strip | null>(null);
   /** The level as heard while a hold's strips show: the one it began with (null: none showing). */
@@ -183,15 +183,15 @@
     return `M${f(i + 0.15)} ${f((100 - h) / 2)}h0.7v${f(h)}h-0.7z`;
   };
   const stripPath = (hs: number[], level: number) => hs.map((h, i) => piece(i, h, level)).join('');
-  /** The heard pieces track by track: a piece belongs to the track its middle is in. */
-  function byTrack(hs: number[], level: number, owners: number[], tracks: readonly StripTrack[]): { key: string; d: string }[] {
-    const out: { key: string; d: string }[] = [];
-    for (let i = 0; i < hs.length; i++) {
-      const key = tracks[owners[i]]?.key ?? '';
-      if (out.at(-1)?.key !== key) out.push({ key, d: '' });
-      out.at(-1)!.d += piece(i, hs[i], level);
-    }
-    return out;
+  /** The heard pieces track by track: a piece belongs to the track its middle is in; each track's path its own, never
+   *  another's once the strip is drawn anew (its fill eases over a ramp: handed on, it showed the track before's colour
+   *  on the playing one's bars, 0.12.4). */
+  function byTrack(hs: number[], level: number, owners: number[], tracks: readonly StripTrack[]): { key: string; id: string; d: string }[] {
+    return playedRuns(owners, tracks).map((r) => {
+      let d = '';
+      for (let i = r.from; i < r.to; i++) d += piece(i, hs[i], level);
+      return { key: tracks[r.owner]?.key ?? '', id: r.id, d };
+    });
   }
   /** A track's colour in a wide view (lib/waveView's waveColours): another track's own; none for the track the player
    *  shows and in a zoom on one track, which have the player's, as the waveform has it anyway (0.10.1). */
@@ -442,7 +442,7 @@
     <div class="layer"><svg class="strip" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}><path d={output ? s.heard : s.made} /></svg></div>
     <div class="layer" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
       <svg class="strip played" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}>
-        {#each s.played as p, i (i)}<path d={p.d} style:--seg={colourOf(p.key)} />{/each}
+        {#each s.played as p (p.id)}<path d={p.d} style:--seg={colourOf(p.key)} />{/each}
       </svg>
     </div>
     {#if band && band[1] > band[0]}
