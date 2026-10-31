@@ -17,6 +17,7 @@
     rank = null,
     line = null,
     tone = null,
+    wrap = false,
     fill = null,
     open = false,
     expanded = null,
@@ -28,6 +29,8 @@
     rank?: number | null;
     line?: string | null;
     tone?: 'bad' | 'warn' | null;
+    /** Its line in full, over as many lines as it needs (a reason, some long), not cut at the row's end. */
+    wrap?: boolean;
     fill?: number | null;
     open?: boolean;
     expanded?: boolean | null;
@@ -41,7 +44,7 @@
   <span class="pic"><Cover src={cover} /></span>
   <span class="text">
     <span class="title">{title}</span>
-    {#if line}<small class:bad={tone === 'bad'} class:warn={tone === 'warn'}>{line}</small>{/if}
+    {#if line}<small class:bad={tone === 'bad'} class:warn={tone === 'warn'} class:wrap>{line}</small>{/if}
   </span>
 {/snippet}
 
@@ -180,6 +183,10 @@
 
   small.bad {
     color: var(--danger-ink);
+  }
+
+  small.wrap {
+    white-space: normal;
   }
 
   small.warn {

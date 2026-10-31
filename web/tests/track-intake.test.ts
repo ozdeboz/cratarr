@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { approvePayload, anyOver, copyOf, foundIds, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } = await import('../src/lib/trackIntake.ts');
+const { approvePayload, anyOver, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } = await import('../src/lib/trackIntake.ts');
 
 const copy = (id: string, lossless = true) => ({
   id,
@@ -46,7 +46,10 @@ test('each state says where it stands; a found one its chosen copy, or the one p
   assert.equal(itemLine(item('1', 'fetching')), 'Downloading');
   assert.equal(itemLine(item('1', 'checking')), 'Checking it');
   assert.equal(itemLine(item('1', 'added')), 'Added');
-  assert.equal(itemLine(item('1', 'refused', { why: 'length' })), 'Refused: length');
+  assert.equal(itemLine(item('1', 'refused', { why: 'It is 14 s longer than the recording' })), 'It is 14 s longer than the recording');
+  assert.equal(itemEnd(item('1', 'refused', { why: 'x' })), 'Refused');
+  assert.equal(itemEnd(item('1', 'failed')), 'Failed');
+  assert.equal(itemEnd(item('1', 'found')), null);
   assert.equal(itemTone(item('1', 'refused')), 'bad');
   assert.equal(itemTone(item('1', 'none')), 'warn');
   assert.equal(itemTone(item('1', 'found')), null);

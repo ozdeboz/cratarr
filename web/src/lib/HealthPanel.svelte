@@ -25,7 +25,7 @@
   import MenuSheet from './MenuSheet.svelte';
   import SelectBar from './SelectBar.svelte';
   import { approveIntake, clearIntake, copyLine, dropIntake, getIntake, startIntake, type Intake, type IntakeItem } from './replaceTrack';
-  import { anyOver, approvePayload, copyOf, foundIds, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } from './trackIntake';
+  import { anyOver, approvePayload, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } from './trackIntake';
   import { toast } from './toast.svelte';
   import { openFinding } from './health';
   import { health, loadHealth, problems } from './healthReport.svelte';
@@ -400,6 +400,7 @@
               title={`${i.title} · ${i.album.title}`}
               line={undone.has(i.id) ? 'Undone' : itemLine(i, picks[i.id])}
               tone={undone.has(i.id) ? null : itemTone(i)}
+              wrap={!!itemEnd(i)}
               onclick={() => (pickOf = i)}
             >
               {#if tickable(i)}
@@ -409,6 +410,8 @@
                 >
               {:else if i.state === 'added' && i.undo && !undone.has(i.id)}
                 <button onclick={() => void undoItem(i)}>Undo</button>
+              {:else if itemEnd(i)}
+                <span class="ended">{itemEnd(i)}</span>
               {/if}
             </ReleaseRow>
           {/each}
@@ -647,6 +650,14 @@
   }
 
   /* A row's tick (as Downloads' and Requests' Select). */
+  /* Where it went wrong, at the row's end; why under its title. */
+  .ended {
+    flex: none;
+    padding: 0 8px;
+    color: var(--danger-ink);
+    font-size: 13px;
+  }
+
   .tick {
     display: grid;
     place-items: center;
