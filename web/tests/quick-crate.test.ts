@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf } = await import(
+const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -485,4 +485,15 @@ test("a built-in crate's Sounds like said briefly, kept as it is: its own name, 
   assert.equal(chipsOf([many]).brief?.text, '7 tracks');
   const jazz = chipsOf([{ axis: 'genre', not: false, value: { kind: 'any_of', values: ['Jazz'] } }, week], {}, 'Sounds like your week');
   assert.equal(plain(sentenceOf(jazz.chips, jazz.modes, jazz.brief!.text)), 'Jazz that sounds like your week');
+});
+
+test("the conditions' edits come back to the sentence as typed: a term's words and other readings kept, a new one read plainly", async () => {
+  const typed = await chipsOfLine('hip hop from the 90s like miles davis');
+  const conditions = conditionsOf(typed);
+  const names = namesOf(typed);
+  const edited = [...conditions, { axis: 'genre', not: true, value: { kind: 'any_of' as const, values: ['Trap'] } }];
+  const back = keptChips(chipsOf(edited, names).chips, typed);
+  assert.deepEqual(back.slice(0, typed.length), typed);
+  assert.deepEqual(back.slice(typed.length).map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Trap!']);
+  assert.deepEqual(conditionsOf(back), conditionsOf(chipsOf(edited, names).chips));
 });

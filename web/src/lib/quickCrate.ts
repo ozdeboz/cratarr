@@ -576,7 +576,7 @@ export function keptChips(next: readonly Chip[], had: readonly Chip[]): Chip[] {
   const old = new Map(had.map((c) => [key(c), c]));
   return next.map((c) => {
     const o = old.get(key(c));
-    return o ? { ...o, own: c.own } : c;
+    return o ? ('own' in c ? { ...o, own: c.own } : o) : c;
   });
 }
 /** How many seeds a sentence lists; more, or weighted, or fresh (a built-in crate's), are said briefly. */
