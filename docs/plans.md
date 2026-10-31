@@ -49,6 +49,10 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   device's own records and the playlists, whatever View chose and on a phone too, View's choice kept; emptied, the list
   comes back where it was. Where the words read as a crate, a page's own list matches by its terms, not the whole line.
   *On 632/0013-filtered-table.* Downloads stays an index of its three lists (no layouts to turn).
+  **One loading rule** (the owner, 2026-10-31: "Keep, then spinner at 300 ms"): a list waiting for its answer keeps
+  what it showed, the loader taking its place at 300 ms (lib/loader): global search, the pages' searched lists, a crate
+  sentence being read; the opened cover's ring and the progress bar on the same number. *On 632/0013-one-loader.* A
+  page or panel swap still blanks its place (the 2026-10-27 rule, no copy of the old one) with its sign at 100 ms.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the

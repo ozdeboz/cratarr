@@ -16,6 +16,7 @@
   import { askIfMany, fewAtATime } from './many.svelte';
   import { plural } from './insights.svelte';
   import { listShows, matchLine, type Matched } from './search';
+  import { keepWhile } from './keepWhile.svelte';
   import Asking from './Asking.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
@@ -208,15 +209,12 @@
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );
-  // Searching, the server's finds not in yet and the browser's own none: the last list stays till they are (the owner,
-  // 2026-10-25: the list and its header went and came back with the albums found by a track).
-  let last = $state.raw<typeof found>([]);
+  // Searching, the server's finds not in yet and the browser's own none: the last list stays (the owner, 2026-10-25: the
+  // list and its header went and came back with the albums found by a track), then the loader (lib/loader, the one rule).
   const pending = $derived(!!pageView.query.trim() && deepFor !== pageView.query.trim());
   const none = (l: typeof found) => l.every((x) => !x.albums.length);
-  $effect(() => {
-    if (!pending || !none(found)) last = found;
-  });
-  const shown = $derived(pending && none(found) && !none(last) ? last : found);
+  const kept = keepWhile(() => found, () => pending && none(found), () => pageView.query.trim());
+  const shown = $derived(kept.loader ? found : kept.value);
   // How you used them, read when such an order is chosen (and each time again: plays change).
   $effect(() => {
     if (!USE_ORDERS.includes(order)) return;
@@ -418,7 +416,7 @@
       <p class="error" role="alert">{s.error}</p>
     {:else if listShows(albums.length, pageView.query, deepFor) === 'asking'}
       <!-- Searching: the server's finds not in yet, so nothing said before the answer (lib/search listShows). -->
-      <Asking />
+      <Asking now={kept.loader} />
     {:else if albums.length === 0}
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). -->

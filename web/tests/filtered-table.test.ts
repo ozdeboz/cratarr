@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
 const { libraryShownOf, playlistShownOf, layoutFits } = await import('../src/lib/layoutRules.ts');
-const { pageQueries, listWhileReading, chipOf, leftOut } = await import('../src/lib/quickCrate.ts');
+const { pageQueries, chipOf, leftOut } = await import('../src/lib/quickCrate.ts');
 const { matches } = await import('../src/lib/search.ts');
 
 test('searching: the table, whatever was chosen, on a phone too', () => {
@@ -50,11 +50,3 @@ test('a left-out term is not matched; no crate: the whole line, as ever', () => 
   assert.deepEqual(pageQueries('', null), [[]]);
 });
 
-test("while a sentence is read: the spinner in the list's place, never an empty list; then the list", () => {
-  // Read on its way: the wait, not the list (and so never "none found").
-  assert.equal(listWhileReading({ pending: true }), 'loading');
-  // Landed as a crate, as none, or failed: the list, matched by the terms or the whole line (pageQueries).
-  assert.equal(listWhileReading({ pending: false }), 'list');
-  // A page without the card: the list, as ever.
-  assert.equal(listWhileReading(null), 'list');
-});

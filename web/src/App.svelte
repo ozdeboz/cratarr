@@ -967,7 +967,8 @@
    *  lib/SearchCrateCard), on the pages that list music or crates; everywhere's results have their own. */
   const pageCrate = $derived(quickOn() && !reach.away && crateCardOn(page) && pageView.query.trim() !== '' && !everywhereShown);
   // Its list matches by the crate's terms there, not the whole line (lib/quickCrate pageQueries).
-  // While the words are read, the spinner in its list's place (lib/quickCrate listWhileReading): never "none found" first.
+  // While the words are read, the list as it was, then the loader in its place (lib/loader, the one rule): never "none
+  // found" first.
   matchCrateBy(() => {
     if (!pageCrate) return null;
     const q = pageView.query.trim();
@@ -1100,9 +1101,9 @@
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->
     {#if pageCrate}<div class="page-crate"><SearchCrateCard q={pageView.query.trim()} /></div>{/if}
-    <!-- The words being read as a crate: the search's wait in the list's place (lib/Asking: nothing for a quick
-         answer, then the mark in motion), the page kept as it is, unseen, behind it. -->
-    {#if listReading()}<Asking />{/if}
+    <!-- The words read as a crate for longer than the list is kept (lib/loader): the loader in the list's place, the
+         page kept as it is, unseen, behind it. -->
+    {#if listReading()}<Asking now />{/if}
     <div class="listed" class:reading={listReading()}>
     <Hold key={pageKey} bind:shown={shownKey}>
     {#if page === 'settings'}

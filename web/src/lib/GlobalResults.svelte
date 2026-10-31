@@ -32,6 +32,7 @@
   import { leaveOnArrival } from './navStep.svelte';
   import { matchLine, type SearchResult } from './search';
   import Asking from './Asking.svelte';
+  import { keepWhile } from './keepWhile.svelte';
   import { toast } from './toast.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import ArtistRowMenu from './ArtistRowMenu.svelte';
@@ -45,6 +46,10 @@
   const q = $derived(pageView.query.trim());
   const groups = $derived(globalGroups(except));
   const asked = $derived(globalAsked());
+  // The server's answer for the words as they are now not in (lib/loader, the one rule): the groups as they were shown,
+  // then the loader in their place.
+  const kept = keepWhile(() => groups, () => !!q && !asked, () => q);
+  const shownGroups = $derived(kept.loader ? [] : kept.value);
   // An album's or a track's library, as a dot before its title, as the Library's lists show it (0.9.5): from its
   // album's subject (`album:<source>/<id>`), the Library's list knowing which library each is in.
   function dotOf(it: SearchResult) {
@@ -177,13 +182,13 @@
       {#if all && !all.done}<li class="more" {@attach nearEnd(() => loadAll(all.q, all.kind))}></li>{/if}
     </ul>
   </section>
-{:else if q && (groups.length || asked)}
+{:else if q && (shownGroups.length || asked)}
   <section class="global" aria-label="Everywhere">
     {#if quickOn()}
       <SearchCrateCard {q} />
     {/if}
-    {#if groups.length}
-      {#each groups as g (g.kind)}
+    {#if shownGroups.length}
+      {#each shownGroups as g (g.kind)}
         <!-- Its heading opens it whole (decision 0076: every group's results, shown all); Beyond's, Find more music. -->
         <SectionHead title={`${g.label} (${g.total.toLocaleString()})`} onmore={g.kind === 'beyond' ? findMore : () => showAll(g.kind)} />
         <ul class="rows">
@@ -203,7 +208,7 @@
   </section>
 {:else if q}
   <!-- Nothing yet, the server's answer for these words not in: the wait, not "nothing" (lib/search listShows). -->
-  <Asking />
+  <Asking now={kept.loader} />
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if menu?.kind === 'track'}

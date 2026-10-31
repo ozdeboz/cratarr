@@ -2,7 +2,8 @@
 // layout, size) live in the View sheet (lib/ViewSheet) and its own filters in the Filter sheet (lib/FilterSheet), not
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
-import { listWhileReading, pageQueries, type Chip } from './quickCrate';
+import { pageQueries, type Chip } from './quickCrate';
+import { keepWhile, type Kept } from './keepWhile.svelte';
 import { matches } from './search';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
@@ -247,21 +248,27 @@ export function usePageMode(get: () => PageMode | null) {
 const matching = $state({ ready: false });
 export const matcherLoaded = () => (matching.ready = true);
 
-/** The pill's search field's words on a page that has one. */
 /** Whether the pill's search lets these texts through, as every search matches (lib/search; 0.12: the server's
  *  matcher, separators aside, an alias as good as the name, a few typos forgiven). */
 export function matchesSearch(...texts: (string | null | undefined)[]): boolean {
   void matching.ready;
-  return pageQueries(pageView.query, crateOfWords()?.chips ?? null).some((q) => matches(q, ...texts));
+  return (listQueries?.value ?? pageQueries(pageView.query, null)).some((q) => matches(q, ...texts));
 }
-/** Whether the page's list gives its place to the spinner: its words still being read as a crate (lib/quickCrate
- *  listWhileReading). */
-export const listReading = () => listWhileReading(crateOfWords()) === 'loading';
+/** Whether the page's list gives its place to the loader: its words read as a crate for longer than the one rule keeps
+ *  what it showed (lib/loader). */
+export const listReading = () => !!listQueries?.loader;
 
-/** The crate the search's words read as, on a page whose list matches by its terms (App registers it: the pages with
- *  the crate card, lib/quickCrate crateCardOn), and whether its reading is still on its way; none elsewhere. */
-let crateOfWords: () => { chips: readonly Chip[] | null; pending: boolean } | null = () => null;
-export const matchCrateBy = (get: typeof crateOfWords) => void (crateOfWords = get);
+/** The crate the search's words read as, on a page whose list matches by its terms (App registers it in its setup: the
+ *  pages with the crate card, lib/quickCrate crateCardOn), and whether its reading is still on its way; none elsewhere.
+ *  While it is (lib/loader, the one rule), the list goes by the words it went by before, then gives way to the loader. */
+let listQueries: Kept<string[][]> | null = null;
+export function matchCrateBy(crateOfWords: () => { chips: readonly Chip[] | null; pending: boolean } | null) {
+  listQueries = keepWhile(
+    () => pageQueries(pageView.query, crateOfWords()?.chips ?? null),
+    () => !!crateOfWords()?.pending,
+    () => pageView.query.trim(),
+  );
+}
 
 export const searchFor = (page: string) =>
   page === 'playlists'

@@ -1,19 +1,19 @@
 <script lang="ts">
-  // A cover whose album is being opened, when that takes long (the owner, 2026-10-27): after OPEN_WAIT_MS it dims, with
-  // everything on it, and the ring turns over it, as the player's cover waits for a new one (lib/NowPlaying). Only the
-  // cover opened, never a cover's picture loading (the owner: not many signs at once). Over the cover, inside what
-  // holds it (positioned); over its buttons too.
+  // A cover whose album is being opened, when that takes long (the owner, 2026-10-27): after LOADER_AFTER_MS (lib/loader,
+  // the one rule: what is there stays, then the sign) it dims, with everything on it, and the ring turns over it, as the
+  // player's cover waits for a new one (lib/NowPlaying). Only the cover opened, never a cover's picture loading (the
+  // owner: not many signs at once). Over the cover, inside what holds it (positioned); over its buttons too.
   import { opening } from './panel.svelte';
   import ProgressRing from './ProgressRing.svelte';
+  import { LOADER_AFTER_MS } from './loader';
 
   let { subject, size = 40 }: { subject: string | null; size?: number } = $props();
 
-  const OPEN_WAIT_MS = 300;
   const asked = $derived(subject !== null && opening(subject));
   let slow = $state(false);
   $effect(() => {
     if (!asked) return void (slow = false);
-    const t = setTimeout(() => (slow = true), OPEN_WAIT_MS);
+    const t = setTimeout(() => (slow = true), LOADER_AFTER_MS);
     return () => clearTimeout(t);
   });
 </script>
