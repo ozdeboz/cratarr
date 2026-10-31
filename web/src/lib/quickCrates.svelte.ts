@@ -3,6 +3,7 @@
 // owner's mockup B: lib/QuickCrate reads it as a sentence), words handed to it from elsewhere (a search's "Grab a crate"),
 // and the last few made here and not saved, kept in this browser to come back to.
 import { can } from './capabilities.svelte';
+import { onArrival } from './navStep.svelte';
 import { CLOSE, type Chip } from './quickCrate';
 
 /** One not saved: its chips and its cut. */
@@ -23,6 +24,14 @@ export const quickCrates = $state({
   /** Words to read into it (a search's), taken by lib/QuickCrate as it shows. */
   words: '',
   recent: readKept(),
+});
+
+/** Saved (lib/QuickCrate): the crate being made goes once the crate it became shows (lib/navStep), not before it, when
+ *  Crates' own page would show between (lib/handover's rule). */
+onArrival((l) => {
+  if (!l.quick) return;
+  quickCrates.chips = [];
+  quickCrates.min = CLOSE;
 });
 
 /** Crates opened on `words` read into a new crate (the one being made, unsaved, kept among the last few first). */

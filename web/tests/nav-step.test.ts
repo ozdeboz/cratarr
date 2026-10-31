@@ -43,6 +43,8 @@ test('back to a search: its words come back, over emptying them', () => {
   assert.deepEqual(merge({ search: 'clear' }, { restore: back }), { restore: back });
   assert.deepEqual(merge({ restore: back }, { search: 'clear' }), { restore: back });
   assert.deepEqual(merge({ search: 'page' }, { search: 'clear', player: true }), { search: 'clear', player: true });
+  // A crate saved from the words being made: they go when it shows, whatever else the step leaves.
+  assert.deepEqual(merge({ search: 'clear' }, { quick: true }), { search: 'clear', quick: true });
   const p = arm(arm(null, { restore: back }, lib, 0, true), { search: 'clear' }, lib, 1, true);
   assert.deepEqual(step(p, lib, lib, 2).apply, { restore: back });
 });
