@@ -36,7 +36,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   sidebar's section, the queue's playing track, a list's own place kept) stops with its item fully in sight: not under
   the top bar, a sticky list head or column head, nor the floating glass top and bottom (`--glass-top`,
   `--glass-bottom`). One rule for it (scroll-padding from the chrome's real heights, kept as they change), not each
-  place's own offset. Today: 4 scrollIntoView and 9 scrollTo calls, no vertical scroll-padding anywhere.
+  place's own offset. *On 632/0013-scroll-clear:* lib/reveal and the scroll-padding (ui-conventions, Checking); a
+  track's links open its list at it, marked; the records, crates and playlists beside the panel bring its item into
+  sight.
   And (the owner, 2026-10-31): **one place for a crate, the panel.** A crate is shown and built only in the crate
   panel: a new one (Crates' +) opens its builder empty, "Grab a crate" and an example; a saved one of one's own heads
   its tracks with the same sentence, a change there opening its edit mode; a menu's Sounds like this and Grab a crate

@@ -57,7 +57,8 @@
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
-  import { glass } from './lib/glass.svelte';
+  import { glass, panelBeside } from './lib/glass.svelte';
+  import { reveal, subjectIn } from './lib/reveal';
   import GlobalResults from './lib/GlobalResults.svelte';
   import SearchCrateCard from './lib/SearchCrateCard.svelte';
   import { quickOn } from './lib/quickCrates.svelte';
@@ -546,6 +547,14 @@
     };
     requestAnimationFrame(go);
     return () => clearTimeout(t);
+  });
+  // What the panel opened beside the page, by a link or from a list of the page's own, is brought into sight in the
+  // page's list, which marks it (lib/reveal; the owner, 2026-10-30); in sight already, nothing moves.
+  $effect(() => {
+    const v = panel.viewed;
+    const el = pageEl;
+    if (!v || !el || !panelBeside()) return;
+    return reveal(() => subjectIn(el, v), { key: v });
   });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
   const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown && !downloadsShown);

@@ -25,7 +25,7 @@
   import MenuSheet from './MenuSheet.svelte';
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { viewOver } from './panel.svelte';
+  import { viewFor, viewOver } from './panel.svelte';
   import { libraryDot } from './albums.svelte';
   import { pageView } from './pageView.svelte';
   import { quickOn } from './quickCrates.svelte';
@@ -73,7 +73,7 @@
   let workOpen = $state<{ mbid: string; title: string } | null>(null);
   let workMenu = $state<{ mbid: string; title: string } | null>(null);
   const workOf = (it: SearchResult) => ({ mbid: it.subject.slice('work:'.length), title: it.title });
-  function open(it: SearchResult) {
+  function open(it: SearchResult & { track?: string }) {
     if (it.kind === 'work') return void (workOpen = workOf(it));
     leaveSearch(deep(it));
     if (it.subject.startsWith('#')) location.hash = it.subject;
@@ -89,6 +89,7 @@
       const a = beyondAlbum(it.subject);
       if (a) void elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, bandcamp: a.bandcamp ?? null, discogs_url: a.discogs_url ?? null });
     }
+    else if (it.kind === 'track' && it.track) viewFor(it.subject, it.track);
     else viewOver(it.subject);
   }
   async function takeBack(it: SearchResult) {
