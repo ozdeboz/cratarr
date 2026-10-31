@@ -52,7 +52,7 @@
   import { longpress } from './longpress';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { visuals } from './visuals/shown.svelte';
-  import { albumSubject, keepViewed, panel, SETTINGS, viewOver } from './panel.svelte';
+  import { albumSubject, keepViewed, panel, SETTINGS, viewFor } from './panel.svelte';
   import { goToArtist, mainArtist } from './albums.svelte';
   import { artistFavorite } from './api';
   import { toast } from './toast.svelte';
@@ -278,7 +278,7 @@
     const t = np;
     if (!t?.album_id) return;
     leavePlayer();
-    viewOver(albumSubject(t.source, t.album_id));
+    viewFor(albumSubject(t.source, t.album_id), t.id);
   }
   // A new track shows its cover (its id: the player's state is a new object on every report).
   const trackId = $derived(np ? `${np.source}/${np.id}` : null);

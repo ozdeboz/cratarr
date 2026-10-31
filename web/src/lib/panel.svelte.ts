@@ -125,6 +125,9 @@ export const panel = $state({
   arrived: null as string | null,
   /** Bumped when the viewed playlist is viewed again: its view scrolls back to the top. */
   again: 0,
+  /** The track a link to `subject` came for (a track's Go to album, a track found by global search): its list scrolls
+   *  to it and marks it (lib/reveal). `n` counts the links, so the same one again scrolls to it again. */
+  mark: null as { subject: string; track: string; n: number } | null,
 });
 
 const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
@@ -195,6 +198,7 @@ addEventListener('popstate', read);
 /** Views playlists (one, or a selection), a crate or an album in the panel, on `tab`. What is already viewed is replaced,
  *  without a step in the history (no stack: ✕ and Back then close it rather than going to the one before). */
 export function viewSelection(names: string[], tab: Tab = 'tracks') {
+  panel.mark = null;
   if (!names.length) return closePlaylist();
   const t = isSingleSubject(names[0]) ? 'tracks' : tab;
   panel.playerTop = false;
@@ -221,6 +225,7 @@ export function viewInPlace(name: string) {
 /** Views a subject over the one viewed, going deeper (an album's artist, an artist's album, as Symfonium's): a step of
  *  its own, which back returns from. With nothing viewed, as viewPlaylist. */
 export function viewOver(name: string) {
+  panel.mark = null;
   if (!panel.viewed) return viewPlaylist(name);
   panel.playerTop = false;
   if (name === panel.viewed && !panel.selection.length) {
@@ -229,6 +234,14 @@ export function viewOver(name: string) {
   }
   push(address([name], 'tracks'));
   read();
+}
+
+/** Views `subject` (an album, a playlist, a crate) over the one viewed, for one of its tracks: its list scrolls to the
+ *  track and marks it. */
+export function viewFor(subject: string, track: string) {
+  const n = (panel.mark?.n ?? 0) + 1;
+  viewOver(subject);
+  panel.mark = { subject, track, n };
 }
 
 /** One of the playlists' other views (Info, Export, Repair, Sync: from their menu, decided 2026-10-16). Over their

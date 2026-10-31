@@ -259,7 +259,7 @@ ${prefs.playlistOrder}`,
     {/if}
     <ul class="grid" class:table class:pending={quick && pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
       {#each listed.list as p (p.id)}
-        <li>
+        <li data-subject={p.id}>
           <!-- Quick add's circle: adds or takes out the playing track. -->
           {#snippet addTo()}
             <button

@@ -105,6 +105,14 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* What scrolls the page to a thing stops clear of what is drawn over it (lib/reveal; the owner, 2026-10-30): the bar and
+   a mini-player along the top, the glass under them (Home's pill floats there too), and the same along the foot. The
+   heights the page's own room is made with (App), so they follow as those change. */
+html {
+  scroll-padding-top: calc(var(--top-h, 0px) + var(--glass-top, 0px) + env(safe-area-inset-top) + var(--gutter-y));
+  scroll-padding-bottom: calc(var(--bottom-h, 0px) + var(--glass-bottom, 0px) + env(safe-area-inset-bottom) + var(--gutter-y));
+}
+
 button,
 input {
   font: inherit;

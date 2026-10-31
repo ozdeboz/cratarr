@@ -42,7 +42,7 @@
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
   import { shownPlaylists } from './lib/output.svelte';
-  import { albumSubject, viewOver, viewPlaylist } from './lib/panel.svelte';
+  import { albumSubject, viewFor, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
   import { CRATE_PART, FLOW_PARTS, prefs, type HomePart } from './lib/prefs.svelte';
   import { backdropUrl } from './lib/backdrop.svelte';
@@ -633,7 +633,7 @@
                  seen); the section's Play plays them, the long-press is the track's menu. -->
             <button
               class:gone={away() && !here('cratarr', t.id)}
-              onclick={() => viewOver(albumSubject('cratarr', t.album_id))}
+              onclick={() => viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id })}
             >
               <span class="cover"><Cover src={albumCoverUrl('cratarr', t.album_id)} /></span>
@@ -695,7 +695,7 @@
             <!-- As Blast from the past's: a tap opens its album, the section's Play plays them, a long-press its menu. -->
             <button
               class:gone={away() && !here('cratarr', t.id)}
-              onclick={() => t.album_id && viewOver(albumSubject('cratarr', t.album_id))}
+              onclick={() => t.album_id && t.id && viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id!, name: t.name ?? t.file, artist: t.artist, album: t.album, album_id: t.album_id ?? null })}
             >
               <span class="cover"><Cover src={coverUrl({ source: 'cratarr', id: t.id!, album_id: t.album_id })} /></span>
