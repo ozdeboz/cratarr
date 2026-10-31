@@ -8,8 +8,9 @@
   // "+ word" for another; Play, Grab this crate (the panel's builder, lib/quickCrates grabCrate: the one place a crate is
   // shown and built) and its count.
   import { untrack } from 'svelte';
-  import { albumCoverUrl, previewCrate, search, type PlaylistRow } from './api';
+  import { coverUrl, previewCrate, search, type PlaylistRow } from './api';
   import CoverCard from './CoverCard.svelte';
+  import { recordFirsts } from './crateRecords';
   import { globalSearch } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
@@ -72,20 +73,9 @@
   const parts = $derived(chips ? sentenceOf(chips, modes) : []);
   /** The terms as pills, in the sentence's order. */
   const order = $derived(parts.flatMap((p) => (p.chip !== undefined ? [p.chip] : [])));
-  /** Six covers, a record's once. */
-  const covers = $derived.by(() => {
-    if (!preview) return [];
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const r of preview.rows) {
-      const key = r.album_id ?? r.id ?? '';
-      if (!r.album_id || seen.has(key)) continue;
-      seen.add(key);
-      out.push(albumCoverUrl(preview.source, r.album_id));
-      if (out.length === 6) break;
-    }
-    return out;
-  });
+  /** Six covers, a record's once: its first track's (the panel's records' own way; an album's id comes with Cratarr's
+   *  own server only, and the card showed none for another). */
+  const covers = $derived(preview ? recordFirsts(preview.rows, 6).map((r) => coverUrl({ source: preview.source, id: r.id!, album_id: r.album_id })) : []);
   const likeAt = (i: number | undefined) => i !== undefined && !!chips?.[i] && seedsOf([chips[i]]).length > 0;
   const notAt = (i: number | undefined) => i !== undefined && !!chips?.[i]?.not;
 

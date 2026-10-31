@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { crateViewOf, holdsLine, orderRecords, recordCell, recordsOf } = await import('../src/lib/crateRecords.ts');
+const { crateViewOf, holdsLine, orderRecords, recordCell, recordFirsts, recordsOf } = await import('../src/lib/crateRecords.ts');
 
 const row = (album_id: string | undefined, album: string, artist: string, year?: number, added?: number) => ({ album_id, album, artist, year, added });
 const rows = [
@@ -72,4 +72,18 @@ test('as a table: ordered by how many of its tracks the crate holds and by their
   assert.equal(recordCell(blue, 'year', null, clock, day), '1959');
   assert.equal(recordCell(blue, 'added', null, clock, day), 'day 12');
   assert.equal(recordCell(blue, 'rating', null, clock, day), '', 'a column a record has no value for');
+});
+
+test("a crate's covers: each record's first playable track, with or without an album id", () => {
+  const rows = [
+    { id: 't1', album: 'Moon Safari', artist: 'Air', missing: true },
+    { id: 't2', album: 'Moon Safari', artist: 'Air' },
+    { id: 't3', album: 'moon safari', artist: 'AIR' },
+    { album: 'Talkie Walkie', artist: 'Air' },
+    { id: 't5', album_id: 'a9', album: 'Pocket Symphony', artist: 'Air' },
+    { id: 't6', album_id: 'a9', album: 'Pocket Symphony', artist: 'Air' },
+    { id: 't7', album: 'Premiers Symptômes', artist: 'Air' },
+  ];
+  assert.deepEqual(recordFirsts(rows, 6).map((r) => r.id), ['t2', 't5', 't7']);
+  assert.deepEqual(recordFirsts(rows, 2).map((r) => r.id), ['t2', 't5']);
 });

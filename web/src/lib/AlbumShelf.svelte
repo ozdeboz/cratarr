@@ -422,8 +422,9 @@
       <Asking now={kept.loader} />
     {:else if albums.length === 0}
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
-           empty column headings, the owner 2026-10-23). -->
-      <p class="empty">{s.albums.length ? 'None in the libraries switched on match.' : empty}</p>
+           empty column headings, the owner 2026-10-23). Words that match no record say so, not the libraries (under a
+           crate card of 229 tracks it read as a contradiction; the owner, 2026-10-31). -->
+      <p class="empty">{!s.albums.length ? empty : pageView.query.trim() ? 'No records match.' : 'None in the libraries switched on match.'}</p>
     {:else}
       <ListHead
         fields={ALBUM_ORDERS}
@@ -643,7 +644,12 @@
     font-size: 1rem;
   }
 
-  .empty,
+  /* As the other pages' "No playlists match." (Playlists .empty): a plain fact, not an error. */
+  .empty {
+    margin-top: 32px;
+    text-align: center;
+    color: var(--muted);
+  }
 
   .error {
     color: var(--danger-ink);
