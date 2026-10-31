@@ -47,6 +47,20 @@ async function call<T>(path: string, method = 'GET', body?: unknown): Promise<T>
 const enc = encodeURIComponent;
 
 export const getRelease = (source: string, album: string) => call<Release>(`/api/albums/${enc(source)}/${enc(album)}/release`);
+/** A release read once and kept (Health's Work through reads the next album's ahead, and an album opened in Health's
+ *  panel reads its missing tracks): forgotten when a track is added to the album, or the answer failed. */
+const releases = new Map<string, Promise<Release>>();
+export function releaseOf(source: string, album: string): Promise<Release> {
+  const key = `${source}/${album}`;
+  let p = releases.get(key);
+  if (!p) {
+    p = getRelease(source, album);
+    p.catch(() => releases.delete(key));
+    releases.set(key, p);
+  }
+  return p;
+}
+export const forgetRelease = (source: string, album: string) => void releases.delete(`${source}/${album}`);
 export const searchTrack = (album: { source: string; id: string }, recording: string, replace?: { source: string; id: string }) =>
   call<{ id: string }>('/api/track-search', 'POST', { album, recording, ...(replace ? { replace } : {}) });
 export const getSearch = (id: string) => call<Search>(`/api/track-search/${enc(id)}`);
