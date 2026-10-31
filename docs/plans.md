@@ -159,6 +159,44 @@ kind of adapters Cratarr's own sources use (0005).
   - Playlists are `.m3u` files of paths: an external track needs an entry form of its own.
   - Tags: only what the other server's API gives (genres, year, sometimes BPM).
 
+### All servers in one library, on the device (explored 2026-10-31)
+
+The owner, 2026-10-31, on the settled "modes only": the point of a merged library is one person with several unrelated
+servers (a friend's Navidrome, one's own Jellyfin elsewhere, a Cratarr), merged on their own device, where no one
+server can reach the others. Not decided; written down as the step after modes.
+
+- How: the app signs in to each server and keeps each library's index on the device (a Cratarr server's by its change
+  log, 0085's third step; a Jellyfin's or a Subsonic server's by their APIs). "All servers" is one more mode, the union
+  of the modes' indexes, each record marked with its server's dot. Search, the filter and crates run on the device
+  over it (the shared Rust core, the matcher); the queue is the device's (0085's fourth step); each track streams from
+  its own server, and what is done to it (a favourite, a rating, a play, a playlist edit) goes back to its server.
+- Graceful degradation (the owner's rule: nothing shown that cannot be consumed, nothing offered that cannot be
+  upheld): each track carries what its server can do; its menu offers that, and a selection across servers what all
+  of them can.
+- What a track from another server goes without:
+  - handing over: Play On, groups, Home Assistant, a server's queue for Android Auto hold only a Cratarr server's own
+    tracks; a queue that mixes servers plays on this device, and offers no Play On;
+  - the sound: Sounds like, Radio, Autoplay, the similar lists, AudioMuse's facts and the tempo; crates on those match
+    only analysed tracks. Within its own server, that server's mix can stand in (Subsonic's similar songs, Jellyfin's
+    Instant Mix), never across servers;
+  - waveforms, snippets and the tape's own view until it has played here (the device can draw them as it plays);
+  - one history: each play goes to its own server, so Cratarr's Insights, its week and its graves see Cratarr's tracks;
+  - playlists across servers: no server holds one, so those are the device's alone;
+  - one copy: an album on two servers shows twice, folded into one where both give its MusicBrainz release;
+  - the library's care: Health, Discover, Requests, release types, Classical and its works, the Edit sheet.
+- Only in the apps (Android, desktop): a browser page holds one origin's sign-in.
+- It ends the thin client in that mode: the app answers the page's library itself, from its indexes.
+- Order: modes per server first (each needs its adapter, its sign-in and its index on the device); then All servers
+  as a view over them, after the device index and beside the queue moving to the device.
+
+**Scrobbling from the device** (the owner, 2026-10-31: "scrobbling should indeed move to the device! This also makes
+more sense privacy wise"): the device that plays a track tells ListenBrainz and Last.fm itself, its own queue of them
+kept while offline (Last.fm takes them up to 14 days late, ListenBrainz any time). So it works the same for every
+server's tracks, and the server never sends anyone's listening out nor holds the services' keys. Today the server
+does it (0068's outbox, Connections). Catches: a sign-in to each service on each device; one play told once, by the
+player that sounded it (a group's leader, not its followers); Subsonic apps and Kodi, which play from Cratarr without
+Cratarr's app, scrobble themselves or not at all.
+
 ## Local library
 
 The phone's own music files, played in Cratarr's app beside the server's.
