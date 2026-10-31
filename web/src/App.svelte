@@ -9,6 +9,7 @@
   import Library from './Library.svelte';
   import Home from './Home.svelte';
   import PageLoading from './lib/PageLoading.svelte';
+  import Asking from './lib/Asking.svelte';
   import LocalAlbums from './LocalAlbums.svelte';
   import ModeSwitcher from './lib/ModeSwitcher.svelte';
   import { localMode, switchable } from './lib/deviceMusic.svelte';
@@ -49,7 +50,7 @@
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
   import { installKeyWind } from './lib/keyWind';
-  import { hasView, matchCrateBy, pageView } from './lib/pageView.svelte';
+  import { hasView, listReading, matchCrateBy, pageView } from './lib/pageView.svelte';
   import { searchesAsTable } from './lib/layouts';
   import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
   import { art, playing } from './lib/remote.svelte';
@@ -966,7 +967,7 @@
    *  lib/SearchCrateCard), on the pages that list music or crates; everywhere's results have their own. */
   const pageCrate = $derived(quickOn() && !reach.away && crateCardOn(page) && pageView.query.trim() !== '' && !everywhereShown);
   // Its list matches by the crate's terms there, not the whole line (lib/quickCrate pageQueries).
-  // Its list holds what it showed while the words are read (lib/quickCrate listQueries): never "none found" first.
+  // While the words are read, the spinner in its list's place (lib/quickCrate listWhileReading): never "none found" first.
   matchCrateBy(() => {
     if (!pageCrate) return null;
     const q = pageView.query.trim();
@@ -1099,6 +1100,10 @@
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->
     {#if pageCrate}<div class="page-crate"><SearchCrateCard q={pageView.query.trim()} /></div>{/if}
+    <!-- The words being read as a crate: the search's wait in the list's place (lib/Asking: nothing for a quick
+         answer, then the mark in motion), the page kept as it is, unseen, behind it. -->
+    {#if listReading()}<Asking />{/if}
+    <div class="listed" class:reading={listReading()}>
     <Hold key={pageKey} bind:shown={shownKey}>
     {#if page === 'settings'}
       <Settings />
@@ -1132,6 +1137,7 @@
       <Playlists />
     {/if}
     </Hold>
+    </div>
     <!-- Global search at the end of what the page's own search leaves (decision 0072), but the kind the page shows. -->
     {#if everywhereShown}<GlobalResults except={pageKinds(page)} />{/if}
     </SheetArea>
@@ -1548,6 +1554,15 @@
   /* The crate a page's search makes, over the page's own results, at the pages' own side margin. */
   .page-crate {
     padding: 0 clamp(12px, 2vw, 32px);
+  }
+
+  /* The page as it lays itself out; unseen while the search's words are read (it stays, its state with it). */
+  .listed {
+    display: contents;
+  }
+
+  .listed.reading {
+    display: none;
   }
 
   .page {

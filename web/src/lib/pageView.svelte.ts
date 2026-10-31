@@ -2,7 +2,7 @@
 // layout, size) live in the View sheet (lib/ViewSheet) and its own filters in the Filter sheet (lib/FilterSheet), not
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
-import { listQueries, type Chip } from './quickCrate';
+import { listWhileReading, pageQueries, type Chip } from './quickCrate';
 import { matches } from './search';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
@@ -252,13 +252,11 @@ export const matcherLoaded = () => (matching.ready = true);
  *  matcher, separators aside, an alias as good as the name, a few typos forgiven). */
 export function matchesSearch(...texts: (string | null | undefined)[]): boolean {
   void matching.ready;
-  const read = crateOfWords();
-  const qs = listQueries(pageView.query, read, lastQueries);
-  if (!read?.pending) lastQueries = qs;
-  return qs.some((q) => matches(q, ...texts));
+  return pageQueries(pageView.query, crateOfWords()?.chips ?? null).some((q) => matches(q, ...texts));
 }
-/** What the list was last matched by, held while new words are read (lib/quickCrate listQueries). */
-let lastQueries: string[][] | null = null;
+/** Whether the page's list gives its place to the spinner: its words still being read as a crate (lib/quickCrate
+ *  listWhileReading). */
+export const listReading = () => listWhileReading(crateOfWords()) === 'loading';
 
 /** The crate the search's words read as, on a page whose list matches by its terms (App registers it: the pages with
  *  the crate card, lib/quickCrate crateCardOn), and whether its reading is still on its way; none elsewhere. */

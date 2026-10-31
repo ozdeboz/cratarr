@@ -453,13 +453,11 @@ export function pageQueries(q: string, chips: readonly Chip[] | null): string[][
   return terms.length ? terms : [words(q)];
 }
 
-/** What a page's own list is matched by now (0.13; the owner's rule: never "none found" before the answer): while the
- *  words' reading as a crate is on its way, what the list was last matched by, held (no empty list for a sentence not
- *  read yet); once it lands, the crate's terms, or the whole line where the words read as none or the reading failed. */
-export function listQueries(q: string, read: { chips: readonly Chip[] | null; pending: boolean } | null, last: string[][] | null): string[][] {
-  if (read?.pending && last) return last;
-  return pageQueries(q, read?.chips ?? null);
-}
+/** What a page shows in its list's place while its words are read as a crate (0.13; the owner: never "none found"
+ *  before the answer, and "our standing pattern is a responsive interface using loading spinners"): the spinner while
+ *  the reading is on its way; once it lands, says none or fails, the list, matched by the crate's terms or the whole
+ *  line (pageQueries). */
+export const listWhileReading = (read: { pending: boolean } | null): 'loading' | 'list' => (read?.pending ? 'loading' : 'list');
 
 /** A line read onto a crate's terms (the crate search's words, lib/quickCrates): the terms not in it yet as chips, how
  *  an "and" or "or" joins them with what it has (modesFrom), and the phrases that read as nothing. */
