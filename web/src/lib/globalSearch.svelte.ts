@@ -75,7 +75,13 @@ export const globalSearch = $state({
    *  (`r`), which the results show instead of what the whole line finds. Null where the words are no crate; the last
    *  one kept while new words are read (its `q` says whose). */
   crate: null as { q: string; chips: Chip[]; modes: Modes; r: ServerSearch } | null,
+  /** The words whose reading as a crate has landed, a crate or none, or failed (a page's list holds what it showed
+   *  until then: lib/quickCrate listQueries). */
+  readFor: null as string | null,
 });
+
+/** Whether the words' reading as a crate is still on its way: two words or more, not read yet. */
+export const readingPending = (q: string) => words(q).length >= 2 && globalSearch.readFor !== q;
 
 /** How many of each kind a phrase's readings offer (lib/quickCrate's crate search asks as many). */
 const READINGS = 3;
@@ -108,7 +114,8 @@ $effect.root(() => {
           keep(foundKept, q, r);
           if (!gone) globalSearch.found = { q, r };
         },
-        () => {},
+        // Unanswered: nothing to read the words by, so they are read as no crate.
+        () => !gone && (globalSearch.readFor = q),
       );
     }, 300);
     return () => {
@@ -121,7 +128,7 @@ $effect.root(() => {
   $effect(() => {
     const f = globalSearch.found;
     const q = pageView.query.trim();
-    if (words(q).length < 2) return void (globalSearch.crate = null);
+    if (words(q).length < 2) return void ((globalSearch.crate = null), (globalSearch.readFor = q));
     if (!f || f.q !== q) return;
     let gone = false;
     const whole = words(q).join(' ');
@@ -138,8 +145,9 @@ $effect.root(() => {
           if (gone) return;
           const chips = crateOfLine(reads);
           globalSearch.crate = chips ? { q, chips, modes: modesFrom(reads), r: answerOfTerms(q, chips.map((c) => c.term), answers) as ServerSearch } : null;
+          globalSearch.readFor = q;
         },
-        () => {},
+        () => !gone && (globalSearch.readFor = q),
       ),
     );
     return () => (gone = true);

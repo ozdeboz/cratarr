@@ -45,6 +45,10 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   Discover, Requests, Crates) where the words read as two kinds or more and the crate holds a track; nothing while it
   loads, nothing otherwise; Grab this crate opens it in the panel. *On 632/0013-grab-glass:* all of it; its look waits
   for the owner's mockup choice.
+  **A page's search shows its list as the table** (the owner, 2026-10-31): the Library's records and composers, the
+  device's own records and the playlists, whatever View chose and on a phone too, View's choice kept; emptied, the list
+  comes back where it was. Where the words read as a crate, a page's own list matches by its terms, not the whole line.
+  *On 632/0013-filtered-table.* Downloads stays an index of its three lists (no layouts to turn).
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the

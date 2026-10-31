@@ -9,6 +9,7 @@
   import Library from './Library.svelte';
   import Home from './Home.svelte';
   import PageLoading from './lib/PageLoading.svelte';
+  import Asking from './lib/Asking.svelte';
   import LocalAlbums from './LocalAlbums.svelte';
   import ModeSwitcher from './lib/ModeSwitcher.svelte';
   import { localMode, switchable } from './lib/deviceMusic.svelte';
@@ -49,7 +50,8 @@
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
   import { installKeyWind } from './lib/keyWind';
-  import { hasView, pageView } from './lib/pageView.svelte';
+  import { hasView, listReading, matchCrateBy, pageView } from './lib/pageView.svelte';
+  import { searchesAsTable } from './lib/layouts';
   import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
   import { art, playing } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
@@ -64,7 +66,7 @@
   import DiscoverPicker from './lib/DiscoverPicker.svelte';
   import { chooseKind, kindNow, recordKinds } from './lib/recordKinds';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
-  import { globalSearch, pageKinds } from './lib/globalSearch.svelte';
+  import { globalSearch, pageKinds, readingPending } from './lib/globalSearch.svelte';
   import { leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
@@ -72,7 +74,7 @@
   import ManyConfirm from './lib/ManyConfirm.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
   import { followAddress } from './lib/panel.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
@@ -964,6 +966,36 @@
   /** A page's own search leads with the crate its words make (0.13; the owner, 2026-10-31: one card, as global search's,
    *  lib/SearchCrateCard), on the pages that list music or crates; everywhere's results have their own. */
   const pageCrate = $derived(quickOn() && !reach.away && crateCardOn(page) && pageView.query.trim() !== '' && !everywhereShown);
+  // Its list matches by the crate's terms there, not the whole line (lib/quickCrate pageQueries).
+  // While the words are read, the spinner in its list's place (lib/quickCrate listWhileReading): never "none found" first.
+  matchCrateBy(() => {
+    if (!pageCrate) return null;
+    const q = pageView.query.trim();
+    return { chips: globalSearch.crate?.q === q ? globalSearch.crate.chips : null, pending: readingPending(q) };
+  });
+  // A list shown as the table while its page searches (lib/layouts; the owner, 2026-10-31) comes back where it was:
+  // the page's place when the first word came, once the search is emptied on the same page.
+  let placeBefore: { page: string; y: number } | null = null;
+  $effect(() => {
+    const on = pageView.query.trim() !== '';
+    const p = page;
+    untrack(() => {
+      if (on) {
+        if (!placeBefore && searchesAsTable(p)) placeBefore = { page: p, y: scrollY };
+        return;
+      }
+      const was = placeBefore;
+      placeBefore = null;
+      if (was?.page !== p) return;
+      // Tried again until the list is long enough again (a second at most), as a page's place on back.
+      let n = 0;
+      const go = () => {
+        window.scrollTo(0, was.y);
+        if (Math.abs(scrollY - was.y) > 2 && n++ < 20) setTimeout(go, 50);
+      };
+      tick().then(() => requestAnimationFrame(go));
+    });
+  });
   // As many of the main pages as fit, each tab at least BAR_SLOT_PX wide (the owner, 2026-10-25: Discover in the bar where
   // there is room): four and More on a phone, all five on a tablet. The pages apart (Requests, Insights, Health,
   // Settings…) stay behind More ("requests is of the other category"), unless every page fits in five (Local mode).
@@ -1068,6 +1100,10 @@
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->
     {#if pageCrate}<div class="page-crate"><SearchCrateCard q={pageView.query.trim()} /></div>{/if}
+    <!-- The words being read as a crate: the search's wait in the list's place (lib/Asking: nothing for a quick
+         answer, then the mark in motion), the page kept as it is, unseen, behind it. -->
+    {#if listReading()}<Asking />{/if}
+    <div class="listed" class:reading={listReading()}>
     <Hold key={pageKey} bind:shown={shownKey}>
     {#if page === 'settings'}
       <Settings />
@@ -1101,6 +1137,7 @@
       <Playlists />
     {/if}
     </Hold>
+    </div>
     <!-- Global search at the end of what the page's own search leaves (decision 0072), but the kind the page shows. -->
     {#if everywhereShown}<GlobalResults except={pageKinds(page)} />{/if}
     </SheetArea>
@@ -1517,6 +1554,15 @@
   /* The crate a page's search makes, over the page's own results, at the pages' own side margin. */
   .page-crate {
     padding: 0 clamp(12px, 2vw, 32px);
+  }
+
+  /* The page as it lays itself out; unseen while the search's words are read (it stays, its state with it). */
+  .listed {
+    display: contents;
+  }
+
+  .listed.reading {
+    display: none;
   }
 
   .page {

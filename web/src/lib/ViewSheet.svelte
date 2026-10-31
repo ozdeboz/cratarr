@@ -27,7 +27,7 @@
   import MenuSheet from './MenuSheet.svelte';
   import { ALBUM_WIDTHS, DATES, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { composersShown } from './classical.svelte';
-  import { libraryLayout, libraryLayouts, playlistLayout, playlistLayouts, type LibraryList } from './layouts';
+  import { libraryLayout, libraryLayouts, libraryLayoutShown, playlistLayout, playlistLayouts, playlistLayoutShown, type LibraryList } from './layouts';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
@@ -50,7 +50,8 @@
       {#if order.columns?.shown.length && order.view?.value !== 'records'}<ColumnOrder {...order.columns} />{/if}
     {:else if page === 'playlists'}
       <SettingRow card label="Layout"><Seg label="Layout" options={playlistLayouts()} bind:value={playlistLayout, (v) => (prefs.playlistLayout = v)} /></SettingRow>
-      {#if playlistLayout() === 'table'}
+      <!-- The table's columns wherever the table shows: chosen, or while the page's search has words (lib/layouts). -->
+      {#if playlistLayoutShown() === 'table'}
         <ColumnOrder kind="playlists" shown={fit('playlists', pageView.width).map((c) => c.id)} offered={COLUMNS.playlists.map((c) => c.id)} />
       {:else}
         <SettingRow card label="Size"><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></SettingRow>
@@ -63,7 +64,7 @@
 
 {#snippet albums()}
   <SettingRow card label="Layout"><Seg label="Layout" options={libraryLayouts(listKind)} bind:value={() => libraryLayout(listKind), (v) => (prefs.albumLayout = v)} /></SettingRow>
-  {#if libraryLayout(listKind) === 'table'}
+  {#if libraryLayoutShown(listKind) === 'table'}
     <!-- A table has no sizes; its columns, as many as the page has room for, in the order dragged here (decision 0042). -->
     <ColumnOrder kind={listKind} shown={fit(listKind, pageView.width, (id) => offered.includes(id)).map((c) => c.id)} {offered} />
   {:else}
