@@ -55,6 +55,8 @@
   let coverOf = $state<string | null>(null);
   /** The track whose better copy is being found (a file cut off or breaking off). */
   let betterOf = $state<string | null>(null);
+  /** The album whose missing tracks are being found (Albums missing tracks): Missing tracks as its menu has it. */
+  let missingOf = $state<string | null>(null);
   const onward = (x: HealthItem) =>
     x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => openTab([x.playlist!], 'tracks') } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -155,6 +157,13 @@
       {#if item.missing?.length}
         <!-- An album missing tracks (0.9.7; the owner, 2026-10-26: "golden work"): which, and the whole album asked for. -->
         <ul class="files">{#each item.missing as m (m)}<li>{m}</li>{/each}</ul>
+        <!-- Each one looked for on Soulseek, one at a time (decision 0080): the album menu's Missing tracks (lib/ReplaceTrackSheet). -->
+        {#if item.album?.[0] === 'cratarr' && me.admin && findsTracks()}
+          <button class="act" onclick={() => (missingOf = item.album![1])}>Find missing tracks<Icon name="chevronRight" size={18} /></button>
+          {#if missingOf === item.album[1]}
+            <ReplaceTrackSheet source="cratarr" album={{ id: item.album[1], title: item.title }} onclose={() => ((missingOf = null), loadHealth())} />
+          {/if}
+        {/if}
         {#if item.release_group}
           {#if item.request || askedFull === item.release_group}
             <p class="muted">Asked for the full album.</p>
