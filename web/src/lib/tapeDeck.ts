@@ -4,6 +4,17 @@
 // the inside of the turn); the layout was tested so at 51 places in a track (no tape through a wheel, the run through
 // the head level). Screen coordinates (y down), a 320 × 47 box; `s` +1 = the tape goes round a part clockwise as seen.
 
+/** The drawing's own size (its viewBox). */
+export const DECK_W = 320;
+export const DECK_H = 43;
+/** How far the deck may grow (× its own size): on a screen at least 1080p tall, three times in the player's landscape
+ *  layout (the owner, 2026-10-30: "300% size on landscape 1080p"), half again in its portrait one, as it is in a panel
+ *  about 500 px wide beside a page (the owner, 2026-10-31: in a wider panel it grew over the title and the waveform);
+ *  its own size elsewhere. */
+export const deckMost = (big: boolean, landscape: boolean) => (!big ? 1 : landscape ? 3 : 1.5);
+/** Its scale in a row `width` px wide: as wide as the row, up to `most`. */
+export const deckScale = (width: number, most: number) => Math.max(0, Math.min(most, width / DECK_W));
+
 export const HUB = 5;
 export const MAXR = 19;
 export const REEL_L: readonly [number, number] = [70, 21];

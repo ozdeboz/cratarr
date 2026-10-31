@@ -14,7 +14,7 @@
   import { deckSpeed, turnTape, windable } from './localPlayer.svelte';
   import { drivenName, playOn } from './playOn.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
-  import { hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
+  import { DECK_H, DECK_W, deckScale, hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
   import { travelOf } from './player/knob';
   import { downbeatAt } from './visuals/downbeat';
 
@@ -22,10 +22,11 @@
   const TURN = 2.4 * Math.PI * 12;
   /** The fastest the picture turns, whatever the tape does (past it the spokes would strobe). */
   const MOST = 16;
-  /** The drawing's own size (its viewBox): drawn at this size, scaled down where the row is narrower, and up on a large
-   *  landscape screen (the owner, 2026-10-30: "the tape deck could probably be 300% size on landscape 1080p"). */
-  const W = 320;
-  const H = 43;
+  /** How far it may grow, as the player says (lib/tapeDeck deckMost: its row keeps the room for it). */
+  let { most = 1 }: { most?: number } = $props();
+  /** The drawing's own size (its viewBox): drawn at this size, scaled down where the row is narrower, up to `most`. */
+  const W = DECK_W;
+  const H = DECK_H;
   /** A turn's length at rate 1 (ms): a part's rate is then its turns a second. */
   const TURN_MS = 1000;
   /** Where every turn starts: far enough in that turning backwards never runs out of turns (a whole number of them). */
@@ -40,20 +41,8 @@
   /** The head's box around its two hills. */
   const HEAD_BOX = { x: HEAD.x - HEAD.half - 1, y: HEAD.y - HEAD.gap - HEAD.height - 1, w: 2 * HEAD.half + 2, h: 2 * (HEAD.gap + HEAD.height) + 2 };
 
-  /** How far it may grow: up to three times on a landscape screen at least as tall as 1080p's (a full HD window), its own
-   *  size elsewhere. */
-  const BIG = '(orientation: landscape) and (min-height: 900px)';
-  const MOST_SCALE = 3;
-  let big = $state(typeof window !== 'undefined' && matchMedia(BIG).matches);
-  $effect(() => {
-    const m = matchMedia(BIG);
-    const on = () => (big = m.matches);
-    m.addEventListener('change', on);
-    return () => m.removeEventListener('change', on);
-  });
-  const most = $derived(big ? MOST_SCALE : 1);
   let width = $state(W);
-  const scale = $derived(Math.min(most, width / W));
+  const scale = $derived(deckScale(width, most));
 
   let tape: SVGPathElement;
   let packL: SVGCircleElement;
