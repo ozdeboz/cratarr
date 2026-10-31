@@ -32,13 +32,26 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
     let copy = track.with_file_name(format!(".{stem}.cratarr-tags.{ext}"));
     std::fs::write(&copy, &original)?;
     let checked = (|| -> Result<()> {
-        let mut file = lofty::probe::Probe::open(&copy)?.options(ParseOptions::new().read_properties(false)).read()?;
-        if file.primary_tag_mut().is_none() {
-            let kind = file.primary_tag_type();
-            file.insert_tag(Tag::new(kind));
+        // The format's own tag, split into what `edit` can see and the rest, and merged again (0.13): every field
+        // lofty has no key for (Vorbis STYLE, MUSICBRAINZ_ALBUMTYPE, RELEASESTATUS…; an ID3v2 frame it does not map)
+        // kept as it was. Through lofty's generic tag alone they were dropped: it writes only the fields it knows.
+        let options = ParseOptions::new().read_properties(false);
+        match kind {
+            Kind::Flac => {
+                let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&copy)?, options)?;
+                let (rest, mut tag) = file.remove_vorbis_comments().unwrap_or_default().split_tag();
+                edit(&mut tag);
+                file.set_vorbis_comments(rest.merge_tag(tag));
+                file.save_to_path(&copy, WriteOptions::default())?;
+            }
+            Kind::Mp3 => {
+                let mut file = lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(&copy)?, options)?;
+                let (rest, mut tag) = file.remove_id3v2().unwrap_or_default().split_tag();
+                edit(&mut tag);
+                file.set_id3v2(rest.merge_tag(tag));
+                file.save_to_path(&copy, WriteOptions::default())?;
+            }
         }
-        edit(file.primary_tag_mut().context("no tag to write to")?);
-        file.save_to_path(&copy, WriteOptions::default())?;
         let after = std::fs::read(&copy)?;
         if audio_of(&after, kind).context("its audio could not be found after writing")? != before {
             bail!("writing the tag would have changed the audio");
@@ -208,6 +221,29 @@ mod tests {
             assert_eq!(audio_of(&std::fs::read(t).unwrap(), kind), audio_of(&before, kind), "the audio as it was");
         }
         assert!(std::fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with('.')), "no copy left");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn fields_lofty_has_no_key_for_are_kept() {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::prelude::*;
+        let d = dir("retag-keep");
+        let f = flac(&d, "one");
+        let read = |f: &Path| lofty::flac::FlacFile::read_from(&mut std::fs::File::open(f).unwrap(), ParseOptions::new()).unwrap();
+        let mut file = read(&f);
+        let mut vc = file.remove_vorbis_comments().unwrap_or_default();
+        vc.push("STYLE".into(), "Dub Techno".into());
+        vc.push("MUSICBRAINZ_ALBUMTYPE".into(), "album".into());
+        vc.push("RELEASESTATUS".into(), "official".into());
+        vc.push("ARTIST".into(), "Ott".into());
+        file.set_vorbis_comments(vc);
+        file.save_to_path(&f, WriteOptions::default()).unwrap();
+        set_bpm(&f, Some(120)).unwrap();
+        let vc = read(&f).remove_vorbis_comments().unwrap();
+        for (k, v) in [("STYLE", "Dub Techno"), ("MUSICBRAINZ_ALBUMTYPE", "album"), ("RELEASESTATUS", "official"), ("ARTIST", "Ott"), ("BPM", "120")] {
+            assert_eq!(vc.get(k), Some(v), "{k}");
+        }
         std::fs::remove_dir_all(&d).ok();
     }
 }
