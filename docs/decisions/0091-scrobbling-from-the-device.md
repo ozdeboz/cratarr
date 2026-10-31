@@ -34,7 +34,7 @@ The owner wants the device to scrobble, but did not want to lose the convenience
   server its plays of other servers' tracks, which the server sends but does not count in its history (they are not
   its tracks).
 - A new account starts on "from each device". An account that has a service connected when this arrives stays
-  "through the server" until it is changed, so no one's scrobbling stops unannounced.
+  "through the server" until it is changed, so no one's scrobbling stops unannounced (the owner, the same day).
 
 **Who tells a play: the player that sounded it, once.**
 
