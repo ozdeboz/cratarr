@@ -87,7 +87,7 @@ fn changed_keys(before: &Tag, after: &Tag) -> Vec<ItemKey> {
 
 /// A FLAC's own comments with what an edit changed: every field of a changed key goes, however it is spelled, and the
 /// edited values come in under the key's own name; the pictures replaced where they changed.
-fn vorbis_edited(mut own: lofty::ogg::VorbisComments, before: &Tag, after: &Tag) -> Result<lofty::ogg::VorbisComments> {
+fn vorbis_edited(mut own: lofty::ogg::tag::VorbisComments, before: &Tag, after: &Tag) -> Result<lofty::ogg::tag::VorbisComments> {
     use lofty::ogg::OggPictureStorage;
     use lofty::tag::{ItemValue, TagType};
     let changed = changed_keys(before, after);
