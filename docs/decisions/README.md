@@ -219,8 +219,9 @@ by a later record that says so in its header. A new decision takes the next numb
   page](0079-follow-and-queue-requests.md): accepted. One may follow another user's player, opted in, from anywhere,
   kept in step by Cratarr; followers and guests at home ask for tracks the leader accepts or declines.
 - [0080: Single-track intake: one track into an album, checked before it goes in](0080-single-track-intake.md):
-  accepted; amended 2026-10-30. One track at a time from a Soulseek search or, since 0.9.19, a file in Cratarr's
-  slskd folder, gated by a whole decode, the recording's length and AcoustID, then added to the album with Undo.
+  accepted; amended 2026-10-30 and 2026-10-31. A track from a Soulseek search or, since 0.9.19, a file in Cratarr's
+  slskd folder, gated by a whole decode, the recording's length and AcoustID, then added to the album with Undo; since
+  0.13 searched in bulk and approved many at once, nothing taken in without a tick.
 - [0081: Release types: MusicBrainz's release group, else the Discogs release that is the album](0081-release-types.md):
   accepted; amended 2026-10-30 and 2026-10-31. What MusicBrainz's release group, else the Discogs release that fits
   the album, says is read by the owner's rule: an album found missing tracks is Incomplete; the name's "EP" or "LP"
