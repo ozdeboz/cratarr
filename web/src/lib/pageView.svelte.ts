@@ -116,9 +116,7 @@ export function trackOrders(kind: PanelKind): OrderField<TrackOrder>[] {
  *  is a page's id or a panel kind. `incoming`: only where a library is used as Incoming. */
 /** A list's switch in its filter. `invert`: shown on while the key is not kept (a source to include, the key keeping it
  *  left out), so what is left out counts as the filter on. */
-/** `classical`: offered only where the server knows the Classical kind (0.10, lib/recordKinds); `quiet`: not counted on
- *  the funnel (it shows more, not less). */
-export type ListSwitch = { key: string; label: string; incoming?: true; invert?: true; section?: string; classical?: true; quiet?: true };
+export type ListSwitch = { key: string; label: string; incoming?: true; invert?: true; section?: string };
 const TRACK_SWITCHES: ListSwitch[] = [
   { key: 'favourites', label: 'Favourites only' },
   { key: 'unplayed', label: 'Unplayed only' },
@@ -130,9 +128,6 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
     { key: 'unplayed', label: 'Unplayed only' },
     { key: 'topRated', label: '4 stars and up' },
     // Not Lossless only, Upgrades waiting or Duplicates waiting (the owner, 2026-10-24: not filter options).
-    // A record in its own kind only (0.10; the owner, 2026-10-30, on by default): Classical > Compilation >
-    // Album/EP/Single > Other, as the server holds it; off, a record shows under each kind it has (`all-kinds` kept).
-    { key: 'all-kinds', label: 'Each record in its own kind only', invert: true, classical: true, quiet: true },
   ],
   playlists: [
     { key: 'favourites', label: 'Favourites only' },

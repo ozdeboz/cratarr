@@ -1,13 +1,9 @@
 <script lang="ts">
-  // The Library's kind of record, beside back (lib/GlassPicker; lib/recordKinds): Records, Albums, EPs, Singles,
-  // Compilations, Classical (0.10, where the server knows it), Other; a Type row made in the Filter sheet that is none of
-  // them shows as "Some types".
+  // The Library's release types, beside back (lib/GlassPicker; lib/recordTypes): Records, then every type with records
+  // with how many, most first; Type rows that no one type names (made in the Filter sheet) read "Selected types" and
+  // tick nothing, and a pick replaces them.
   import GlassPicker from './GlassPicker.svelte';
-  import { chooseKind, kindNow, recordKinds, type RecordKind } from './recordKinds';
-
-  const chosen = $derived(kindNow());
-  const kinds = $derived(recordKinds());
-  const shown = $derived(kinds.find((k) => k.id === chosen)?.label ?? 'Some types');
+  import { chooseType, typeNow, typesLabel, typesOffered } from './recordTypes.svelte';
 </script>
 
-<GlassPicker {shown} menuLabel="The Library shows" options={kinds} {chosen} onchoose={(id) => chooseKind(id as RecordKind)} />
+<GlassPicker shown={typesLabel()} menuLabel="The Library shows" options={typesOffered()} chosen={typeNow()} onchoose={(id) => chooseType(id)} />
