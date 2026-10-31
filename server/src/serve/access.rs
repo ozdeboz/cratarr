@@ -358,6 +358,8 @@ async fn home_assistant_on(State(serve): State<Arc<Serve>>, axum::Json(b): axum:
 
 /// The purpose of Home Assistant's keys.
 const HOME_ASSISTANT: &str = "home_assistant";
+/// The purpose of the MCP server's keys (0.13, decision 0090: Connections → MCP): they only read.
+const MCP: &str = "mcp";
 
 #[derive(serde::Deserialize)]
 struct NewKey {
@@ -369,7 +371,7 @@ struct NewKey {
     /// `read` or `control` (the default).
     #[serde(default)]
     scope: Option<String>,
-    /// What uses it: `home_assistant`; none for any other.
+    /// What uses it: `home_assistant`, `mcp` (always a reading key); none for any other.
     #[serde(default)]
     purpose: Option<String>,
 }
@@ -389,8 +391,10 @@ async fn new_key(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json
             return (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": "No such user." }))).into_response();
         }
     }
-    let purpose = k.purpose.as_deref().filter(|p| *p == HOME_ASSISTANT);
-    match serve.sessions.new_key(name, owner.as_deref(), k.scope.as_deref().unwrap_or("control"), purpose, now()) {
+    let purpose = k.purpose.as_deref().filter(|p| [HOME_ASSISTANT, MCP].contains(p));
+    // The MCP server's keys only read, whatever is asked (decision 0090).
+    let scope = if purpose == Some(MCP) { "read" } else { k.scope.as_deref().unwrap_or("control") };
+    match serve.sessions.new_key(name, owner.as_deref(), scope, purpose, now()) {
         Ok((key, made)) => {
             tracing::info!(target: "signin", name = %made.name, "API key made");
             let mut r = axum::Json(json!({ "key": key, "id": made.id, "name": made.name })).into_response();
@@ -724,6 +728,15 @@ mod tests {
             .unwrap();
         let ha: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(ha.into_body(), 1 << 16).await.unwrap()).unwrap();
         assert_eq!(ha["keys"][0]["purpose"], "home_assistant", "shown with its connection");
+        // A key for the MCP server (0.13): read only, whatever is asked.
+        let mcp = HttpRequest::post("/api/auth/keys")
+            .header("content-type", "application/json")
+            .header("cookie", format!("{COOKIE}={token}"))
+            .body(Body::from(r#"{"name":"Claude Code","password":"pw","purpose":"mcp","scope":"control"}"#))
+            .unwrap();
+        assert_eq!(status(&s, mcp).await.0, StatusCode::OK);
+        let made = s.sessions.keys().unwrap().into_iter().find(|k| k.name == "Claude Code").unwrap();
+        assert_eq!((made.purpose.as_deref(), made.scope.as_str()), (Some("mcp"), "read"));
     }
 
     #[test]
