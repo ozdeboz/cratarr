@@ -39,6 +39,19 @@ pub struct Incomplete {
 /// The album's tracks (title, length s) against the release group's releases: the smallest holding every track, and
 /// what it has beyond them; none where the album is whole or no release holds it.
 pub(super) fn check(files: &[(String, i64)], releases: &[super::renumber::Release]) -> Option<Incomplete> {
+    held(files, releases).and_then(|(r, used)| beyond(files, r, &used))
+}
+
+/// The discs the album's tracks are on in the smallest release that holds it (0.13: one whose files say fewer lost
+/// their disc numbers); none where no release holds it.
+pub(super) fn discs(files: &[(String, i64)], releases: &[super::renumber::Release]) -> Option<u32> {
+    let (_, used) = held(files, releases)?;
+    let on: HashSet<usize> = used.iter().map(|(d, _)| *d).collect();
+    Some(on.len() as u32)
+}
+
+/// The smallest release holding every one of the album's tracks, and where each is on it (medium, track).
+fn held<'a>(files: &[(String, i64)], releases: &'a [super::renumber::Release]) -> Option<(&'a super::renumber::Release, HashSet<(usize, usize)>)> {
     let holds = |r: &super::renumber::Release| -> Option<HashSet<(usize, usize)>> {
         let mut used = HashSet::new();
         for (title, secs) in files {
@@ -54,8 +67,15 @@ pub(super) fn check(files: &[(String, i64)], releases: &[super::renumber::Releas
         }
         Some(used)
     };
-    let size = |r: &super::renumber::Release| r.media.iter().map(|m| m.tracks.len()).sum::<usize>();
-    let (r, used) = releases.iter().filter_map(|r| Some((r, holds(r)?))).min_by_key(|(r, _)| size(r))?;
+    releases.iter().filter_map(|r| Some((r, holds(r)?))).min_by_key(|(r, _)| size(r))
+}
+
+fn size(r: &super::renumber::Release) -> usize {
+    r.media.iter().map(|m| m.tracks.len()).sum()
+}
+
+/// What a release that holds the album has beyond its tracks; none where nothing.
+fn beyond(files: &[(String, i64)], r: &super::renumber::Release, used: &HashSet<(usize, usize)>) -> Option<Incomplete> {
     let of = size(r);
     if of <= files.len() {
         return None;
@@ -77,7 +97,8 @@ pub(super) fn check(files: &[(String, i64)], releases: &[super::renumber::Releas
 pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::Client) -> Result<()> {
     let (s, now) = (served.clone(), super::moment::now_secs());
     let due: Vec<(String, String)> = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
-        let checked = s.userdata.album_complete_at()?;
+        // Those looked at by an older rule count as never looked at (0.13: their discs are kept now).
+        let checked = s.userdata.album_complete_now()?;
         let mut albums: Vec<(i64, String, String)> = Vec::new();
         for l in s.library.lacking()? {
             if l.folder != 0 {
@@ -117,8 +138,9 @@ pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::
         let files = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a)).await??.0;
         let files: Vec<(String, i64)> = files.into_iter().map(|t| (t.title, i64::from(t.secs))).collect();
         let found = check(&files, &releases).map(|i| serde_json::to_string(&Incomplete { release_group: Some(rg.clone()).filter(|g| !g.is_empty()), ..i })).transpose()?;
+        let on = discs(&files, &releases);
         let ud = served.userdata.clone();
-        tokio::task::spawn_blocking(move || ud.set_album_complete(&album, found.as_deref(), super::moment::now_secs())).await??;
+        tokio::task::spawn_blocking(move || ud.set_album_complete(&album, found.as_deref(), on, super::moment::now_secs())).await??;
     }
     Ok(())
 }
@@ -147,6 +169,17 @@ mod tests {
         let whole = vec![("Euphoria".to_string(), 300), ("Delight".to_string(), 280), ("Bloom".to_string(), 251)];
         assert!(check(&whole, &[standard.clone()]).is_none(), "whole");
         let other = vec![("Euphoria".to_string(), 300), ("Elsewhere".to_string(), 200)];
-        assert!(check(&other, &[standard]).is_none(), "no release holds a track it does not have");
+        assert!(check(&other, &[standard.clone()]).is_none(), "no release holds a track it does not have");
+        assert_eq!(discs(&whole, &[standard]), Some(1));
+        assert_eq!(discs(&other, &[]), None);
+    }
+
+    #[test]
+    fn an_album_s_tracks_are_on_the_discs_of_the_release_that_holds_it() {
+        let mut two = release("CD", &[("Euphoria", 301), ("Delight", 279)]);
+        two.media.push(Medium { format: "CD".into(), tracks: vec![("Bloom".into(), Some(250)), ("Dusk".into(), Some(320))] });
+        let files = vec![("Euphoria".to_string(), 300), ("Delight".to_string(), 280), ("Bloom".to_string(), 251), ("Dusk".to_string(), 321)];
+        assert_eq!(discs(&files, &[two.clone()]), Some(2));
+        assert_eq!(discs(&files[..2], &[two]), Some(1), "only the first disc's tracks: on one");
     }
 }

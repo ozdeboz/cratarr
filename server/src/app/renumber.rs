@@ -536,6 +536,29 @@ pub async fn undo(token: &str) -> Result<()> {
     Ok(())
 }
 
+/// What is off in an album's discs (0.13, for the owner's review with an assistant: albums that lost their disc
+/// numbers), none when nothing is: its track numbers start again at 1 on one disc (1–10, then 1–9: two discs' tracks
+/// without their disc numbers), or the release that holds it has its tracks on more discs (`released`, `incomplete`)
+/// than its files say. `numbers`: each track's (disc, track).
+pub fn discs_off(numbers: &[(Option<u32>, Option<u32>)], released: Option<u32>) -> Option<String> {
+    let on: std::collections::BTreeSet<u32> = numbers.iter().map(|(d, _)| d.unwrap_or(1).max(1)).collect();
+    let local = on.len().max(1) as u32;
+    let mut seen = std::collections::BTreeMap::<u32, u32>::new();
+    for n in numbers.iter().filter_map(|(_, t)| *t).filter(|n| *n > 0) {
+        *seen.entry(n).or_default() += 1;
+    }
+    // Every number from 1 up to at least 2 there twice or more: the numbers start again.
+    let again = (1..).take_while(|n| seen.get(n).is_some_and(|c| *c > 1)).count() >= 2;
+    let restarts = local == 1 && again;
+    let more = released.filter(|r| *r > local);
+    match (restarts, more) {
+        (true, Some(r)) => Some(format!("Numbers start again at 1; MusicBrainz has it on {r} discs")),
+        (true, None) => Some("Numbers start again at 1 without disc numbers".into()),
+        (false, Some(r)) => Some(format!("On {r} discs at MusicBrainz; the files say {local}")),
+        (false, None) => None,
+    }
+}
+
 /// What is off in an album's numbering, per disc (none when nothing is): numbers twice, numbers missing below the
 /// highest (`gaps`: not for an album a renumber look matched to a release, whose gaps are tracks not held; the owner,
 /// 2026-10-26), tracks without one. `numbers`: each track's (disc, track).
@@ -578,6 +601,21 @@ pub fn off(numbers: &[(Option<u32>, Option<u32>)], gaps: bool) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_album_that_lost_its_disc_numbers_is_told() {
+        let one = |n: u32| (None, Some(n));
+        let restarted: Vec<_> = (1..=10).chain(1..=9).map(one).collect();
+        assert_eq!(discs_off(&restarted, None).as_deref(), Some("Numbers start again at 1 without disc numbers"));
+        assert_eq!(discs_off(&restarted, Some(2)).as_deref(), Some("Numbers start again at 1; MusicBrainz has it on 2 discs"));
+        let whole: Vec<_> = (1..=12).map(one).collect();
+        assert_eq!(discs_off(&whole, Some(2)).as_deref(), Some("On 2 discs at MusicBrainz; the files say 1"));
+        assert_eq!(discs_off(&whole, Some(1)), None);
+        let numbered: Vec<_> = (1..=10).map(|n| (Some(1), Some(n))).chain((1..=9).map(|n| (Some(2), Some(n)))).collect();
+        assert_eq!(discs_off(&numbered, Some(2)), None, "its disc numbers kept");
+        let twice = [one(1), one(2), one(3), one(3)];
+        assert_eq!(discs_off(&twice, None), None, "one number twice: Track numbers, not discs");
+    }
 
     fn track(id: &str, title: &str, secs: u32) -> Track {
         Track { id: id.into(), path: PathBuf::from(format!("{id}.flac")), file: format!("{id}.flac"), title: title.into(), secs, disc: None, track: None }

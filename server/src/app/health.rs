@@ -164,6 +164,7 @@ fn name_of(key: &str) -> &'static str {
         "library:genre" => "Missing genres",
         "library:album-artist" => "Missing album artists",
         "library:track-numbers" => "Track numbers",
+        "library:discs" => "Disc numbers",
         "library:musicbrainz" => "Missing MusicBrainz ids",
         "library:incomplete" => "Albums missing tracks",
         "library:rules" => "Named otherwise by a rule",
@@ -255,7 +256,9 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 /// 2026-10-25). No share of all the albums (0.9.7, the owner: a bar is for something good, not for what is wrong).
 /// Track numbers (0.9.6): `numbering`'s
 /// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
-pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)]) -> Vec<Finding> {
+/// Disc numbers (0.13): `discs`' albums that lost theirs (numbers starting again, or fewer discs than the release that
+/// holds them), each with what is off; Renumber fixes them too.
+pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], discs: &[(String, String, String, String)]) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
     let kinds: [(&str, Level, &str, &str, Pick); 5] = [
         ("cover", Level::Critical, "album without a cover", "albums without a cover", |r| r.cover),
@@ -279,11 +282,18 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
             .collect();
         out.push(f);
     }
-    if !numbering.is_empty() {
-        let mut hit: Vec<&(String, String, String, String)> = numbering.iter().collect();
+    let found: [(&[(String, String, String, String)], &str, &str, &str); 2] = [
+        (numbering, "library:track-numbers", "album with track numbers off", "albums with track numbers off"),
+        (discs, "library:discs", "album that lost its disc numbers", "albums that lost their disc numbers"),
+    ];
+    for (albums, key, one, many) in found {
+        if albums.is_empty() {
+            continue;
+        }
+        let mut hit: Vec<&(String, String, String, String)> = albums.iter().collect();
         hit.sort_by(|a, b| a.2.to_lowercase().cmp(&b.2.to_lowercase()).then_with(|| a.1.cmp(&b.1)));
         let count = hit.len() as u64;
-        let mut f = finding("library", "library:track-numbers", Level::Warning, count, n(count, "album with track numbers off", "albums with track numbers off"));
+        let mut f = finding("library", key, Level::Warning, count, n(count, one, many));
         f.items = hit
             .iter()
             .take(ITEMS)
@@ -465,13 +475,21 @@ impl App {
         let folders = self.library.catalogue().folders();
         let music = music.and_then(|m| folders.iter().position(|f| f == std::path::Path::new(&m))).map(|i| i as i64);
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
-        let (rows, numbering, matched) =
-            tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((lib.lacking()?, lib.numbering(music)?, ud.renumber_matched()?)) }).await??;
-        let off: Vec<(String, String, String, String)> = numbering
-            .into_iter()
-            .filter_map(|(id, name, artist, numbers)| super::renumber::off(&numbers, !matched.contains(&id)).map(|line| (id, name, artist, line)))
-            .collect();
-        let mut out = library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off);
+        let (rows, numbering, matched, released) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            Ok((lib.lacking()?, lib.numbering(music)?, ud.renumber_matched()?, ud.album_discs()?))
+        })
+        .await??;
+        // Disc numbers lost (0.13) first: such an album's numbers twice are that, not Track numbers.
+        let mut discs: Vec<(String, String, String, String)> = Vec::new();
+        let mut off: Vec<(String, String, String, String)> = Vec::new();
+        for (id, name, artist, numbers) in numbering {
+            if let Some(line) = super::renumber::discs_off(&numbers, released.get(&id).copied()) {
+                discs.push((id, name, artist, line));
+            } else if let Some(line) = super::renumber::off(&numbers, !matched.contains(&id)) {
+                off.push((id, name, artist, line));
+            }
+        }
+        let mut out = library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off, &discs);
         out.extend(self.check_incomplete(&served, music).await?);
         // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
         let s = served.clone();
@@ -805,7 +823,7 @@ mod tests {
 
     #[test]
     fn every_finding_has_a_short_name() {
-        for key in ["files:broken", "library:cover", "library:track-numbers", "incoming:upgrades", "server:slow", "servers:jellyfin", "players:away:Tablet", "library:check"] {
+        for key in ["files:broken", "library:cover", "library:track-numbers", "library:discs", "incoming:upgrades", "server:slow", "servers:jellyfin", "players:away:Tablet", "library:check"] {
             assert_ne!(name_of(key), "Finding", "{key}");
         }
         assert_eq!(finding("library", "library:genre", Level::Warning, 12, "12 albums without a genre").name, "Missing genres");
