@@ -2,7 +2,7 @@
 // layout, size) live in the View sheet (lib/ViewSheet) and its own filters in the Filter sheet (lib/FilterSheet), not
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
-import { pageQueries, type Chip } from './quickCrate';
+import { listQueries, type Chip } from './quickCrate';
 import { matches } from './search';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
@@ -252,12 +252,17 @@ export const matcherLoaded = () => (matching.ready = true);
  *  matcher, separators aside, an alias as good as the name, a few typos forgiven). */
 export function matchesSearch(...texts: (string | null | undefined)[]): boolean {
   void matching.ready;
-  return pageQueries(pageView.query, crateOfWords()).some((q) => matches(q, ...texts));
+  const read = crateOfWords();
+  const qs = listQueries(pageView.query, read, lastQueries);
+  if (!read?.pending) lastQueries = qs;
+  return qs.some((q) => matches(q, ...texts));
 }
+/** What the list was last matched by, held while new words are read (lib/quickCrate listQueries). */
+let lastQueries: string[][] | null = null;
 
 /** The crate the search's words read as, on a page whose list matches by its terms (App registers it: the pages with
- *  the crate card, lib/quickCrate crateCardOn); none elsewhere. */
-let crateOfWords: () => readonly Chip[] | null = () => null;
+ *  the crate card, lib/quickCrate crateCardOn), and whether its reading is still on its way; none elsewhere. */
+let crateOfWords: () => { chips: readonly Chip[] | null; pending: boolean } | null = () => null;
 export const matchCrateBy = (get: typeof crateOfWords) => void (crateOfWords = get);
 
 export const searchFor = (page: string) =>

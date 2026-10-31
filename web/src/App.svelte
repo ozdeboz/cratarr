@@ -65,7 +65,7 @@
   import DiscoverPicker from './lib/DiscoverPicker.svelte';
   import { chooseKind, kindNow, recordKinds } from './lib/recordKinds';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
-  import { globalSearch, pageKinds } from './lib/globalSearch.svelte';
+  import { globalSearch, pageKinds, readingPending } from './lib/globalSearch.svelte';
   import { leaveOnArrival, leavePlayer, navPlace, onArrival } from './lib/navStep.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
@@ -966,7 +966,12 @@
    *  lib/SearchCrateCard), on the pages that list music or crates; everywhere's results have their own. */
   const pageCrate = $derived(quickOn() && !reach.away && crateCardOn(page) && pageView.query.trim() !== '' && !everywhereShown);
   // Its list matches by the crate's terms there, not the whole line (lib/quickCrate pageQueries).
-  matchCrateBy(() => (pageCrate ? (globalSearch.crate?.chips ?? null) : null));
+  // Its list holds what it showed while the words are read (lib/quickCrate listQueries): never "none found" first.
+  matchCrateBy(() => {
+    if (!pageCrate) return null;
+    const q = pageView.query.trim();
+    return { chips: globalSearch.crate?.q === q ? globalSearch.crate.chips : null, pending: readingPending(q) };
+  });
   // A list shown as the table while its page searches (lib/layouts; the owner, 2026-10-31) comes back where it was:
   // the page's place when the first word came, once the search is emptied on the same page.
   let placeBefore: { page: string; y: number } | null = null;

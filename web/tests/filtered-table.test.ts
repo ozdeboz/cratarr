@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
 const { libraryShownOf, playlistShownOf, layoutFits } = await import('../src/lib/layoutRules.ts');
-const { pageQueries, chipOf, leftOut } = await import('../src/lib/quickCrate.ts');
+const { pageQueries, listQueries, chipOf, leftOut } = await import('../src/lib/quickCrate.ts');
 const { matches } = await import('../src/lib/search.ts');
 
 test('searching: the table, whatever was chosen, on a phone too', () => {
@@ -48,4 +48,20 @@ test('a left-out term is not matched; no crate: the whole line, as ever', () => 
   assert.deepEqual(pageQueries('hip hop but not jazz', chips), [['hip', 'hop']]);
   assert.deepEqual(pageQueries('miles davis', null), [['miles', 'davis']]);
   assert.deepEqual(pageQueries('', null), [[]]);
+});
+
+test('while a sentence is read: the list held as it last was, never empty first; then the reading decides', () => {
+  const line = 'hip hop and jazz from the 90s like miles davis';
+  const last = [['hip', 'hop']];
+  // Read on its way: what the list showed for the words before, held.
+  assert.deepEqual(listQueries(line, { chips: null, pending: true }, last), last);
+  // Nothing held yet (the page's first words): the whole line, as ever.
+  assert.deepEqual(listQueries(line, { chips: null, pending: true }, null), [pageQueries(line, null)[0]]);
+  // Landed as a crate: its terms.
+  const chips = [chipOf('hip hop', [genre('Hip Hop')])!, chipOf('miles davis', [artist('Miles Davis', 'ar-1')])!];
+  assert.deepEqual(listQueries(line, { chips, pending: false }, last), [['hip', 'hop'], ['miles', 'davis']]);
+  // Landed as none, or failed: the whole line, possibly empty.
+  assert.deepEqual(listQueries(line, { chips: null, pending: false }, last), [pageQueries(line, null)[0]]);
+  // A page without the card: the whole line.
+  assert.deepEqual(listQueries('miles davis', null, last), [['miles', 'davis']]);
 });
