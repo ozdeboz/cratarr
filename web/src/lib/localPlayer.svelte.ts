@@ -3630,7 +3630,7 @@ export async function windHold(dir: 'back' | 'forward') {
   if (h.released) {
     disarm(armed);
     tape.holding = null;
-    if (fromReverse && tapeDir.want === 'L' && backwards()) return;
+    if (tapeDir.want === 'L' && backwards()) return;
     const w = where();
     return void (w && playOnAt(w.seg.index, w.offset));
   }
@@ -3641,7 +3641,8 @@ export async function windHold(dir: 'back' | 'forward') {
     if (fromReverse && tapeDir.want === 'L') backwards();
     return;
   }
-  if (fromReverse) tape.rewinding!.backTo = true;
+  // Let go, the knob's way at L: backwards again, from playing backwards or from a pause alike (0.12.4).
+  if (fromReverse || tapeDir.want === 'L') tape.rewinding!.backTo = true;
 }
 /** A forward hold while playing: its stream asked from a moment ahead, taken over as the track reaches that moment
  *  (once it is loaded), at 1×. Let go before: nothing changed. Not loaded in time: asked again further on, twice, then
