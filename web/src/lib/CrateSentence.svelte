@@ -2,16 +2,17 @@
   // A crate read as a sentence (0.12, the owner's mockup B; 0.13, decision 0088: one crate, two views): its terms
   // underlined, the words between muted, ending in the field where more is typed ("and…"; the whole line read, a comma
   // or Enter). A term tapped reads another way (lib/QuickTermSheet); a kind's "and" or "or" tapped flips how its terms
-  // join (lib/quickCrate joinOf). Where something is "like", the closeness curve (lib/LikeCurve) under it. The crate
-  // search at the top of Crates (lib/QuickCrate) and a crate's Sentence view (lib/CrateEditor) both draw it: its terms,
-  // cut and joins are theirs (bound); `rest`, the conditions a sentence cannot say, said as how many more.
+  // join (lib/quickCrate joinOf). Where something is "like", the closeness curve (lib/LikeCurve) under it. The panel's
+  // alone since 0.13 (the one place a crate is built): the builder's Sentence view (lib/CrateEditor) and a saved crate's
+  // head (lib/CrateHead). Its terms, cut and joins are theirs (bound); `rest`, the conditions a sentence cannot say,
+  // said as how many more.
   import { untrack } from 'svelte';
   import { likeCurve, search, type Condition } from './api';
   import LikeCurve from './LikeCurve.svelte';
   import { curveKey, type CurveAsk } from './likeCurveAsk';
   import { hiddenLibraries } from './listFilter.svelte';
   import { prefs } from './prefs.svelte';
-  import { TERM_KINDS, chipOf, conditionsOf, countAt, flipped, joinKindOf, joinOf, keepsOwn, minAt, modesFrom, readLine, seedsOf, sentenceOf, type Chip, type Found, type JoinKind, type Modes } from './quickCrate';
+  import { TERM_KINDS, conditionsOf, countAt, flipped, joinOf, keepsOwn, minAt, readLine, readOnto, seedsOf, sentenceOf, type Chip, type Found, type JoinKind, type Modes } from './quickCrate';
   import QuickTermSheet from './QuickTermSheet.svelte';
 
   let {
@@ -61,11 +62,10 @@
    *  once; an "and" or "or" between two terms of one kind sets how they join (modesFrom). A search's words too. */
   export async function add(words: string) {
     if (!words.trim()) return;
-    const read = (await readLine(words, ask)).filter((r) => !chips.some((c) => c.term.toLowerCase() === r.term.toLowerCase()));
-    missed = read.filter((r) => !r.readings.length).map((r) => r.term);
-    const have = chips.flatMap((c) => joinKindOf(c) ?? []);
-    modes = { ...modes, ...modesFrom(read, have) };
-    chips = [...chips, ...read.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? [])];
+    const r = readOnto(chips, await readLine(words, ask));
+    missed = r.missed;
+    modes = { ...modes, ...r.modes };
+    chips = [...chips, ...r.add];
   }
 
   /** A comma (or a semicolon) ends what is before it: read, the rest stays in the field; Enter reads it all. */

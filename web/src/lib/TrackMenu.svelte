@@ -302,7 +302,7 @@
     leavePlayer();
     viewGenre(name);
   }
-  /** Sounds like it: the crate search's sentence with the track as its "like" term (0.12; the owner: one way to make a
+  /** Sounds like it: the panel's builder, its sentence with the track as its "like" term (0.12; the owner: one way to make a
    *  crate), to refine or save; Cratarr's own, which AudioMuse hears. */
   function goToLike() {
     // Read before closing: closing lets go of the track.

@@ -98,6 +98,7 @@
   import RowHeart from './RowHeart.svelte';
   import type { ExcludeEntry } from './crates.svelte';
   import CrateEditor from './CrateEditor.svelte';
+  import CrateHead from './CrateHead.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
@@ -195,6 +196,8 @@
   const builder = $derived(builderOf(panel.viewed));
   const crateEditing = $derived(builder !== null);
   let crateDraft = $state<CrateDraft | null>(null);
+  /** The name the builder's sentence gives a crate not named yet (lib/quickCrate nameOf): it saves under it. */
+  let crateNamed = $state('');
   /** Edit mode's picture, saved with Save as the rest is: one picked (shown at once), or the crate's own removed. */
   let crateImage = $state<{ file: Blob; url: string } | 'remove' | null>(null);
   /** The viewed crate's id, when a crate is viewed (not a playlist), or changed. */
@@ -230,7 +233,7 @@
   const other = $derived(tab !== 'tracks');
   const title = $derived(
     crateEditing
-      ? crateDraft?.name.trim() || 'New crate'
+      ? crateDraft?.name.trim() || crateNamed || 'New crate'
       : creating
         ? 'New playlist'
         : crate
@@ -1555,6 +1558,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // out.
   let crateTotal = $state<number | null>(null);
   let crateSaving = $state(false);
+  /** How a grabbed crate starts (0.13, lib/quickCrates): its sentence as read, words still to read. Taken from its draft
+   *  as it is read (`crateRead` counts the reads, the builder made anew each), so a reload starts from its conditions. */
+  let crateStart = $state<Pick<CrateDraft, 'sentence' | 'words'>>({});
+  let crateRead = $state(0);
   /** Delete: a second tap on the trash confirms (Undo follows). */
   let crateDeleteArmed = $state(false);
   const forgetPicked = () => {
@@ -1583,7 +1590,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
     untrack(forgetPicked);
     if (!b) return;
     const kept = keptDraft(b.id);
-    if (kept) return void (crateDraft = kept);
+    if (kept) {
+      const { sentence, words, ...draft } = kept;
+      crateStart = { sentence, words };
+      crateRead++;
+      return void (crateDraft = draft);
+    }
+    crateStart = {};
     if (!b.id) return void (crateDraft = { name: '', conditions: [] });
     const which = b.id;
     getCrate(which).then(
@@ -1606,9 +1619,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   async function saveCrate() {
     const b = builder;
     const d = crateDraft;
-    if (!b || !d || !d.name.trim() || crateSaving) return;
+    const name = d?.name.trim() || crateNamed;
+    if (!b || !d || !name || crateSaving) return;
     crateSaving = true;
-    const name = d.name.trim();
     try {
       const saved = b.id ? await updateCrate(b.id, name, d.conditions) : await createCrate(name, d.conditions);
       withUndo(b.id ? `Saved ${name}.` : `Created ${name}.`, [saved.undo], { after: () => followCrate(saved.id) });
@@ -1659,10 +1672,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
     sel?.removeAllRanges();
     sel?.addRange(range);
   }
-  // A new playlist or crate: the caret in its name at once, as a tap on the name puts it there.
+  // A new playlist: the caret in its name at once, as a tap on the name puts it there. A new crate's goes to its sentence
+  // (0.13, lib/CrateEditor: "Grab a crate" and an example), which names it.
   let named = '';
   $effect(() => {
-    const key = creating ? 'playlist' : builder && !builder.id ? 'crate' : '';
+    const key = creating ? 'playlist' : '';
     const el = nameEl;
     if (key === named || (key && !el)) return;
     named = key;
@@ -1945,7 +1959,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
             ><Icon name={albState.icon} size={24} /></button
           >
         {/if}
-        <button class="icon save" aria-label="Save" title="Save" onclick={saveCrate} disabled={crateSaving || !crateDraft?.name.trim()} aria-busy={crateSaving}
+        <button class="icon save" aria-label="Save" title="Save" onclick={saveCrate} disabled={crateSaving || !(crateDraft?.name.trim() || crateNamed)} aria-busy={crateSaving}
           ><Icon name="arrowDownToLine" size={24} /></button
         >
       </div>
@@ -2035,7 +2049,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
             contenteditable="plaintext-only"
             class:saving={crateSaving}
             aria-label="Name"
-            data-placeholder="New crate"
+            data-placeholder={crateNamed || 'New crate'}
             spellcheck="false"
             bind:textContent={crateDraft.name}
             onkeydown={(e) => {
@@ -2081,6 +2095,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <!-- The artists left out of it by hand (0.10, decision 0083: Not in this crate), each a tap to take back. -->
           {#if crate && !crateEditing && excludedArtists.crates[crate]?.length}<p class="genres"><span class="row-head">Not in this crate</span>{#each excludedArtists.crates[crate] as a (a.key)}<button aria-label="Take {a.name} back into this crate" title="Take back" onclick={() => setNotInCrate(crate, a.name, false)}>{a.name}</button>{/each}</p>{/if}
         </div>
+        <!-- One's own crate says itself as the builder does (0.13, lib/CrateHead: one crate view, seen or made); a change
+             there opens its edit mode with it. -->
+        {#if crate && !crateEditing && !multi && !isPermanentCrate}<CrateHead {crate} name={title} />{/if}
         <!-- A ranked crate's fit (the owner, 2026-10-23): what it learned not to suggest; a tap corrects it. -->
         {#if crate && like && !multi}<AvoidLine {crate} name={suggestsFor?.name ?? title} round={saved} seed={like.item} onchange={() => saved++} />{/if}
         {#if (shownProfile || (like && curve?.alike.length)) && !multi}
@@ -2132,7 +2149,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {/each}
     {:else if crateEditing}
       {#if crateDraft}
-        <CrateEditor bind:conditions={crateDraft.conditions} bind:total={crateTotal} names={crateDraft.names ?? {}} crate={builder?.id ?? null} name={crateDraft.name} />
+        {#key crateRead}
+          <CrateEditor bind:conditions={crateDraft.conditions} bind:total={crateTotal} names={crateDraft.names ?? {}} crate={builder?.id ?? null} name={crateDraft.name} sentence={crateStart.sentence ?? null} words={crateStart.words ?? ''} bind:named={crateNamed} />
+        {/key}
       {:else if error}
         <p class="error" role="alert">{error}</p>
       {:else}

@@ -375,11 +375,35 @@ export function wordChip(kind: 'genre' | 'style' | 'mood' | 'tag' | 'label', wor
 
 /** Global search's words read as a crate (0.12; the owner, 2026-10-30: mockup 1a, the crate card first): its chips
  *  where they read as two terms or more of two kinds or more (a year and an artist; a genre, a decade and an artist),
- *  null where they are one thing (a name, a genre), which the plain Grab a crate row stays for. */
+ *  null where they are one thing (a name, a genre): no crate then (the owner, 2026-10-31). */
 export function crateOfLine(reads: readonly Read[]): Chip[] | null {
   const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []);
   const kinds = new Set(chips.map((c) => c.reading.kind));
   return chips.length >= 2 && kinds.size >= 2 ? chips : null;
+}
+
+/** The crate a search's words make, at the top of its results (the owner, 2026-10-31: global search's and every page's
+ *  own, one card): only where they read as a crate (crateOfLine: two kinds or more) that holds a track; nothing while
+ *  its count is not known, so no empty crate comes and goes. */
+export const crateShows = (chips: readonly Chip[] | null, total: number | null | undefined): boolean =>
+  !!chips && chips.length > 0 && total != null && total >= 1;
+
+/** The pages whose own search lists music or crates, where the crate card leads its results (the owner, 2026-10-31).
+ *  Not Home (its search is everywhere's, which has the card), nor the pages that find settings, insights, health or
+ *  MusicBrainz. */
+const CRATE_CARD_PAGES = new Set(['library', 'playlists', 'downloads', 'discover', 'requests', 'crates']);
+export const crateCardOn = (page: string) => CRATE_CARD_PAGES.has(page);
+
+/** A line read onto a crate's terms (the crate search's words, lib/quickCrates): the terms not in it yet as chips, how
+ *  an "and" or "or" joins them with what it has (modesFrom), and the phrases that read as nothing. */
+export function readOnto(chips: readonly Chip[], read: readonly Read[]): { add: Chip[]; modes: Modes; missed: string[] } {
+  const fresh = read.filter((r) => !chips.some((c) => c.term.toLowerCase() === r.term.toLowerCase()));
+  const have = chips.flatMap((c) => joinKindOf(c) ?? []);
+  return {
+    add: fresh.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []),
+    modes: modesFrom(fresh, have),
+    missed: fresh.filter((r) => !r.readings.length).map((r) => r.term),
+  };
 }
 
 /** The join kind a read term makes, as chipOf will chip it: an artist with an id "like" unless asked "by", an album asked

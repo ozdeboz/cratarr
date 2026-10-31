@@ -57,6 +57,9 @@
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
   import GlobalResults from './lib/GlobalResults.svelte';
+  import SearchCrateCard from './lib/SearchCrateCard.svelte';
+  import { quickOn } from './lib/quickCrates.svelte';
+  import { crateCardOn } from './lib/quickCrate';
   import RecordsPicker from './lib/RecordsPicker.svelte';
   import DiscoverPicker from './lib/DiscoverPicker.svelte';
   import { chooseKind, kindNow, recordKinds } from './lib/recordKinds';
@@ -958,6 +961,9 @@
   /** Everywhere's results in the page's place: on a page's Everywhere tab, and on Home whenever it searches (it has
    *  nothing of its own to find; the owner, 2026-10-25: its results came after all of Home, out of sight). */
   const everywhereShown = $derived(pageView.query.trim() !== '' && (page === 'home' || (scoped && globalSearch.scope === 'everywhere')));
+  /** A page's own search leads with the crate its words make (0.13; the owner, 2026-10-31: one card, as global search's,
+   *  lib/SearchCrateCard), on the pages that list music or crates; everywhere's results have their own. */
+  const pageCrate = $derived(quickOn() && !reach.away && crateCardOn(page) && pageView.query.trim() !== '' && !everywhereShown);
   // As many of the main pages as fit, each tab at least BAR_SLOT_PX wide (the owner, 2026-10-25: Discover in the bar where
   // there is room): four and More on a phone, all five on a tablet. The pages apart (Requests, Insights, Health,
   // Settings…) stay behind More ("requests is of the other category"), unless every page fits in five (Local mode).
@@ -1061,6 +1067,7 @@
     <SheetArea area={() => pageEl}>
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->
+    {#if pageCrate}<div class="page-crate"><SearchCrateCard q={pageView.query.trim()} /></div>{/if}
     <Hold key={pageKey} bind:shown={shownKey}>
     {#if page === 'settings'}
       <Settings />
@@ -1505,6 +1512,11 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) 1px var(--player-w);
     align-items: start;
+  }
+
+  /* The crate a page's search makes, over the page's own results, at the pages' own side margin. */
+  .page-crate {
+    padding: 0 clamp(12px, 2vw, 32px);
   }
 
   .page {

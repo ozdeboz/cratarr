@@ -1,10 +1,11 @@
 <script lang="ts">
-  // Global search's words read as a crate (0.12; the owner, 2026-10-30: mockup 1a, "a crate card first"): where they
-  // read as two terms or more of two kinds or more (lib/quickCrate crateOfLine), the first result is the crate they
-  // make: four of its covers, its sentence in small, how many tracks, Grab this crate (Crates, the sentence filled in)
-  // and Play. One word, or one kind: the plain Grab a crate row instead (`plain`). Read once the search's own answer for
-  // the words is in (so nothing per keystroke), that answer reused for the whole line; the crate's count and covers once
-  // it reads.
+  // A search's words read as a crate (0.12; the owner, 2026-10-30: mockup 1a, "a crate card first"): where they read as
+  // two terms or more of two kinds or more (lib/quickCrate crateOfLine), the first result is the crate they make: four
+  // of its covers, its sentence in small, how many tracks, Grab this crate and Play. One card for global search's
+  // results and every page's own (0.13; the owner, 2026-10-31), shown only once its count is in and it holds a track
+  // (crateShows): nothing for one word, one kind or an empty crate, nothing while it loads. Grab this crate opens it in
+  // the panel's builder (lib/quickCrates grabCrate: the one place a crate is shown and built). Read once the search's
+  // own answer for the words is in (so nothing per keystroke), that answer reused for the whole line.
   import { untrack } from 'svelte';
   import { albumCoverUrl, previewCrate, search, type PlaylistRow } from './api';
   import Cover from './Cover.svelte';
@@ -14,27 +15,30 @@
   import { hiddenLibraries } from './listFilter.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
-  import { TERM_KINDS, conditionsOf, crateOfLine, nameOf, readLine, sentenceOf, type Chip, type Found } from './quickCrate';
+  import { TERM_KINDS, conditionsOf, crateOfLine, crateShows, modesFrom, nameOf, readLine, sentenceOf, type Chip, type Found, type Modes } from './quickCrate';
   import { grabCrate } from './quickCrates.svelte';
   import { words } from './search';
   import { toast } from './toast.svelte';
 
-  let { q, plain }: { q: string; plain: import('svelte').Snippet } = $props();
+  let { q }: { q: string } = $props();
 
   /** How many of each kind a phrase's readings offer, as the crate search asks. */
   const EACH = 3;
   const fromAnswer = (r: import('./api').ServerSearch): Found => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []);
 
-  let chips = $state<Chip[] | null>(null);
-  let preview = $state<{ source: string; total: number; rows: PlaylistRow[] } | null>(null);
+  /** The crate shown: its terms, joins and first tracks, together, given only once all are in (the last one stays
+   *  while the next words are read, so the card is not gone between keystrokes; the owner's no-flash rule). */
+  let shown = $state<{ chips: Chip[]; modes: Modes; preview: { source: string; total: number; rows: PlaylistRow[] } } | null>(null);
+  const chips = $derived(shown?.chips ?? null);
+  const modes = $derived(shown?.modes ?? {});
+  const preview = $derived(shown?.preview ?? null);
   // Read when the search's answer for these words is in; the whole line from that answer, its shorter phrases asked.
   const answered = $derived(globalSearch.found?.q === q ? globalSearch.found.r : null);
   $effect(() => {
     const r = answered;
     const line = q;
-    chips = null;
-    preview = null;
-    if (!r || words(line).length < 2) return;
+    if (words(line).length < 2) return void (shown = null);
+    if (!r) return;
     let gone = false;
     const whole = words(line).join(' ');
     const ask = (phrase: string): Promise<Found> =>
@@ -44,11 +48,11 @@
         (reads) => {
           if (gone) return;
           const c = crateOfLine(reads);
-          chips = c;
-          if (!c) return;
-          previewCrate(conditionsOf(c), 4, prefs.source || undefined, { without: hiddenLibraries() }).then(
-            (p) => !gone && (preview = p),
-            () => {},
+          if (!c) return void (shown = null);
+          const m = modesFrom(reads);
+          previewCrate(conditionsOf(c, undefined, m), 4, prefs.source || undefined, { without: hiddenLibraries() }).then(
+            (p) => !gone && (shown = crateShows(c, p.total) ? { chips: c, modes: m, preview: p } : null),
+            () => !gone && (shown = null),
           );
         },
         () => {},
@@ -57,7 +61,7 @@
     return () => (gone = true);
   });
 
-  const parts = $derived(chips ? sentenceOf(chips) : []);
+  const parts = $derived(chips ? sentenceOf(chips, modes) : []);
   /** Four covers, an album's once. */
   const covers = $derived.by(() => {
     if (!preview) return [];
@@ -75,14 +79,14 @@
   const likeAt = (i: number | undefined) => i !== undefined && !!chips?.[i]?.reading.id && chips?.[i]?.how === 'like';
 
   function grab() {
-    if (chips) grabCrate(chips);
+    if (chips) grabCrate(chips, modes);
   }
   let starting = $state(false);
   async function play() {
     if (!chips) return;
     starting = true;
     try {
-      const p = await previewCrate(conditionsOf(chips), 500, prefs.source || undefined, { without: hiddenLibraries() });
+      const p = await previewCrate(conditionsOf(chips, undefined, modes), 500, prefs.source || undefined, { without: hiddenLibraries() });
       const ids = p.rows.flatMap((r) => (r.id && !r.missing ? [r.id] : []));
       if (ids.length) await playCollection({ kind: 'tracks', source: p.source, ids }, 'play', nameOf(chips));
     } catch (e) {
@@ -93,7 +97,7 @@
   }
 </script>
 
-{#if chips}
+{#if shown}
   <section class="card" aria-label="A crate of {q}">
     <span class="mosaic" aria-hidden="true">
       {#each [0, 1, 2, 3] as k (k)}<span class="tile">{#if covers[k]}<Cover src={covers[k]} />{/if}</span>{/each}
@@ -107,8 +111,6 @@
       </span>
     </span>
   </section>
-{:else}
-  {@render plain()}
 {/if}
 
 <style>

@@ -37,6 +37,14 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   the top bar, a sticky list head or column head, nor the floating glass top and bottom (`--glass-top`,
   `--glass-bottom`). One rule for it (scroll-padding from the chrome's real heights, kept as they change), not each
   place's own offset. Today: 4 scrollIntoView and 9 scrollTo calls, no vertical scroll-padding anywhere.
+  And (the owner, 2026-10-31): **one place for a crate, the panel.** A crate is shown and built only in the crate
+  panel: a new one (Crates' +) opens its builder empty, "Grab a crate" and an example; a saved one of one's own heads
+  its tracks with the same sentence, a change there opening its edit mode; a menu's Sounds like this and Grab a crate
+  open the builder with it started. Crates has no field of its own: its glass searches its crates as every page's does.
+  **One crate card** leads both global search's results and every page's own search (Library, Playlists, Downloads,
+  Discover, Requests, Crates) where the words read as two kinds or more and the crate holds a track; nothing while it
+  loads, nothing otherwise; Grab this crate opens it in the panel. *On 632/0013-grab-glass:* all of it; its look waits
+  for the owner's mockup choice.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
