@@ -420,6 +420,8 @@ export type Axis = {
   values: string[];
   /** How many items of the list have each of `values` (the Filter sheet's, filterList); absent in the builder's. */
   counts?: number[];
+  /** The Type axis only (0.13): each of `values`' layer, 1 a release type, 2 an extra type, 3 Classical. */
+  layers?: number[];
   min: number | null;
   max: number | null;
   known: number;
@@ -1443,10 +1445,12 @@ export type ListedAlbum = {
   classical_mark?: 'classical' | 'not';
   composers?: { key: string; name: string }[];
   performers?: string[];
-  /** Its release type (Cratarr's own library's): "album", "ep", "single", "incomplete", "other"; none where not known.
-   *  `secondary`: MusicBrainz's secondary types ("compilation", "live"…). */
+  /** Its release type: "album", "ep", "single", "broadcast", "other"; none where not known. `secondary`: MusicBrainz's
+   *  secondary types ("compilation", "live"…). `whole_tracks`: where tracks were found missing, the whole release's
+   *  count (`tracks` is the library's). */
   type?: string | null;
   secondary?: string[];
+  whole_tracks?: number;
   /** The fields an administrator set by hand (0.13, per-record overrides; lib/recordEdit). */
   set?: import('./recordEdit').OverrideField[];
 };

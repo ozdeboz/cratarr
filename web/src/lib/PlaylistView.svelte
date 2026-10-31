@@ -136,6 +136,7 @@
   import SectionHead from './SectionHead.svelte';
   import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
+  import { openHealth } from './health';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
   import { inApp } from './app.svelte';
@@ -2087,6 +2088,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
           {#if details}<p class="details">{#if albumDot}<i class="dot" style:background={albumDot.colour} role="img" aria-label={albumDot.name}></i>{/if}{details}</p>{/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
+          <!-- A record missing tracks (0.13): how many of its release's it holds, to Health's albums missing tracks. -->
+          {#if album && listedHere?.a.whole_tracks}<button class="details left-out" onclick={() => openHealth('library:incomplete')}><Icon name="health" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></button>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy, album.source === BANDCAMP ? { id: album.id, title } : null)}
               >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"

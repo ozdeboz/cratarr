@@ -7,9 +7,6 @@
 import type { FilterCondition } from './prefs.svelte';
 
 export const ALL = 'all';
-/** The release types, the first layer: one a record (MusicBrainz's primary types, a fixed vocabulary). */
-export const RELEASE_TYPES = ['Album', 'EP', 'Single', 'Broadcast', 'Other'] as const;
-const isRelease = (v: string) => RELEASE_TYPES.some((t) => t.toLowerCase() === v.toLowerCase());
 export const CLASSICAL = 'Classical';
 /** The label of Type rows no one type names (two values, Not, two rows). */
 export const SELECTED = 'Selected types';
@@ -60,12 +57,24 @@ export function typesShown(on: readonly FilterCondition[]): string {
   return t === null ? SELECTED : t === ALL ? 'Records' : typeLabel(t);
 }
 
-/** A Type row's values as the Filter sheet's card says them (the owner, 2026-10-31, mockup A): as the server reads
- *  them, the release types joined "or", and the rest "and" ("Album or EP and Live and Classical"). */
-export function typesSaid(values: readonly string[], shown: (v: string) => string = (v) => v): string {
-  const release = values.filter(isRelease).map(shown).join(' or ');
-  return [release, ...values.filter((v) => !isRelease(v)).map(shown)].filter(Boolean).join(' and ');
+/** A Type row's values as the Filter sheet's card says them (the owner, 2026-10-31, mockup A), as the server reads
+ *  them: "or" within a layer, "and" across, the layers in order ("Album or EP and Live and Classical"); a Not row means
+ *  the same, left out. `layerOf`: a value's layer (the axis's `layers`); one it does not know is its own. */
+export function typesSaid(values: readonly string[], layerOf: (v: string) => number | undefined, shown: (v: string) => string = (v) => v): string {
+  const groups = new Map<number | string, string[]>();
+  for (const v of values) {
+    const l = layerOf(v) ?? `own:${v}`;
+    groups.set(l, [...(groups.get(l) ?? []), shown(v)]);
+  }
+  const order = (k: number | string) => (typeof k === 'number' ? k : 99);
+  return [...groups.entries()].sort(([a], [b]) => order(a) - order(b)).map(([, vs]) => vs.join(' or ')).join(' and ');
 }
+
+/** A value's layer, as the Type axis says it. */
+export const layerIn = (axis: { values: readonly string[]; layers?: readonly number[] } | null | undefined) => (v: string) => {
+  const i = axis?.values.indexOf(v) ?? -1;
+  return i >= 0 ? axis?.layers?.[i] : undefined;
+};
 
 /** The Type rows a pick is: none for Records, else that type's one. */
 export const rowsOfType = (id: string): FilterCondition[] => (id === ALL ? [] : [{ axis: 'type', not: false, value: { kind: 'any_of', values: [id] } }]);
