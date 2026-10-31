@@ -91,6 +91,12 @@ const MARKERS: [string[], Want][] = (
     // "But not" (0.13): what follows is left out, through a kind word after it ("but not on Def Jam").
     [['but', 'not'], { not: true }],
     [['not'], { not: true }],
+    // Said otherwise (the owner, 2026-10-31: "any other missing completions?"): "without", "except", "excluding", "no".
+    [['but', 'without'], { not: true }],
+    [['without'], { not: true }],
+    [['except'], { not: true }],
+    [['excluding'], { not: true }],
+    [['no'], { not: true }],
   ] as [string[], Want][]
 ).sort((a, b) => b[0].length - a[0].length);
 const isJoin = (t: string) => JOINS.has(t.toLowerCase());
@@ -249,12 +255,20 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
       const tryAt = async (n: number): Promise<Found | null> => {
         const p = phrase(n);
         const edges = [tokens[i], tokens[i + n - 1]].filter(isJoin);
-        if (!edges.length) return fitting(p);
+        // The sentence's kind words inside it ("hip hop not", "rock by"), each only where the name holds it ("Stand by
+        // Me"): else "hip hop not 00s" read Hip Hop, its "not" lost, and the 2000s went in (the owner, 2026-10-31).
+        const inner = Array.from({ length: n - 1 }, (_, k) => i + k + 1)
+          .filter((j) => markerAt(tokens, j))
+          .map((j) => tokens[j].toLowerCase());
+        if (!edges.length && !inner.length) return fitting(p);
         // A join word at its edge only where the name holds it ("The Roots"): the matcher forgives a word too many, so
         // "Miles Davis or" would otherwise read as Miles Davis, its "or" lost (0.13: that "or" is the crate's choice).
         const f = (await once(p)).filter((h) => {
           const own = words(h.title);
-          return edges.every((e) => own.includes(e.toLowerCase()) || ((e === '&' || e.toLowerCase() === 'and') && h.title.includes('&')));
+          return (
+            edges.every((e) => own.includes(e.toLowerCase()) || ((e === '&' || e.toLowerCase() === 'and') && h.title.includes('&'))) &&
+            inner.every((w) => own.includes(w))
+          );
         });
         return fits(p, f) ? f : null;
       };
@@ -289,12 +303,16 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
   const reads: Read[] = [];
   let carried: Want | null = null;
   for (const piece of splitTerms(text)) {
-    const tokens = piece.replace(/(\d{4})\s*(?:[-–]|\bto\b)\s*(\d{4})/gi, '$1-$2').split(' ');
+    const tokens = piece
+      .replace(/(\d{4})\s*(?:[-–]|\bto\b)\s*(\d{4})/gi, '$1-$2')
+      // "before 1970", "after the 90s", "since 2010", "until 1980": one open span (yearOf), read as one term.
+      .replace(OPEN_YEARS, (_, w: string, y: string) => `${w.toLowerCase()}:${y}`)
+      .split(' ');
     const parts: (Read | string[])[] = [];
     for (const t of tokens) {
       if (!words(t).length && t !== '&') continue;
       const year = yearOf(t, now);
-      if (year) parts.push({ term: t, readings: [year] });
+      if (year) parts.push({ term: t.replace(':', ' '), readings: [year] });
       else if (Array.isArray(parts.at(-1))) (parts.at(-1) as string[]).push(t);
       else parts.push([t]);
     }
@@ -302,8 +320,9 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
     let wanted = false;
     for (const p of parts) {
       if (!Array.isArray(p)) {
-        reads.push(p);
-        want = null;
+        // A year after "not" left out ("hip hop not 00s"), the "not" on to the next kind word, as between words.
+        reads.push(want?.not ? { ...p, not: true } : p);
+        if (!want?.not) want = null;
         continue;
       }
       const s = await segment(p, want);
@@ -321,13 +340,45 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
   });
 }
 
-/** A year or a decade as typed: 1975, '75, 1970s, '70s, 70s, 1970-1979; `now` for which century a two-digit year is
- *  (one after this year's two digits is last century's). */
+/** The words that open a span on one side, with the year or decade after them ("before the 70s"): readLine makes them
+ *  one token ("before:70s"), yearOf reads it. */
+const OPEN_YEARS = /\b(before|after|since|until|till)\s+(?:the\s+)?([’‘']?\d{2,4}[’‘']?s?)(?=\s|$)/gi;
+/** An open span's missing end, as a year reading's value holds it ("0-1969": before 1970; "2001-9999": after 2000). */
+export const NO_START = 0;
+export const NO_END = 9999;
+/** The decades said in words ("the seventies"). */
+const DECADE_WORDS: Record<string, number> = { twenties: 20, thirties: 30, forties: 40, fifties: 50, sixties: 60, seventies: 70, eighties: 80, nineties: 90, noughties: 0, aughts: 0 };
+
+/** A year or a decade as typed: 1975, '75, 1970s, '70s, 70s, seventies, 1970-1979, 70s-80s; an open one after
+ *  readLine's "before", "after", "since", "until" ("before:1970"); `now` for which century a two-digit year is (one
+ *  after this year's two digits is last century's). */
 export function yearOf(term: string, now = new Date().getFullYear()): Reading | null {
-  const t = term.trim().toLowerCase().replace(/^[’‘]/, "'");
+  const t = term.trim().toLowerCase().replace(/[’‘]/g, "'");
   const two = (yy: number) => (yy <= now % 100 ? 2000 + yy : 1900 + yy);
   const span = (min: number, max: number, label: string): Reading => ({ kind: 'year', value: `${min}-${max}`, label });
-  let m = /^(\d{4})\s*[-–]\s*(\d{4})$/.exec(t);
+  let m = /^(before|after|since|until|till):(.+)$/.exec(t);
+  if (m) {
+    const inner = yearOf(m[2], now);
+    if (!inner) return null;
+    const [a, b] = inner.value.split('-').map(Number);
+    const said = `${m[1] === 'till' ? 'until' : m[1]} ${/^\d{3}0s$/.test(inner.label) ? `the ${inner.label}` : inner.label}`;
+    if (m[1] === 'before') return span(NO_START, a - 1, said);
+    if (m[1] === 'after') return span(b + 1, NO_END, said);
+    if (m[1] === 'since') return span(a, NO_END, said);
+    return span(NO_START, b, said);
+  }
+  if (t in DECADE_WORDS) {
+    const d = two(DECADE_WORDS[t]);
+    return span(d, d + 9, `${d}s`);
+  }
+  // Decade to decade: "70s-80s", "1970s-80s", "1970s–1980s".
+  m = /^'?(\d{1,3})0'?s\s*[-–]\s*'?(\d{1,3})0'?s$/.exec(t);
+  if (m) {
+    const dec = (d: string) => (d.length === 3 ? Number(d) * 10 : two(Number(d) * 10));
+    const [a, b] = [dec(m[1]), dec(m[2])];
+    if (b >= a) return span(a, b + 9, `${a}s to ${b}s`);
+  }
+  m = /^(\d{4})\s*[-–]\s*(\d{4})$/.exec(t);
   if (m) {
     const [a, b] = [Number(m[1]), Number(m[2])];
     return span(Math.min(a, b), Math.max(a, b), `${Math.min(a, b)}–${Math.max(a, b)}`);
@@ -380,9 +431,10 @@ export function readingsFor(term: string, found: readonly (SearchResult & { id?:
 export function chipOf(term: string, readings: readonly Reading[], how?: 'like' | 'by', not?: boolean): Chip | null {
   const [reading, ...others] = readings;
   if (!reading) return null;
-  // Left out (0.13, "but not"): a kind a crate can leave out, an artist "by" them; a year or "like" cannot be.
+  // Left out (0.13, "but not"): a kind a crate can leave out, an artist "by" them, a year or a span its own; a track
+  // cannot be (no condition names one).
   if (not) {
-    if (reading.kind === 'year' || reading.kind === 'track') return null;
+    if (reading.kind === 'track') return null;
     return reading.kind === 'artist' ? { term, reading, others, how: 'by', own: false, not: true } : { term, reading, others, not: true };
   }
   // An album asked for as "like" by the sentence's words ("sounds like Kind of Blue") seeds by its id, as a menu's does.
@@ -399,8 +451,9 @@ export function readAs(chip: Chip, reading: Reading): Chip {
 }
 
 /** Whether a term can be left out (0.13, the term's Leave out; the owner, 2026-10-31): what a crate's conditions can
- *  negate as the sentence says it. Not a year (the years are one span) nor a track (no condition names one). */
-export const canLeaveOut = (chip: Chip) => chip.reading.kind !== 'year' && chip.reading.kind !== 'track';
+ *  negate as the sentence says it. Not a track (no condition names one); a year or a span is left out on its own,
+ *  apart from the years' one span. */
+export const canLeaveOut = (chip: Chip) => chip.reading.kind !== 'track';
 
 /** The term left out ("but not …") or taken back in: read again from its own readings, so an artist left out is "by"
  *  them and, back in, sounds like them again where it can. */
@@ -426,11 +479,15 @@ export function wordChip(kind: 'genre' | 'style' | 'mood' | 'tag' | 'label', wor
 
 /** Global search's words read as a crate (0.12; the owner, 2026-10-30: mockup 1a, the crate card first): its chips
  *  where they read as two terms or more of two kinds or more (a year and an artist; a genre, a decade and an artist),
- *  null where they are one thing (a name, a genre): no crate then (the owner, 2026-10-31). */
+ *  or one of them left out (the owner, 2026-10-31: "jazz and blues, but not techno" should also work: a "not" is said
+ *  only of a crate), or joined by a typed "or" or "and" (the owner, 2026-10-31: "jazz or blues… should also result in
+ *  a crate"), null where they are one thing (a name, a genre): no crate then (the owner, 2026-10-31). */
 export function crateOfLine(reads: readonly Read[]): Chip[] | null {
   const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []);
   const kinds = new Set(chips.map((c) => c.reading.kind));
-  return chips.length >= 2 && kinds.size >= 2 ? chips : null;
+  const leaves = chips.some((c) => c.not) && chips.some((c) => !c.not);
+  const joined = reads.some((r) => r.join && r.readings.length);
+  return chips.length >= 2 && (kinds.size >= 2 || leaves || joined) ? chips : null;
 }
 
 /** The crate a search's words make, at the top of its results (the owner, 2026-10-31: global search's and every page's
@@ -513,10 +570,17 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
   // What is left out (0.13, "but not"): each kind's one row, negated (none of them).
   const notAxis = new Map<string, string[]>();
   let years: [number, number] | null = null;
+  // Years left out: each its own negated span ("not the 2000s, not 1975").
+  const notYears: [number, number][] = [];
   for (const c of chips) {
     const r = c.reading;
     if (c.not) {
-      if (r.kind === 'year' || r.kind === 'track') continue;
+      if (r.kind === 'track') continue;
+      if (r.kind === 'year') {
+        const [a, b] = r.value.split('-').map(Number);
+        if (!notYears.some(([x, y]) => x === a && y === b)) notYears.push([a, b]);
+        continue;
+      }
       const vs = notAxis.get(r.kind) ?? [];
       if (!vs.includes(r.value)) vs.push(r.value);
       notAxis.set(r.kind, vs);
@@ -533,8 +597,11 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
     const all = values.length > 1 && isMulti(axis) && joinOf(modes, axis) === 'and';
     rows.push({ axis, not: false, value: { kind: all ? 'all_of' : 'any_of', values } });
   }
-  if (years) rows.push({ axis: 'year', not: false, value: { kind: 'range', min: years[0], max: years[1] } });
+  // An open end ("before 1970") none (the conditions' open range).
+  const end = (y: number) => (y <= NO_START || y >= NO_END ? null : y);
+  if (years) rows.push({ axis: 'year', not: false, value: { kind: 'range', min: end(years[0]), max: end(years[1]) } });
   for (const [axis, values] of notAxis) rows.push({ axis, not: true, value: { kind: 'any_of', values } });
+  for (const [min, max] of notYears) rows.push({ axis: 'year', not: true, value: { kind: 'range', min: end(min), max: end(max) } });
   const seeds = seedsOf(chips);
   if (seeds.length) {
     const either = seeds.length > 1 && joinOf(modes, 'like') === 'or';
@@ -590,15 +657,18 @@ export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: str
   if (albums.length) (word('from the album'), list(albums));
 
   // The years: one span, from the earliest chip's start to the latest's end; a decade "the 1970s", a span "1970 to 1985".
+  const yearAt = ({ c, i }: { c: Chip; i: number }) => ({ i, span: c.reading.value.split('-').map(Number) as [number, number], decade: /^\d{3}0s$/.test(c.reading.label) });
   const years = of('year')
-    .map(({ c, i }) => ({ i, span: c.reading.value.split('-').map(Number) as [number, number], decade: /^\d{3}0s$/.test(c.reading.label) }))
+    .map(yearAt)
     .sort((a, b) => a.span[0] - b.span[0] || a.span[1] - b.span[1]);
+  /** A span open at one end ("before 1970", "since 2010"): said as itself, no "from". */
+  const open = (y: (typeof years)[number]) => y.span[0] <= NO_START || y.span[1] >= NO_END;
   const yearTerm = (y: (typeof years)[number]) => {
     if (y.decade) word('the');
-    term(y.i, y.span[0] === y.span[1] || y.decade ? chips[y.i].reading.label : `${y.span[0]} to ${y.span[1]}`);
+    term(y.i, y.span[0] === y.span[1] || y.decade || open(y) ? chips[y.i].reading.label : `${y.span[0]} to ${y.span[1]}`);
   };
   if (years.length) {
-    word('from');
+    if (!open(years[0])) word('from');
     const last = years.reduce((a, b) => (b.span[1] > a.span[1] ? b : a));
     yearTerm(years[0]);
     for (const y of years.slice(1)) if (y !== last) (word(',', true), yearTerm(y));
@@ -630,13 +700,26 @@ export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: str
     ['from the album', left('album')],
   ];
   let first = true;
-  for (const [lead, items] of groups) {
-    if (!items.length) continue;
+  const leaving = () => {
     if (first) (out.length && word(',', true), word('but not'));
     else (word(',', true), word('not'));
     first = false;
+  };
+  for (const [lead, items] of groups) {
+    if (!items.length) continue;
+    leaving();
     if (lead) word(lead);
     list(items);
+  }
+  // Years left out, each as itself: "but not from the 2000s or 1975".
+  const leftYears = left('year').map(yearAt);
+  if (leftYears.length) {
+    leaving();
+    if (!open(leftYears[0])) word('from');
+    leftYears.forEach((y, k) => {
+      if (k) (k < leftYears.length - 1 ? word(',', true) : word('or'));
+      yearTerm(y);
+    });
   }
   return out;
 }
@@ -707,10 +790,13 @@ export function chipsOf(
         } else chips.push({ ...wordChip(c.axis as 'genre' | 'style' | 'mood' | 'tag' | 'label', value), ...not });
       }
       if (!c.not && isMulti(c.axis) && v.values.length > 1) modes[c.axis] = v.kind === 'all_of' ? 'and' : 'or';
-    } else if (plain && !c.not && c.axis === 'year' && v.kind === 'range' && v.min !== null && v.max !== null) {
-      const [a, z] = [v.min, v.max];
-      const label = a === z ? String(a) : a % 10 === 0 && z === a + 9 ? `${a}s` : `${a}–${z}`;
-      chips.push({ term: label, reading: { kind: 'year', value: `${a}-${z}`, label }, others: [] });
+    } else if (c.enabled !== false && !c.quantifier && (c.not || !done.has(at)) && c.axis === 'year' && v.kind === 'range' && (v.min !== null || v.max !== null)) {
+      // The years' one span, open at one end too ("before 1970", "since 2010"); a span left out each its own row
+      // ("but not from the 2000s").
+      const [a, z] = [v.min ?? NO_START, v.max ?? NO_END];
+      const label =
+        v.min === null ? `before ${z + 1}` : v.max === null ? `since ${a}` : a === z ? String(a) : a % 10 === 0 && z === a + 9 ? `${a}s` : `${a}–${z}`;
+      chips.push({ term: label, reading: { kind: 'year', value: `${a}-${z}`, label }, others: [], ...(c.not ? { not: true } : {}) });
     } else if (plain && !c.not && v.kind === 'like' && !brief && (v.min === undefined || v.fresh || !!v.weights?.length || v.of.length > SEEDS_LISTED)) {
       // A built-in crate's (by how many, weighted, fresh) or a long list: said briefly, kept as it is.
       brief = { text: briefOf(v.of, names, crateName), condition: c };

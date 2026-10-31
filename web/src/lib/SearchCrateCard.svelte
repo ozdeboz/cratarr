@@ -1,3 +1,14 @@
+<script module lang="ts">
+  import type { CrateCover } from './api';
+  import type { Chip, Modes } from './quickCrate';
+
+  type Shown = { chips: Chip[]; modes: Modes; preview: { source: string; total: number; covers?: CrateCover[] } };
+  /** The card last shown and the words it was for: a card made anew for the same words (a page's search handed to
+   *  global search's, each its own card) starts as it was, not gone until its tracks are asked again (the owner,
+   *  2026-10-31: it hid for a moment, "I see no use for this at all"). */
+  let last: { q: string; shown: Shown } | null = null;
+</script>
+
 <script lang="ts">
   // A search's words read as a crate (0.12; the owner, 2026-10-30: "a crate card first"): where they read as two terms
   // or more of two kinds or more (lib/quickCrate crateOfLine; read once, lib/globalSearch `crate`), the first result is
@@ -8,9 +19,8 @@
   // "+ word" for another; Play, Grab this crate (the panel's builder, lib/quickCrates grabCrate: the one place a crate is
   // shown and built) and its count.
   import { untrack } from 'svelte';
-  import { coverUrl, previewCrate, search, type PlaylistRow } from './api';
+  import { coverUrl, previewCrate, search } from './api';
   import CoverCard from './CoverCard.svelte';
-  import { recordFirsts } from './crateRecords';
   import { globalSearch } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
@@ -18,7 +28,7 @@
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
   import QuickTermSheet from './QuickTermSheet.svelte';
-  import { TERM_KINDS, conditionsOf, crateShows, nameOf, readLine, readOnto, seedsOf, sentenceOf, type Chip, type Found, type Modes } from './quickCrate';
+  import { TERM_KINDS, conditionsOf, crateShows, nameOf, readLine, readOnto, seedsOf, sentenceOf, type Found } from './quickCrate';
   import { grabCrate } from './quickCrates.svelte';
   import { words } from './search';
   import { toast } from './toast.svelte';
@@ -29,17 +39,20 @@
   const EACH = 3;
   const ask = (phrase: string): Promise<Found> =>
     search(phrase, [...TERM_KINDS], EACH).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
-  /** Its first tracks asked: enough for six covers of six records. A crate's own order comes a record at a time, its
-   *  tracks together: 24 were two hip hop albums, fewer than the strip's four, and the card showed no covers (the
-   *  owner, 2026-10-31). */
-  const FIRST = 200;
+  /** Its count and its first records' covers (the server's: the first six records, a crate's own order coming a record
+   *  at a time; a first page of 24 tracks was two albums, fewer than the strip's four, and the card showed no covers,
+   *  the owner 2026-10-31). One track: the card lists none (the server asks one at least). */
+  const COVERS = 6;
   const previewOf = (c: readonly Chip[], m: Modes) =>
-    previewCrate(conditionsOf(c, undefined, m), FIRST, prefs.source || undefined, { without: hiddenLibraries() });
+    previewCrate(conditionsOf(c, undefined, m), 1, prefs.source || undefined, { without: hiddenLibraries(), covers: COVERS });
 
-  type Shown = { chips: Chip[]; modes: Modes; preview: { source: string; total: number; rows: PlaylistRow[] } };
   /** The crate shown: its terms, joins and first tracks, together, given only once all are in (the last one stays
    *  while the next words are read, so the card is not gone between keystrokes; the owner's no-flash rule). */
-  let shown = $state<Shown | null>(null);
+  let shown = $state<Shown | null>(untrack(() => (last?.q === q ? last.shown : null)));
+  $effect(() => {
+    const s = shown;
+    if (s) last = { q: untrack(() => q), shown: s };
+  });
   const chips = $derived(shown?.chips ?? null);
   const modes = $derived(shown?.modes ?? {});
   const preview = $derived(shown?.preview ?? null);
@@ -73,11 +86,9 @@
   }
 
   const parts = $derived(chips ? sentenceOf(chips, modes) : []);
-  /** The terms as pills, in the sentence's order. */
-  const order = $derived(parts.flatMap((p) => (p.chip !== undefined ? [p.chip] : [])));
-  /** Six covers, a record's once: its first track's (the panel's records' own way; an album's id comes with Cratarr's
-   *  own server only, and the card showed none for another). */
-  const covers = $derived(preview ? recordFirsts(preview.rows, 6).map((r) => coverUrl({ source: preview.source, id: r.id!, album_id: r.album_id })) : []);
+  /** Its first records' covers, each its first track's (the panel's records' own way, so a crate of any server shows
+   *  them). */
+  const covers = $derived(preview ? (preview.covers ?? []).map((c) => coverUrl({ source: preview.source, id: c.track, album_id: c.album_id })) : []);
   const likeAt = (i: number | undefined) => i !== undefined && !!chips?.[i] && seedsOf([chips[i]]).length > 0;
   const notAt = (i: number | undefined) => i !== undefined && !!chips?.[i]?.not;
 
@@ -123,18 +134,16 @@
   {@const cs = chips}
   <div class="crate">
     <CoverCard {covers} label="A crate of {q}" onopen={grab} wide>
-      <h3 class="sentence">{#each parts as p, k (k)}{#if !p.tight && k}{' '}{/if}{#if p.chip !== undefined}<span class="term" class:like={likeAt(p.chip)} class:not={notAt(p.chip)}>{p.text}</span>{:else}<span class="w">{p.text}</span>{/if}{/each}</h3>
-      <!-- Its terms as the week's pills (the owner, 2026-10-31): each opens its menu; "+ word" adds one. -->
-      <p class="pills">
-        {#each order as i (i)}
-          <button class:like={likeAt(i)} class:not={notAt(i)} onclick={() => (at = i)}>{cs[i].reading.label}</button>
-        {/each}
+      <!-- Its terms tapped in the sentence itself, each opening its menu, "+ word" at its end (the owner, 2026-10-31:
+           the pills under it said the same sentence again). -->
+      <h3 class="sentence">
+        {#each parts as p, k (k)}{#if !p.tight && k}{' '}{/if}{#if p.chip !== undefined}{@const i = p.chip}<button class="term" class:like={likeAt(i)} class:not={notAt(i)} aria-label="{cs[i].reading.label}: change or leave out" onclick={() => (at = i)}>{p.text}</button>{:else}<span class="w">{p.text}</span>{/if}{/each}
         {#if adding === null}
           <button class="more" onclick={() => ((adding = ''), (missed = []))}>+ word</button>
         {:else}
           <input class="more" type="search" aria-label="Another word" bind:value={adding} onkeydown={add} onblur={() => !adding?.trim() && (adding = null)} {@attach focusing} />
         {/if}
-      </p>
+      </h3>
       {#if missed.length}<p>Nothing found for {missed.join(', ')}</p>{/if}
       <div class="acts">
         <button class="pill play" disabled={starting} onclick={play}><Icon name="play" size={18} />Play</button>
@@ -167,7 +176,18 @@
   }
 
   .term {
+    padding: 0;
+    border: 0;
     border-bottom: 2px solid var(--border);
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .term:hover,
+  .term:focus-visible {
+    border-bottom-color: var(--text);
   }
 
   .term.like {
@@ -184,27 +204,25 @@
     font-weight: 400;
   }
 
-  .pills button.like {
-    border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
-  }
-
-  .pills button.not {
-    text-decoration: line-through;
-  }
-
-  .pills .more {
-    border-style: dashed;
-  }
-
-  .pills input.more {
-    width: 12ch;
+  /* "+ word" at the sentence's end: the week's pill, dashed (another to come). */
+  .more {
+    margin-left: 4px;
     padding: 2px 10px;
     border: 1px dashed var(--border);
     border-radius: 999px;
     background: none;
-    color: var(--text);
+    color: var(--muted);
     font: inherit;
     font-size: 0.85rem;
+    font-weight: 400;
+    vertical-align: middle;
+    cursor: pointer;
+  }
+
+  input.more {
+    width: 12ch;
+    color: var(--text);
+    cursor: text;
   }
 
   .acts {

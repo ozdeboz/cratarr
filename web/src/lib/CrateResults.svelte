@@ -7,6 +7,7 @@
   import { onDestroy, untrack, type Snippet } from 'svelte';
   import { coverUrl, previewCrate, type Condition, type CrateName, type PlaylistRow } from './api';
   import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordKey, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
+  import Asking from './Asking.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
   import ListHead from './ListHead.svelte';
@@ -214,6 +215,10 @@
     </ol>
   {/if}
   {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
+{:else if conditions.length}
+  <!-- Its first answer on its way: the one loading rule's spinner (the owner, 2026-10-31: a grabbed crate showed
+       nothing, no spinner either). A later change keeps the list shown until its answer. -->
+  <Asking />
 {/if}
 
 <!-- A track of the crate: its cover, name, artist and length, its round snippet button opening it on its waveform. -->
