@@ -17,6 +17,7 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import Asking from './lib/Asking.svelte';
+  import { keepWhile } from './lib/keepWhile.svelte';
   import { deepMatches } from './lib/deepSearch.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
@@ -54,6 +55,9 @@
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
   const shows = $derived(listShows(sorted.length, pageView.query, deepOf.answeredFor()));
+  // None by name and the server's finds not in (lib/loader, the one rule): the list as it was, then the loader.
+  const kept = keepWhile(() => ({ shows, list: sorted }), () => shows === 'asking', () => pageView.query.trim());
+  const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
 </script>
 
 <main>
@@ -61,16 +65,16 @@
     <Notice text={crates.error} />
   {:else if !crates.list}
     <PageLoading />
-  {:else if shows === 'asking'}
+  {:else if listed.shows === 'asking'}
     <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
-    <Asking />
-  {:else if shows === 'empty'}
+    <Asking now={kept.loader} />
+  {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     <p class="empty">No crates match.</p>
   {:else}
-    <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(sorted.length, 'crate')} />
+    <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(listed.list.length, 'crate')} />
     <ul class="grid">
-      {#each sorted as c (c.id)}
+      {#each listed.list as c (c.id)}
         <li>
           <CrateCard crate={c} active={panelBeside() && (panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id)} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
         </li>

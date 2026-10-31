@@ -130,8 +130,6 @@ export function matchLine(matched: readonly Matched[], kind = ''): string | null
   return `${on}: ${m.text} · ${m.count.toLocaleString()} ${unit}${m.count === 1 ? '' : 's'}`;
 }
 
-/** How long a list still asking the server shows nothing before its loader (lib/Asking), so a quick answer shows none. */
-export const ASK_DELAY = 300;
 /** What a searched list shows (the owner, 2026-10-31: never "no X found" before the answer is in): its rows if it has
  *  any; else, while the server's answer for the words as they are now (`words`) is not in (`answeredFor`: the words
  *  last answered, or failed), the wait (lib/Asking); its empty line only after. */

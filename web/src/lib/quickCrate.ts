@@ -453,12 +453,6 @@ export function pageQueries(q: string, chips: readonly Chip[] | null): string[][
   return terms.length ? terms : [words(q)];
 }
 
-/** What a page shows in its list's place while its words are read as a crate (0.13; the owner: never "none found"
- *  before the answer, and "our standing pattern is a responsive interface using loading spinners"): the spinner while
- *  the reading is on its way; once it lands, says none or fails, the list, matched by the crate's terms or the whole
- *  line (pageQueries). */
-export const listWhileReading = (read: { pending: boolean } | null): 'loading' | 'list' => (read?.pending ? 'loading' : 'list');
-
 /** A line read onto a crate's terms (the crate search's words, lib/quickCrates): the terms not in it yet as chips, how
  *  an "and" or "or" joins them with what it has (modesFrom), and the phrases that read as nothing. */
 export function readOnto(chips: readonly Chip[], read: readonly Read[]): { add: Chip[]; modes: Modes; missed: string[] } {

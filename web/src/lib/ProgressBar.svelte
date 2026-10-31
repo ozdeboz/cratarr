@@ -4,9 +4,9 @@
   // and once shown, finishes its run before fading, so it never blinks.
   import { untrack } from 'svelte';
   import { loading } from './progress.svelte';
+  import { LOADER_AFTER_MS } from './loader';
 
-  /** Answers quicker than this show nothing. */
-  const DELAY_MS = 300;
+  /** Answers quicker than LOADER_AFTER_MS show nothing (lib/loader, the one rule). */
   /** Once shown, at least this long. */
   const MIN_MS = 400;
 
@@ -30,7 +30,7 @@
           done = false;
           value = 0.15;
           since = performance.now();
-        }, DELAY_MS),
+        }, LOADER_AFTER_MS),
       );
     } else if (!busy && shown) {
       timers.push(

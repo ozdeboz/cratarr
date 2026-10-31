@@ -12,6 +12,7 @@
   import { live, queueTap } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
   import Asking from './lib/Asking.svelte';
+  import { keepWhile } from './lib/keepWhile.svelte';
   import { listShows } from './lib/search';
   import { toast } from './lib/toast.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
@@ -90,6 +91,9 @@
     });
   });
   const shows = $derived(listShows(items.length, pageView.query, deepOf.answeredFor()));
+  // None by name and the server's finds not in (lib/loader, the one rule): the list as it was, then the loader.
+  const kept = keepWhile(() => ({ shows, list: items }), () => shows === 'asking', () => pageView.query.trim());
+  const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
 
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
@@ -210,10 +214,10 @@
 
   {#if (!view || waiting) && !error}
     <PageLoading />
-  {:else if shows === 'asking'}
+  {:else if listed.shows === 'asking'}
     <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
-    <Asking />
-  {:else if shows === 'empty'}
+    <Asking now={kept.loader} />
+  {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     <p class="empty">No playlists match.</p>
   {:else}
@@ -223,7 +227,7 @@
       fields={PLAYLIST_ORDERS}
       bind:value={prefs.playlistOrder}
       bind:down={prefs.playlistDown}
-      count={howMany(items.length, 'playlist')}
+      count={howMany(listed.list.length, 'playlist')}
       selecting={select.on}
       onselect={() => (select.on ? endSelect() : startSelect())}
     />
@@ -235,7 +239,7 @@
       </div>
     {/if}
     <ul class="grid" class:table class:pending={quick && pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
-      {#each items as p (p.id)}
+      {#each listed.list as p (p.id)}
         <li>
           <!-- Quick add's circle: adds or takes out the playing track. -->
           {#snippet addTo()}
