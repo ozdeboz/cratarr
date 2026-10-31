@@ -2,12 +2,13 @@
   // A place that shows one thing at a time (the panel, the page), switching in one commit (lib/holdPlace.svelte): when `key`
   // changes, what it showed goes at once (the owner, 2026-10-27: never old content on navigation, always responsive):
   // the new content gets ready unseen, the place's own background showing meanwhile, the shared loading sign over it
-  // after HOLD_SIGN_MS; once what it shows is ready (holdUntil), its pictures are in and the whole of it shows at once
+  // after LOADER_AFTER_MS (lib/loader: the one loading rule's 300 ms, the owner 2026-10-31); once what it shows is ready (holdUntil), its pictures are in and the whole of it shows at once
   // (what comes from elsewhere may follow). Nothing claimed: at once, as before. After HOLD_GIVE_UP_MS as it is. A
   // place opening (the app starting, the phone's panel coming up) holds its first content the same way. `shown`: the key
   // whose content shows (what a page marks as open follows it, not the key asked for).
   import { mount, setContext, tick, unmount, untrack, type Snippet } from 'svelte';
   import { HOLD, type HoldPlace } from './holdPlace.svelte';
+  import { LOADER_AFTER_MS } from './loader';
   import MarkLoader from './MarkLoader.svelte';
 
   // `seeThrough`: opening, the place is not there at all until its content is ready (the phone's panel over the page):
@@ -22,8 +23,6 @@
     children,
   }: { key: unknown; shown?: unknown; seeThrough?: boolean; onshown?: () => void; children: Snippet } = $props();
 
-  /** The sign a moment after (a page there at once shows no flash of it). */
-  const HOLD_SIGN_MS = 100;
   /** How long a see-through place opening stays away before its background and the sign show. */
   const HOLD_MAX_MS = 3000;
   const HOLD_GIVE_UP_MS = 10000;
@@ -54,7 +53,7 @@
   };
   setContext(HOLD, place);
 
-  /** The loading sign after HOLD_SIGN_MS, in the middle of what can be seen of the place (once per hold). */
+  /** The loading sign after LOADER_AFTER_MS, in the middle of what can be seen of the place (once per hold). */
   function showSign() {
     if (signAt || signTimer || !box) return;
     signTimer = setTimeout(() => {
@@ -73,7 +72,7 @@
       frame.after(at);
       signAt = at;
       sign = mount(MarkLoader, { target: at, props: { size: 40 } });
-    }, HOLD_SIGN_MS);
+    }, LOADER_AFTER_MS);
   }
 
   /** A see-through opening's place, hidden until then. */
