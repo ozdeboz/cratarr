@@ -27,7 +27,8 @@ export const COLUMNS: Record<ColumnKind, readonly Column[]> = {
     { id: 'added', label: 'Added', width: 96 },
     { id: 'plays', label: 'Plays', width: 52, end: true },
     { id: 'lastPlayed', label: 'Last played', width: 96 },
-    { id: 'format', label: 'Format', width: 120 },
+    // Its quality, as its order is named (the owner, 2026-10-31: one name): the format it shows, e.g. FLAC 24/96.
+    { id: 'format', label: 'Quality', width: 120 },
     { id: 'rating', label: 'Rating', width: 76 },
   ],
   // The Library's Classical composers (lib/ComposerList; the owner, 2026-10-31: View and the order as its albums'): what
@@ -40,6 +41,8 @@ export const COLUMNS: Record<ColumnKind, readonly Column[]> = {
     { id: 'lastPlayed', label: 'Last played', width: 96 },
     { id: 'changed', label: 'Changed', width: 96 },
     { id: 'unplayed', label: 'Unplayed', width: 72, end: true },
+    // Its entries pointing at a missing file, where it has some (the owner, 2026-10-31: the Missing order's column).
+    { id: 'missing', label: 'Missing', width: 64, end: true },
   ],
 };
 
