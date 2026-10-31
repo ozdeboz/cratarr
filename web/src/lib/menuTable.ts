@@ -196,7 +196,6 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   soundsLike: 'Sounds like this',
   otherVersions: 'Other versions',
   favourite: 'Favourite',
-  excludeEverywhere: 'Exclude everywhere',
   addToPlaylist: 'Add to playlist',
   copyToMine: 'Copy to my playlists',
   saveAsPlaylist: 'Save as playlist',
