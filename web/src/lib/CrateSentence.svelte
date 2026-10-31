@@ -87,7 +87,10 @@
   }
   const flip = (kind: JoinKind) => (modes = { ...modes, [kind]: flipped(joinOf(modes, kind)) });
 
-  const parts = $derived(sentenceOf(chips, modes, brief));
+  // Nothing read yet: "Grab a crate" leads, not the sentence's "Tracks" (the owner, 2026-10-31); the example after it
+  // shows the sentence's own words at work.
+  const parts = $derived(chips.length || brief ? sentenceOf(chips, modes, brief) : [{ text: 'Grab a crate' }]);
+  const EXAMPLE = 'hip hop and jazz from the 90s like Miles Davis';
   /** The sentence already leaves something out: the crate's own exclusions follow with "not", else "but not". */
   const saysBut = $derived(parts.some((p) => p.text === 'but not'));
   const seeds = $derived(seedsOf(chips));
@@ -133,7 +136,7 @@
           onclick={() => onexcluded?.(name)}>{name}</button
         >{/each}{/if}{#if parts.length || excluded.length}{' '}{/if}<input
     type="search"
-    placeholder={chips.length ? 'and…' : 'hip hop 90s Miles Davis'}
+    placeholder={chips.length ? 'and…' : EXAMPLE}
     aria-label={chips.length ? 'More words for the crate' : 'Words for a crate'}
     bind:this={field}
     bind:value={text}
@@ -249,10 +252,9 @@
   }
 
   /* Nothing typed yet: the line alone, its field the list's width. */
+  /* Nothing typed yet: "Grab a crate" and the example after it, the field as wide as the example. */
   .empty input[type='search'] {
-    box-sizing: border-box;
-    width: 100%;
-    field-sizing: fixed;
+    min-width: min(100%, 12ch);
   }
 
   .more {
