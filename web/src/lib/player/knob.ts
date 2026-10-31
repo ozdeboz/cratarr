@@ -45,16 +45,13 @@ export function notSounding(l: Late): 'plain' | 'retry' | 'rest' {
 export const holdInReverse = (dir: 1 | -1): 'fly' | 'turn' => (dir < 0 ? 'fly' : 'turn');
 
 /** Where a hold let go brakes to (× the track's): the way the knob is set at 1×, a hold that way braking to it on the
- *  same way; one against it to a stand, the knob's way taking over from there. A hold from playing backwards with the
- *  knob still at L (`backTo`): backwards is the knob's way; otherwise forwards. */
-export const letGoTo = (dir: 1 | -1, backTo: boolean, want: Knob['want']): 0 | 1 => {
-  const back = backTo && want === 'L';
-  return (dir < 0) === back ? 1 : 0;
-};
+ *  same way; one against it to a stand, the knob's way taking over from there. The knob's setting alone decides, from
+ *  playing backwards or from a pause alike (0.12.4: a hold from a pause at L ended forwards; `_backTo` no longer counts). */
+export const letGoTo = (dir: 1 | -1, _backTo: boolean, want: Knob['want']): 0 | 1 => ((dir < 0) === (want === 'L') ? 1 : 0);
 
 /** A hold let go, its brake run out: on the way it was going at 1× backwards (`backwards`), forwards from there, or
  *  resting there (a pause pressed meanwhile). */
-export function afterLetGo(dir: 1 | -1, backTo: boolean, want: Knob['want'], after: 'play' | 'pause'): 'backwards' | 'forwards' | 'rest' {
+export function afterLetGo(_dir: 1 | -1, _backTo: boolean, want: Knob['want'], after: 'play' | 'pause'): 'backwards' | 'forwards' | 'rest' {
   if (after === 'pause') return 'rest';
-  return backTo && want === 'L' ? 'backwards' : 'forwards';
+  return want === 'L' ? 'backwards' : 'forwards';
 }

@@ -163,6 +163,23 @@ test('the knob at R, a back hold and its let-go: forwards at 1× after, the sett
   assert.deepEqual(ways, ['R', 'R', 'L', 'L', 'L', 'L', 'R']);
 });
 
+test("the knob at L, paused: a hold Next let go plays backwards, the knob's way (as the app does)", () => {
+  const k = knobRules;
+  // From a pause, not from playing backwards: what follows is as at R (here it plays on), its way the knob's.
+  assert.equal(k.letGoTo(1, false, 'L'), 0, 'the forward hold brakes to a stand');
+  assert.equal(k.afterLetGo(1, false, 'L', 'play'), 'backwards', 'then backwards at 1×');
+  assert.equal(k.afterLetGo(1, false, 'L', 'pause'), 'rest', 'or resting there, as at R');
+  assert.equal(k.afterLetGo(1, false, 'R', 'play'), 'forwards', 'at R: forwards, as before');
+});
+
+test('the knob at L, paused: a hold Previous let go plays on backwards at 1×', () => {
+  const k = knobRules;
+  assert.equal(k.letGoTo(-1, false, 'L'), 1, 'braked to 1× on its own way');
+  assert.equal(k.afterLetGo(-1, false, 'L', 'play'), 'backwards');
+  assert.equal(k.letGoTo(-1, false, 'R'), 0, 'at R: a stand, then forwards, as before');
+  assert.equal(k.afterLetGo(-1, false, 'R', 'play'), 'forwards');
+});
+
 test("a skip in either setting: the new track the setting's way, the setting kept", () => {
   assert.equal(knobRules.skipWay('L'), 'backwards');
   assert.equal(knobRules.skipWay('R'), 'forwards');
