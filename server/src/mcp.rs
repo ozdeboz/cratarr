@@ -16,7 +16,6 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::service::RequestContext;
@@ -57,7 +56,6 @@ async fn keyed(mut request: Request, next: Next) -> Response {
 #[derive(Clone)]
 pub struct Cratarr {
     app: Arc<App>,
-    tool_router: ToolRouter<Cratarr>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -166,7 +164,7 @@ fn row(a: &crate::source::Album) -> Value {
 #[tool_router]
 impl Cratarr {
     pub fn new(app: Arc<App>) -> Self {
-        Self { app, tool_router: Self::tool_router() }
+        Self { app }
     }
 
     /// Cratarr's own records, classical said of each (`classical::tell`).
@@ -298,6 +296,17 @@ mod tests {
         };
         let status = r.status();
         (status, String::from_utf8(axum::body::to_bytes(r.into_body(), 4096).await.unwrap().to_vec()).unwrap())
+    }
+
+    #[test]
+    fn the_tools_are_listed_with_what_they_take() {
+        let tools = Cratarr::tool_router().list_all();
+        let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["album", "albums", "classical", "crates", "health", "search"]);
+        let albums = tools.iter().find(|t| t.name == "albums").unwrap();
+        let schema = serde_json::to_value(&*albums.input_schema).unwrap();
+        assert!(schema["properties"]["type"].is_object() && schema["properties"]["classical"].is_object(), "{schema}");
     }
 
     #[tokio::test]
