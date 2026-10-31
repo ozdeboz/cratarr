@@ -181,13 +181,19 @@
   let serverBackIn = $state(false);
   const back = $derived(local ? backHere() : serverBack);
   const backIn = $derived(local ? device.tracks !== null && devicePlays.known : serverBackIn);
+  // Asked again only when the queues change (0.12.3; the owner: Home flickered): read inside the effect, the version's
+  // lookup in Play On's players made it run, and ask the server, at every report of any player.
+  const backKey = $derived(local ? null : JSON.stringify([queuesPlayer(), queuesVersion()]));
   $effect(() => {
-    if (local) return;
-    void queuesVersion();
-    getHomeBack(queuesPlayer()).then(
-      (r) => ((serverBack = r.items), (serverBackIn = true)),
-      () => (serverBackIn = true),
+    const key = backKey;
+    if (key === null) return;
+    const [player] = JSON.parse(key) as [string | null, string];
+    let current = true;
+    getHomeBack(player).then(
+      (r) => current && ((serverBack = r.items), (serverBackIn = true)),
+      () => current && (serverBackIn = true),
     );
+    return () => (current = false);
   });
   /** A queue's icon by where it came from, as the queue switcher has it (lib/QueuesSheet). */
   const FROM: Record<string, IconName> = { playlist: 'playlists', album: 'albums', favourites: 'heart', library: 'library', tracks: 'music', player: 'speaker' };
