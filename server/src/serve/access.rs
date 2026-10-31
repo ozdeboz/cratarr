@@ -226,8 +226,8 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
     };
     let Ok(decided) = decided else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
     match decided {
-        // A key that only reads changes nothing.
-        Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
+        // A key that only reads changes nothing. The MCP server (0.13) is asked by POST, and only reads.
+        Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") && !mcp(uri.path()) => {
             return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This key only reads." }))).into_response();
         }
         Some(Some(who)) => return acting_as(who, next.run(request)).await,
@@ -238,6 +238,11 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
     let r = refuse(&method, request.headers(), &shown);
     note_refused(&r, request.headers(), peer, uri.path(), uri.query(), "cratarr");
     r
+}
+
+/// The MCP server's path (`crate::mcp`): every tool there reads, so a reading key may POST to it.
+fn mcp(path: &str) -> bool {
+    path == "/mcp" || path.starts_with("/mcp/")
 }
 
 /// Whether the running request is an administrator's (decision 0051): signed in as one, not through a key (a key acts
@@ -589,6 +594,9 @@ mod tests {
         let (reads, _) = s.sessions.new_key("Dashboard", Some("me"), "read", None, now()).unwrap();
         assert_eq!(status(&s, keyed(&reads, "GET", "/api/library")).await.0, StatusCode::OK);
         assert_eq!(status(&s, keyed(&reads, "POST", "/api/library")).await.0, StatusCode::FORBIDDEN, "it only reads");
+        // The MCP server (0.13) is asked by POST and only reads: past the check (no route here, so 404).
+        assert_eq!(status(&s, keyed(&reads, "POST", "/mcp")).await.0, StatusCode::NOT_FOUND, "a reading key may ask the MCP server");
+        assert_eq!(status(&s, keyed(&reads, "POST", "/mcpx")).await.0, StatusCode::FORBIDDEN, "nothing else");
         let (controls, _) = s.sessions.new_key("Home Assistant", Some("me"), "control", Some(HOME_ASSISTANT), now()).unwrap();
         assert_eq!(status(&s, keyed(&controls, "GET", "/api/auth/keys")).await.0, StatusCode::FORBIDDEN, "an administrator's key is no administrator");
         // One who left the directory's group is no one.
