@@ -45,6 +45,12 @@ pub struct Incomplete {
     pub release_id: Option<String>,
     /// Each missing track: its disc and number on the release (from 1), and its title.
     pub missing: Vec<(u32, u32, String)>,
+    /// The release's length and its longest track (ms), where every track's length is known (0.13: the type rule reads
+    /// an incomplete album as its release).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub longest_ms: Option<u64>,
 }
 
 /// The album's tracks (title, length s) against the release group's releases: the smallest holding every track, and
@@ -93,7 +99,12 @@ fn beyond(files: &[(String, i64)], r: &super::renumber::Release, used: &HashSet<
         .collect();
     let f = &r.facts;
     let release = [Some(f.title.clone()), f.year.map(|y| y.to_string()), Some(f.format.clone()).filter(|x| !x.is_empty())].into_iter().flatten().collect::<Vec<_>>().join(", ");
-    Some(Incomplete { of, has: files.len(), release, release_group: None, release_id: Some(r.id.clone()).filter(|i| !i.is_empty()), missing })
+    let lengths: Option<Vec<u64>> = r.media.iter().flat_map(|m| m.tracks.iter().map(|t| t.1.map(|s| u64::from(s) * 1000))).collect();
+    let (length_ms, longest_ms) = match lengths {
+        Some(l) if !l.is_empty() => (Some(l.iter().sum()), l.iter().max().copied()),
+        _ => (None, None),
+    };
+    Some(Incomplete { of, has: files.len(), release, release_group: None, release_id: Some(r.id.clone()).filter(|i| !i.is_empty()), missing, length_ms, longest_ms })
 }
 
 /// A round's batch: the Music albums with a release, never looked at first, then those looked at longest ago.

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS record_overrides (album TEXT NOT NULL, field TEXT NOT
 ";
 
 /// The release types a record can be set to.
-pub const TYPES: [&str; 5] = ["album", "ep", "single", "incomplete", "other"];
+pub const TYPES: [&str; 5] = ["album", "ep", "single", "broadcast", "other"];
 
 /// What is set of one record; none: as Cratarr finds it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

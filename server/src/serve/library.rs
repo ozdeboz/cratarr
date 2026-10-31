@@ -13,7 +13,7 @@
 //! Changed from Navidrome: the library is rebuilt whole when the catalogue's files change (24,000 songs take seconds),
 //! where Navidrome refreshes the albums a scan touched; one library; no tag tables (the catalogue keeps the tags).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS albums (
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
   folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
   format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', type_why TEXT,
-  set_fields TEXT NOT NULL DEFAULT '');
+  set_fields TEXT NOT NULL DEFAULT '', whole_tracks INTEGER);
 CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
@@ -134,7 +134,8 @@ pub fn release_words<'a>(words: impl IntoIterator<Item = &'a str>) -> (Option<St
             "album" | "lp" => Some("album"),
             "ep" => Some("ep"),
             "single" => Some("single"),
-            "other" | "broadcast" => Some("other"),
+            "broadcast" => Some("broadcast"),
+            "other" => Some("other"),
             _ => None,
         };
         match main {
@@ -163,15 +164,39 @@ pub fn type_label(word: &str) -> String {
 /// A release's types as kept (user data `release_types`): its primary type and its secondary ones.
 pub type Kept = (Option<String>, Vec<String>);
 
-/// An album as the type rule reads it: its tracks in the library, their length and its longest (ms), its name, whether
-/// its album artist is Various Artists, and whether it was found missing tracks (`app::incomplete`).
+/// An album as the type rule reads it: its tracks, their length and its longest (ms), its name, whether its album
+/// artist is Various Artists. Its tracks are the library's, or the whole release's where tracks were found missing
+/// (`Whole`).
 struct Shape<'a> {
     tracks: usize,
     duration_ms: u64,
     longest_ms: u64,
     name: &'a str,
     various: bool,
-    incomplete: bool,
+}
+
+/// The whole release of an album found missing tracks (`app::incomplete`, user data `album_complete`): how many tracks
+/// it has, and their length and the longest (ms) where every one's is known. The type rule reads an incomplete album
+/// as this (0.13, the owner, 2026-10-31: incomplete is a fact, not a type).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Whole {
+    pub tracks: usize,
+    pub duration_ms: Option<u64>,
+    pub longest_ms: Option<u64>,
+}
+
+impl Shape<'_> {
+    /// The album as its whole release has it, where tracks were found missing: never fewer tracks or shorter than the
+    /// library's.
+    fn whole(self, whole: Option<&Whole>) -> Self {
+        let Some(w) = whole else { return self };
+        Shape {
+            tracks: self.tracks.max(w.tracks),
+            duration_ms: self.duration_ms.max(w.duration_ms.unwrap_or(0)),
+            longest_ms: self.longest_ms.max(w.longest_ms.unwrap_or(0)),
+            ..self
+        }
+    }
 }
 
 const MINUTE_MS: u64 = 60_000;
@@ -179,17 +204,17 @@ const MINUTE_MS: u64 = 60_000;
 /// An album's release type (0.13, the owner's rule, 2026-10-31; decision 0081's second amendment), on top of what
 /// MusicBrainz's release group, else Discogs' format, says: MusicBrainz's Single is one song in versions, not a short
 /// release, and an EP of either may be an album of twelve tracks. In order:
-/// 1. Missing tracks of the smallest release that holds it (`app::incomplete`, only where that was found): incomplete.
-/// 2. The name wins: "… EP" an EP, "… LP" an album.
-/// 3. Seven tracks or more, or over 45 minutes: an album (the owner's EPs reach 44 minutes, their albums start at 47).
-/// 4. Four to six tracks: an EP.
-/// 5. One to three: an EP where over 15 minutes or a track is 10 minutes or longer, else a single.
-/// 6. A Single said (one song in versions) is an EP at most, however long.
+/// 1. The name wins: "… EP" an EP, "… LP" an album.
+/// 2. Seven tracks or more, or over 45 minutes: an album (the owner's EPs reach 44 minutes, their albums start at 47).
+/// 3. Four to six tracks: an EP.
+/// 4. One to three: an EP where over 15 minutes or a track is 10 minutes or longer, else a single.
+/// 5. A Single said (one song in versions) is an EP at most, however long.
 ///
-/// The same for an album neither says anything of. Other (a broadcast) stays as said. A Various Artists album is a
+/// An album found missing tracks is read as its whole release (`Whole`; 0.13, the owner: incomplete is no type). The
+/// same for an album neither says anything of. A Broadcast or Other stays as said. A Various Artists album is a
 /// compilation besides. (primary, where from, which rule where the rule decided, secondary): where from is the source
-/// that said a type, none where none did; the rule ("incomplete", "name", "tracks", "length", "one song") only where
-/// the type is not the one said.
+/// that said a type, none where none did; the rule ("name", "tracks", "length", "one song") only where the type is not
+/// the one said.
 fn release_type_of(
     musicbrainz: Option<&Kept>,
     discogs: Option<&Kept>,
@@ -203,12 +228,10 @@ fn release_type_of(
     if album.various && !secondary.iter().any(|s| s == "compilation") {
         secondary.push("compilation".into());
     }
-    if said == Some("other") || album.tracks == 0 {
+    if matches!(said, Some("other" | "broadcast")) || album.tracks == 0 {
         return (said.map(str::to_string), from, None, secondary);
     }
-    let (kind, why) = if album.incomplete {
-        ("incomplete", "incomplete")
-    } else if let Some(kind) = named(album.name) {
+    let (kind, why) = if let Some(kind) = named(album.name) {
         (kind, "name")
     } else {
         let (kind, why) = if album.tracks >= 7 {
@@ -242,7 +265,7 @@ mod release_type_tests {
 
     fn shape(name: &str, tracks: usize, minutes: f64, longest: f64) -> Shape<'_> {
         let ms = |m: f64| (m * MINUTE_MS as f64) as u64;
-        Shape { tracks, duration_ms: ms(minutes), longest_ms: ms(longest), name, various: false, incomplete: false }
+        Shape { tracks, duration_ms: ms(minutes), longest_ms: ms(longest), name, various: false }
     }
 
     fn said(kind: &str) -> Kept {
@@ -259,7 +282,8 @@ mod release_type_tests {
     fn release_words_read_musicbrainz_s_and_discogs_names() {
         assert_eq!(release_words(["EP", "Live", "Remastered"]), (Some("ep".into()), vec!["live".into()]));
         assert_eq!(release_words(["LP", "Album", "Compilation"]), (Some("album".into()), vec!["compilation".into()]));
-        assert_eq!(release_words(["Broadcast"]).0.as_deref(), Some("other"));
+        assert_eq!(release_words(["Broadcast"]).0.as_deref(), Some("broadcast"));
+        assert_eq!(release_words(["Other"]).0.as_deref(), Some("other"));
         assert_eq!(type_label("ep"), "EP");
         assert_eq!(type_label("compilation"), "Compilation");
     }
@@ -294,12 +318,23 @@ mod release_type_tests {
     }
 
     #[test]
-    fn an_album_found_missing_tracks_is_incomplete_whatever_it_is_named() {
-        let missing = |album: Shape<'static>| Shape { incomplete: true, ..album };
-        assert_eq!(typed(Some(&said("ep")), missing(shape("Outsider Music EP", 1, 7.0, 7.0))), ("incomplete".into(), Some("incomplete")));
-        assert_eq!(typed(Some(&said("album")), missing(shape("Västertorp", 11, 50.0, 6.0))), ("incomplete".into(), Some("incomplete")));
-        assert_eq!(typed(None, missing(shape("Escape Reality", 2, 9.0, 5.0))), ("incomplete".into(), Some("incomplete")));
-        assert_eq!(typed(Some(&said("ep")), shape("Speed Dembow Vol.II", 1, 4.0, 4.0)).0, "single", "not found missing: never guessed");
+    fn an_album_found_missing_tracks_is_typed_as_its_whole_release() {
+        let whole = |tracks, minutes: f64, longest: f64| Whole { tracks, duration_ms: Some((minutes * MINUTE_MS as f64) as u64), longest_ms: Some((longest * MINUTE_MS as f64) as u64) };
+        // Two of an eleven-track album: an album, not a single.
+        assert_eq!(typed(Some(&said("album")), shape("Västertorp", 2, 9.0, 5.0).whole(Some(&whole(11, 50.0, 6.0)))), ("album".into(), None));
+        assert_eq!(typed(None, shape("Escape Reality", 2, 9.0, 5.0).whole(Some(&whole(5, 24.0, 6.0)))), ("ep".into(), Some("tracks")));
+        // The name still wins.
+        assert_eq!(typed(Some(&said("ep")), shape("Outsider Music EP", 1, 7.0, 7.0).whole(Some(&whole(9, 40.0, 7.0)))), ("ep".into(), None));
+        // Lengths not known: its tracks count, the library's length at least.
+        let counted = Whole { tracks: 8, duration_ms: None, longest_ms: None };
+        assert_eq!(typed(None, shape("Odd", 3, 12.0, 4.0).whole(Some(&counted))), ("album".into(), Some("tracks")));
+        assert_eq!(typed(Some(&said("ep")), shape("Speed Dembow Vol.II", 1, 4.0, 4.0)).0, "single", "not found missing: as it is");
+    }
+
+    #[test]
+    fn broadcast_and_other_stay_as_said() {
+        assert_eq!(typed(Some(&said("broadcast")), shape("Essential Mix", 1, 120.0, 120.0)), ("broadcast".into(), None));
+        assert_eq!(typed(Some(&said("other")), shape("Odd", 12, 60.0, 6.0)), ("other".into(), None));
     }
 
     #[test]
@@ -324,7 +359,7 @@ mod release_type_tests {
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 11;
+const LAYOUT: i64 = 12;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -368,8 +403,9 @@ pub struct Library {
     originals: Mutex<HashMap<String, u32>>,
     /// The release types found (0.9.6), by `mb:<release>` and `dc:<album id>` (user data `release_types`).
     release_types: Mutex<HashMap<String, Kept>>,
-    /// The albums found missing tracks (0.13: typed incomplete), by album id (user data `album_complete`).
-    incomplete: Mutex<HashSet<String>>,
+    /// The albums found missing tracks, by album id, with their whole release (user data `album_complete`; 0.13: typed
+    /// as it).
+    incomplete: Mutex<HashMap<String, Whole>>,
     /// A record's facts set by hand (0.13), by its Music-form id (user data `record_overrides`).
     overrides: Mutex<HashMap<String, Overrides>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
@@ -572,8 +608,8 @@ impl Library {
         *self.overrides.lock().unwrap_or_else(|p| p.into_inner()) = overrides;
     }
 
-    /// The albums found missing tracks (by album id, 0.13); a change builds the library again.
-    pub fn set_incomplete(&self, albums: HashSet<String>) {
+    /// The albums found missing tracks, with their whole release (by album id, 0.13); a change builds the library again.
+    pub fn set_incomplete(&self, albums: HashMap<String, Whole>) {
         *self.incomplete.lock().unwrap_or_else(|p| p.into_inner()) = albums;
     }
 
@@ -589,9 +625,9 @@ impl Library {
         // The release types too (0.9.6): without them here, types that came after a build never built the library
         // again (seen on the sim, 2026-10-26: 21 kept, none shown).
         let t = self.release_types.lock().unwrap_or_else(|p| p.into_inner());
-        // The albums found missing tracks too (0.13): they are typed incomplete.
+        // The albums found missing tracks too (0.13): they are typed as their whole release.
         use md5::Digest;
-        let mut i: Vec<String> = self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect();
+        let mut i: Vec<String> = self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(a, w)| format!("{a} {w:?}")).collect();
         i.sort_unstable();
         // And the facts set by hand (0.13).
         let set: BTreeMap<String, Overrides> =
@@ -1183,7 +1219,7 @@ struct Facts {
     originals: HashMap<String, u32>,
     extra_genres: HashMap<String, Vec<String>>,
     release_types: HashMap<String, Kept>,
-    incomplete: HashSet<String>,
+    incomplete: HashMap<String, Whole>,
     overrides: HashMap<String, Overrides>,
 }
 
@@ -1216,7 +1252,7 @@ fn album_src(album: &str, base: &str, folder: i64, dir: &str, first: &ServedRow,
         release.and_then(|m| facts.release_types.get(&format!("mb:{m}"))),
         facts.release_types.get(&format!("dc:{album}")),
         covers.get(&(folder, dir.to_string())),
-        facts.incomplete.contains(album),
+        facts.incomplete.get(album),
         facts.overrides.get(base),
     );
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
@@ -1320,9 +1356,9 @@ fn write_albums(
     let mut ins_album = tx.prepare_cached(
         "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
            size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps, cover,
-           release_type, type_from, secondary, src, type_why, set_fields)
+           release_type, type_from, secondary, src, type_why, set_fields, whole_tracks)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23, ?24, ?25, ?26, ?27, ?28)",
+           ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
     )?;
     let mut ins_fts = tx.prepare_cached("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
     let mut ins_tri = tx.prepare_cached("INSERT INTO albums_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
@@ -1384,8 +1420,8 @@ fn write_albums(
             longest_ms: songs.iter().filter_map(|s| s.row.duration_ms).max().unwrap_or(0),
             name: &first.album,
             various: first.album_artist.eq_ignore_ascii_case("Various Artists"),
-            incomplete: facts.incomplete.contains(album_id),
-        };
+        }
+        .whole(facts.incomplete.get(album_id));
         let (mut kind, mut type_from, mut type_why, mut secondary) = release_type_of(
             first.row.first("musicbrainz_albumid").and_then(|m| facts.release_types.get(&format!("mb:{m}"))),
             facts.release_types.get(&format!("dc:{album_id}")),
@@ -1426,6 +1462,7 @@ fn write_albums(
             album_src(album_id, &first.album_base, first.folder, &dir, first.row, facts, covers),
             type_why,
             set.map(|o| o.fields().join("\u{1f}")).unwrap_or_default(),
+            facts.incomplete.get(album_id).map(|w| w.tracks).filter(|t| *t > songs.len()).map(|t| t as i64),
         ])?;
         let n = tx.last_insert_rowid();
         ins_fts.execute(params![n, first.album, first.album_artist])?;
@@ -2011,7 +2048,7 @@ mod tests {
         assert_ne!(lib.originals_print(), before, "new types change what the library was built from (`change`)");
         let odd: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Odd'", [], |r| r.get(0)).unwrap();
         let before = lib.originals_print();
-        lib.set_incomplete([odd].into());
+        lib.set_incomplete([(odd, Whole { tracks: 12, duration_ms: None, longest_ms: None })].into());
         assert_ne!(lib.originals_print(), before, "an album found missing tracks too");
         lib.build(&folders(), &Rules::default()).unwrap();
         let t: (Option<String>, Option<String>, String, Option<String>) = lib
@@ -2020,7 +2057,7 @@ mod tests {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })
             .unwrap();
-        assert_eq!(t, (Some("incomplete".into()), Some("musicbrainz".into()), "live".into(), Some("incomplete".into())), "found missing tracks");
+        assert_eq!(t, (Some("album".into()), Some("musicbrainz".into()), "live".into(), Some("tracks".into())), "found missing tracks: typed as its twelve-track release");
     }
 
     #[test]

@@ -513,6 +513,36 @@ pub struct AxisView {
     /// Whether the tracks within one item differ on it, so "any" or "all of its tracks" can mean different things (an
     /// album's tracks share its year and its heart: they cannot; a playlist's can). False where items are tracks.
     pub varies: bool,
+    /// The Type axis' values' layers (`type_layer`), as `values`: what joins with "or" and what with "and"; empty for
+    /// other axes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<u8>,
+}
+
+/// The release types, a record's first layer of types (MusicBrainz's primary types; 0.13, the owner: Broadcast its own).
+pub const RELEASE_TYPES: [&str; 5] = ["Album", "EP", "Single", "Broadcast", "Other"];
+
+/// A Type value's layer (0.13, the owner, 2026-10-31): 1 a release type, 2 an extra type (Compilation, Live,
+/// Soundtrack…), 3 Classical. A Type row's values of one layer join with "or", layers with "and".
+pub fn type_layer(value: &str) -> u8 {
+    if RELEASE_TYPES.iter().any(|t| t.eq_ignore_ascii_case(value)) {
+        1
+    } else if value.eq_ignore_ascii_case(crate::app::classical::CLASSICAL) {
+        3
+    } else {
+        2
+    }
+}
+
+/// Whether a record's types hold a Type row's values: one of each layer's the row names ("Album, EP" either; "Album,
+/// Live" a live album). A row negated holds where this does not.
+pub fn types_hold(values: &[String], types: &[String]) -> bool {
+    let has = |v: &String| types.iter().any(|t| t.eq_ignore_ascii_case(v));
+    !values.is_empty()
+        && [1, 2, 3].into_iter().all(|layer| {
+            let mut of = values.iter().filter(|v| type_layer(v) == layer).peekable();
+            of.peek().is_none() || of.any(has)
+        })
 }
 
 /// How many steps a range's density has.
@@ -1101,6 +1131,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 known: items.len(),
                 bins: Vec::new(),
                 varies: varies(key),
+                layers: Vec::new(),
             };
             match key {
                 "playlist" => {
@@ -1129,6 +1160,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "type" => {
                     (a.values, a.counts) = counted(|f| &f.release_types);
                     a.known = known(|f| !f.release_types.is_empty());
+                    a.layers = a.values.iter().map(|v| type_layer(v)).collect();
                 }
                 "mood" => {
                     (a.values, a.counts) = counted(|f| &f.moods);
@@ -1214,7 +1246,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("artist", Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(&crate::app::excluded_artists::key(v))),
         ("album", Value::AnyOf { values }) => f.album.as_deref().is_some_and(|a| values.iter().any(|v| v == a)),
         ("label", Value::AnyOf { values }) => values.iter().any(|v| f.labels.iter().any(|l| l.eq_ignore_ascii_case(v))),
-        ("type", Value::AnyOf { values }) => values.iter().any(|v| f.release_types.iter().any(|t| t.eq_ignore_ascii_case(v))),
+        ("type", Value::AnyOf { values }) => types_hold(values, &f.release_types),
         ("length", Value::Range { min, max }) => within(f.length.map(minutes), min, max),
         ("quality", Value::AnyOf { values }) => f.quality.as_ref().is_some_and(|q| values.contains(q)),
         ("key", Value::AnyOf { values }) => f.key.as_ref().is_some_and(|k| values.iter().any(|v| v.eq_ignore_ascii_case(k))),

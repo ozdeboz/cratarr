@@ -214,8 +214,8 @@ pub struct AlbumTrack {
 }
 
 /// An album's release type (0.9.6, the owner: the Library can hide EPs and singles): its primary type ("album", "ep",
-/// "single", "incomplete", "other"; none: not known), the source that said one ("musicbrainz", "discogs"; none where
-/// none did), the owner's rule that decided it where it is not the one said (0.13, decision 0081: "incomplete", "name",
+/// "single", "broadcast", "other"; none: not known), the source that said one ("musicbrainz", "discogs"; none where
+/// none did), the owner's rule that decided it where it is not the one said (0.13, decision 0081: "name",
 /// "tracks", "length", "one song"), and its secondary types ("compilation", "live"…). Cratarr's own library's; other
 /// servers' albums say none.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
@@ -232,6 +232,10 @@ pub struct ReleaseType {
     pub set: Vec<String>,
     #[serde(default)]
     pub secondary: Vec<String>,
+    /// Where tracks were found missing (0.13: incomplete is a fact, not a type): how many tracks its whole release has,
+    /// the record's page saying "7 of 12 tracks" with the album's own count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_tracks: Option<u32>,
     /// Classical (0.10, the owner, 2026-10-30), a kind beside the release type: Cratarr's own library's records say
     /// whether they are (`app::classical`), other servers' say nothing; the mark where someone marked it (`classical`,
     /// `not`); a classical record's composers (keyed by MusicBrainz artist, else `name:<loose name>`) and performers,
