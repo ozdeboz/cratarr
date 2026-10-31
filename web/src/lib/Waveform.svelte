@@ -18,6 +18,7 @@
   import { untrack } from 'svelte';
   import { reducedMotion } from './motion';
   import { barTracks, gridBars, placeOf, planStrip, trackBars, type GridStrip, type StripTrack } from './waveStrip';
+  import { markShows } from './waveView';
 
   let {
     bins,
@@ -449,12 +450,15 @@
         <svg class="strip ahead" viewBox="0 0 {s.count} 100" preserveAspectRatio="none" style:transform={at}><path d={s.heard} /></svg>
       </div>
     {/if}
-    {#if s.marks.length}
+    {#if s.marks.length && stretch}
+      <!-- Placed across the waveform as it shows now, not in the strip: a boundary at an edge (resting on a wall) shows
+           no marker, one coming in fades in (lib/waveView's markShows). -->
       <div class="layer marks">
-        <div class="strip-marks" style:transform={at}>
+        <div class="strip-marks">
           {#each s.marks as m (m)}
-            {@const x = (m - s.e0) / (s.e1 - s.e0)}
-            {#if x > 0 && x < 1}<span class="edge" style:left="{x * 100}%"></span>{/if}
+            {@const x = (m - stretch.from) / Math.max(1e-9, stretch.to - stretch.from)}
+            {@const o = markShows(x, n)}
+            {#if o > 0}<span class="edge" style:left="{x * 100}%" style:opacity={o < 1 ? o.toFixed(3) : null}></span>{/if}
           {/each}
         </div>
       </div>
@@ -497,7 +501,8 @@
   {#if wide}
     {#each wide.marks as m (m)}
       {@const x = (m - wide.from) / Math.max(1e-6, wide.to - wide.from)}
-      {#if x > 0 && x < 1}<span class="edge" style:left="{x * 100}%"></span>{/if}
+      {@const o = markShows(x, n)}
+      {#if o > 0}<span class="edge" style:left="{x * 100}%" style:opacity={o < 1 ? o.toFixed(3) : null}></span>{/if}
     {/each}
   {/if}
   {/if}
@@ -575,8 +580,6 @@
     position: absolute;
     inset: 0 auto 8px 0;
     width: 100%;
-    transform-origin: 0 0;
-    will-change: transform;
   }
 
   /* A boundary between two tracks in a wide view (lib/SeekWave): a small tick below the waveform. */

@@ -27,7 +27,16 @@ function tell(away: boolean) {
 /** Called each time Cratarr answers (lib/later sends what waited). */
 export const whenReached = new Set<() => void>();
 
+/** When Cratarr last answered live (ms). */
+let lastReached = 0;
+/** A slow answer from the last copy this soon after a live one is a slow answer, not out of reach (0.12.3; the owner:
+ *  Home flickered: each request past the service worker's wait flipped the page away and the next one back). */
+export const KEPT_GRACE_MS = 10_000;
+/** Whether an answer from the last copy at `now` means out of reach, the last live answer at `last`. */
+export const keptMeansAway = (last: number, now: number) => now - last > KEPT_GRACE_MS;
+
 export function reached() {
+  lastReached = Date.now();
   reach.away = false;
   reach.answered = true;
   reach.kept = false;
@@ -36,6 +45,7 @@ export function reached() {
 }
 /** An answer from its last copy (the service worker's X-Cratarr-Kept): out of reach, shown as last seen. */
 export function keptAnswer() {
+  if (!keptMeansAway(lastReached, Date.now())) return;
   reach.away = true;
   reach.kept = true;
   tell(true);

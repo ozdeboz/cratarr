@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-server"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "alac-encoder",
  "anyhow",
