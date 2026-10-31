@@ -13,6 +13,8 @@
     items = null,
     bpms = null,
     crate = false,
+    names = {},
+    onnamed,
   }: {
     conditions: FilterCondition[];
     /** null: not read yet (the cards then show no name rather than the axis's key first). */
@@ -23,6 +25,9 @@
     /** A crate's conditions: a Sounds like's curve counts among the tracks its others leave (0.11, lib/ConditionCard
      *  `within`); a filter's count the whole library, the list it is on narrowing it besides. */
     crate?: boolean;
+    /** Names for the ids its conditions hold (decision 0088), and a new one's (a seed added on a card). */
+    names?: Readonly<Record<string, import('./quickCrate').Named>>;
+    onnamed?: (id: string, named: import('./quickCrate').Named) => void;
   } = $props();
 
   // One card open at a time keeps the list short; a new one opens.
@@ -50,6 +55,8 @@
       {items}
       {bpms}
       within={crate ? conditions.filter((_, j) => j !== i) : null}
+      {names}
+      {onnamed}
       bind:open={() => opened === i, (o) => (opened = o ? i : null)}
       onremove={() => remove(i)}
     />

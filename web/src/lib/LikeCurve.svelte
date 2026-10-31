@@ -150,6 +150,9 @@
   .curve {
     display: block;
     width: 100%;
+    /* At most about 160 px high (the owner, 2026-10-31: "a bit too large on my tablet"): its width capped, so the
+       drawing keeps its proportions and a drag still maps across its whole width. */
+    max-width: 440px;
     overflow: visible;
     /* Swiped over, the page scrolls; a grabbed handle (or a long press) drags. */
     touch-action: pan-y;

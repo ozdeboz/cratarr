@@ -137,7 +137,8 @@ export const builderOf = (viewed: string | null): { id: string | null } | null =
 
 /** A crate being made or changed, kept in this browser under its own address until Save or Cancel (it survives the
  *  player over it, a page change and a reload). */
-export type CrateDraft = { name: string; conditions: Condition[] };
+/** `names`: the server's for the ids its conditions hold (0.13, decision 0088). */
+export type CrateDraft = { name: string; conditions: Condition[]; names?: Record<string, import('./quickCrate').Named> };
 const draftKey = (id: string | null) => `cratarr-crate-draft:${id ?? 'new'}`;
 export function keptDraft(id: string | null): CrateDraft | null {
   try {

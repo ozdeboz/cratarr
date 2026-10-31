@@ -247,3 +247,6 @@ by a later record that says so in its header. A new decision takes the next numb
   in `X-Cratarr-At`, favourites and ratings the last change winning; `Idempotency-Key` and play ids kept 30 days; one
   change log per server (`/api/changes`); playlist edits as operations on entry ids, merged as a set, the last move
   winning.
+- [0088: One crate, two views; and or or](0088-one-crate-two-views.md): accepted, for 0.13. Every crate opens with a
+  Sentence / Conditions switch over the same conditions, names for ids from the server; Sounds like blended or near
+  any one seed, genre, style, mood and tag any or all of their values.

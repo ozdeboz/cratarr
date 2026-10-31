@@ -5,15 +5,67 @@
   // (lib/ConditionList, decision 0061), on the whole library's tracks (no Any or All). The controls come from the
   // server's axis list (kind and domain), so a new axis needs nothing here. Below them, the unsaved crate's first tracks
   // (after 300 ms); its size goes to the panel (`total`), which shows it under the name.
-  import { coverUrl, getCrateAxes, previewCrate, type Axis, type PlaylistRow } from './api';
+  // One crate, two views (0.13, decision 0088; the owner, 2026-10-31): a Sentence / Conditions switch over the same
+  // conditions. The sentence (lib/CrateSentence) says what it can of them (lib/quickCrate chipsOf, named by the server's
+  // `names`), the rest as how many more; the conditions are the cards. An edit in either is the crate's conditions, so
+  // the other shows it. It opens on the sentence where the sentence can say all of it.
+  import { untrack } from 'svelte';
+  import { coverUrl, getCrateAxes, previewCrate, type Axis, type Condition, type PlaylistRow } from './api';
   import ConditionList from './ConditionList.svelte';
+  import CrateSentence from './CrateSentence.svelte';
+  import { chipsOf, conditionsOf, type Chip, type Modes, type Named } from './quickCrate';
+  import Seg from './Seg.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
   import { prefs, type FilterCondition } from './prefs.svelte';
   import { toast } from './toast.svelte';
   import Row from './Row.svelte';
   import TrackCover from './TrackCover.svelte';
 
-  let { conditions = $bindable(), total = $bindable(null) }: { conditions: FilterCondition[]; total?: number | null } = $props();
+  let {
+    conditions = $bindable(),
+    total = $bindable(null),
+    names = {},
+  }: {
+    conditions: FilterCondition[];
+    total?: number | null;
+    /** The server's names for the ids its conditions hold (decision 0088). */
+    names?: Readonly<Record<string, Named>>;
+  } = $props();
+
+  /** Names learnt here: a seed added on a card, a term read in the sentence. */
+  let added = $state<Record<string, Named>>({});
+  const allNames = $derived({ ...names, ...added });
+
+  const VIEWS = [
+    { value: 'sentence', label: 'Sentence' },
+    { value: 'conditions', label: 'Conditions' },
+  ];
+  // The sentence's terms, cut and joins while it shows, and what it cannot say, kept as it is.
+  let chips = $state<Chip[]>([]);
+  let min = $state(0);
+  let modes = $state<Modes>({});
+  let rest = $state<Condition[]>([]);
+  function toSentence() {
+    const r = chipsOf(conditions, allNames);
+    [chips, min, modes, rest] = [r.chips, r.min, r.modes, r.rest];
+    view = 'sentence';
+  }
+  let view = $state<'sentence' | 'conditions'>('conditions');
+  untrack(() => {
+    if (!chipsOf(conditions, allNames).rest.length) toSentence();
+  });
+  // The sentence's edits are the crate's conditions (what it cannot say after them), its terms' names learnt.
+  $effect(() => {
+    if (view !== 'sentence') return;
+    const next = [...conditionsOf(chips, min, modes), ...rest];
+    untrack(() => {
+      const learnt: Record<string, Named> = {};
+      for (const c of chips)
+        if (c.reading.kind === 'album' || c.reading.id) learnt[c.reading.id ?? c.reading.value] = { name: c.reading.label, kind: c.reading.kind === 'album' ? 'album' : c.reading.kind === 'track' ? 'track' : 'artist' };
+      if (Object.keys(learnt).some((k) => allNames[k]?.name !== learnt[k].name)) added = { ...added, ...learnt };
+      if (JSON.stringify(next) !== JSON.stringify(conditions)) conditions = next;
+    });
+  });
 
   // The axes: their kinds and domains in this library.
   let axes = $state<Axis[] | null>(null);
@@ -53,7 +105,14 @@
 </script>
 
 <div class="editor">
-  <ConditionList bind:conditions {axes} crate />
+  <div class="views">
+    <Seg label="Show the crate as" options={VIEWS} bind:value={() => view, (v) => (v === 'sentence' ? toSentence() : (view = 'conditions'))} />
+  </div>
+  {#if view === 'sentence'}
+    <div class="sentence"><CrateSentence bind:chips bind:min bind:modes {rest} onmore={() => (view = 'conditions')} /></div>
+  {:else}
+    <ConditionList bind:conditions {axes} crate names={allNames} onnamed={(id, n) => (added = { ...added, [id]: n })} />
+  {/if}
 
   {#if previewError}
     <p class="error" role="alert">{previewError}</p>
@@ -75,6 +134,16 @@
 <style>
   .editor {
     padding: 0 12px;
+  }
+
+  .views {
+    display: flex;
+    padding: 4px 0 12px;
+  }
+
+  .sentence {
+    display: grid;
+    gap: 10px;
   }
 
   .preview {

@@ -20,7 +20,7 @@ export function changed<C extends Condition>(c: C, patch: Partial<C>): C {
 
 export function complete(c: Condition): boolean {
   const v = c.value;
-  if (v.kind === 'any_of') return v.values.length > 0 || NONE_ASKS.has(c.axis);
+  if (v.kind === 'any_of' || v.kind === 'all_of') return v.values.length > 0 || NONE_ASKS.has(c.axis);
   if (v.kind === 'range') return v.min !== null || v.max !== null;
   if (v.kind === 'like') return v.of.length > 0;
   return true;

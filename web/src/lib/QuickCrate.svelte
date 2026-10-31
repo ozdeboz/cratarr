@@ -8,20 +8,18 @@
   // the Records / Tracks switch a saved crate has. Nothing typed: the last few not saved, to come back to. Its state is
   // lib/quickCrates': it stays while the page is left.
   import { onDestroy, untrack } from 'svelte';
-  import { coverUrl, createCrate, likeCurve, previewCrate, search, type PlaylistRow } from './api';
+  import { coverUrl, createCrate, previewCrate, type PlaylistRow } from './api';
   import { CRATE, loadCrates, startCrate } from './crates.svelte';
   import Icon from './Icon.svelte';
-  import LikeCurve from './LikeCurve.svelte';
-  import { curveKey, type CurveAsk } from './likeCurveAsk';
   import { hiddenLibraries } from './listFilter.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { viewPlaylist } from './panel.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
-  import { CLOSE, TERM_KINDS, chipOf, conditionsOf, countAt, keepsOwn, minAt, nameOf, readLine, recentFor, seedsOf, sentenceOf, type Chip, type Found } from './quickCrate';
+  import { CLOSE, conditionsOf, nameOf, recentFor } from './quickCrate';
   import { forgetQuick, keepQuick, quickCrates } from './quickCrates.svelte';
-  import QuickTermSheet from './QuickTermSheet.svelte';
+  import CrateSentence from './CrateSentence.svelte';
   import { clockText } from './remote.svelte';
   import Row from './Row.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
@@ -41,84 +39,26 @@
 
   const chips = $derived(quickCrates.chips);
   const min = $derived(quickCrates.min);
+  /** What is typed and not read yet (the unsaved crates under the field go by it). */
   let text = $state('');
-  /** Words that read as nothing. */
-  let missed = $state<string[]>([]);
-  /** The term whose sheet shows. */
-  let at = $state<number | null>(null);
   let menuOpen = $state(false);
   let saving = $state(false);
+  /** The sentence (lib/CrateSentence): the terms, their cut and joins are quickCrates'. */
+  let sentence = $state<{ add: (words: string) => Promise<void> }>();
 
-  /** How many of each kind a phrase's readings offer (the owner, 2026-10-30: the right one could not be chosen with one). */
-  const EACH = 3;
-  const ask = (phrase: string): Promise<Found> =>
-    search(phrase, [...TERM_KINDS], EACH).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
-
-  /** The words typed, read as a whole line (lib/quickCrate readLine), each phrase a term of its best reading; one
-   *  already in it, once. */
-  async function addTerms(words: string) {
-    if (!words.trim()) return;
-    const read = (await readLine(words, ask)).filter((r) => !quickCrates.chips.some((c) => c.term.toLowerCase() === r.term.toLowerCase()));
-    missed = read.filter((r) => !r.readings.length).map((r) => r.term);
-    quickCrates.chips = [...quickCrates.chips, ...read.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? [])];
-  }
   // A search's words (lib/quickCrates openQuickCrate), read as they come.
   $effect(() => {
     const words = quickCrates.words;
-    if (!words) return;
+    const s = sentence;
+    if (!words || !s) return;
     untrack(() => {
       quickCrates.words = '';
-      missed = [];
-      void addTerms(words);
+      void s.add(words);
     });
   });
 
-  /** A comma (or a semicolon) ends what is before it: read, the rest stays in the field; Enter reads it all. */
-  function typed() {
-    const cut = Math.max(text.lastIndexOf(','), text.lastIndexOf(';'));
-    if (cut < 0) return;
-    void addTerms(text.slice(0, cut));
-    text = text.slice(cut + 1).trimStart();
-  }
-  function entered(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      void addTerms(text);
-      text = '';
-    } else if (e.key === 'Backspace' && !text && quickCrates.chips.length) {
-      // An empty field's Backspace opens the last term (its Remove a tap away), as a token field's would take it.
-      at = quickCrates.chips.length - 1;
-    }
-  }
-
-  const parts = $derived(sentenceOf(chips));
-  const conditions = $derived(conditionsOf(chips, min));
+  const conditions = $derived(conditionsOf(chips, min, quickCrates.modes));
   const name = $derived(nameOf(chips));
-  const seeds = $derived(seedsOf(chips));
-  const own = $derived(keepsOwn(chips));
-  const likedNames = $derived(chips.filter((c) => c.how === 'like' && c.reading.id).map((c) => c.reading.label));
-
-  // The closeness curve, for the artists "like", counted among the tracks the other terms leave (the owner: "Filtered
-  // curve in 0.11"), so its count is the preview's; asked 300 ms after a change, not again when only its cut moves.
-  let curve = $state<number[] | null>(null);
-  const curveAsk = $derived<CurveAsk>({ of: seeds, within: conditions, without: hiddenLibraries(), own });
-  const curveAt = $derived(curveKey(curveAsk, prefs.source || undefined));
-  $effect(() => {
-    void curveAt;
-    const asked = untrack(() => curveAsk);
-    if (!asked.of.length) return void (curve = null);
-    let gone = false;
-    const t = setTimeout(() => {
-      likeCurve(asked, prefs.source || undefined).then(
-        (c) => !gone && (curve = c.alike),
-        () => !gone && (curve = null),
-      );
-    }, 300);
-    return () => {
-      gone = true;
-      clearTimeout(t);
-    };
-  });
 
   // The crate as it is: its count and its tracks a page at a time, as a saved crate's, asked 300 ms after a change
   // (none without a term: that would be the whole library); more as the list's end comes into sight.
@@ -220,8 +160,8 @@
   function clear() {
     quickCrates.chips = [];
     quickCrates.min = CLOSE;
+    quickCrates.modes = {};
     text = '';
-    missed = [];
   }
   async function save() {
     saving = true;
@@ -248,11 +188,11 @@
   }
   function startOver() {
     menuOpen = false;
-    keepQuick({ chips, min });
+    keepQuick({ chips, min, modes: quickCrates.modes });
     clear();
   }
   // Left unsaved (the page left, the browser closed): kept among the last few, and still here on coming back.
-  const keep = () => quickCrates.chips.length && keepQuick({ chips: quickCrates.chips, min: quickCrates.min });
+  const keep = () => quickCrates.chips.length && keepQuick({ chips: quickCrates.chips, min: quickCrates.min, modes: quickCrates.modes });
   $effect(() => {
     addEventListener('pagehide', keep);
     return () => removeEventListener('pagehide', keep);
@@ -296,30 +236,9 @@
   {#if reach.away}
   <p class="note">Grabbing a crate needs Cratarr.</p>
   {:else}
-  <p class="sentence" class:empty={!chips.length}>
-    {#each parts as p, k (k)}{#if k && !p.tight}{' '}{/if}{#if p.chip !== undefined}{@const c = chips[p.chip]}<button
-          class="term"
-          class:like={!!c?.reading.id && c.how === 'like'}
-          onclick={() => (at = p.chip ?? null)}>{p.text}</button
-        >{:else}<span class="w">{p.text}</span>{/if}{/each}{#if chips.length}{' '}{/if}<input
-      type="search"
-      placeholder={chips.length ? 'and…' : 'hip hop 90s Miles Davis'}
-      aria-label={chips.length ? 'More words for the crate' : 'Words for a crate'}
-      bind:value={text}
-      oninput={typed}
-      onkeydown={entered}
-    />
-  </p>
-  {#if missed.length}<p class="note">Nothing found for {missed.join(', ')}</p>{/if}
+  <CrateSentence bind:this={sentence} bind:chips={quickCrates.chips} bind:min={quickCrates.min} bind:modes={quickCrates.modes} bind:text />
 
   {#if chips.length}
-    {#if seeds.length && curve?.length}
-      {@const c = curve}
-      <div class="near">
-        <p class="alike"><span>Alike {likedNames.join(' and ')}</span><b>at least {Math.round(min)}%</b></p>
-        <LikeCurve curve={c} count={countAt(c, min)} onchange={(n) => (quickCrates.min = minAt(c, n))} />
-      </div>
-    {/if}
     <div class="sum">
       <b>{preview ? `${preview.total.toLocaleString()} ${preview.total === 1 ? 'track' : 'tracks'}` : ''}</b>
       <button class="icon" aria-label="Save as a crate" title="Save" disabled={none || saving} onclick={save}><Icon name="save" size={22} /></button>
@@ -371,6 +290,7 @@
             onclick={() => {
               quickCrates.chips = k.chips.map((c) => ({ ...c }));
               quickCrates.min = k.min;
+              quickCrates.modes = { ...(k.modes ?? {}) };
             }}
           >
             {#snippet lead()}<span class="lead"><Icon name="clock" size={20} /></span>{/snippet}
@@ -381,17 +301,6 @@
   {/if}
   {/if}
 </section>
-
-{#if at !== null && chips[at]}
-  {@const i = at}
-  <QuickTermSheet
-    chip={chips[i]}
-    {ask}
-    onchange={(c: Chip) => (quickCrates.chips = quickCrates.chips.map((x, k) => (k === i ? c : x)))}
-    onremove={() => (quickCrates.chips = quickCrates.chips.filter((_, k) => k !== i))}
-    onclose={() => (at = null)}
-  />
-{/if}
 
 {#if menuOpen}
   <MenuSheet label="The crate being made" icon="crates" title={name} onclose={() => (menuOpen = false)}>
@@ -444,97 +353,6 @@
     display: grid;
     place-items: center;
     padding: 16px 0;
-  }
-
-  /* The crate as a sentence (mockup B): its terms in the text's own weight, underlined, the words between muted. */
-  /* On an accent line, like writing (the owner's 3a, 2026-10-30): no box, before typing or after. */
-  .sentence {
-    margin: 0;
-    padding: 4px 2px 8px;
-    border-bottom: 2px solid var(--accent);
-    font-size: 22px;
-    font-weight: 600;
-    line-height: 1.55;
-    text-wrap: pretty;
-  }
-
-  /* Keyboard focus shows on the line itself, the field having no box of its own. */
-  .sentence:focus-within {
-    border-bottom-width: 3px;
-    padding-bottom: 7px;
-  }
-
-  .w {
-    color: var(--muted);
-    font-weight: 400;
-  }
-
-  .term {
-    padding: 0 0 1px;
-    border: 0;
-    border-bottom: 2px solid var(--border);
-    background: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .term.like {
-    border-bottom-color: var(--accent);
-  }
-
-  .term:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-    border-radius: 3px;
-  }
-
-  /* Where more is typed: the sentence's end, as wide as what is in it. */
-  input[type='search'] {
-    field-sizing: content;
-    min-width: 5ch;
-    max-width: 100%;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-weight: 400;
-    caret-color: var(--accent);
-  }
-
-  input[type='search']::placeholder {
-    color: var(--muted);
-    opacity: 1;
-  }
-
-  input[type='search']:focus {
-    outline: none;
-  }
-
-  /* Nothing typed yet: the line alone, its field the list's width. */
-  .empty input[type='search'] {
-    box-sizing: border-box;
-    width: 100%;
-    field-sizing: fixed;
-  }
-
-  .near {
-    display: grid;
-    gap: 4px;
-  }
-
-  .alike {
-    display: flex;
-    justify-content: space-between;
-    margin: 0;
-    color: var(--muted);
-    font-size: 13px;
-  }
-
-  .alike b {
-    color: var(--text);
-    font-weight: 600;
   }
 
   .sum {
