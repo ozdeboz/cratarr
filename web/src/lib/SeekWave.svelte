@@ -10,7 +10,7 @@
   import { accentFor, keepAccent } from './accents.svelte';
   import { appInfo, inApp } from './app.svelte';
   import { startStopNow } from './device.svelte';
-  import { deckNow, local } from './localPlayer.svelte';
+  import { deckNow, local, throughOf } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
@@ -132,6 +132,19 @@
    *  (the owner, 2026-10-29: the zoom's other tracks and their boundaries never showed there). */
   const throughQueue = $derived(startStopNow().edges === 'queue');
   const zoomOn = $derived(holdNow.on && port().holdsQueue && !reducedMotion());
+  /** Through the queue, how far a hold can go, from this track's start: the start of the first track it can wind back
+   *  into and the end of the last it can wind on into, as the tape goes (lib/localPlayer's throughOf: no further than
+   *  the queue's ends, a track it cannot wind or whose length is not known; repeat or not, a hold does not wrap). The
+   *  window's walls (lib/waveView): no empty stretch before the queue or after it (0.12.3, the owner). */
+  const queueEnds = $derived.by(() => {
+    if (!throughQueue || local.index < 0 || !hereLen) return undefined;
+    const back = throughOf(local.index, -1).at(-1) ?? local.index;
+    const on = throughOf(local.index, 1).at(-1) ?? local.index;
+    const lo = along(back, 0);
+    const end = on === local.index ? hereLen : local.queue[on]?.duration_secs;
+    const hi = end ? along(on, end) : null;
+    return { lo: lo ?? -Infinity, hi: hi ?? Infinity };
+  });
   // A hold's window (lib/waveView's stepWindow; 0.10.1, the owner: "So pure continuous transitions"): centred on the
   // crosshair, against the edge a direction does not need, as wide as the speed asks and standing once at the top
   // speed; let go, back to the track's own view. In s from the playing track's start. Through the queue it is the wide
@@ -176,6 +189,7 @@
             speed: holdNow.speed,
             top: holdNow.top,
             aim: l === null ? null : along(li, l),
+            ends: queueEnds,
           },
           dt,
         );

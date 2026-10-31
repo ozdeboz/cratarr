@@ -10,11 +10,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { stepWindow } = await import('../src/lib/waveView.ts');
+const { stepWindow, markShows } = await import('../src/lib/waveView.ts');
 const { planStrip, gridBars, placeOf, trackBars, STRIP_SPAN, SPAN_SLACK } = await import('../src/lib/waveStrip.ts');
 
 const LENS = [212, 187, 245, 301, 176, 233, 198, 264];
 const STARTS = LENS.map((_, i) => LENS.slice(0, i).reduce((a, b) => a + b, 0));
+const TOTAL = LENS.reduce((a, b) => a + b, 0);
 const BINS = LENS.map((_, i) => {
   let s = i + 1;
   const r = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
@@ -50,13 +51,20 @@ type Seen = {
   plain: boolean;
   /** The playing track's place in the queue. */
   track: number;
+  /** What shows, in s along the whole queue. */
+  qfrom: number;
+  qto: number;
 };
+/** A hold's way and the queue's walls (lib/SeekWave's queueEnds): `walls` the queue's ends are walls, the tape resting
+ *  at them; `known` the end known while `grow` s have not passed (a radio or Autoplay queue growing), then the whole. */
+type Opts = { dir?: 1 | -1; walls?: boolean; known?: number; grow?: number };
 
 /**
  * A hold from `q0` s along the queue: 4x doubling every 2 s to 16x, held `heldS` s, then braked to 1x in a second and
  * on for `afterS` s. Each frame: the window in the hold's frame, the strip shown with its bars.
  */
-function hold(q0: number, heldS: number, afterS: number, through = true): Seen[] {
+function hold(q0: number, heldS: number, afterS: number, through = true, o: Opts = {}): Seen[] {
+  const dir = o.dir ?? 1;
   let win: ReturnType<typeof stepWindow> = null;
   let base: number | null = null;
   let had: Strip | null = null;
@@ -68,14 +76,18 @@ function hold(q0: number, heldS: number, afterS: number, through = true): Seen[]
   for (let t = 0; t < heldS + afterS; t += FRAME / 1000) {
     const holding = t < heldS;
     v = holding ? Math.min(16, 4 * 2 ** (t / 2)) : Math.max(1, v - 15 * (FRAME / 1000));
-    q += v * (FRAME / 1000);
+    const end = o.grow !== undefined && t < o.grow ? (o.known ?? TOTAL) : TOTAL;
+    q += dir * v * (FRAME / 1000);
+    if (o.walls) q = Math.max(0, Math.min(end - 1e-6, q));
     let i = 0;
     while (i < LENS.length - 1 && q >= STARTS[i + 1]) i++;
     const moved = idx < 0 || idx === i ? 0 : STARTS[idx] - STARTS[i];
     idx = i;
     const pos = q - STARTS[i];
     const was = win;
-    win = stepWindow(win, { len: LENS[i], pos, moved, holding, through, dir: 1, speed: v, top: 16, aim: holding ? pos + (v * v) / 128 : null }, FRAME);
+    const ends = o.walls ? { lo: -STARTS[i], hi: end - STARTS[i] } : undefined;
+    const aim = holding ? (o.walls ? Math.max(ends!.lo, Math.min(ends!.hi, pos + (dir * v * v) / 128)) : pos + (dir * v * v) / 128) : null;
+    win = stepWindow(win, { len: LENS[i], pos, moved, holding, through, dir, speed: v, top: 16, aim, ends }, FRAME);
     if (!win) {
       if (was) out.push({ ...out.at(-1)!, t, plain: true });
       continue;
@@ -95,7 +107,7 @@ function hold(q0: number, heldS: number, afterS: number, through = true): Seen[]
     const redrawn = s !== had;
     had = s;
     if (!bars.has(s)) bars.set(s, gridBars(tracks, s));
-    out.push({ t, held: holding, from, to, pos: pos - fa, cur0, cur1, progress: pos / LENS[i], strip: s, bars: bars.get(s)!, redrawn, plain: false, track: i });
+    out.push({ t, held: holding, from, to, pos: pos - fa, cur0, cur1, progress: pos / LENS[i], strip: s, bars: bars.get(s)!, redrawn, plain: false, track: i, qfrom: from + STARTS[base!], qto: to + STARTS[base!] });
   }
   return out;
 }
@@ -236,3 +248,77 @@ test("leaving a track's start, the window gathers speed rather than going at onc
   for (const j of leaving) assert.ok(j.d <= 0.03, `${j.t.toFixed(2)} s: ${j.d.toFixed(3)} s a frame at once`);
   assert.ok(leaving.at(-1)!.step > 0.2, "then at the tape's speed");
 });
+
+// The queue's own ends (0.12.3, the owner: "during the continuous hold, the window shouldn't allow viewing empty
+// waveforms"): before the first track's start and after the last one's end nothing shows, and reaching them, no jump.
+const EPS = 1e-6;
+test("a hold back from the first track's start never shows before the queue", () => {
+  const f = hold(25, 10, 3, true, { dir: -1, walls: true }).filter((x) => !x.plain);
+  assert.ok(f.length > 500);
+  for (const x of f) assert.ok(x.qfrom >= -EPS, `${x.t.toFixed(2)} s: shows ${(-x.qfrom).toFixed(3)} s before the queue`);
+});
+
+test("a hold on into the last track's end never shows past it, and no jump at the end", () => {
+  const f = hold(TOTAL - 150, 16, 4, true, { walls: true });
+  const drawn = f.filter((x) => !x.plain);
+  for (const x of drawn) assert.ok(x.qto <= TOTAL + EPS, `${x.t.toFixed(2)} s: shows ${(x.qto - TOTAL).toFixed(3)} s past the queue`);
+  // Held at the end, its width changes a little each frame (no zoom jump on reaching it; the zoom in as the hold
+  // begins is the hand-over's, eased, as the tests above hold it).
+  const atEnd = drawn.filter((x) => x.held && x.t > 4.5);
+  for (let k = 1; k < atEnd.length; k++) {
+    const dw = Math.abs(atEnd[k].to - atEnd[k].from - (atEnd[k - 1].to - atEnd[k - 1].from));
+    assert.ok(dw <= 0.5, `${atEnd[k].t.toFixed(2)} s: its width changed by ${dw.toFixed(3)} s in a frame`);
+  }
+  // At the top speed, reaching the end and resting on it: no lurch. (Before it, the width runs up with the speed and
+  // stops at once at the top, as it is meant to; against a wall that shows in the one edge that moves.)
+  for (const j of jolts(f).filter((x) => x.t > 4.5)) assert.ok(j.d <= 0.25, `${j.t.toFixed(2)} s: its motion changed by ${j.d.toFixed(3)} s in a frame`);
+  // And it stands against the end: what shows reaches it.
+  assert.ok(drawn.some((x) => Math.abs(x.qto - TOTAL) <= 1e-3), 'it rests on the end');
+});
+
+test('a queue growing under a hold: its end moves on, what shows eases after it, no jump', () => {
+  const f = hold(STARTS[6], 20, 0, true, { walls: true, known: STARTS[7], grow: 12 });
+  for (const x of f.filter((y) => !y.plain && y.t < 12)) assert.ok(x.qto <= STARTS[7] + EPS, `${x.t.toFixed(2)} s: past the known end`);
+  // The end moving on lets the window come off it toward the middle, sprung from standing: up to half its width in
+  // under a second, so a little more each frame than a hold's own motion (0.3 against 0.25), never a step.
+  for (const j of jolts(f)) assert.ok(j.d <= 0.5, `${j.t.toFixed(2)} s: its motion changed by ${j.d.toFixed(3)} s in a frame`);
+});
+
+test('at the walls the same number of bars across the waveform', () => {
+  for (const f of [hold(25, 10, 3, true, { dir: -1, walls: true }), hold(TOTAL - 150, 16, 4, true, { walls: true })]) {
+    for (const x of f.filter((y) => !y.plain)) {
+      const shown = (x.to - x.from) / x.strip.span;
+      // The planner's quarter-bar slack (landing on the track's own grid as it is let go: a ten-thousandth over).
+      assert.ok(Math.abs(shown - N) <= SPAN_SLACK + 1e-3, `${x.t.toFixed(2)} s: ${shown.toFixed(4)} bars across`);
+    }
+  }
+});
+
+// A boundary's marker (0.12.3, the owner: "when track boundaries are snapped to the waveform viewport edges, they
+// should not be shown"): none at an edge, whole inside, fading between.
+test('a boundary marker: none within a bar of an edge, whole two bars in, no step between', () => {
+  const n = N;
+  assert.equal(markShows(0, n), 0);
+  assert.equal(markShows(1, n), 0);
+  assert.equal(markShows(0.5 / n, n), 0);
+  assert.equal(markShows(1 - 1 / n, n), 0);
+  assert.equal(markShows(2 / n, n), 1);
+  assert.equal(markShows(0.5, n), 1);
+  assert.ok(markShows(1.5 / n, n) > 0 && markShows(1.5 / n, n) < 1);
+  // Moving off a wall a fraction of a bar a frame: its opacity never steps by more than the move.
+  let last = markShows(0, n);
+  for (let x = 0; x <= 0.1; x += 0.05 / n) {
+    const o = markShows(x, n);
+    assert.ok(Math.abs(o - last) <= 0.05 + 1e-9, `at ${x.toFixed(4)}: ${last.toFixed(3)} to ${o.toFixed(3)}`);
+    last = o;
+  }
+});
+
+test("a boundary on a wall shows no marker: from a track's start going forward, its start on the left edge", () => {
+  const f = hold(STARTS[1], 6, 0).filter((x) => !x.plain);
+  // While the window rests against the start (the start at the left edge), the start's marker does not show.
+  const resting = f.filter((x) => Math.abs(x.qfrom - STARTS[1]) <= 1e-6);
+  assert.ok(resting.length > 10);
+  for (const x of resting) assert.equal(markShows((STARTS[1] - x.qfrom) / (x.qto - x.qfrom), N), 0);
+});
+
