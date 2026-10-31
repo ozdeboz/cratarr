@@ -26,7 +26,7 @@
   import { clockText } from './remote.svelte';
   import Row from './Row.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, fromLabel, playFromHere, snippet, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, snippet, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import { toast } from './toast.svelte';
   import TrackCover from './TrackCover.svelte';
   import { withUndo } from './undo.svelte';
@@ -269,8 +269,8 @@
   });
   onDestroy(keep);
   // A row's snippet (0.12, the owner: "as buttons which when pressed expand a waveform as A2"): its round button plays
-  // the track's liveliest 20 s and opens the row on its waveform (lib/SnippetStrip), with Play from here; again, it stops
-  // and folds. One row open at a time; leaving the page ends it.
+  // the track's first lively 20 s and opens the row on its waveform (lib/SnippetStrip); again, it stops and folds (the
+  // owner, 2026-10-31: a snippet's button never plays the track itself; Play is the row's own). One row open at a time; leaving the page ends it.
   let openRow = $state<number | null>(null);
   const snipOf = (src: string, r: PlaylistRow): SnippetTrack | null =>
     r.id && !r.missing ? { source: src, id: r.id, name: r.name ?? r.file, duration_secs: r.duration_secs ?? null } : null;
@@ -294,11 +294,6 @@
     });
   });
   onDestroy(() => openRow !== null && endSnippet());
-  function fromHere(t: SnippetTrack) {
-    const at = startOf(t);
-    openRow = null;
-    playFromHere(t, at).catch((e) => toast.fail(e, "It didn't play"));
-  }
 </script>
 
 <section class="quick" aria-label="Grab a crate">
@@ -432,7 +427,6 @@
     {#if openRow === i && st}
       <div class="snipped">
         <SnippetStrip track={st} />
-        <button class="from" onclick={() => fromHere(st)}>{fromLabel(startOf(st))}</button>
       </div>
     {/if}
   </li>
@@ -611,18 +605,6 @@
   .snipped {
     display: grid;
     padding: 0 16px 8px;
-  }
-
-  .from {
-    justify-self: start;
-    padding: 6px 0;
-    border: 0;
-    background: none;
-    color: var(--accent-ink);
-    font: inherit;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
   }
 
   .preview,
