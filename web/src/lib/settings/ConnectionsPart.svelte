@@ -1,6 +1,7 @@
 <script lang="ts">
   // Connections: the servers Cratarr works with, Lidarr, Last.fm and Discogs, and Home Assistant (the owner, 2026-10-24:
-  // its own section, its key with it; it acts at once, lib/settings/HomeAssistantPart); the rest saved with the Save bar.
+  // its own section, its key with it; it acts at once, lib/settings/HomeAssistantPart) and MCP after it (0.13,
+  // lib/settings/McpPart, the same way); the rest saved with the Save bar.
   // Each is a row (its state in a line); its settings are on its own page behind it (`thing`: a server's id, `lidarr`,
   // `lastfm`, `discogs`): its fields as rows, a value typed or chosen in a sheet, its connection checked there, and
   // Remove last (the settings' North Star, 2026-10-19; the owner, 2026-10-25: Last.fm and Discogs the same way, no
@@ -40,6 +41,7 @@
   import Group from './Group.svelte';
   import HomeAssistantPart from './HomeAssistantPart.svelte';
   import Item from './Item.svelte';
+  import McpPart from './McpPart.svelte';
   import ValueSheet from './ValueSheet.svelte';
 
   let { thing = null }: { thing?: string | null } = $props();
@@ -48,12 +50,13 @@
   const s = $derived(ed.s!);
   const LIDARR = 'lidarr';
   const HOME_ASSISTANT = 'home-assistant';
+  const MCP = 'mcp';
   const LASTFM = 'lastfm';
   const DISCOGS = 'discogs';
   const MUSICBRAINZ = 'musicbrainz';
   const SLSKD = 'slskd';
   const ACOUSTID = 'acoustid';
-  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID;
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === MCP || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
@@ -222,7 +225,7 @@
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
   nameThing(() =>
-    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'slskd' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
+    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === MCP ? 'MCP' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'slskd' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
   );
   // Last.fm's key and Discogs' app as rows say them.
   const fmOff = $derived(fmKey?.enabled === false);
@@ -395,6 +398,8 @@
   {/if}
 {:else if thing === HOME_ASSISTANT}
   <HomeAssistantPart page />
+{:else if thing === MCP}
+  <McpPart page />
 {:else if thing === LIDARR}
   {#if s.lidarr}
     <Group>
@@ -629,6 +634,7 @@
     {/each}
   </Group>
   <HomeAssistantPart />
+  <McpPart />
   {#if addingKind}
     <ChoiceSheet title="Add server" options={s.kinds.map((k) => ({ value: k.id, label: k.label }))} value={''} onchange={add} onclose={() => (addingKind = false)} />
   {/if}
