@@ -13,6 +13,10 @@
 //   direction doesn't need the neighbour, it's not shown, and the edge never moves"). Going on through the queue the
 //   way it goes there is no wall: forward from a track's start the start stays the left edge, the crosshair moving
 //   right from it until it can stand in the middle; back from there the window moves on into the track before.
+// - The queue's own ends (0.12.3, the owner: "during the continuous hold, the window shouldn't allow viewing empty
+//   waveforms"): through the queue, the start of the first track a hold can wind back into and the end of the last it
+//   can wind on into are walls too, as a track's edges are on its own; a window wider than what they hold is no wider.
+//   Where they move (a radio or Autoplay queue growing) what shows is kept and eased, not jumped.
 
 /** The direction the tape goes: forward, backward, or not known. */
 export type WaveDir = 1 | -1 | 0;
@@ -131,6 +135,9 @@ export type HoldWindowIn = {
   top: number;
   /** The crosshair: where letting go lands (null: not known now). */
   aim: number | null;
+  /** Through the queue, how far a hold can go: the start of the first track it can wind back into and the end of the
+   *  last it can wind on into (none: `-Infinity`/`Infinity`). */
+  ends?: Walls;
 };
 /** The window between frames. */
 export type HoldWindow = {
@@ -149,7 +156,9 @@ export type HoldWindow = {
    *  speed. Its focus (the playhead plus the lead), for where it would have been placed by the new rules. */
   sv: Offset;
   focus: number;
+  /** The walls the window keeps to: the hold's own (`hold`) within the queue's ends. */
   walls: Walls;
+  hold: Walls;
   held: boolean;
   /** How long ago it was let go (ms; null: held). */
   since: number | null;
@@ -165,21 +174,25 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   // No track, or none held; let go and on into a track of a place not known: its own view at once.
   if (!(i.len > 0) || (!s && !i.holding) || (s && i.moved === null && !i.holding)) return null;
   let last = { from: 0, to: i.len };
-  let walls: Walls = { lo: 0, hi: i.len };
+  let hold: Walls = { lo: 0, hi: i.len };
   let rebase = false;
   if (s && i.moved !== null) {
     // Where it was heading: a hand-over does not stand still a frame (0.11.1).
     last = { from: s.shown.from + i.moved + s.sv.a * dt, to: s.shown.to + i.moved + s.sv.b * dt };
-    walls = { lo: s.walls.lo + i.moved, hi: s.walls.hi + i.moved };
+    hold = { lo: s.hold.lo + i.moved, hi: s.hold.hi + i.moved };
     // Let go and on into another track: that one's own view, from what shows.
     if (i.moved !== 0 && !i.holding) rebase = true;
   }
   const starting = i.holding && (!s || !s.held || i.moved === null);
   if (starting) {
-    walls = holdWalls(i.dir, i.through, 0, i.len);
+    hold = holdWalls(i.dir, i.through, 0, i.len);
     rebase = true;
   }
-  if (!i.holding) walls = { lo: 0, hi: i.len };
+  if (!i.holding) hold = { lo: 0, hi: i.len };
+  const ends = i.through && i.ends ? i.ends : NO_WALLS;
+  const walls: Walls = i.holding ? { lo: Math.max(hold.lo, ends.lo), hi: Math.min(hold.hi, ends.hi) } : hold;
+  // The queue's ends moved under a hold (a queue growing, a track added or taken out): from what showed, eased.
+  if (s && s.held && i.holding && !starting && i.moved !== null && (moves(s.walls.lo + i.moved, walls.lo) || moves(s.walls.hi + i.moved, walls.hi))) rebase = true;
   if (s?.held && !i.holding) rebase = true;
   const since = i.holding ? null : s?.held || s?.since == null ? 0 : s.since + dt;
   let span = starting ? 0 : (s?.span ?? 0);
@@ -198,6 +211,8 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   let w = target;
   let wv = 0;
   if (!i.holding) [w, wv] = spring(w0, s && !s.held ? s.wv : 0, target, dt, target > w0 ? ZOOM_OUT_MS : ZOOM_EASE_MS, settleOf(target));
+  // Held, no wider than the walls hold: nothing past the queue's ends ever shows.
+  else w = Math.min(w, walls.hi - walls.lo);
   const lead = i.holding ? (i.aim !== null ? i.aim - i.pos : (s?.rel ?? 0)) : 0;
   let rel = lead;
   let relv = 0;
@@ -223,9 +238,24 @@ export function stepWindow(s: HoldWindow | null, i: HoldWindowIn, dt: number): H
   }
   // Handing over, what shows may be beyond the new walls (a let go after the next track showed): through the queue it
   // eases in from there; on one track never past its edges.
-  const shown = shownOf(placed, off, i.through ? { lo: -Infinity, hi: Infinity } : { lo: 0, hi: i.len });
+  const shown = shownOf(placed, off, i.through ? ends : { lo: 0, hi: i.len });
   if (!i.holding && since! >= ZOOM_KEEP_MS && !off && rel === 0 && w === i.len && shown.from === 0 && shown.to === i.len) return null;
   const sv =
     s && i.moved !== null && dt > 0 ? { a: (shown.from - (s.shown.from + i.moved)) / dt, b: (shown.to - (s.shown.to + i.moved)) / dt } : { a: 0, b: 0 };
-  return { w, span, rel, off, wv, relv, offv, sv, focus: i.pos + rel, walls, held: i.holding, since, shown };
+  return { w, span, rel, off, wv, relv, offv, sv, focus: i.pos + rel, walls, hold, held: i.holding, since, shown };
 }
+
+/**
+ * How much a track boundary's marker shows, at `x` across the waveform (0 its left edge, 1 its right) with `n` bars
+ * across it (0.12.3, the owner: "when track boundaries are snapped to the waveform viewport edges, they should not be
+ * shown", as the plain waveform shows none at its edges): none within a bar of an edge, whole from two bars in, between
+ * them fading, so a boundary leaving a wall comes in without a pop and one reaching an edge goes the same way.
+ */
+export function markShows(x: number, n: number): number {
+  if (!(n > 0) || !Number.isFinite(x)) return 0;
+  return Math.max(0, Math.min(1, Math.min(x, 1 - x) * n - 1));
+}
+
+const NO_WALLS: Walls = { lo: -Infinity, hi: Infinity };
+/** Whether a wall moved between frames (one gone or come counts; none either time does not). */
+const moves = (a: number, b: number) => (Number.isFinite(a) || Number.isFinite(b)) && !(Math.abs(a - b) <= 1e-9);
