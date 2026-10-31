@@ -3,7 +3,8 @@
   // Insights, Health and Settings (the owner, 2026-10-24: "a unified way of presenting release rows"), in a group of
   // rows (lib/settings/Group, which draws the block and the lines between): its cover, its title, one line under it
   // (`tone`: bad or warn), filled behind as far as work on it has come (`fill`, 0 to 1), and at its end either › (a tap
-  // acts: `onclick`) or something of its own (`children`: a tick in a select mode, a count). `open`: the one shown
+  // acts: `onclick`) or something of its own (`children`: a tick in a select mode, a count); both, the row acts and its
+  // end is its own (0.13, Health's review list: a tap picks another copy, its tick at the end). `open`: the one shown
   // beside. `rank`: its place in a top list, before its cover. `expanded` (0.13, Health's panel): it opens what it holds
   // under itself, in place, its › turned down while it does.
   import type { Snippet } from 'svelte';
@@ -16,6 +17,7 @@
     rank = null,
     line = null,
     tone = null,
+    wrap = false,
     fill = null,
     open = false,
     expanded = null,
@@ -27,6 +29,8 @@
     rank?: number | null;
     line?: string | null;
     tone?: 'bad' | 'warn' | null;
+    /** Its line in full, over as many lines as it needs (a reason, some long), not cut at the row's end. */
+    wrap?: boolean;
     fill?: number | null;
     open?: boolean;
     expanded?: boolean | null;
@@ -40,7 +44,7 @@
   <span class="pic"><Cover src={cover} /></span>
   <span class="text">
     <span class="title">{title}</span>
-    {#if line}<small class:bad={tone === 'bad'} class:warn={tone === 'warn'}>{line}</small>{/if}
+    {#if line}<small class:bad={tone === 'bad'} class:warn={tone === 'warn'} class:wrap>{line}</small>{/if}
   </span>
 {/snippet}
 
@@ -57,6 +61,12 @@
     {@render body()}
     <span class="end"><Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={20} /></span>
   </button>
+{:else if onclick}
+  <!-- It acts, and its end is a control of its own (two controls side by side, never one inside the other). -->
+  <div class="release both" class:open class:filling={fill !== null} style:--fill={fill === null ? null : `${Math.min(1, Math.max(0, fill)) * 100}%`}>
+    <button class="main" {onclick}>{@render body()}</button>
+    <span class="end">{@render children?.()}</span>
+  </div>
 {:else}
   <div class="release still" class:open class:filling={fill !== null} style:--fill={fill === null ? null : `${Math.min(1, Math.max(0, fill)) * 100}%`}>
     {@render body()}
@@ -86,6 +96,32 @@
 
   button.release:hover,
   button.release:focus-visible {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+
+  /* It acts and has an end of its own: its body the button, the end beside it. */
+  .release.both {
+    padding: 0 14px 0 0;
+  }
+
+  .release.both .main {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    min-height: 64px;
+    padding: 10px 0 10px 12px;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .release.both .main:hover,
+  .release.both .main:focus-visible {
     background: color-mix(in srgb, var(--text) 5%, transparent);
   }
 
@@ -147,6 +183,10 @@
 
   small.bad {
     color: var(--danger-ink);
+  }
+
+  small.wrap {
+    white-space: normal;
   }
 
   small.warn {
