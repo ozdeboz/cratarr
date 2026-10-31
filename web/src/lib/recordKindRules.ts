@@ -1,11 +1,13 @@
 // The record kinds' rules (lib/recordKinds), pure so the tests take them as they are: which kinds the Library offers,
 // the filter's Type row each one is, and which kind a Type row reads as. Classical (0.10; the owner, 2026-10-30) is
 // offered where the server says which records are (its albums carry `classical`), after Compilations and before Other
-// (the owner's order); Other is every record of none of the named kinds. A record shows in its own kind only where the
-// server's precedence holds (Classical > Compilation > Album/EP/Single > Other; its filter switch, lib/pageView).
+// (the owner's order); Other is every record of none of the named kinds. Incomplete (0.13, decision 0081's second
+// amendment): a record found missing tracks (as Health finds them) is that instead of its type; offered last before
+// Other, as a state rather than a kind to browse by. A record shows in its own kind only where the server's precedence
+// holds (Classical > Compilation > Album/EP/Single/Incomplete > Other; its filter switch, lib/pageView).
 import type { FilterCondition } from './prefs.svelte';
 
-export const BASE_NAMED = ['Album', 'EP', 'Single', 'Compilation'] as const;
+export const BASE_NAMED = ['Album', 'EP', 'Single', 'Compilation', 'Incomplete'] as const;
 export const CLASSICAL = 'Classical';
 
 export const RECORD_KINDS = [
@@ -15,6 +17,7 @@ export const RECORD_KINDS = [
   { id: 'Single', label: 'Singles' },
   { id: 'Compilation', label: 'Compilations' },
   { id: 'Classical', label: 'Classical' },
+  { id: 'Incomplete', label: 'Incomplete' },
   { id: 'other', label: 'Other' },
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number]['id'];
