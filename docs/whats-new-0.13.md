@@ -1,6 +1,7 @@
 # What's new in 0.13
 
-Since 0.12.4; release/0.12's fixes after it are in it too. The notes for each part are in [decisions](decisions).
+Since 0.12.4; release/0.12's fixes after it are in it too. 0.13 is what preview.3 holds (the owner, 2026-11-01): modes per server, scrobbling from the device and each
+user's own music moved to 0.15 and 0.16 ([plans](plans.md)). The notes for each part are in [decisions](decisions).
 
 ## Crates
 
