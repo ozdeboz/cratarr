@@ -12,7 +12,7 @@
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
-  import { albumSubject, artistSubject, backOne, closePlaylist, DOWNLOADS, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
+  import { albumSubject, artistSubject, backOne, closePlaylist, DOWNLOADS, SETTINGS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { appInfo, download, downloads, removeDownloads } from './app.svelte';
   import type { Collection } from './api';
@@ -211,7 +211,7 @@
   <Crumbs
     trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]}
     here={L.label}
-    siblings={beside ? null : { menuLabel: 'Downloads shows', options: DOWNLOADS_LISTS.map((l) => ({ id: l.id, label: l.label })), chosen: L.id, onchoose: (id) => viewPlaylist(DOWNLOADS + id) }}
+    siblings={beside ? null : { menuLabel: 'Downloads shows', options: DOWNLOADS_LISTS.map((l) => ({ id: l.id, label: l.label })), chosen: L.id, onchoose: (id) => viewSibling(DOWNLOADS + id) }}
   />
 {/snippet}
 

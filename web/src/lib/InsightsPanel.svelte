@@ -16,7 +16,7 @@
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights, mapFull } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
-  import { backOne, INSIGHTS, isStep, upToPage, viewPlaylist } from './panel.svelte';
+  import { backOne, INSIGHTS, isStep, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
@@ -67,7 +67,7 @@
     here={v.label}
     siblings={beside || v.under
       ? null
-      : { menuLabel: 'Insights shows', options: INSIGHTS_VIEWS.filter((x) => !x.under).map((x) => ({ id: x.id, label: x.label, group: x.group })), chosen: v.id, onchoose: (id) => viewPlaylist(INSIGHTS + id) }}
+      : { menuLabel: 'Insights shows', options: INSIGHTS_VIEWS.filter((x) => !x.under).map((x) => ({ id: x.id, label: x.label, group: x.group })), chosen: v.id, onchoose: (id) => viewSibling(INSIGHTS + id) }}
   />
 {/snippet}
 
