@@ -14,6 +14,7 @@
   import { fade } from 'svelte/transition';
   import { glassPart, GLASS_MS } from './glassMotion';
   import { untrack } from 'svelte';
+  import { innerWidth } from 'svelte/reactivity/window';
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
@@ -246,6 +247,23 @@
   // count stays the globe's alone. Not while everywhere's results show.
   const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn);
   let row = $state<HTMLElement>();
+  // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the
+  // buttons it replaces took, besides its own wish (as wide as a phone's row allows, 320 px at most). Said on the field
+  // (`data-wants`) for the title beside it to give way where it would squeeze it (lib/NavigationControls).
+  let pill = $state<HTMLElement>();
+  let folded = $state(0);
+  $effect(() => {
+    const p = pill;
+    if (!p) return;
+    const seen = new ResizeObserver(() => {
+      if (!searching && !showing && !confirming) folded = p.offsetWidth;
+    });
+    seen.observe(p);
+    return () => seen.disconnect();
+  });
+  /** The lens and the pill's own room, beside the field. */
+  const LENS = 52;
+  const fieldWants = $derived(Math.max(Math.min(320, (innerWidth.current ?? 400) - 220), folded - LENS, 140));
   let lens = $state<HTMLElement>();
   /** The magnifier's middle, from the row's right end: where the callout's tip points. */
   let tip = $state(24);
@@ -284,7 +302,7 @@
     </span>
   {/if}
 
-  <div class="pill" class:wide={showing} role="toolbar" aria-label="The page's tools" {@attach glassPart({ radius: 26 })}>
+  <div class="pill" class:wide={showing} role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
     <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
     {#if confirming && page && pageAction}
       {@const a = pageAction}
@@ -316,7 +334,7 @@
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search">
+        <span class="field" role="search" style:width="{fieldWants}px" data-wants={fieldWants}>
           <span class="typed" class:layered={!!layered}>
             {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
             <input
