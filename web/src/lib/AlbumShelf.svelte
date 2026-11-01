@@ -16,6 +16,7 @@
   import { albumCoverUrl, search, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { plural } from './insights.svelte';
+  import { recordsWord } from './recordTypeRules';
   import { listShows, matchLine, type Matched } from './search';
   import { keepWhile } from './keepWhile.svelte';
   import Asking from './Asking.svelte';
@@ -384,7 +385,7 @@
   function favouriteTicked() {
     const list = [...ticked];
     const on = !tickedFav;
-    const n = plural(list.length, 'record');
+    const n = plural(list.length, recordsWord(list.map((x) => x.a.type)));
     askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
       navigator.vibrate?.(8);
       selecting = null;
@@ -449,7 +450,7 @@
         fields={ALBUM_ORDERS}
         bind:value={order}
         bind:down
-        count={`${howMany(albums.length, 'record')}${countMore ? ` · ${countMore}` : ''}`}
+        count={`${howMany(albums.length, recordsWord(albums.map((a) => a.type)))}${countMore ? ` · ${countMore}` : ''}`}
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
         countOnly={layout === 'flow'}
@@ -639,7 +640,7 @@
   <SelectionMenu
     title={several.title}
     tracks={several.tracks}
-    chips={[plural(several.list.length, 'record')]}
+    chips={[plural(several.list.length, recordsWord(several.list.map((x) => x.a.type)))]}
     extra={severalExtra}
     onclose={() => ((several = null), (selecting = null))}
   />

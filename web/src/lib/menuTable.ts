@@ -188,7 +188,8 @@ export const GROUP_ORDER: readonly MenuGroupId[] = ['go', 'discover', 'feel', 'c
 export const OWN_CARD: readonly EntryId[] = ['discover', 'extra'];
 
 /** The names that are the same everywhere (0058: Info not Details, View for the object, Go to for another); the
- *  entries named by what they are about ("Go to Bonobo", "Delete 3 playlists") are left out. */
+ *  entries named by what they are about ("Go to Bonobo", "Delete 3 playlists", "Delete EP": a record by its type,
+ *  lib/recordTypeRules) are left out. */
 export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   view: 'View',
   goAlbum: 'Go to album',
@@ -227,12 +228,11 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   removeFromQueue: 'Remove from queue',
   removeResume: 'Remove resume point',
   clearQueue: 'Clear the queue',
-  deleteAlbum: 'Delete album',
   deleteCrate: 'Delete crate',
 };
 
-/** Names no menu uses any more: what 0058 and its amendment renamed. */
-export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…'];
+/** Names no menu uses any more: what 0058 and its amendment renamed, and Delete album (a record by its type, 2026-11-01). */
+export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…', 'Delete album'];
 
 /** What a menu offers out of reach (decision 0085: don't offer what can't be upheld; the owner, 2026-10-30): the entries
  *  that work with Cratarr away. A navigation reads the service worker's last copy (lib/away), a heart, a rating, a

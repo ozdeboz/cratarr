@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { ALL, SELECTED, layerIn, layeredRows, rowsOfType, typeLabel, typeOfRows, typeOptions, typesSaid, typesShown } = await import('../src/lib/recordTypeRules.ts');
+const { ALL, SELECTED, layerIn, layeredRows, recordWord, recordsTitle, recordsWord, rowsOfType, typeLabel, typeOfRows, typeOptions, typesSaid, typesShown } = await import('../src/lib/recordTypeRules.ts');
 
 const row = (values: string[], not = false) => ({ axis: 'type', not, value: { kind: 'any_of' as const, values } });
 
@@ -61,4 +61,18 @@ test('the Filter sheet says "or" within a layer and "and" across, as the server 
   assert.equal(said(['Live', 'Album', 'Classical', 'EP']), 'Album or EP and Live and Classical');
   assert.equal(said(['Compilation', 'Live']), 'Compilation or Live', 'one layer: either');
   assert.equal(typesSaid(['Album', 'EP'], layerIn(null)), 'Album and EP', 'no layers known: each its own');
+});
+
+test('records are named by their one release type, else records (the owner, 2026-11-01)', () => {
+  assert.equal(recordWord('ep'), 'EP');
+  assert.equal(recordWord('album'), 'album');
+  assert.equal(recordWord('other'), 'record', 'Other names no kind');
+  assert.equal(recordWord(null), 'record');
+  assert.equal(recordsWord(['single', 'single']), 'single');
+  assert.equal(recordsWord(['album', 'ep']), 'record');
+  assert.equal(recordsWord(['album', undefined]), 'record', 'one without a type: records');
+  assert.equal(recordsWord([]), 'record');
+  assert.equal(recordsTitle(['ep']), 'EPs');
+  assert.equal(recordsTitle(['album', 'album']), 'Albums');
+  assert.equal(recordsTitle(['album', 'single']), 'Records');
 });

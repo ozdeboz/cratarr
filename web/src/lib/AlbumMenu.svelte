@@ -89,6 +89,7 @@
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
+  import { recordWord } from './recordTypeRules';
   import { playPlaylistFrom } from './output.svelte';
   import { shuffled } from './shuffle';
   import { albumGone, albumSubject, panel, viewPlaylist } from './panel.svelte';
@@ -162,6 +163,8 @@
       return keptAlbum;
     }
   });
+  // Named by its release type: Delete EP, this single (lib/recordTypeRules).
+  const word = $derived(recordWord(a.type));
   const source = $derived.by(() => {
     try {
       return (keptSource = givenSource ?? keptSource);
@@ -360,7 +363,8 @@
   const toList = new TracksToPlaylist(
     () => source,
     () => ids,
-    'this album',
+    // svelte-ignore state_referenced_locally
+    `this ${word}`,
   );
   $effect(() => {
     if (ids[0]) toList.ask([ids[0]]);
@@ -377,7 +381,7 @@
   // Opened at the playlists for an album outside Music: there is nothing to add it to.
   $effect(() => {
     if (step === 'lists' && toList.first && !toList.first.addable) {
-      toast.fail(null, "This album isn't in Music, so it can't go in a playlist");
+      toast.fail(null, `This ${word} isn't in Music, so it can't go in a playlist`);
       onclose();
     }
   });
@@ -388,7 +392,7 @@
   // svelte-ignore state_referenced_locally
   const primary = offer?.from?.use === 'music';
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
-  const NO_LIDARR = "Lidarr isn't set up in Settings, so it may fetch this album again.";
+  const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   let ask = $state<false | Ask | 'really'>(false);
   /** The move's library. */
   let to = $state<LibraryInfo | null>(null);
@@ -539,13 +543,13 @@
       if (!to) return;
       const name = to.name;
       moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `Moved ${a.title} to ${name}.`);
-    }, 'Could not move the album');
+    }, `Could not move the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
       const r = await replaceIncoming(source, a.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
       moved(r, `Replaced ${r.title} in ${music}.`);
-    }, 'Could not replace the album');
+    }, `Could not replace the ${word}`);
   /** The tag differences shown at first (the rest behind "And N more"). */
   const DIFF_SHOWN = 12;
   let diffAll = $state(false);
@@ -554,7 +558,7 @@
       const { undo, title } = await deleteAlbum(source, a.id);
       gone();
       withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in ${fromName}.`, after: onundone });
-    }, 'Could not delete the album');
+    }, `Could not delete the ${word}`);
   async function cancel(id: number) {
     onclose();
     try {
@@ -668,7 +672,7 @@
   {:else if e === 'removeResume'}
     {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
   {:else if e === 'deleteAlbum'}
-    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
+    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label={`Delete ${word}`} danger onclick={() => (ask = 'delete')} />{/if}
   {/if}
 {/snippet}
 
@@ -810,7 +814,7 @@
     <div class="form">
       <p class="ask">Delete {a.title}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
       <div class="actions">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>Delete album</button>
+        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>Delete {word}</button>
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>

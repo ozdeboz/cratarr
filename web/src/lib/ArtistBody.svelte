@@ -16,6 +16,7 @@
   import CoverPlay from './CoverPlay.svelte';
   import { bandcampOf, bandcampPlay, playOnBandcamp, bandcampFailed } from './bandcampFound.svelte';
   import SectionHead from './SectionHead.svelte';
+  import { recordsTitle } from './recordTypeRules';
   import { matchesSearch } from './pageView.svelte';
 
   let {
@@ -191,8 +192,9 @@
      a narrow one the profile stays in the header, to fold. -->
 <div class="beside" class:with-profile={!searching && (!!profile || profileComing)}>
   {#if albumsShown.length}
-    <section aria-label="Albums" bind:this={albumsEl}>
-      <SectionHead title="Albums" />
+    {@const heading = recordsTitle(albumsShown.map((a) => a.type))}
+    <section aria-label={heading} bind:this={albumsEl}>
+      <SectionHead title={heading} />
       {@render grid(albumsShown)}
     </section>
   {/if}

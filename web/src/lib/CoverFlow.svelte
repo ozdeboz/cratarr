@@ -259,7 +259,7 @@
   style:bottom={bleed ? `${-bleed}px` : null}
   style:perspective="{620 * front.u}px"
   role="listbox"
-  aria-label="Albums"
+  aria-label="Records"
   tabindex="0"
   onkeydown={key}
   onpointerdown={down}

@@ -32,6 +32,21 @@ const PLURAL: Record<string, string> = {
 };
 export const typeLabel = (value: string) => PLURAL[value.toLowerCase()] ?? value;
 
+/** A record as its release type names it (the owner, 2026-11-01: "When it's a single type, we can use that type"):
+ *  album, EP, single, broadcast; a record where it has none or is Other. */
+const ONE: Record<string, string> = { album: 'album', ep: 'EP', single: 'single', broadcast: 'broadcast' };
+export const recordWord = (type?: string | null) => ONE[type?.toLowerCase() ?? ''] ?? 'record';
+/** Several records' word: their one release type where they all have it ("3 EPs"), else record ("12 records"). */
+export function recordsWord(types: readonly (string | null | undefined)[]): string {
+  const words = new Set(types.map(recordWord));
+  return words.size === 1 ? [...words][0] : 'record';
+}
+/** As a heading: Albums, EPs, Singles, Broadcasts, Records. */
+export const recordsTitle = (types: readonly (string | null | undefined)[]) => {
+  const w = recordsWord(types);
+  return `${w[0].toUpperCase()}${w.slice(1)}s`;
+};
+
 export type TypeOption = { id: string; label: string; count?: number };
 /** The Type axis as the filter answers it (lib/api Axis): its values, most records first, and their counts. */
 export type TypeAxis = { values: readonly string[]; counts?: readonly number[] };
