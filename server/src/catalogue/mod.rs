@@ -1357,7 +1357,7 @@ impl Catalogue {
     /// writes into them (decision 0092, `app::file_facts`). Read-only; blocking.
     pub fn named_values(&self, names: &[&str]) -> Result<HashMap<(i64, String), HashMap<String, Vec<String>>>> {
         let db = self.db();
-        let list = names.iter().map(|n| format!("'{}'", n.replace(''', "''"))).collect::<Vec<_>>().join(", ");
+        let list = names.iter().map(|n| format!("'{}'", n.replace('\'', "''"))).collect::<Vec<_>>().join(", ");
         let mut st = db.prepare(&format!(
             "SELECT t.folder, t.rel, t.name, t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel
              WHERE {PRESENT_F} AND t.name IN ({list}) ORDER BY t.folder, t.rel, t.n"
