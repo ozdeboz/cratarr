@@ -54,8 +54,11 @@
   const ACTIVITY = 'Activity';
   /** How many, and how it stands where the server says ("3 missing"): the finding's count, else its items. */
   const countOf = (p: ReturnType<typeof problems>[number]) => {
-    const n = (p.finding?.count ?? p.items.length).toLocaleString();
-    return p.finding?.state ? `${n} ${p.finding.state}` : n;
+    const count = p.finding?.count ?? p.items.length;
+    const state = p.finding?.state;
+    // A state with nothing to count says only itself ("Salon · silent").
+    if (state) return count ? `${count.toLocaleString()} ${state}` : state;
+    return count.toLocaleString();
   };
 </script>
 
