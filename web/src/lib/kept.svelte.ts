@@ -42,6 +42,8 @@ export const kept = $state({
   waiting: null as 'wifi' | 'charging' | 'network' | null,
   /** The track downloading now, as "artist – name". */
   current: null as string | null,
+  /** The app's sync job under way, from its start to its end, as the app says (held back by its rules too). */
+  running: false,
 });
 
 export const keptKey = (kind: KeptKind, source: string, id: string) => `${kind}:${source}/${id}`;
@@ -50,7 +52,9 @@ export const keptKey = (kind: KeptKind, source: string, id: string) => `${kind}:
 export const isKept = (kind: KeptKind, source: string, id: string) => kept.items.some((i) => i.key === keptKey(kind, source, id));
 
 /** Anything syncing or held back: the Downloads page's ring shows. */
-export const keptBusy = () => kept.items.some((i) => i.state === 'syncing' || i.state === 'waiting');
+/** Syncing: the app's job under way, as it says (the owner, 2026-11-01: read from its albums, between two of them
+ *  nothing seemed to sync, and the pill's held progress folded; the job says its own start and end now). */
+export const keptBusy = () => kept.running;
 
 /** Keep an item on the device, or not (`name` for the sheet). The app answers with the whole list again. */
 export function setKept(kind: KeptKind, source: string, id: string, on: boolean, name: string = id) {
@@ -108,10 +112,11 @@ if (inApp) {
     kept.budget = typeof m.budget === 'number' ? m.budget : null;
     kept.waiting = m.waiting === 'wifi' || m.waiting === 'charging' || m.waiting === 'network' ? m.waiting : null;
     kept.current = typeof m.current === 'string' ? m.current : null;
+    kept.running = m.running === true;
     kept.known = true;
-    // A sync asked for by hand: ended once nothing syncs any more (held back by the rules counts as its end).
+    // A sync asked for by hand: ended once the job has (held back by the rules counts as its end).
     if (asked) {
-      if (kept.items.some((i) => i.state === 'syncing')) asked.syncing = true;
+      if (kept.running && !kept.waiting) asked.syncing = true;
       else if (asked.syncing || kept.waiting) ended();
     }
   });
