@@ -17,7 +17,8 @@ DIR=${1:?usage: scripts/dev-instance.sh <folder> [port]}
 PORT=${2:-8095}
 NAME=cratarr-dev
 IMAGE=cratarr:dev
-REPO=$(cd "$(dirname "$0")/.." && pwd)
+# A path docker takes on Windows too (Git Bash: C:/…, not /c/…).
+REPO=$(cd "$(dirname "$0")/.." && (pwd -W 2>/dev/null || pwd))
 export MSYS_NO_PATHCONV=1
 
 mkdir -p "$DIR/music" "$DIR/fixtures" "$DIR/data"
