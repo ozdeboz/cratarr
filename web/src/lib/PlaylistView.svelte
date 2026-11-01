@@ -105,13 +105,14 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
-  import { can, offers } from './capabilities.svelte';
+  import { can, findsTracks, offers } from './capabilities.svelte';
   import { later, laterKey } from './later.svelte';
   import { applyOps, opsFor, type PlaylistOp } from './playlistOps';
   import { reach } from './reach.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
+  import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -136,7 +137,6 @@
   import SectionHead from './SectionHead.svelte';
   import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
-  import { openHealth } from './health';
   import { stateLine } from './fileChangeRules';
   import { openReview, undoRun } from './fileRuns.svelte';
   import { refresh } from './live.svelte';
@@ -1148,6 +1148,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
   // An album's menu (its ⋮ in the action bar).
   let albumMenuOpen = $state(false);
+  /** Its missing tracks open (lib/ReplaceTrackSheet), from its details line. */
+  let missingOpen = $state(false);
   let bandcampMenuOpen = $state(false);
   let artistMenuOpen = $state(false);
   async function resumeAlbum() {
@@ -2120,7 +2122,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
               >{#if l.progress !== null}<span class="files-meter"><i style:width={`${l.progress * 100}%`}></i></span>{/if}</button
             >
           {/if}
-          {#if album && listedHere?.a.whole_tracks}<button class="details left-out" onclick={() => openHealth('library:incomplete')}><Icon name="health" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></button>{/if}
+          <!-- Its missing tracks over it, to look for (the owner, 2026-11-01: it opened Health's whole list, a U-turn);
+               where they can't be looked for here, only said. -->
+          {#if album && listedHere?.a.whole_tracks}<button class="details left-out" disabled={!(me.admin && album.source === 'cratarr' && findsTracks())} onclick={() => (missingOpen = true)}><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></button>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy, album.source === BANDCAMP ? { id: album.id, title } : null)}
               >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
@@ -2706,6 +2710,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}
   />
+{/if}
+
+{#if missingOpen && album}
+  <ReplaceTrackSheet source={album.source} album={{ id: album.id, title: albumHead?.title ?? title }} onclose={() => (missingOpen = false)} />
 {/if}
 
 <style>
