@@ -11,6 +11,9 @@ const empty = () => ({
   /** undefined: not known yet; null: none. */
   week: undefined as HomeWeek | null | undefined,
   moment: undefined as Moment | null | undefined,
+  /** When the moment was asked (ms), and the part of the day it was. */
+  momentAt: 0,
+  momentPart: '',
   back: null as HomeBack[] | null,
   dug: undefined as Digging | null | undefined,
   favAlbumIds: null as string[] | null,
@@ -24,6 +27,16 @@ const empty = () => ({
 
 let keptFor = '';
 let kept = $state(empty());
+
+/** The part of the day, as the moment changes with it: morning, day, evening, night. */
+export function partOfDay(d = new Date()): string {
+  const h = d.getHours();
+  return h >= 5 && h < 12 ? 'morning' : h >= 12 && h < 18 ? 'day' : h >= 18 && h < 23 ? 'evening' : 'night';
+}
+/** Whether the kept moment still holds (the owner, 2026-11-01: checked before it shows): asked within half an hour,
+ *  in the same part of the day. It follows the weather and the time; the other sections do not go stale in minutes. */
+export const momentFresh = (k: { moment: unknown; momentAt: number; momentPart: string }, now = Date.now()) =>
+  k.moment !== undefined && now - k.momentAt < 30 * 60_000 && k.momentPart === partOfDay(new Date(now));
 
 /** What Home showed last, for this server and these libraries (emptied for another). */
 export function homeKept(source: string, without: readonly string[] | undefined) {
