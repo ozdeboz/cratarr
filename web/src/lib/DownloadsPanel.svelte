@@ -12,7 +12,7 @@
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
-  import { albumSubject, artistSubject, backOne, closePlaylist, DOWNLOADS, SETTINGS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
+  import { albumSubject, artistSubject, backOne, closePlaylist, DOWNLOADS, SETTINGS, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { appInfo, download, downloads, removeDownloads } from './app.svelte';
   import type { Collection } from './api';
@@ -250,7 +250,7 @@
         />
         <!-- Where its room and quality are set: a row of its own, saying so (the owner, 2026-10-26: the bar's row did not
              make clear it went there). -->
-        <Item name="Sync settings" onclick={() => viewPlaylist(`${SETTINGS}sync`)} />
+        <Item name="Sync settings" onclick={() => viewOver(`${SETTINGS}sync`)} />
         {#if waiting}<Item lead="warn" name={kept.waiting ? WAITS[kept.waiting] : `${waiting} waiting`} />{/if}
         {#if failed.length}
           <!-- Retry asks Cratarr: not offered out of its reach (decision 0085: never offer what cannot be upheld). -->

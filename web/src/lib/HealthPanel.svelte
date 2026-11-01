@@ -92,7 +92,7 @@
   /** A missing track being looked for (Albums missing tracks): its album and recording (lib/ReplaceTrackSheet). */
   let searchOf = $state<{ album: string; title: string; recording: string } | null>(null);
   const onward = (x: HealthItem) =>
-    x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => openTab([x.playlist!], 'tracks') } : null;
+    x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => viewOver(x.playlist!) } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
   const clock = (ms: number | null) => (ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms / 1000) % 60)).padStart(2, '0')}` : '');
 

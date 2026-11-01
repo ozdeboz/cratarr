@@ -109,10 +109,11 @@
     return [...by].map(([name, them]) => ({ name, them }));
   });
 
-  /** Gone from the Library's list at once (as its page's `gone`), before it is read again. */
-  function leave(gone: { source: string; id: string }[]) {
+  /** Gone from the Library's list at once (as its page's `gone`), before it is read again; `deleted`: from the panel
+   *  too (a moved one stays open, its panel following it). */
+  function leave(gone: { source: string; id: string }[], deleted = false) {
     const out = new Set(gone.map((x) => `${x.source}/${x.id}`));
-    for (const x of gone) albumGone(x.source, x.id);
+    if (deleted) for (const x of gone) albumGone(x.source, x.id);
     const v = library.view;
     if (v) v.sources = v.sources.map((s) => ({ ...s, albums: s.albums.filter((a) => !out.has(`${s.id}/${a.id}`)) }));
   }
@@ -156,7 +157,7 @@
           },
           1,
         );
-        leave(gone);
+        leave(gone, true);
         if (!gone.length) return toast.fail(null, `Could not delete the ${word}s`);
         withUndo(gone.length === 1 && them.length === 1 ? `Deleted ${gone[0].title}.` : `Deleted ${doneOf(gone.length, them.length)}.`, tokens, { after: reread });
       },

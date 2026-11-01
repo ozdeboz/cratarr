@@ -333,7 +333,7 @@ export function playlistRenamed(from: string, to: string) {
 export function playlistDeleted(id: string) {
   if (!panel.selection.includes(id)) return;
   const rest = panel.selection.filter((x) => x !== id);
-  if (!rest.length) return closePlaylist();
+  if (!rest.length) return backOne();
   replace(address(rest, panel.tab));
   read();
 }
@@ -346,8 +346,9 @@ export function albumMoved(source: string, from: string, to: string) {
 }
 
 /** An album that left Incoming (kept, replaced or deleted) closes. */
+/** A record deleted: back one level from it (not every level: what it was opened over stays). */
 export function albumGone(source: string, id: string) {
-  if (panel.viewed === albumSubject(source, id)) closePlaylist();
+  if (panel.viewed === albumSubject(source, id)) backOne();
 }
 
 /** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own, Insights' panel
