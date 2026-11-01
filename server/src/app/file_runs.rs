@@ -508,9 +508,12 @@ mod tests {
             apply_one(t, &to, &none, "moved").unwrap();
             assert!(holds(&fields_of(t, &["releasetype", "date"]).unwrap(), &none));
         }
-        // A FLAC's second release type field follows.
+        // A FLAC's second release type field follows (lofty has no key for it: read as the file keeps it).
         apply_one(&f, &[("releasetype".to_string(), Vec::new())], &[("releasetype".to_string(), s(&["ep"]))], "moved").unwrap();
-        assert_eq!(fields_of(&f, &["musicbrainz_albumtype"]).unwrap()["musicbrainz_albumtype"], ["ep"]);
+        use lofty::prelude::*;
+        let vc = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&f).unwrap(), lofty::config::ParseOptions::new()).unwrap().remove_vorbis_comments().unwrap();
+        assert_eq!(vc.get_all("MUSICBRAINZ_ALBUMTYPE").collect::<Vec<_>>(), ["ep"]);
+        assert_eq!(vc.get_all("RELEASETYPE").collect::<Vec<_>>(), ["ep"]);
         std::fs::remove_dir_all(&d).ok();
     }
 

@@ -92,9 +92,7 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
 /// where lofty does not map them (Opus's `R128_*`, a lower-case MP4 freeform), decision 0035.
 fn by_raw_key(raw: &str) -> Option<&'static str> {
     let last = raw.rsplit(':').next().unwrap_or(raw);
-    const NAMED: [&str; 9] = [
-        // Lidarr's second field for the release type in a FLAC (0.13), which lofty has no key for.
-        "musicbrainz_albumtype",
+    const NAMED: [&str; 8] = [
         "albumartists",
         // A style (0.9.7), as Vorbis `STYLE`, ID3v2 `TXXX:STYLE` or an MP4 freeform keeps it.
         "style",
