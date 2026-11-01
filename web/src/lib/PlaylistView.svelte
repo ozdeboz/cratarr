@@ -137,6 +137,8 @@
   import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { openHealth } from './health';
+  import { stateLine } from './fileChangeRules';
+  import { openReview, undoRun } from './fileRuns.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
   import { inApp } from './app.svelte';
@@ -284,12 +286,26 @@
       readLibrary(n > 0).catch(() => {});
     }
   });
+  // Its files against Cratarr (decision 0092: the record's state line, under its title): the album answer's, read again
+  // as a run's news comes while it differs, waits or is written.
+  let filesState = $state<import('./api').FilesState | null>(null);
+  $effect(() => {
+    const a = album;
+    if (!a || a.source !== 'cratarr') return;
+    let t = 0;
+    const off = on('file_run', () => {
+      clearTimeout(t);
+      t = window.setTimeout(() => albumView(a.source, a.id).then((r) => (filesState = r.files_state ?? null), () => {}), 500);
+    });
+    return () => (off(), clearTimeout(t));
+  });
   const listedHere = $derived.by(() => {
     const a = album;
     const s = a ? library.view?.sources.find((x) => x.id === a.source) : undefined;
     const la = s?.albums.find((x) => x.id === a!.id);
     return s && la ? { s, a: la } : null;
   });
+  const filesLine = $derived(album ? stateLine(filesState ?? listedHere?.a.files_state) : null);
 
   // The album's artist chip: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
   // their own panel's chip).
@@ -375,6 +391,7 @@
       rows = null;
       error = null;
       albumHead = null;
+      filesState = null;
       artistHead = null;
       listGenres = null;
     }
@@ -384,6 +401,7 @@
       : a
         ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : albumView(a.source, a.id)).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
+            if (want === id) filesState = r.files_state ?? null;
             if (want === id)
               albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners };
             return { ...r, total: r.rows.length };
@@ -2089,6 +2107,19 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {#if details}<p class="details">{#if albumDot}<i class="dot" style:background={albumDot.colour} role="img" aria-label={albumDot.name}></i>{/if}{details}</p>{/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
           <!-- A record missing tracks (0.13): how many of its release's it holds, to Health's albums missing tracks. -->
+          {#if album && filesLine}
+            {@const l = filesLine}
+            {@const run = filesState?.run}
+            <button
+              class="details left-out"
+              class:warn={l.tone === 'warn'}
+              disabled={!l.act}
+              onclick={() => (l.act === 'review' ? openReview('types', album.id) : l.act === 'undo' && run ? void undoRun(run, [album.id]) : undefined)}
+              ><Icon name={l.tone === 'warn' ? 'bang' : l.act === 'undo' ? 'check' : l.act === 'review' ? 'pencil' : 'save'} size={14} /><span
+                >{l.text}{#if l.act === 'review'} · <b class="act">Review</b>{:else if l.act === 'undo'} · <b class="act">Undo</b>{/if}</span
+              >{#if l.progress !== null}<span class="files-meter"><i style:width={`${l.progress * 100}%`}></i></span>{/if}</button
+            >
+          {/if}
           {#if album && listedHere?.a.whole_tracks}<button class="details left-out" onclick={() => openHealth('library:incomplete')}><Icon name="health" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></button>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy, album.source === BANDCAMP ? { id: album.id, title } : null)}
@@ -3003,6 +3034,36 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   .tool.add {
     color: var(--accent-ink);
+  }
+
+  /* The record's state line (decision 0092): its act in the accent, its meter beside while it writes. */
+  .left-out .act {
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+
+  .left-out.warn {
+    color: var(--warn, #e0a23a);
+  }
+
+  .left-out:disabled {
+    cursor: default;
+  }
+
+  .files-meter {
+    display: inline-block;
+    width: 64px;
+    height: 4px;
+    margin-left: 6px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--text) 12%, transparent);
+  }
+
+  .files-meter i {
+    display: block;
+    height: 100%;
+    background: var(--accent);
   }
 
   .left-out {
