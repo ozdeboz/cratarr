@@ -286,7 +286,7 @@
   });
 </script>
 
-<span class="pill-row" class:wide={showing} bind:this={row}>
+<span class="pill-row" class:wide={showing} class:fill={searching && pageView.leadAway} bind:this={row}>
   {#if globeShown}
     <span class="globe" transition:fade|global={{ duration: GLASS_MS }}>
       <button
@@ -627,6 +627,13 @@
      as the search opens, so what it is at fits (the owner, 2026-10-25). */
   /* The work's progress unfolded takes all the room the row has, up to 560 px (the owner, 2026-10-25: on a phone it drew
      a little over half, its line cut, a gap left before back). */
+  /* The open search where the title gave way: it grows to meet back (the owner, 2026-11-01), its own width the least. */
+  .pill-row.fill,
+  .pill-row.fill .pill,
+  .pill-row.fill .field {
+    flex: 1 1 auto;
+  }
+
   .pill-row.wide,
   .pill.wide {
     flex: 1 1 auto;
