@@ -109,6 +109,10 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   counts); a reference found by guessing (Bandcamp's search box, MusicBrainz without an id in the files), shown
   once to confirm. Open, a record shows a row a source, agreeing, missing or differing, and what each says. What
   would change the files goes through the review sheet (0092).
+- *CLAP, maybe, never with certainty* (the owner, 2026-11-01: "possibly but not with any certainty"): not a reference
+  (it knows a sound, not a track list), at most an amber hint where AcoustID knows nothing: a track that sounds
+  unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
+  miss too much. AudioMuse runs after import, so in Health, not on the intake card.
 - Mockups of the intake card first (632), then the server's checks and references (a5).
 
 ## External library
