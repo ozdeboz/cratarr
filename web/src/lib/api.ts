@@ -1071,7 +1071,8 @@ export type FileRun = {
   state: 'waiting' | 'writing' | 'done';
   done: number;
   of: number;
-  failed: { album: string; file?: string; why: string }[];
+  /** Each file (or record) set aside and why; the record's name where the server gives it. */
+  failed: { album: string; file?: string; why: string; title?: string; artist?: string | null }[];
   at?: number;
   undo?: string;
   undone: boolean;
