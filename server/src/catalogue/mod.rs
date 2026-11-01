@@ -429,7 +429,8 @@ impl Catalogue {
             cat.db().execute("UPDATE tags SET name = 'bpm' WHERE raw IN ('TBPM', 'tmpo') AND name IS NULL", [])?;
             // Reader 6 names a file's mood, style and grouping (0.9.7, the library's words), which no reader before kept:
             // every file read before is read again, and served as it was read until then.
-            // Reader 7 names the release type (0.13, written into files by decision 0092): every file read again too.
+            // Reader 7 names the release type (0.13, written into files by decision 0092) and reads the fields lofty has
+            // no key for (STYLE, unread since lofty 0.25): every file read again too.
             if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 7) {
                 cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, READ])?;
             }
