@@ -39,7 +39,10 @@ type Part = {
 const GHOST = 'data-glass-ghost';
 const isLayer = (p: Part, el: Element) => el === p.glass || el === p.shade || el.hasAttribute(GHOST);
 const kidsOf = (p: Part) => [...p.box.children].filter((el) => !isLayer(p, el));
-const windowNow = () => `${innerWidth}x${innerHeight}`;
+/** The window's width: a change of it (turning the phone, a window resized) is laid out at once, not moved. Not its
+ *  height, which the keyboard changes as the search opens (the owner, 2026-11-01: after the first search it no longer
+ *  moved). */
+const windowNow = () => `${innerWidth}`;
 
 /** The frame a part's places are measured in: the window, moved as the nearest fixed or sticky element (the row it
  *  floats in, or the part itself: the bar) is moved by its transforms, so a page scrolling under it, or the row or
@@ -118,7 +121,9 @@ function play(p: Part) {
     after.kids.size !== kept.length ||
     p.kids.size !== kept.length ||
     kept.some((el) => !sameRect(was.get(el)!, after.kids.get(el)!));
-  if (!from || !changed || resized || reducedMotion() || p.still()) return settle();
+  // All of it hidden, or all of it back (app.css's `.away` hides what slides away, the bar's tabs among it): no move.
+  const whole = after.kids.size > 0 && p.kids.size > 0;
+  if (!from || !changed || !whole || resized || reducedMotion() || p.still()) return settle();
 
   const to = after.at;
   const timing: KeyframeAnimationOptions = { duration: GLASS_MS, easing: DECELERATE_CSS };
