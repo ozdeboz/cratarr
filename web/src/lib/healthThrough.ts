@@ -14,6 +14,18 @@ export function byDomain<T extends { domain: string }>(list: readonly T[]): { do
   return out;
 }
 
+/** The problems by Health's area, in the areas' order, each area's most urgent first (red, then amber, then grey;
+ *  the report's order within each: the owner, 2026-11-01). */
+export function byArea<T extends { area: string; urgent: boolean; finding: { level: 'critical' | 'warning' | 'info' } | null }>(
+  list: readonly T[],
+  areas: readonly string[],
+): { area: string; problems: T[] }[] {
+  const rank = (p: T) => ({ bad: 0, warn: 1, off: 2 })[dotOf(p)];
+  return areas
+    .map((area) => ({ area, problems: list.filter((p) => p.area === area).sort((a, b) => rank(a) - rank(b)) }))
+    .filter((g) => g.problems.length);
+}
+
 /** A problem's dot (lib/settings/Item's): red where it needs you, amber a warning, grey to know. */
 export function dotOf(p: { urgent: boolean; finding: { level: 'critical' | 'warning' | 'info' } | null }): 'bad' | 'warn' | 'off' {
   if (!p.finding) return p.urgent ? 'bad' : 'warn';

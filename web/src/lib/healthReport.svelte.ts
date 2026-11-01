@@ -1,7 +1,7 @@
 // The health report and the files' problems (decision 0063), read once for the Health page's list and its panel
 // (lib/HealthPanel) alike, and again on each visit to the page.
 import { getFileProblems, getHealthReport, type FileProblem, type HealthFinding, type HealthItem } from './api';
-import { DOMAINS, iconOf } from './health';
+import { type Area, areaOf, DOMAINS, iconOf } from './health';
 import type { IconName } from './Icon.svelte';
 
 export const health = $state<{ findings: HealthFinding[]; loaded: boolean; problems: FileProblem[] | null; error: string | null }>({
@@ -49,6 +49,8 @@ export type Problem = {
   icon: IconName;
   urgent: boolean;
   domain: string;
+  /** Its area of Health (lib/health AREAS). */
+  area: Area;
   /** Its short name, the panel's breadcrumb (the owner, 2026-10-25: "Quality replacements", "Missing genres"). */
   name: string;
   /** What it is, on its card ("12 albums without a genre"; a file kind's "Files without tags"). */
@@ -72,11 +74,11 @@ const fileItem = (p: FileProblem): HealthItem => {
 export function problems(): Problem[] {
   const out: Problem[] = health.findings
     .filter((f) => f.domain !== 'files')
-    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, name: f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
+    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, area: areaOf(f.domain), name: f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
   for (const k of FILE_KINDS) {
     const files = (health.problems ?? []).filter((p) => p.kind === k.kind);
     if (files.length)
-      out.push({ key: `files-${k.kind}`, icon: DOMAINS.files.icon, urgent: k.kind === 'broken', domain: DOMAINS.files.name, name: health.findings.find((f) => f.key === `files:${k.kind}`)?.name ?? k.title, title: k.title, said: `${files.length.toLocaleString()} ${files.length === 1 ? 'file' : 'files'}${k.title.slice('Files'.length)}`, line: `${files.length} ${files.length === 1 ? 'file' : 'files'}`, finding: null, items: files.map(fileItem), hint: k.hint });
+      out.push({ key: `files-${k.kind}`, icon: DOMAINS.files.icon, urgent: k.kind === 'broken', domain: DOMAINS.files.name, area: areaOf('files'), name: health.findings.find((f) => f.key === `files:${k.kind}`)?.name ?? k.title, title: k.title, said: `${files.length.toLocaleString()} ${files.length === 1 ? 'file' : 'files'}${k.title.slice('Files'.length)}`, line: `${files.length} ${files.length === 1 ? 'file' : 'files'}`, finding: null, items: files.map(fileItem), hint: k.hint });
   }
   return out;
 }

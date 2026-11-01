@@ -21,6 +21,20 @@ export const DOMAINS: Record<string, { name: string; icon: IconName }> = {
   requests: { name: 'Requests', icon: 'inbox' },
 };
 
+/** Health's three areas (the owner, 2026-11-01): what is yours (records, files, Incoming, playlists), what Cratarr
+ *  talks to (servers, services, the network, sign-in, players, requests), and what it is doing (analysis; Changes to
+ *  files beside it). Each domain is in one. */
+export const AREAS = ['Library', 'Connections', 'Activity'] as const;
+export type Area = (typeof AREAS)[number];
+const AREA_OF: Record<string, Area> = {
+  library: 'Library',
+  incoming: 'Library',
+  files: 'Library',
+  playlists: 'Library',
+  analysis: 'Activity',
+};
+export const areaOf = (domain: string): Area => AREA_OF[domain] ?? 'Connections';
+
 const PAGES: Record<string, string> = { library: '#/library', playlists: '#/', settings: '#/settings', health: '#/health', requests: '#/requests' };
 
 /** Opens where a finding is dealt with (a switch turned on there first); none: nothing. */
