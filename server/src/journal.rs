@@ -162,6 +162,11 @@ pub struct RunRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunFailed {
     pub album: String,
+    /// Its record's title and artist, where known (a record set aside whole has no files in the run to name it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     pub why: String,
