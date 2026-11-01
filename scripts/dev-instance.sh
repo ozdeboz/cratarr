@@ -17,17 +17,26 @@ DIR=${1:?usage: scripts/dev-instance.sh <folder> [port]}
 PORT=${2:-8095}
 NAME=cratarr-dev
 IMAGE=cratarr:dev
-# A path docker takes on Windows too (Git Bash: C:/…, not /c/…).
-REPO=$(cd "$(dirname "$0")/.." && (pwd -W 2>/dev/null || pwd))
+REPO=$(cd "$(dirname "$0")/.." && pwd)
 export MSYS_NO_PATHCONV=1
+# A folder as the docker daemon sees it: from Git Bash on Windows the daemon is Docker CE inside WSL, where C:/x is
+# /mnt/c/x; elsewhere the folder itself.
+host() {
+  p=$(cd "$1" && pwd)
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) d=$(printf %s "$p" | cut -d/ -f2); echo "/mnt/$d/${p#/$d/}" ;;
+    *) echo "$p" ;;
+  esac
+}
 
 mkdir -p "$DIR/music" "$DIR/fixtures" "$DIR/data"
+H=$(host "$DIR")
 echo "building $IMAGE from $REPO"
-docker build -q -t "$IMAGE" "$REPO" > /dev/null
+(cd "$REPO" && docker build -q -t "$IMAGE" .) > /dev/null
 
 if [ ! -d "$DIR/fixtures/library" ]; then
   echo "making the fixture library"
-  docker run --rm -v "$DIR/fixtures:/fixtures" --entrypoint /cratarr-server "$IMAGE" --make-fixtures /fixtures/library
+  docker run --rm -v "$H/fixtures:/fixtures" --entrypoint /cratarr-server "$IMAGE" --make-fixtures /fixtures/library
 fi
 
 if [ ! -f "$DIR/data/settings.json" ]; then
@@ -54,7 +63,7 @@ fi
 docker rm -f "$NAME" > /dev/null 2>&1 || true
 docker run -d --name "$NAME" --restart unless-stopped --memory 768m \
   -p "$PORT:8080" \
-  -v "$DIR/data:/data" -v "$DIR/music:/music" -v "$DIR/fixtures:/fixtures" \
+  -v "$H/data:/data" -v "$H/music:/music" -v "$H/fixtures:/fixtures" \
   "$IMAGE" > /dev/null
 
 echo "waiting for it to answer on :$PORT"
