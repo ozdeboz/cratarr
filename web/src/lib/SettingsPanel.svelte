@@ -25,8 +25,10 @@
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
   import { askDevice, askDownloads, inApp } from './app.svelte';
-  import { backFromThing, closePlaylist, panel, settingsThing, upToPage } from './panel.svelte';
-  import { SECTIONS, thingTitle, type SettingsSection } from './settingsSections.svelte';
+  import { backFromThing, backOne, panel, SETTINGS, settingsThing, upToPage, viewPlaylist } from './panel.svelte';
+  import type { Siblings } from './Crumbs.svelte';
+  import { keptFor, partsFor, SECTIONS, SETTINGS_GROUPS, thingTitle, type SettingsSection } from './settingsSections.svelte';
+  import { installed } from './offline.svelte';
   import { ed } from './settings/editor.svelte';
   import { partReset } from './settings/reset.svelte';
   import SaveBar from './settings/SaveBar.svelte';
@@ -55,6 +57,17 @@
   const thing = $derived(settingsThing(panel.viewed));
   // The part's name, as its row on the Settings page has it; on a thing's page the thing's.
   const partTitle = $derived(section === 'device' ? deviceName() : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'));
+  // On a phone the part's name is a picker of Settings' other parts, in their groups (a move sideways; lib/Crumbs).
+  const siblings = $derived<Siblings>({
+    menuLabel: 'Settings shows',
+    options: partsFor(me.admin, inApp, installed).map((x) => ({
+      id: x.id,
+      label: x.id === 'device' ? deviceName() : x.title,
+      group: SETTINGS_GROUPS.find((g) => g.kept === keptFor(x, me.admin))?.title,
+    })),
+    chosen: section,
+    onchoose: (id) => viewPlaylist(SETTINGS + id),
+  });
   const title = $derived(thing ? (thingTitle.text ?? '') : partTitle);
 
   // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).
@@ -107,14 +120,14 @@
   {#if thing}
     <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromThing(section)}><Icon name="back" size={22} /></button></span>
   {:else if !beside}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
+    <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
   {/if}
   <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
   {@const top = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }]}
   {#if thing}
     <Crumbs trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
   {:else}
-    <Crumbs trail={top} here={partTitle} />
+    <Crumbs trail={top} here={partTitle} siblings={beside ? null : siblings} />
   {/if}
 {/snippet}
 {#snippet glassExtra()}

@@ -46,7 +46,10 @@
   import ContentControls from './ContentControls.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
-  import { albumSubject, closePlaylist, healthThing, openTab, panel, upToPage, viewOver } from './panel.svelte';
+  import { albumSubject, backOne, closePlaylist, HEALTH, healthThing, isStep, openTab, panel, upToPage, viewOver, viewPlaylist } from './panel.svelte';
+  import { byDomain } from './healthThrough';
+  import { planTitle } from './fileChangeRules';
+  import type { Siblings } from './Crumbs.svelte';
   import FileChanges from './FileChanges.svelte';
   import { CHANGES, changesView, fileRuns, openChanges } from './fileRuns.svelte';
   import Crumbs from './Crumbs.svelte';
@@ -281,21 +284,38 @@
   const top = $derived(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }]);
   // Changes to files (decision 0092): its list, a plan to review, a run, under Health as a problem is.
   const changes = $derived(problem === CHANGES ? changesView(healthThing(panel.viewed)) : null);
-  const changesTrail = $derived(changes && changes.view !== 'list' ? [...top, { label: 'Changes to files', go: openChanges }] : top);
+  // The levels Back walks through (lib/Crumbs, one rule for every panel; the owner, 2026-11-01): Changes to files above a
+  // run only where the run was opened from it (a step), and a tap there is that step back, never a jump to the list.
+  const changesTrail = $derived(changes && changes.view !== 'list' && isStep() ? [...top, { label: 'Changes to files', go: () => history.back() }] : top);
   const changesHere = $derived(
-    !changes ? '' : changes.view === 'list' ? 'Changes to files' : changes.view === 'plan' ? 'Review changes' : (fileRuns.list?.find((r) => r.id === changes.id)?.title ?? 'A change to files'),
+    !changes ? '' : changes.view === 'list' ? 'Changes to files' : changes.view === 'plan' ? planTitle(changes.kind) : (fileRuns.list?.find((r) => r.id === changes.id)?.title ?? 'A change to files'),
+  );
+  // On a phone the problem's name is a picker of the other problems, in their groups, and Changes to files (a move
+  // sideways, not up to Health's list and down again).
+  const siblings = $derived<Siblings | null>(
+    beside
+      ? null
+      : {
+          menuLabel: 'Health shows',
+          options: [
+            ...byDomain(problems()).flatMap((g) => g.problems.map((x) => ({ id: x.key, label: x.name, group: g.domain }))),
+            ...(me.admin ? [{ id: CHANGES, label: 'Changes to files', group: 'Files' }] : []),
+          ],
+          chosen: changes ? CHANGES : (p?.key ?? null),
+          onchoose: (id) => viewPlaylist(HEALTH + id),
+        },
   );
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
   {#if !beside}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
+    <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
   {/if}
   {#if changes}
-    <Crumbs trail={changesTrail} here={changesHere} />
+    <Crumbs trail={changesTrail} here={changesHere} siblings={changes.view === 'list' ? siblings : null} />
   {:else if p}
-    <Crumbs trail={top} here={p.name} />
+    <Crumbs trail={top} here={p.name} {siblings} />
   {:else}
     <h2 class="title">Health</h2>
   {/if}

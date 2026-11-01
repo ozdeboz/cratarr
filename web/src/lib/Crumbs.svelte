@@ -8,11 +8,17 @@
   // something cut), for every panel on this device ("global on the device": prefs.crumbsWhole). No levels above: only
   // where one is, as beside the page whose name its list already shows (Settings › Display beside Settings' list said
   // Settings twice).
+  // One rule for every panel (the owner, 2026-11-01): the levels are those Back walks through, each a tap back there;
+  // only places are levels. Where one is can be a picker of its siblings (Settings' other parts, Health's other
+  // problems: a move sideways instead of up and down again, as the Library's "Records ▾"); the short and whole switch
+  // is then the … before the trail.
   import { tick } from 'svelte';
   import { prefs } from './prefs.svelte';
+  import GlassPicker, { type PickerOption } from './GlassPicker.svelte';
 
   type Level = { label: string; go?: () => void };
-  let { trail = [], here }: { trail?: Level[]; here: string } = $props();
+  export type Siblings = { menuLabel: string; options: readonly PickerOption[]; chosen: string | null; onchoose: (id: string) => void };
+  let { trail = [], here, siblings = null }: { trail?: Level[]; here: string; siblings?: Siblings | null } = $props();
   let line = $state<HTMLElement>();
   const whole = $derived(prefs.crumbsWhole);
   const shown = $derived(whole ? trail : trail.slice(-1));
@@ -29,8 +35,8 @@
 </script>
 
 <h2 class="crumbs" class:whole bind:this={line}>
-  {#each shown as up, i (i)}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <span class="here" aria-current="page" onclick={show}>{here}</span>
+  {#if siblings && trail.length > 1}<button class="more" aria-pressed={whole} aria-label={whole ? 'Fewer levels' : 'Every level'} onclick={show}>…</button><span class="sep" aria-hidden="true">›</span>{/if}{#each shown as up, i (i)}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <span class="here" aria-current="page" onclick={show}>{here}</span>{/if}
 </h2>
 
 <style>
@@ -61,12 +67,22 @@
     color: var(--muted);
   }
 
-  button.up {
+  button.up,
+  button.more {
     padding: 0;
     border: 0;
     background: none;
     font: inherit;
     cursor: pointer;
+  }
+
+  button.more {
+    flex: none;
+    color: var(--muted);
+  }
+
+  button.more[aria-pressed='true'] {
+    color: var(--accent-ink);
   }
 
   button.up:hover {
