@@ -139,17 +139,48 @@ pub enum Change {
 /// run wrote.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileRun {
+    /// The writer ("types", "fix:<finding>", "renumber") and how the page names it.
     pub what: String,
+    pub title: String,
+    /// Its records, as the review sheet named them.
+    pub records: Vec<RunRecord>,
     pub files: Vec<FileWrite>,
+    /// The files not written, and why.
+    #[serde(default)]
+    pub failed: Vec<RunFailed>,
 }
 
-/// One file of a run: its album, where it is, and its fields before and after (each field's values as items).
+/// A record of a run: its album id, title and artist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunRecord {
+    pub album: String,
+    pub title: String,
+    pub artist: String,
+}
+
+/// A file a run did not write, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunFailed {
+    pub album: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    pub why: String,
+}
+
+/// One file of a run: its album, where it is, its track's title, its fields before and after (each field's values as
+/// items) with where each new value comes from, and whether it was undone.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileWrite {
     pub album: String,
     pub path: std::path::PathBuf,
+    #[serde(default)]
+    pub track: Option<String>,
     pub before: Vec<(String, Vec<String>)>,
     pub after: Vec<(String, Vec<String>)>,
+    #[serde(default)]
+    pub from: Vec<(String, String)>,
+    #[serde(default)]
+    pub undone: bool,
 }
 
 /// One playlist's file before a change, and the fingerprint of the file the change left.
@@ -439,9 +470,23 @@ impl Journal {
         row.map(|(run, at, undone)| Ok((serde_json::from_str(&run)?, at, undone.is_some()))).transpose()
     }
 
-    /// Take a run for undoing: true for the one caller that may undo it.
-    pub fn claim_run(&self, id: EventId, at: i64) -> Result<bool> {
-        Ok(self.db().execute("UPDATE file_runs SET undone_at = ?2 WHERE id = ?1 AND undone_at IS NULL", params![id, at])? == 1)
+    /// A run kept again after some of it was undone; `undone` once all of it is.
+    pub fn update_run(&self, id: EventId, run: &FileRun, undone: Option<i64>) -> Result<()> {
+        self.db().execute("UPDATE file_runs SET run = ?2, undone_at = ?3 WHERE id = ?1", params![id, serde_json::to_string(run)?, undone])?;
+        Ok(())
+    }
+
+    /// The runs kept since `since` (epoch seconds), newest first: id, when, the run, whether all of it was undone.
+    pub fn file_runs_since(&self, since: i64) -> Result<Vec<(EventId, i64, FileRun, bool)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, at, run, undone_at FROM file_runs WHERE at >= ?1 ORDER BY id DESC")?;
+        let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, at, run, undone) = row?;
+            out.push((id, at, serde_json::from_str(&run)?, undone.is_some()));
+        }
+        Ok(out)
     }
 
     /// Forget events older than `before` (epoch seconds): nothing can undo or handle them any more.
@@ -459,15 +504,25 @@ mod change_tests {
     #[test]
     fn a_file_run_is_kept_while_the_trash_keeps_and_undone_once() {
         let j = Journal::open(None).unwrap();
-        let file = FileWrite { album: "al-1".into(), path: "/m/a.flac".into(), before: vec![("date".into(), vec![])], after: vec![("date".into(), vec!["2010".into()])] };
-        let run = FileRun { what: "file-facts".into(), files: vec![file] };
+        let file = FileWrite {
+            album: "al-1".into(),
+            path: "/m/a.flac".into(),
+            track: Some("A".into()),
+            before: vec![("date".into(), vec![])],
+            after: vec![("date".into(), vec!["2010".into()])],
+            from: vec![("date".into(), "the album's year".into())],
+            undone: false,
+        };
+        let record = RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() };
+        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new() };
         let old = j.record_run(1_000, &run, None, 100).unwrap();
         let id = j.record_run(2_000, &run, Some("ann"), 100).unwrap();
         assert_eq!(j.file_run(old).unwrap(), None, "older than the trash keeps: forgotten");
-        assert_eq!(j.file_run(id).unwrap(), Some((run, 2_000, false)));
-        assert!(j.claim_run(id, 2_010).unwrap());
-        assert!(!j.claim_run(id, 2_020).unwrap(), "undone once");
-        assert!(j.file_run(id).unwrap().unwrap().2);
+        assert_eq!(j.file_run(id).unwrap(), Some((run.clone(), 2_000, false)));
+        assert_eq!(j.file_runs_since(1_500).unwrap().len(), 1);
+        run.files[0].undone = true;
+        j.update_run(id, &run, Some(2_010)).unwrap();
+        assert_eq!(j.file_run(id).unwrap(), Some((run, 2_000, true)));
     }
 
     #[test]

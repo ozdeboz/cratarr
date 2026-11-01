@@ -263,8 +263,13 @@ pub fn router(app: Arc<App>) -> Router {
             // Types, years and Classical into the files (0.13, decision 0092): the switch and Health's Write; a run's
             // Undo.
             .route("/api/settings/file-facts", get(file_facts).put(file_facts_switch))
-            .route("/api/settings/file-facts/write", post(file_facts_write))
-            .route("/api/file-runs/{token}/undo", post(file_run_undo))
+            // Every change to the library's files (decision 0092): a kind's review sheet and its apply, the runs, a
+            // run as written, its Undo.
+            .route("/api/file-changes/plans/{kind}", get(file_change_plan))
+            .route("/api/file-changes/plans/{kind}/apply", post(file_change_apply))
+            .route("/api/file-changes/runs", get(file_change_runs))
+            .route("/api/file-changes/runs/{id}", get(file_change_run))
+            .route("/api/file-changes/runs/{id}/undo", post(file_change_undo))
             .route("/api/settings/preview", post(preview))
             .route("/api/settings/lidarr", post(preview_lidarr))
             .route("/api/settings/lidarr/options", get(lidarr_options))
@@ -3704,6 +3709,7 @@ async fn collection(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Jso
     // Classical (0.10), as the Library's albums say it.
     for s in &mut v.sources {
         crate::app::classical::tell(&s.id, &mut s.albums).await;
+        crate::app::file_facts::tell(&s.id, &mut s.albums);
     }
     Json(v)
 }
@@ -6579,14 +6585,63 @@ async fn file_facts_switch(Json(b): Json<SwitchedOn>) -> Result<Json<crate::app:
     file_facts().await
 }
 
-/// Write (an administrator's tap): every record whose files differ, a run on the one path; its first status.
-async fn file_facts_write(State(app): State<Arc<App>>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
-    Ok(Json(crate::app::file_facts::write(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+#[derive(Deserialize)]
+struct PlanOf {
+    /// Album ids, comma-separated: only these records.
+    albums: Option<String>,
 }
 
-/// A run's Undo (`r…`): each file put back where it still holds what the run wrote.
-async fn file_run_undo(State(app): State<Arc<App>>, Path(token): Path<String>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
-    Ok(Json(crate::app::file_runs::undo(&app, &token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+#[derive(Deserialize)]
+struct Ticked {
+    #[serde(default)]
+    albums: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct RunsSince {
+    since: Option<i64>,
+}
+
+fn file_change_refused(e: anyhow::Error) -> ApiError {
+    ToggleError::Refused(format!("{e:#}")).into()
+}
+
+/// A kind's review sheet (`types`; Health's fixes and Renumber as they move onto the path): per record its fields old
+/// → new and where the new comes from.
+async fn file_change_plan(Path(kind): Path<String>, Query(q): Query<PlanOf>) -> Result<Json<crate::app::file_runs::PlanView>, ApiError> {
+    let albums = q.albums.map(|a| a.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect());
+    match kind.as_str() {
+        crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::plan(albums).await.map_err(file_change_refused)?)),
+        _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
+    }
+}
+
+/// The ticked records of a kind's sheet written (an administrator's yes): the run's first status.
+async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>, Json(b): Json<Ticked>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    let albums = b.albums.unwrap_or_default();
+    match kind.as_str() {
+        crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums).await.map_err(file_change_refused)?)),
+        _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
+    }
+}
+
+/// Every run since `since` (epoch seconds; default the last 30 days): waiting or writing first, then kept, newest first.
+async fn file_change_runs(State(app): State<Arc<App>>, Query(q): Query<RunsSince>) -> Result<Json<Vec<crate::app::file_runs::Status>>, ApiError> {
+    let since = q.since.unwrap_or_else(|| crate::app::moment::now_secs() - 30 * 86_400);
+    Ok(Json(crate::app::file_runs::runs(&app, since).map_err(file_change_refused)?))
+}
+
+/// A kept run, its records as written.
+async fn file_change_run(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (status, sheet) = crate::app::file_runs::run(&app, &id).map_err(file_change_refused)?;
+    Ok(Json(json!({ "run": status, "kind": sheet.kind, "title": sheet.title, "records": sheet.records })))
+}
+
+/// A run's Undo, or its records `albums`': each file put back where it still holds what the run wrote.
+async fn file_change_undo(State(app): State<Arc<App>>, Path(id): Path<String>, body: axum::body::Bytes) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    // `{albums}` or nothing: the whole run.
+    let albums = serde_json::from_slice::<Ticked>(&body).ok().and_then(|b| b.albums);
+    Ok(Json(crate::app::file_runs::undo(&app, &id, albums).await.map_err(file_change_refused)?))
 }
 
 /// Lidarr's quality and metadata profiles and root folders (its page's choices for Want), of the saved Lidarr.
