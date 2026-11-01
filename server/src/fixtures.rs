@@ -109,7 +109,7 @@ fn albums() -> Vec<Album> {
             mixed: false,
         },
         Album {
-            artist: "Anna Weiss",
+            artist: "Lowstring Collective",
             title: "Cello Suite No. 1",
             year: Some("1995"),
             form: Form::Flac,
@@ -121,7 +121,7 @@ fn albums() -> Vec<Album> {
                 ("GENRE", "Baroque"),
                 ("COMPOSER", "Johann Sebastian Bach"),
                 ("WORK", "Cello Suite No. 1 in G major, BWV 1007"),
-                ("PERFORMER", "Anna Weiss"),
+                ("PERFORMER", "Lowstring Collective"),
             ],
             mixed: false,
         },
