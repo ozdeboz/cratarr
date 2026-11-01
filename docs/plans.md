@@ -102,6 +102,13 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   a whole listen). Keep, Replace or Delete; nothing moves or is written before that yes. All green with AcoustID
   agreeing: offered with Keep ticked; amber or red: left open with its reason. A record checked by hand is its own
   reference for its type and year after.
+- *One Health item for the references of every indexer* (the owner, 2026-11-01): "References", across MusicBrainz,
+  Discogs, Bandcamp and AcoustID, never one item a source. Its entries: a record no reference agrees with (its
+  type, year and completeness rest on its files alone; paste a link, or "checked by hand", the record then its own
+  reference); references that disagree (track count, lengths, year side by side; the owner picks the one that
+  counts); a reference found by guessing (Bandcamp's search box, MusicBrainz without an id in the files), shown
+  once to confirm. Open, a record shows a row a source, agreeing, missing or differing, and what each says. What
+  would change the files goes through the review sheet (0092).
 - Mockups of the intake card first (632), then the server's checks and references (a5).
 
 ## External library
