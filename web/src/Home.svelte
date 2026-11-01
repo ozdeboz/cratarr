@@ -41,6 +41,7 @@
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
+  import { homeKept, momentFresh, partOfDay, type CrateShelf } from './lib/homeKept.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { albumSubject, viewFor, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
@@ -61,6 +62,10 @@
   /** Local mode (lib/localHome): the device's own Home, nothing asked of Cratarr. */
   const local = localMode();
   if (local) askDevicePlays();
+  // What Home showed last (lib/homeKept): shown at once on its return, each answer asked again quietly behind it.
+  const kept = homeKept(prefs.source, hiddenLibraries());
+  // The moment and its sky only while they still hold (half an hour, the same part of the day): else the fresh one.
+  const momentKept = momentFresh(kept);
 
   onMount(() => {
     if (!library.view) void readLibrary(false);
@@ -69,14 +74,14 @@
 
   // New for you (the owner, 2026-10-23 and 2026-10-30): the server's (one rule with its crate): Cratarr's own library's
   // newest albums, those heard 5% or more of and those without a cover left out, at most 3 of an album artist's.
-  let serverNewest = $state<{ source: string; a: ListedAlbum }[]>([]);
-  let serverNewestIn = $state(false);
+  let serverNewest = $state<{ source: string; a: ListedAlbum }[]>(kept.newest ?? []);
+  let serverNewestIn = $state(kept.newest !== null);
   const newest = $derived(local ? newestHere().map((a) => ({ source: DEVICE, a })) : serverNewest);
   const newestIn = $derived(local ? device.tracks !== null : serverNewestIn);
   onMount(() => {
     if (local) return;
     getHomeNew().then(
-      (r) => ((serverNewest = r.albums.map(({ source, ...a }) => ({ source, a }))), (serverNewestIn = true)),
+      (r) => ((serverNewest = kept.newest = r.albums.map(({ source, ...a }) => ({ source, a }))), (serverNewestIn = true)),
       () => (serverNewestIn = true),
     );
   });
@@ -109,13 +114,13 @@
 
   // Sounds like your week: the server's (app::home): its size, its genres, how many tracks were played, and its first
   // albums with a cover for the mosaic.
-  let week = $state<HomeWeek | null>(null);
-  let weekIn = $state(false);
+  let week = $state<HomeWeek | null>(kept.week ?? null);
+  let weekIn = $state(kept.week !== undefined);
   onMount(() => {
     if (local) return void (weekIn = true);
     getHomeWeek(prefs.source || undefined, hiddenLibraries()).then(
-      (r) => ((week = r.week), (weekIn = true)),
-      () => ((week = null), (weekIn = true)),
+      (r) => ((week = kept.week = r.week), (weekIn = true)),
+      () => (weekIn = true),
     );
   });
   /** Its first four albums, as a seeded crate's mosaic (lib/PlaylistView). */
@@ -136,13 +141,13 @@
   // The moment (the owner, 2026-10-23: its own style, not a shelf like those below): its albums as a Flow on a canvas
   // painted for the sky, the front one named; its radio plays only what is near it, the moment read again on each
   // refill (it follows the weather).
-  let moment = $state<Moment | null>(null);
-  let momentIn = $state(false);
+  let moment = $state<Moment | null>(momentKept ? (kept.moment ?? null) : null);
+  let momentIn = $state(momentKept);
   onMount(() => {
     if (local) return void (momentIn = true);
     getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      (m) => ((moment = m), (momentIn = true)),
-      () => ((moment = null), (momentIn = true)),
+      (m) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), (momentIn = true)),
+      () => (momentIn = true),
     );
   });
   const momentAlbums = $derived(
@@ -178,8 +183,8 @@
 
   // Jump back in: the server's (app::home): the albums and playlists played last and this player's queues left, a queue
   // that is an album's tracks shown as that album; asked again when the queues change.
-  let serverBack = $state<HomeBack[]>([]);
-  let serverBackIn = $state(false);
+  let serverBack = $state<HomeBack[]>(kept.back ?? []);
+  let serverBackIn = $state(kept.back !== null);
   const back = $derived(local ? backHere() : serverBack);
   const backIn = $derived(local ? device.tracks !== null && devicePlays.known : serverBackIn);
   // Asked again only when the queues change (0.12.3; the owner: Home flickered): read inside the effect, the version's
@@ -191,7 +196,7 @@
     const [player] = JSON.parse(key) as [string | null, string];
     let current = true;
     getHomeBack(player).then(
-      (r) => current && ((serverBack = r.items), (serverBackIn = true)),
+      (r) => current && ((serverBack = kept.back = r.items), (serverBackIn = true)),
       () => current && (serverBackIn = true),
     );
     return () => (current = false);
@@ -199,13 +204,13 @@
   /** A queue's icon by where it came from, as the queue switcher has it (lib/QueuesSheet). */
   const FROM: Record<string, IconName> = { playlist: 'playlists', album: 'albums', favourites: 'heart', library: 'library', tracks: 'music', player: 'speaker' };
   // Blast from the past and Grave digging (the server's), of the libraries switched on.
-  let dug = $state<Digging | null>(null);
-  let dugIn = $state(false);
+  let dug = $state<Digging | null>(kept.dug ?? null);
+  let dugIn = $state(kept.dug !== undefined);
   onMount(() => {
     if (local) return void (dugIn = true);
     getDigging(prefs.source || undefined, hiddenLibraries()).then(
-      (d) => ((dug = d), (dugIn = true)),
-      () => ((dug = null), (dugIn = true)),
+      (d) => ((dug = kept.dug = d), (dugIn = true)),
+      () => (dugIn = true),
     );
   });
   // Blast from the past: each album once (the owner, 2026-10-23), by its track unplayed longest; Play plays them all.
@@ -241,20 +246,25 @@
 
   // Favourite albums and Favourite tracks (the owner, 2026-10-24: the standard ones, off until switched on): Cratarr's
   // own, asked for only when switched on.
-  let favAlbumIds = $state<string[] | null>(null);
-  let favRows = $state<PlaylistRow[] | null>(null);
+  let favAlbumIds = $state<string[] | null>(kept.favAlbumIds);
+  let favRows = $state<PlaylistRow[] | null>(kept.favRows);
+  // Asked once a visit, what was kept showing meanwhile.
+  let favAlbumsAsked = false;
+  let favTracksAsked = false;
   $effect(() => {
-    if (local || !order.includes('favAlbums') || favAlbumIds) return;
+    if (local || !order.includes('favAlbums') || favAlbumsAsked) return;
+    favAlbumsAsked = true;
     getFavoriteAlbums('cratarr').then(
-      (ids) => (favAlbumIds = ids),
-      () => (favAlbumIds = []),
+      (ids) => (favAlbumIds = kept.favAlbumIds = ids),
+      () => (favAlbumIds ??= []),
     );
   });
   $effect(() => {
-    if (local || !order.includes('favTracks') || favRows) return;
+    if (local || !order.includes('favTracks') || favTracksAsked) return;
+    favTracksAsked = true;
     getFavoriteTracks().then(
-      (r) => (favRows = r.rows.filter((x) => x.id && !x.missing)),
-      () => (favRows = []),
+      (r) => (favRows = kept.favRows = r.rows.filter((x) => x.id && !x.missing)),
+      () => (favRows ??= []),
     );
   });
   const favAlbums = $derived.by(() => {
@@ -285,7 +295,7 @@
   let exploreIn = $state(false);
   let statusIn = $state(false);
   const PATIENCE = 4000;
-  let patient = $state(true);
+  let patient = $state(!kept.seen);
   onMount(() => {
     const t = setTimeout(() => (patient = false), PATIENCE);
     return () => clearTimeout(t);
@@ -297,12 +307,12 @@
   // One's own crates on Home (0.9.3; the owner, 2026-10-25): each a shelf of its albums, as New for you's, its › the
   // crate; read once a visit, its first albums in the crate's order (`null`: nothing to show).
   const CRATE_ALBUMS = 20;
-  type CrateShelf = { name: string; source: string; albums: { id: string; title: string; artist: string | null; year: number | null }[] };
-  let crateShelves = $state<Record<string, CrateShelf | null>>({});
+  let crateShelves = $state<Record<string, CrateShelf | null>>({ ...kept.crates });
+  // Each asked once a visit, its kept shelf showing meanwhile.
   const asking = new Set<string>();
   $effect(() => {
     const ids = order.filter((p) => p.startsWith(CRATE_PART)).map((p) => p.slice(CRATE_PART.length));
-    for (const id of untrack(() => ids.filter((x) => !(x in crateShelves) && !asking.has(x)))) {
+    for (const id of untrack(() => ids.filter((x) => !asking.has(x)))) {
       asking.add(id);
       Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
         ([page, def]) => {
@@ -312,9 +322,9 @@
             albums.push({ id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null, year: r.year ?? null });
             if (albums.length === CRATE_ALBUMS) break;
           }
-          crateShelves[id] = { name: def.name, source: page.source, albums };
+          crateShelves[id] = kept.crates[id] = { name: def.name, source: page.source, albums };
         },
-        () => (crateShelves[id] = null),
+        () => !(id in crateShelves) && (crateShelves[id] = null),
       );
     }
   });
@@ -336,7 +346,10 @@
   // the rest can start to enter"): with a flow leading Home, its sky shows as soon as it is known which (the moment's
   // weather, or one's own picture) and that picture is in, then its words and albums, then the sections after it; two
   // and a half seconds at most, then whatever there is.
-  let skyIn = $state(false);
+  let skyIn = $state(kept.sky && momentKept);
+  $effect(() => {
+    if (skyIn) kept.sky = true;
+  });
   /** The sections a first screen shows: the lead and the one after it. */
   const FIRST_SCREEN = 2;
   $effect(() => {
@@ -357,6 +370,9 @@
     settledOf(part) && (part === lead || !heroLead || skyIn) && (!patient || order.slice(0, order.indexOf(part)).every((x) => settledOf(x)));
   /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
   const loading = $derived(!order.some(turn) && !order.every((x) => settledOf(x)));
+  $effect(() => {
+    if (!loading) kept.seen = true;
+  });
   // One commit (lib/Hold; the owner, 2026-10-26: "Hold until its first screen is ready"): the page before stays until
   // the header's picture and the first sections are in; those further down may follow.
   holdUntil(
