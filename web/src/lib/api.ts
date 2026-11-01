@@ -1425,6 +1425,10 @@ export type HealthFinding = {
   key: string;
   /** Its short name, the panel's breadcrumb ("Quality replacements"; 0.9.6); a server before it has none. */
   name?: string;
+  /** What it is about and how it stands, for Health's row (the owner, 2026-11-01: "Covers · 3 missing"): the thing,
+   *  and the word its count is said with. */
+  thing?: string;
+  state?: string;
   /** What it is, in a sentence ("11 better copies wait to replace Music"): its card's, and the panel's top. */
   title: string;
   detail?: string;

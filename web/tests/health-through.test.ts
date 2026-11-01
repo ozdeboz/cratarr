@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { byDomain, damagedStops, dotOf, handledOne, missingStops, nextStop, nextWanted, skipStop, startThrough, throughKind, throughLine, throughTotal } =
+const { byArea, byDomain, damagedStops, dotOf, handledOne, missingStops, nextStop, nextWanted, skipStop, startThrough, throughKind, throughLine, throughTotal } =
   await import('../src/lib/healthThrough.ts');
 
 test('problems grouped by domain, a domain where its worst problem stands, worst first within', () => {
@@ -87,4 +87,16 @@ test('the walk: each track dealt with counts once, a new stop starts clean, an u
   assert.deepEqual(t, { at: 2, handled: [], count: 5 });
   // Never past the last.
   assert.equal(throughLine({ at: 9, handled: [], count: 7 }, 7), '7 of 7');
+});
+
+test("Health's three areas, in their order, each its most urgent first; an empty area left out (the owner, 2026-11-01)", () => {
+  const p = (key: string, area: string, level: 'critical' | 'warning' | 'info') => ({ key, area, urgent: false, finding: { level } });
+  const list = [p('genre', 'Library', 'info'), p('lidarr', 'Connections', 'warning'), p('broken', 'Library', 'critical'), p('cover', 'Library', 'warning')];
+  assert.deepEqual(
+    byArea(list, ['Library', 'Connections', 'Activity']).map((g) => [g.area, g.problems.map((x) => x.key)]),
+    [
+      ['Library', ['broken', 'cover', 'genre']],
+      ['Connections', ['lidarr']],
+    ],
+  );
 });

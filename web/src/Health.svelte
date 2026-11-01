@@ -1,14 +1,15 @@
 <script lang="ts">
   // Health (decision 0063), laid out as Settings (0.13; the owner, 2026-10-31, mockup C: "keeping a straight style"):
-  // the problems grouped by their domain, each group under its small heading, a domain where its worst problem stands
-  // and its problems worst first (lib/healthThrough byDomain); each a row (lib/settings/Item): a dot (red: it needs you,
-  // amber: a warning, grey: to know), its name, one line, how many, and ›. A tap opens the problem in the panel
+  // three areas (the owner, 2026-11-01): Library, Connections, Activity (lib/health AREAS), each under its small
+  // heading, its problems most urgent first (lib/healthThrough byArea); only problems show. Each a row
+  // (lib/settings/Item): a dot (red: it needs you, amber: a warning, grey: to know), the thing it is about, one line,
+  // how many and how it stands ("Covers · 3 missing", where the server says so), and ›. A tap opens the problem in the panel
   // (lib/HealthPanel, one layout for every problem): beside the list on a roomy window, where one is always open (App:
   // the one last open, else the first), its row tinted; over the list on a phone. The report is an administrator's;
   // anyone else sees the files.
   import { panelBeside } from './lib/glass.svelte';
   import { health, loadHealth, problems } from './lib/healthReport.svelte';
-  import { byDomain, dotOf } from './lib/healthThrough';
+  import { byArea, dotOf } from './lib/healthThrough';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { HEALTH, healthOf, healthThing, panel, viewPlaylist } from './lib/panel.svelte';
@@ -17,7 +18,7 @@
   import Item from './lib/settings/Item.svelte';
   import { fileFacts, loadFileFacts } from './lib/fileFacts.svelte';
   import { CHANGES, fileRuns, loadRuns, openChanges, openReview } from './lib/fileRuns.svelte';
-  import { DOMAINS } from './lib/health';
+  import { AREAS } from './lib/health';
   import { me } from './lib/me.svelte';
 
   $effect(loadHealth);
@@ -25,7 +26,7 @@
   const list = $derived(problems().filter((p) => matchesSearch(p.domain, p.title, p.line, ...p.items.map((x) => `${x.title} ${x.line ?? ''}`))));
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
   searchNone(() => (health.loaded && problems().length && !list.length ? 'problems' : null));
-  const groups = $derived(byDomain(list));
+  const groups = $derived(byArea(list, AREAS));
   // Changes to files (decision 0092; administrators'): the records whose files differ from their types and years (while
   // types into files is on) a line under Library, opening its review; every run one line under Files, naming what
   // writes and waits. Lines that point: no meter, no Undo of their own.
@@ -39,7 +40,8 @@
     const parts = [writing ? `${writing.title} writing` : null, waiting ? `${waiting} waiting` : null].filter(Boolean);
     return parts.length ? parts.join(' · ') : null;
   });
-  const showChanges = $derived(me.admin && (!!fileRuns.list?.length || !!fileFacts.value?.on));
+  // Activity shows only while something runs or ran this month (the owner, 2026-11-01: only what matters shows).
+  const showChanges = $derived(me.admin && !!fileRuns.list?.length);
   const opened = (thing: string | null) => panelBeside() && healthOf(panel.viewed) === CHANGES && healthThing(panel.viewed) === thing;
   const facts = $derived(differ > 0 || showChanges);
   // A run ended: how many differ is counted again.
@@ -48,10 +50,13 @@
     void ended;
     loadFileFacts();
   });
-  const LIBRARY = DOMAINS.library.name;
-  const FILES = DOMAINS.files.name;
-  /** How many: the finding's count, else its items. */
-  const countOf = (p: ReturnType<typeof problems>[number]) => (p.finding?.count ?? p.items.length).toLocaleString();
+  const LIBRARY = 'Library';
+  const ACTIVITY = 'Activity';
+  /** How many, and how it stands where the server says ("3 missing"): the finding's count, else its items. */
+  const countOf = (p: ReturnType<typeof problems>[number]) => {
+    const n = (p.finding?.count ?? p.items.length).toLocaleString();
+    return p.finding?.state ? `${n} ${p.finding.state}` : n;
+  };
 </script>
 
 <main>
@@ -62,24 +67,24 @@
     {#if !problems().length}<p class="empty">All good.</p>{:else if !pageView.none}<p class="empty">None of them match.</p>{/if}
   {:else}
     <div class="groups">
-      {#each groups as g (g.domain)}
-        <Group title={g.domain}>
+      {#each groups as g (g.area)}
+        <Group title={g.area}>
           {#each g.problems as p (p.key)}
             <Item
               lead={dotOf(p)}
-              name={p.name}
+              name={p.finding?.thing ?? p.name}
               line={p.name === p.title ? p.line : p.title}
               value={countOf(p)}
               open={panelBeside() && healthOf(panel.viewed) === p.key}
               onclick={() => viewPlaylist(HEALTH + p.key)}
             />
           {/each}
-          {#if g.domain === LIBRARY}{@render differItem()}{/if}
-          {#if g.domain === FILES}{@render changesItem()}{/if}
+          {#if g.area === LIBRARY}{@render differItem()}{/if}
+          {#if g.area === ACTIVITY}{@render changesItem()}{/if}
         </Group>
       {/each}
-      {#if differ > 0 && !groups.some((g) => g.domain === LIBRARY)}<Group title={LIBRARY}>{@render differItem()}</Group>{/if}
-      {#if showChanges && !groups.some((g) => g.domain === FILES)}<Group title={FILES}>{@render changesItem()}</Group>{/if}
+      {#if differ > 0 && !groups.some((g) => g.area === LIBRARY)}<Group title={LIBRARY}>{@render differItem()}</Group>{/if}
+      {#if showChanges && !groups.some((g) => g.area === ACTIVITY)}<Group title={ACTIVITY}>{@render changesItem()}</Group>{/if}
     </div>
   {/if}
 </main>
