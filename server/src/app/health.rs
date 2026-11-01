@@ -189,8 +189,9 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "servers:lidarr" => ("Lidarr", "unreachable"),
         "requests:waiting" => ("Requests", "waiting"),
         k if k.starts_with("servers:") => ("Server", "unreachable"),
-        k if k.starts_with("players:held:") => ("Plays", "held"),
-        k if k.starts_with("players:away:") => ("Players", "silent"),
+        // A player's own (the owner, 2026-11-01: "The player as the thing"): named where it is found.
+        k if k.starts_with("players:held:") => ("Player", "play held"),
+        k if k.starts_with("players:away:") => ("Player", "silent"),
         k if k.ends_with(":check") => ("Checks", "failed"),
         _ => return None,
     })
@@ -774,13 +775,17 @@ impl App {
         for p in self.play_on.list() {
             if let Some(why) = &p.held {
                 let mut f = finding("players", format!("players:held:{}", p.name), Level::Warning, 1, format!("{} held back a play", p.name));
+                f.thing = Some(p.name.clone());
                 f.detail = Some(why.clone());
                 out.push(f);
             }
             let away = at - p.seen as i64;
             if !p.online && p.kind == "app" && (24 * 3600..30 * 24 * 3600).contains(&away) {
                 let days = away / (24 * 3600);
-                out.push(finding("players", format!("players:away:{}", p.name), Level::Info, 1, format!("{} not heard from for {}", p.name, n(days as u64, "day", "days"))));
+                // No count: a player is silent or not ("Salon · silent"; the page leaves a 0 out).
+                let mut f = finding("players", format!("players:away:{}", p.name), Level::Info, 0, format!("{} not heard from for {}", p.name, n(days as u64, "day", "days")));
+                f.thing = Some(p.name.clone());
+                out.push(f);
             }
         }
         out
