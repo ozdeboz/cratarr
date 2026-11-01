@@ -92,7 +92,7 @@
   import { recordWord } from './recordTypeRules';
   import { playPlaylistFrom } from './output.svelte';
   import { shuffled } from './shuffle';
-  import { albumGone, albumSubject, panel, viewPlaylist } from './panel.svelte';
+  import { albumGone, albumSubject, panel, viewOver } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
@@ -531,7 +531,8 @@
       jobs.poke();
       return;
     }
-    gone();
+    // It stays open where it is (the owner, 2026-11-01: no U-turns): its panel follows it to its new place.
+    ongone?.();
     withUndo(words, [r.undo], { undone: `${r.title} is back in ${fromName}.`, after: onundone });
   }
   function gone() {
@@ -583,7 +584,7 @@
         label="View"
         onclick={() => {
           onclose();
-          viewPlaylist(albumSubject(source, a.id));
+          viewOver(albumSubject(source, a.id));
         }}
       />
     {/if}

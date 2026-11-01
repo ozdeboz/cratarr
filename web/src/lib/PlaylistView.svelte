@@ -147,7 +147,7 @@
   import { playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
-  import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
+  import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { reveal } from './reveal';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
@@ -1312,7 +1312,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       making = null;
       refresh();
       loadCrates();
-      viewPlaylist(name);
+      viewOver(name);
     } catch (e) {
       toast.fail(e, "The playlist wasn't made");
       if (making) making.saving = false;
@@ -1649,7 +1649,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** After a crate's undo or redo: the list follows, and a crate that is gone no longer shows in the panel. */
   async function followCrate(c: string) {
     await loadCrates();
-    if (panel.viewed === CRATE + c && !crates.list?.some((x) => x.id === c)) closePlaylist();
+    if (panel.viewed === CRATE + c && !crates.list?.some((x) => x.id === c)) backOne();
   }
   async function saveCrate() {
     const b = builder;
@@ -1688,7 +1688,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       withUndo(`Deleted ${name}.`, [undo], { after: () => followCrate(c) });
       forgetDraft(c);
       await loadCrates();
-      closePlaylist();
+      backOne();
     } catch (e) {
       toast.fail(e, "The crate wasn't deleted");
     }
