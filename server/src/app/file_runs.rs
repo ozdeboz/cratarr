@@ -265,6 +265,21 @@ fn apply_one(path: &Path, from: &[(String, Vec<String>)], to: &[(String, Vec<Str
     write(path, to)
 }
 
+/// One file put back: already as it was before (an Undo cut short, a person's own undo): nothing to write, undone all
+/// the same (false); holding what the run wrote: `before` written (true); else set aside ("changed since it was
+/// written").
+fn restore_one(path: &Path, after: &[(String, Vec<String>)], before: &[(String, Vec<String>)]) -> Result<bool> {
+    let names: Vec<&str> = after.iter().chain(before).map(|(n, _)| n.as_str()).collect();
+    let now = fields_of(path, &names)?;
+    if holds(&now, before) {
+        return Ok(false);
+    }
+    if !holds(&now, after) {
+        bail!("changed since it was written");
+    }
+    write(path, before).map(|()| true)
+}
+
 /// The review sheet of a proposal (or of a run, `written` per record).
 pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite], written: bool) -> PlanView {
     let records = records
@@ -503,16 +518,18 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
             let of = files.len();
             set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(token.clone()), at: None });
             let results = tokio::task::spawn_blocking(move || {
-                files.into_iter().map(|(i, f)| (i, f.path.clone(), apply_one(&f.path, &f.after, &f.before, "changed since it was written"))).collect::<Vec<_>>()
+                files.into_iter().map(|(i, f)| (i, f.path.clone(), restore_one(&f.path, &f.after, &f.before))).collect::<Vec<_>>()
             })
             .await
             .unwrap_or_default();
             let mut back = Vec::new();
             for (i, path, r) in results {
                 match r {
-                    Ok(()) => {
+                    Ok(wrote) => {
                         run.files[i].undone = true;
-                        back.push(path);
+                        if wrote {
+                            back.push(path);
+                        }
                     }
                     Err(e) => status.failed.push(failed_of(&run.records, &album, &path, &e)),
                 }
@@ -610,9 +627,10 @@ mod tests {
             apply_one(t, &none, &to, "moved").unwrap();
             let now = fields_of(t, &["releasetype", "date"]).unwrap();
             assert!(holds(&now, &to), "{}: {now:?}", t.display());
-            assert_eq!(apply_one(t, &none, &to, "changed since").unwrap_err().to_string(), "changed since");
-            apply_one(t, &to, &none, "moved").unwrap();
+            assert_eq!(apply_one(t, &none, &to, "changed since").unwrap_err().to_string(), "changed since");            // Undo: back to none; again, nothing to write (already as it was).
+            assert!(restore_one(t, &to, &none).unwrap());
             assert!(holds(&fields_of(t, &["releasetype", "date"]).unwrap(), &none));
+            assert!(!restore_one(t, &to, &none).unwrap(), "already as it was: undone, not set aside");
         }
         // A FLAC's second release type field follows (lofty has no key for it: read as the file keeps it).
         apply_one(&f, &[("releasetype".to_string(), Vec::new())], &[("releasetype".to_string(), s(&["ep"]))], "moved").unwrap();
