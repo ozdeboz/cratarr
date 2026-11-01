@@ -236,6 +236,10 @@ pub struct ReleaseType {
     /// the record's page saying "7 of 12 tracks" with the album's own count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whole_tracks: Option<u32>,
+    /// Its files' state where they differ from what Cratarr holds, or a run touched them (decision 0092; Cratarr's own
+    /// records, with writing into files on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_state: Option<crate::app::file_runs::FilesState>,
     /// Classical (0.10, the owner, 2026-10-30), a kind beside the release type: Cratarr's own library's records say
     /// whether they are (`app::classical`), other servers' say nothing; the mark where someone marked it (`classical`,
     /// `not`); a classical record's composers (keyed by MusicBrainz artist, else `name:<loose name>`) and performers,
