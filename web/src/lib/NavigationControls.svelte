@@ -45,6 +45,11 @@
   // stays as it is. Library's view (its picker is never cut: the field's glass slides over it) gives way the same
   // where the two glasses would meet (the owner, 2026-10-26).
   let away = $state(false);
+  // Said to the pill beside it: the open search then takes the room the title left, to the gap beside back.
+  $effect(() => {
+    pageView.leadAway = away;
+    return () => (pageView.leadAway = false);
+  });
   $effect(() => {
     if (!pageView.searchOpen) return void (away = false);
     const measure = () => {
@@ -119,16 +124,17 @@
     box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
   }
 
-  /* A title in it: its thin glass, the round button's glass in front of it. Not a fading copy's (lib/glassMotion). */
-  .lead:has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) {
+  /* A title in it: its thin glass, the round button's glass in front of it. Not a fading copy's (lib/glassMotion), nor a
+     title given way (the panel's is hidden, not gone: its glass stayed as a sliver beside back, the owner 2026-11-01). */
+  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) {
     padding: 2px 18px 2px 2px;
   }
 
-  .lead:has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) > :is(.glass, .shade) {
+  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) > :is(.glass, .shade) {
     opacity: 1;
   }
 
-  .lead:has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) :global(.navpill) {
+  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) :global(.navpill) {
     box-shadow: none;
   }
 

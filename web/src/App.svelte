@@ -1460,7 +1460,7 @@
   }
 
   /* The pill's work unfolded (lib/ContentControls): the right side takes the row's room. */
-  .page-row .right:has(:global(.pill-row.wide)) {
+  .page-row .right:has(:global(.pill-row.wide, .pill-row.fill)) {
     flex: 1 1 auto;
   }
 
