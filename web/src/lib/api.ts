@@ -1060,7 +1060,8 @@ export const setFileFacts = (on: boolean) =>
  *  track (else the same in every file of the record). */
 export type FileField = { field: string; track?: string; before: string[]; after: string[]; from: string };
 /** A record in a plan, or in a run (`written` of its `files`, `undone`). */
-export type FileRecord = { album: string; title: string; artist: string; files: number; fields: FileField[]; written?: number; undone?: boolean };
+/** `stamp`: what the sheet shows of it, sent back with Write so a record changed since is set aside (a plan's, not a run's). */
+export type FileRecord = { album: string; title: string; artist: string; files: number; fields: FileField[]; stamp?: string | null; written?: number; undone?: boolean };
 export type FilePlan = { kind: string; title: string; records: FileRecord[] };
 /** A run: `l…` while live, `r…` once kept (its undo token too); `done` of `of` records; `albums` how many. */
 export type FileRun = {
@@ -1070,7 +1071,8 @@ export type FileRun = {
   state: 'waiting' | 'writing' | 'done';
   done: number;
   of: number;
-  failed: { album: string; file?: string; why: string }[];
+  /** Each file (or record) set aside and why; the record's name where the server gives it. */
+  failed: { album: string; file?: string; why: string; title?: string; artist?: string | null }[];
   at?: number;
   undo?: string;
   undone: boolean;
@@ -1081,7 +1083,8 @@ export type FilesState = { state: 'differs' | 'waiting' | 'writing' | 'written' 
 const posting = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 export const getFilePlan = (kind: string, albums?: string[]) =>
   request<FilePlan>(`/api/file-changes/plans/${encodeURIComponent(kind)}${albums?.length ? `?albums=${albums.map(encodeURIComponent).join(',')}` : ''}`);
-export const applyFilePlan = (kind: string, albums: string[]) => request<FileRun>(`/api/file-changes/plans/${encodeURIComponent(kind)}/apply`, posting({ albums }));
+export const applyFilePlan = (kind: string, records: Pick<FileRecord, 'album' | 'stamp'>[]) =>
+  request<FileRun>(`/api/file-changes/plans/${encodeURIComponent(kind)}/apply`, posting({ albums: records.map((r) => r.album), stamps: Object.fromEntries(records.flatMap((r) => (r.stamp ? [[r.album, r.stamp]] : []))) }));
 export const getFileRuns = (since?: number) => request<FileRun[]>(`/api/file-changes/runs${since ? `?since=${since}` : ''}`);
 export const getFileRun = (id: string) => request<{ run: FileRun; kind: string; title: string; records: FileRecord[] }>(`/api/file-changes/runs/${encodeURIComponent(id)}`);
 export const undoFileRun = (id: string, albums?: string[]) => request<FileRun>(`/api/file-changes/runs/${encodeURIComponent(id)}/undo`, posting(albums ? { albums } : {}));

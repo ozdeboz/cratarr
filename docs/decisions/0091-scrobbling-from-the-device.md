@@ -3,6 +3,7 @@
 - Status: accepted (the owner, 2026-10-31: "scrobbling should indeed move to the device! This also makes more sense
   privacy wise", and the choices below, by question set; the server's parts reviewed by a5 the same day); for 0.13,
   with modes per server.
+- Moved: with modes per server to 0.15 (the owner, 2026-11-01: 0.13 frozen at what preview.3 holds; docs/plans.md).
 - Date: 2026-10-31
 - Builds on: 0068 (one way in for listening; its scrobbler), 0064 (the listening history), 0085 and 0087 (offline
   first; plays with an id and a time), 0051 (several users), modes per server (docs/plans.md, 0.13)

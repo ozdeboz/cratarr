@@ -89,6 +89,28 @@ impl Server {
         }
     }
 
+    /// Undoes a run and waits for its Undo to finish (it answers at once and works in the background): the run then.
+    async fn undo(&self, id: &str) -> (u16, Value) {
+        let (status, first) = self.send(reqwest::Method::POST, &format!("/api/file-changes/runs/{id}/undo"), json!({})).await;
+        if status != 200 {
+            return (status, first);
+        }
+        assert!(["waiting", "writing", "done"].contains(&first["state"].as_str().unwrap_or("")), "{first}");
+        let start = Instant::now();
+        loop {
+            let runs = self.get("/api/file-changes/runs").await;
+            // While it undoes, the run is listed live (waiting, writing) beside its kept self; done, only kept.
+            let mine: Vec<&Value> = runs.as_array().unwrap().iter().filter(|r| r["id"] == id).collect();
+            if !mine.iter().any(|r| r["state"] != "done")
+                && let Some(run) = mine.first()
+            {
+                return (status, (*run).clone());
+            }
+            assert!(start.elapsed() < Duration::from_secs(120), "waited for {id}'s Undo: {runs}");
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
     fn stop(mut self) {
         self.child.kill().ok();
         self.child.wait().ok();
@@ -200,13 +222,13 @@ async fn types_and_years_into_the_files_end_to_end() {
     }
 
     // Undo the second run, then the first: every file as it was before Cratarr, the tagger's change too.
-    let undone = s.ok(reqwest::Method::POST, &format!("/api/file-changes/runs/{b_id}/undo"), json!({})).await;
+    let (_, undone) = s.undo(&b_id).await;
     assert_eq!(undone["undone"], true, "{undone}");
     assert_eq!(vorbis(&first, "RELEASETYPE"), ["single"]);
     let (status, _) = s.send(reqwest::Method::POST, &format!("/api/file-changes/runs/{b_id}/undo"), json!({})).await;
     assert_eq!(status, 409, "undone once");
     // The first run wrote nothing where its record was set aside whole; else its files go back too.
-    let (status, _) = s.send(reqwest::Method::POST, &format!("/api/file-changes/runs/{a_id}/undo"), json!({})).await;
+    let (status, _) = s.undo(&a_id).await;
     assert!(status == 200 || status == 409, "{status}");
     assert_eq!(vorbis(&second, "RELEASETYPE"), ["album"], "back as it was");
     assert_eq!(vorbis(&second, "MUSICBRAINZ_ALBUMTYPE"), ["album"]);

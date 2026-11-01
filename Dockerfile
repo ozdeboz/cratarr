@@ -23,6 +23,9 @@ ARG CARGO_BUILD_JOBS
 WORKDIR /app
 COPY server/ server/
 WORKDIR /app/server
+# The same build settings in every stage that compiles the server's own crates (tests, e2e): a stage that differs
+# compiles them again (0.13: the e2e stage rebuilt them for 15 minutes beside the tests'). Release is not incremental.
+ENV CARGO_INCREMENTAL=0
 
 FROM source AS build
 # The crates and what was compiled before are kept between builds (BuildKit caches): only what changed is built again.

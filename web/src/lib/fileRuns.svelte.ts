@@ -2,7 +2,7 @@
 // when "Changes to files" or a review shows and kept up to date from the live channel (`file_run`); the panel's
 // addresses for the three views (Health's `changes`: the list; `changes/<kind>[:<album>]`: a plan to review;
 // `changes/run:<id>`: a run as written). Administrators' only, as the server's routes are.
-import { applyFilePlan, getFileRuns, undoFileRun, type FileRun } from './api';
+import { applyFilePlan, getFileRuns, undoFileRun, type FileRecord, type FileRun } from './api';
 import { on } from './events.svelte';
 import { withRun } from './fileChangeRules';
 import { me } from './me.svelte';
@@ -43,10 +43,11 @@ export const openReview = (kind: string, album?: string) => (album ? viewOver(ad
 /** A run as written, a step deeper. */
 export const openRun = (id: string) => openStep(address(`run:${id}`));
 
-/** The ticked records written: the list then shows the run under way. */
-export async function apply(kind: string, albums: string[]): Promise<boolean> {
+/** The ticked records written, each as the sheet showed it (its stamp: one changed since is set aside): the list then
+ *  shows the run under way. */
+export async function apply(kind: string, records: Pick<FileRecord, 'album' | 'stamp'>[]): Promise<boolean> {
   try {
-    fileRuns.list = withRun(fileRuns.list ?? [], await applyFilePlan(kind, albums));
+    fileRuns.list = withRun(fileRuns.list ?? [], await applyFilePlan(kind, records));
     openChanges();
     return true;
   } catch (e) {

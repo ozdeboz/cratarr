@@ -6,7 +6,8 @@
   // aside and why, Undo of all of it at the foot).
   import { albumCoverUrl, getFilePlan, getFileRun, type FilePlan, type FileRecord, type FileRun } from './api';
   import Asking from './Asking.svelte';
-  import { changeOf, fieldLabel, runGroups, runLine } from './fileChangeRules';
+  import { asideOf, changeOf, fieldLabel, runGroups, runLine, type SetAside } from './fileChangeRules';
+  import { library } from './albums.svelte';
   import { apply, changesView, fileRuns, loadRuns, openRun, undoRun } from './fileRuns.svelte';
   import { plural } from './insights.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
@@ -55,7 +56,7 @@
   async function write() {
     if (v.view !== 'plan' || !ticked.length) return;
     writing = true;
-    await apply(v.kind, ticked.map((r) => r.album));
+    await apply(v.kind, ticked);
     writing = false;
   }
 
@@ -73,9 +74,13 @@
     );
     return () => (gone = true);
   });
-  const titleOf = (album: string) => {
-    const r = run?.records.find((x) => x.album === album);
-    return r ? `${r.artist} – ${r.title}` : album;
+  /** A record set aside by its name: the server's, the run's, else the library's; never its id. */
+  const titleOf = (x: SetAside) => {
+    const r = run?.records.find((y) => y.album === x.album);
+    const a = !r && !x.title ? library.view?.sources.flatMap((s) => s.albums).find((y) => y.id === x.album) : null;
+    const title = x.title ?? r?.title ?? a?.title;
+    const artist = x.artist ?? r?.artist ?? a?.artist;
+    return title ? (artist ? `${artist} – ${title}` : title) : 'A record';
   };
 </script>
 
@@ -145,7 +150,7 @@
     </Group>
     {#if r.failed.length}
       <Group title="Set aside">
-        {#each r.failed as f, i (i)}<Item lead="warn" name={f.file ?? titleOf(f.album)} line={f.file ? `${titleOf(f.album)} · ${f.why}` : f.why} tone="warn" wrap />{/each}
+        {#each asideOf(r.failed) as x (x.album)}<Item lead="warn" name={titleOf(x)} line={[x.files ? plural(x.files, 'file') : '', ...x.why].filter(Boolean).join(' · ')} tone="warn" wrap />{/each}
       </Group>
     {/if}
     {#if r.undo && !r.undone}

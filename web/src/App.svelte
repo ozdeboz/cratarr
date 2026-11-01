@@ -22,7 +22,7 @@
   import { health, problems } from './lib/healthReport.svelte';
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { askDownloads, downloads, inApp } from './lib/app.svelte';
-  import './lib/keyboard.svelte';
+  import { keyboard } from './lib/keyboard.svelte';
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
   import { later } from './lib/later.svelte';
@@ -685,8 +685,14 @@
   // In a panel whose action bar sticks (lib/glass's `below`), the bar is away exactly while it sticks, scrolling up
   // too (the owner, 2026-10-25).
   // And while a library item is open, where the user wants it so (Display; its panel hands a `below`).
+  // The keyboard up on a phone (lib/keyboard): along the bottom only the glass being typed in stays, over the keyboard;
+  // the bar, the mini-player and the navigation controls there make way (the owner, 2026-11-01: "But only input glass
+  // needs that").
+  const typing = $derived(phone && keyboard.open);
   const navHidden = $derived(
-    !navBottom && (navAway || (phone && !!handedNow?.below && (prefs.navHidesOnItem || (prefs.stickyActions && handedNow.below())))),
+    navBottom
+      ? typing
+      : navAway || (phone && !!handedNow?.below && (prefs.navHidesOnItem || (prefs.stickyActions && handedNow.below()))),
   );
   // Somewhere else: the bar shows again.
   $effect(() => {
@@ -698,7 +704,7 @@
     const root = document.documentElement.style;
     const shown = phone && !navHidden ? topBar : 0;
     const up = miniTop ? miniSpace : 0;
-    const down = miniTop ? 0 : miniSpace;
+    const down = miniTop || typing ? 0 : miniSpace;
     // Along each edge, from it inwards: the bar, the mini-player, the controls. The page's room (kept while the bar
     // slides away, so the page does not jump), and where things float as the bar shows now.
     root.setProperty('--top-h', `${(phone && !navBottom ? topBar : 0) + up}px`);
@@ -1181,7 +1187,7 @@
     <div class="playlist-layer" aria-hidden="true" out:fade={{ duration: reducedMotion() ? 0 : 200 }}></div>
   {/if}
   {#if mini}
-    <div class="mini-dock" class:over={playlistLayer} class:at-top={miniTop}><MiniPlayer /></div>
+    <div class="mini-dock" class:over={playlistLayer} class:at-top={miniTop} class:typing={typing && !miniTop} inert={(typing && !miniTop) || undefined}><MiniPlayer /></div>
   {/if}
   <!-- Played on from elsewhere before this page was touched: the browser holds the sound back until a tap. -->
   {#if target.tapToPlay}
@@ -1247,7 +1253,7 @@
     {/if}
     {#if leadBottom || rightBottom}
       <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row at-bottom" class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
-        {#if leadBottom}{@render leadPart()}{:else}<span></span>{/if}
+        {#if leadBottom && !typing}{@render leadPart()}{:else}<span></span>{/if}
         {#if rightBottom}{@render rightPart()}{/if}
       </div>
     {/if}
@@ -1348,6 +1354,13 @@
   }
 
   /* Along the top (Display's Mini player), under the bar there. */
+  /* Typing (the keyboard up): out of the way, only the glass being typed in stands over the keyboard (the owner,
+     2026-11-01: "only input glass needs that"); the bar along the bottom goes the same way (navHidden). */
+  .mini-dock.typing {
+    opacity: 0;
+    pointer-events: none;
+  }
+
   .mini-dock.at-top {
     top: calc(var(--bar-top, 0px) + env(safe-area-inset-top) + var(--gutter-x));
     bottom: auto;

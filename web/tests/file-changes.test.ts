@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { changeOf, fieldLabel, runGroups, runLine, stateLine, withRun } = await import('../src/lib/fileChangeRules.ts');
+const { asideOf, changeOf, fieldLabel, runGroups, runLine, stateLine, withRun } = await import('../src/lib/fileChangeRules.ts');
 
 const run = (o: Record<string, unknown>) => ({ id: 'r1', what: 'types', title: 'Types into files', state: 'done', done: 0, of: 0, failed: [], undone: false, albums: 1, ...o }) as never;
 
@@ -18,8 +18,8 @@ test('a change: added, taken away, or one for another', () => {
 });
 
 test("a run's line: waiting, writing n of m, set aside, undone", () => {
-  assert.equal(runLine(run({ state: 'waiting' })), 'Waiting');
-  assert.equal(runLine(run({ state: 'writing', done: 3, of: 12 })), 'Writing 3 of 12');
+  assert.equal(runLine(run({ id: 'l1', state: 'waiting' })), 'Waiting');
+  assert.equal(runLine(run({ id: 'l1', state: 'writing', done: 3, of: 12 })), 'Writing 3 of 12');
   assert.match(runLine(run({ at: 1_700_000_000, failed: [{ album: 'a', why: 'changed since it was planned' }] })), /^1 set aside · /);
   assert.match(runLine(run({ at: 1_700_000_000, undone: true })), /^Undone · /);
 });
@@ -51,4 +51,27 @@ test("the record's state line: its words and what a tap does", () => {
   assert.equal(stateLine({ state: 'written', run: 'r3' })?.act, 'undo');
   assert.equal(stateLine({ state: 'written' })?.act, null, 'no run: nothing to undo');
   assert.equal(stateLine({ state: 'changed' })?.tone, 'warn');
+});
+
+test('what a run set aside: a row per record, its files counted, each reason once; the line counts records', () => {
+  const failed = [
+    { album: 'a', file: '01.flac', why: 'its audio could not be found' },
+    { album: 'a', file: '02.flac', why: 'its audio could not be found' },
+    { album: 'b', file: '01.mp3', why: 'the written fields did not read back as written', title: 'Elastic Variations', artist: 'Anthony Manning' },
+    { album: 'c', why: 'changed since it was planned' },
+  ];
+  assert.deepEqual(asideOf(failed), [
+    { album: 'a', title: undefined, artist: undefined, files: 2, why: ['its audio could not be found'] },
+    { album: 'b', title: 'Elastic Variations', artist: 'Anthony Manning', files: 1, why: ['the written fields did not read back as written'] },
+    { album: 'c', title: undefined, artist: undefined, files: 0, why: ['changed since it was planned'] },
+  ]);
+  assert.match(runLine(run({ at: 1_700_000_000, failed })), /^3 set aside · /);
+});
+
+test("a kept run under way again is its Undo: said so in the list and on the record's line", () => {
+  assert.equal(runLine(run({ id: 'r4', state: 'waiting' })), 'Waiting to undo');
+  assert.equal(runLine(run({ id: 'r4', state: 'writing', done: 2, of: 5 })), 'Undoing 2 of 5');
+  assert.equal(runLine(run({ id: 'l4', state: 'writing', done: 2, of: 5 })), 'Writing 2 of 5');
+  assert.equal(stateLine({ state: 'writing', done: 1, of: 4, run: 'r4' } as never)?.text, 'Undoing its files, 1 of 4');
+  assert.equal(stateLine({ state: 'waiting', run: 'l4' } as never)?.text, 'Waiting to write its files');
 });

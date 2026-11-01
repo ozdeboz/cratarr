@@ -53,7 +53,15 @@ pub fn ticked(mut p: Proposal, albums: &[String], stamps: Option<&HashMap<String
         .cloned()
         .collect();
     p.files.retain(|f| albums.contains(&f.album) && !stale.contains(&f.album));
-    p.failed.extend(stale.iter().map(|album| RunFailed { album: album.clone(), file: None, why: "changed since it was planned".into() }));
+    let named = |album: &str| p.records.iter().find(|r| r.album == album).map(|r| (r.title.clone(), r.artist.clone()));
+    let set_aside: Vec<RunFailed> = stale
+        .iter()
+        .map(|album| {
+            let n = named(album);
+            RunFailed { album: album.clone(), title: n.as_ref().map(|n| n.0.clone()), artist: n.map(|n| n.1), file: None, why: "changed since it was planned".into() }
+        })
+        .collect();
+    p.failed.extend(set_aside);
     p
 }
 
@@ -263,7 +271,9 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
         .iter()
         .filter_map(|r| {
             let mine: Vec<&FileWrite> = files.iter().filter(|f| f.album == r.album).collect();
-            if mine.is_empty() {
+            // On a sheet, a record with nothing to write is left out; a run lists every record it was given, those
+            // it wrote nothing of (each set aside) with none written.
+            if mine.is_empty() && !written {
                 return None;
             }
             let mut fields: Vec<FieldView> = Vec::new();
@@ -355,6 +365,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
             })
             .await;
             let (ok, failed, seen) = done.unwrap_or_else(|e| (Vec::new(), vec![(None, e.to_string())], Vec::new()));
+            let record = p.records.iter().find(|r| r.album == album);
             // The written files read again, and those set aside too: the catalogue learns what changed them.
             reread(&ok.iter().map(|f| f.path.clone()).chain(seen).collect::<Vec<_>>()).await;
             let changed = failed.iter().any(|(_, why)| why.contains("changed since"));
@@ -368,7 +379,13 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
                     at: Some(super::moment::now_secs()),
                 },
             );
-            status.failed.extend(failed.into_iter().map(|(file, why)| RunFailed { album: album.clone(), file, why }));
+            status.failed.extend(failed.into_iter().map(|(file, why)| RunFailed {
+                album: album.clone(),
+                title: record.map(|r| r.title.clone()),
+                artist: record.map(|r| r.artist.clone()),
+                file,
+                why,
+            }));
             written.extend(ok);
             status.done += 1;
             tell(&status);
@@ -445,8 +462,7 @@ pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
 /// others set aside ("changed since it was written"). Its status, `undone` once all of it is.
 pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>>) -> Result<Status> {
     let id = kept_id(token)?;
-    let _turn = LOCK.lock().await;
-    let (mut run, at, undone) = app.journal.file_run(id)?.context("That run is no longer kept")?;
+    let (run, at, undone) = app.journal.file_run(id)?.context("That run is no longer kept")?;
     if undone {
         bail!("Already undone");
     }
@@ -460,32 +476,87 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
     if todo.is_empty() {
         bail!("Nothing to undo");
     }
-    let mut failed = Vec::new();
-    let mut back = Vec::new();
-    let results = tokio::task::spawn_blocking(move || {
-        todo.into_iter().map(|(i, f)| (i, f.album.clone(), f.path.clone(), apply_one(&f.path, &f.after, &f.before, "changed since it was written"))).collect::<Vec<_>>()
-    })
-    .await?;
-    for (i, album, path, r) in results {
-        match r {
-            Ok(()) => {
-                run.files[i].undone = true;
-                back.push(path);
-                set_state(&album, FilesState { state: "differs".into(), done: None, of: None, run: None, at: None });
-            }
-            Err(e) => {
-                set_state(&album, FilesState { state: "changed".into(), done: None, of: None, run: Some(token.to_string()), at: Some(super::moment::now_secs()) });
-                failed.push(RunFailed { album, file: path.file_name().and_then(|n| n.to_str()).map(str::to_string), why: super::plain(format!("{e:#}")) });
-            }
+    // As a run writes (0092): in the background under the one lock, an album at a time, told as it goes; the answer is
+    // its first status. (Once one blocking batch: with 57 records on a slow disk the page's call waited minutes.)
+    let mut by_album: Vec<(String, Vec<(usize, FileWrite)>)> = Vec::new();
+    for (i, f) in todo {
+        match by_album.iter_mut().find(|(a, _)| *a == f.album) {
+            Some((_, v)) => v.push((i, f)),
+            None => by_album.push((f.album.clone(), vec![(i, f)])),
         }
     }
-    reread(&back).await;
-    let all = run.files.iter().all(|f| f.undone);
-    app.journal.update_run(id, &run, all.then(super::moment::now_secs))?;
-    let mut status = kept_status(id, at, &run, all);
-    status.failed = failed;
+    let mut status = kept_status(id, at, &run, false);
+    (status.state, status.done, status.of, status.failed) = ("waiting", 0, by_album.len(), Vec::new());
+    for (album, _) in &by_album {
+        set_state(album, FilesState { state: "waiting".into(), done: None, of: None, run: Some(token.to_string()), at: None });
+    }
     tell(&status);
-    Ok(status)
+    let (app, token, first) = (app.clone(), token.to_string(), status.clone());
+    tokio::spawn(async move {
+        let _turn = LOCK.lock().await;
+        // Read again under the lock: another Undo may have taken some of it meanwhile.
+        let Ok(Some((mut run, at, _))) = app.journal.file_run(id) else { return };
+        status.state = "writing";
+        tell(&status);
+        for (album, files) in by_album {
+            let files: Vec<(usize, FileWrite)> = files.into_iter().filter(|(i, _)| run.files.get(*i).is_some_and(|f| !f.undone)).collect();
+            let of = files.len();
+            set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(token.clone()), at: None });
+            let results = tokio::task::spawn_blocking(move || {
+                files.into_iter().map(|(i, f)| (i, f.path.clone(), apply_one(&f.path, &f.after, &f.before, "changed since it was written"))).collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            let mut back = Vec::new();
+            for (i, path, r) in results {
+                match r {
+                    Ok(()) => {
+                        run.files[i].undone = true;
+                        back.push(path);
+                    }
+                    Err(e) => status.failed.push(failed_of(&run.records, &album, &path, &e)),
+                }
+            }
+            let changed = status.failed.iter().any(|f| f.album == album);
+            set_state(
+                &album,
+                FilesState {
+                    state: if changed { "changed" } else { "differs" }.into(),
+                    done: None,
+                    of: None,
+                    run: changed.then(|| token.clone()),
+                    at: changed.then(super::moment::now_secs),
+                },
+            );
+            reread(&back).await;
+            // Kept after each album, so an Undo cut short (a restart) is not done twice.
+            let all = run.files.iter().all(|f| f.undone);
+            if let Err(e) = app.journal.update_run(id, &run, all.then(super::moment::now_secs)) {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "an undo's progress not kept");
+            }
+            status.done += 1;
+            tell(&status);
+            tokio::time::sleep(PACE).await;
+        }
+        let all = run.files.iter().all(|f| f.undone);
+        let failed = std::mem::take(&mut status.failed);
+        status = Status { failed, ..kept_status(id, at, &run, all) };
+        tracing::info!(target: "library", what = %status.what, undone = all, failed = status.failed.len(), "file changes undone");
+        tell(&status);
+    });
+    Ok(first)
+}
+
+/// A file set aside, with its record's title and artist (a record set aside whole has no files in the run to name it).
+fn failed_of(records: &[RunRecord], album: &str, path: &Path, e: &anyhow::Error) -> RunFailed {
+    let r = records.iter().find(|r| r.album == album);
+    RunFailed {
+        album: album.to_string(),
+        title: r.map(|r| r.title.clone()),
+        artist: r.map(|r| r.artist.clone()),
+        file: path.file_name().and_then(|n| n.to_str()).map(str::to_string),
+        why: super::plain(format!("{e:#}")),
+    }
 }
 
 /// The files by album, in order.
@@ -569,7 +640,7 @@ mod tests {
         let now = Proposal { kind: "types".into(), files: vec![file("a", &["album"]), file("b", &["single"]), file("c", &["album"])], ..Proposal::default() };
         let p = ticked(now, &s(&["a", "b"]), Some(&stamps));
         assert_eq!(p.files.iter().map(|f| f.album.as_str()).collect::<Vec<_>>(), ["a"], "c was not ticked; b set aside");
-        assert_eq!(p.failed, vec![RunFailed { album: "b".into(), file: None, why: "changed since it was planned".into() }]);
+        assert_eq!(p.failed, vec![RunFailed { album: "b".into(), title: None, artist: None, file: None, why: "changed since it was planned".into() }]);
     }
 
     #[test]

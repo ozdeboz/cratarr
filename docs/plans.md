@@ -26,25 +26,33 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   sentence, snippets, one search matcher, the steady waveform, one table head, menus on search results and works,
   and menus that offer only what works away ([whats-new-0.12](whats-new-0.12.md)); works in global search wait for
   the server's search kind.
-- **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and modes per server** (the External
-  library below, taken up). Cratarr's mode is Cratarr's own library, its libraries (Music, Incoming, each user's own)
-  still switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
-  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. With modes,
-  scrobbling from the device ([0091](decisions/0091-scrobbling-from-the-device.md): each user's choice, through one
-  Cratarr server for one sign-in). *Not started yet;* both want the owner's design choices first.
-  *On trunk* ([whats-new-0.13](whats-new-0.13.md)): one crate in two views and only in the panel, more words in the
+- **0.13: what preview.3 holds, frozen** (the owner, 2026-11-01: what remains moves on rather than holding the release;
+  out once the owner has tried preview.3 enough). One crate in two views and only in the panel, more words in the
   sentence, the crate card atop every search; a page's search as the table, its empty answer from the magnifier, one
-  loading rule; scrolling to what a link leads to, clear of the chrome; the Library's types in three layers; the
-  record Edit sheet and Classical's why; Health as Settings, Disc numbers, missing tracks many at once; one way to
-  change files ([0092](decisions/0092-one-way-to-change-files.md)) with types into files its first writer; Cratarr
-  as an MCP server ([0090](decisions/0090-mcp-server.md)). Under way: test and development data
-  ([0093](decisions/0093-test-and-development-data.md)); the other writers moving onto 0092's path.
+  loading rule; scrolling to what a link leads to, clear of the chrome; the Library's types in three layers, records
+  named by their type; the record Edit sheet and Classical's why; Health as Settings, Disc numbers, missing tracks many
+  at once; one way to change files ([0092](decisions/0092-one-way-to-change-files.md)) with types into files its first
+  writer, and the tag writer that keeps every field; STYLE read from the files again; Cratarr as an MCP server
+  ([0090](decisions/0090-mcp-server.md)); test and development data ([0093](decisions/0093-test-and-development-data.md)).
+  ([whats-new-0.13](whats-new-0.13.md).)
+- **0.14: references and the intake** (the owner, 2026-11-01: "this comes next"): MusicBrainz, Discogs and Bandcamp as
+  references, the checks without one, the hand check's intake card, one Health item for references (Soulseek in
+  Cratarr, below). With it, the other writers onto 0092's path (Health's fixes, Renumber, the tempo, the covers, the
+  length fixes, single-track intake), each losing its own Undo.
+- **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**
+  ([0091](decisions/0091-scrobbling-from-the-device.md)). Cratarr's mode is Cratarr's own library, its libraries still
+  switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
+  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. Wants the
+  owner's design choices first.
+- **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and the whole library's index on the
+  device** (offline first's fourth step).
+- **0.17: crates and the queue on the device** (offline first's fifth step); then all servers in one library, on the
+  device (below), as a view over the modes' indexes.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
-- **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
-  apps carry their own pages (beside 0.11); Downloads an offline shelf, and nothing done offline lost,
-  playlist edits included (beside 0.12); the whole library's index on the device (beside 0.13, after modes); crates and
-  the queue on the device (0.14).
+- **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
+  own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
+  done); the whole library's index on the device (0.16); crates and the queue on the device (0.17).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
 
 ## Soulseek in Cratarr, not through Lidarr (explored 2026-10-31)
@@ -83,6 +91,37 @@ intake below), so March 2026's unattended batches cannot happen again.
   at Music only; if Cratarr fetches, where its albums land decides what Health sees.
 - Found while looking: Cratarr's analysis says "no sound" for Roll the Dice (2010), whose MP3s play fine (−15 dB);
   the decoder gets no frames from them (a large cover in the tag, perhaps). To be fixed on its own.
+
+**Next after 0.13 (the owner, 2026-11-01: "Yes this comes next, first we move to release").** Searching Soulseek
+needs no MusicBrainz; judging what was found does: a reference says which tracks and lengths the release has.
+
+- *Three references, in turn:* MusicBrainz, then Discogs (its track lists, not only its genres), then Bandcamp (an
+  album page's own track list and lengths, as Cratarr already reads it for playing, 0071; strong for independent,
+  electronic and digital-only releases). One that agrees on the track count and each length is the target. Bandcamp
+  is found through its search box's answers only, so a match counts only where the tracks agree; Cratarr keeps its
+  own link to the page.
+- *Checked without a reference:* each file decoded whole, lossless where it says so, no clicks or clipping; track
+  numbers without gaps or doubles; one album, album artist and year in every file; the folder's name as the tags
+  say; every track from one Soulseek user's folder (a mix was March 2026's mark); AcoustID per track (the right
+  recording under its title); already in the library or not.
+- *The hand check, where no reference agrees:* one intake card per arrival on the review sheet's pattern (0092):
+  cover, where it came from, format, the tracks with their lengths, each check green, amber or red with its one
+  sentence, and per track a small waveform and play buttons for its start, middle and end (seconds per album, not
+  a whole listen). Keep, Replace or Delete; nothing moves or is written before that yes. All green with AcoustID
+  agreeing: offered with Keep ticked; amber or red: left open with its reason. A record checked by hand is its own
+  reference for its type and year after.
+- *One Health item for the references of every indexer* (the owner, 2026-11-01): "References", across MusicBrainz,
+  Discogs, Bandcamp and AcoustID, never one item a source. Its entries: a record no reference agrees with (its
+  type, year and completeness rest on its files alone; paste a link, or "checked by hand", the record then its own
+  reference); references that disagree (track count, lengths, year side by side; the owner picks the one that
+  counts); a reference found by guessing (Bandcamp's search box, MusicBrainz without an id in the files), shown
+  once to confirm. Open, a record shows a row a source, agreeing, missing or differing, and what each says. What
+  would change the files goes through the review sheet (0092).
+- *CLAP, maybe, never with certainty* (the owner, 2026-11-01: "possibly but not with any certainty"): not a reference
+  (it knows a sound, not a track list), at most an amber hint where AcoustID knows nothing: a track that sounds
+  unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
+  miss too much. AudioMuse runs after import, so in Health, not on the intake card.
+- Mockups of the intake card first (632), then the server's checks and references (a5).
 
 ## External library
 
