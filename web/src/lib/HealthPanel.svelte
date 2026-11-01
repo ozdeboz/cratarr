@@ -46,7 +46,7 @@
   import ContentControls from './ContentControls.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
-  import { albumSubject, backOne, closePlaylist, HEALTH, healthThing, isStep, openTab, panel, upToPage, viewOver, viewPlaylist } from './panel.svelte';
+  import { albumSubject, backOne, closePlaylist, HEALTH, healthThing, isStep, openTab, panel, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
   import { byDomain } from './healthThrough';
   import { planTitle } from './fileChangeRules';
   import type { Siblings } from './Crumbs.svelte';
@@ -302,7 +302,7 @@
             ...(me.admin ? [{ id: CHANGES, label: 'Changes to files', group: 'Files' }] : []),
           ],
           chosen: changes ? CHANGES : (p?.key ?? null),
-          onchoose: (id) => viewPlaylist(HEALTH + id),
+          onchoose: (id) => viewSibling(HEALTH + id),
         },
   );
 </script>

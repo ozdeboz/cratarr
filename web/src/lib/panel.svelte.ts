@@ -286,6 +286,11 @@ export function goHome() {
   window.scrollTo(0, 0);
 }
 
+/** A sibling picked (a section's name as the picker of its siblings; the owner, 2026-11-01: "Changing siblings should
+ *  be history with back", as the Library's types are): the same level, a step of its own that Back returns from. */
+export function viewSibling(name: string) {
+  viewOver(name);
+}
 /** Back one level (the panel's back button, a breadcrumb's level above; the owner, 2026-11-01: one rule for every
  *  panel's breadcrumbs, the levels Back walks through): the step before, or the panel closed where it is the first. */
 export function backOne() {

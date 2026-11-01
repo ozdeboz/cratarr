@@ -25,7 +25,7 @@
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
   import { askDevice, askDownloads, inApp } from './app.svelte';
-  import { backFromThing, backOne, panel, SETTINGS, settingsThing, upToPage, viewPlaylist } from './panel.svelte';
+  import { backFromThing, backOne, panel, SETTINGS, settingsThing, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import type { Siblings } from './Crumbs.svelte';
   import { keptFor, partsFor, SECTIONS, SETTINGS_GROUPS, thingTitle, type SettingsSection } from './settingsSections.svelte';
   import { installed } from './offline.svelte';
@@ -66,7 +66,7 @@
       group: SETTINGS_GROUPS.find((g) => g.kept === keptFor(x, me.admin))?.title,
     })),
     chosen: section,
-    onchoose: (id) => viewPlaylist(SETTINGS + id),
+    onchoose: (id) => viewSibling(SETTINGS + id),
   });
   const title = $derived(thing ? (thingTitle.text ?? '') : partTitle);
 

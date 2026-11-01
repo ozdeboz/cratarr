@@ -22,7 +22,7 @@
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
-  import { backOne, REQUESTS, upToPage, viewPlaylist } from './panel.svelte';
+  import { backOne, REQUESTS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -146,7 +146,7 @@
   <Crumbs
     trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]}
     here={L.name}
-    siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewPlaylist(REQUESTS + id) }}
+    siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
   />
 {/snippet}
 {#snippet glassExtra()}
