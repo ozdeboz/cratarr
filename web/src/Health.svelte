@@ -15,6 +15,8 @@
   import { matchesSearch, pageView, searchNone } from './lib/pageView.svelte';
   import Group from './lib/settings/Group.svelte';
   import Item from './lib/settings/Item.svelte';
+  import { factsLine, loadFileFacts, writeFacts } from './lib/fileFacts.svelte';
+  import { DOMAINS } from './lib/health';
 
   $effect(loadHealth);
   // The pill's search (the owner, 2026-10-25): a problem whose words, or one of its items', hold every word.
@@ -22,6 +24,11 @@
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
   searchNone(() => (health.loaded && problems().length && !list.length ? 'problems' : null));
   const groups = $derived(byDomain(list));
+  // Types and years into the files (0.13), while its switch is on: one line under Library, many differing (Write) or
+  // being written.
+  $effect(() => loadFileFacts());
+  const facts = $derived(factsLine());
+  const LIBRARY = DOMAINS.library.name;
   /** How many: the finding's count, else its items. */
   const countOf = (p: ReturnType<typeof problems>[number]) => (p.finding?.count ?? p.items.length).toLocaleString();
 </script>
@@ -30,7 +37,7 @@
   {#if health.error}<Notice text={health.error} />{/if}
   {#if !health.loaded}
     <PageLoading />
-  {:else if !list.length}
+  {:else if !list.length && !facts}
     {#if !problems().length}<p class="empty">All good.</p>{:else if !pageView.none}<p class="empty">None of them match.</p>{/if}
   {:else}
     <div class="groups">
@@ -46,11 +53,19 @@
               onclick={() => viewPlaylist(HEALTH + p.key)}
             />
           {/each}
+          {#if facts && g.domain === LIBRARY}{@render factsItem(facts)}{/if}
         </Group>
       {/each}
+      {#if facts && !groups.some((g) => g.domain === LIBRARY)}<Group title={LIBRARY}>{@render factsItem(facts)}</Group>{/if}
     </div>
   {/if}
 </main>
+
+{#snippet factsItem(f: NonNullable<typeof facts>)}
+  <Item lead="off" name={f.name} progress={f.progress}>
+    {#if f.write}<button onclick={() => void writeFacts()}>Write</button>{/if}
+  </Item>
+{/snippet}
 
 <style>
   /* One column, as Settings' list: beside a problem it is the list's own column (App). */

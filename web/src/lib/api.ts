@@ -1047,6 +1047,20 @@ export type CatalogueStatus = {
 export const getSettings = () => request<Settings>('/api/settings');
 
 export const getCatalogue = () => quietly<CatalogueStatus>('/api/catalogue');
+/** Types and years into the files (0.13; the owner, 2026-10-31; administrators'): whether Cratarr writes a record's
+ *  release types, its year and Classical into its files' tags; how many of its own records' files differ now; a run
+ *  writing them, and the last one's. */
+export type FileFacts = {
+  on: boolean;
+  differ: number;
+  writing: { done: number; of: number } | null;
+  last: { at: number; albums: number; tracks: number; failed: { album: string; why: string }[] } | null;
+};
+export const getFileFacts = () => quietly<FileFacts>('/api/settings/file-facts');
+export const setFileFacts = (on: boolean) =>
+  request<FileFacts>('/api/settings/file-facts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+/** Writes every record whose files differ, an album at a time, in the background. */
+export const writeFileFacts = () => request<FileFacts>('/api/settings/file-facts/write', { method: 'POST' });
 
 /** Folders, chosen and shown (decision 0044): a folder in the browser, with how much audio is in it (`more`: past the
  *  count) and whether Cratarr can write there. */
