@@ -29,7 +29,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 - **0.13: what preview.3 holds, frozen** (the owner, 2026-11-01: what remains moves on rather than holding the release;
   out once the owner has tried preview.3 enough). One crate in two views and only in the panel, more words in the
   sentence, the crate card atop every search; a page's search as the table, its empty answer from the magnifier, one
-  loading rule; scrolling to what a link leads to, clear of the chrome; the Library's types in three layers, records
+  loading rule; scrolling to what a link leads to, clear of the chrome; the glass moving as one (lib/glassMotion:
+  ContentControls, NavigationControls and the bar laid out once and moved by clip-path, opacity and transform only;
+  the owner, 2026-11-01), the keyboard pushing up only the glass typed in; the Library's types in three layers, records
   named by their type; the record Edit sheet and Classical's why; Health as Settings, Disc numbers, missing tracks many
   at once; one way to change files ([0092](decisions/0092-one-way-to-change-files.md)) with types into files its first
   writer, and the tag writer that keeps every field; STYLE read from the files again; Cratarr as an MCP server

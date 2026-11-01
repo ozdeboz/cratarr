@@ -33,6 +33,13 @@ user's own music moved to 0.15 and 0.16 ([plans](plans.md)). The notes for each 
   the player's album open the album at that track, marked. Beside the panel, the page's records, crates and
   playlists bring what it opened into sight. Nothing a page scrolls to ends up under the bar, the mini-player, a
   sticky action bar or the glass.
+- **The glass moves as one.** The floating controls and the bar of pages change shape in one smooth step: the
+  search opening, More, a page's buttons coming and going, the title making way. Nothing in them is laid out again
+  while they move, so they keep moving while a page is busy drawing.
+- **Typing on a phone:** the bar and the glass at the top stay where they are; along the bottom only the glass being
+  typed in stands over the keyboard, the rest making way. With the search open, the Library's picker makes way for the
+  field rather than cutting it short.
+- **The loading sign sits still** while the page under it is scrolled.
 - **Back undoes a filter.** A pick beside back, or what was changed while the Filter sheet was open, is one step: Back
   shows the list as it was (Library, Playlists, Downloads).
 
