@@ -150,7 +150,8 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
                 let types = kind.into_iter().chain(secondary.split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string)).collect();
                 let classical = classical.records.get(&id).is_some_and(|r| r.classical);
                 let year_set = set.split('\u{1f}').any(|f| f == "year");
-                let year = year.and_then(|y| u32::try_from(y).ok()).filter(|y| *y > 0);
+                // A year below 1000 is a placeholder (0001-01-01), no year: never written into a file.
+                let year = year.and_then(|y| u32::try_from(y).ok()).filter(|y| *y >= 1000);
                 let types_from = types_from(from.as_deref(), why.as_deref());
                 held.push((Held { id, title, artist, types, types_from, year, year_set, classical }, Vec::new()));
             }

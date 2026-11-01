@@ -23,14 +23,28 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
         Some("mp3") => Kind::Mp3,
         _ => bail!("only FLAC and MP3 tracks are written to"),
     };
-    let original = std::fs::read(track).with_context(|| format!("reading {}", track.display()))?;
-    let before = audio_of(&original, kind).context("its audio could not be found")?;
+    // What the file is, by its content: a ".flac" that is not one is refused in words (seen on the sample: two).
+    let named = if kind == Kind::Flac { "FLAC" } else { "MP3" };
+    let content = lofty::probe::Probe::open(track)
+        .with_context(|| format!("reading {}", track.display()))?
+        .guess_file_type()
+        .ok()
+        .and_then(|p| p.file_type());
+    match content {
+        Some(lofty::file::FileType::Flac) if kind == Kind::Flac => {}
+        Some(lofty::file::FileType::Mpeg) if kind == Kind::Mp3 => {}
+        Some(other) => bail!("not a {named} file: it holds {other:?} audio"),
+        None => bail!("not a file Cratarr can read as {named}"),
+    }
+    // The audio, compared as a fingerprint read a piece at a time (0.13: a whole file in memory took 300 MB for an
+    // hour-long track, in a server given 768 MB).
+    let before = audio_print(track, kind)?.with_context(|| format!("not a {named} file Cratarr can read: its audio could not be found"))?;
     // The copy keeps the track's extension: the tag reader knows a file's format by it. Hidden: no walk takes it for a
     // track.
     let stem = track.file_stem().and_then(|n| n.to_str()).unwrap_or("track");
     let ext = track.extension().and_then(|x| x.to_str()).unwrap_or("");
     let copy = track.with_file_name(format!(".{stem}.cratarr-tags.{ext}"));
-    std::fs::write(&copy, &original)?;
+    std::fs::copy(track, &copy).with_context(|| format!("copying {}", track.display()))?;
     let checked = (|| -> Result<()> {
         // Only what `edit` changed is written (0.13): `edit` sees the format's own tag as lofty's generic one, and
         // the fields of each key it changed are replaced in the format's own tag; every other field stays as it was.
@@ -40,7 +54,7 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
         let options = ParseOptions::new().read_properties(false);
         match kind {
             Kind::Flac => {
-                let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&copy)?, options)?;
+                let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&copy)?, options).with_context(|| format!("not a {named} file Cratarr can read"))?;
                 let own = file.remove_vorbis_comments().unwrap_or_default();
                 let (_, before) = own.clone().split_tag();
                 let mut after = before.clone();
@@ -49,7 +63,7 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
                 file.save_to_path(&copy, WriteOptions::default())?;
             }
             Kind::Mp3 => {
-                let mut file = lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(&copy)?, options)?;
+                let mut file = lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(&copy)?, options).with_context(|| format!("not a {named} file Cratarr can read"))?;
                 let own = file.remove_id3v2().unwrap_or_default();
                 let (_, before) = own.clone().split_tag();
                 let mut after = before.clone();
@@ -58,8 +72,7 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
                 file.save_to_path(&copy, WriteOptions::default())?;
             }
         }
-        let after = std::fs::read(&copy)?;
-        if audio_of(&after, kind).context("its audio could not be found after writing")? != before {
+        if audio_print(&copy, kind)?.context("its audio could not be found after writing")? != before {
             bail!("writing the tag would have changed the audio");
         }
         check(&copy)
@@ -188,8 +201,97 @@ pub fn set_bpm(track: &Path, to: Option<u32>) -> Result<()> {
     )
 }
 
+/// Where a file's audio lies (`audio_of`'s bounds), read from its head and tail only: FLAC's frames after its metadata
+/// blocks; MP3's frames between a leading ID3v2 tag and trailing APEv2 and ID3v1 tags.
+fn audio_range(f: &mut std::fs::File, kind: Kind) -> std::io::Result<Option<(u64, u64)>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = f.metadata()?.len();
+    let mut head = [0u8; 10];
+    f.seek(SeekFrom::Start(0))?;
+    if f.read_exact(&mut head[..4]).is_err() {
+        return Ok(None);
+    }
+    match kind {
+        Kind::Flac => {
+            if &head[..4] != b"fLaC" {
+                return Ok(None);
+            }
+            let mut at = 4u64;
+            loop {
+                let mut h = [0u8; 4];
+                f.seek(SeekFrom::Start(at))?;
+                if f.read_exact(&mut h).is_err() {
+                    return Ok(None);
+                }
+                at += 4 + u64::from(u32::from_be_bytes([0, h[1], h[2], h[3]]));
+                if at > len {
+                    return Ok(None);
+                }
+                if h[0] & 0x80 != 0 {
+                    return Ok(Some((at, len)));
+                }
+            }
+        }
+        Kind::Mp3 => {
+            let mut start = 0u64;
+            if &head[..3] == b"ID3" {
+                if f.read_exact(&mut head[4..10]).is_err() {
+                    return Ok(None);
+                }
+                let size = head[6..10].iter().fold(0u64, |s, &x| (s << 7) | u64::from(x & 0x7f));
+                start = 10 + size + if head[5] & 0x10 != 0 { 10 } else { 0 };
+            }
+            let mut end = len;
+            let mut tail = [0u8; 32];
+            if end >= 128 {
+                f.seek(SeekFrom::Start(end - 128))?;
+                f.read_exact(&mut tail[..3])?;
+                if &tail[..3] == b"TAG" {
+                    end -= 128;
+                }
+            }
+            if end >= 32 {
+                f.seek(SeekFrom::Start(end - 32))?;
+                f.read_exact(&mut tail)?;
+                if &tail[..8] == b"APETAGEX" {
+                    let size = u64::from(u32::from_le_bytes([tail[12], tail[13], tail[14], tail[15]]));
+                    let header = if tail[23] & 0x80 != 0 { 32 } else { 0 };
+                    match end.checked_sub(size + header) {
+                        Some(e) => end = e,
+                        None => return Ok(None),
+                    }
+                }
+            }
+            Ok((start <= end).then_some((start, end)))
+        }
+    }
+}
+
+/// A file's audio as a fingerprint (SHA-256), read a piece at a time: none where its audio cannot be found.
+pub(crate) fn audio_print(path: &Path, kind: Kind) -> Result<Option<[u8; 32]>> {
+    use sha2::Digest;
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let Some((start, end)) = audio_range(&mut f, kind)? else { return Ok(None) };
+    f.seek(SeekFrom::Start(start))?;
+    let mut left = end - start;
+    let mut hash = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    while left > 0 {
+        let take = left.min(buf.len() as u64) as usize;
+        let n = f.read(&mut buf[..take])?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+        left -= n as u64;
+    }
+    Ok(Some(hash.finalize().into()))
+}
+
 /// A file's audio, without its tags: FLAC's frames after its metadata blocks; MP3's frames between a leading ID3v2
 /// tag and trailing APEv2 and ID3v1 tags.
+#[cfg(test)]
 pub(crate) fn audio_of(b: &[u8], kind: Kind) -> Option<&[u8]> {
     match kind {
         Kind::Flac => {
@@ -294,6 +396,31 @@ pub(crate) mod fixtures {
 mod tests {
     use super::fixtures::*;
     use super::*;
+
+    #[test]
+    fn the_audio_s_print_is_read_in_pieces_and_bounds_the_audio_as_the_whole_file_does() {
+        use sha2::Digest;
+        let d = dir("retag-print");
+        let f = flac(&d, "one");
+        let m = d.join("two.mp3");
+        mp3(&m);
+        for (t, kind) in [(&f, Kind::Flac), (&m, Kind::Mp3)] {
+            let whole: [u8; 32] = sha2::Sha256::digest(audio_of(&std::fs::read(t).unwrap(), kind).unwrap()).into();
+            assert_eq!(audio_print(t, kind).unwrap(), Some(whole), "{}", t.display());
+        }
+        // A ".flac" that is an MP3, and a file that is neither: refused in words, nothing written.
+        let fake = d.join("three.flac");
+        std::fs::copy(&m, &fake).unwrap();
+        let before = std::fs::read(&fake).unwrap();
+        let e = set_bpm(&fake, Some(120)).unwrap_err().to_string();
+        assert!(e.starts_with("not a FLAC file"), "{e}");
+        let junk = d.join("four.mp3");
+        std::fs::write(&junk, b"not audio at all").unwrap();
+        let e = set_bpm(&junk, Some(120)).unwrap_err().to_string();
+        assert!(e.starts_with("not a"), "{e}");
+        assert_eq!(std::fs::read(&fake).unwrap(), before, "untouched");
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn a_bpm_is_written_read_back_and_removed_the_audio_untouched() {
