@@ -40,7 +40,7 @@ COPY shared /app/shared
 RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace
 
 # The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library, driven through
-# its API. Its own stage, after the tests: `docker build --target e2e .` (one heavy job at a time).
+# its API. Its own stage, after the tests: `docker build --target e2e .`.
 FROM source AS e2e
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared

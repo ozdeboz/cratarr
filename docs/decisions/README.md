@@ -269,6 +269,6 @@ by a later record that says so in its header. A new decision takes the next numb
   in one shape; Health shows each kind of difference in one line with its action. Amends 0089: types into files
   follow Cratarr.
 - [0093: Test and development data](0093-test-and-development-data.md): accepted, for 0.13. A fixture library of small
-  generated albums in the repository; one end-to-end suite starting the real server on a throwaway copy of it; a
-  development instance on this PC with its own data and music (the fixtures and a read-only sample from the NAS), which
-  the dev page points at instead of production; previews stay on the NAS, built once the suite passes.
+  generated albums made by the server; one end-to-end suite starting the real server on a throwaway copy of it; an
+  optional development instance with its own data and music, fenced off from the world. How developers work, and
+  where a maintainer tries a preview, are not directed.
