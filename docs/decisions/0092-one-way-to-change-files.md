@@ -62,17 +62,27 @@ Everything around the writing is each writer's own:
    done), `done` of `of`, `failed: [{album, why}]`, when it ran, its undo token and `undone`. Told on the live channel
    to open pages.
 
-**How the page shows it** (from the rules there are: the truth principle, one progress meter, minimal words, Undo
-after an action):
+**How the page shows it: three pieces, the same for every writer** (the owner, 2026-11-01, on the second round of
+mockups: "Yes, this is a lot better"; learned from Picard's original and new values, Lidarr's Preview Retag and
+Activity, beets' diff, MediaMonkey's tag sync; mockups at https://claude.ai/artifact/3tfcXWgYpuTbe799uRQgTL):
 
-- **Where the files differ from Cratarr, Health says so:** one line for each kind of difference, how many, and one
-  action ("12 records' files differ from their types and years · Write"). An item open shows its before and after.
-- **While a run writes:** "Writing 3 of 12" with the one meter, in the line that started it; the page stays usable.
-- **Waiting for another run:** "Waiting", in the line that asked.
-- **After a run, in the same place:** what it did ("Wrote 12 records") with Undo, and each failure with its reason
-  (the gate's own sentence, "changed since it was planned" among them); after an Undo, "Undone". No notice beyond
-  that.
-- **A setting's switch** only decides what Health offers. Its words never promise a write.
+- **Before: the review sheet.** One panel page for every plan: its title says what proposes it ("Types into files",
+  "Renumber · the 1998 CD release", "Missing years"); the records, each with a tick where there are several; under each,
+  its fields as the file has them, struck, and as Cratarr has them, each saying where the new value comes from (the type
+  rule, set by hand, MusicBrainz). One button at its foot with the count, named for the writer ("Write 11",
+  "Renumber", "Fix"). Someone who is not an administrator sees the same sheet without the button.
+- **On the item: the record's state line.** Under a record's title in its panel, the details line where "7 of 12
+  tracks" sits: its files differ from Cratarr (Review), waiting to write, writing (the meter, "2 of 4"), written
+  (Undo), or a file changed since it was planned (Review). Nothing while the files agree with Cratarr.
+- **During and after: Changes to files.** Health › Files: every run in one list, Now (the one writing, with the
+  meter; those waiting), then by day: done with Undo, what was set aside, undone. A run opens as the review sheet as
+  written, with Undo per album; kept as long as the journal keeps it.
+- **Health's lines point.** A kind of difference is a line with its count and ›, opening the review sheet; "Changes
+  to files" names what is writing and waiting. No meter and no Undo in them: one place for each.
+- **What is reviewed:** whatever Cratarr proposes (a rule's types, a finding's year, a release's numbers, a fact set by
+  hand going into the files). What you set yourself on what you see (halve this track's tempo) and moves you chose
+  (Keep, Replace) are the yes already. Every run lands in Changes to files, with Undo.
+- **A setting's switch** only decides what Health lists. Its words never promise a write.
 
 **Amendment to 0089:** with "Write types and years into files" on, the files follow Cratarr: what Cratarr holds for
 a record's types, year and Classical, found or set by hand, is what Write writes. A file's own words (title, artists,
