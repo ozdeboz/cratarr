@@ -10,6 +10,8 @@
 #   fixtures/  the fixture library (`cratarr-server --make-fixtures`), made once
 #   data/      the instance's own settings, catalogue, user data and journal: never copied anywhere
 #
+# The fixtures are an Incoming library: Cratarr has one Music folder (the first Music library with audio), the sample.
+#
 # Fenced off: no accounts (nobody signs in; it is for the machine's own network), MusicBrainz switched off at its
 # first start, no service keys, no Lidarr, slskd or Jellyfin. 768 MB, as production.
 set -eu
@@ -52,7 +54,7 @@ if [ ! -f "$DIR/data/settings.json" ]; then
       "id": "cratarr",
       "kind": "cratarr",
       "enabled": true,
-      "libraries": { "music": ["/music", "/fixtures/library"] },
+      "libraries": { "music": ["/music"], "incoming": ["/fixtures/library"] },
       "values": { "folders": ["/music", "/fixtures/library"] }
     }
   ]
