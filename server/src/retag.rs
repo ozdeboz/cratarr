@@ -278,7 +278,8 @@ pub(crate) fn audio_print(path: &Path, kind: Kind) -> Result<Option<[u8; 32]>> {
     let mut hash = sha2::Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     while left > 0 {
-        let n = f.read(&mut buf[..left.min(buf.len() as u64) as usize])?;
+        let take = left.min(buf.len() as u64) as usize;
+        let n = f.read(&mut buf[..take])?;
         if n == 0 {
             break;
         }
