@@ -14,7 +14,7 @@ set -eu
 list=${1:?the sample list}
 dest=${2:?the music folder}
 host=${3:?the ssh host of the music server}
-ROOTS=${DEV_SAMPLE_ROOTS:?the music server's folders (DEV_SAMPLE_ROOTS)}
+ROOTS=${DEV_SAMPLE_ROOTS:?the music server folders, DEV_SAMPLE_ROOTS}
 
 mkdir -p "$dest"
 copied=0
