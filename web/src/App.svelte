@@ -505,7 +505,11 @@
       // Its content's edge, not its glass's: a narrowed glass lets the picker run out under the field.
       const edge = Math.max(leadEl.getBoundingClientRect().right, ...parts.map((e) => e.getBoundingClientRect().left + e.scrollWidth));
       const met = !!rightEl && edge > rightEl.getBoundingClientRect().left - 4;
-      titleAway = parts.length > 0 && (met || cut > 36 || room < 48 || room < 0.7 * (room + cut));
+      // The open field squeezed narrower than it wants (its CSS: min(320px, 100vw - 220px)), once its slide has ended
+      // (the owner, 2026-11-01: "Why did records not collapse??" beside a field cut short).
+      const field = rightEl?.querySelector<HTMLElement>('.field');
+      const squeezed = !!field && !field.getAnimations().length && field.getBoundingClientRect().width < Math.min(320, innerWidth - 220) - 2;
+      titleAway = parts.length > 0 && (met || squeezed || cut > 36 || room < 48 || room < 0.7 * (room + cut));
     };
     const ts = [150, 350, 600].map((ms) => window.setTimeout(measure, ms));
     addEventListener('resize', measure);
