@@ -179,6 +179,8 @@ export const pageView = $state({
   counted: null as { shown: number; total: number; pending?: boolean } | null,
   /** The pill's search field is open (App's title gives way when it leaves no room, lib/ContentControls). */
   searchOpen: false,
+  /** The title beside back gave way to the open search (lib/NavigationControls): the field takes its room. */
+  leadAway: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
   /** The page's mode button (usePageMode), while it shows. */
