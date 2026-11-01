@@ -7,16 +7,10 @@
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import DetailsGroup from './DetailsGroup.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
 
-  offerReset(
-    () => "The player's extra details shown, none of them chosen; swiping up the queue, down closing.",
-    () => {
-      prefs.playerRow = true;
-      prefs.playerFacts = [];
-      prefs.playerSwipes = { ...SWIPES_DEFAULT };
-    },
-  );
+  // What Reset puts back (lib/settings/reset): each as the part names it, its default the prefs'.
+  offerReset(() => [pref('playerRow', "The player's details row"), pref('playerFacts', 'Details shown'), pref('playerSwipes', 'Swipes')]);
   const SWIPE_ROWS: { key: keyof PlayerSwipes; name: string; options: { value: string; label: string }[] }[] = [
     { key: 'upLeft', name: 'Swipe up, left', options: SWIPES_UP },
     { key: 'upRight', name: 'Swipe up, right', options: SWIPES_UP },

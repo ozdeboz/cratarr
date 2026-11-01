@@ -16,7 +16,7 @@
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
 
   const AREA_NAMES: Record<string, string> = {
     playon: 'Play On',
@@ -128,10 +128,8 @@
   const detailed = $derived(!!levels && Object.keys(levels.now).length > 0);
   /** More detail: every area, or back to normal. */
   const detail = (on: boolean) => levels && setLevels(on ? Object.fromEntries(levels.areas.map((a) => [a, 'debug'])) : {});
-  offerReset(
-    () => (detailed ? 'More detail back to off, every area to normal.' : null),
-    () => setLevels({}),
-  );
+  // What Reset puts back (lib/settings/reset): every area's logging to normal.
+  offerReset(() => (levels ? [{ name: 'More detail', now: () => detailed, def: false, set: () => setLevels({}) }] : null));
 
   const today = new Date().toDateString();
   /** The time, with the day when it is not today. */

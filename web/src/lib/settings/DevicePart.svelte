@@ -21,14 +21,12 @@
   import { defaultBrowserName } from '../playOnTarget.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
   import ValueSheet from './ValueSheet.svelte';
   import StartStopSheet from '../StartStopSheet.svelte';
 
-  offerReset(
-    () => (inApp ? 'Stay ready back to off.' : null),
-    () => setDevice({ stayReady: false }),
-  );
+  // What Reset puts back (lib/settings/reset): the app's Stay ready.
+  offerReset(() => (inApp ? [{ name: 'Stay ready', now: () => !!appInfo.stayReady, def: false, set: (v: boolean) => setDevice({ stayReady: v }) }] : null));
 
   $effect(() => {
     if (inApp && appInfo.deviceMusic === 'granted') askFolders();
