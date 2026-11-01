@@ -38,7 +38,8 @@ while IFS= read -r line || [ -n "$line" ]; do
   echo "copying $rel"
   # The path goes to the server's shell quoted, so names with spaces, quotes and other signs arrive as they are.
   quoted=$(printf "%s" "$rel" | sed "s/'/'\\\\''/g")
-  ssh "$host" "tar -C '$root' -cf - -- '$quoted'" | tar -C "$dest" -xf -
+  # -n: ssh would read the rest of the list from stdin.
+  ssh -n "$host" "tar -C '$root' -cf - -- '$quoted'" | tar -C "$dest" -xf -
   copied=$((copied + 1))
 done < "$list"
 echo "$copied copied, $kept already there"
