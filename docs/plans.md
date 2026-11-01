@@ -40,7 +40,7 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 - **0.14: references and the intake** (the owner, 2026-11-01: "this comes next"): MusicBrainz, Discogs and Bandcamp as
   references, the checks without one, the hand check's intake card, one Health item for references (Soulseek in
   Cratarr, below). With it, the other writers onto 0092's path (Health's fixes, Renumber, the tempo, the covers, the
-  length fixes, single-track intake), each losing its own Undo.
+  length fixes, single-track intake), each losing its own Undo ([the map](writers-onto-0092.md)).
 - **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**
   ([0091](decisions/0091-scrobbling-from-the-device.md)). Cratarr's mode is Cratarr's own library, its libraries still
   switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
