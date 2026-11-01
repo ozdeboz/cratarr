@@ -8,7 +8,7 @@
   import Asking from './Asking.svelte';
   import { asideOf, changeOf, fieldLabel, runGroups, runLine, type SetAside } from './fileChangeRules';
   import { library } from './albums.svelte';
-  import { apply, changesView, fileRuns, loadRuns, openRun, undoRun } from './fileRuns.svelte';
+  import { apply, changesView, fileRuns, keptOf, keptRun, loadRuns, openRun, sent, undoRun } from './fileRuns.svelte';
   import { plural } from './insights.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import Group from './settings/Group.svelte';
@@ -60,11 +60,19 @@
     writing = false;
   }
 
+  // A run under way (`l…`): its status as its news comes, the records the sheet sent; once kept, its page as written in
+  // its place.
+  const live = $derived(v.view === 'run' && v.id.startsWith('l') ? (fileRuns.list?.find((r) => r.id === v.id) ?? null) : null);
+  $effect(() => {
+    if (v.view !== 'run' || !v.id.startsWith('l')) return;
+    const kept = keptOf(v.id);
+    if (kept) keptRun(kept.id);
+  });
   // A run as written, read again as its news comes (an Undo, the run ending).
   let run = $state<{ run: FileRun; kind: string; title: string; records: FileRecord[] } | null>(null);
   const news = $derived(v.view === 'run' ? JSON.stringify(fileRuns.list?.find((r) => r.id === v.id) ?? null) : '');
   $effect(() => {
-    if (v.view !== 'run') return;
+    if (v.view !== 'run' || v.id.startsWith('l')) return;
     const id = v.id;
     void news;
     let gone = false;
@@ -137,6 +145,28 @@
       onsave={() => void write()}
     />
   {/if}
+{:else if v.view === 'run' && v.id.startsWith('l')}
+  <!-- Under way: its meter, what the sheet sent, what is set aside so far. -->
+  {#if live}
+    <Group>
+      <Item name={`${live.title} · ${plural(live.of || sent.records.length, 'record')}`} line={runLine(live)} progress={live.state === 'writing' && live.of ? live.done / live.of : live.state === 'waiting' ? 0 : null} />
+    </Group>
+    {#if sent.id === live.id && sent.records.length}
+      <Group>
+        {#each sent.records.slice(0, showing) as x (x.album)}{@render record(x, plural(x.files, 'file'), null)}{/each}
+        {#if sent.records.length > showing}<Item name={`${(sent.records.length - showing).toLocaleString()} more`} onclick={() => (showing += STEP)} />{/if}
+      </Group>
+    {/if}
+    {#if live.failed.length}
+      <Group title="Set aside">
+        {#each asideOf(live.failed) as x (x.album)}<Item lead="warn" name={titleOf(x)} line={[x.files ? plural(x.files, 'file') : '', ...x.why].filter(Boolean).join(' · ')} tone="warn" wrap />{/each}
+      </Group>
+    {/if}
+  {:else if !fileRuns.list}
+    <Asking />
+  {:else}
+    <p class="muted">This run is no longer under way.</p>
+  {/if}
 {:else if v.view === 'run'}
   {#if failed}
     <p class="muted">{failed}</p>
@@ -175,7 +205,7 @@
           line={runLine(r)}
           tone={r.state === 'done' && !r.undone && r.failed.length ? 'warn' : null}
           progress={r.state === 'writing' && r.of ? r.done / r.of : null}
-          onclick={r.id.startsWith('r') ? () => openRun(r.id) : null}
+          onclick={() => openRun(r.id)}
         />
       {/each}
     </Group>
