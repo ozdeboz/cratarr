@@ -66,6 +66,22 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; kep
   { id: 'diagnostics', title: 'Diagnostics', icon: 'list', kept: 'server', admin: true },
 ];
 
+/** Personal, Device, Server: Settings' groups, in order. */
+export const SETTINGS_GROUPS = [
+  { kept: 'personal', title: 'Personal' },
+  { kept: 'device', title: 'Device' },
+  { kept: 'server', title: 'Server' },
+] as const;
+/** The group a part is in for someone: a part of the server's that anyone opens (Connections) is Personal for someone
+ *  not an administrator. */
+export const keptFor = (x: (typeof SECTIONS)[number], admin: boolean): SettingsKept => (x.admin && !admin ? 'personal' : x.kept);
+/** The parts someone sees, in their groups' order (Settings' list, and its picker in the glass): the app's in the app
+ *  (Sync in the installed page too: 0.9.8, its own downloads), the server's for administrators (and those anyone opens). */
+export function partsFor(admin: boolean, app: boolean, installed: boolean): (typeof SECTIONS)[number][] {
+  const allowed = SECTIONS.filter((x) => (!x.app || app || (x.id === 'sync' && installed)) && (!x.admin || admin || x.everyone));
+  return SETTINGS_GROUPS.flatMap((g) => allowed.filter((x) => keptFor(x, admin) === g.kept));
+}
+
 export const settingsSaved = $state({ n: 0 });
 /** The name of the thing whose own page a part shows (lib/SettingsPanel's title there). */
 export const thingTitle = $state({ text: null as string | null });

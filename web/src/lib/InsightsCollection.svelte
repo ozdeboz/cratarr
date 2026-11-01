@@ -9,6 +9,7 @@
   import Icon from './Icon.svelte';
   import PageLoading from './PageLoading.svelte';
   import { plural } from './insights.svelte';
+  import { INSIGHTS, openStep } from './panel.svelte';
   import { prefs } from './prefs.svelte';
 
   let { data }: { data: Insights } = $props();
@@ -25,6 +26,13 @@
   const o = $derived(data.overview);
   const waited = $derived(o?.incoming_since ? Math.max(0, Math.floor((Date.now() / 1000 - o.incoming_since) / 86_400)) : null);
   // One grid of tiles, no half-empty rows (the owner, 2026-10-23): the collection's, then what waits in Incoming.
+  // A view one level deeper (Missing albums, exclusions) opens as a step, its crumb's level above the view it came from.
+  const step = (e: MouseEvent, href: string) => {
+    const m = /view=([^&]+)/.exec(href);
+    if (!m || !decodeURIComponent(m[1]).startsWith(INSIGHTS)) return;
+    e.preventDefault();
+    openStep(decodeURIComponent(m[1]));
+  };
   const tiles = $derived<{ value: string; label: string; href?: string }[]>([
     { value: num(l.tracks), label: 'tracks' },
     { value: num(l.albums), label: 'albums' },
@@ -194,7 +202,7 @@
   <section aria-label="Your music">
     <div class="tiles">
       {#each tiles as t (t.label)}
-        {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span><i class="go-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></i></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
+        {#if t.href}<a class="tile go" href={t.href} onclick={(e) => step(e, t.href!)}><b>{t.value}</b><span>{t.label}</span><i class="go-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></i></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
       {/each}
     </div>
   </section>
@@ -276,7 +284,7 @@
     <section aria-label="Discovery">
       <div class="tiles">
         {#each discTiles as t (t.label)}
-          {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span><i class="go-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></i></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
+          {#if t.href}<a class="tile go" href={t.href} onclick={(e) => step(e, t.href!)}><b>{t.value}</b><span>{t.label}</span><i class="go-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></i></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
         {/each}
       </div>
     </section>
