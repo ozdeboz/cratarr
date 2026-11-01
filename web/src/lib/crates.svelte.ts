@@ -7,7 +7,7 @@ import { shownPlaylists } from './output.svelte';
 import { pickOf, playCollection } from './play.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
-import { viewPlaylist } from './panel.svelte';
+import { viewOver } from './panel.svelte';
 import { toast } from './toast.svelte';
 import { withUndo } from './undo.svelte';
 
@@ -203,7 +203,7 @@ export async function setCrateArt(id: string, file: Blob | null) {
  *  saved; reached from a track's menu and from the genres shown on top of a list. */
 export const GENRE = 'genre:';
 export const genreOf = (crate: string | null) => (crate?.startsWith(GENRE) ? crate.slice(GENRE.length) : null);
-export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
+export const viewGenre = (name: string) => viewOver(CRATE + GENRE + name);
 /** A word's crate (0.9.7, the harvest: the owner, 2026-10-26): as a genre's, for each kind of word (`crate:style:<w>`,
  *  `crate:mood:<w>`, `crate:tag:<w>`, and 0.11's `crate:label:<w>`), the server's crates::genre_crate making them all;
  *  found by the global search. */
@@ -236,7 +236,7 @@ const likeNames = $state<Record<string, string>>({});
 export const nameLike = (crate: string, name: string) => (likeNames[crate] = name);
 export function viewLike(id: string, count = LIKE_COUNT) {
   const crate = LIKE + id + (count === LIKE_COUNT ? '' : `@${count}`);
-  viewPlaylist(CRATE + crate);
+  viewOver(CRATE + crate);
   if (!likeNames[crate]) getCrate(crate).then((d) => (likeNames[crate] = d.name)).catch(() => {});
 }
 /** A crate the server makes from a seed (a genre, a track, an album): the library's, never one's own. */
@@ -251,7 +251,7 @@ export function startCrate(name: string, conditions: Condition[] = [], more: Omi
   } catch {
     /* the builder starts empty */
   }
-  viewPlaylist(NEW_CRATE);
+  viewOver(NEW_CRATE);
 }
 
 // A crate's Play and Shuffle, Play next and Add to queue (its card's picture, its panel, its menu: decision 0058's
