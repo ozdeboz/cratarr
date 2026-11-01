@@ -93,3 +93,18 @@ sent later.
 - A user with no Cratarr server at all (only modes of other servers) can scrobble from each device only.
 - To check when building: ListenBrainz's and Last.fm's APIs answering a page in a browser (cross-origin requests); if
   one does not, the browser goes through the app's bridge where it can, and otherwise offers through the server only.
+
+## Amendment (2026-10-31): several independent servers
+
+With modes per server (0.13) a person has accounts on several servers. The owner chose (question set) one choice and
+one switch per server, not a choice per server:
+
+- **One choice per person:** from this device, or through one Cratarr server of theirs, the one they signed in to the
+  services on. Through it, the plays of every other server's tracks go to that one (`/api/scrobbles`). A second
+  Cratarr server scrobbles its own tracks only if it is the one chosen.
+- **Per Jellyfin or Subsonic server, in its mode's settings: "This server scrobbles for me"** (off at the start).
+  Subsonic's `scrobble` registers a play, which a server forwards to Last.fm (Navidrome, Gonic, Airsonic-Advanced: and
+  to ListenBrainz) where its user set that up there; a Jellyfin does through a plugin. No API says whether a server
+  does, so the person says. On, the device leaves that server's tracks to it and only reports their plays, as it
+  always does (each server's own history and counts); off, the device (or the chosen Cratarr server) scrobbles them.
+  A play is then never sent twice.
