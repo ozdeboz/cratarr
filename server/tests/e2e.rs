@@ -74,16 +74,19 @@ impl Server {
         v["sources"].as_array().into_iter().flatten().filter(|s| s["id"] == "cratarr").flat_map(|s| s["albums"].as_array().cloned().unwrap_or_default()).collect()
     }
 
-    /// A run, once done (by its kept id, or the newest run).
-    async fn done_run(&self) -> Value {
-        let mut last = Value::Null;
-        self.until("the run to finish", Duration::from_secs(120), || async {
+    /// The newest run once it is done and kept, other than `not`.
+    async fn done_run(&self, not: Option<&str>) -> Value {
+        let start = Instant::now();
+        loop {
             let runs = self.get("/api/file-changes/runs").await;
-            last = runs.as_array().and_then(|r| r.first().cloned()).unwrap_or(Value::Null);
-            last["state"] == "done" && last["id"].as_str().is_some_and(|i| i.starts_with('r'))
-        })
-        .await;
-        last
+            let newest = runs.as_array().and_then(|r| r.first().cloned()).unwrap_or(Value::Null);
+            let id = newest["id"].as_str().unwrap_or("");
+            if newest["state"] == "done" && id.starts_with('r') && Some(id) != not {
+                return newest;
+            }
+            assert!(start.elapsed() < Duration::from_secs(120), "waited for a run to finish: {runs}");
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
     }
 
     fn stop(mut self) {
@@ -162,7 +165,7 @@ async fn types_and_years_into_the_files_end_to_end() {
     set_vorbis(&first, "RELEASETYPE", "single");
     let started = s.ok(reqwest::Method::POST, "/api/file-changes/plans/types/apply", json!({ "albums": [tide_album], "stamps": { tide_album.clone(): tide_stamp } })).await;
     assert!(["waiting", "writing", "done"].contains(&started["state"].as_str().unwrap()), "{started}");
-    let a = s.done_run().await;
+    let a = s.done_run(None).await;
     let why: Vec<&str> = a["failed"].as_array().unwrap().iter().map(|f| f["why"].as_str().unwrap()).collect();
     assert!(!why.is_empty() && why.iter().all(|w| w.contains("changed since it was planned")), "{a}");
     assert_eq!(vorbis(&first, "RELEASETYPE"), ["single"], "the tagger's change kept");
@@ -173,14 +176,7 @@ async fn types_and_years_into_the_files_end_to_end() {
     let sheet = s.get(&format!("/api/file-changes/plans/types?albums={tide_album}")).await;
     let record = &sheet["records"][0];
     s.ok(reqwest::Method::POST, "/api/file-changes/plans/types/apply", json!({ "albums": [tide_album], "stamps": { tide_album.clone(): record["stamp"] } })).await;
-    let mut b = s.done_run().await;
-    if b["id"] == a_id.as_str() {
-        s.until("the second run", Duration::from_secs(60), || async {
-            b = s.get("/api/file-changes/runs").await[0].clone();
-            b["id"] != a_id.as_str() && b["state"] == "done"
-        })
-        .await;
-    }
+    let b = s.done_run(Some(&a_id)).await;
     assert!(b["failed"].as_array().unwrap().is_empty(), "{b}");
     for f in std::fs::read_dir(&tide_dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "flac")) {
         assert_eq!(vorbis(&f, "RELEASETYPE"), ["ep"], "{}", f.display());
