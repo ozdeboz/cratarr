@@ -290,7 +290,7 @@ pub fn make(dir: &Path) -> Result<Vec<PathBuf>> {
                 vc.push((*k).into(), (*v).into());
             }
             if a.cover == Cover::Inside {
-                let pic = Picture::new_unchecked(PictureType::CoverFront, Some(MimeType::Jpeg), None, picture.clone());
+                let pic = Picture::unchecked(picture.clone()).pic_type(PictureType::CoverFront).mime_type(MimeType::Jpeg).build();
                 lofty::ogg::OggPictureStorage::insert_picture(&mut vc, pic, None)?;
             }
             file.set_vorbis_comments(vc);
