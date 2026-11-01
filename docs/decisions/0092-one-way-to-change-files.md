@@ -1,10 +1,10 @@
 # 0092: One way to change files
 
-- Status: proposed (the owner, 2026-10-31: "do we now have a properly unified path of file+tag handling? I want a
+- Status: accepted (the owner, 2026-10-31: "do we now have a properly unified path of file+tag handling? I want a
   clean and coherent architecture!", "Not scattered, but logical please", "we should probably think of our rules,
   wherever we have appropriate ones, to decide how this all should be presented to our users"; by question set: draft
-  it now, before types into files is merged; always asked; files follow Cratarr). For 0.13. The server's parts are
-  a5's to review and build, the page's 632's.
+  it now, before types into files is merged; always asked; files follow Cratarr; the server's parts reviewed by a5 the
+  same day). For 0.13. The server's parts are a5's to build, the page's 632's.
 - Date: 2026-10-31
 - Builds on: 0008 (the catalogue: tags read in two layers), 0011 and 0026 (the journal, the app's one undo journal),
   0013 (Keep and Replace: moves all or none), 0053 (tags without touching the audio), Health's fixes (0.9.7: core facts
@@ -37,19 +37,30 @@ Everything around the writing is each writer's own:
 
 1. **A plan:** for each file, what changes and why. Kinds: tags set or cleared by key; a cover embedded or written
    beside; an audio header (the length fixes); a move; a delete into the trash. Each change carries its reason and its
-   source (Health's finding, Renumber's release, the Edit sheet, the type rule, a Keep).
+   source (Health's finding, Renumber's release, the Edit sheet, the type rule, a Keep), and what the file held before.
+   A plan is made from the catalogue (quick), and each file is read again just before it is written: one whose fields
+   no longer match the plan's before (Lidarr or a person changed it meanwhile) is set aside as "changed since it was
+   planned", not written.
 2. **The gate, one rule:** nothing is written into the library's files without an administrator's yes to that plan
    (Health's fixes' rule; the March 2026 lesson, 0080). A switch never writes by itself: it decides what is offered.
    The yes is either the tap that is the action (Keep, Replace, Renumber, an intake's approval, an Edit sheet's Save
    where it writes files) or the tap on what is offered (Health's Fix, Write). However few files, it is asked (the
-   owner: always asked).
-3. **Applied one way:** one album at a time, paced. Tags and audio headers through the checked copy (only what
-   changes; the audio byte for byte, or for a header the frames its check names); moves all or none; deletes into the
-   trash. A file that fails is set aside with its reason, and the run goes on.
-4. **Recorded once:** a run is one journal entry (0011, 0026) holding each file's before. One Undo per run, and per
-   album within it where the page offers that. The writers' own before-files go.
-5. **Told once:** a run's status in one shape, for every writer: what it is, `done` of `of`, `failed: [{album, why}]`,
-   when it ran, its undo token. Told on the live channel to open pages.
+   owner: always asked). Write, Fix and Renumber are administrators'; anyone else's Edit sheet Save changes only
+   Cratarr's facts, and their files follow at the next Write an administrator gives.
+3. **Applied one way:** one album at a time, paced, and one run at a time: a single lock over every change to the
+   library's files (types into files, the fixes, Renumber, Keep and Replace, intake, the trash's moves); a second run
+   waits, and says it is waiting. Tags and audio headers through the checked copy (only what changes; the audio byte
+   for byte, or for a header the frames its check names); moves all or none; deletes into the trash. A file that fails
+   is set aside with its reason, and its album's other files are still written; the run goes on.
+4. **Recorded once:** a run is one journal entry (0011, 0026) holding each file's before. A tag's before is small and
+   goes in the entry; an embedded cover's (megabytes) and a header's bytes are kept as files beside the journal, named
+   in the entry and pruned with it. The journal keeps runs as long as the trash keeps what it holds (`trash_days`). One
+   Undo per run, and per album within it where the page offers that; an album's Undo undoes what was written of it.
+   Undo checks as writing does: it puts a file back only where the file still holds what the run wrote, else sets it
+   aside as "changed since" and says so, never overwriting it. The writers' own before-files go.
+5. **Told once:** a run's status in one shape, for every writer: its `id`, what it is, its `state` (waiting, writing,
+   done), `done` of `of`, `failed: [{album, why}]`, when it ran, its undo token and `undone`. Told on the live channel
+   to open pages.
 
 **How the page shows it** (from the rules there are: the truth principle, one progress meter, minimal words, Undo
 after an action):
@@ -57,8 +68,10 @@ after an action):
 - **Where the files differ from Cratarr, Health says so:** one line for each kind of difference, how many, and one
   action ("12 records' files differ from their types and years · Write"). An item open shows its before and after.
 - **While a run writes:** "Writing 3 of 12" with the one meter, in the line that started it; the page stays usable.
+- **Waiting for another run:** "Waiting", in the line that asked.
 - **After a run, in the same place:** what it did ("Wrote 12 records") with Undo, and each failure with its reason
-  (the gate's own sentence). No notice beyond that.
+  (the gate's own sentence, "changed since it was planned" among them); after an Undo, "Undone". No notice beyond
+  that.
 - **A setting's switch** only decides what Health offers. Its words never promise a write.
 
 **Amendment to 0089:** with "Write types and years into files" on, the files follow Cratarr: what Cratarr holds for
@@ -72,5 +85,6 @@ track numbers) stay as 0089 has them: fixed in the tags, never set by hand in Cr
   Renumber, the tempo, the covers, the length fixes, single-track intake. Each one's own before-files and Undo go as it
   moves. Their tests move with them, and one set of tests holds the path (gate, apply, record, undo).
 - Every writer's progress, failures and Undo look the same on the page.
-- Derived files (the CD-format copies, the Opus and stream forms) are made beside the library, not changes to its
-  files: not on this path.
+- Not on this path: derived files (the CD-format copies, the Opus and stream forms), made beside the library, not
+  changes to its files; and playlists' `.m3u` files, which are edits of a person's own list on their own path (0025),
+  journaled already.

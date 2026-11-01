@@ -263,7 +263,7 @@ by a later record that says so in its header. A new decision takes the next numb
   holding no keys) or through one Cratarr server (sign in once, other servers' plays handed to it; amended: a
   "This server scrobbles for me" switch per other server); Subsonic apps and Kodi
   follow it; a play told once, by its id.
-- [0092: One way to change files](0092-one-way-to-change-files.md): proposed, for 0.13. Every change to the library's
+- [0092: One way to change files](0092-one-way-to-change-files.md): accepted, for 0.13. Every change to the library's
   files is a plan (what changes, why), gated by an administrator's yes (a switch never writes by itself), applied one
   album at a time through the checked copy or all-or-none moves, recorded as one journal entry with one Undo, and told
   in one shape; Health shows each kind of difference in one line with its action. Amends 0089: types into files
