@@ -6595,6 +6595,9 @@ struct PlanOf {
 struct Ticked {
     #[serde(default)]
     albums: Option<Vec<String>>,
+    /// Each ticked record's stamp from the sheet: a record no longer as it showed is set aside.
+    #[serde(default)]
+    stamps: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -6620,7 +6623,7 @@ async fn file_change_plan(Path(kind): Path<String>, Query(q): Query<PlanOf>) -> 
 async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>, Json(b): Json<Ticked>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
     let albums = b.albums.unwrap_or_default();
     match kind.as_str() {
-        crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums).await.map_err(file_change_refused)?)),
+        crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums, b.stamps).await.map_err(file_change_refused)?)),
         _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
     }
 }

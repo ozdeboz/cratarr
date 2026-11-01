@@ -200,17 +200,18 @@ pub async fn plan(albums: Option<Vec<String>>) -> Result<file_runs::PlanView> {
     Ok(file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
 }
 
-/// The ticked records written (an administrator's apply on the review sheet): a run on the one path.
-pub async fn apply(app: &Arc<super::App>, albums: Vec<String>) -> Result<file_runs::Status> {
+/// The ticked records written (an administrator's apply on the review sheet), each set aside where it is no longer what
+/// the sheet showed (its stamp): a run on the one path.
+pub async fn apply(app: &Arc<super::App>, albums: Vec<String>, stamps: Option<HashMap<String, String>>) -> Result<file_runs::Status> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     anyhow::ensure!(!albums.is_empty(), "No records ticked");
     anyhow::ensure!(!file_runs::busy(KIND), "Already writing");
     let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
         anyhow::ensure!(is_on(&served), "Writing into files is switched off");
-        proposal(&served, Some(&albums))
+        Ok(file_runs::ticked(proposal(&served, Some(&albums))?, &albums, stamps.as_ref()))
     })
     .await??;
-    anyhow::ensure!(!p.files.is_empty(), "Nothing differs");
+    anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Nothing differs");
     Ok(file_runs::start(app, p))
 }
 
