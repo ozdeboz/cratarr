@@ -1,7 +1,7 @@
 <script lang="ts">
   // An Insights view in the panel (the owner, 2026-10-24: Insights as Settings and Health): opened from the page's list,
   // beside it on a roomy window (no ✕ there), over it on a phone. Its bar: where it is (Collection › Overview) and the
-  // pill the pages have (lib/TopPill: the same glass, the same motion; the owner, 2026-10-25): its funnel opening what is
+  // pill the pages have (lib/ContentControls: the same glass, the same motion; the owner, 2026-10-25): its funnel opening what is
   // counted, its sliders how it is shown (lib/InsightsSheet), each where the view has any. The views are the tabs' as they
   // were (Collection's sections, Listening's History and Profile, the Map).
   import Icon from './Icon.svelte';
@@ -12,7 +12,7 @@
   import InsightsProfile from './InsightsProfile.svelte';
   import InsightsSheet from './InsightsSheet.svelte';
   import { insightsFilter, insightsView } from './insightsControls.svelte';
-  import TopPill from './TopPill.svelte';
+  import ContentControls from './ContentControls.svelte';
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights, mapFull } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -71,7 +71,7 @@
   {#if !handed}
     <div class="bar" class:beside>
       {@render glassLeft()}
-      {#if pill()}<TopPill {...pill()!} />{/if}
+      {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>

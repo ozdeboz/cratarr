@@ -1,6 +1,6 @@
 // The global search's state (decision 0072; the owner, 2026-10-25, mockup 3): what the words find everywhere, asked
 // while any search is on, so its count shows beside the page's before it is looked at; and which the page or panel
-// shows, its own results or everywhere's (the globe beside the search, lib/TopPill). The library's kinds and what is not in it from the
+// shows, its own results or everywhere's (the globe beside the search, lib/ContentControls). The library's kinds and what is not in it from the
 // server, the pages and Settings' parts from the browser (lib/everywhere).
 import { search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
@@ -71,7 +71,7 @@ export const globalSearch = $state({
   all: null as string | null,
   allFound: null as { q: string; kind: string; items: Found[]; total: number; done: boolean } | null,
   /** The words read as a crate (0.13; the owner, 2026-10-31), once for the crate card (lib/SearchCrateCard), the
-   *  field's dimmed joining words (lib/TopPill) and the results: its terms, their joins, and what its terms find
+   *  field's dimmed joining words (lib/ContentControls) and the results: its terms, their joins, and what its terms find
    *  (`r`), which the results show instead of what the whole line finds. Null where the words are no crate; the last
    *  one kept while new words are read (its `q` says whose). */
   crate: null as { q: string; chips: Chip[]; modes: Modes; r: ServerSearch } | null,

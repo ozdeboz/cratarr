@@ -160,7 +160,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
 - **New playlist, New crate** are the panel's edit mode with nothing made yet (decided 2026-10-16: "creating a playlist
   should look like editing one, with regard to everything"), from the + at the end of the page's pill
-  (`lib/TopPill.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
+  (`lib/ContentControls.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
   typed), the caret in it at once, Cancel and Save (once it has a name) in the action bar's place. A new playlist is
   made by its Save (`?view=playlist-new`); a new crate is the builder, saved with its Save.
 - **What a menu holds and how it opens** (decision 0058): in the music lists a long-press, a right-click or ⋮ opens
@@ -284,7 +284,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
-- **A page's floating row** (2026-10-15, `App.svelte`, `lib/TopPill.svelte`): back on the left (a round as tall as the
+- **A page's floating row** (2026-10-15, `App.svelte`, `lib/ContentControls.svelte`): back on the left (a round as tall as the
   pill; nothing there while there is nowhere to go back to: no mark in its place, 2026-10-16), and on a page with something to
   play the pill on the right: **search** (a magnifier that opens into a field over the row, the whole row on a phone, at
   most 520 px on a wide page; ✕ empties and folds it, Esc folds it, the magnifier stays in the accent while a search

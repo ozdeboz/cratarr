@@ -1,4 +1,4 @@
-// What the page shown now hands the pill's sheets (lib/TopPill, decided 2026-10-15): a page's view settings (order,
+// What the page shown now hands the pill's sheets (lib/ContentControls, decided 2026-10-15): a page's view settings (order,
 // layout, size) live in the View sheet (lib/ViewSheet) and its own filters in the Filter sheet (lib/FilterSheet), not
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
@@ -16,7 +16,7 @@ export type OrderField<K extends string = string> = { value: K; label: string; m
 /** The page's own button at the pill's end: a + where it makes something, or with things ticked their menu (⋮). */
 /** `progress`: a ring around the icon, 0 to 1, while work goes on (the Downloads page's sync, decision 0038). */
 /** The page's own button in its pill. `progress` (0 to 1; null while nothing runs): work it starts and shows, ringed on
- *  the button and unfolded in the pill after a tap (lib/TopPill); `line`: what that work is at, said there. */
+ *  the button and unfolded in the pill after a tap (lib/ContentControls); `line`: what that work is at, said there. */
 export type PageAction = { icon: IconName; label: string; run: () => void; progress?: number | null; line?: string | null };
 /** A page's mode, a button that stays lit while on, left of its own button (Playlists' Quick add, 0.9.18). */
 export type PageMode = { icon: IconName; label: string; on: boolean; toggle: () => void };
@@ -177,7 +177,7 @@ export const pageView = $state({
   /** How many of the page's list its filter lets through, of how many (the Filter sheet's count); null: not counted.
    *  `pending`: the server's answer to a changed filter is on its way (the count is the last one's). */
   counted: null as { shown: number; total: number; pending?: boolean } | null,
-  /** The pill's search field is open (App's title gives way when it leaves no room, lib/TopPill). */
+  /** The pill's search field is open (App's title gives way when it leaves no room, lib/ContentControls). */
   searchOpen: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
@@ -189,7 +189,7 @@ export const pageView = $state({
 
 /** The calling page's own search finding none (0.13; the owner, 2026-10-31: A2, "an overlay pointing at the search
  *  glass with a button to clear"): `what` it lists ("records") while its words leave none of it, else null. The page's
- *  pill says it, from its lit magnifier, the words a chip whose ✕ clears (lib/TopPill); the page itself says nothing
+ *  pill says it, from its lit magnifier, the words a chip whose ✕ clears (lib/ContentControls); the page itself says nothing
  *  then. An effect: it follows what `what` reads. */
 export function searchNone(what: () => string | null) {
   $effect(() => {

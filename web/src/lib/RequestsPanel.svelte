@@ -21,7 +21,7 @@
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
-  import TopPill from './TopPill.svelte';
+  import ContentControls from './ContentControls.svelte';
   import { closePlaylist, upToPage } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
@@ -169,7 +169,7 @@
   {#if !handed}
     <div class="bar" class:beside>
       {@render glassLeft()}
-      {#if pill()}<TopPill {...pill()!} />{/if}
+      {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}
     </div>
   {/if}

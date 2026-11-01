@@ -43,7 +43,7 @@
   import Hold from './lib/Hold.svelte';
   import { handing, HANDOVER_GIVE_UP_MS, nextHeld, NONE, type Places } from './lib/handover';
   import MiniPlayer from './lib/MiniPlayer.svelte';
-  import TopPill from './lib/TopPill.svelte';
+  import ContentControls from './lib/ContentControls.svelte';
   import InsightsPanel from './lib/InsightsPanel.svelte';
   import { INSIGHTS_VIEWS, viewNow, type InsightsView } from './lib/insightsViews';
   import Mark from './lib/Mark.svelte';
@@ -56,15 +56,15 @@
   import { art, playing } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
-  import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
+  import { reducedMotion, SHEET_OUT } from './lib/motion';
   import { glass, panelBeside } from './lib/glass.svelte';
   import { reveal, subjectIn } from './lib/reveal';
   import GlobalResults from './lib/GlobalResults.svelte';
   import SearchCrateCard from './lib/SearchCrateCard.svelte';
   import { quickOn } from './lib/quickCrates.svelte';
   import { crateCardOn } from './lib/quickCrate';
-  import RecordsPicker from './lib/RecordsPicker.svelte';
-  import DiscoverPicker from './lib/DiscoverPicker.svelte';
+  import NavigationControls from './lib/NavigationControls.svelte';
+  import { glassPart } from './lib/glassMotion';
   import { chooseType, loadTypes, typeNow, typesOffered } from './lib/recordTypes.svelte';
   import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
   import { globalSearch, pageKinds, readingPending } from './lib/globalSearch.svelte';
@@ -399,7 +399,7 @@
   const MINI_SPACE = 80;
   const miniSpace = $derived(mini && playing() ? MINI_SPACE : 0);
   // The page's row (Symfonium's, decided 2026-10-15), floating over the page's top: back on the left, when this visit
-  // has a step before this one; on the right, on a page with something to play, the pill (lib/TopPill): the filter
+  // has a step before this one; on the right, on a page with something to play, the pill (lib/ContentControls): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
   const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local-albums'];
@@ -488,32 +488,7 @@
     navPlace.page = page;
     navPlace.shownPage = shownPage;
   });
-  // The title beside back gives way to the open search where it would be cut to a few letters or less (the owner,
-  // 2026-10-25): measured as the field slides open (200 ms, after a page change 100 ms later), and as the window
-  // changes; a title that fits beside the open field stays as it is. Library's view (its picker is never cut: the
-  // field's glass slides over it) gives way the same where the two glasses would meet (the owner, 2026-10-26).
   let leadEl = $state<HTMLElement>();
-  let titleAway = $state(false);
-  $effect(() => {
-    if (!pageView.searchOpen) return void (titleAway = false);
-    const measure = () => {
-      if (!leadEl || titleAway) return;
-      const parts = [...leadEl.querySelectorAll<HTMLElement>('.page-name, .crumbs .up, .crumbs .here, .title, .views')];
-      const cut = parts.reduce((n, e) => n + Math.max(0, e.scrollWidth - e.clientWidth), 0);
-      const room = parts.reduce((n, e) => n + e.clientWidth, 0);
-      // More than a few letters cut (about three, or a third of it: "Req…"), or no room at all.
-      // Its content's edge, not its glass's: a narrowed glass lets the picker run out under the field.
-      const edge = Math.max(leadEl.getBoundingClientRect().right, ...parts.map((e) => e.getBoundingClientRect().left + e.scrollWidth));
-      const met = !!rightEl && edge > rightEl.getBoundingClientRect().left - 4;
-      titleAway = parts.length > 0 && (met || cut > 36 || room < 48 || room < 0.7 * (room + cut));
-    };
-    const ts = [150, 350, 600].map((ms) => window.setTimeout(measure, ms));
-    addEventListener('resize', measure);
-    return () => {
-      ts.forEach(clearTimeout);
-      removeEventListener('resize', measure);
-    };
-  });
   // Where a page was scrolled to, kept with its step of the history: back there brings it back; any other way there
   // (its link, Home's button) starts at its top (the owner, 2026-10-25).
   let popped = false;
@@ -629,7 +604,7 @@
   const underBar = $derived(phone && !!panelPage && !!(settingsShown || healthShown || insightsShown || requestsShown || downloadsShown));
   /** An index page and its panel share the row's place: going one level deeper (or back) changes what the glass holds,
    *  at once, instead of fading it in anew (the owner, 2026-10-25: "the top left and top right glass hide"). */
-  const leadFade = $derived(reducedMotion() || (phone && !!panelPage && (underBar || !layerShown)) ? 0 : 150);
+  const leadStill = $derived(phone && !!panelPage && (underBar || !layerShown));
   /** The one pill's settings: the panel's where it handed them, else the page's. */
   const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(page));
   const pillNow = $derived(
@@ -968,7 +943,7 @@
     else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
   });
   const ALL = $derived([...MAIN, ...APART]);
-  /** The page's search has its globe (lib/TopPill): everywhere's shown in the page's place. */
+  /** The page's search has its globe (lib/ContentControls): everywhere's shown in the page's place. */
   const scoped = $derived(page !== 'home' && page !== 'find');
   /** Everywhere's results in the page's place: on a page's Everywhere tab, and on Home whenever it searches (it has
    *  nothing of its own to find; the owner, 2026-10-25: its results came after all of Home, out of sight). */
@@ -1229,7 +1204,6 @@
         role="group"
         aria-label="More pages"
         style:--cols={moreCols}
-        transition:slide|global={{ duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
       >
         {#each overflow as p (p.id)}
           <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
@@ -1240,29 +1214,25 @@
     {/if}
   {/snippet}
   {#snippet leadPart()}
-      {#if handed}
-        <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
-      {:else}
-        <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>
-          {#if navAt > 0 || backHome || globalSearch.all}
-            <!-- Out of a search's Show all first (it is a step of the history), then back as ever. -->
-            <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.href)))}><Icon name="back" size={22} /></button></span>
-          {/if}
-          <!-- Wherever the bar of pages is along the top (under 1024 px, as the CSS; the owner, 2026-10-25): from there the
-               sidebar of pages names it. -->
-          {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
-          <!-- What the page shows, on the glass's extension as a control page's name (the owner, 2026-10-25): the
-               Library's kind of record, Discover's mode (the owner, 2026-10-29). -->
-          {#if page === 'library'}<RecordsPicker />{:else if page === 'discover'}<DiscoverPicker />{/if}
-        </span>
-      {/if}
+    <!-- Back (out of a search's Show all first: it is a step of the history), the page's name wherever the bar of pages
+         is along the top (under 1024 px, as the CSS; the owner, 2026-10-25: from there the sidebar names it), the
+         Library's and Discover's picker; or the panel's left part where it handed its glass. -->
+    <NavigationControls
+      left={handed?.left ?? null}
+      back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.href))) : null}
+      name={panelPage && phone ? panelPage.label : null}
+      picker={page === 'library' ? 'library' : page === 'discover' ? 'discover' : null}
+      still={leadStill}
+      right={() => rightEl}
+      bind:el={leadEl}
+    />
   {/snippet}
   {#snippet rightPart()}
       <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
            Discover's: its search and Look again (the owner, 2026-10-24). The panel's where it handed its glass. -->
       {#if pillNow || handed?.extra}
         <span class="right" bind:this={rightEl}>
-          {#if pillNow}<SheetArea area={() => pageEl}><TopPill {...pillNow} /></SheetArea>{/if}{#if handed?.extra}{@render handed.extra()}{/if}
+          {#if pillNow}<SheetArea area={() => pageEl}><ContentControls {...pillNow} /></SheetArea>{/if}{#if handed?.extra}{@render handed.extra()}{/if}
         </span>
       {/if}
   {/snippet}
@@ -1305,7 +1275,8 @@
 <LabelTip />
   <ProgressBar />
 
-  <nav class="bar" class:bottom={navBottom} class:away={navHidden} aria-label="Pages" onclickcapture={collapse}>
+  <nav class="bar" class:bottom={navBottom} class:away={navHidden} aria-label="Pages" onclickcapture={collapse} {@attach glassPart({ radius: 0 })}>
+    <span class="glass" aria-hidden="true"></span>
     <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on; under them when the bar
          is along the bottom (the owner, 2026-10-25), the tabs nearest the page either way. -->
     {#if switchInBar && !navBottom}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
@@ -1406,10 +1377,12 @@
      viewed playlist. */
   .page-row {
     position: fixed;
-    top: calc(var(--top-now, 0px) + env(safe-area-inset-top) + var(--gutter-y));
+    top: calc(env(safe-area-inset-top) + var(--gutter-y));
     left: var(--gutter-x);
     right: var(--gutter-x);
     z-index: 20;
+    /* Under what is along the top now (the bar, the mini-player), moved there: the glass's motion is never a place's. */
+    translate: 0 var(--top-now, 0px);
     display: flex;
     justify-content: space-between;
     /* Back stays round when what is beside it grows a row. */
@@ -1423,67 +1396,17 @@
     pointer-events: auto;
   }
 
-  /* Back, and the page's name beside it where the page is an index (Requests, Downloads, Insights, Health, Settings). */
-  /* Embedded always as with its extension (the owner, 2026-10-26: the glass moved a few pixels between the Library,
-     with its view picker's thin glass, and Home, without): the extension's 2 px, whether it shows or not. */
-  .lead,
+  /* The pill's side of the row: the extension's 2 px, as lib/NavigationControls' (the owner, 2026-10-26). */
   .right {
     padding: 2px;
-  }
-
-  .lead {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  /* A title in the glass (the owner, 2026-10-25, mockup 3: content scrolling under a bare title made it hard to read):
-     the page's name or the panel's breadcrumbs on a thinner glass than the button's, more light through, the button's
-     round glass in front of it. */
-  .lead:has(:global(.page-name, .crumbs, .title, .views)) {
-    padding: 2px 18px 2px 2px;
-    border-radius: 26px;
-    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
-    -webkit-backdrop-filter: blur(10px) saturate(1.3);
-    backdrop-filter: blur(10px) saturate(1.3);
-    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
-  }
-
-  .lead:has(:global(.page-name, .crumbs, .title, .views)) :global(.navpill) {
-    box-shadow: none;
-  }
-
-  /* The search open with no room for the title: only the round button, its thin glass gone with the title. */
-  .lead.title-away :global(:is(.page-name, .crumbs, .title, .views)) {
-    display: none;
-  }
-
-  .lead.title-away {
-    padding: 2px;
-    background: none;
-    box-shadow: none;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-
-  .lead.title-away :global(.navpill) {
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
-  }
-
-  .page-name {
-    margin: 0;
-    overflow: hidden;
-    font-size: 22px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   /* Going: up out under the bar, whole (a row along the bottom: down); nothing in it takes a tap meanwhile. */
   .page-row.away {
     transform: translateY(calc(-100% - var(--top-now, 0px) - env(safe-area-inset-top) - 16px));
-    transition: transform 200ms ease-in;
+    transition:
+      transform 200ms ease-in,
+      translate 200ms ease;
     pointer-events: none;
   }
 
@@ -1498,7 +1421,9 @@
   /* Over the panel's layer while it holds the panel's glass (lib/glass). */
   .page-row.handed {
     z-index: 22;
-    transition: transform 150ms ease;
+    transition:
+      transform 150ms ease,
+      translate 200ms ease;
   }
 
   /* The panel's action bar has the top: its glass slides just under it (52 px), as its own pills did (the owner,
@@ -1521,7 +1446,7 @@
     min-width: 0;
   }
 
-  /* The pill's work unfolded (lib/TopPill): the right side takes the row's room. */
+  /* The pill's work unfolded (lib/ContentControls): the right side takes the row's room. */
   .page-row .right:has(:global(.pill-row.wide)) {
     flex: 1 1 auto;
   }
@@ -1532,30 +1457,6 @@
 
   .page.under-row {
     padding-top: var(--glass-top);
-  }
-
-  /* Back, round as the pill (lib/TopPill). */
-  .navpill {
-    display: flex;
-    padding: 2px;
-    border-radius: 26px;
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
-  }
-
-  .navpill button {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 0;
-    border-radius: 22px;
-    background: none;
-    color: inherit;
-    cursor: pointer;
   }
 
   .overlay {
@@ -1653,10 +1554,18 @@
     z-index: 20;
     display: flex;
     flex-direction: column;
+    isolation: isolate;
     padding: calc(6px + env(safe-area-inset-top)) 8px 6px;
+  }
+
+  .bar > .glass {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
     background: color-mix(in srgb, var(--surface) 88%, transparent);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
+    pointer-events: none;
   }
 
   .bar {
@@ -1667,13 +1576,16 @@
   .bar.bottom {
     inset: auto 0 0;
     padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  }
+
+  .bar.bottom > .glass {
     border-top: 1px solid var(--border);
     border-bottom: 0;
   }
 
   /* Its glass carried on past the window's foot: Safari on an iPhone shows the page under its own bar there, below
      ours (the owner, 2026-10-27: an empty band of the page under the bar). */
-  .bar.bottom::after {
+  .bar.bottom > .glass::after {
     content: '';
     position: absolute;
     inset: 100% 0 auto;
@@ -1701,14 +1613,13 @@
   /* The controls just above the mini-player (Display's Controls), following it as it comes and goes. */
   .page-row.at-bottom {
     top: auto;
+    bottom: calc(env(safe-area-inset-bottom) + var(--gutter-y));
     /* With the keyboard up, just above it (lib/keyboard's --kb): its search field stays in view. */
-    bottom: max(calc(var(--bottom-now, 0px) + env(safe-area-inset-bottom) + var(--gutter-y)), calc(var(--kb, 0px) + var(--gutter-y)));
+    translate: 0 calc(env(safe-area-inset-bottom) - max(calc(var(--bottom-now, 0px) + env(safe-area-inset-bottom)), var(--kb, 0px)));
   }
 
   .page-row {
-    transition:
-      top 200ms ease,
-      bottom 200ms ease;
+    transition: translate 200ms ease;
   }
 
   .bar .tabs {

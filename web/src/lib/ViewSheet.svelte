@@ -19,7 +19,7 @@
 </script>
 
 <script lang="ts">
-  // The page's View (lib/TopPill's view button, decided 2026-10-15): how its list shows: for playlists chips or a table
+  // The page's View (lib/ContentControls's view button, decided 2026-10-15): how its list shows: for playlists chips or a table
   // and the size, for albums rows, covers or a table and the size, a track list's columns. Not its order or direction,
   // which only its list's header sets (decision 0060).
   import ColumnOrder from './ColumnOrder.svelte';
