@@ -75,7 +75,7 @@
   });
 </script>
 
-<span class="lead" class:away bind:this={el} {@attach glassPart({ radius: 26, still: () => still })}>
+<span class="lead" class:title-away={away} bind:this={el} {@attach glassPart({ radius: 26, still: () => still })}>
   <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
   {#if left}
     {@render left()}
@@ -132,21 +132,21 @@
     box-shadow: none;
   }
 
-  /* The search open with no room for the title (`away`): only the round button. The panel's left part hides its own
+  /* The search open with no room for the title (`away`; not the class `away`, app.css's for what slides away): only the round button. The panel's left part hides its own
      (its breadcrumbs, its name); the page's are not drawn. */
-  .lead.away :global(:is(.page-name, .crumbs, .title, .views)) {
+  .lead.title-away :global(:is(.page-name, .crumbs, .title, .views)) {
     display: none;
   }
 
-  .lead.away {
+  .lead.title-away {
     padding: 2px;
   }
 
-  .lead.away > :is(.glass, .shade) {
+  .lead.title-away > :is(.glass, .shade) {
     opacity: 0;
   }
 
-  .lead.away :global(.navpill) {
+  .lead.title-away :global(.navpill) {
     box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
