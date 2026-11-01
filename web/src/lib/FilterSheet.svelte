@@ -56,7 +56,7 @@
     const of = list;
     return untrack(() => filterChange(of));
   });
-  const items = $derived(list === 'library' ? 'album' : list === 'playlists' ? 'playlist' : null);
+  const items = $derived(list === 'library' ? 'record' : list === 'playlists' ? 'playlist' : null);
   const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
   /** The switches by section, in the order the sections first come; switches without one in a section of no title. */
   const sections = $derived.by(() => {

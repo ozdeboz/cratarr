@@ -2,14 +2,12 @@
 // Svelte's state, so it can be tested.
 
 export type ShownLayout = 'rows' | 'grid' | 'table' | 'flow';
-export type LibraryList = 'albums' | 'composers' | 'tracks';
+export type LibraryList = 'albums' | 'composers';
 export type PlaylistLayout = 'chips' | 'table';
 
 /** Whether a layout can show a Library list (the owner, 2026-10-26): no table on a phone's screen, where it adds
- *  nothing; neither Covers nor Flow for the tracks; no Flow for Classical's composers (a coverflow of portraits, most
- *  of them missing). */
-export const layoutFits = (list: LibraryList, l: ShownLayout, phone: boolean) =>
-  !(phone && l === 'table') && !(list === 'tracks' && (l === 'grid' || l === 'flow')) && !(list === 'composers' && l === 'flow');
+ *  nothing; no Flow for Classical's composers (a coverflow of portraits, most of them missing). */
+export const layoutFits = (list: LibraryList, l: ShownLayout, phone: boolean) => !(phone && l === 'table') && !(list === 'composers' && l === 'flow');
 
 /** The layout a Library list shows in: the table while the page's search has words (the owner, 2026-10-31: filtered
  *  results as the table, a phone's too), else the chosen one where it fits, else rows. View's choice is never changed. */

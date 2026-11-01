@@ -23,7 +23,7 @@
   // and the size, for albums rows, covers or a table and the size, a track list's columns. Not its order or direction,
   // which only its list's header sets (decision 0060).
   import ColumnOrder from './ColumnOrder.svelte';
-  import { COLUMNS, fit, LIBRARY_TRACK_COLUMNS } from './columns.svelte';
+  import { COLUMNS, fit } from './columns.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { ALBUM_WIDTHS, DATES, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { composersShown } from './classical.svelte';
@@ -37,7 +37,7 @@
   // records' (`kind`: a list of the device's, lib/layouts), or Classical's composers while they show.
   let { page = null, order = null, kind, onclose }: { page?: string | null; order?: ListOrder | null; kind?: LibraryList; onclose: () => void } = $props();
   const listKind = $derived<LibraryList>(kind ?? (page === 'library' && composersShown() ? 'composers' : 'albums'));
-  const offered = $derived(listKind === 'tracks' ? LIBRARY_TRACK_COLUMNS : COLUMNS[listKind].map((c) => c.id));
+  const offered = $derived(COLUMNS[listKind].map((c) => c.id));
 </script>
 
 <MenuSheet label="View" icon="sliders" title="View" {onclose}>

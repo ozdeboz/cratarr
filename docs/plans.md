@@ -30,32 +30,15 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   library below, taken up). Cratarr's mode is Cratarr's own library, its libraries (Music, Incoming, each user's own)
   still switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
   library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. With modes,
-  scrobbling from the device (each user's choice, through the server for one sign-in; below, under External library).
-  With it (the owner, 2026-10-30): **scrolling to what a link leads to, and every automatic scroll clear of the
-  chrome.** Arriving through a link or a search result (an album in a list, a track in a playlist or crate, an
-  artist's place) scrolls to that item and marks it; and every scroll the page makes by itself (that one, the
-  sidebar's section, the queue's playing track, a list's own place kept) stops with its item fully in sight: not under
-  the top bar, a sticky list head or column head, nor the floating glass top and bottom (`--glass-top`,
-  `--glass-bottom`). One rule for it (scroll-padding from the chrome's real heights, kept as they change), not each
-  place's own offset. *On 632/0013-scroll-clear:* lib/reveal and the scroll-padding (ui-conventions, Checking); a
-  track's links open its list at it, marked; the records, crates and playlists beside the panel bring its item into
-  sight.
-  And (the owner, 2026-10-31): **one place for a crate, the panel.** A crate is shown and built only in the crate
-  panel: a new one (Crates' +) opens its builder empty, "Grab a crate" and an example; a saved one of one's own heads
-  its tracks with the same sentence, a change there opening its edit mode; a menu's Sounds like this and Grab a crate
-  open the builder with it started. Crates has no field of its own: its glass searches its crates as every page's does.
-  **One crate card** leads both global search's results and every page's own search (Library, Playlists, Downloads,
-  Discover, Requests, Crates) where the words read as two kinds or more and the crate holds a track; nothing while it
-  loads, nothing otherwise; Grab this crate opens it in the panel. *On 632/0013-grab-glass:* all of it; its look waits
-  for the owner's mockup choice.
-  **A page's search shows its list as the table** (the owner, 2026-10-31): the Library's records and composers, the
-  device's own records and the playlists, whatever View chose and on a phone too, View's choice kept; emptied, the list
-  comes back where it was. Where the words read as a crate, a page's own list matches by its terms, not the whole line.
-  *On 632/0013-filtered-table.* Downloads stays an index of its three lists (no layouts to turn).
-  **One loading rule** (the owner, 2026-10-31: "Keep, then spinner at 300 ms"): a list waiting for its answer keeps
-  what it showed, the loader taking its place at 300 ms (lib/loader): global search, the pages' searched lists, a crate
-  sentence being read; the opened cover's ring and the progress bar on the same number. *On 632/0013-one-loader.* A
-  page or panel swap still blanks its place (the 2026-10-27 rule, no copy of the old one) with its sign at 100 ms.
+  scrobbling from the device ([0091](decisions/0091-scrobbling-from-the-device.md): each user's choice, through one
+  Cratarr server for one sign-in). *Not started yet;* both want the owner's design choices first.
+  *On trunk* ([whats-new-0.13](whats-new-0.13.md)): one crate in two views and only in the panel, more words in the
+  sentence, the crate card atop every search; a page's search as the table, its empty answer from the magnifier, one
+  loading rule; scrolling to what a link leads to, clear of the chrome; the Library's types in three layers; the
+  record Edit sheet and Classical's why; Health as Settings, Disc numbers, missing tracks many at once; one way to
+  change files ([0092](decisions/0092-one-way-to-change-files.md)) with types into files its first writer; Cratarr
+  as an MCP server ([0090](decisions/0090-mcp-server.md)). Under way: test and development data
+  ([0093](decisions/0093-test-and-development-data.md)); the other writers moving onto 0092's path.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
@@ -257,8 +240,9 @@ AudioMuse analysis is done."
 - Done in 74.x (2026-10-23): one path, `similarity` (signals, rarity, middle and spread, the listener's Similar by),
   for the radio, Sounds like (a track's, an album's, your week's), and the similar albums, playlists and crates at a
   list's foot; the radio and the crates read a track from the same facts (`crates::Facts::like`).
-- Left, and it waits for AudioMuse's analysis of the whole library (with CLAP): weighing the signals (all equal now,
-  or the listener's order), CLAP text search, steering the radio by mood and energy, the closeness graph last.
+- Left, and no longer waiting: AudioMuse's analysis of the whole library (with CLAP) finished on 2026-10-29 and is in
+  Cratarr (31,687 tracks): weighing the signals (all equal now, or the listener's order), CLAP text search (the owner:
+  "Yes, later", a design talk first), steering the radio by mood and energy, the closeness graph last.
 - Seen so far: a crate's Start radio seeds from 300 of its tracks (drawn by the server since 73.2) and leaves the seed
   out; a broad crate (Unlisted, 16,000 tracks) makes a blurry profile. Play as radio (only the crate's tracks) is a
   different path again.
