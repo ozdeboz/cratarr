@@ -129,13 +129,16 @@ function play(p: Part) {
   const timing: KeyframeAnimationOptions = { duration: GLASS_MS, easing: DECELERATE_CSS };
   const all = union(from, to);
   const r = p.radius;
-  // The glass: drawn as large as both, its outline from the old to the new.
+  // The glass: drawn as large as both, its outline from the old to the new. Shown whole while it moves, taking its
+  // own strength at the end: a title's glass shrinks onto the round button it gives way to and goes behind it, or
+  // grows out of it (the owner, 2026-11-01: the navigation glass faded instead of gliding to collapse).
+  const seen = Math.max(glassWas, after.glass);
   p.glass.style.inset = grownTo(all, to);
   p.anims.push(
     p.glass.animate(
       [
-        { clipPath: insetOf(from, all, r), opacity: glassWas },
-        { clipPath: insetOf(to, all, r), opacity: after.glass },
+        { clipPath: insetOf(from, all, r), opacity: seen },
+        { clipPath: insetOf(to, all, r), opacity: seen },
       ],
       timing,
     ),
@@ -146,8 +149,8 @@ function play(p: Part) {
     p.anims.push(
       p.shade.animate(
         [
-          { transformOrigin: '0 0', transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${sx}, ${sy})`, opacity: glassWas },
-          { transformOrigin: '0 0', transform: 'none', opacity: after.glass },
+          { transformOrigin: '0 0', transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${sx}, ${sy})`, opacity: seen },
+          { transformOrigin: '0 0', transform: 'none', opacity: seen },
         ],
         timing,
       ),
