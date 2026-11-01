@@ -184,7 +184,7 @@ ${prefs.playlistOrder}`,
   }
   const cellsOf = (p: Playlist): Cell[] | undefined => (cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, p, stats[p.id]) })) : undefined);
 
-  // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
+  // The pill's last button (lib/ContentControls): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
   // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change; one line says so.
   usePageAction(() => (reach.away ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
@@ -224,7 +224,7 @@ ${prefs.playlistOrder}`,
 </script>
 
 <main>
-  <!-- The search, size, favourites-only and New playlist are the pill's (lib/TopPill), the order the list's header,
+  <!-- The search, size, favourites-only and New playlist are the pill's (lib/ContentControls), the order the list's header,
        what is ticked the select bar's (decided 2026-10-15/16). -->
   {#if error}
     <Notice text={error} />

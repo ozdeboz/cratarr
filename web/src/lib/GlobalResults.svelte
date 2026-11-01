@@ -2,7 +2,7 @@
   // Global search's results (decision 0072): a group per kind but the kind the page already shows (`except`), a few
   // of each, why each is there; the server's (the library, what is not in it) and the browser's (pages, Settings'
   // parts; lib/everywhere), as lib/globalSearch holds them. Shown as the page's or the panel's Everywhere (the owner,
-  // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
+  // 2026-10-25: the globe beside the search, lib/ContentControls), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
   // the server makes them (0.11) and the words read as a crate of two kinds or more that holds a track, that crate as a
