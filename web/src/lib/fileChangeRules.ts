@@ -2,6 +2,10 @@
 // list of runs), the words and the merging, pure so the tests take them as they are.
 import type { FileField, FileRun, FilesState } from './api';
 
+/** A plan as its crumb names it (what proposes it). */
+const PLANS: Record<string, string> = { types: 'Types and years' };
+export const planTitle = (kind: string) => PLANS[kind] ?? 'Changes to review';
+
 /** A field as the review sheet names it. */
 const FIELDS: Record<string, string> = { releasetype: 'Type', date: 'Date', genre: 'Genre' };
 export const fieldLabel = (field: string) => FIELDS[field] ?? field.charAt(0).toUpperCase() + field.slice(1);

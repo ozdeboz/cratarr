@@ -12,7 +12,7 @@
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
-  import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
+  import { albumSubject, artistSubject, backOne, closePlaylist, DOWNLOADS, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { appInfo, download, downloads, removeDownloads } from './app.svelte';
   import type { Collection } from './api';
@@ -207,8 +207,12 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
-  <Crumbs trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]} here={L.label} />
+  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
+  <Crumbs
+    trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]}
+    here={L.label}
+    siblings={beside ? null : { menuLabel: 'Downloads shows', options: DOWNLOADS_LISTS.map((l) => ({ id: l.id, label: l.label })), chosen: L.id, onchoose: (id) => viewPlaylist(DOWNLOADS + id) }}
+  />
 {/snippet}
 
 {#snippet glassExtra()}

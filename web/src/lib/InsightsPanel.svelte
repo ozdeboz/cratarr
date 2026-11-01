@@ -16,7 +16,7 @@
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights, mapFull } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
-  import { closePlaylist, INSIGHTS, upToPage, viewPlaylist } from './panel.svelte';
+  import { backOne, INSIGHTS, isStep, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
@@ -55,15 +55,19 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
+  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   {@const parent = v.under ? INSIGHTS_VIEWS.find((x) => x.id === v.under) : null}
+  <!-- The levels Back walks through (lib/Crumbs): Insights, the view a deeper one was opened from; its group is a
+       heading of the page's list, not a place. On a phone the view's name picks another view. -->
   <Crumbs
     trail={[
       ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('#/insights') }]),
-      { label: v.group, go: beside ? undefined : () => upToPage('#/insights') },
-      ...(v.under ? [{ label: parent?.label ?? v.group, go: () => viewPlaylist(INSIGHTS + v.under) }] : []),
+      ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: () => history.back() }] : []),
     ]}
     here={v.label}
+    siblings={beside || v.under
+      ? null
+      : { menuLabel: 'Insights shows', options: INSIGHTS_VIEWS.filter((x) => !x.under).map((x) => ({ id: x.id, label: x.label, group: x.group })), chosen: v.id, onchoose: (id) => viewPlaylist(INSIGHTS + id) }}
   />
 {/snippet}
 

@@ -22,7 +22,7 @@
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
-  import { closePlaylist, upToPage } from './panel.svelte';
+  import { backOne, REQUESTS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -142,8 +142,12 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
-  <Crumbs trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]} here={L.name} />
+  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
+  <Crumbs
+    trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]}
+    here={L.name}
+    siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewPlaylist(REQUESTS + id) }}
+  />
 {/snippet}
 {#snippet glassExtra()}
   {#if selectable.length}

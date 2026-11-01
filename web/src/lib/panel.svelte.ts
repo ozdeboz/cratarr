@@ -286,6 +286,16 @@ export function goHome() {
   window.scrollTo(0, 0);
 }
 
+/** Back one level (the panel's back button, a breadcrumb's level above; the owner, 2026-11-01: one rule for every
+ *  panel's breadcrumbs, the levels Back walks through): the step before, or the panel closed where it is the first. */
+export function backOne() {
+  if (depth() > 0) return history.back();
+  closePlaylist();
+}
+/** What shows was opened a step deeper (openStep): the level above it is the step before. Read again as the address
+ *  changes. */
+export const isStep = () => (void panel.viewed, void panel.selection, !!history.state?.thing);
+
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
   const d = depth();
