@@ -30,7 +30,7 @@
   import { keptFor, partsFor, SECTIONS, SETTINGS_GROUPS, thingTitle, type SettingsSection } from './settingsSections.svelte';
   import { installed } from './offline.svelte';
   import { ed } from './settings/editor.svelte';
-  import { partReset } from './settings/reset.svelte';
+  import { resetRows, runReset } from './settings/reset.svelte';
   import SaveBar from './settings/SaveBar.svelte';
   import AccountPart from './settings/AccountPart.svelte';
   import AuthPart from './settings/AuthPart.svelte';
@@ -98,7 +98,7 @@
   async function reset() {
     resetBusy = true;
     try {
-      await partReset.run?.();
+      await runReset();
       resetting = false;
     } finally {
       resetBusy = false;
@@ -134,7 +134,7 @@
   <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
   {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
   <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
-  {#if partReset.run && !thing}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
+  {#if !thing && resetRows().length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
   {#if !beside}<PanelPlace />{/if}
 {/snippet}
 
@@ -193,9 +193,10 @@
       <ImportPart {thing} />
     {/if}
 
-    {#if resetting && partReset.run}
+    {#if resetting && resetRows().length}
+      <!-- What Reset puts back, each one now → its default (the owner, 2026-11-01: a list, from what Reset does). -->
       <MenuSheet label="Reset" icon="resetSettings" title={`Reset ${title}`} onclose={() => (resetting = false)}>
-        <p class="reset">{partReset.what}</p>
+        <ul class="reset">{#each resetRows() as r (r.name)}<li><span class="name">{r.name}</span><span class="to">{r.from} → {r.to}</span></li>{/each}</ul>
         <MenuEntry icon="resetSettings" label="Reset" danger busy={resetBusy} disabled={resetBusy} onclick={reset} />
         <MenuEntry icon="close" label="Cancel" disabled={resetBusy} onclick={() => (resetting = false)} />
       </MenuSheet>
@@ -243,9 +244,23 @@
   }
 
   /* Padding, not margin: the sheet measures its content's height. */
+  /* What Reset puts back: a row each, its name, then now → its default. */
   .reset {
+    display: grid;
+    gap: 8px;
     margin: 0;
     padding: 4px 24px 12px;
+    list-style: none;
+  }
+
+  .reset li {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 12px;
+  }
+
+  .reset .to {
     color: var(--muted);
   }
 
