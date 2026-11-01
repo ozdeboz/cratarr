@@ -47,7 +47,8 @@
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
   import { albumSubject, backOne, closePlaylist, HEALTH, healthThing, isStep, openTab, panel, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
-  import { byDomain } from './healthThrough';
+  import { byArea } from './healthThrough';
+  import { AREAS } from './health';
   import { planTitle } from './fileChangeRules';
   import type { Siblings } from './Crumbs.svelte';
   import FileChanges from './FileChanges.svelte';
@@ -298,8 +299,8 @@
       : {
           menuLabel: 'Health shows',
           options: [
-            ...byDomain(problems()).flatMap((g) => g.problems.map((x) => ({ id: x.key, label: x.name, group: g.domain }))),
-            ...(me.admin ? [{ id: CHANGES, label: 'Changes to files', group: 'Files' }] : []),
+            ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, label: x.finding?.thing ?? x.name, group: g.area }))),
+            ...(me.admin ? [{ id: CHANGES, label: 'Changes to files', group: 'Activity' }] : []),
           ],
           chosen: changes ? CHANGES : (p?.key ?? null),
           onchoose: (id) => viewSibling(HEALTH + id),
