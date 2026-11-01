@@ -144,16 +144,21 @@
     <Asking />
   {:else}
     {@const r = run.run}
+    <!-- Only what it wrote; a record it wrote nothing of is said under Set aside alone (the dev instance's check,
+         2026-11-01: a refused record showed twice, the first time as Undone). -->
+    {@const wrote = run.records.filter((x) => (x.written ?? 0) > 0)}
     <p class="lead">{runLine(r) || plural(r.albums, 'record')}</p>
-    <Group>
-      {#each run.records as x (x.album)}{@render record(x, x.undone ? 'Undone' : `${x.written ?? 0} of ${plural(x.files, 'file')} written`, r.undo && !r.undone && !x.undone ? 'undo' : null)}{/each}
-    </Group>
+    {#if wrote.length}
+      <Group>
+        {#each wrote as x (x.album)}{@render record(x, x.undone ? 'Undone' : `${x.written ?? 0} of ${plural(x.files, 'file')} written`, r.undo && !r.undone && !x.undone ? 'undo' : null)}{/each}
+      </Group>
+    {/if}
     {#if r.failed.length}
       <Group title="Set aside">
         {#each asideOf(r.failed) as x (x.album)}<Item lead="warn" name={titleOf(x)} line={[x.files ? plural(x.files, 'file') : '', ...x.why].filter(Boolean).join(' · ')} tone="warn" wrap />{/each}
       </Group>
     {/if}
-    {#if r.undo && !r.undone}
+    {#if r.undo && !r.undone && wrote.length}
       <SaveBar label={`${plural(r.albums, 'record')} written`} action="Undo all" onsave={() => void undoRun(r.id)} />
     {/if}
   {/if}
