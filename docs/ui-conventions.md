@@ -421,6 +421,14 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   search, the player's album) opens the list with `viewFor`: it scrolls to the track, in the middle, and marks it as
   the viewed one is (a border). Beside the panel, the page's list (records, crates, playlists: `data-subject`) brings
   what the panel opened into sight; a list that makes only what is near (lib/nearBlocks) says where with `nearFor`.
+- **The glass moves as one** (0.13; the owner, 2026-11-01: "a bottom up guarantee it will always animate smoothly"):
+  the floating controls (`lib/NavigationControls`, `lib/ContentControls`) and the bar of pages are glass parts
+  (`lib/glassMotion`): a box drawing nothing itself, its `.glass` layer (the blur and colour) and `.shade` (ring and
+  shadow) under its children. Whatever changes in one is laid out once, as it ends; then only clip-path, opacity,
+  transform and translate move: its glass from the old outline to the new, its children moved, faded in, or a copy of
+  one that went faded out, each clipped to the outline. A glass part never animates a size or a place (no `slide`, no
+  transition of top, width, padding…); the row follows the bar by `translate`. A blur inside a clipped box sees only
+  that box, so no child is clipped by an ancestor: each gets its own clip. `tests/glass-motion` holds it.
 
 ## Rows
 
