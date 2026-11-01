@@ -468,6 +468,8 @@
     position: relative;
     isolation: isolate;
     display: flex;
+    /* It may be narrower than its buttons want (the open field gives first): it ran past the window's edge. */
+    min-width: 0;
     padding: 2px;
   }
 

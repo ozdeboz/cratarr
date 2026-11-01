@@ -57,7 +57,11 @@
       const edge = Math.max(el.getBoundingClientRect().right, ...parts.map((e) => e.getBoundingClientRect().left + e.scrollWidth));
       const r = right();
       const met = !!r && edge > r.getBoundingClientRect().left - 4;
-      away = parts.length > 0 && (met || cut > 36 || room < 48 || room < 0.7 * (room + cut));
+      // The open field squeezed narrower than it wants (its CSS: min(320px, 100vw - 220px)): the owner, 2026-11-01,
+      // "Why did records not collapse??" beside a field cut short.
+      const field = r?.querySelector<HTMLElement>('.field');
+      const squeezed = !!field && field.getBoundingClientRect().width < Math.min(320, innerWidth - 220) - 2;
+      away = parts.length > 0 && (met || squeezed || cut > 36 || room < 48 || room < 0.7 * (room + cut));
     };
     tick().then(measure);
     const r = right();
