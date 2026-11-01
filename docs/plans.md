@@ -84,6 +84,26 @@ intake below), so March 2026's unattended batches cannot happen again.
 - Found while looking: Cratarr's analysis says "no sound" for Roll the Dice (2010), whose MP3s play fine (−15 dB);
   the decoder gets no frames from them (a large cover in the tag, perhaps). To be fixed on its own.
 
+**Next after 0.13 (the owner, 2026-11-01: "Yes this comes next, first we move to release").** Searching Soulseek
+needs no MusicBrainz; judging what was found does: a reference says which tracks and lengths the release has.
+
+- *Three references, in turn:* MusicBrainz, then Discogs (its track lists, not only its genres), then Bandcamp (an
+  album page's own track list and lengths, as Cratarr already reads it for playing, 0071; strong for independent,
+  electronic and digital-only releases). One that agrees on the track count and each length is the target. Bandcamp
+  is found through its search box's answers only, so a match counts only where the tracks agree; Cratarr keeps its
+  own link to the page.
+- *Checked without a reference:* each file decoded whole, lossless where it says so, no clicks or clipping; track
+  numbers without gaps or doubles; one album, album artist and year in every file; the folder's name as the tags
+  say; every track from one Soulseek user's folder (a mix was March 2026's mark); AcoustID per track (the right
+  recording under its title); already in the library or not.
+- *The hand check, where no reference agrees:* one intake card per arrival on the review sheet's pattern (0092):
+  cover, where it came from, format, the tracks with their lengths, each check green, amber or red with its one
+  sentence, and per track a small waveform and play buttons for its start, middle and end (seconds per album, not
+  a whole listen). Keep, Replace or Delete; nothing moves or is written before that yes. All green with AcoustID
+  agreeing: offered with Keep ticked; amber or red: left open with its reason. A record checked by hand is its own
+  reference for its type and year after.
+- Mockups of the intake card first (632), then the server's checks and references (a5).
+
 ## External library
 
 Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood.
