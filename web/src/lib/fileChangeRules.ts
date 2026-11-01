@@ -21,8 +21,25 @@ export function runLine(r: FileRun): string {
   if (r.state === 'writing') return `Writing ${r.done.toLocaleString()} of ${r.of.toLocaleString()}`;
   const when = r.at ? time(r.at) : '';
   if (r.undone) return ['Undone', when].filter(Boolean).join(' · ');
-  const aside = r.failed.length ? `${r.failed.length.toLocaleString()} set aside` : null;
+  const records = asideOf(r.failed).length;
+  const aside = records ? `${records.toLocaleString()} set aside` : null;
   return [aside, when].filter(Boolean).join(' · ');
+}
+
+export type SetAside = { album: string; title?: string; artist?: string | null; files: number; why: string[] };
+/** What a run set aside, a row per record (the owner, 2026-11-01: it listed each file, by the record's id): how many of
+ *  its files, and each reason once, in the order they came. */
+export function asideOf(failed: FileRun['failed']): SetAside[] {
+  const by = new Map<string, SetAside>();
+  for (const f of failed) {
+    const r = by.get(f.album) ?? { album: f.album, title: f.title, artist: f.artist, files: 0, why: [] };
+    if (f.file) r.files++;
+    if (!r.why.includes(f.why)) r.why.push(f.why);
+    r.title ??= f.title;
+    r.artist ??= f.artist;
+    by.set(f.album, r);
+  }
+  return [...by.values()];
 }
 
 /** The list's groups: Now (writing and waiting), then each day newest first ("Today", "Yesterday", a weekday within
