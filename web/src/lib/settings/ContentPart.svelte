@@ -12,19 +12,17 @@
   import OrderList from './OrderList.svelte';
   import { localMode } from '../deviceMusic.svelte';
   import { LOCAL_PARTS } from '../localHome.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
 
-  offerReset(
-    () => 'Home’s sections as they came, in their first order; the music profiles with every row.',
-    () => {
-      prefs.profileOpen = true;
-      prefs.profile = true;
-      prefs.profileFoldAt = 0;
-      prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
-      prefs.homeParts = homeDefault();
-      prefs.homeCrates = false;
-    },
-  );
+  // What Reset puts back (lib/settings/reset): each as the part names it, its default the prefs'.
+  offerReset(() => [
+    pref('homeParts', "Home's sections"),
+    pref('homeCrates', 'Your crates on Home'),
+    pref('profile', 'Music profiles'),
+    pref('profileOpen', 'Music profiles open'),
+    pref('profileFoldAt', 'Music profiles folded'),
+    pref('profileRows', "Music profiles' rows"),
+  ]);
 
   /** The first section leads Home as the flow on top, so only one made of albums may be first (the owner, 2026-10-24):
    *  another dragged there lands under the first that can lead; the last that can lead stays switched on. */
