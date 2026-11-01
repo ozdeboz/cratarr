@@ -29,6 +29,32 @@ pub struct Proposal {
     pub title: String,
     pub records: Vec<RunRecord>,
     pub files: Vec<FileWrite>,
+    /// Records set aside before the run (their sheet's stamp no longer matching, `ticked`).
+    pub failed: Vec<RunFailed>,
+}
+
+/// A record's stamp: what the sheet showed of it (each file's place and fields before and after), so an apply can tell
+/// whether that is still what would be written.
+pub fn stamp(files: &[FileWrite], album: &str) -> String {
+    let said: String = files
+        .iter()
+        .filter(|f| f.album == album)
+        .map(|f| format!("{}\u{1}{:?}\u{1}{:?}\n", f.path.display(), f.before, f.after))
+        .collect();
+    format!("{:016x}", crate::journal::fingerprint(&said))
+}
+
+/// A proposal kept to the records ticked on the sheet, each set aside where its stamp no longer matches what would be
+/// written now ("changed since it was planned"); without stamps, the records ticked.
+pub fn ticked(mut p: Proposal, albums: &[String], stamps: Option<&HashMap<String, String>>) -> Proposal {
+    let stale: Vec<String> = albums
+        .iter()
+        .filter(|a| stamps.and_then(|s| s.get(*a)).is_some_and(|s| *s != stamp(&p.files, a)))
+        .cloned()
+        .collect();
+    p.files.retain(|f| albums.contains(&f.album) && !stale.contains(&f.album));
+    p.failed.extend(stale.iter().map(|album| RunFailed { album: album.clone(), file: None, why: "changed since it was planned".into() }));
+    p
 }
 
 /// The review sheet: per record its changes, old → new and where the new comes from.
@@ -52,6 +78,9 @@ pub struct RecordView {
     pub written: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undone: Option<bool>,
+    /// On a sheet: what it showed, sent back with the apply (`ticked`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<String>,
 }
 
 /// A field's change: in every file of the record (no `track`), or in one track.
@@ -269,6 +298,7 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
                 fields,
                 written: written.then(|| mine.len()),
                 undone: written.then(|| mine.iter().all(|f| f.undone)),
+                stamp: (!written).then(|| stamp(files, &r.album)),
             })
         })
         .collect();
@@ -288,7 +318,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         state: "waiting",
         done: 0,
         of: albums.len(),
-        failed: Vec::new(),
+        failed: p.failed.clone(),
         at: None,
         undo: None,
         undone: false,
@@ -311,17 +341,22 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
             let done = tokio::task::spawn_blocking(move || {
                 let mut ok = Vec::new();
                 let mut failed = Vec::new();
+                let mut seen = Vec::new();
                 for f in files {
                     match apply_one(&f.path, &f.before, &f.after, "changed since it was planned") {
                         Ok(()) => ok.push(f),
-                        Err(e) => failed.push((f.path.file_name().and_then(|n| n.to_str()).map(str::to_string), super::plain(format!("{e:#}")))),
+                        Err(e) => {
+                            failed.push((f.path.file_name().and_then(|n| n.to_str()).map(str::to_string), super::plain(format!("{e:#}"))));
+                            seen.push(f.path);
+                        }
                     }
                 }
-                (ok, failed)
+                (ok, failed, seen)
             })
             .await;
-            let (ok, failed) = done.unwrap_or_else(|e| (Vec::new(), vec![(None, e.to_string())]));
-            reread(&ok.iter().map(|f| f.path.clone()).collect::<Vec<_>>()).await;
+            let (ok, failed, seen) = done.unwrap_or_else(|e| (Vec::new(), vec![(None, e.to_string())], Vec::new()));
+            // The written files read again, and those set aside too: the catalogue learns what changed them.
+            reread(&ok.iter().map(|f| f.path.clone()).chain(seen).collect::<Vec<_>>()).await;
             let changed = failed.iter().any(|(_, why)| why.contains("changed since"));
             set_state(
                 &album,
@@ -515,6 +550,26 @@ mod tests {
         assert_eq!(vc.get_all("MUSICBRAINZ_ALBUMTYPE").collect::<Vec<_>>(), ["ep"]);
         assert_eq!(vc.get_all("RELEASETYPE").collect::<Vec<_>>(), ["ep"]);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_record_no_longer_as_its_sheet_showed_is_set_aside() {
+        let file = |album: &str, before: &[&str]| FileWrite {
+            album: album.into(),
+            path: format!("/m/{album}.flac").into(),
+            track: None,
+            before: vec![("releasetype".into(), s(before))],
+            after: vec![("releasetype".into(), s(&["ep"]))],
+            from: Vec::new(),
+            undone: false,
+        };
+        let shown = vec![file("a", &["album"]), file("b", &["album"])];
+        let stamps: HashMap<String, String> = ["a", "b"].iter().map(|x| (x.to_string(), stamp(&shown, x))).collect();
+        // Since the sheet, a tagger changed b's file: what would be written there is not what was shown.
+        let now = Proposal { kind: "types".into(), files: vec![file("a", &["album"]), file("b", &["single"]), file("c", &["album"])], ..Proposal::default() };
+        let p = ticked(now, &s(&["a", "b"]), Some(&stamps));
+        assert_eq!(p.files.iter().map(|f| f.album.as_str()).collect::<Vec<_>>(), ["a"], "c was not ticked; b set aside");
+        assert_eq!(p.failed, vec![RunFailed { album: "b".into(), file: None, why: "changed since it was planned".into() }]);
     }
 
     #[test]

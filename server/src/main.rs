@@ -4,6 +4,7 @@ mod albums;
 #[allow(dead_code)]
 mod analysis;
 mod bandcamp;
+mod fixtures;
 mod api;
 mod app;
 mod catalogue;
@@ -114,6 +115,23 @@ async fn main() -> Result<()> {
         let args: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(match serve::access::mint(&args) {
             Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e:#}");
+                1
+            }
+        });
+    }
+    // The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there.
+    if std::env::args().nth(1).as_deref() == Some("--make-fixtures") {
+        let Some(dir) = std::env::args().nth(2) else {
+            eprintln!("--make-fixtures <folder>");
+            std::process::exit(2);
+        };
+        std::process::exit(match fixtures::make(std::path::Path::new(&dir)) {
+            Ok(albums) => {
+                println!("{} albums in {dir}", albums.len());
+                0
+            }
             Err(e) => {
                 eprintln!("{e:#}");
                 1
