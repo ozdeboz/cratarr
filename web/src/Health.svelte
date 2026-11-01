@@ -11,10 +11,14 @@
   import { byDomain, dotOf } from './lib/healthThrough';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
-  import { HEALTH, healthOf, panel, viewPlaylist } from './lib/panel.svelte';
+  import { HEALTH, healthOf, healthThing, panel, viewPlaylist } from './lib/panel.svelte';
   import { matchesSearch, pageView, searchNone } from './lib/pageView.svelte';
   import Group from './lib/settings/Group.svelte';
   import Item from './lib/settings/Item.svelte';
+  import { fileFacts, loadFileFacts } from './lib/fileFacts.svelte';
+  import { CHANGES, fileRuns, loadRuns, openChanges, openReview } from './lib/fileRuns.svelte';
+  import { DOMAINS } from './lib/health';
+  import { me } from './lib/me.svelte';
 
   $effect(loadHealth);
   // The pill's search (the owner, 2026-10-25): a problem whose words, or one of its items', hold every word.
@@ -22,6 +26,30 @@
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
   searchNone(() => (health.loaded && problems().length && !list.length ? 'problems' : null));
   const groups = $derived(byDomain(list));
+  // Changes to files (decision 0092; administrators'): the records whose files differ from their types and years (while
+  // types into files is on) a line under Library, opening its review; every run one line under Files, naming what
+  // writes and waits. Lines that point: no meter, no Undo of their own.
+  $effect(() => loadFileFacts());
+  $effect(() => loadRuns());
+  const differ = $derived(fileFacts.value?.on ? fileFacts.value.differ : 0);
+  const now = $derived((fileRuns.list ?? []).filter((r) => r.state !== 'done'));
+  const changesLine = $derived.by(() => {
+    const writing = now.find((r) => r.state === 'writing');
+    const waiting = now.filter((r) => r.state === 'waiting').length;
+    const parts = [writing ? `${writing.title} writing` : null, waiting ? `${waiting} waiting` : null].filter(Boolean);
+    return parts.length ? parts.join(' · ') : null;
+  });
+  const showChanges = $derived(me.admin && (!!fileRuns.list?.length || !!fileFacts.value?.on));
+  const opened = (thing: string | null) => panelBeside() && healthOf(panel.viewed) === CHANGES && healthThing(panel.viewed) === thing;
+  const facts = $derived(differ > 0 || showChanges);
+  // A run ended: how many differ is counted again.
+  const ended = $derived((fileRuns.list ?? []).filter((r) => r.state === 'done').length);
+  $effect(() => {
+    void ended;
+    loadFileFacts();
+  });
+  const LIBRARY = DOMAINS.library.name;
+  const FILES = DOMAINS.files.name;
   /** How many: the finding's count, else its items. */
   const countOf = (p: ReturnType<typeof problems>[number]) => (p.finding?.count ?? p.items.length).toLocaleString();
 </script>
@@ -30,7 +58,7 @@
   {#if health.error}<Notice text={health.error} />{/if}
   {#if !health.loaded}
     <PageLoading />
-  {:else if !list.length}
+  {:else if !list.length && !facts}
     {#if !problems().length}<p class="empty">All good.</p>{:else if !pageView.none}<p class="empty">None of them match.</p>{/if}
   {:else}
     <div class="groups">
@@ -46,11 +74,22 @@
               onclick={() => viewPlaylist(HEALTH + p.key)}
             />
           {/each}
+          {#if g.domain === LIBRARY}{@render differItem()}{/if}
+          {#if g.domain === FILES}{@render changesItem()}{/if}
         </Group>
       {/each}
+      {#if differ > 0 && !groups.some((g) => g.domain === LIBRARY)}<Group title={LIBRARY}>{@render differItem()}</Group>{/if}
+      {#if showChanges && !groups.some((g) => g.domain === FILES)}<Group title={FILES}>{@render changesItem()}</Group>{/if}
     </div>
   {/if}
 </main>
+
+{#snippet differItem()}
+  {#if differ > 0}<Item lead="off" name="Files that differ from their types and years" line="Review before writing" value={differ.toLocaleString()} open={opened('types')} onclick={() => openReview('types')} />{/if}
+{/snippet}
+{#snippet changesItem()}
+  {#if showChanges}<Item lead="off" name="Changes to files" line={changesLine} open={opened(null)} onclick={openChanges} />{/if}
+{/snippet}
 
 <style>
   /* One column, as Settings' list: beside a problem it is the list's own column (App). */

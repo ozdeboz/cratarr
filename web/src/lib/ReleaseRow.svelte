@@ -199,4 +199,30 @@
     place-items: center;
     color: var(--muted);
   }
+
+  /* Its own buttons as a settings row's (lib/settings/Item): small and flat, the main one in the accent; a tick is its
+     own. */
+  .end :global(button:where(:not(.tick, [role='checkbox'], [aria-pressed]))) {
+    min-height: 36px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .end :global(button.primary) {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+
+  .end :global(button:disabled) {
+    opacity: 0.5;
+    cursor: default;
+  }
 </style>

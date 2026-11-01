@@ -1047,6 +1047,44 @@ export type CatalogueStatus = {
 export const getSettings = () => request<Settings>('/api/settings');
 
 export const getCatalogue = () => quietly<CatalogueStatus>('/api/catalogue');
+/** Types and years into the files (0.13; the owner, 2026-10-31; administrators'): whether Cratarr offers to write a
+ *  record's release types, its year and Classical into its files' tags, and how many records' files differ now. */
+export type FileFacts = { on: boolean; differ: number };
+export const getFileFacts = () => quietly<FileFacts>('/api/settings/file-facts');
+export const setFileFacts = (on: boolean) =>
+  request<FileFacts>('/api/settings/file-facts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+
+// One way to change files (decision 0092; administrators'): a plan reviewed (what each record's files hold, what
+// Cratarr holds, and from where), applied as a run; every run in one shape, also told live (`file_run`).
+/** A field's change: its values as the files hold them and as Cratarr does ([] none); `track` where it differs by
+ *  track (else the same in every file of the record). */
+export type FileField = { field: string; track?: string; before: string[]; after: string[]; from: string };
+/** A record in a plan, or in a run (`written` of its `files`, `undone`). */
+export type FileRecord = { album: string; title: string; artist: string; files: number; fields: FileField[]; written?: number; undone?: boolean };
+export type FilePlan = { kind: string; title: string; records: FileRecord[] };
+/** A run: `l…` while live, `r…` once kept (its undo token too); `done` of `of` records; `albums` how many. */
+export type FileRun = {
+  id: string;
+  what: string;
+  title: string;
+  state: 'waiting' | 'writing' | 'done';
+  done: number;
+  of: number;
+  failed: { album: string; file?: string; why: string }[];
+  at?: number;
+  undo?: string;
+  undone: boolean;
+  albums: number;
+};
+/** A record's files against Cratarr (`done` of `of` files while writing; `written` for a day). */
+export type FilesState = { state: 'differs' | 'waiting' | 'writing' | 'written' | 'changed'; done?: number; of?: number; run?: string; at?: number };
+const posting = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+export const getFilePlan = (kind: string, albums?: string[]) =>
+  request<FilePlan>(`/api/file-changes/plans/${encodeURIComponent(kind)}${albums?.length ? `?albums=${albums.map(encodeURIComponent).join(',')}` : ''}`);
+export const applyFilePlan = (kind: string, albums: string[]) => request<FileRun>(`/api/file-changes/plans/${encodeURIComponent(kind)}/apply`, posting({ albums }));
+export const getFileRuns = (since?: number) => request<FileRun[]>(`/api/file-changes/runs${since ? `?since=${since}` : ''}`);
+export const getFileRun = (id: string) => request<{ run: FileRun; kind: string; title: string; records: FileRecord[] }>(`/api/file-changes/runs/${encodeURIComponent(id)}`);
+export const undoFileRun = (id: string, albums?: string[]) => request<FileRun>(`/api/file-changes/runs/${encodeURIComponent(id)}/undo`, posting(albums ? { albums } : {}));
 
 /** Folders, chosen and shown (decision 0044): a folder in the browser, with how much audio is in it (`more`: past the
  *  count) and whether Cratarr can write there. */
@@ -1453,6 +1491,8 @@ export type ListedAlbum = {
   whole_tracks?: number;
   /** The fields an administrator set by hand (0.13, per-record overrides; lib/recordEdit). */
   set?: import('./recordEdit').OverrideField[];
+  /** Its files against Cratarr's facts (0.13, decision 0092), while types into files is on; null: they agree. */
+  files_state?: FilesState | null;
 };
 
 /** One server's album list. */
@@ -2069,6 +2109,8 @@ export const trackPlayed = (source: string, id: string) => quietly<{ counted: bo
 /** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
 export type AlbumView = {
+  /** As a listed album's (decision 0092). */
+  files_state?: FilesState | null;
   source: string;
   id: string;
   title: string;

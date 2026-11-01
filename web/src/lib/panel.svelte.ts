@@ -88,6 +88,12 @@ export function backFromStep(subject: string) {
 /** A problem of Health (`health:<its key>`), opened from the Health page's cards (lib/HealthPanel), as Settings' parts. */
 export const HEALTH = 'health:';
 export const healthOf = (viewed: string | null) => (viewed?.startsWith(HEALTH) ? viewed.slice(HEALTH.length).split('/')[0] : null);
+/** What a Health part shows a step deeper (Changes to files' plan or run, decision 0092), if anything. */
+export function healthThing(viewed: string | null): string | null {
+  if (!viewed?.startsWith(HEALTH)) return null;
+  const at = viewed.indexOf('/', HEALTH.length);
+  return at < 0 ? null : decodeURIComponent(viewed.slice(at + 1));
+}
 /** A view of Insights (`insights:history`, lib/InsightsPanel), opened from its page's list, as a part of the settings
  *  is (the owner, 2026-10-24). */
 export const INSIGHTS = 'insights:';

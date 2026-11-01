@@ -46,7 +46,9 @@
   import TopPill from './TopPill.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
-  import { albumSubject, closePlaylist, openTab, upToPage, viewOver } from './panel.svelte';
+  import { albumSubject, closePlaylist, healthThing, openTab, panel, upToPage, viewOver } from './panel.svelte';
+  import FileChanges from './FileChanges.svelte';
+  import { CHANGES, changesView, fileRuns, openChanges } from './fileRuns.svelte';
   import Crumbs from './Crumbs.svelte';
 
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
@@ -277,6 +279,12 @@
   // own (it led to Health too), and often the problem's name again (the owner, 2026-10-26: "Health › Analysis ›
   // Analysis").
   const top = $derived(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }]);
+  // Changes to files (decision 0092): its list, a plan to review, a run, under Health as a problem is.
+  const changes = $derived(problem === CHANGES ? changesView(healthThing(panel.viewed)) : null);
+  const changesTrail = $derived(changes && changes.view !== 'list' ? [...top, { label: 'Changes to files', go: openChanges }] : top);
+  const changesHere = $derived(
+    !changes ? '' : changes.view === 'list' ? 'Changes to files' : changes.view === 'plan' ? 'Review changes' : (fileRuns.list?.find((r) => r.id === changes.id)?.title ?? 'A change to files'),
+  );
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
@@ -284,7 +292,9 @@
   {#if !beside}
     <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
   {/if}
-  {#if p}
+  {#if changes}
+    <Crumbs trail={changesTrail} here={changesHere} />
+  {:else if p}
     <Crumbs trail={top} here={p.name} />
   {:else}
     <h2 class="title">Health</h2>
@@ -343,7 +353,9 @@
     </div>
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>
-    {#if !p}
+    {#if changes}
+      <FileChanges thing={healthThing(panel.viewed)} />
+    {:else if !p}
       {#if health.loaded}<p class="muted">This is no longer a problem.</p>{/if}
     {:else}
       <!-- How it stands, and what it means behind its (i). -->
