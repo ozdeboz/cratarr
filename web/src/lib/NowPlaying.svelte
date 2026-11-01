@@ -52,7 +52,7 @@
   import { longpress } from './longpress';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { visuals } from './visuals/shown.svelte';
-  import { albumSubject, keepViewed, panel, SETTINGS, viewFor } from './panel.svelte';
+  import { albumSubject, keepViewed, panel, viewFor } from './panel.svelte';
   import { goToArtist, mainArtist } from './albums.svelte';
   import { artistFavorite } from './api';
   import { toast } from './toast.svelte';
@@ -268,10 +268,10 @@
     // A Bandcamp preview's row says where it plays from (the owner, 2026-10-25).
     return now.source === BANDCAMP ? [{ id: 'bandcamp', short: 'Bandcamp' }, ...facts] : facts;
   });
-  /** The row's Add: Settings → Player, where the row's facts are chosen; the player over the page gives way. */
+  /** The row's Add: its facts chosen over the player (lib/DetailsSheet), the player staying (the owner, 2026-11-01:
+   *  it closed the player for Settings › Player, a U-turn). */
   function toRowSettings() {
-    leavePlayer();
-    location.hash = `#/settings?view=${encodeURIComponent(SETTINGS + 'player')}`;
+    detailsOpen = true;
   }
   /** The album's name: the album in the panel, as the artist's chip opens the artist. */
   function toAlbum() {
