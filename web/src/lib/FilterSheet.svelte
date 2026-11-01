@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first the
+  // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/ContentControls): first the
   // list's own filter, remembered per kind of list (decisions 0060 and 0061): how many it lets through, its conditions
   // as cards (lib/ConditionList: a crate's, unsaved; any or all of each item's tracks where the items hold them), and
   // the kind's own switches; at the title's end, Save as crate (the owner, 2026-10-23) and Reset, back to no filter of

@@ -43,7 +43,7 @@
   import { me } from './me.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
-  import TopPill from './TopPill.svelte';
+  import ContentControls from './ContentControls.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
   import { albumSubject, closePlaylist, healthThing, openTab, panel, upToPage, viewOver } from './panel.svelte';
@@ -349,7 +349,7 @@
   {#if !handed}
     <div class="bar" class:beside>
       {@render glassLeft()}
-      {#if pill()}<TopPill {...pill()!} />{/if}
+      {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>

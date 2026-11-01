@@ -1,0 +1,259 @@
+// One motion for the glass (the owner, 2026-11-01: the top glass stuttered, "a bottom up guarantee it will always
+// animate smoothly"). A glass part is a box that paints nothing itself: a `glass` layer in it (the blur and the colour),
+// a `shade` (the ring and the shadow) and its own children. Whatever changes in it (a child comes or goes, words, its
+// size), it is laid out once, at once, as it ends; then only transform, opacity and clip-path move, from the shape it
+// had to the one it has:
+// - the glass: its clip-path from the old outline to the new (the layer drawn as large as both meanwhile);
+// - the shade: moved and stretched from the old to the new (transform);
+// - a child that stays: moved from where it was (translate); one that comes: faded in; one that goes: a copy of it
+//   where it was, faded out. Each is clipped to the glass's outline as it moves, so nothing shows past the glass.
+// Nothing animates a size or a place, so no step of it lays the page out again, and the browser's compositor runs what it
+// can while a page change keeps the page busy. A blur inside a clipped element sees only that element (a backdrop
+// root), so a child that is a glass of its own (the round back button) is never clipped by an ancestor here: each child
+// gets its own clip. A child hidden (display: none) goes as one removed: its copy shows as it was.
+import { decelerate, DECELERATE_CSS, reducedMotion } from './motion';
+import { between, grownTo, insetOf, rectIn, sameRect, union, type Rect } from './glassShape';
+
+export const GLASS_MS = 200;
+
+type Part = {
+  box: HTMLElement;
+  glass: HTMLElement;
+  shade: HTMLElement | null;
+  radius: number;
+  /** No motion now: what changes is there at once (where the owner wanted it so). */
+  still: () => boolean;
+  frame: () => { left: number; top: number };
+  /** The box and each child where they are at rest (in the frame), and the glass's opacity. */
+  at: Rect | null;
+  kids: Map<Element, Rect>;
+  /** How each child is displayed, for its copy when it is hidden. */
+  shows: Map<Element, string>;
+  seen: number;
+  /** The move under way: from, to, since. */
+  run: { from: Rect; to: Rect; start: number } | null;
+  anims: Animation[];
+  window: string;
+};
+
+const GHOST = 'data-glass-ghost';
+const isLayer = (p: Part, el: Element) => el === p.glass || el === p.shade || el.hasAttribute(GHOST);
+const kidsOf = (p: Part) => [...p.box.children].filter((el) => !isLayer(p, el));
+const windowNow = () => `${innerWidth}x${innerHeight}`;
+
+/** The frame a part's places are measured in: the window, moved as the nearest fixed or sticky element (the row it
+ *  floats in, or the part itself: the bar) is moved by its transforms, so a page scrolling under it, or the row or
+ *  the bar sliding away, changes no place in it; a change of its own layout (the bar along the bottom growing up) does. */
+function frameOf(box: HTMLElement): () => { left: number; top: number } {
+  let el: HTMLElement | null = box;
+  while (el && !['fixed', 'sticky'].includes(getComputedStyle(el).position)) el = el.parentElement;
+  const f = el;
+  if (!f) return () => ({ left: 0, top: 0 });
+  // Its offsets are its layout's, without the transforms.
+  return () => {
+    const r = f.getBoundingClientRect();
+    return { left: r.left - f.offsetLeft, top: r.top - f.offsetTop };
+  };
+}
+
+function measure(p: Part) {
+  const f = p.frame();
+  const at = rectIn(p.box.getBoundingClientRect(), f);
+  const kids = new Map<Element, Rect>();
+  const shows = new Map<Element, string>();
+  for (const el of kidsOf(p)) {
+    const display = getComputedStyle(el).display;
+    if (display === 'none') continue;
+    kids.set(el, rectIn(el.getBoundingClientRect(), f));
+    shows.set(el, display);
+  }
+  return { at, kids, shows, glass: Number(getComputedStyle(p.glass).opacity) };
+}
+
+/** The outline shown now: where the move under way has got to, else where it rests. */
+function shownNow(p: Part, now: number): Rect | null {
+  if (!p.run || !p.at) return p.at;
+  const t = Math.min(1, (now - p.run.start) / GLASS_MS);
+  return between(p.run.from, p.run.to, decelerate(t));
+}
+
+/** A child's offset from its rest now (its translate under way). */
+function offsetNow(el: Element): [number, number] {
+  const t = getComputedStyle(el).translate;
+  if (!t || t === 'none') return [0, 0];
+  const [x, y] = t.split(' ').map((v) => parseFloat(v) || 0);
+  return [x, y ?? 0];
+}
+
+function play(p: Part) {
+  const now = performance.now();
+  const from = shownNow(p, now);
+  // Where each child that was there is seen now: its rest, moved by what it is still moving.
+  const was = new Map<Element, Rect>();
+  for (const [el, r] of p.kids) {
+    const [dx, dy] = el.isConnected ? offsetNow(el) : [0, 0];
+    was.set(el, { ...r, x: r.x + dx, y: r.y + dy });
+  }
+  const glassWas = p.seen;
+  const showed = p.shows;
+  for (const a of p.anims) a.cancel();
+  p.anims = [];
+  p.glass.style.inset = '';
+  const after = measure(p);
+  const win = windowNow();
+  const resized = win !== p.window;
+  p.window = win;
+  const settle = () => {
+    p.at = after.at;
+    p.kids = after.kids;
+    p.shows = after.shows;
+    p.seen = after.glass;
+    p.run = null;
+  };
+  const kept = [...after.kids.keys()].filter((el) => was.has(el));
+  const changed =
+    !from ||
+    !sameRect(from, after.at) ||
+    glassWas !== after.glass ||
+    after.kids.size !== kept.length ||
+    p.kids.size !== kept.length ||
+    kept.some((el) => !sameRect(was.get(el)!, after.kids.get(el)!));
+  if (!from || !changed || resized || reducedMotion() || p.still()) return settle();
+
+  const to = after.at;
+  const timing: KeyframeAnimationOptions = { duration: GLASS_MS, easing: DECELERATE_CSS };
+  const all = union(from, to);
+  const r = p.radius;
+  // The glass: drawn as large as both, its outline from the old to the new.
+  p.glass.style.inset = grownTo(all, to);
+  p.anims.push(
+    p.glass.animate(
+      [
+        { clipPath: insetOf(from, all, r), opacity: glassWas },
+        { clipPath: insetOf(to, all, r), opacity: after.glass },
+      ],
+      timing,
+    ),
+  );
+  if (p.shade) {
+    const sx = from.w / Math.max(1, to.w);
+    const sy = from.h / Math.max(1, to.h);
+    p.anims.push(
+      p.shade.animate(
+        [
+          { transformOrigin: '0 0', transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${sx}, ${sy})`, opacity: glassWas },
+          { transformOrigin: '0 0', transform: 'none', opacity: after.glass },
+        ],
+        timing,
+      ),
+    );
+  }
+  for (const [el, k1] of after.kids) {
+    const k0 = was.get(el);
+    const frames: Keyframe[] = k0
+      ? [
+          { translate: `${k0.x - k1.x}px ${k0.y - k1.y}px`, clipPath: insetOf(from, k0, r) },
+          { translate: '0px 0px', clipPath: insetOf(to, k1, r) },
+        ]
+      : [
+          { opacity: 0, clipPath: insetOf(from, k1, r) },
+          { opacity: 1, clipPath: insetOf(to, k1, r) },
+        ];
+    p.anims.push(el.animate(frames, timing));
+  }
+  // What went: a copy where it was, fading as the glass leaves it.
+  for (const [el, k0] of was) {
+    if (after.kids.has(el)) continue;
+    const ghost = el.cloneNode(true) as HTMLElement;
+    ghost.setAttribute(GHOST, '');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.inert = true;
+    Object.assign(ghost.style, {
+      position: 'absolute',
+      left: `${k0.x - to.x}px`,
+      top: `${k0.y - to.y}px`,
+      width: `${k0.w}px`,
+      height: `${k0.h}px`,
+      margin: '0',
+      display: showed.get(el) ?? '',
+      translate: 'none',
+      pointerEvents: 'none',
+    });
+    p.box.append(ghost);
+    const a = ghost.animate(
+      [
+        { opacity: 1, clipPath: insetOf(from, k0, r) },
+        { opacity: 0, clipPath: insetOf(to, k0, r) },
+      ],
+      { ...timing, fill: 'forwards' },
+    );
+    const gone = () => ghost.remove();
+    a.finished.then(gone, gone);
+  }
+  p.at = to;
+  p.kids = after.kids;
+  p.shows = after.shows;
+  p.seen = after.glass;
+  p.run = { from, to, start: now };
+  const anims = p.anims;
+  Promise.all(anims.map((a) => a.finished)).then(
+    () => {
+      if (p.anims !== anims) return;
+      p.glass.style.inset = '';
+      p.run = null;
+    },
+    () => {},
+  );
+}
+
+/** Makes `box` a glass part (an attachment: `{@attach glassPart({ radius: 26 })}`): its first children of class `glass`
+ *  and `shade` are its layers. Its motion is its own from then on, whatever changes it. */
+export function glassPart({ radius, still = () => false }: { radius: number; still?: () => boolean }) {
+  return (box: HTMLElement) => {
+    const glass = box.querySelector<HTMLElement>(':scope > .glass');
+    if (!glass) throw new Error('glassPart: no .glass layer');
+    const p: Part = {
+      box,
+      glass,
+      shade: box.querySelector<HTMLElement>(':scope > .shade'),
+      radius,
+      still,
+      frame: frameOf(box),
+      at: null,
+      kids: new Map(),
+      shows: new Map(),
+      seen: 1,
+      run: null,
+      anims: [],
+      window: windowNow(),
+    };
+    const first = measure(p);
+    p.at = first.at;
+    p.kids = first.kids;
+    p.shows = first.shows;
+    p.seen = first.glass;
+    // A change to its children or words: played before the frame is drawn (animation frames come before layout).
+    let asked = 0;
+    const ask = () => {
+      if (!asked) asked = requestAnimationFrame(() => ((asked = 0), play(p)));
+    };
+    const ours = (n: Node) => n instanceof Element && (n.hasAttribute(GHOST) || n === p.glass || n === p.shade);
+    const changes = new MutationObserver((list) => {
+      if (list.some((m) => !(ours(m.target) || (m.type === 'childList' && [...m.addedNodes, ...m.removedNodes].every(ours))))) ask();
+    });
+    changes.observe(box, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class'] });
+    // Its size changed otherwise (the room beside it, a font): played at once, still before that frame is drawn.
+    const sized = new ResizeObserver(() => {
+      if (asked) return;
+      const now = measure(p);
+      if (p.at && !p.run && !sameRect(p.at, now.at)) play(p);
+    });
+    sized.observe(box);
+    return () => {
+      changes.disconnect();
+      sized.disconnect();
+      cancelAnimationFrame(asked);
+      for (const a of p.anims) a.cancel();
+    };
+  };
+}

@@ -11,7 +11,8 @@
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import Meter from './Meter.svelte';
-  import { fade, slide } from 'svelte/transition';
+  import { fade } from 'svelte/transition';
+  import { glassPart, GLASS_MS } from './glassMotion';
   import { untrack } from 'svelte';
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
@@ -121,24 +122,10 @@
   // unfolds it again rather than starting it twice. Only the pill shows it (no line at the page's top); folded, the
   // button's ring does.
   const SHOWN_MS = 4000;
-  /** One motion for all that unfolds and makes way: the field or the bar slides in as the other's button slides out,
-   *  together, so the pill's width changes in one smooth step; every button has it, played whatever brings it or takes
-   *  it away (`|global`: a page change, the two steps' swap), so the pill never jumps (the owner, 2026-10-24). */
-  const UNFOLD = { axis: 'x', duration: 200 } as const;
-  /** After a page change the slides wait this long: the new page draws first (Playlists blocks the browser for up to
-   *  about 90 ms as it is opened or left, measured 2026-10-24), so the slide is seen in full instead of jumping. */
-  const PAGE_WAIT = 100;
-  /** The page the pill last settled on (not shown, only compared): another page means a change still drawing. */
-  let settled = untrack(() => page);
-  $effect(() => {
-    const p = page;
-    if (p === settled) return;
-    const t = window.setTimeout(() => (settled = p), PAGE_WAIT);
-    return () => clearTimeout(t);
-  });
-  function paced(node: Element) {
-    return slide(node, { ...UNFOLD, delay: page !== settled ? PAGE_WAIT : 0 });
-  }
+  // One motion for all that unfolds and makes way (the owner, 2026-10-24: the pill never jumps): the pill is a glass
+  // part (lib/glassMotion), so the field or the bar comes in as the other's button goes, its glass reaching from the
+  // old outline to the new in one step, whatever brings them or takes them away (a page change too: nothing in it lays
+  // the page out again, so a page busy drawing does not stall it).
   let showing = $state(false);
   let ran = false;
   let fold = 0;
@@ -271,7 +258,7 @@
       tip = a.right - (b.left + b.width / 2);
     };
     place();
-    // The pill's buttons slide in and out (the field opening): the tip follows.
+    // The pill's outline changes (the field opening, at once; its glass then moves): the tip follows.
     const seen = new ResizeObserver(place);
     seen.observe(r);
     return () => seen.disconnect();
@@ -283,7 +270,7 @@
 
 <span class="pill-row" class:wide={showing} bind:this={row}>
   {#if globeShown}
-    <span class="globe" transition:paced|global>
+    <span class="globe" transition:fade|global={{ duration: GLASS_MS }}>
       <button
         class="funnel"
         class:on={globeOn}
@@ -297,18 +284,19 @@
     </span>
   {/if}
 
-  <div class="pill" class:wide={showing} role="toolbar" aria-label="The page's tools">
+  <div class="pill" class:wide={showing} role="toolbar" aria-label="The page's tools" {@attach glassPart({ radius: 26 })}>
+    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
     {#if confirming && page && pageAction}
       {@const a = pageAction}
       <!-- The page's work asked for: the whole pill is ✓ (start it) and ✕ (leave it), until one is tapped. -->
-      <button class="confirm" aria-label={a.label} title={a.label} onclick={() => confirm(a)} transition:paced|global><Icon name="check" size={22} /></button>
-      <button aria-label="Cancel" title="Cancel" onclick={() => (confirming = false)} transition:paced|global><Icon name="close" size={22} /></button>
+      <button class="confirm" aria-label={a.label} title={a.label} onclick={() => confirm(a)}><Icon name="check" size={22} /></button>
+      <button aria-label="Cancel" title="Cancel" onclick={() => (confirming = false)}><Icon name="close" size={22} /></button>
     {:else}
     {#if showing && page && pageAction && !searching}
       {@const a = pageAction}
       <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
            are, its glass as it is (the owner, 2026-10-24). -->
-      <span class="work" role="status" aria-live="polite" transition:paced|global
+      <span class="work" role="status" aria-live="polite"
         ><Meter label={a.line ?? a.label} value={a.progress ?? 0} /></span
       >
     {/if}
@@ -322,13 +310,13 @@
         title={words}
         onmousedown={(e) => searching && e.preventDefault()}
         onclick={() => (searching = !searching)}
-        transition:paced|global
+       
         ><Icon name="search" size={22} /></button
       >
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" transition:paced|global>
+        <span class="field" role="search">
           <span class="typed" class:layered={!!layered}>
             {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
             <input
@@ -349,21 +337,21 @@
         </span>
       {/if}
     {/if}
-    {#if filter && !searching && !(showing && page && pageAction)}<button class="funnel" class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))} transition:paced|global
+    {#if filter && !searching && !(showing && page && pageAction)}<button class="funnel" class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))}
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
-    {#if view && (page || order?.columns?.shown.length || order?.view || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
+    {#if view && (page || order?.columns?.shown.length || order?.view || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))}><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
-    {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
+    {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     <!-- The page's mode (Playlists' Quick add), lit while on. -->
     {#if page && pageView.mode && !searching && !(showing && pageAction)}
       {@const m = pageView.mode}
-      <button class:lit={m.on} aria-pressed={m.on} aria-label={m.label} title={m.label} onclick={m.toggle} transition:paced|global><Icon name={m.icon} size={22} /></button>
+      <button class:lit={m.on} aria-pressed={m.on} aria-label={m.label} title={m.label} onclick={m.toggle}><Icon name={m.icon} size={22} /></button>
     {/if}
     <!-- A page's own button; a panel's where it hands one (the Map's Full screen, lib/InsightsPanel). -->
     {#if (page || action) && pageAction && !searching}
       {@const a = pageAction}
-      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)} transition:paced|global
+      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)}
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<ProgressRing progress={a.progress} size={38} />{/if}</button
       >
     {/if}
@@ -474,17 +462,33 @@
     color: var(--accent-ink);
   }
 
-  /* A dark round-ended pill as Symfonium's, a little see-through and blurring what is under it. */
+  /* A dark round-ended pill as Symfonium's, a little see-through and blurring what is under it: its glass and its shade
+     are layers under its buttons (lib/glassMotion moves them), the pill itself drawing nothing. */
   .pill {
     position: relative;
+    isolation: isolate;
     display: flex;
+    /* It may be narrower than its buttons want (the open field gives first): it ran past the window's edge. */
+    min-width: 0;
     padding: 2px;
-    /* Nothing draws past its outline: a button sliding out (narrower than its icon and ring) is cut at the edge. */
-    overflow: hidden;
+  }
+
+  .pill > .glass,
+  .pill > .shade {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
     border-radius: 26px;
+    pointer-events: none;
+  }
+
+  .pill > .glass {
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
+  }
+
+  .pill > .shade {
     box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 

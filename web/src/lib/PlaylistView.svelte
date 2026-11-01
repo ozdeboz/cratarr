@@ -168,7 +168,7 @@
   import SyncTab from './SyncTab.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import PanelPlace from './PanelPlace.svelte';
-  import TopPill from './TopPill.svelte';
+  import ContentControls from './ContentControls.svelte';
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
@@ -1883,7 +1883,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {#if !handed}
       <div class="pills" class:below={stuck}>
         {@render glassLeft()}
-        <span class="end">{#if pill()}<TopPill {...pill()!} />{/if}<PanelPlace /></span>
+        <span class="end">{#if pill()}<ContentControls {...pill()!} />{/if}<PanelPlace /></span>
       </div>
     {/if}
   {/if}
@@ -3242,7 +3242,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     gap: 6px;
   }
 
-  /* Back and ✕ (lib/TopPill's look). */
+  /* Back and ✕ (lib/ContentControls's look). */
   .navpill {
     display: flex;
     padding: 2px;

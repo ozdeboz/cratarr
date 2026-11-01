@@ -28,7 +28,7 @@
   import ReleaseRow from './ReleaseRow.svelte';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
-  import TopPill from './TopPill.svelte';
+  import ContentControls from './ContentControls.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -230,7 +230,7 @@
   {#if !handed}
     <div class="bar" class:beside>
       {@render glassLeft()}
-      {#if pill()}<TopPill {...pill()!} />{/if}
+      {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}
     </div>
   {/if}
