@@ -55,7 +55,7 @@
   async function write() {
     if (v.view !== 'plan' || !ticked.length) return;
     writing = true;
-    await apply(v.kind, ticked.map((r) => r.album));
+    await apply(v.kind, ticked);
     writing = false;
   }
 
