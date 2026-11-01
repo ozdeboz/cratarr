@@ -18,7 +18,7 @@ export type FoundGroup = { kind: string; label: string; items: Found[]; total: n
 /** The server's kinds, the library's first, then what is not in it (decision 0072, 7). */
 const LIBRARY: { kind: SearchKind; label: string }[] = [
   { kind: 'artist', label: 'Artists' },
-  { kind: 'album', label: 'Albums' },
+  { kind: 'album', label: 'Records' },
   { kind: 'track', label: 'Tracks' },
   // Classical's works (0.12, decision 0086; the owner, 2026-10-30: works reachable), each opening its sheet (lib/WorkSheet).
   { kind: 'work', label: 'Works' },
