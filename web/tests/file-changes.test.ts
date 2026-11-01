@@ -18,8 +18,8 @@ test('a change: added, taken away, or one for another', () => {
 });
 
 test("a run's line: waiting, writing n of m, set aside, undone", () => {
-  assert.equal(runLine(run({ state: 'waiting' })), 'Waiting');
-  assert.equal(runLine(run({ state: 'writing', done: 3, of: 12 })), 'Writing 3 of 12');
+  assert.equal(runLine(run({ id: 'l1', state: 'waiting' })), 'Waiting');
+  assert.equal(runLine(run({ id: 'l1', state: 'writing', done: 3, of: 12 })), 'Writing 3 of 12');
   assert.match(runLine(run({ at: 1_700_000_000, failed: [{ album: 'a', why: 'changed since it was planned' }] })), /^1 set aside · /);
   assert.match(runLine(run({ at: 1_700_000_000, undone: true })), /^Undone · /);
 });
@@ -66,4 +66,12 @@ test('what a run set aside: a row per record, its files counted, each reason onc
     { album: 'c', title: undefined, artist: undefined, files: 0, why: ['changed since it was planned'] },
   ]);
   assert.match(runLine(run({ at: 1_700_000_000, failed })), /^3 set aside · /);
+});
+
+test("a kept run under way again is its Undo: said so in the list and on the record's line", () => {
+  assert.equal(runLine(run({ id: 'r4', state: 'waiting' })), 'Waiting to undo');
+  assert.equal(runLine(run({ id: 'r4', state: 'writing', done: 2, of: 5 })), 'Undoing 2 of 5');
+  assert.equal(runLine(run({ id: 'l4', state: 'writing', done: 2, of: 5 })), 'Writing 2 of 5');
+  assert.equal(stateLine({ state: 'writing', done: 1, of: 4, run: 'r4' } as never)?.text, 'Undoing its files, 1 of 4');
+  assert.equal(stateLine({ state: 'waiting', run: 'l4' } as never)?.text, 'Waiting to write its files');
 });
