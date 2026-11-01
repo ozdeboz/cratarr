@@ -1,19 +1,20 @@
 #!/bin/sh
-# The development instance's sample (decision 0093): the albums a list names, copied from the music server over SSH,
+# The development instance's sample (decision 0093): the albums a list names, copied from a music server over SSH,
 # read only there (tar reads, nothing is written on it), into the development instance's music folder, one folder per
 # album artist as on the server. An album already copied is left as it is (its writers may have changed it); remove
-# its folder to copy it again.
+# its folder to copy it again. The list, the server and its music folders are your own, kept out of the repository.
 #
-#   scripts/dev-sample.sh <sample list> <music folder> [ssh host]
+#   DEV_SAMPLE_ROOTS='/srv/music /srv/incoming' scripts/dev-sample.sh <sample list> <music folder> <ssh host>
 #
-# The list: one album folder per line as the server has it (its root, then `Artist/Album`), anything after a tab a
-# comment; `#` lines are comments. The roots it knows are ROOTS below; a path under another is refused.
+# The list: one album folder per line as the server has it (one of the roots, then `Artist/Album`), anything after a
+# tab a comment; `#` lines are comments. DEV_SAMPLE_ROOTS: the server's music folders, space-separated; a path under
+# none of them is refused.
 set -eu
 
 list=${1:?the sample list}
 dest=${2:?the music folder}
-host=${3:-nas}
-ROOTS='/Volume1/media/Music /Volume1/media/lidarr-music'
+host=${3:?the ssh host of the music server}
+ROOTS=${DEV_SAMPLE_ROOTS:?the music server's folders (DEV_SAMPLE_ROOTS)}
 
 mkdir -p "$dest"
 copied=0
