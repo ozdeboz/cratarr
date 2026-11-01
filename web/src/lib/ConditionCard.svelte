@@ -53,7 +53,7 @@
     /** The axes have been read: until then no name and no summary, not the raw key ("bpm") and "none chosen" before
      *  "Tempo · 80–105 BPM" (the owner, 2026-10-24). */
     known?: boolean;
-    /** What the list's items are when they hold tracks ("album", "playlist"): the condition holds for any or all of
+    /** What the list's items are when they hold tracks ("record", "playlist"): the condition holds for any or all of
      *  each one's tracks. */
     items?: string | null;
     open?: boolean;

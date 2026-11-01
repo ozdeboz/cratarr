@@ -255,7 +255,7 @@ export const searchFor = (page: string) =>
   page === 'playlists'
     ? 'Filter playlists'
     : page === 'library' || page === 'local-albums'
-      ? 'Filter albums'
+      ? 'Filter records'
       : page === 'downloads'
         ? 'Filter downloads'
         : page === 'discover'

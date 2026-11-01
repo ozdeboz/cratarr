@@ -4,6 +4,7 @@
   // menu and the select bar have what local music has: Play, Shuffle, Play next, Add to queue (nothing of Cratarr's).
   import type { ListedAlbum, ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
+  import { plural } from './lib/insights.svelte';
   import { askLibrary, asLocal, device, DEVICE, deviceAlbums, type DeviceTrack } from './lib/deviceMusic.svelte';
   import Icon from './lib/Icon.svelte';
   import { enqueue, playQueue } from './lib/localPlayer.svelte';
@@ -43,7 +44,7 @@
   {:else}
     <AlbumShelf
       {sources}
-      empty="No albums on this device."
+      empty="No records on this device."
       bind:order
       bind:down
       onplay={(_, a) => play([a.id], 'play', a.title)}
@@ -51,7 +52,7 @@
     >
       {#snippet actions(ticked, done)}
         {@const ids = ticked.map((x) => x.a.id)}
-        <button aria-label="Play" title="Play" disabled={!ids.length} onclick={() => (play(ids, 'play', `${ids.length} albums`), done())}><Icon name="play" size={24} /></button>
+        <button aria-label="Play" title="Play" disabled={!ids.length} onclick={() => (play(ids, 'play', plural(ids.length, 'record')), done())}><Icon name="play" size={24} /></button>
         <button aria-label="Play next" title="Play next" disabled={!ids.length} onclick={() => (play(ids, 'next', ''), done())}><Icon name="playNext" size={24} /></button>
         <button aria-label="Add to queue" title="Add to queue" disabled={!ids.length} onclick={() => (play(ids, 'last', ''), done())}><Icon name="listAdd" size={24} /></button>
       {/snippet}
