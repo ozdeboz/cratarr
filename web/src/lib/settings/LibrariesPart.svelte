@@ -25,7 +25,7 @@
   const FORMAT_OPTIONS = FORMATS.map((f) => ({ value: f.id, label: f.label }));
   const useLabel = (id: string) => USES.find((u) => u.id === id)?.label ?? id;
   const FILE_FACTS_MORE =
-    "A record's release types, its year and Classical (as a genre) written into its files' tags, in Music, Incoming, Lidarr's folder and each user's own music, so other apps read them as Cratarr does. A small change is written by itself; when many records differ, Health offers to write them.";
+    "A record's release types, its year and Classical (as a genre) written into its files' tags, in Music, Incoming, Lidarr's folder and each user's own music, so other apps read them as Cratarr does. Nothing is written without you: Health says which records' files differ, and writes them when you tap Write.";
   $effect(() => loadFileFacts());
   const USE_MORE = 'Music: the playlists and the tracks that can go in them. Incoming: new music waiting to be heard.';
   const TAGS_MORE =

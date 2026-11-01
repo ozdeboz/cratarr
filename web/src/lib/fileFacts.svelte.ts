@@ -1,6 +1,6 @@
 // Types and years into the files (0.13; the owner, 2026-10-31): a switch in Settings › Libraries, off at the start; on,
-// Cratarr writes each record's types, year and Classical into its files' tags, a small change by itself, and Health
-// says when many differ, with Write. Read where it shows, and again every two seconds while a run writes.
+// Health says how many records' files differ from their types, year and Classical, and Write writes them (the owner:
+// always asked, however few). Read where it shows, and again every two seconds while a run writes.
 import { getFileFacts, setFileFacts, writeFileFacts, type FileFacts } from './api';
 import { me } from './me.svelte';
 import { toast } from './toast.svelte';
