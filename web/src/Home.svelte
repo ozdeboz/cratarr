@@ -41,7 +41,7 @@
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
-  import { homeKept, type CrateShelf } from './lib/homeKept.svelte';
+  import { homeKept, momentFresh, partOfDay, type CrateShelf } from './lib/homeKept.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { albumSubject, viewFor, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
@@ -64,6 +64,8 @@
   if (local) askDevicePlays();
   // What Home showed last (lib/homeKept): shown at once on its return, each answer asked again quietly behind it.
   const kept = homeKept(prefs.source, hiddenLibraries());
+  // The moment and its sky only while they still hold (half an hour, the same part of the day): else the fresh one.
+  const momentKept = momentFresh(kept);
 
   onMount(() => {
     if (!library.view) void readLibrary(false);
@@ -139,12 +141,12 @@
   // The moment (the owner, 2026-10-23: its own style, not a shelf like those below): its albums as a Flow on a canvas
   // painted for the sky, the front one named; its radio plays only what is near it, the moment read again on each
   // refill (it follows the weather).
-  let moment = $state<Moment | null>(kept.moment ?? null);
-  let momentIn = $state(kept.moment !== undefined);
+  let moment = $state<Moment | null>(momentKept ? (kept.moment ?? null) : null);
+  let momentIn = $state(momentKept);
   onMount(() => {
     if (local) return void (momentIn = true);
     getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      (m) => ((moment = kept.moment = m), (momentIn = true)),
+      (m) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), (momentIn = true)),
       () => (momentIn = true),
     );
   });
@@ -344,7 +346,7 @@
   // the rest can start to enter"): with a flow leading Home, its sky shows as soon as it is known which (the moment's
   // weather, or one's own picture) and that picture is in, then its words and albums, then the sections after it; two
   // and a half seconds at most, then whatever there is.
-  let skyIn = $state(kept.sky);
+  let skyIn = $state(kept.sky && momentKept);
   $effect(() => {
     if (skyIn) kept.sky = true;
   });
