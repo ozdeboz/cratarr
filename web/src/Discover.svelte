@@ -36,7 +36,7 @@
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
-  import { matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
+  import { matchesSearch, pageView, searchNone, usePageAction } from './lib/pageView.svelte';
   import { switchOn } from './lib/listFilter.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
   import { me } from './lib/me.svelte';
@@ -142,6 +142,8 @@
   const mode = $derived<ReasonMode>(inSpotify() ? 'fresh' : (prefs.discoverMode as ReasonMode));
   const inMode = (a: DiscoverAlbum) => modeOf(a) === mode;
   const cards = $derived(mode === 'artists' ? [] : inModeOrder(mode, albums.filter(inMode)));
+  // Its words leave none of what it has: the pill says so, from its magnifier (pageView searchNone, A2); its own line
+  // stays for the filter alone.
   /** New artists: the server's, each with their records (those that pass); from a server before it, the new artists'
    *  records by artist, the best fit first. */
   const artists = $derived.by(() => {
@@ -156,6 +158,7 @@
     for (const a of inModeOrder('artists', [...shown.values()])) (by.get(a.artist) ?? by.set(a.artist, []).get(a.artist)!).push(a);
     return [...by].map(([name, records]) => ({ name, why: [] as string[], records }));
   });
+  searchNone(() => (kept.length && !looking && (mode === 'artists' ? !artists.length : !cards.length) ? (mode === 'artists' ? 'artists' : 'albums') : null));
   // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): Fresh.
   loadSpotify().then(() => {
     if (inSpotify() && spotify.state && !spotify.state.shown) prefs.discoverMode = 'fresh';
@@ -338,12 +341,12 @@
     {/if}
     {#if !albums.length}
       <!-- Nothing found yet: the shared loading sign, not words of its own (the owner, 2026-10-26). -->
-      {#if !looking}{#if kept.length || view.found}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{:else}<PageLoading />{/if}{/if}
+      {#if !looking}{#if kept.length || view.found}{#if !(kept.length && pageView.none)}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{/if}{:else}<PageLoading />{/if}{/if}
     {:else}
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      {#if mode === 'artists' ? !artists.length : !cards.length}<p class="note">None of them match.</p>{/if}
+      {#if (mode === 'artists' ? !artists.length : !cards.length) && !pageView.none}<p class="note">None of them match.</p>{/if}
       {#each artists as x (x.name)}
         <SectionHead title={x.name} />
         {#each x.why as w (w)}<p class="why-artist">{w}</p>{/each}
