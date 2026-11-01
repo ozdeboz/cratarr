@@ -50,6 +50,9 @@ object Kept {
     /** Told after anything changed (MainActivity sends the page a report). */
     @Volatile var onChange: (() -> Unit)? = null
 
+    /** Sync passes going on now (the report's `running`). */
+    private val passes = java.util.concurrent.atomic.AtomicInteger(0)
+
     /** A kept item, as stored: its tracks as Cratarr last said, and how many the budget left out. */
     private class Item(
         val kind: String,
@@ -206,6 +209,8 @@ object Kept {
     private fun keyOf(t: JSONObject) = "${Uri.encode(t.optString("source"))}/${Uri.encode(t.optString("id"))}"
 
     private fun syncHere(app: Context, retryFailed: Boolean) {
+        passes.incrementAndGet()
+        onChange?.invoke()
         try {
             val prefs = Prefs(app)
             val server = prefs.serverUrl?.trimEnd('/')
@@ -277,6 +282,8 @@ object Kept {
             saveItems(app, items)
         } catch (e: Exception) {
             Log.w(TAG, "sync: ${e.message}")
+        } finally {
+            passes.decrementAndGet()
         }
         onChange?.invoke()
     }
@@ -367,6 +374,13 @@ object Kept {
                 null
             }
         }
+        // The sync job says its own state (0.13, the owner: no guessing from the items, nor a timed wait): running from a
+        // pass's start until every kept track it asked for has come, also while its rules hold it back (`waiting`
+        // says why). The owner's own Downloads are not the job's.
+        val unfinished = setOf(Download.STATE_QUEUED, Download.STATE_DOWNLOADING, Download.STATE_RESTARTING)
+        val running = passes.get() > 0 || items.any { item ->
+            (0 until item.tracks.length()).any { i -> item.tracks.optJSONObject(i)?.let { downloads[keyOf(it)]?.state in unfinished } == true }
+        }
         val out = JSONArray()
         for (item in items.sortedByDescending { it.since }) {
             var done = 0
@@ -402,6 +416,7 @@ object Kept {
             .put("used", downloads.values.sumOf { it.bytesDownloaded })
             .put("budget", if (budget <= 0) JSONObject.NULL else budget * 1_000_000_000L)
             .put("waiting", waiting ?: JSONObject.NULL)
+            .put("running", running)
             .put("current", current ?: JSONObject.NULL)
     }
 }
