@@ -320,6 +320,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "slow (encodes every track): the Dockerfile's e2e stage"]
     fn the_fixture_library_is_made_with_its_hard_cases() {
         let d = std::env::temp_dir().join(format!("cratarr-fixtures-{}", std::process::id()));
         let albums = make(&d).unwrap();

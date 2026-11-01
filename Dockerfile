@@ -40,7 +40,7 @@ RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registr
 # The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library, driven through
 # its API. Its own stage, after the tests: `docker build --target e2e .` (one heavy job at a time).
 FROM source AS e2e
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target-e2e,target=/app/server/target     cargo test --release --locked --test e2e -- --ignored --nocapture
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target-e2e,target=/app/server/target     cargo test --release --locked --bin cratarr-server fixtures:: -- --ignored         && cargo test --release --locked --test e2e -- --ignored --nocapture
 
 FROM scratch AS binary
 COPY --from=build /cratarr-server /cratarr-server
