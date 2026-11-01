@@ -132,6 +132,7 @@ impl App {
         // are typed by the owner's rule (0.13: a type is always known).
         for s in &mut sources {
             super::classical::tell(&s.id, &mut s.albums).await;
+            super::file_facts::tell(&s.id, &mut s.albums);
             if s.id != crate::source::cratarr::KIND.id {
                 s.albums.iter_mut().for_each(crate::serve::library::type_by_rule);
             }

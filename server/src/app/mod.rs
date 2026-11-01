@@ -47,6 +47,8 @@ pub mod around;
 pub mod words;
 pub mod harvest;
 pub mod fixes;
+pub mod file_facts;
+pub mod file_runs;
 pub mod matching;
 pub mod incomplete;
 pub mod track_fetch;
