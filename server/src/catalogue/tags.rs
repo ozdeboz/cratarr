@@ -3,7 +3,7 @@
 //! value as stored: nothing is split or merged here (see `normalise`). Cover art is not read.
 
 /// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`).
-pub const READER_VERSION: u32 = 6;
+pub const READER_VERSION: u32 = 7;
 
 /// What is wrong with a file that could still be read (a file that cannot be read at all is an error instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +81,8 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
         ItemKey::MusicBrainzReleaseGroupId => "musicbrainz_releasegroupid",
         ItemKey::MusicBrainzArtistId => "musicbrainz_artistid",
         ItemKey::MusicBrainzReleaseArtistId => "musicbrainz_albumartistid",
+        // The release type (0.13, decision 0092: written into files): Vorbis RELEASETYPE, ID3v2 TXXX:MusicBrainz Album Type.
+        ItemKey::MusicBrainzReleaseType => "releasetype",
         _ => return None,
     })
 }
@@ -90,7 +92,9 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
 /// where lofty does not map them (Opus's `R128_*`, a lower-case MP4 freeform), decision 0035.
 fn by_raw_key(raw: &str) -> Option<&'static str> {
     let last = raw.rsplit(':').next().unwrap_or(raw);
-    const NAMED: [&str; 8] = [
+    const NAMED: [&str; 9] = [
+        // Lidarr's second field for the release type in a FLAC (0.13), which lofty has no key for.
+        "musicbrainz_albumtype",
         "albumartists",
         // A style (0.9.7), as Vorbis `STYLE`, ID3v2 `TXXX:STYLE` or an MP4 freeform keeps it.
         "style",

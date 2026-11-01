@@ -134,6 +134,24 @@ pub enum Change {
     Tempo { tracks: Vec<crate::app::tempo::TempoChange> },
 }
 
+/// A run of changes to the library's files (decision 0092): what wrote it, and each file it wrote with its fields before
+/// and after, by the tag reader's names ("releasetype", "date", "genre"). Undone only where a file still holds what the
+/// run wrote.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileRun {
+    pub what: String,
+    pub files: Vec<FileWrite>,
+}
+
+/// One file of a run: its album, where it is, and its fields before and after (each field's values as items).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileWrite {
+    pub album: String,
+    pub path: std::path::PathBuf,
+    pub before: Vec<(String, Vec<String>)>,
+    pub after: Vec<(String, Vec<String>)>,
+}
+
 /// One playlist's file before a change, and the fingerprint of the file the change left.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextChange {
@@ -172,6 +190,8 @@ CREATE TABLE IF NOT EXISTS handled (
   PRIMARY KEY (event, handler)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS changes (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, change TEXT NOT NULL, undone_at INTEGER);
+CREATE TABLE IF NOT EXISTS file_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, run TEXT NOT NULL, account TEXT, undone_at INTEGER);
 ";
 
 /// Columns added after the first schema; added to an existing journal when missing.
@@ -399,6 +419,31 @@ impl Journal {
         Ok(())
     }
 
+    /// Keep a run of changes to the library's files (decision 0092) of `account`'s; runs older than `keep` seconds (the
+    /// trash's days) are forgotten on the way.
+    pub fn record_run(&self, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
+        let db = self.db();
+        db.execute("DELETE FROM file_runs WHERE at < ?1", [at - keep])?;
+        db.execute("INSERT INTO file_runs (at, run, account) VALUES (?1, ?2, ?3)", params![at, serde_json::to_string(run)?, account])?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// A run, when it ran, and whether it was undone; `None` when it is not (or no longer) kept.
+    pub fn file_run(&self, id: EventId) -> Result<Option<(FileRun, i64, bool)>> {
+        let row = self
+            .db()
+            .query_row("SELECT run, at, undone_at FROM file_runs WHERE id = ?1", [id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?))
+            })
+            .optional()?;
+        row.map(|(run, at, undone)| Ok((serde_json::from_str(&run)?, at, undone.is_some()))).transpose()
+    }
+
+    /// Take a run for undoing: true for the one caller that may undo it.
+    pub fn claim_run(&self, id: EventId, at: i64) -> Result<bool> {
+        Ok(self.db().execute("UPDATE file_runs SET undone_at = ?2 WHERE id = ?1 AND undone_at IS NULL", params![id, at])? == 1)
+    }
+
     /// Forget events older than `before` (epoch seconds): nothing can undo or handle them any more.
     pub fn prune(&self, before: i64) -> Result<usize> {
         let db = self.db();
@@ -410,6 +455,20 @@ impl Journal {
 #[cfg(test)]
 mod change_tests {
     use super::*;
+
+    #[test]
+    fn a_file_run_is_kept_while_the_trash_keeps_and_undone_once() {
+        let j = Journal::open(None).unwrap();
+        let file = FileWrite { album: "al-1".into(), path: "/m/a.flac".into(), before: vec![("date".into(), vec![])], after: vec![("date".into(), vec!["2010".into()])] };
+        let run = FileRun { what: "file-facts".into(), files: vec![file] };
+        let old = j.record_run(1_000, &run, None, 100).unwrap();
+        let id = j.record_run(2_000, &run, Some("ann"), 100).unwrap();
+        assert_eq!(j.file_run(old).unwrap(), None, "older than the trash keeps: forgotten");
+        assert_eq!(j.file_run(id).unwrap(), Some((run, 2_000, false)));
+        assert!(j.claim_run(id, 2_010).unwrap());
+        assert!(!j.claim_run(id, 2_020).unwrap(), "undone once");
+        assert!(j.file_run(id).unwrap().unwrap().2);
+    }
 
     #[test]
     fn a_change_is_kept_for_a_day_and_claimed_once() {

@@ -260,6 +260,11 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/incoming/jobs", get(incoming_jobs))
             .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
             .route("/api/settings", get(get_settings).put(save_settings))
+            // Types, years and Classical into the files (0.13, decision 0092): the switch and Health's Write; a run's
+            // Undo.
+            .route("/api/settings/file-facts", get(file_facts).put(file_facts_switch))
+            .route("/api/settings/file-facts/write", post(file_facts_write))
+            .route("/api/file-runs/{token}/undo", post(file_run_undo))
             .route("/api/settings/preview", post(preview))
             .route("/api/settings/lidarr", post(preview_lidarr))
             .route("/api/settings/lidarr/options", get(lidarr_options))
@@ -6557,6 +6562,31 @@ async fn release_group_cover(Path(rg): Path<String>) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     }
     kept_cover(crate::app::cover_cache::Of::ReleaseGroup(rg)).await
+}
+
+/// Writing types, years and Classical into the files: whether it is on, how many records' files differ, its last run.
+async fn file_facts() -> Result<Json<crate::app::file_facts::View>, ApiError> {
+    Ok(Json(crate::app::file_facts::view().await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// Switched on or off: it only decides what Health offers (decision 0092: nothing is written by itself).
+async fn file_facts_switch(Json(b): Json<SwitchedOn>) -> Result<Json<crate::app::file_facts::View>, ApiError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    tokio::task::spawn_blocking(move || crate::app::file_facts::set_on(&served, b.on))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    file_facts().await
+}
+
+/// Write (an administrator's tap): every record whose files differ, a run on the one path; its first status.
+async fn file_facts_write(State(app): State<Arc<App>>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    Ok(Json(crate::app::file_facts::write(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// A run's Undo (`r…`): each file put back where it still holds what the run wrote.
+async fn file_run_undo(State(app): State<Arc<App>>, Path(token): Path<String>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    Ok(Json(crate::app::file_runs::undo(&app, &token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// Lidarr's quality and metadata profiles and root folders (its page's choices for Want), of the saved Lidarr.

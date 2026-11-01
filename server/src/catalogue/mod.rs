@@ -429,7 +429,8 @@ impl Catalogue {
             cat.db().execute("UPDATE tags SET name = 'bpm' WHERE raw IN ('TBPM', 'tmpo') AND name IS NULL", [])?;
             // Reader 6 names a file's mood, style and grouping (0.9.7, the library's words), which no reader before kept:
             // every file read before is read again, and served as it was read until then.
-            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 6) {
+            // Reader 7 names the release type (0.13, written into files by decision 0092): every file read again too.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 7) {
                 cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, READ])?;
             }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
@@ -1348,6 +1349,23 @@ impl Catalogue {
             if let Some(&i) = index.get(&rel) {
                 out[i].1.push((name, value));
             }
+        }
+        Ok(out)
+    }
+
+    /// Every present file's values of the tags named in `names`, by (folder, path): what the files hold of what Cratarr
+    /// writes into them (decision 0092, `app::file_facts`). Read-only; blocking.
+    pub fn named_values(&self, names: &[&str]) -> Result<HashMap<(i64, String), HashMap<String, Vec<String>>>> {
+        let db = self.db();
+        let list = names.iter().map(|n| format!("'{}'", n.replace(''', "''"))).collect::<Vec<_>>().join(", ");
+        let mut st = db.prepare(&format!(
+            "SELECT t.folder, t.rel, t.name, t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel
+             WHERE {PRESENT_F} AND t.name IN ({list}) ORDER BY t.folder, t.rel, t.n"
+        ))?;
+        let mut out: HashMap<(i64, String), HashMap<String, Vec<String>>> = HashMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+            let (folder, rel, name, value) = row?;
+            out.entry((folder, rel)).or_default().entry(name).or_default().push(value);
         }
         Ok(out)
     }

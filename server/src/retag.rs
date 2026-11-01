@@ -73,6 +73,9 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
     Ok(())
 }
 
+/// Lidarr's second Vorbis field for the release type.
+const ALBUMTYPE: &str = "MUSICBRAINZ_ALBUMTYPE";
+
 /// The keys an edit changed: each whose values differ before and after.
 fn changed_keys(before: &Tag, after: &Tag) -> Vec<ItemKey> {
     let values = |t: &Tag, k: ItemKey| t.items().filter(|i| i.key() == k).map(|i| i.value().clone()).collect::<Vec<_>>();
@@ -103,6 +106,16 @@ fn vorbis_edited(mut own: lofty::ogg::tag::VorbisComments, before: &Tag, after: 
     for item in after.items().filter(|i| changed.contains(&i.key())) {
         if let (Some(k), ItemValue::Text(v)) = (item.key().map_key(TagType::VorbisComments), item.value()) {
             own.push(k.to_string(), v.clone());
+        }
+    }
+    // Lidarr's second field for the release type, which lofty has no key for, follows RELEASETYPE (0.13): one type,
+    // however a player reads it.
+    if changed.contains(&ItemKey::MusicBrainzReleaseType) {
+        own.remove(ALBUMTYPE).for_each(drop);
+        for item in after.items().filter(|i| i.key() == ItemKey::MusicBrainzReleaseType) {
+            if let ItemValue::Text(v) = item.value() {
+                own.push(ALBUMTYPE.to_string(), v.clone());
+            }
         }
     }
     if before.pictures() != after.pictures() {
