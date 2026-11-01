@@ -268,3 +268,7 @@ by a later record that says so in its header. A new decision takes the next numb
   album at a time through the checked copy or all-or-none moves, recorded as one journal entry with one Undo, and told
   in one shape; Health shows each kind of difference in one line with its action. Amends 0089: types into files
   follow Cratarr.
+- [0093: Test and development data](0093-test-and-development-data.md): proposed, for 0.13. A fixture library of small
+  generated albums in the repository; one end-to-end suite starting the real server on a throwaway copy of it; a
+  development instance on this PC with its own data and music (the fixtures and a read-only sample from the NAS), which
+  the dev page and previews point at instead of production.
