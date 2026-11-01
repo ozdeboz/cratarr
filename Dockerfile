@@ -41,7 +41,9 @@ RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registr
 FROM source AS e2e
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target-e2e,target=/app/server/target     cargo test --release --locked --bin cratarr-server fixtures:: -- --ignored         && cargo test --release --locked --test e2e -- --ignored --nocapture
+# Unoptimised and on the test stage's cache, as the tests are: what they compiled (the server and this suite) is reused,
+# so after them this stage only runs.
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
 
 # The binary alone, to take out (the test server runs on it, with CRATARR_WEB_DIR at a built web/dist).
 FROM scratch AS binary
