@@ -15,10 +15,13 @@ export function changeOf(f: Pick<FileField, 'before' | 'after'>): { gone: string
 
 const time = (at: number) => new Date(at * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
-/** A run's line in the list: under way, waiting, or how it ended and when. */
+/** A kept run (`r…`) under way again is being undone (its Undo runs as a write does, a record at a time). */
+const undoing = (run: string | null | undefined) => !!run?.startsWith('r');
+
+/** A run's line in the list: under way (writing, or its Undo), waiting, or how it ended and when. */
 export function runLine(r: FileRun): string {
-  if (r.state === 'waiting') return 'Waiting';
-  if (r.state === 'writing') return `Writing ${r.done.toLocaleString()} of ${r.of.toLocaleString()}`;
+  if (r.state === 'waiting') return undoing(r.id) ? 'Waiting to undo' : 'Waiting';
+  if (r.state === 'writing') return `${undoing(r.id) ? 'Undoing' : 'Writing'} ${r.done.toLocaleString()} of ${r.of.toLocaleString()}`;
   const when = r.at ? time(r.at) : '';
   if (r.undone) return ['Undone', when].filter(Boolean).join(' · ');
   const records = asideOf(r.failed).length;
@@ -86,9 +89,9 @@ export function stateLine(s: FilesState | null | undefined): { text: string; ton
     case 'differs':
       return { text: 'Its files differ from Cratarr', tone: null, act: 'review', progress: null };
     case 'waiting':
-      return { text: 'Waiting to write its files', tone: null, act: null, progress: null };
+      return { text: undoing(s.run) ? 'Waiting to undo its files' : 'Waiting to write its files', tone: null, act: null, progress: null };
     case 'writing':
-      return { text: `Writing its files${s.of ? `, ${s.done ?? 0} of ${s.of}` : ''}`, tone: null, act: null, progress: s.of ? (s.done ?? 0) / s.of : 0 };
+      return { text: `${undoing(s.run) ? 'Undoing' : 'Writing'} its files${s.of ? `, ${s.done ?? 0} of ${s.of}` : ''}`, tone: null, act: null, progress: s.of ? (s.done ?? 0) / s.of : 0 };
     case 'written':
       return { text: 'Its files written', tone: null, act: s.run ? 'undo' : null, progress: null };
     case 'changed':
