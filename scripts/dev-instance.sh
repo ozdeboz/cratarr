@@ -31,12 +31,15 @@ host() {
 
 mkdir -p "$DIR/music" "$DIR/fixtures" "$DIR/data"
 H=$(host "$DIR")
+# On a Windows folder (WSL's drvfs) only root may set a file's permissions, which every writer does when a written copy
+# takes a file's place: there the instance runs as root. Elsewhere, as the image's own user.
+case "$H" in /mnt/*) AS="--user 0:0" ;; *) AS="" ;; esac
 echo "building $IMAGE from $REPO"
 (cd "$REPO" && docker build -q -t "$IMAGE" .) > /dev/null
 
 if [ ! -d "$DIR/fixtures/library" ]; then
   echo "making the fixture library"
-  docker run --rm -v "$H/fixtures:/fixtures" --entrypoint /cratarr-server "$IMAGE" --make-fixtures /fixtures/library
+  docker run --rm $AS -v "$H/fixtures:/fixtures" --entrypoint /cratarr-server "$IMAGE" --make-fixtures /fixtures/library
 fi
 
 if [ ! -f "$DIR/data/settings.json" ]; then
@@ -61,7 +64,7 @@ else
 fi
 
 docker rm -f "$NAME" > /dev/null 2>&1 || true
-docker run -d --name "$NAME" --restart unless-stopped --memory 768m \
+docker run -d --name "$NAME" --restart unless-stopped --memory 768m $AS \
   -p "$PORT:8080" \
   -v "$H/data:/data" -v "$H/music:/music" -v "$H/fixtures:/fixtures" \
   "$IMAGE" > /dev/null
