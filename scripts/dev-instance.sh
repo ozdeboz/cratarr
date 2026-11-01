@@ -33,6 +33,7 @@ if [ ! -f "$DIR/data/settings.json" ]; then
   cat > "$DIR/data/settings.json" <<'JSON'
 {
   "version": 3,
+  "music_folder": "/music",
   "sources": [
     {
       "id": "cratarr",

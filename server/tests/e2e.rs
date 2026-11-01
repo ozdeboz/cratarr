@@ -129,8 +129,10 @@ async fn types_and_years_into_the_files_end_to_end() {
     let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
     assert!(made.success(), "the fixture library is made");
     let folder = music.to_string_lossy().to_string();
+    // The fixture library as the Music folder: a server looks for music in its mounts and there (decision 0009).
     let settings = json!({
         "version": 3,
+        "music_folder": folder,
         "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": { "music": [folder] }, "values": { "folders": [folder] } }],
     });
     std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
