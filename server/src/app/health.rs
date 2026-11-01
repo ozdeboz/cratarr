@@ -42,6 +42,12 @@ pub struct Finding {
     /// A short name for it, a noun phrase in title case (0.9.6, the owner: the panel's breadcrumb): "Missing covers".
     pub name: String,
     pub title: String,
+    /// Health's row, in two parts (0.13, the owner): what it is about and how it is, read "{thing} · {count} {state}"
+    /// ("Covers · 3 missing"). `None` where no such pair fits; the page falls back on the name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thing: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub count: u64,
@@ -145,7 +151,49 @@ static FIRST_SEEN: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
 /// A finding as a check makes it; its time is set by the report.
 fn finding(domain: &'static str, key: impl Into<String>, level: Level, count: u64, title: impl Into<String>) -> Finding {
     let key = key.into();
-    Finding { domain, name: name_of(&key).into(), key, title: title.into(), detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
+    let (thing, state) = label_of(&key).map_or((None, None), |(t, s)| (Some(t.to_string()), Some(s.to_string())));
+    Finding { domain, name: name_of(&key).into(), key, title: title.into(), thing, state, detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
+}
+
+/// A finding's row, by its key: what it is about (a plural noun, Records where it counts records) and how it is (the
+/// owner's table, 2026-11-01). An unreachable server's thing is its own name, set where it is found.
+fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
+    Some(match key {
+        "library:cover" => ("Covers", "missing"),
+        "library:year" => ("Years", "missing"),
+        "library:genre" => ("Genres", "missing"),
+        "library:album-artist" => ("Album artists", "missing"),
+        "library:musicbrainz" => ("MusicBrainz ids", "missing"),
+        "library:track-numbers" => ("Track numbers", "off"),
+        "library:discs" => ("Disc numbers", "off"),
+        "library:incomplete" => ("Records", "missing tracks"),
+        "library:rules" => ("Names", "set by a rule"),
+        "files:broken" => ("Files", "unreadable"),
+        "files:cut-short" => ("Files", "cut off"),
+        "files:damaged_tag" => ("Tags", "damaged"),
+        "files:no_tags" => ("Tags", "missing"),
+        "files:no_length" => ("Lengths", "missing"),
+        "files:length-misread" => ("Lengths", "read wrong"),
+        "files:length-guessed" => ("Lengths", "guessed"),
+        "files:sound-breaks" => ("Sound", "breaking off"),
+        "incoming:upgrades" => ("Replacements", "better"),
+        "incoming:duplicates" => ("Duplicates", "found"),
+        "incoming:failed" => ("Conversions", "failed"),
+        "playlists:missing" => ("Playlist tracks", "missing"),
+        "analysis:audiomuse" => ("Analysis", "to do"),
+        "sign-in:refused" => ("Sign-ins", "refused"),
+        "sign-in:throttled" => ("Sign-ins", "throttled"),
+        "server:runaway" => ("Clients", "running away"),
+        "server:slow" => ("Responses", "slow"),
+        "server:settings-file" => ("Settings file", "unreadable"),
+        "servers:lidarr" => ("Lidarr", "unreachable"),
+        "requests:waiting" => ("Requests", "waiting"),
+        k if k.starts_with("servers:") => ("Server", "unreachable"),
+        k if k.starts_with("players:held:") => ("Plays", "held"),
+        k if k.starts_with("players:away:") => ("Players", "silent"),
+        k if k.ends_with(":check") => ("Checks", "failed"),
+        _ => return None,
+    })
 }
 
 /// A finding's short name, by its key (the breadcrumb's; its title stays the sentence).
@@ -350,6 +398,7 @@ fn check_connections(at: i64) -> Vec<Finding> {
             let level = if name == "musicbrainz" { Level::Critical } else { Level::Warning };
             let mut f = finding("connections", format!("connections:{name}"), level, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
             f.name = super::reach::label(name).to_string();
+            (f.thing, f.state) = (Some(f.name.clone()), Some("failing".into()));
             f.detail = s.last_error.map(|(_, why)| why);
             f.open = matches!(name, "musicbrainz" | "discogs" | "lastfm").then_some(Open { page: "settings", switch: None, thing: Some(name_static(name)) });
             f
@@ -703,6 +752,7 @@ impl App {
         }
         for s in view.sources.iter().filter(|s| s.enabled && !s.status.connected) {
             let mut f = finding("servers", format!("servers:{}", s.id), Level::Critical, 1, format!("{} can't be reached", s.label));
+            f.thing = Some(s.label.to_string());
             f.detail = s.status.error.clone().or_else(|| s.error.clone());
             f.open = settings();
             out.push(f);
@@ -827,6 +877,16 @@ mod tests {
             assert_ne!(name_of(key), "Finding", "{key}");
         }
         assert_eq!(finding("library", "library:genre", Level::Warning, 12, "12 albums without a genre").name, "Missing genres");
+    }
+
+    #[test]
+    fn every_finding_has_a_row_of_thing_and_state() {
+        for key in ["files:broken", "files:no_tags", "library:incomplete", "incoming:failed", "server:slow", "servers:jellyfin", "players:held:Tablet", "players:away:Tablet", "library:check"] {
+            assert!(label_of(key).is_some(), "{key}");
+        }
+        let f = finding("library", "library:cover", Level::Warning, 3, "3 albums without a cover");
+        assert_eq!((f.thing.as_deref(), f.state.as_deref()), (Some("Covers"), Some("missing")));
+        assert_eq!(label_of("files:something-new"), None, "the page falls back on the name");
     }
 
     #[test]
