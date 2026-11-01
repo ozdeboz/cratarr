@@ -1068,6 +1068,7 @@ impl IncomingService {
             for v in converted.iter().filter(|v| v.converted != v.original && !c.has_row(folder, &v.original)) {
                 c.move_files(folder, &v.converted, folder, &v.original)?;
             }
+            c.changed_outside_pass();
             Ok(())
         })
         .await
@@ -1112,6 +1113,7 @@ impl IncomingService {
             for ((ff, fr), (tf, tr)) in &pairs2 {
                 c2.move_files(*ff, fr, *tf, tr)?;
             }
+            c2.changed_outside_pass();
             Ok(())
         })
         .await
