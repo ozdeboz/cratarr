@@ -35,12 +35,14 @@ Three tiers, each with data of its own; production is changed only by a deploy t
    server in headless Edge. Connections are off and the time is fixed where it matters. Everything is thrown away after
    the run. A stage of its own in the Dockerfile, after `test`; only one heavy job runs at a time (this PC's rule).
 3. **A development instance, on this PC.** A second Cratarr in docker with its own data folder (its own catalogue,
-   user data and journal) and its own music: the fixture library plus a sample of about 100 real albums (some 5 GB),
+   user data and journal) and its own music: the fixture library plus a sample of about 90 real albums (about 11 GB, the rewritten ones being FLAC),
    copied read only from the NAS over SSH and then disconnected (the NAS is read, never written; no NAS mounts). The
    sample is chosen for the hard cases, not at random: the 12 albums the old tag writer damaged (their repaired
    copies), classical with works, soundtracks of various artists, two-disc albums, ID3v2.3 MP3s and MP3s with APE or
-   ID3v1 trailers, an album dated "0001", albums from Lidarr's folder. Its list is `data-dev/sample.txt`, not
-   committed. The LAN dev page and our own trying-out point at it; its writers change only its copies. It is kept until its data is thrown away by hand, and made again from the fixtures
+   ID3v1 trailers, an album dated "0001", albums from Lidarr's folder, and (the owner: "long names and whatnot") the
+   longest paths and titles, names in other scripts and with accents, every tag key spelled otherwise, covers over
+   1 MB, ".flac" files that are not FLAC. Its list is `cratarr-devinstance/sample.txt` beside the instance, not
+   committed; `scripts/dev-sample.sh` copies it. The LAN dev page and our own trying-out point at it; its writers change only its copies. It is kept until its data is thrown away by hand, and made again from the fixtures
    and the sample by one script. It is up while the PC is.
    **Fenced off from the world from its start:** MusicBrainz, Discogs and Last.fm off (MusicBrainz's one request a
    second is shared with production's address); no scrobbling (no service sign-ins, tracking off for its accounts);
