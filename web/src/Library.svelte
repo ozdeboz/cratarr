@@ -165,7 +165,7 @@
     {#if composer}<h2 class="composer">{composer.name}</h2>{/if}
     <!-- Their works first, then their records (0.12, decision 0086), where the server knows works. -->
     {#if composer && can('works') === true}<ComposerWorks composer={composer.key} />{/if}
-    <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
+    <AlbumShelf sources={shown} empty="No records." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
           {@const job = jobs.of(s.id, a.id)!}

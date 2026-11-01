@@ -77,7 +77,7 @@
     onplay?: (source: ShelfSource, a: ListedAlbum) => void;
     /** The select bar's buttons, the page's own: the ticked albums, and the end of selecting. */
     actions?: Snippet<[{ s: ShelfSource; a: ListedAlbum }[], () => void]>;
-    /** After the list header's count ("12 albums · 1.2 GB"). */
+    /** After the list header's count ("12 records · 1.2 GB"). */
     countMore?: string;
   } = $props();
   const playOf = (s: ShelfSource, a: ListedAlbum) => (onplay ? onplay(s, a) : playListedAlbum(s.id, a));
@@ -384,7 +384,7 @@
   function favouriteTicked() {
     const list = [...ticked];
     const on = !tickedFav;
-    const n = plural(list.length, 'album');
+    const n = plural(list.length, 'record');
     askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
       navigator.vibrate?.(8);
       selecting = null;
@@ -432,7 +432,7 @@
   {#each shown as { s, albums } (s.id)}
     {#if sources.length > 1}<h2>{s.label}</h2>{/if}
     {#if !s.supported}
-      <p class="empty">{s.label} can't list albums.</p>
+      <p class="empty">{s.label} can't list records.</p>
     {:else if s.error && s.albums.length === 0}
       <p class="error" role="alert">{s.error}</p>
     {:else if listShows(albums.length, pageView.query, deepFor) === 'asking'}
@@ -449,7 +449,7 @@
         fields={ALBUM_ORDERS}
         bind:value={order}
         bind:down
-        count={`${howMany(albums.length, 'album')}${countMore ? ` · ${countMore}` : ''}`}
+        count={`${howMany(albums.length, 'record')}${countMore ? ` · ${countMore}` : ''}`}
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
         countOnly={layout === 'flow'}
@@ -639,7 +639,7 @@
   <SelectionMenu
     title={several.title}
     tracks={several.tracks}
-    chips={[plural(several.list.length, 'album')]}
+    chips={[plural(several.list.length, 'record')]}
     extra={severalExtra}
     onclose={() => ((several = null), (selecting = null))}
   />
