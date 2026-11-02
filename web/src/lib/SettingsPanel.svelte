@@ -37,6 +37,9 @@
   import AuthPart from './settings/AuthPart.svelte';
   import UsersPart from './settings/UsersPart.svelte';
   import { me } from './me.svelte';
+  import { loadSettingsWords, settingsMatches, settingsWords } from './settingsSearch.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
   import AppearancePart from './settings/AppearancePart.svelte';
@@ -130,6 +133,21 @@
   // all of them when the part's name has the words; a thing's page has none.
   const narrowing = $derived(handed && !thing && words(pageView.query).length > 0 && !matchesSearch(partTitle));
   narrowSettings(() => narrowing);
+  // The page's search through every part (the owner, 2026-11-02: "the search input field should be page-wide across all
+  // child panels. Obviously, the current panel should surface at the top, but directly after, all siblings on the page
+  // should surface too"): under this part's own rows, each other part it finds with its rows; a tap opens that part,
+  // the words still searched. Nothing anywhere: the page's search says so (decision 0095), not this panel.
+  $effect(() => {
+    if (narrowing) void loadSettingsWords();
+  });
+  const elsewhere = $derived.by(() => {
+    if (!narrowing) return [];
+    void settingsWords.by;
+    const w = words(pageView.query);
+    return SECTIONS.filter((x) => x.id !== section && (!x.app || inApp) && (!x.admin || me.admin || x.everyone))
+      .map((x) => ({ id: x.id, title: x.title, found: settingsMatches(x.id, x.title, w) }))
+      .filter((x) => x.found.title || x.found.rows.length);
+  });
   // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
   // its own beside it).
   const resetAction = () => (resetRows(section).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
@@ -220,7 +238,16 @@
 
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     <!-- Its own search leaving no row (shown until one is left, lib/settings/narrow). -->
-    {#if narrowing}<p class="none">No settings match.</p>{/if}
+    {#if elsewhere.length}
+      <!-- The other parts the search finds, each a group of its rows (lib/settings/Group, Item). -->
+      <div class="elsewhere" aria-label="In other parts">
+        {#each elsewhere as e (e.id)}
+          <Group title={e.title}>
+            {#each e.found.rows.length ? e.found.rows : [e.title] as row (row)}<Item name={row} onclick={() => viewSibling(SETTINGS + e.id)} />{/each}
+          </Group>
+        {/each}
+      </div>
+    {:else if narrowing && !pageView.none}<p class="none">No settings match.</p>{/if}
     {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
