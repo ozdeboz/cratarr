@@ -22,7 +22,7 @@ use ts_rs::TS;
 
 use super::play::{How, QUEUE_MOST};
 use super::queue::{PlayedOn, Queue, Repeat};
-use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, RadioBy, from_old};
+use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, RadioBy, Within, from_old};
 use super::{PlaylistService, ToggleError};
 
 mod along;
@@ -440,10 +440,10 @@ pub struct RadioState {
     pub mode: RadioMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seed: Vec<String>,
-    /// The crate it plays inside, when it does ("Play as radio").
+    /// What it plays inside, when it does ("Play as radio"; decision 0094: the page's collection).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub within: Option<String>,
+    pub within: Option<Within>,
 }
 
 /// What `play` plays when it is not given tracks; resolved here, so it never reaches the player.
@@ -590,13 +590,14 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         seed: Option<Vec<String>>,
-        /// A crate to play inside (its id); "" plays outside any again; left out: as it was.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// What to play inside (decision 0094: a crate, a playlist, a record, an artist or tracks); null plays beyond
+        /// it again; left out: as it was.
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        within: Option<String>,
+        within: Option<Option<Within>>,
     },
     /// Autoplay in a mode, or `stop` (decision 0036, amended): the player appends its tracks when the queue runs out.
-    /// What is left out stays as it was; `within` "" plays outside any crate again. On turns repeat all off.
+    /// What is left out stays as it was; `within` null plays beyond what it stayed inside again. On turns repeat all off.
     Autoplay {
         mode: AutoplayMode,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -608,9 +609,9 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         seed: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        within: Option<String>,
+        within: Option<Option<Within>>,
     },
     /// Radio's and Autoplay's picks leave the owner's favourites out, or not (decision 0036, amended). A change takes
     /// their picks still to come out.
@@ -2716,7 +2717,7 @@ impl PlayOn {
                 albums: Some(a.albums),
                 restart: Some(a.restart),
                 seed: Some(a.seed),
-                within: Some(a.within.unwrap_or_default()),
+                within: Some(a.within),
             },
             None => Command::Autoplay { mode: AutoplayMode::Stop, albums: None, restart: None, seed: None, within: None },
         };
@@ -2787,13 +2788,14 @@ impl PlayOn {
             account: self.account_of(name),
             folders: None,
         };
-        let first = super::radio::next(ask).await?;
+        let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
+        let first = super::radio::next(&app, ask).await?;
         if first.is_empty() {
             return Err(ToggleError::Refused("Nothing like it was found.".into()));
         }
         let title = from.name.clone().or(from.playlist.clone()).unwrap_or_else(|| name_of(&seeds));
         // Set before the play: a play of Autoplay's tracks only keeps its seed.
-        let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: Some(false), seed: Some(seed), within: Some(String::new()) };
+        let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: Some(false), seed: Some(seed), within: Some(None) };
         Box::pin(self.command(name, auto)).await?;
         let play = Command::Play {
             from: PlayFrom { name: Some(format!("Radio: {title}")), ..PlayFrom::default() },

@@ -212,6 +212,22 @@ fn new_picks(
 /// what it excluded, on `lib`'s libraries switched on; a source the account switched off adds nothing (decision 0094,
 /// `taste::off_of`). Blocking.
 fn taste_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excluded: &[String]) -> Result<crate::similarity::Profile, ToggleError> {
+    Ok(super::taste::profiles(lib.alike(), &sources_in(lib, ud, user, excluded)?, &super::taste::off_of(ud, user)).0)
+}
+
+/// An account's profile of some of its taste's sources (`taste_in`, `skipped_in`). Blocking.
+type ProfileOf = fn(&CrateLibrary, &crate::userdata::UserData, &str, &[String]) -> Result<crate::similarity::Profile, ToggleError>;
+
+/// What an account skips, as a profile (decision 0094: skips keep tracks away in Radio and Autoplay): the avoid
+/// profile of its skips alone (excluding is a hard no of its own), none while its skipped source is off. Blocking.
+fn skipped_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excluded: &[String]) -> Result<crate::similarity::Profile, ToggleError> {
+    let mut off = super::taste::off_of(ud, user);
+    off.push("excluded");
+    Ok(super::taste::profiles(lib.alike(), &sources_in(lib, ud, user, excluded)?, &off).1)
+}
+
+/// An account's taste's sources (`taste::Sources`), on `lib`'s libraries switched on. Blocking.
+fn sources_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excluded: &[String]) -> Result<super::taste::Sources, ToggleError> {
     let alike = lib.alike();
     let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
     let starred = ud.starred(user, crate::userdata::Kind::Song)?;
@@ -225,14 +241,13 @@ fn taste_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excl
             *played.entry(i).or_default() += 1;
         }
     }
-    let sources = super::taste::Sources {
+    Ok(super::taste::Sources {
         favourites: starred.iter().filter_map(|s| place(s)).collect(),
         playlists: lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line).filter(|&i| lib.on(i))?, lists.len()))).collect(),
         plays: played.into_iter().collect(),
         excluded: excluded.iter().filter_map(|line| alike.place_of_line(line).filter(|&i| lib.on(i))).collect(),
         skipped: skips.into_iter().collect(),
-    };
-    Ok(super::taste::profiles(alike, &sources, &super::taste::off_of(ud, user)).0)
+    })
 }
 
 /// Whether an album's album artist is excluded everywhere (decision 0083, the owner 2026-10-30): its artist as shown,
@@ -3741,14 +3756,24 @@ impl PlaylistService {
     }
 
     /// How well each track of the libraries not in `without` fits `user`'s taste (`taste_in`, `Alike::fit`; decision
-    /// 0094: Best match), by its song id; none while there is no taste.
+    /// 0094: Best match, Radio's Your taste), by its song id; none while there is no taste.
     pub async fn taste_fits(&self, user: &str, without: &[String]) -> Result<HashMap<String, f64>, ToggleError> {
+        self.fits_to(user, without, taste_in).await
+    }
+
+    /// How like each track of the libraries not in `without` is to what `user` skips (`skipped_in`; decision 0094:
+    /// skips keep tracks away in Radio and Autoplay), by its song id; none while nothing is skipped or skips are off.
+    pub async fn skipped_fits(&self, user: &str, without: &[String]) -> Result<HashMap<String, f64>, ToggleError> {
+        self.fits_to(user, without, skipped_in).await
+    }
+
+    async fn fits_to(&self, user: &str, without: &[String], profile: ProfileOf) -> Result<HashMap<String, f64>, ToggleError> {
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lib = self.crate_library(None, false, false, without).await?;
         let excluded = self.own_crates()?.excluded().await?;
         let user = user.to_string();
         tokio::task::spawn_blocking(move || -> Result<HashMap<String, f64>, ToggleError> {
-            let taste = taste_in(&lib, &serve.userdata, &user, &excluded)?;
+            let taste = profile(&lib, &serve.userdata, &user, &excluded)?;
             let alike = lib.alike();
             Ok(lib.files.iter().enumerate().filter(|(i, _)| lib.on(*i)).filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.fit(&taste, i, lib.by())?))).collect())
         })

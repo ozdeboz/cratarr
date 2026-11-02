@@ -2730,8 +2730,8 @@ async fn sync_measure(State(app): State<Arc<App>>) -> Json<crate::app::together:
 }
 
 /// The radio's next tracks for the player that plays (decision 0036): already in the radio lane.
-async fn radio_next(Json(r): Json<crate::app::radio::NextRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let tracks = crate::app::radio::next(r).await?;
+async fn radio_next(State(app): State<Arc<App>>, Json(r): Json<crate::app::radio::NextRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let tracks = crate::app::radio::next(&app, r).await?;
     Ok(Json(serde_json::json!({ "tracks": tracks })))
 }
 

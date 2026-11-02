@@ -13,7 +13,7 @@ use cratarr_rules::{ByHand, Lane};
 
 use super::ToggleError;
 use super::playon::{Command, QueueTrack};
-use super::radio::{Autoplay, AutoplayMode, LANE_AUTOPLAY, LANE_RADIO, RADIO_COUNT, RADIO_MAX, RadioBy, from_old};
+use super::radio::{Autoplay, AutoplayMode, LANE_AUTOPLAY, LANE_RADIO, RADIO_COUNT, RADIO_MAX, RadioBy, Within, from_old};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Queue {
@@ -212,7 +212,7 @@ impl Queue {
         albums: Option<bool>,
         restart: Option<bool>,
         seed: Option<Vec<String>>,
-        within: Option<String>,
+        within: Option<Option<Within>>,
         current: Option<usize>,
     ) -> Command {
         let Some(mode) = mode.on() else {
@@ -224,11 +224,7 @@ impl Queue {
         };
         let was_on = self.autoplay.is_some();
         let was = self.autoplay.take().unwrap_or_default();
-        let within = match within {
-            Some(w) if w.is_empty() => None,
-            Some(w) => Some(w),
-            None => was.within.clone(),
-        };
+        let within = within.unwrap_or_else(|| was.within.clone());
         let a = Autoplay {
             mode,
             albums: albums.unwrap_or(was.albums),
@@ -249,7 +245,7 @@ impl Queue {
             albums: Some(a.albums),
             restart: Some(a.restart),
             seed: Some(a.seed),
-            within: Some(a.within.unwrap_or_default()),
+            within: Some(a.within),
         }
     }
 
@@ -700,7 +696,7 @@ mod tests {
         let told = q.edit(auto(AutoplayMode::Similar)).unwrap();
         assert_eq!(
             told,
-            Command::Autoplay { mode: AutoplayMode::Similar, albums: Some(false), restart: Some(false), seed: Some(vec![]), within: Some(String::new()) }
+            Command::Autoplay { mode: AutoplayMode::Similar, albums: Some(false), restart: Some(false), seed: Some(vec![]), within: Some(None) }
         );
         assert_eq!((q.repeat, q.version), (Repeat::Off, v), "on turns repeat all off; a setting, the version stays");
         // The player appended Autoplay's picks; playing b.
@@ -799,12 +795,27 @@ mod tests {
     }
 
     #[test]
+    fn autoplay_stays_inside_a_collection_until_told_null() {
+        let mut q = played(&["a"]);
+        let c: Command = serde_json::from_str(r#"{"command":"autoplay","mode":"taste","within":{"kind":"playlist","id":"Road"}}"#).unwrap();
+        q.edit(c).unwrap();
+        let road = Some(Within::Playlist { id: "Road".into() });
+        assert_eq!(q.autoplay.as_ref().map(|a| (a.mode, a.within.clone())), Some((super::super::radio::AutoMode::Taste, road.clone())));
+        q.edit(auto(AutoplayMode::Similar)).unwrap();
+        assert_eq!(q.autoplay.as_ref().and_then(|a| a.within.clone()), road, "left out: as it was");
+        let c: Command = serde_json::from_str(r#"{"command":"autoplay","mode":"similar","within":null}"#).unwrap();
+        let told = q.edit(c).unwrap();
+        assert_eq!(q.autoplay.as_ref().map(|a| a.within.is_none()), Some(true), "null: beyond it");
+        assert!(serde_json::to_string(&told).unwrap().contains(r#""within":null"#), "told in full");
+    }
+
+    #[test]
     fn shuffle_keeps_the_inserts_and_the_tail_and_a_new_play_keeps_both_switches() {
         let tracks: Vec<QueueTrack> = (0..6u32).map(|i| QueueTrack { n: Some(i), ..track(&format!("t{i}")) }).collect();
         let mut q = Queue::default();
         q.edit(Command::play(tracks, 0, 0)).unwrap();
         q.edit(Command::Radio { on: true, mode: None, seed: None, within: None, by: None, count: None }).unwrap();
-        q.edit(Command::Autoplay { mode: AutoplayMode::Similar, albums: None, restart: None, seed: Some(vec!["s".into()]), within: Some("c1".into()) }).unwrap();
+        q.edit(Command::Autoplay { mode: AutoplayMode::Similar, albums: None, restart: None, seed: Some(vec!["s".into()]), within: Some(Some(Within::Crate { id: "c1".into() })) }).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(2), after: None, how: None }, Some(0)).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY), in_lane("p2", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();

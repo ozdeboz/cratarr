@@ -711,7 +711,8 @@ export const radioNext = (ask: {
   exclude: string[];
   last: string | null;
   count: number;
-  within?: string | null;
+  /** What it stays inside, only its tracks (decision 0094; null: beyond it). */
+  within?: Collection | null;
   albums?: boolean;
   /** Radio's inserts: what they are like (the track, its artist, its era). */
   by?: string;

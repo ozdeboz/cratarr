@@ -258,6 +258,12 @@ pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
     }
 }
 
+/// The songs of Cratarr's own library a collection holds, in its order, read as a play reads them: what Radio and
+/// Autoplay stay inside (decision 0094). `owner`: whose favourites and exclusions.
+pub async fn own_songs(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Vec<String>, ToggleError> {
+    Ok(candidates(app, Some(source::cratarr::KIND.id), what, owner).await?.ids)
+}
+
 /// The favourites of `owner`, or all of Cratarr's own library, less what `owner` excluded from automatic picks.
 async fn own_candidates(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
     let Some(served) = app.served.clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };

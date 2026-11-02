@@ -3,4 +3,4 @@
 /**
  * Autoplay's modes; off is its absence (`stop` in commands).
  */
-export type AutoMode = "similar" | "artist" | "era" | "random";
+export type AutoMode = "similar" | "artist" | "era" | "random" | "taste";
