@@ -11,7 +11,7 @@
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import { exporting } from './export.svelte';
-  import { BITRATES, exportLabel, exportLeftOut, exportReady, exportRequest, FORMATS, several, suggestedName, withTracks } from './exportChoices';
+  import { BITRATES, exportLabel, exportLeftOut, exportReady, exportRequest, FORMATS, playlistFileOffered, several, suggestedName, withTracks } from './exportChoices';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -130,7 +130,7 @@
         />
       {/if}
     {/if}
-  {:else}
+  {:else if playlistFileOffered(what)}
     <Switch card label="Include a playlist file" checked={exporting.m3u} onchange={(on) => (exporting.m3u = on)} />
   {/if}
   {#if tracks}

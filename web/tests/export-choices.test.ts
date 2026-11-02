@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 const { blankExport, exportLabel, exportLeftOut, exportReady, exportRequest, keptExport, suggestedName } = await import('../src/lib/exportChoices.ts');
 
-const tracks = { kind: 'tracks' as const, name: 'Kind of Blue', tracks: [{ source: 'cratarr', id: 'tr-1' }] };
+const tracks = { kind: 'tracks' as const, name: 'Kind of Blue', tracks: [{ source: 'cratarr', id: 'tr-1' }, { source: 'cratarr', id: 'tr-2' }] };
 const two = { kind: 'playlists' as const, names: ['Chill', 'robin/Jazz'] };
 
 test('a list of tracks always carries them, its playlist file only when asked; a combined name only for several playlists', () => {
@@ -13,6 +13,10 @@ test('a list of tracks always carries them, its playlist file only when asked; a
   assert.deepEqual(exportRequest(tracks, o), { what: tracks, format: 'opus', bitrate: 128, layout: 'flat', tracks: true, combine: null, m3u: true });
   assert.deepEqual(exportRequest(two, o), { what: two, format: 'opus', bitrate: 128, layout: 'flat', tracks: false, combine: 'Both', m3u: false });
   assert.equal(exportRequest({ kind: 'playlists', names: ['Chill'] }, o).combine, null, 'one playlist: nothing to combine');
+  const one = { kind: 'tracks' as const, name: 'So What', tracks: [{ source: 'cratarr', id: 'tr-1' }] };
+  const three = { ...one, tracks: [1, 2, 3].map((n) => ({ source: 'cratarr', id: `tr-${n}` })) };
+  assert.equal(exportRequest(one, o).m3u, false, 'one track: no playlist file (the owner, 2026-11-02)');
+  assert.equal(exportRequest(three, o).m3u, true);
 });
 
 test('no packaging to choose: the server makes one file itself, several one zip (the owner, 2026-10-30)', () => {

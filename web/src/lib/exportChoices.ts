@@ -65,6 +65,9 @@ export function keptExport(k: unknown): ExportOptions {
 /** Whether the export carries tracks: a list of tracks always does, playlists unless only their files. */
 export const withTracks = (what: ExportWhat, o: ExportOptions) => what.kind === 'tracks' || !o.playlistOnly;
 
+/** A list of tracks may take a playlist file of them; one track does not (the owner, 2026-11-02). */
+export const playlistFileOffered = (what: ExportWhat) => what.kind === 'tracks' && what.tracks.length > 1;
+
 /** Several playlists, which may be combined into one. */
 export const several = (what: ExportWhat) => what.kind === 'playlists' && what.names.length > 1;
 
@@ -76,7 +79,7 @@ export function exportRequest(what: ExportWhat, o: ExportOptions): ExportRequest
     layout: o.layout,
     tracks: withTracks(what, o),
     combine: several(what) && o.combine ? o.name.trim() : null,
-    m3u: what.kind === 'tracks' && o.m3u,
+    m3u: playlistFileOffered(what) && o.m3u,
   };
 }
 
