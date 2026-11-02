@@ -3,6 +3,7 @@
   // focused it is beside the others, and the playlists closest to it, each opening over it.
   import { insights } from './insights.svelte';
   import MarkLoader from './MarkLoader.svelte';
+  import Notice from './Notice.svelte';
   import { shownPlaylists } from './output.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
 
@@ -16,7 +17,8 @@
 
 <div class="about" aria-label={`About ${pid}`}>
   {#if !pt}
-    {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
+    <!-- Failed: said, never the loader for ever (the owner, 2026-11-02: an error is never empty nor endless). -->
+    {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else if insights.error}<Notice text={insights.error} />{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
   {:else}
     {#if pt.focus !== null && insights.focus[i] !== undefined}
       <p class="note">More focused than {Math.round(100 * insights.focus[i])}% of your playlists</p>
