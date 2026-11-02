@@ -14,8 +14,8 @@
 //! the covers, the length fixes and single-track intake move here in that order (0092).
 //!
 //! The album actions (Keep, a move between libraries, Replace, Delete) are on the one list too (the owner, 2026-11-02:
-//! a move "was hard to see … Health activity had no listing of this"): told as they go (`Tracked`: moving, then adding
-//! while the library reads it), then from the journal, each with its own Undo (`m…`).
+//! a move "was hard to see … Health activity had no listing of this"): a Keep, a move and a Replace told as they go
+//! (`Tracked`: moving, then adding while the library reads it), then from the journal, each with its own Undo (`m…`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
