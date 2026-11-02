@@ -1487,6 +1487,20 @@ impl Catalogue {
         .collect()
     }
 
+    /// The problems of these files of a folder (0.14, a record's own Health): those that have one, in their order.
+    pub fn problems_in(&self, folder: i64, rels: &[String]) -> Result<Vec<Problem>> {
+        let path = self.folders().get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default();
+        let db = self.db();
+        let mut st = db.prepare_cached(&format!("SELECT issue, issue_detail FROM files WHERE folder = ?1 AND rel = ?2 AND issue IS NOT NULL AND {PRESENT}"))?;
+        let mut out = Vec::new();
+        for rel in rels {
+            if let Some((kind, detail)) = st.query_row(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))).optional()? {
+                out.push(Problem { folder: path.clone(), rel: rel.clone(), kind, detail });
+            }
+        }
+        Ok(out)
+    }
+
     /// Tests elsewhere: treat every file waiting for its tags as read (test files are not audio).
     #[cfg(test)]
     pub fn pretend_read_for_tests(&self) {
