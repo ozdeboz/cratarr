@@ -146,7 +146,6 @@
           prefs.navAt === 'bottom' && 'Bar at the bottom',
           prefs.navAt === 'top' && prefs.navHides && 'Bar hides when scrolling',
           prefs.navAt === 'top' && !prefs.navHidesOnItem && 'Bar stays over library items',
-          !prefs.stickyActions && 'Action bar scrolls away',
           prefs.miniAt === 'top' && 'Mini player at the top',
           prefs.navControlsAt === 'bottom' && 'Navigation controls at the bottom',
           prefs.contentControlsAt === 'bottom' && 'Content controls at the bottom',

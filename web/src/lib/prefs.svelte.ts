@@ -124,9 +124,6 @@ export type Prefs = {
   /** The bar of pages slides away while a library item (a playlist, an album, an artist, a crate) is open: on by
    *  default, as such a panel has long covered it (the owner, 2026-10-25). */
   navHidesOnItem: boolean;
-  /** A panel's action bar docks at the top when scrolled to (on by default); in such a panel the bar of pages slides
-   *  away scrolling down, as with navHides. Off, the action bar scrolls away with the rest. */
-  stickyActions: boolean;
   /** Where the mini-player floats below 1024 px: along the bottom, or the top (under the bar there). */
   miniAt: 'top' | 'bottom';
   /** Where back (or ✕), Home and the title float below 1024 px, next to the mini-player on that edge. */
@@ -435,7 +432,6 @@ export const DEFAULTS: Prefs = {
   navAt: 'top',
   navHides: false,
   navHidesOnItem: true,
-  stickyActions: true,
   miniAt: 'bottom',
   navControlsAt: 'top',
   contentControlsAt: 'top',
@@ -543,7 +539,6 @@ function read(): Prefs {
       if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
       if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
       if (typeof saved.navHidesOnItem === 'boolean') p.navHidesOnItem = saved.navHidesOnItem;
-      if (typeof saved.stickyActions === 'boolean') p.stickyActions = saved.stickyActions;
       for (const k of ['miniAt', 'navControlsAt', 'contentControlsAt'] as const) if (saved[k] === 'top' || saved[k] === 'bottom') p[k] = saved[k];
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
       if (Number.isInteger(saved.listZoom) && saved.listZoom >= 0 && saved.listZoom < LIST_WIDTHS.length) p.listZoom = saved.listZoom;

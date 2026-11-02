@@ -27,7 +27,6 @@
     pref('navAt', 'Navigation bar', EDGE),
     pref('navHidesOnItem', 'Hide when opening a library item'),
     pref('navHides', 'Hide when scrolling'),
-    pref('stickyActions', 'Sticky action bar'),
     pref('miniAt', 'Mini player', EDGE),
     pref('navControlsAt', 'Navigation controls', EDGE),
     pref('contentControlsAt', 'Content controls', EDGE),
@@ -53,12 +52,6 @@
     more={why}
     disabled={side || prefs.navAt === 'bottom'}
     toggle={{ checked: prefs.navHides && prefs.navAt !== 'bottom', onchange: (on) => (prefs.navHides = on) }}
-  />
-  <Item
-    name="Sticky action bar"
-    line="Play buttons stay in sight"
-    more="On, the action bar stays at the top as you scroll a playlist, an album or an artist, and the navigation bar slides away while you scroll down there. Off, the action bar scrolls away with the rest."
-    toggle={{ checked: prefs.stickyActions, onchange: (on) => (prefs.stickyActions = on) }}
   />
   <Item name="Mini player" more={why} disabled={side}><Seg label="Mini player" options={EDGES} bind:value={prefs.miniAt} /></Item>
   <Item name="Navigation controls" line="Back, Home and the title" more={why} disabled={side}><Seg label="Navigation controls" options={EDGES} bind:value={prefs.navControlsAt} /></Item>
