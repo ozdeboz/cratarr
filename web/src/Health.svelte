@@ -35,9 +35,9 @@
   const differ = $derived(fileFacts.value?.on ? fileFacts.value.differ : 0);
   const now = $derived((fileRuns.list ?? []).filter((r) => r.state !== 'done'));
   const changesLine = $derived.by(() => {
-    const writing = now.find((r) => r.state === 'writing');
+    const writing = now.find((r) => r.state === 'writing' || r.state === 'adding');
     const waiting = now.filter((r) => r.state === 'waiting').length;
-    const parts = [writing ? `${writing.title} writing` : null, waiting ? `${waiting} waiting` : null].filter(Boolean);
+    const parts = [writing ? `${writing.title} ${writing.state === 'adding' ? 'adding' : 'writing'}` : null, waiting ? `${waiting} waiting` : null].filter(Boolean);
     return parts.length ? parts.join(' · ') : null;
   });
   // Activity shows only while something runs or ran this month (the owner, 2026-11-01: only what matters shows).
