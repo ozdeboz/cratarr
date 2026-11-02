@@ -320,11 +320,13 @@ export const queueTracks = (ids: string[], mode: 'next' | 'last', source?: strin
 // What plays is the server's choice (server/src/app/play.rs): any collection, played, shuffled, put next or queued, at
 // most 500 of its tracks, picked from all of it (the owner, 2026-10-23: a big crate's Shuffle played the same few, its
 // panel's first page). lib/play.svelte.ts plays them where the output is.
+/** `without` (a crate's, an artist's): the libraries switched off (the owner, 2026-11-02: "Only what's switched on";
+ *  New for you and Grave digging every library whatever it says). */
 export type Collection =
-  | { kind: 'crate'; id: string } // genres are crates: id 'genre:<name>'
+  | { kind: 'crate'; id: string; without?: string[] } // genres are crates: id 'genre:<name>'
   | { kind: 'playlist'; id: string }
   | { kind: 'album'; source: string; id: string }
-  | { kind: 'artist'; source: string; name: string }
+  | { kind: 'artist'; source: string; name: string; without?: string[] }
   | { kind: 'tracks'; source: string; ids: string[] };
 /** play: in its order (from a track, or its first 500) · shuffle: 500 from all of it, mixed · next: after the playing
  *  track · last: at the end of the queue. */
@@ -1594,7 +1596,12 @@ export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>
 
 // Classical (0.10): its composers, each one's records, a record's mark, and a track's other versions (the library's
 // recordings of the same work, by MusicBrainz's work links).
-export const getClassicalComposers = () => quietly<import('./composers').Composer[]>('/api/classical/composers');
+/** `without`: the libraries switched off (their counts; a composer with none there left out). */
+export const getClassicalComposers = (without?: string[]) => {
+  const u = new URLSearchParams();
+  for (const w of without ?? []) u.append('without', w);
+  return quietly<import('./composers').Composer[]>(`/api/classical/composers${without?.length ? `?${u}` : ''}`);
+};
 export const getClassicalComposer = (key: string) => quietly<{ key: string; name: string; records: string[] }>(`/api/classical/composers/${encodeURIComponent(key)}`);
 // Works and movements (0.12, decision 0086, when the server says `works`): a composer's works, and a work with its
 // movements and the library's recordings of it (Cratarr's own library).
@@ -2220,10 +2227,12 @@ export type ServerSearch = {
 };
 /** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most), from `offset` on (a Show all's
  *  next page, decision 0076; a server before 0.9.13 answers from the start again). */
-export const search = (q: string, kinds: SearchKind[] = [], limit = 20, offset = 0) =>
-  quietly<ServerSearch>(
-    `/api/search?${new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit), ...(offset ? { offset: String(offset) } : {}) })}`,
-  );
+/** `without`: the libraries switched off (the owner, 2026-11-02: "Only what's switched on", its counts too). */
+export const search = (q: string, kinds: SearchKind[] = [], limit = 20, offset = 0, without?: string[]) => {
+  const u = new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit), ...(offset ? { offset: String(offset) } : {}) });
+  for (const w of without ?? []) u.append('without', w);
+  return quietly<ServerSearch>(`/api/search?${u}`);
+};
 /** An album found beyond what Cratarr knows (decision 0076): MusicBrainz's and Discogs' live search, merged; where. */
 export type BeyondAlbum = {
   title: string;
@@ -2277,8 +2286,12 @@ export type ArtistView = {
   /** Null where the server keeps no favourite artists. */
   favorite?: boolean;
 };
-export const artistView = (source: string, name: string) =>
-  quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?name=${encodeURIComponent(name)}`);
+/** `without`: the libraries switched off; theirs left out of its records, appearances and tracks. */
+export const artistView = (source: string, name: string, without?: string[]) => {
+  const u = new URLSearchParams({ name });
+  for (const w of without ?? []) u.append('without', w);
+  return quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?${u}`);
+};
 /** Whether an artist is a favourite (the heart on an album's artist chip); null where the server keeps none. */
 export const artistFavorite = (source: string, name: string) =>
   quietly<{ favorite: boolean | null }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}`);

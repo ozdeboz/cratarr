@@ -182,6 +182,10 @@ export function forgetDraft(id: string | null) {
 /** Home's shelves as crates (the server's `home:new`, `home:graves`; the owner, 2026-10-24): their › open them. */
 export const HOME_CRATES: Record<string, string> = { 'home:new': 'New for you', 'home:graves': 'Grave digging' };
 export const homeCrate = (id: string | null) => !!id && id in HOME_CRATES;
+/** The libraries a crate's request leaves out (the owner, 2026-11-02: "Only what's switched on": every number, list,
+ *  Play, download, playlist and radio pick from the libraries switched on); New for you and Grave digging the one
+ *  exception, a whole one: always every library, everywhere. */
+export const withoutFor = (id: string | null | undefined) => (homeCrate(id ?? null) ? undefined : hiddenLibraries());
 export const crateNameKnown = (id: string): string | null =>
   HOME_CRATES[id] ??
   crates.list?.find((c) => c.id === id)?.name ?? wordOf(id)?.word ?? likeNames[id] ?? (crates.list && !likeOf(id) ? id : null);

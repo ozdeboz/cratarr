@@ -13,7 +13,7 @@
   import DownloadStep from './DownloadStep.svelte';
   import { inOrder, type EntryId, type MenuKind } from './menuTable';
   import MenuTable from './MenuTable.svelte';
-  import { CRATE, EDIT_CRATE, WORD_LABEL, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate, wordOf } from './crates.svelte';
+  import { CRATE, EDIT_CRATE, WORD_LABEL, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate, wordOf, withoutFor } from './crates.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { panel, viewPlaylist } from './panel.svelte';
   import { work } from './panelWork.svelte';
@@ -43,7 +43,7 @@
   $effect(() => {
     const c = id;
     if (!c) return;
-    crateRows(c, 0, 1, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() })
+    crateRows(c, 0, 1, prefs.source || undefined, undefined, undefined, { without: withoutFor(c) })
       .then((r) => (source = r.source))
       .catch(() => {});
   });
@@ -115,7 +115,7 @@
     const got: Downloadable[] = [];
     try {
       for (let at = 0; at < MOST; at += 500) {
-        const r = await crateRows(id, at, 500, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() });
+        const r = await crateRows(id, at, 500, prefs.source || undefined, undefined, undefined, { without: withoutFor(id) });
         for (const x of r.rows) {
           if (x.id && !x.missing) got.push({ source: r.source, id: x.id, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: x.album_id ?? null });
         }

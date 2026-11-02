@@ -6,6 +6,7 @@
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
   // the menu of one (a tile's menu is this way); several, their menu with what one album's has (lib/SeveralAlbums).
+  import { hiddenLibraries } from './listFilter.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import CoverWait from './CoverWait.svelte';
   import { NearBlocks } from './nearBlocks.svelte';
@@ -183,7 +184,7 @@
     }
     let gone = false;
     const t = setTimeout(() => {
-      search(q, ['album'], 100).then(
+      search(q, ['album'], 100, 0, hiddenLibraries()).then(
         (r) => {
           if (gone) return;
           const m = new Map<string, Matched>();
@@ -281,7 +282,7 @@
   let blocked = $state.raw<{ for: string; of: ListBlocked | null } | null>(null);
   const SEARCH = { kind: 'search' as const, label: 'Search' };
   let excludedOpen = $state(false);
-  const noneShown = $derived(!kept.loader && shown.length > 0 && shown.every(({ albums }) => !albums.length) && (unfiltered ?? sources).some((x) => x.albums.length > 0));
+  const noneShown = $derived(!kept.loader && shown.length > 0 && shown.every(({ albums }) => !albums.length) && (unfiltered ?? sources).some((x) => x.albums.some((a) => !a.library || libraryShown(x.id, a.library))));
   $effect(() => {
     if (!noneShown || (!explain && !pageView.query.trim())) return void (blocked = null);
     const asked = JSON.stringify([pageView.query, $state.snapshot(prefs.filters[kind] ?? null), prefs.hiddenLibraries]);
@@ -293,6 +294,8 @@
     );
     return () => (gone = true);
   });
+  /** A record of a library switched on (the owner, 2026-11-02: "Only what's switched on": a number never promises more). */
+  const switchedOn = (x: ShelfSource, a: ListedAlbum) => !a.library || libraryShown(x.id, a.library);
   const howManyRecords = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'record' : 'records'}`;
   const attributed = $derived.by(() => {
     if (!noneShown || !blocked) return null;
@@ -304,7 +307,7 @@
     for (const g of b?.groups ?? []) for (const k of g.keys) byKey.set(k, g.causes);
     const groups: { causes: number[]; keys: string[] }[] = [];
     for (const x of unfiltered ?? sources)
-      for (const a of x.albums) {
+      for (const a of x.albums.filter((a) => switchedOn(x, a))) {
         const c = [...(byKey.get(a.id) ?? []), ...(search >= 0 && !matches(x, a) ? [search] : [])];
         if (c.length) groups.push({ causes: c, keys: [a.id] });
       }
@@ -332,7 +335,7 @@
       !attributed &&
       shown.length > 0 &&
       shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) &&
-      listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty' && { n: shown.reduce((k, { s }) => k + s.albums.length, 0), one: 'record' },
+      listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty' && { n: shown.reduce((k, { s }) => k + s.albums.filter((a) => switchedOn(s, a)).length, 0), one: 'record' },
   );
   // How you used them, read when such an order is chosen (and each time again: plays change).
   $effect(() => {

@@ -37,7 +37,7 @@
   import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeStatus from './lib/HomeStatus.svelte';
-  import { CRATE, LIKE, viewGenre, viewLike } from './lib/crates.svelte';
+  import { CRATE, LIKE, viewGenre, viewLike, withoutFor } from './lib/crates.svelte';
   import { device, DEVICE, localMode } from './lib/deviceMusic.svelte';
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -187,7 +187,7 @@
     navigator.vibrate?.(8);
     starting = true;
     try {
-      await startRadio([], moment.name, { kind: 'crate', id: `${LIKE}now` });
+      await startRadio([], moment.name, { kind: 'crate', id: `${LIKE}now`, without: withoutFor(`${LIKE}now`) });
     } catch (e) {
       toast.fail(e, "The radio didn't start");
     } finally {
@@ -334,7 +334,7 @@
   // Each asked once a visit, its kept shelf showing meanwhile.
   const asking = new Set<string>();
   const readCrate = (id: string) =>
-    Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
+    Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: withoutFor(id) }), getCrate(id)]).then(
       ([page, def]) => {
         const albums: CrateShelf['albums'] = [];
         for (const r of page.rows) {

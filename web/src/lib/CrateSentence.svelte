@@ -56,7 +56,7 @@
   /** How many of each kind a phrase's readings offer (the owner, 2026-10-30: the right one could not be chosen with one). */
   const EACH = 3;
   const ask = (phrase: string): Promise<Found> =>
-    search(phrase, [...TERM_KINDS], EACH).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
+    search(phrase, [...TERM_KINDS], EACH, 0, hiddenLibraries()).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
 
   /** Words read as a whole line (lib/quickCrate readLine), each phrase a term of its best reading, one already in it
    *  once; an "and" or "or" between two terms of one kind sets how they join (modesFrom). A search's words too. */
