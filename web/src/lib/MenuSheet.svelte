@@ -93,14 +93,17 @@
     else toast.show({ text: "It couldn't be copied", tone: 'error' });
   }
 
-  // The accent from the first image, fading in once known.
   const end_ = $state<StepEnd>({ action: null });
   setContext(STEP_END, end_);
+  // The accent from the first image, fading in once known. Read again only when that image is another, and the one it
+  // has kept until the new one is known (the owner, 2026-11-02: the sheet changed colour twice as Sync to this device
+  // was switched, and later by itself: each report gave the menu its images anew, and the accent went to the default
+  // and back).
+  const first = $derived(images?.[0] ?? null);
   let accent = $state<string | null>(null);
   $effect(() => {
-    const src = images?.[0];
-    accent = null;
-    if (!src) return;
+    const src = first;
+    if (!src) return void (accent = null);
     let gone = false;
     accentOf(src).then((a) => !gone && (accent = a));
     return () => (gone = true);
@@ -193,7 +196,7 @@
   in:fly|global={{ y: 400, duration: SHEET_IN, easing: decelerate }}
   out:fly|global={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
 >
-  {#if images?.[0] && !coverBroken(images[0])}<img class="blur" src={images[0]} alt="" aria-hidden="true" onerror={() => coverBroke(images?.[0])} />{/if}
+  {#if first && !coverBroken(first)}<img class="blur" src={first} alt="" aria-hidden="true" onerror={() => coverBroke(first)} />{/if}
   <div class="veil"></div>
   <div class="handle" aria-hidden="true"></div>
 
