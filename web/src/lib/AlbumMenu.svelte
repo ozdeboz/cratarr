@@ -21,14 +21,16 @@
   };
 
   /** For an album of the Library's list. One already in Music (an upgrade or a duplicate) does not move there again:
-   *  an upgrade replaces. */
+   *  an upgrade replaces. Verdicts compare against every library now (2026-11-02, decision 0096's 0.13 fixes): only a
+   *  pair in Music replaces (`replaceable`), and only then is Music no target for a move. */
   export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
     const deletable = s.deletable.includes(a.id);
     const verdict = s.verdicts[a.id];
+    const inMusic = !!verdict?.replaceable;
     return {
       from: s.library_info.find((l) => l.id === a.library) ?? null,
-      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(verdict && l.use === 'music')) : [],
-      replaceable: deletable && verdict?.kind === 'upgrade',
+      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(inMusic && l.use === 'music')) : [],
+      replaceable: deletable && verdict?.kind === 'upgrade' && inMusic,
       deletable,
       job: jobs.of(s.id, a.id)?.id ?? null,
     };
@@ -378,10 +380,12 @@
   });
   /** Download… (decision 0058, amended 0.10): its tracks, in lib/DownloadStep. */
   let exporting = $state(false);
-  // Opened at the playlists for an album outside Music: there is nothing to add it to.
+  // Opened at the playlists for one that cannot go in them: there is nothing to add it to. Since 2026-10-15 every
+  // library's tracks can; not only where no Music library is set up (playlists are kept there) or its library is not
+  // in use (the owner, 2026-11-02: it said "isn't in Music", untrue of Incoming).
   $effect(() => {
     if (step === 'lists' && toList.first && !toList.first.addable) {
-      toast.fail(null, `This ${word} isn't in Music, so it can't go in a playlist`);
+      toast.fail(null, `This ${word} can't go in a playlist: its library isn't in use, or no Music library is set up`);
       onclose();
     }
   });

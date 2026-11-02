@@ -1,6 +1,7 @@
 <script lang="ts">
   // Asked once more before something goes (a server, a folder, a Kodi, every exclusion put back): a sheet naming it,
-  // the act in red, and Cancel, as the panel's Reset asks. `icon`: the act's (a bin by default).
+  // the act in red, and Cancel, as the panel's Reset asks. `icon`: the act's (a bin by default); `danger` false: an act
+  // that takes nothing away (the pill's Sync now), not in red.
   import type { IconName } from '../Icon.svelte';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -10,6 +11,7 @@
     text = null,
     label,
     icon = 'trash',
+    danger = true,
     onconfirm,
     onclose,
   }: {
@@ -17,6 +19,7 @@
     text?: string | null;
     label: string;
     icon?: IconName;
+    danger?: boolean;
     onconfirm: () => void;
     onclose: () => void;
   } = $props();
@@ -27,7 +30,7 @@
   <MenuEntry
     {icon}
     {label}
-    danger
+    {danger}
     onclick={() => {
       onconfirm();
       onclose();

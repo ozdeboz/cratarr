@@ -11,8 +11,9 @@
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import Meter from './Meter.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { fade } from 'svelte/transition';
-  import { glassPart, GLASS_MS } from './glassMotion';
+  import { glassPart } from './glassMotion';
   import { untrack } from 'svelte';
   import { innerWidth } from 'svelte/reactivity/window';
   import OutputSheet from './OutputSheet.svelte';
@@ -23,6 +24,7 @@
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
   import { inSpotify, SPOTIFY_FILTER } from './spotify.svelte';
   import { dimmedIn } from './quickCrate';
+  import { crateCards } from './SearchCrateCard.svelte';
 
   let {
     page = null,
@@ -119,16 +121,16 @@
   }
 
   // The page's work, as the search (the owner, 2026-10-24): a tap on its button unfolds the pill into its progress, the
-  // one bar and what it is at, which folds again after a moment, and at once when the work ends; a tap while it runs
-  // unfolds it again rather than starting it twice. Only the pill shows it (no line at the page's top); folded, the
-  // button's ring does.
+  // one bar and what it is at, which folds again after a moment; a tap while it runs unfolds it again rather than
+  // starting it twice. Only the pill shows it (no line at the page's top); folded, the button's ring does. Its moment
+  // is its own whatever the work does meanwhile (the owner, 2026-11-02: it folded as the work ended, at once where
+  // there was little to do, "sometimes even folding before being expanded 100%"): ended, it says so until then.
   const SHOWN_MS = 4000;
   // One motion for all that unfolds and makes way (the owner, 2026-10-24: the pill never jumps): the pill is a glass
   // part (lib/glassMotion), so the field or the bar comes in as the other's button goes, its glass reaching from the
   // old outline to the new in one step, whatever brings them or takes them away (a page change too: nothing in it lays
   // the page out again, so a page busy drawing does not stall it).
   let showing = $state(false);
-  let ran = false;
   let fold = 0;
   function unfold() {
     showing = true;
@@ -138,52 +140,48 @@
   function act(a: NonNullable<typeof pageView.action>) {
     // A button that starts work it shows (`progress` given, null while idle); others only act.
     if (a.progress === undefined) return a.run();
-    // Its progress showing: the tap folds it (the owner, 2026-10-24).
+    // Its progress showing (held or not): the tap folds it (the owner, 2026-10-24).
     if (showing) {
       clearTimeout(fold);
       showing = false;
       return;
     }
-    // Not running: two steps (the owner, 2026-10-24): the pill asks first, ✓ starts it, ✕ leaves it.
+    // Not running: asked first, in a sheet (the owner, 2026-11-02: "Confirmations should be done by sheet", not in
+    // the pill).
     if (a.progress === null) {
-      confirming = true;
+      asking = true;
       return;
     }
     unfold();
   }
-  /** A long-press while the work runs: its progress unfolds and stays, no fold after SHOWN_MS (the owner, 2026-10-25);
-   *  a tap folds it, and it folds when the work ends, as ever. */
+  /** A long-press: its progress unfolds and stays, no fold after SHOWN_MS (the owner, 2026-10-25), whether the work
+   *  runs or not (the owner, 2026-11-02: it held nothing open); a tap folds it. */
   function hold(a: NonNullable<typeof pageView.action>) {
-    if (a.progress == null) return;
+    if (a.progress === undefined) return;
     clearTimeout(fold);
     showing = true;
   }
-  /** The page's work asked for and not yet confirmed: the pill is ✓ and ✕ alone. */
-  let confirming = $state(false);
+  /** The page's work asked for and not yet confirmed: its sheet. */
+  let asking = $state(false);
   function confirm(a: NonNullable<typeof pageView.action>) {
-    confirming = false;
     a.run();
     unfold();
   }
+  // Folded, and not asked, on another page; not each time the pill's settings are given again (App's one pill gets a
+  // new object whenever they are read again, as the search's words below: the owner, 2026-11-02, every report of the
+  // sync folded it, "interrupting every step", and a long-press held nothing).
+  let pageWas = untrack(() => page);
   $effect(() => {
-    void page;
-    confirming = false;
-  });
-  $effect(() => {
-    const p = pageAction?.progress;
-    if (p != null) ran = true;
-    else if (ran) {
-      ran = false;
-      showing = false;
-    }
-  });
-  $effect(() => {
-    void page;
+    const p = page;
+    if (p === pageWas) return;
+    pageWas = p;
+    asking = false;
+    clearTimeout(fold);
     showing = false;
   });
   $effect(() => () => clearTimeout(fold));
 
-  // The globe (the owner, 2026-10-25): while a search is on, left of the magnifier on thinner glass (as the title's),
+  // The globe (the owner, 2026-10-25): while a search is on, left of the magnifier on the pill's glass (2026-11-02),
   // how many everywhere finds on its badge; a tap shows everywhere's results in the page's or the panel's place, lit,
   // another its own again. Home searches everywhere as it is, Find more music is MusicBrainz's: no globe there.
   // Not on a panel that is a search's result, carrying the page's words (the owner, 2026-10-25); a search typed in
@@ -245,7 +243,8 @@
   // The page's own search finding none (0.13; the owner, 2026-10-31: A2): said under the pill, its tip on the
   // magnifier (lit, folded, after another page; or the field open), the words a chip whose ✕ clears; everywhere's
   // count stays the globe's alone. Not while everywhere's results show.
-  const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn);
+  // Not while the words make a crate whose card shows (the owner, 2026-11-02: the crate card wins, the page found that).
+  const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn && crateCards.shown === 0);
   let row = $state<HTMLElement>();
   // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the
   // buttons it replaces took, besides its own wish (as wide as a phone's row allows, 320 px at most). Said on the field
@@ -256,7 +255,7 @@
     const p = pill;
     if (!p) return;
     const seen = new ResizeObserver(() => {
-      if (!searching && !showing && !confirming) folded = p.offsetWidth;
+      if (!searching && !showing) folded = p.offsetWidth;
     });
     seen.observe(p);
     return () => seen.disconnect();
@@ -286,11 +285,14 @@
   });
 </script>
 
-<span class="pill-row" class:wide={showing} class:fill={searching && pageView.leadAway} bind:this={row}>
-  {#if globeShown}
-    <span class="globe" transition:fade|global={{ duration: GLASS_MS }}>
+<span class="pill-row" class:fill={searching && pageView.leadAway} bind:this={row}>
+  <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
+    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
+    <!-- Everywhere, while a search finds something there (the owner, 2026-11-02): on the pill's one glass, which grows
+         for it, as back's grows for a title (lib/NavigationControls), not a glass of its own under it. -->
+    {#if globeShown}
       <button
-        class="funnel"
+        class="funnel globe"
         class:on={globeOn}
         aria-pressed={globeOn}
         aria-label={globeOn ? "Back to this page's results" : `Everywhere, ${badge} found`}
@@ -299,23 +301,13 @@
         onclick={() => (globalSearch.scope = globeOn ? 'page' : 'everywhere')}
         ><Icon name="globe" size={22} />{#if badge !== null}<span class="badge">{badge > 99 ? '99+' : badge}</span>{/if}</button
       >
-    </span>
-  {/if}
-
-  <div class="pill" class:wide={showing} role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
-    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
-    {#if confirming && page && pageAction}
-      {@const a = pageAction}
-      <!-- The page's work asked for: the whole pill is ✓ (start it) and ✕ (leave it), until one is tapped. -->
-      <button class="confirm" aria-label={a.label} title={a.label} onclick={() => confirm(a)}><Icon name="check" size={22} /></button>
-      <button aria-label="Cancel" title="Cancel" onclick={() => (confirming = false)}><Icon name="close" size={22} /></button>
-    {:else}
+    {/if}
     {#if showing && page && pageAction && !searching}
       {@const a = pageAction}
       <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
            are, its glass as it is (the owner, 2026-10-24). -->
       <span class="work" role="status" aria-live="polite"
-        ><Meter label={a.line ?? a.label} value={a.progress ?? 0} /></span
+        ><Meter label={a.line ?? a.label} value={a.progress ?? a.level ?? 1} /></span
       >
     {/if}
     <!-- One unfolds at a time, the other's button out of the way: the search hides while the work's progress shows, the
@@ -373,7 +365,6 @@
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<ProgressRing progress={a.progress} size={38} />{/if}</button
       >
     {/if}
-    {/if}
   </div>
   {#if noneShown}
     <div class="none" role="status" style:--tip="{tip}px" transition:fade={{ duration: 150 }}>
@@ -388,12 +379,16 @@
 {#if viewOpen && (page || order?.columns?.shown.length || order?.view)}
   <ViewSheet {page} {order} onclose={() => (viewOpen = false)} />
 {/if}
+{#if asking && pageAction}
+  {@const a = pageAction}
+  <ConfirmSheet title={`${a.label}?`} label={a.label} icon={a.icon} danger={false} onconfirm={() => confirm(a)} onclose={() => (asking = false)} />
+{/if}
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 
 <style>
-  /* The pill and the globe left of it, the pill's round end over the globe's glass. */
+  /* The pill, and the search's callout under it. */
   .pill-row {
     position: relative;
     display: flex;
@@ -460,22 +455,8 @@
     color: var(--accent-text);
   }
 
-  /* Thinner glass than the pill's (as the title's, App's .lead): more light through. */
-  .globe {
-    display: flex;
-    align-items: center;
-    margin-right: -24px;
-    /* As tall as the pill with its band (app.css --island-ring). */
-    padding: 4px 26px 4px 4px;
-    border-radius: 26px 0 0 26px;
-    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
-    -webkit-backdrop-filter: blur(10px) saturate(1.3);
-    backdrop-filter: blur(10px) saturate(1.3);
-    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
-  }
-
   /* Everywhere's shown: lit. */
-  .globe button.on {
+  button.globe.on {
     background: color-mix(in srgb, var(--accent) 22%, transparent);
     color: var(--accent-ink);
   }
@@ -510,8 +491,11 @@
     box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
+  /* Round, never squeezed by a narrow row (the owner, 2026-11-02: no button out of shape): the field gives first, then
+     the title beside back (lib/NavigationControls). */
   button {
     display: grid;
+    flex: none;
     place-items: center;
     width: 48px;
     height: 44px;
@@ -533,11 +517,6 @@
   /* The page's own button with work going on: a ring of its progress around the icon. */
   .action {
     position: relative;
-  }
-
-  /* The page's work asked for: its ✓ in the accent, the ✕ as the pill's other buttons. */
-  .confirm {
-    color: var(--accent-ink);
   }
 
   /* A search or a filter that applies. */
@@ -623,10 +602,6 @@
     opacity: 0.55;
   }
 
-  /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour; as wide
-     as the search opens, so what it is at fits (the owner, 2026-10-25). */
-  /* The work's progress unfolded takes all the room the row has, up to 560 px (the owner, 2026-10-25: on a phone it drew
-     a little over half, its line cut, a gap left before back). */
   /* The open search where the title gave way: it grows to meet back (the owner, 2026-11-01), its own width the least. */
   .pill-row.fill,
   .pill-row.fill .pill,
@@ -634,20 +609,17 @@
     flex: 1 1 auto;
   }
 
-  .pill-row.wide,
-  .pill.wide {
-    flex: 1 1 auto;
-    justify-content: flex-end;
-  }
-
+  /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour, the pill
+     as wide as what it says (the owner, 2026-11-02: it took the row's room, "weirdly sized with empty space"), its
+     figures of one width so a step of the work does not move it; narrower only where the row has no more room. */
   .work {
     display: flex;
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     align-items: center;
-    max-width: 560px;
-    min-width: 140px;
+    min-width: 0;
     padding: 0 10px 0 16px;
     overflow: hidden;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 

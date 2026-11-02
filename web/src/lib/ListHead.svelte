@@ -16,6 +16,8 @@
     onselect,
     open = $bindable(false),
     countOnly = false,
+    oncount = null,
+    countLabel = '',
   }: {
     /** `most`: chosen, it starts most first (lib/pageView OrderField). */
     fields: readonly { value: K; label: string; most?: true }[];
@@ -31,6 +33,10 @@
     open?: boolean;
     /** How many alone, no order or select (a Library list as Flow, the owner 2026-10-26). */
     countOnly?: boolean;
+    /** A tap on how many: what it counts turned to the other (a crate's records and tracks: the owner, 2026-11-02). */
+    oncount?: (() => void) | null;
+    /** That tap's name ("Show as tracks"). */
+    countLabel?: string;
   } = $props();
 
   const label = $derived(fields.find((f) => f.value === value)?.label ?? fields[0]?.label ?? '');
@@ -44,7 +50,7 @@
     >
   {/if}
   <span class="grow"></span>
-  <span class="count">{count}</span>
+  {#if oncount}<button class="count" aria-label={countLabel} title={countLabel} onclick={oncount}>{count}</button>{:else}<span class="count">{count}</span>{/if}
   {#if selecting !== null && !countOnly}
     <button class="icon" class:on={selecting} aria-pressed={selecting} aria-label="Start multi-select" title="Start multi-select" onclick={onselect}
       ><Icon name="listChecks" size={22} /></button
@@ -109,5 +115,14 @@
 
   .count {
     padding-right: 4px;
+  }
+
+  button.count {
+    padding: 8px 4px 8px 8px;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
   }
 </style>

@@ -27,6 +27,7 @@
   import { classical, followAddress } from './lib/classical.svelte';
   import { CLASSICAL } from './lib/recordTypeRules';
   import { classicalListed, typeNow } from './lib/recordTypes.svelte';
+  import { LOADER_AFTER_MS } from './lib/loader';
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
@@ -143,6 +144,38 @@
     if (!sources || (!keys && !of)) return sources;
     return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => (!keys || keys.has(a.id)) && (!of || of.has(a.id))) }));
   });
+  // Another kind of record (the picker, or Back to the one before) replaces the page at once (the owner, 2026-11-02:
+  // "When using the picker, the page should really be instantly replaced, and after the regular waiting time, we should
+  // show a loading spinner"): the records of the kind before go in the frame the pick shows in, the page blank; the new
+  // ones are made only once that frame is drawn (a whole Library takes a moment to lay out, and the picker showed
+  // nothing of the tap until it had, the old records with it), and for a type once the server has said which records
+  // are of it. The loader after LOADER_AFTER_MS (lib/loader), as a page's swap.
+  /** The kind whose records may be made: the one picked, once the frame without the old ones has been drawn. */
+  let madeKind = $state(untrack(typeNow));
+  /** A pick under way: from it until its records can show. */
+  let switching = $state(false);
+  let loaderDue = $state(false);
+  $effect.pre(() => {
+    const k = typeNow();
+    if (k === untrack(() => madeKind) && !untrack(() => switching)) return;
+    switching = true;
+    loaderDue = false;
+    let t = 0;
+    let frame = requestAnimationFrame(() => {
+      frame = 0;
+      // After the frame is drawn: a task of its own, not the frame's.
+      t = window.setTimeout(() => (madeKind = k));
+    });
+    const due = setTimeout(() => (loaderDue = true), LOADER_AFTER_MS);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(t);
+      clearTimeout(due);
+    };
+  });
+  $effect(() => {
+    if (switching && madeKind === typeNow() && !pass.pending) switching = false;
+  });
   // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
   $effect(() => {
@@ -155,6 +188,8 @@
 <main>
   {#if error}
     <p class="error" role="alert">{error}</p>
+  {:else if switching}
+    {#if loaderDue}<PageLoading />{/if}
   {:else if shown === null}
     <PageLoading />
   {:else if shown.length === 0}

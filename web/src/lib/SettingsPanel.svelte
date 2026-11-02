@@ -11,6 +11,7 @@
   // settings are not asked for.
   import { deviceName } from './playOnTarget.svelte';
   import { glass, handGlass } from './glass.svelte';
+  import ResetSheet from './settings/ResetSheet.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { untrack } from 'svelte';
@@ -19,19 +20,18 @@
   import { words } from './search';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
-  import MenuEntry from './MenuEntry.svelte';
-  import MenuSheet from './MenuSheet.svelte';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
   import { askDevice, askDownloads, inApp } from './app.svelte';
   import { backFromThing, backOne, panel, SETTINGS, settingsThing, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
-  import type { Siblings } from './Crumbs.svelte';
+  import type { Level, Siblings } from './Crumbs.svelte';
+  import { groupsOf, landingOf, remembered } from './groupCrumb';
+  import { prefs } from './prefs.svelte';
   import { keptFor, partsFor, SECTIONS, SETTINGS_GROUPS, thingTitle, type SettingsSection } from './settingsSections.svelte';
   import { installed } from './offline.svelte';
   import { ed } from './settings/editor.svelte';
   import { resetRows, runReset } from './settings/reset.svelte';
-  import SaveBar from './settings/SaveBar.svelte';
   import AccountPart from './settings/AccountPart.svelte';
   import AuthPart from './settings/AuthPart.svelte';
   import UsersPart from './settings/UsersPart.svelte';
@@ -57,16 +57,35 @@
   const thing = $derived(settingsThing(panel.viewed));
   // The part's name, as its row on the Settings page has it; on a thing's page the thing's.
   const partTitle = $derived(section === 'device' ? deviceName() : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'));
-  // On a phone the part's name is a picker of Settings' other parts, in their groups (a move sideways; lib/Crumbs).
-  const siblings = $derived<Siblings>({
-    menuLabel: 'Settings shows',
-    options: partsFor(me.admin, inApp, installed).map((x) => ({
-      id: x.id,
-      label: x.id === 'device' ? deviceName() : x.title,
-      group: SETTINGS_GROUPS.find((g) => g.kept === keptFor(x, me.admin))?.title,
-    })),
-    chosen: section,
-    onchoose: (id) => viewSibling(SETTINGS + id),
+  // On a phone the part's name is a picker of the other parts of its group, and its group's a picker of the groups
+  // (lib/Crumbs, lib/groupCrumb; the owner, 2026-11-02: Settings › Device › Appearance, one list of every part was "way
+  // too tall"): a move sideways, a group's landing on the part last seen in it, else its top one.
+  const parts = $derived(partsFor(me.admin, inApp, installed).map((x) => ({ id: x.id as string, group: keptFor(x, me.admin) as string, title: x.id === 'device' ? deviceName() : x.title })));
+  const groupNow = $derived(parts.find((x) => x.id === section)?.group ?? null);
+  const groupTitle = (kept: string) => SETTINGS_GROUPS.find((g) => g.kept === kept)?.title ?? kept;
+  const siblings = $derived.by<Siblings | null>(() => {
+    const own = parts.filter((x) => x.group === groupNow);
+    return own.length > 1 ? { menuLabel: `${groupTitle(groupNow ?? '')} shows`, options: own.map((x) => ({ id: x.id, label: x.title })), chosen: section, onchoose: (id) => viewSibling(SETTINGS + id) } : null;
+  });
+  const groupLevel = $derived<Level | null>(
+    groupNow
+      ? {
+          label: groupTitle(groupNow),
+          pick: {
+            menuLabel: 'Settings groups',
+            options: groupsOf(parts).map((g) => ({ id: g, label: groupTitle(g) })),
+            chosen: groupNow,
+            onchoose: (g) => {
+              const to = g === groupNow ? null : landingOf(parts, g, prefs.groupLast[`settings/${g}`]);
+              if (to) viewSibling(SETTINGS + to);
+            },
+          },
+        }
+      : null,
+  );
+  // The part seen, remembered for its group's next pick.
+  $effect(() => {
+    if (groupNow) prefs.groupLast = remembered(prefs.groupLast, 'settings', groupNow, section);
   });
   const title = $derived(thing ? (thingTitle.text ?? '') : partTitle);
 
@@ -92,18 +111,17 @@
     if (scrollEl) scrollEl.scrollTop = 0;
   });
 
+  // The server's settings saved as they are changed (the owner, 2026-11-02: "I thought we used to have instantly saving
+  // settings"; the Unsaved changes bar is gone): each sheet's OK, switch or choice is the decision, a connection's
+  // address and secrets one sheet together; a moment after the last change, while every server has what it needs.
+  $effect(() => {
+    if (!me.admin || !ed.dirty || !ed.complete || ed.saving || !ed.s?.settings_file) return;
+    const t = setTimeout(() => void ed.save(), 300);
+    return () => clearTimeout(t);
+  });
+
   // A part's Reset (lib/settings/reset): asked once more, in a sheet, before its preferences go back to their defaults.
   let resetting = $state(false);
-  let resetBusy = $state(false);
-  async function reset() {
-    resetBusy = true;
-    try {
-      await runReset();
-      resetting = false;
-    } finally {
-      resetBusy = false;
-    }
-  }
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
   const handed = $derived(glass.one && !beside);
@@ -111,7 +129,10 @@
   // all of them when the part's name has the words; a thing's page has none.
   const narrowing = $derived(handed && !thing && words(pageView.query).length > 0 && !matchesSearch(partTitle));
   narrowSettings(() => narrowing);
-  const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings' } : null);
+  // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
+  // its own beside it).
+  const resetAction = () => (resetRows(section).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
+  const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings', action: resetAction() } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
@@ -122,8 +143,9 @@
   {:else if !beside}
     <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
   {/if}
-  <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
-  {@const top = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }]}
+  <!-- Settings › its group › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25;
+       the group a picker, the owner 2026-11-02). -->
+  {@const top: Level[] = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }, ...(groupLevel ? [groupLevel] : [])]}
   {#if thing}
     <Crumbs trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
   {:else}
@@ -133,8 +155,9 @@
 {#snippet glassExtra()}
   <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
   {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
-  <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
-  {#if !thing && resetRows().length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
+  <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar; handed to App's
+       glass, it is the pill's own button. -->
+  {#if !thing && !handed && resetRows(section).length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
   {#if !beside}<PanelPlace />{/if}
 {/snippet}
 
@@ -149,6 +172,7 @@
   {/if}
   <div class="scroll" class:away={handed && everywhere()} bind:this={scrollEl}>
     {#if ed.loadError && me.admin}<Notice text={ed.loadError} />{/if}
+    {#if me.admin && ed.s && !ed.s.settings_file && (section === 'connections' || section === 'libraries')}<Notice tone="warn" text="Cratarr can't write its settings file, so changes here are not kept." />{/if}
     {#if !allowed}
       <!-- Another user's view of an administrator's part: nothing. -->
     {:else if section === 'device'}
@@ -193,18 +217,11 @@
       <ImportPart {thing} />
     {/if}
 
-    {#if resetting && resetRows().length}
-      <!-- What Reset puts back, each one now → its default (the owner, 2026-11-01: a list, from what Reset does). -->
-      <MenuSheet label="Reset" icon="resetSettings" title={`Reset ${title}`} onclose={() => (resetting = false)}>
-        <ul class="reset">{#each resetRows() as r (r.name)}<li><span class="name">{r.name}</span><span class="to">{r.from} → {r.to}</span></li>{/each}</ul>
-        <MenuEntry icon="resetSettings" label="Reset" danger busy={resetBusy} disabled={resetBusy} onclick={reset} />
-        <MenuEntry icon="close" label="Cancel" disabled={resetBusy} onclick={() => (resetting = false)} />
-      </MenuSheet>
+    {#if resetting && resetRows(section).length}
+      <!-- What Reset puts back, each one now → its default (lib/settings/ResetSheet). -->
+      <ResetSheet title={`Reset ${title}`} rows={resetRows(section)} onconfirm={() => runReset(section)} onclose={() => (resetting = false)} />
     {/if}
 
-    {#if ed.dirty}
-      <SaveBar saving={ed.saving} canSave={!!ed.s?.settings_file} onsave={ed.save} ondiscard={() => ed.s && ed.fill(ed.s)} />
-    {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     <!-- Its own search leaving no row (shown until one is left, lib/settings/narrow). -->
     {#if narrowing}<p class="none">No settings match.</p>{/if}
@@ -245,24 +262,8 @@
 
   /* Padding, not margin: the sheet measures its content's height. */
   /* What Reset puts back: a row each, its name, then now → its default. */
-  .reset {
-    display: grid;
-    gap: 8px;
-    margin: 0;
-    padding: 4px 24px 12px;
-    list-style: none;
-  }
 
-  .reset li {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 2px 12px;
-  }
 
-  .reset .to {
-    color: var(--muted);
-  }
 
   .navpill {
     display: flex;

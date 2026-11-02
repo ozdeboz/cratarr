@@ -33,6 +33,7 @@
     type LikeCurveData,
     type FilterList,
     type ListProfileData,
+    type Condition,
     type CrateLook,
     crateToPlaylist,
     createCrate,
@@ -118,6 +119,7 @@
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
+  import RecordSheet from './RecordSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
@@ -136,7 +138,7 @@
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordKey, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { stateLine } from './fileChangeRules';
   import { openReview, undoRun } from './fileRuns.svelte';
@@ -173,7 +175,7 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
+  import { conditionsFor, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
   import { matchesSearch, pageView, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
@@ -200,6 +202,12 @@
    *  its tracks were (decision 0024). */
   const builder = $derived(builderOf(panel.viewed));
   const crateEditing = $derived(builder !== null);
+  /** One's own crate, which its Edit changes (not Home's, nor a seeded one: lib/CrateMenu's). */
+  const ownCrate = $derived.by(() => {
+    const c = crate;
+    const it = c ? crates.list?.find((x) => x.id === c) : null;
+    return !!c && !!it && !it.permanent && !seeded(c);
+  });
   let crateDraft = $state<CrateDraft | null>(null);
   /** The name the builder's sentence gives a crate not named yet (lib/quickCrate nameOf): it saves under it. */
   let crateNamed = $state('');
@@ -585,7 +593,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     // One cover an album (the owner, 2026-10-23: duplicates consolidated): by its name and album artist in any case (the
     // same album in Music and in Incoming, or without its id), and no cover twice.
     const seen = new Set<string>();
-    const out: { url: string; album: { id: string; title: string; artist: string | null } | null }[] = [];
+    const out: { url: string; key: string; album: { id: string; title: string; artist: string | null } | null }[] = [];
     for (const r of rows ?? []) {
       if (!r.id || r.missing) continue;
       const named = r.album ? `${r.album}\n${r.album_artist ?? r.artist ?? ''}`.toLowerCase() : null;
@@ -594,7 +602,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       if (keys.some((k) => seen.has(k))) continue;
       for (const k of keys) seen.add(k);
       // Its album, for the long-press's menu (the owner, 2026-10-24).
-      out.push({ url, album: r.album_id ? { id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null } : null });
+      out.push({ url, key: recordKey(r), album: r.album_id ? { id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null } : null });
       if (out.length === 60) break;
     }
     return out;
@@ -695,20 +703,34 @@ ${r.album_artist ?? r.artist ?? ''}`;
     down: sortDown,
     set: setSort,
     columns: { kind: 'tracks' as const, shown: cols.map((c) => c.id), offered: sortFields.map((f) => f.value) },
-    view: crate && !crateEditing ? { value: crateViewOf(crate, prefs.crateViews), set: (v: 'records' | 'tracks') => (prefs.crateViews = { ...prefs.crateViews, [crate]: v }) } : undefined,
+    view: crate && !crateEditing ? { value: crateViewOf(crate, prefs.crateViews), set: (v: 'records' | 'tracks') => setCrateView(crate, v) } : undefined,
   });
   // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches (Favourites only, Unplayed
   // only, Hide missing tracks) and its conditions (any of what the server knows of a track: genre, mood, tempo, …),
   // both the server's, which says which rows pass (the owner, 2026-10-29: one filter, one engine). A crate's rows come
   // filtered and ordered by the server, as they are paged, from the libraries switched on.
-  // A playlist's only (the owner, 2026-10-24): an album is too short and alike to filter, a crate is a filter already,
-  // an artist's lists are theirs; a filter left on there from before goes by nothing.
-  const filterable = $derived(kind === 'playlist');
+  // A playlist's (the owner, 2026-10-24: an album is too short and alike to filter, an artist's lists are theirs; a
+  // filter left on there from before goes by nothing), and a crate's that cannot be edited (the owner, 2026-11-02:
+  // Home's, a Sounds like's; one's own crate is a filter already, its conditions edited in it). A crate's conditions go
+  // to the server with its rows (CrateLook.filter), 300 ms after the last change.
+  const fixedCrate = $derived(!!crate && !crateEditing && !creating && !ownCrate);
+  const filterable = $derived(kind === 'playlist' || fixedCrate);
+  let crateFilter = $state<Condition[] | undefined>(undefined);
+  $effect(() => {
+    const now = fixedCrate ? $state.snapshot(conditionsFor('crate')) : undefined;
+    if (JSON.stringify(now) === JSON.stringify(untrack(() => crateFilter))) return;
+    const t = setTimeout(() => (crateFilter = now), 300);
+    return () => clearTimeout(t);
+  });
   // A Home shelf's crate shows what Home showed, of every library, whatever is switched off (the owner, 2026-10-24).
-  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: undefined, order: sortKey, down: sortDown });
+  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: crateFilter, order: sortKey, down: sortDown });
   const lookKey = $derived(JSON.stringify(crateLook));
   const pass = passing(() => kind, () =>
-    filterable && !crate && !album && !artist && p && !multi ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null,
+    fixedCrate && crate && !multi
+      ? { list: { kind: 'crate', id: crate, favourites: favouritesOf(crate), favourite_albums: favouriteAlbumsOf(crate) }, source: prefs.source || undefined }
+      : filterable && !crate && !album && !artist && p && !multi
+        ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined }
+        : null,
   );
   const keeps = (r: PlaylistRow) => !pass.keys || pass.keys.has(r.entry);
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
@@ -742,9 +764,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return list;
   });
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
+  /** A crate as records or as tracks, chosen in View or by a tap on the list's count (the owner, 2026-11-02). */
+  const setCrateView = (c: string, v: 'records' | 'tracks') => (prefs.crateViews = { ...prefs.crateViews, [c]: v });
   // A crate as records or tracks (0.10; the owner, 2026-10-30: lib/crateRecords): its tracks grouped by album, in the
   // crate's order or an album order, each saying how much of its album the crate holds; a record opened shows its crate
-  // tracks, a step of the history. Playing the crate is as ever: its tracks in its order, whichever way it shows.
+  // tracks in a sheet (lib/RecordSheet). Playing the crate is as ever: its tracks in its order, whichever way it shows.
   const recordsView = $derived(!!crate && !crateEditing && crateViewOf(crate, prefs.crateViews) === 'records');
   const records = $derived(recordsView && shown ? orderRecords(recordsOf(shown), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : []);
   // As a table (the owner, 2026-10-30: one table head): the Library's records' columns as far as a record has them,
@@ -762,22 +786,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // As its rows say (album_tracks), else as the Library's list has the album.
   const albumTotal = (rec: { of: number | null; albumId: string | null }) =>
     rec.of ?? (rec.albumId ? (library.view?.sources.find((s) => s.id === source)?.albums.find((a) => a.id === rec.albumId)?.tracks ?? null) : null);
+  /** A record opened: its crate tracks in a sheet over the list (lib/RecordSheet; the owner, 2026-11-02: it replaced
+   *  the crate's list in place). */
   let recordOpen = $state<string | null>(null);
-  const openRecord = $derived(recordsView && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
+  // Of the records view, or of the flow in the header (a crate's, a wide playlist's) whichever way the list shows.
+  const openRecord = $derived(recordOpen && shown ? (recordsOf(shown).find((r) => r.key === recordOpen) ?? null) : null);
   const recordShown = $derived(openRecord && shown ? shown.filter((x) => openRecord.at.includes(x.i)) : []);
-  function showRecord(key: string) {
-    history.pushState({ ...(history.state ?? {}), crateRecord: key }, '');
-    recordOpen = key;
-  }
+  // Another list: no record open.
   $effect(() => {
-    const back = () => (recordOpen = (history.state?.crateRecord as string | undefined) ?? null);
-    addEventListener('popstate', back);
-    return () => removeEventListener('popstate', back);
-  });
-  // Another crate, or tracks chosen: no record open.
-  $effect(() => {
-    void crate;
-    void recordsView;
+    void panel.viewed;
     untrack(() => (recordOpen = null));
   });
   /** A record's menu: its crate tracks as a selection's (lib/SelectionMenu), with Go to album and out of this crate. */
@@ -868,8 +885,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     multi ? Object.values(sections).flatMap((s) => ('rows' in s ? s.rows.map((r) => r.bpm) : [])) : (rows?.map((r) => r.bpm) ?? null),
   );
   $effect(() => {
-    if (tab !== 'info' && !multi) return;
-    // Info's spread, and a selection's stacked one in the header (decision 0041).
+    if (!multi) return;
+    // A selection's stacked spread in the header (decision 0041).
     for (const pid of ids) untrack(() => loadSection(pid));
   });
   /** The list's profile (the owner, 2026-10-23: lib/ListProfile), worked out on the server over all its tracks, as
@@ -1929,7 +1946,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <!-- Its art on its way: the place kept, empty. -->
         {:else if flowing}
           <!-- A crate's albums as a coverflow on a light canvas (the owner, 2026-10-23); a drag or a tap moves through them. -->
-          <CoverFlow covers={flowShown} onmenu={(i) => (flowMenu = flowItems[i]?.album ?? null)} />
+          <!-- A tap on the front cover opens its record's tracks here in a sheet (lib/RecordSheet), one beside it comes to the
+               front (the owner, 2026-11-02). -->
+          <CoverFlow covers={flowShown} onopen={(i) => flowItems[i] && (recordOpen = flowItems[i].key)} onmenu={(i) => (flowMenu = flowItems[i]?.album ?? null)} />
         {:else if oneWide}
           <!-- Alone, it takes the top row's middle too (the glass is at that row's far ends) and comes nearer the action
                bar (the owner, 2026-10-26: at least twice the size it had). -->
@@ -2021,7 +2040,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <span class="grow"></span>
         {#if crate}
           <!-- What shows the crate stays here (its favourites filters); what is done with it is its menu's (decision
-               0058: Sync to this device, Edit, Save as playlist, Start a crate from a genre). -->
+               0058: Sync to this device, Save as playlist, Start a crate from a genre). Edit, one's own crate's, left
+               of the heart (the owner, 2026-11-02): edit mode's Cancel takes its place, the heart and the albums'
+               button staying where they are. -->
+          {#if ownCrate}
+            {@const c = crate}
+            <button class="icon" aria-label={`Edit ${title}`} title="Edit" onclick={() => viewPlaylist(EDIT_CRATE + c)}><Icon name="pencil" size={22} /></button>
+          {/if}
           {#if favState}
             <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button
@@ -2175,17 +2200,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       </header>
     {/if}
 
-    {#if tab === 'info'}
-      <div class="info-tab">
-        {#each ids as pid (pid)}
-          {#if multi}
-            <Section title={pid}>{@render about(pid)}</Section>
-          {:else}
-            {@render about(pid)}
-          {/if}
-        {/each}
-      </div>
-    {:else if tab === 'export'}
+    {#if tab === 'export'}
       <ExportTab {ids} />
     {:else if tab === 'repair'}
       <RepairTab {ids} />
@@ -2291,18 +2306,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
     {:else if rows && shown}
-      {#if openRecord}
-        <!-- A record opened: its crate tracks, back to the records (a step of the history). -->
-        <SectionHead title={`${openRecord.title || 'Unknown album'} · ${holdsLine(openRecord.at.length, albumTotal(openRecord))}`} onback={() => history.back()} />
-        <ol class="rows" class:selecting={!!selecting} bind:clientWidth={listWidth}>
-          {#each recordShown as x (x.i)}{@render trackRow(x.r, source, title, recordShown.map((y) => y.r), x.i, false)}{/each}
-        </ol>
-      {:else if recordsView}
+      {#if recordsView}
         <ListHead
           fields={RECORD_ORDERS}
           bind:value={() => prefs.crateRecordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: prefs.crateRecordSort.down })}
           bind:down={() => prefs.crateRecordSort.down, (d) => (prefs.crateRecordSort = { key: prefs.crateRecordSort.key, down: d })}
           count={plural(records.length, 'record')}
+          oncount={() => crate && setCrateView(crate, 'tracks')}
+          countLabel="Show as tracks"
           selecting={!!selecting}
           onselect={() => (selecting ? (selecting = null) : startSelect())}
         />
@@ -2317,6 +2328,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
         bind:down={() => sortDown, (d) => setSort(sortKey, d)}
         bind:open={sortOpen}
         count={plural(crate ? total : shownPlayable.length, 'track')}
+        oncount={crate && !crateEditing ? () => crate && setCrateView(crate, 'records') : null}
+        countLabel="Show as records"
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
       />
@@ -2384,40 +2397,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
 </section>
 
 <!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap views one). -->
-{#snippet about(pid: string)}
-  {@const i = insights.indexOf(pid)}
-  {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
-  {@const near = insights.closest(i)}
-  <div class="about" aria-label={`About ${pid}`}>
-    {#if !pt}
-      {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
-    {:else}
-      {#if pt.focus !== null && insights.focus[i] !== undefined}
-        <p class="note">More focused than {Math.round(100 * insights.focus[i])}% of your playlists</p>
-      {/if}
-      {#if near.length}
-        <h3 class="list-head">Closest playlists</h3>
-        <ul class="plain">
-          {#each near as c (c.index)}
-            <li>
-              <PlaylistItem
-                p={shownPlaylists().find((x) => x.id === c.name) ?? { id: c.name, name: c.name }}
-                size="large"
-                sub={c.shares}
-                label={`View ${c.name}`}
-                onclick={() => viewPlaylist(c.name)}
-                attach={fromAction(longpress, () => () => (badgeMenu = c.name))}
-              />
-            </li>
-          {/each}
-        </ul>
-      {:else if pt.focus === null}
-        <p class="note">Nothing is known about it yet.</p>
-      {/if}
-    {/if}
-  </div>
-{/snippet}
-
 <!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe right plays it next, a swipe left takes
      it out of its crate or playlist, a long-press is its menu, the heart adds it to playlists. -->
 <!-- The list's column names over its tracks (decision 0042): a row of the same shape, so they line up. A tap on one
@@ -2544,7 +2523,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {/snippet}
 
 <!-- A crate's record (0.10, lib/crateRecords): its album's cover, title, artist and how much of it the crate holds; a
-     tap opens its crate tracks (in select mode ticks them all), a long press or its menu button its menu. -->
+     tap opens its crate tracks in a sheet (in select mode ticks them all), a long press or its menu button its menu. -->
 {#snippet recordRow(rec: CrateRecord)}
   {@const first = rows![rec.at[0]]}
   {@const all = !!selecting && rec.at.every((i) => selecting!.has(i))}
@@ -2554,7 +2533,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       title={rec.title || 'Unknown album'}
       cells={recordCols.length ? recordCells(rec) : undefined}
       label={selecting ? `${all ? 'Untick' : 'Tick'} ${rec.title}` : `Open ${rec.title}`}
-      onclick={() => (selecting ? tickRecord(rec) : showRecord(rec.key))}
+      onclick={() => (selecting ? tickRecord(rec) : (recordOpen = rec.key))}
       attachMain={fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (recordMenu = rec)))}
     >
       {#snippet lead()}{#if first}{@render cover(first, source)}{/if}{/snippet}
@@ -2610,25 +2589,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {/if}
 {#if tickedMenu}
   {@const away = tickedOuts(tickedMenu.rows)}
-  <SelectionMenu title={plural(tickedMenu.tracks.length, 'track')} tracks={tickedMenu.tracks} onclose={() => ((tickedMenu = null), (selecting = null))}>
-    {#snippet extra(close)}
-      {#if away.length}
-        <MenuGroup>
-          {#each away as o (o.label)}
-            <MenuEntry
-              icon={o.icon}
-              label={o.label}
-              danger
-              onclick={() => {
-                close();
-                o.run();
-              }}
-            />
-          {/each}
-        </MenuGroup>
-      {/if}
-    {/snippet}
-  </SelectionMenu>
+  <SelectionMenu title={plural(tickedMenu.tracks.length, 'track')} tracks={tickedMenu.tracks} outs={away} onclose={() => ((tickedMenu = null), (selecting = null))} />
+{/if}
+{#if openRecord}
+  {@const rec = openRecord}
+  <RecordSheet
+    {source}
+    title={rec.title || 'Unknown album'}
+    chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec))].filter(Boolean)}
+    items={recordShown}
+    onmenu={(r) => (trackMenu = { track: asTrack(r, source), start: 'menu', outs: menuOuts(null, title) })}
+    onclose={() => (recordOpen = null)}
+  />
 {/if}
 {#if recordMenu}
   {@const rec = recordMenu}
@@ -2638,38 +2610,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     title={rec.title || 'Unknown album'}
     chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec))].filter(Boolean)}
     tracks={tracksOf(rs.filter((r) => r.id && !r.missing))}
+    album={rec.albumId ? () => viewOver(albumSubject(source, rec.albumId!)) : null}
+    outs={away}
     onclose={() => (recordMenu = null)}
-  >
-    {#snippet extra(close)}
-      {#if rec.albumId}
-        <MenuGroup>
-          <MenuEntry
-            icon="squareArrowOutUpRight"
-            label="Go to album"
-            onclick={() => {
-              close();
-              viewOver(albumSubject(source, rec.albumId!));
-            }}
-          />
-        </MenuGroup>
-      {/if}
-      {#if away.length}
-        <MenuGroup>
-          {#each away as o (o.label)}
-            <MenuEntry
-              icon={o.icon}
-              label={o.label}
-              danger
-              onclick={() => {
-                close();
-                o.run();
-              }}
-            />
-          {/each}
-        </MenuGroup>
-      {/if}
-    {/snippet}
-  </SelectionMenu>
+  />
 {/if}
 {#if badgeMenu}
   <SubjectMenu subject={badgeMenu} onclose={() => (badgeMenu = null)} />
@@ -3095,14 +3039,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     cursor: pointer;
   }
 
-  .info-tab {
-    padding: 0 8px;
-  }
-
-  .about {
-    padding: 4px 0 8px;
-  }
-
   /* The list's column names (decision 0042): in from the sides as a track's row is, a cover's room in front. */
   .column-head {
     padding: 0 8px;
@@ -3172,20 +3108,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     margin: 4px 8px;
     color: var(--muted);
     font-size: 13px;
-  }
-
-  /* A list's heading inside a tab (Closest playlists): small, over its large rows. */
-  .list-head {
-    margin: 12px 8px 4px;
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  ul.plain {
-    margin: 0;
-    padding: 0;
-    list-style: none;
   }
 
   /* Several playlists on Tracks: a section each, its header folding it. */

@@ -23,7 +23,7 @@
 
   // What Reset puts back (lib/settings/reset): each as its row names it, its default the prefs'.
   const EDGE = (v: string) => (v === 'bottom' ? 'Bottom' : 'Top');
-  offerReset(() => [
+  offerReset('layout', () => [
     pref('navAt', 'Navigation bar', EDGE),
     pref('navHidesOnItem', 'Hide when opening a library item'),
     pref('navHides', 'Hide when scrolling'),

@@ -117,7 +117,9 @@ ${prefs.playlistOrder}`,
   });
 
   const memberCount = $derived(shownPlaylists().filter((p) => optimistic[p.id] ?? p.member).length);
-  const NOT_MUSIC = "Not in your Music, so it can't go in playlists.";
+  // Every library's tracks can go in playlists (2026-10-15); not where none is set up as Music or its library is not in
+  // use (the owner, 2026-11-02: it said "Not in your Music", untrue of Incoming).
+  const NOT_MUSIC = "Can't go in playlists: its library isn't in use, or no Music library is set up.";
 
   async function tap(p: Playlist) {
     if (busy[p.id]) return;

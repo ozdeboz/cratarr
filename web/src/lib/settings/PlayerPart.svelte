@@ -7,10 +7,12 @@
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import DetailsGroup from './DetailsGroup.svelte';
-  import { offerReset, pref } from './reset.svelte';
+  import { offerReset } from './reset.svelte';
+  import { playerItems } from './resetItems.svelte';
 
-  // What Reset puts back (lib/settings/reset): each as the part names it, its default the prefs'.
-  offerReset(() => [pref('playerRow', "The player's details row"), pref('playerFacts', 'Details shown'), pref('playerSwipes', 'Swipes')]);
+  // What Reset puts back: the part's declaration (lib/settings/resetItems), its bands' looks with it (they disagreed:
+  // the owner, 2026-11-02).
+  offerReset('player', playerItems);
   const SWIPE_ROWS: { key: keyof PlayerSwipes; name: string; options: { value: string; label: string }[] }[] = [
     { key: 'upLeft', name: 'Swipe up, left', options: SWIPES_UP },
     { key: 'upRight', name: 'Swipe up, right', options: SWIPES_UP },

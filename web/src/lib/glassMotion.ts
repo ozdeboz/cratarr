@@ -30,8 +30,8 @@ type Part = {
   /** How each child is displayed, for its copy when it is hidden. */
   shows: Map<Element, string>;
   seen: number;
-  /** The move under way: from, to, since. */
-  run: { from: Rect; to: Rect; start: number } | null;
+  /** The move under way: from, to, and the glass's animation, whose own clock says how far it got. */
+  run: { from: Rect; to: Rect; clock: Animation } | null;
   anims: Animation[];
   window: string;
 };
@@ -73,11 +73,15 @@ function measure(p: Part) {
   return { at, kids, shows, glass: Number(getComputedStyle(p.glass).opacity) };
 }
 
-/** The outline shown now: where the move under way has got to, else where it rests. */
-function shownNow(p: Part, now: number): Rect | null {
+/** The outline shown now: where the move under way has got to, else where it rests. By the glass's own animation, as
+ *  each child's translate is read from its own (offsetNow), never by the clock on the wall: a move whose first frame a
+ *  busy page held back (a page change after the tap that folded the search) has not moved yet, and the next move
+ *  takes over from where both are seen (the owner, 2026-11-02: back with the search open, the lens and its glass came
+ *  apart). */
+function shownNow(p: Part): Rect | null {
   if (!p.run || !p.at) return p.at;
-  const t = Math.min(1, (now - p.run.start) / GLASS_MS);
-  return between(p.run.from, p.run.to, decelerate(t));
+  const ms = Number(p.run.clock.currentTime ?? 0);
+  return between(p.run.from, p.run.to, decelerate(Math.min(1, ms / GLASS_MS)));
 }
 
 /** A child's offset from its rest now (its translate under way). */
@@ -89,12 +93,12 @@ function offsetNow(el: Element): [number, number] {
 }
 
 function play(p: Part) {
-  const now = performance.now();
-  const from = shownNow(p, now);
+  const from = shownNow(p);
   // Where each child that was there is seen now: its rest, moved by what it is still moving.
   const was = new Map<Element, Rect>();
   for (const [el, r] of p.kids) {
-    const [dx, dy] = el.isConnected ? offsetNow(el) : [0, 0];
+    // Read only while a move is under way: at rest there is none, and the read costs the tap's task a style pass.
+    const [dx, dy] = p.run && el.isConnected ? offsetNow(el) : [0, 0];
     was.set(el, { ...r, x: r.x + dx, y: r.y + dy });
   }
   const glassWas = p.seen;
@@ -134,15 +138,14 @@ function play(p: Part) {
   // grows out of it (the owner, 2026-11-01: the navigation glass faded instead of gliding to collapse).
   const seen = Math.max(glassWas, after.glass);
   p.glass.style.inset = grownTo(all, to);
-  p.anims.push(
-    p.glass.animate(
-      [
-        { clipPath: insetOf(from, all, r), opacity: seen },
-        { clipPath: insetOf(to, all, r), opacity: seen },
-      ],
-      timing,
-    ),
+  const clock = p.glass.animate(
+    [
+      { clipPath: insetOf(from, all, r), opacity: seen },
+      { clipPath: insetOf(to, all, r), opacity: seen },
+    ],
+    timing,
   );
+  p.anims.push(clock);
   if (p.shade) {
     const sx = from.w / Math.max(1, to.w);
     const sy = from.h / Math.max(1, to.h);
@@ -156,22 +159,45 @@ function play(p: Part) {
       ),
     );
   }
+  // A child that comes or goes where its neighbour that stays passes over it (the one before it, else after it) moves
+  // with that neighbour: the field comes in with the magnifier it opens from, and goes with it, rather than lying still
+  // as the magnifier slides over it (the owner, 2026-11-02: the lens came apart from its glass). One the neighbour does
+  // not pass (a button at the pill's still end) fades where it is.
+  const order = [...was.keys()];
+  const moveOf = (box: Rect, near: Element[]): [number, number] => {
+    const k = near.find((n) => was.has(n) && after.kids.has(n));
+    if (!k) return [0, 0];
+    const [a, b] = [was.get(k)!, after.kids.get(k)!];
+    const swept = union(a, b);
+    if (box.x >= swept.x + swept.w || box.x + box.w <= swept.x) return [0, 0];
+    return [b.x - a.x, b.y - a.y];
+  };
+  const shifted = (k: Rect, [dx, dy]: [number, number]): Rect => ({ ...k, x: k.x + dx, y: k.y + dy });
+  const kidsNow = [...after.kids.keys()];
   for (const [el, k1] of after.kids) {
     const k0 = was.get(el);
-    const frames: Keyframe[] = k0
-      ? [
-          { translate: `${k0.x - k1.x}px ${k0.y - k1.y}px`, clipPath: insetOf(from, k0, r) },
-          { translate: '0px 0px', clipPath: insetOf(to, k1, r) },
-        ]
-      : [
-          { opacity: 0, clipPath: insetOf(from, k1, r) },
-          { opacity: 1, clipPath: insetOf(to, k1, r) },
-        ];
+    let frames: Keyframe[];
+    if (k0) {
+      frames = [
+        { translate: `${k0.x - k1.x}px ${k0.y - k1.y}px`, clipPath: insetOf(from, k0, r) },
+        { translate: '0px 0px', clipPath: insetOf(to, k1, r) },
+      ];
+    } else {
+      const i = kidsNow.indexOf(el);
+      const [dx, dy] = moveOf(k1, [...kidsNow.slice(0, i).reverse(), ...kidsNow.slice(i + 1)]);
+      const start = shifted(k1, [-dx, -dy]);
+      frames = [
+        { opacity: 0, translate: `${-dx}px ${-dy}px`, clipPath: insetOf(from, start, r) },
+        { opacity: 1, translate: '0px 0px', clipPath: insetOf(to, k1, r) },
+      ];
+    }
     p.anims.push(el.animate(frames, timing));
   }
-  // What went: a copy where it was, fading as the glass leaves it.
+  // What went: a copy where it was, fading as the glass leaves it, moving with its neighbour.
   for (const [el, k0] of was) {
     if (after.kids.has(el)) continue;
+    const i = order.indexOf(el);
+    const move = moveOf(k0, [...order.slice(0, i).reverse(), ...order.slice(i + 1)]);
     const ghost = el.cloneNode(true) as HTMLElement;
     ghost.setAttribute(GHOST, '');
     ghost.setAttribute('aria-hidden', 'true');
@@ -190,8 +216,8 @@ function play(p: Part) {
     p.box.append(ghost);
     const a = ghost.animate(
       [
-        { opacity: 1, clipPath: insetOf(from, k0, r) },
-        { opacity: 0, clipPath: insetOf(to, k0, r) },
+        { opacity: 1, translate: '0px 0px', clipPath: insetOf(from, k0, r) },
+        { opacity: 0, translate: `${move[0]}px ${move[1]}px`, clipPath: insetOf(to, shifted(k0, move), r) },
       ],
       { ...timing, fill: 'forwards' },
     );
@@ -202,7 +228,7 @@ function play(p: Part) {
   p.kids = after.kids;
   p.shows = after.shows;
   p.seen = after.glass;
-  p.run = { from, to, start: now };
+  p.run = { from, to, clock };
   const anims = p.anims;
   Promise.all(anims.map((a) => a.finished)).then(
     () => {

@@ -24,12 +24,13 @@
   import { isKept, setKept } from './kept.svelte';
   import type { Downloadable } from './app.svelte';
   import DownloadStep from './DownloadStep.svelte';
+  import PlaylistAbout from './PlaylistAbout.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
   import { installed } from './offline.svelte';
   import { startPlaylists } from './output.svelte';
-  import { openTab, viewSelection, panel, type Tab } from './panel.svelte';
+  import { openTab, viewOver, viewSelection, panel, type Tab } from './panel.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { withUndo } from './undo.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
@@ -63,7 +64,7 @@
     keepFrom?: string | null;
   } = $props();
 
-  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken' | 'download'>(untrack(() => start));
+  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken' | 'download' | 'info'>(untrack(() => start));
   $effect(() => void loadPlaylistFavorites());
 
   /** The one playlist, when the menu is for one. */
@@ -371,8 +372,8 @@
       <MenuEntry icon="users" label="Shared with other users" switched={allShared} onclick={() => setShared(ids, !allShared)} />
     {/if}
   {:else if e === 'info'}
-    <!-- The panel's other views of them (back returns to their tracks). -->
-    <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
+    <!-- A step of the menu, as a track's Info (the owner, 2026-11-02: it was a tab of the panel). -->
+    <MenuEntry icon="info" label="Info" onclick={() => (mode = 'info')} />
   {:else if e === 'rename'}
     {#if one && !others}
       <MenuEntry
@@ -433,6 +434,11 @@
   {#if mode === 'menu'}
     <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
     <MenuTable kind="playlist" {entry} />
+  {:else if mode === 'info'}
+    {#each ids as pid (pid)}
+      {#if ids.length > 1}<div class="heading">{playlists.find((x) => x.id === pid)?.name ?? pid}</div>{/if}
+      <PlaylistAbout {pid} onopen={(name) => (onclose(), viewOver(name))} />
+    {/each}
   {:else if mode === 'download'}
     <DownloadStep what={{ kind: 'playlists', names: [...ids] }} tracks={tracksToGet} {onclose} />
   {:else if mode === 'rename' && one}
