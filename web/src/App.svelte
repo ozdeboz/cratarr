@@ -1413,9 +1413,11 @@
     pointer-events: auto;
   }
 
-  /* The pill's side of the row: the extension's 2 px, as lib/NavigationControls' (the owner, 2026-10-26). */
+  /* The pill's side of the row: the extension's 2 px, as lib/NavigationControls' (the owner, 2026-10-26); none above, so
+     its glass's top is the lead's (the lead has none: back's 2 px are inside its glass; the owner, 2026-11-02: "why
+     are these glasses not perfectly aligned vertically?"). */
   .right {
-    padding: 2px;
+    padding: 0 2px 2px;
   }
 
   /* Going: up out under the bar, whole (a row along the bottom: down); nothing in it takes a tap meanwhile. */
