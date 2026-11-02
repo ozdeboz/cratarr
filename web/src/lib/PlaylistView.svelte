@@ -182,6 +182,7 @@
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
   import { causeChip, conditionsFor, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
+  import { windowsOf } from './profileWindow';
   import NothingPopover, { type NothingChip } from './NothingPopover.svelte';
   import { answers, pointAt, type Answer } from './attribution';
   import { lastOf } from './lastChange.svelte';
@@ -1070,6 +1071,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** The profile shown: the preview's or the list's, while music profiles are on (Settings › Display › Content). */
   // Beside the similarity curve always, whatever Settings says of music profiles (the owner, 2026-10-25): what the
   // curve's cut takes in is read off it.
+  // The list filter's window on the profile's bars (the owner, 2026-11-02): a playlist's, or a crate's that cannot be
+  // edited, as its Filter sheet has it on.
+  const profileWindows = $derived(filterable ? windowsOf(conditionsFor(kind)) : {});
   const shownProfile = $derived(prefs.profile || !!(like && curve?.alike.length) ? (previewProfile ?? profile) : null);
   /** The seed the curve is of: moving the cut (another crate of the same seed) keeps it shown until the new one comes. */
   let curveOf = '';
@@ -2256,7 +2260,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#if (shownProfile || (like && curve?.alike.length)) && !multi}
           <div class="head-spread" class:artist-head={!!artist && !artist.tracks}>
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
-            {#if shownProfile}<ListProfile data={shownProfile} />{/if}
+            {#if shownProfile}<ListProfile data={shownProfile} windows={profileWindows} />{/if}
           </div>
         {:else if (prefs.profile && profileComing) || curveComing}
           <div class="head-spread waiting" class:artist-head={!!artist && !artist.tracks} aria-hidden="true"></div>
