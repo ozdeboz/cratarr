@@ -38,7 +38,7 @@ pub enum List {
     Artist { source: String, name: String },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Request {
     #[serde(default)]
     pub conditions: Vec<crates::Condition>,
@@ -74,6 +74,18 @@ pub fn switches_of(list: &List) -> &'static [&'static str] {
     }
 }
 
+/// A switch's word, as the page's SWITCHES has it: its chip's (decision 0095).
+fn switch_label(key: &str) -> &str {
+    match key {
+        "favourites" => "Favourites only",
+        "unplayed" => "Unplayed only",
+        "topRated" => "4 stars and up",
+        "mine" => "Mine only",
+        "missing" => "Hide missing tracks",
+        other => other,
+    }
+}
+
 /// What a list's items are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -98,6 +110,11 @@ pub struct Filtered {
     pub tempo: crates::TempoBands,
     /// A list of tracks' profile (the owner, 2026-10-23), over all its tracks; none for albums and playlists.
     pub profile: Option<crates::Profile>,
+    /// What left everything out, when nothing passes (decision 0095): each condition and switch of the filter, the
+    /// Library's libraries switched off. None while something passes, or when nothing would with every cause lifted.
+    pub reasons: Vec<crates::Reason>,
+    /// How many would pass with every cause lifted; `total` while something passes.
+    pub all_back: usize,
 }
 
 /// A line's facts; none for a line the catalogue has no file for (a missing one, or switched off).
@@ -105,8 +122,57 @@ fn facts_of<'a>(by_line: &HashMap<&str, &'a Facts>, none: &'a Facts, line: Optio
     line.and_then(|l| by_line.get(l).copied()).unwrap_or(none)
 }
 
-/// Works a filter out on a list (`want`: the server, else the first connected; an album's or an artist's own).
+/// Works a filter out on a list (`want`: the server, else the first connected; an album's or an artist's own). When
+/// nothing passes, says why (decision 0095): the list worked out again with each cause lifted alone (how many pass
+/// then, its axes not counted), and with every one (all its items, and those only the libraries switched off hold).
 pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Filtered, ToggleError> {
+    let (mut answer, off_held) = work_out(app, want, &r, true).await?;
+    answer.all_back = answer.total;
+    if answer.passed > 0 {
+        return Ok(answer);
+    }
+    answer.all_back += off_held;
+    if answer.all_back == 0 {
+        return Ok(answer);
+    }
+    let lifts = lifts(&r);
+    let asked = !lifts.is_empty();
+    for (lifted, mut reason) in lifts {
+        reason.back = work_out(app, want, &lifted, false).await?.0.passed;
+        answer.reasons.push(reason);
+    }
+    if off_held > 0 {
+        let mine: Vec<String> = r.without.iter().filter(|k| k.starts_with(&format!("{}/", answer.source))).cloned().collect();
+        // Nothing else asked: what they hold is what comes back.
+        let back = match asked {
+            true => work_out(app, want, &Request { without: Vec::new(), ..r.clone() }, false).await?.0.passed,
+            false => off_held,
+        };
+        answer.reasons.push(crates::Reason::libraries_off(&mine, back));
+    }
+    Ok(answer)
+}
+
+/// The filter's causes, each with the request it lifted (decision 0095): every condition that is on and asks
+/// something, every switch on; their reasons' `back` to be counted.
+fn lifts(r: &Request) -> Vec<(Request, crates::Reason)> {
+    let mut lifts = Vec::new();
+    for (i, c) in r.conditions.iter().enumerate().filter(|(_, c)| c.enabled && c.complete()) {
+        let mut lifted = r.clone();
+        lifted.conditions.remove(i);
+        lifts.push((lifted, crates::Reason::new(crates::Why::Filter, Some(c.axis.clone()), crates::axis_label(&c.axis).unwrap_or(c.axis.as_str()), 0)));
+    }
+    for (i, k) in r.switches.iter().enumerate() {
+        let mut lifted = r.clone();
+        lifted.switches.remove(i);
+        lifts.push((lifted, crates::Reason::new(crates::Why::Filter, Some(k.clone()), switch_label(k), 0)));
+    }
+    lifts
+}
+
+/// The filter's answer on a list (its axes, tempo spread and profile counted when `full`), and how many items only
+/// the libraries switched off hold (the Library's albums, or artists).
+async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -> Result<(Filtered, usize), ToggleError> {
     if let Some(c) = r.conditions.iter().find(|c| !crates::is_axis(&c.axis)) {
         return Err(ToggleError::Refused(format!("Unknown axis: {}.", c.axis)));
     }
@@ -152,6 +218,8 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
         _ => (Vec::new(), conditions),
     };
     let mut record_kinds: Option<Vec<Vec<String>>> = None;
+    // What only the libraries switched off hold: the Library's albums, or artists (decision 0095).
+    let mut off_held = 0;
     let (items, grouped): (Items, Vec<Item>) = match &r.list {
         List::Crate { .. } => (Items::Tracks, lib.select(&shown).iter().map(|l| one(String::new(), Some(l.as_str()))).collect()),
         List::Playlist { id } => {
@@ -188,7 +256,7 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
         List::Library | List::Artists => {
-            let listed = library_albums(app, &lib.source, &r.without).await;
+            let (listed, off_artists) = library_albums(app, &lib.source, &r.without).await;
             // Cratarr's own albums by their own tracks, wherever their files are (2026-10-29, the owner's "Stellar -
             // Tunnel": two copies in two artists' folders, so the album's folder was the library's root, and the
             // filter found none of its files and left it out of every answer, negated ones too).
@@ -218,6 +286,7 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
                     .map(|(a, k)| Item::of(a.id.clone(), a.tracks.clone(), a.rated && (!unplayed || a.tracks.iter().all(|f| never_played(f, uses))) && kinds_pass(&kind_rows, k)))
                     .collect();
                 record_kinds = Some(kinds);
+                off_held = off_artists.len();
                 (Items::Albums, items)
             } else {
                 let hearted: Option<std::collections::HashSet<String>> = match on("favourites") {
@@ -225,12 +294,19 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
                     false => None,
                 };
                 let looks = ArtistLook { conditions: &conditions, world: &w, uses, hearted: hearted.as_ref(), unplayed: on("unplayed") };
+                let named: std::collections::HashSet<String> = listed.iter().flat_map(|a| a.artists.iter().map(|n| n.to_lowercase())).collect();
+                off_held = off_artists.iter().flatten().map(|n| n.to_lowercase()).filter(|n| !named.contains(n)).collect::<std::collections::HashSet<_>>().len();
                 (Items::Artists, artists_of(&lib.source, &albums, &looks))
             }
         }
     };
     let keys: Vec<String> = grouped.iter().filter(|i| i.passes(&conditions, &w)).flat_map(|i| i.keys.iter().cloned()).collect();
     let passed = grouped.iter().filter(|i| i.passes(&conditions, &w)).count();
+    let (source, total) = (lib.source.clone(), grouped.len());
+    if !full {
+        let answer = Filtered { source, items, keys: Vec::new(), passed, total, axes: Vec::new(), tempo: Default::default(), profile: None, reasons: Vec::new(), all_back: 0 };
+        return Ok((answer, off_held));
+    }
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|i| i.tracks.as_slice()).collect();
     let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
     // The Library's Type axis counts records by their types (a record under each it has: the counts overlap).
@@ -247,7 +323,8 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
     });
     // A crate's rows are paged on the server: they come filtered there, so its thousands of lines are not sent here.
     let keys = if matches!(r.list, List::Crate { .. }) { Vec::new() } else { keys };
-    Ok(Filtered { source: lib.source.clone(), items, keys, passed, total: grouped.len(), axes, tempo, profile })
+    let answer = Filtered { source, items, keys, passed, total, axes, tempo, profile, reasons: Vec::new(), all_back: 0 };
+    Ok((answer, off_held))
 }
 
 /// Cratarr's own albums' files (`source` its own library's), by each album's id: its tracks', through the library's
@@ -296,23 +373,25 @@ struct Listed {
 }
 
 /// The Library's albums on a server, of the libraries not switched off (as the Library page shows them), each with
-/// the line of its folder, as its files' lines begin, and its album artists.
-async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> Vec<Listed> {
+/// the line of its folder, as its files' lines begin, and its album artists; and the album artists of each album the
+/// libraries switched off leave out (decision 0095: what they hold).
+async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> (Vec<Listed>, Vec<Vec<String>>) {
     let view = app.albums(Some(source)).await;
-    let Some(s) = view.sources.into_iter().find(|s| s.id == source) else { return Vec::new() };
+    let Some(s) = view.sources.into_iter().find(|s| s.id == source) else { return (Vec::new(), Vec::new()) };
     let roots = app.library.connected().into_iter().find(|(a, _)| a.cfg.id == source).map(|(a, _)| a.placement.roots.clone()).unwrap_or_default();
     let cat = app.library.catalogue();
     let folders = cat.folders();
-    s.albums
+    let album_artists = |artist: Option<String>, artists: Vec<String>| -> Vec<String> { if artists.is_empty() { artist.into_iter().collect() } else { artists } };
+    let (on, off): (Vec<_>, Vec<_>) = s.albums.into_iter().partition(|a| a.library.as_ref().is_none_or(|l| !without.contains(&format!("{source}/{l}"))));
+    let listed = on
         .into_iter()
-        .filter(|a| a.library.as_ref().is_none_or(|l| !without.contains(&format!("{source}/{l}"))))
         .map(|a| {
             let dir = a.path.as_deref().and_then(|p| folder_of(&roots, &folders, p)).and_then(|(i, rel)| cat.line_of(i, &rel));
             let kinds = super::classical::kinds_of(&a.release);
-            let artists = if a.artists.is_empty() { a.artist.into_iter().collect() } else { a.artists };
-            Listed { id: a.id, dir, artists, kinds }
+            Listed { id: a.id, dir, artists: album_artists(a.artist, a.artists), kinds }
         })
-        .collect()
+        .collect();
+    (listed, off.into_iter().map(|a| album_artists(a.artist, a.artists)).collect())
 }
 
 /// 4 stars and up.
@@ -504,6 +583,31 @@ mod tests {
         let look = ArtistLook { conditions: &not_classical, world: &w, uses: None, hearted: None, unplayed: false };
         let keys: Vec<String> = artists_of("cratarr", &albums, &look).iter().filter(|i| i.passes(&not_classical, &w)).flat_map(|i| i.keys.clone()).collect();
         assert_eq!(keys, ["cratarr\u{0}moby"]);
+    }
+
+    #[test]
+    fn a_filter_that_leaves_nothing_names_each_of_its_causes() {
+        // Decision 0095: "No records." was said as if there were none; now each condition and switch is a chip.
+        let r: Request = serde_json::from_value(serde_json::json!({
+            "conditions": [
+                { "axis": "energy", "value": { "kind": "range", "min": 80 } },
+                { "axis": "genre", "value": { "kind": "any_of", "values": [] } },
+                { "axis": "genre", "value": { "kind": "any_of", "values": ["Dub"] }, "enabled": false }
+            ],
+            "list": { "kind": "library" },
+            "switches": ["favourites"]
+        }))
+        .unwrap();
+        let lifts = lifts(&r);
+        let said: Vec<(Option<&str>, &str)> = lifts.iter().map(|(_, w)| (w.key.as_deref(), w.label.as_str())).collect();
+        assert_eq!(said, [(Some("energy"), "Energy"), (Some("favourites"), "Favourites only")], "a row asking nothing, or muted, is no cause");
+        assert!(lifts.iter().all(|(_, w)| w.kind == crates::Why::Filter));
+        assert_eq!((lifts[0].0.conditions.len(), lifts[0].0.switches.len()), (2, 1), "the energy row lifted");
+        assert_eq!((lifts[1].0.conditions.len(), lifts[1].0.switches.len()), (3, 0), "the switch lifted");
+        let json = serde_json::to_value(&lifts[0].1).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "filter", "key": "energy", "label": "Energy", "back": 0 }));
+        let off = serde_json::to_value(crates::Reason::libraries_off(&["cratarr/A".into(), "cratarr/B".into()], 3)).unwrap();
+        assert_eq!(off, serde_json::json!({ "kind": "libraries_off", "label": "2 libraries off", "back": 3 }));
     }
 
     #[test]
