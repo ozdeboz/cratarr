@@ -41,6 +41,14 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   references, the checks without one, the hand check's intake card, one Health item for references (Soulseek in
   Cratarr, below). With it, the other writers onto 0092's path (Health's fixes, Renumber, the tempo, the covers, the
   length fixes, single-track intake), each losing its own Undo ([the map](writers-onto-0092.md)).
+  And all of what the owner decided on 2026-11-02 ("All in 0.14"): taste in sequences and lists
+  ([0094](decisions/0094-taste-in-sequences-and-lists.md): one taste per account, Best match on every list, Your taste
+  as a radio mode, skips keeping tracks away gently, one radio sheet wherever radio starts, own orders named); one way to
+  say nothing ([0095](decisions/0095-one-way-to-say-nothing.md)); a library's quality limit
+  ([0096](decisions/0096-libraries-equal.md)'s amendment); energy and danceability on the library's 0–100% in the
+  profile, the filter's window lit on the panel's bars (the sheet unchanged); a playlist's Sync into "Shared with other
+  users", Repair into Health, a record's own Health problems on its page; and, suggested, the tagged total ("05/06") for
+  missing tracks without a reference. Previews on staging along the way.
 - **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**
   ([0091](decisions/0091-scrobbling-from-the-device.md)). Cratarr's mode is Cratarr's own library, its libraries still
   switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
