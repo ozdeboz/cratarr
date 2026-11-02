@@ -5,6 +5,7 @@
   // menu should offer the Want option"): Want for it by its artist and title (or Requested), as for any missing album.
   // The player's track menu and a Bandcamp album's.
   import { getDiscover, getRequests, notDiscover, wantAlbum, wantDiscover, type DiscoverAlbum } from './api';
+  import { hrefOf } from './addresses';
   import { samePage } from './bandcampPreview';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -94,7 +95,7 @@
         label="Requested"
         onclick={() => {
           onclose();
-          location.hash = '#/requests';
+          location.hash = hrefOf('requests');
         }}
       />
     {:else}
@@ -108,7 +109,7 @@
         label="Requested"
         onclick={() => {
           onclose();
-          location.hash = '#/requests';
+          location.hash = hrefOf('requests');
         }}
       />
     {:else}

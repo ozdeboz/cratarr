@@ -21,7 +21,8 @@
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { artistSubject } from './panel.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { toast } from './toast.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import { excludedArtists, excludedEverywhere, loadCrateArtists, loadExcludedArtists, notInThisCrate, setExcludedEverywhere, setNotInCrate } from './excludedArtists.svelte';

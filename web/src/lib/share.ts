@@ -5,9 +5,6 @@ import { inApp, toApp } from './app.svelte';
 import { copyText } from './clipboard';
 import { toast } from './toast.svelte';
 
-/** The address that opens `subject` (a playlist's name, an album's subject) in the panel, over `page`. */
-export const linkTo = (page: string, subject: string) => `${location.origin}/#/${page}?${new URLSearchParams({ view: subject })}`;
-
 export async function share(title: string, text: string, url: string | null) {
   const words = url ? `${text}\n${url}` : text;
   if (inApp) return toApp({ type: 'share', title, text: words });

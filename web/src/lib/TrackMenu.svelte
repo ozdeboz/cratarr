@@ -62,7 +62,8 @@
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
   import { albumSubject, artistOf, panel, viewFor } from './panel.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { crateOf, genreOf, viewGenre } from './crates.svelte';
   import { likeChip } from './quickCrate';
   import { grabCrate } from './quickCrates.svelte';

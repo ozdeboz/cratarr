@@ -96,7 +96,8 @@
   import { shuffled } from './shuffle';
   import { albumGone, albumSubject, panel, viewOver } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { toast } from './toast.svelte';
   import { askFor, followingNow } from './following.svelte';
   import AlbumCard from './AlbumCard.svelte';

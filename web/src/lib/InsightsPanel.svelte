@@ -88,7 +88,7 @@
        the view's name picks another view of its group. -->
   <Crumbs
     trail={[
-      ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('#/insights') }, groupLevel]),
+      ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('insights') }, groupLevel]),
       ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: () => history.back() }] : []),
     ]}
     here={v.label}

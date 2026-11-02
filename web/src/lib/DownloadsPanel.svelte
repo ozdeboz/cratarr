@@ -209,7 +209,7 @@
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   <Crumbs
-    trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]}
+    trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('downloads') }]}
     here={L.label}
     siblings={beside ? null : { menuLabel: 'Downloads shows', options: DOWNLOADS_LISTS.map((l) => ({ id: l.id, label: l.label })), chosen: L.id, onchoose: (id) => viewSibling(DOWNLOADS + id) }}
   />

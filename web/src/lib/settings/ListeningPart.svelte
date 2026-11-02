@@ -6,6 +6,7 @@
   // connects with the user token from its settings page; Last.fm with the API key and shared secret made at
   // last.fm/api, then its own sign-in page, which comes back to this page.
   import type { SettingsSection } from '../settingsSections.svelte';
+  import { wordHere } from '../addresses';
   import { forgetScrobble, getScrobbles, scrobbleLastFm, scrobbleListenBrainz, setScrobbleOn, type ScrobbleTarget } from '../api';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
@@ -34,7 +35,7 @@
     );
   load();
   // Back from Last.fm's sign-in with what went wrong, if anything.
-  const back = new URLSearchParams(location.hash.split('?')[1] ?? '').get('scrobble');
+  const back = wordHere('scrobble');
   if (back) error = back;
 
   const of = (s: Service) => targets?.find((t) => t.target === s) ?? null;

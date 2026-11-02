@@ -5,6 +5,7 @@
   // sign-in coming back to this page, read again every 6 hours. Live wins; disconnected, the export shows again. No
   // playing on Spotify: what is here plays from the library, what is not is asked for.
   import { connectSpotify, disconnectSpotify, forgetSpotifyImport, setSpotifyClient, syncSpotify } from '../api';
+  import { hrefOf, wordHere } from '../addresses';
   import { copyText } from '../clipboard';
   import { openThing } from '../panel.svelte';
   import { prefs } from '../prefs.svelte';
@@ -30,7 +31,7 @@
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
   const secure = location.protocol === 'https:' || loopback;
 
-  let error = $state<string | null>(new URLSearchParams(location.hash.split('?')[1] ?? '').get('spotify_error'));
+  let error = $state<string | null>(wordHere('spotify_error'));
   const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   // Read again while it is being read (the first read on connecting, a Refresh).
@@ -52,7 +53,7 @@
 
   function showInDiscover() {
     prefs.discoverMode = 'spotify-albums';
-    location.hash = '#/discover';
+    location.hash = hrefOf('discover');
   }
 
   let typing = $state(false);
