@@ -239,6 +239,12 @@ fn library_in(roles: &settings::Roles, placement: &crate::placement::Placement, 
         .map(|l| l.id.clone())
 }
 
+/// The format of the used library in a catalogue folder: its own (a Music library set to "as is" keeps hi-res files as
+/// they are); CD format, Music's by its use, while no library is found there.
+fn format_in(roles: &settings::Roles, placement: &crate::placement::Placement, folder: &std::path::Path) -> settings::Format {
+    library_in(roles, placement, folder).map_or(settings::Format::Cd, |l| roles.format_of(&l))
+}
+
 /// The catalogue's album directory behind a server path (the server's paths and Cratarr's differ in front).
 fn incoming_dir<'a>(incoming: &'a [IncomingDir], path: &str) -> Option<&'a IncomingDir> {
     incoming.iter().filter(|d| !d.dir.is_empty() && path.ends_with(&format!("/{}", d.dir))).max_by_key(|d| d.dir.len())
@@ -816,7 +822,7 @@ impl IncomingService {
     pub async fn keep_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate(source_id, album_id).await?;
         let (_, plan) = self.plan_keep(&at, year).await?;
-        let convert = self.to_convert(&at).await.len();
+        let convert = if self.music_format(source_id) == settings::Format::Cd { self.to_convert(&at).await.len() } else { 0 };
         let acquisition = self.acquisition().is_some();
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
@@ -844,11 +850,21 @@ impl IncomingService {
     /// Keep (decision 0013): move a new album from Incoming into Music, named per the library's template. Write-ahead
     /// like Delete; the files and catalogue rows move (track ids kept); Lidarr stops fetching it, and the moved
     /// files' new server items get the old ones' play data (handlers). Undo puts it all back.
-    /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
+    /// Hi-res files are converted first, in the queue, where Music's format is CD format: the plan is checked now, so a
+    /// refusal shows at once.
     pub async fn keep(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
-        self.move_located(source_id, at, 0, settings::Format::Cd, year).await
+        self.move_located(source_id, at, 0, self.music_format(source_id), year).await
+    }
+
+    /// The format of the Music library on a server (Keep's target), as a move into it has it (`target_of`).
+    fn music_format(&self, source_id: &str) -> settings::Format {
+        let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
+        match (live.iter().find(|a| a.cfg.id == source_id), folders.first()) {
+            (Some(a), Some(music)) => format_in(&a.cfg.libraries, &a.placement, music),
+            _ => settings::Format::Cd,
+        }
     }
 
     /// Move (decision 0034): an album of any used library into another of its server; Keep is the move into Music.
@@ -1472,5 +1488,19 @@ mod tests {
         assert_eq!(at("/music").as_deref(), Some("m"));
         assert_eq!(at("/incoming").as_deref(), Some("i"), "a library not used is passed over");
         assert_eq!(at("/elsewhere"), None);
+    }
+
+    #[test]
+    fn keep_follows_the_music_librarys_own_format() {
+        let mut roles = settings::Roles { music: vec!["m".into()], ..settings::Roles::default() };
+        let placement = crate::placement::Placement {
+            roots: Vec::new(),
+            libraries: vec![crate::placement::PlacedLibrary { id: "m".into(), name: "Music".into(), folders: vec!["/music".into()], paths: Vec::new(), read_only: false }],
+        };
+        let music = std::path::Path::new("/music");
+        assert_eq!(format_in(&roles, &placement, music), settings::Format::Cd, "Music's by its use");
+        roles.policies.insert("m".into(), settings::LibraryPolicy { format: Some(settings::Format::AsIs), ..Default::default() });
+        assert_eq!(format_in(&roles, &placement, music), settings::Format::AsIs, "set to as is: hi-res files stay as they are");
+        assert_eq!(format_in(&roles, &placement, std::path::Path::new("/elsewhere")), settings::Format::Cd);
     }
 }
