@@ -21,11 +21,18 @@
   import Seg from './Seg.svelte';
   import { shuffled } from './shuffle';
   import RecordSheet from './RecordSheet.svelte';
+  import SnippetMark from './SnippetMark.svelte';
   import SnippetRows from './SnippetRows.svelte';
   import { matcherModule } from './matcherLoad';
   import { spreadRecords } from './spread';
   import { toast } from './toast.svelte';
   import TrackCover from './TrackCover.svelte';
+  import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
+  import SelectionMenu from './SelectionMenu.svelte';
+  import { fromAction } from 'svelte/attachments';
+  import { longpress } from './longpress';
+  import { albumSubject, viewOver } from './panel.svelte';
+  import type { LocalTrack } from './localPlayer.svelte';
 
   let {
     conditions,
@@ -123,6 +130,14 @@
   );
   /** A record opened: the crate's tracks of it, in a sheet over the list (lib/RecordSheet; the owner, 2026-11-02). */
   let recordOpen = $state<string | null>(null);
+  // A long-press (a right-click) on a record or a track opens its menu, as in a crate's own panel (the owner,
+  // 2026-11-02): a record's its tracks of the crate and Go to album, a track's its own.
+  let recordMenu = $state<string | null>(null);
+  let trackMenu = $state.raw<MenuTrack | null>(null);
+  const menuTrackOf = (r: PlaylistRow): MenuTrack => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, has_versions: r.has_versions });
+  const localOf = (rows: PlaylistRow[]): LocalTrack[] =>
+    rows.filter((r) => r.id && !r.missing).map((r) => ({ source: preview?.source ?? 'cratarr', id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
+  const openTrackMenu = (r: PlaylistRow) => r.id && !r.missing && (trackMenu = menuTrackOf(r));
   const openRecord = $derived(view === 'records' && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
   $effect(() => {
     void key;
@@ -172,14 +187,16 @@
       {#each records as rec (rec.key)}
         {@const first = preview.rows[rec.at[0]]}
         <li>
-          <Row size="large" title={rec.title || 'Unknown album'} sub={[rec.artist, holdsLine(rec.at.length, rec.of)].filter(Boolean).join(' · ')} label={`Open ${rec.title || 'an unknown album'}`} onclick={() => (recordOpen = rec.key)}>
+          <Row size="large" title={rec.title || 'Unknown album'} sub={[rec.artist, holdsLine(rec.at.length, rec.of)].filter(Boolean).join(' · ')} label={`Open ${rec.title || 'an unknown album'}`} onclick={() => (recordOpen = rec.key)} attachMain={fromAction(longpress, () => () => (recordMenu = rec.key))}>
             {#snippet lead()}<TrackCover src={first?.id && !first.missing ? coverUrl({ source: src, id: first.id }) : null} />{/snippet}
+            <!-- It opens its tracks with their snippets (lib/RecordSheet): the snippet's mark says so (the owner, 2026-11-02). -->
+            {#snippet action()}<button class="snip" aria-label={`Hear ${rec.title || 'an unknown album'}`} onclick={() => (recordOpen = rec.key)}><SnippetMark /></button>{/snippet}
           </Row>
         </li>
       {/each}
     </ol>
   {:else}
-    <SnippetRows source={src} items={preview.rows.map((r, i) => ({ r, i }))} {key} label="The crate's tracks" />
+    <SnippetRows source={src} items={preview.rows.map((r, i) => ({ r, i }))} {key} label="The crate's tracks" onmenu={openTrackMenu} />
   {/if}
   {#if openRecord}
     {@const rec = openRecord}
@@ -188,9 +205,25 @@
       title={rec.title || 'Unknown album'}
       chips={[rec.artist ?? '', holdsLine(rec.at.length, rec.of)].filter(Boolean)}
       items={rec.at.map((i) => ({ r: preview!.rows[i], i }))}
+      onmenu={openTrackMenu}
       onclose={() => (recordOpen = null)}
     />
   {/if}
+  {#if recordMenu}
+    {@const rec = records.find((r) => r.key === recordMenu)}
+    {#if rec}
+      {@const rows = rec.at.map((i) => preview!.rows[i]).filter(Boolean)}
+      {@const albumId = rows.find((r) => r.album_id)?.album_id ?? null}
+      <SelectionMenu
+        title={rec.title || 'Unknown album'}
+        chips={[rec.artist ?? '', holdsLine(rec.at.length, rec.of)].filter(Boolean)}
+        tracks={localOf(rows)}
+        album={albumId ? viewOver.bind(null, albumSubject(src, albumId)) : null}
+        onclose={() => (recordMenu = null)}
+      />
+    {/if}
+  {/if}
+  {#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
   {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
 {:else if conditions.length}
   <!-- Its first answer on its way: the one loading rule's spinner (the owner, 2026-10-31: a grabbed crate showed
@@ -261,5 +294,16 @@
   .error {
     margin: 0;
     color: var(--danger-ink);
+  }
+
+  /* A record's snippets, its tracks' sheet (lib/RecordSheet): the snippet's mark, as lib/SnippetRows' at rest. */
+  .snip {
+    display: grid;
+    place-items: center;
+    padding: 4px;
+    border: 0;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
   }
 </style>
