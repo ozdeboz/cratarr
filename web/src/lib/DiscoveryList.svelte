@@ -27,7 +27,7 @@
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
   import { albumSubject, viewOver } from './panel.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
 
@@ -50,6 +50,14 @@
   const shownMissing = $derived((missing?.albums ?? []).filter((a) => matchesSearch(a.title, a.artist)));
   const shownExcluded = $derived((excluded?.albums ?? []).filter((a) => matchesSearch(a.album, a.artist)));
   const shownArtists = $derived((excluded?.artists ?? []).filter((a) => matchesSearch(a.artist)));
+  // The page's words leaving none of the list (decision 0095): said from the magnifier.
+  searchNone(
+    () =>
+      kind === 'missing'
+        ? !shownMissing.length && { n: missing?.albums.length ?? 0, one: 'record' }
+        : !shownExcluded.length && !shownArtists.length && { n: (excluded?.albums.length ?? 0) + (excluded?.artists.length ?? 0), one: 'exclusion' },
+    'panel',
+  );
   const when = (secs: number) => new Date(secs * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
   // A missing album opened: from Bandcamp where it is there, else its menu.

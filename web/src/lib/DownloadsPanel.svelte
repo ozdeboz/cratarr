@@ -24,7 +24,7 @@
   import { DOWNLOADS_LISTS, goTo, onceAlbums, WAITS, type DownloadsList, type OnceAlbum } from './downloadsLists.svelte';
   import Icon from './Icon.svelte';
   import { kept, setKept, syncKept, type KeptItem } from './kept.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -116,6 +116,8 @@
       return matchesSearch(titleOf(g), artistOf(g), yearOf(g) ? String(yearOf(g)) : null, [...new Set(s.flatMap((r) => r.genres))].join(' '), s.map((r) => r.name).join(' '));
     }),
   );
+  // The page's words leaving none of the list (decision 0095): said from the magnifier, not "Nothing synced".
+  searchNone(() => (list === 'synced' ? !synced.length && { n: kept.items.length, one: 'download' } : list === 'once' && !once.length && { n: onceAlbums().length, one: 'record' }), 'panel');
   function albumLine(g: OnceAlbum): { text: string; fill: number | null; bad: boolean } {
     const listed = listedOf(g);
     const done = g.tracks.filter((t) => t.download.state === 'done').length;
@@ -276,7 +278,7 @@
             />
           {/if}
         {:else}
-          <Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />
+          {#if !kept.items.length}<Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />{/if}
         {/each}
       </Group>
     {:else}
@@ -309,7 +311,7 @@
           />
           {/if}
         {:else}
-          <Item name="Nothing downloaded once" />
+          {#if !onceAlbums().length}<Item name="Nothing downloaded once" />{/if}
         {/each}
       </Group>
     {/if}

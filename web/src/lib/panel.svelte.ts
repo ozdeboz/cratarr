@@ -152,6 +152,11 @@ const steps = $state({ n: 0, how: 'view' as Step['how'] });
 export const panelDepth = () => steps.n;
 /** Whether the panel shows beside the page (set by App): its history then is its own, out of the page's. */
 const layout = $state({ beside: false });
+/** A panel shows beside the page (not over it): the page's search is the one in sight. */
+export const panelBeside = () => layout.beside && panel.viewed !== null;
+/** A panel covers the page (full screen, over it): the page says nothing about itself meanwhile (decision 0095: a
+ *  page's "nothing" over a panel pointed at a list out of sight). */
+export const pageCovered = () => !layout.beside && panel.viewed !== null;
 export function setBeside(beside: boolean) {
   if (layout.beside === beside) return;
   layout.beside = beside;

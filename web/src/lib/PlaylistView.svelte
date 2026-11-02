@@ -186,7 +186,7 @@
   import NothingPopover, { type NothingChip } from './NothingPopover.svelte';
   import { answers, pointAt, type Answer } from './attribution';
   import { lastOf } from './lastChange.svelte';
-  import { matchesSearch, pageView, searchLines, trackOrders, type TrackOrder } from './pageView.svelte';
+  import { matchesSearch, pageView, searchLines, searchNone, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
@@ -878,6 +878,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return list;
   });
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
+  // A record's or a playlist's words leaving none of what its filter keeps (decision 0095): said from the magnifier. A
+  // crate's search is one of its causes (its explain), an artist's said by lib/ArtistBody.
+  searchNone(() => !crate && !artist && !!rows && !!shown && !shown.length && { n: rows.filter((r) => keeps(r)).length, one: 'track' }, 'panel');
   /** A crate as records or as tracks, chosen in View or by a tap on the list's count (the owner, 2026-11-02). */
   const setCrateView = (c: string, v: 'records' | 'tracks') => (prefs.crateViews = { ...prefs.crateViews, [c]: v });
   // A crate as records or tracks (0.10; the owner, 2026-10-30: lib/crateRecords): its tracks grouped by album, in the

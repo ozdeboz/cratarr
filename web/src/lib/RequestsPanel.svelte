@@ -22,7 +22,7 @@
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
   import { backOne, REQUESTS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
@@ -106,6 +106,14 @@
   const found = (r: AlbumRequest) => matchesSearch(r.album, r.artist, r.user);
   const waiting = $derived((view?.waiting ?? []).filter(found));
   const mine = $derived((view?.mine ?? []).filter(found));
+  const seen = (a: { album: string; artist: string | null }) => matchesSearch(a.album, a.artist);
+  // The page's words leaving none of the list (decision 0095): said from the magnifier, not the list's "None waiting".
+  searchNone(() => {
+    if (list === 'waiting') return !waiting.length && { n: view?.waiting?.length ?? 0, one: 'request' };
+    if (list === 'mine') return !mine.length && { n: view?.mine.length ?? 0, one: 'request' };
+    const w = requests.watching;
+    return !!w && !w.fetching.some(seen) && !w.looking.some(seen) && { n: w.fetching.length + w.looking.length, one: 'record' };
+  }, 'panel');
   /** What Select can tick in this list. */
   const selectable = $derived(list === 'waiting' ? waiting : list === 'mine' ? mine.filter(canTakeBack) : []);
   const ticked = $derived(selecting ? selectable.filter((r) => selecting!.has(r.id)).map((r) => r.id) : []);
@@ -187,12 +195,12 @@
     {:else if list === 'waiting'}
       {#if !view.fetcher}<p class="note">Approved requests need Lidarr: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
       <Group>
-        {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}<Item name="None waiting" />{/each}
+        {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}{#if !view.waiting?.length}<Item name="None waiting" />{/if}{/each}
       </Group>
     {:else if list === 'mine'}
       <Group>
         {#each mine as r (r.id)}{@render row(r, false, canTakeBack(r))}{:else}
-          <Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = hrefOf('discover'))} />
+          {#if !view.mine.length}<Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = hrefOf('discover'))} />{/if}
         {/each}
       </Group>
     {:else if !requests.watching}
@@ -201,11 +209,11 @@
       {@const w = requests.watching}
       {#if w.fetching.length}
         <Group title="Fetching now">
-          {#each w.fetching.filter((a) => matchesSearch(a.album, a.artist)) as a (`f:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} fill={a.done} />{/each}
+          {#each w.fetching.filter(seen) as a (`f:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} fill={a.done} />{/each}
         </Group>
       {/if}
       <Group title="Not found yet" more="What Lidarr watches for and has not found yet (its Wanted).">
-        {#each w.looking.filter((a) => matchesSearch(a.album, a.artist)) as a (`l:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} />{:else}<Item name="Nothing" />{/each}
+        {#each w.looking.filter(seen) as a (`l:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} />{:else}{#if !w.looking.length}<Item name="Nothing" />{/if}{/each}
         {#if w.more}<Item name="{w.more.toLocaleString()} more" line="In Lidarr's Wanted" />{/if}
       </Group>
     {/if}

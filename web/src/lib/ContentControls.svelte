@@ -22,6 +22,7 @@
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
+  import { pageCovered, panelBeside } from './panel.svelte';
   import { globalAsked, globalGroups, globalSearch, pageKinds } from './globalSearch.svelte';
   import type { PanelKind } from './prefs.svelte';
   import type { Snippet } from 'svelte';
@@ -252,7 +253,10 @@
   // magnifier (lit, folded, after another page; or the field open), the words a chip whose ✕ clears; everywhere's
   // count stays the globe's alone. Not while everywhere's results show.
   // Not while the words make a crate whose card shows (the owner, 2026-11-02: the crate card wins, the page found that).
-  const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn && crateCards.shown === 0);
+  // A panel's none (searchNone 'panel') by the pill that holds the search: the page's while the panel is beside it, the
+  // panel's own while it covers the page; the page's own none first.
+  const noneSaid = $derived(page ? (pageCovered() ? null : pageView.none && crateCards.shown === 0 ? pageView.none : panelBeside() ? pageView.panelNone : null) : search ? pageView.panelNone : null);
+  const noneShown = $derived(!!noneSaid && pageView.query.trim() !== '' && !globeOn);
   let row = $state<HTMLElement>();
   // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the
   // buttons it replaces took, and grows from what its row has left, 320 px at most. A piece of its row (lib/glassRow): the
@@ -373,7 +377,7 @@
     {/if}
   </div>
   {#if noneShown}
-    <NothingPopover anchor={lens} said={`No ${pageView.none} for`} chips={[{ label: pageView.query.trim(), onclear: clear }]} />
+    <NothingPopover anchor={lens} said={noneSaid ?? ''} chips={[{ label: 'Search', onclear: clear }]} />
   {/if}
 </span>
 {#if filterOpen}

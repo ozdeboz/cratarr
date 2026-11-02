@@ -2,6 +2,10 @@
   /** One cause that left nothing (decision 0095: reasons are data): its word, and what a tap does: ✕ clears it, or it
    *  opens where it is dealt with (the exclusions: too much for one ✕, the owner 2026-11-02). */
   export type NothingChip = { label: string; onclear?: () => void; onopen?: () => void };
+  /** Those hanging from one control, in the order they came (the owner, 2026-11-02: the page's and its panel's both left
+   *  nothing for the same words, and theirs lay over each other): each under the one before, the tip the first's. */
+  const stacks = new Map<HTMLElement, HTMLElement[]>();
+  const STACK_GAP = 8;
 </script>
 
 <script lang="ts">
@@ -36,7 +40,7 @@
   /** Room between the control and the tip's point. */
   const GAP = 12;
   let el = $state<HTMLElement>();
-  let at = $state<{ left: number; top: number; tip: number } | null>(null);
+  let at = $state<{ left: number; top: number; tip: number; first: boolean } | null>(null);
 
   function place() {
     const a = anchor;
@@ -48,8 +52,14 @@
     const w = box.offsetWidth;
     const mid = r.left + r.width / 2;
     const left = Math.max(EDGE, Math.min(mid - w / 2, innerWidth - EDGE - w));
-    at = { left, top: r.bottom + GAP, tip: Math.max(16, Math.min(w - 16, mid - left)) };
+    const before = above(a, box);
+    at = { left, top: r.bottom + GAP + before.reduce((n, b) => n + b.offsetHeight + STACK_GAP, 0), tip: Math.max(16, Math.min(w - 16, mid - left)), first: !before.length };
   }
+  /** The ones over this one on the same control. */
+  const above = (a: HTMLElement, box: HTMLElement) => {
+    const list = stacks.get(a) ?? [];
+    return list.slice(0, Math.max(0, list.indexOf(box)));
+  };
 
   $effect(() => {
     const a = anchor;
@@ -63,11 +73,12 @@
     }
     // Its control moves without changing size (the search folding slides the magnifier along the glass; a panel's
     // action row scrolls): followed each frame while it shows, placed again only when something moved.
+    stacks.set(a, [...(stacks.get(a) ?? []), box]);
     let raf = 0;
     let was = '';
     const follow = () => {
       const r = a.getBoundingClientRect();
-      const now = `${r.left},${r.bottom},${r.width},${box.offsetWidth},${innerWidth}`;
+      const now = `${r.left},${r.bottom},${r.width},${box.offsetWidth},${innerWidth},${above(a, box).map((b) => b.offsetHeight).join()}`;
       if (now !== was) {
         was = now;
         place();
@@ -75,7 +86,12 @@
       raf = requestAnimationFrame(follow);
     };
     follow();
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      const rest = (stacks.get(a) ?? []).filter((b) => b !== box);
+      if (rest.length) stacks.set(a, rest);
+      else stacks.delete(a);
+    };
   });
 </script>
 
@@ -86,6 +102,7 @@
   role="status"
   bind:this={el}
   class:placed={at !== null}
+  class:under={at !== null && !at.first}
   style:left={at ? `${at.left}px` : null}
   style:top={at ? `${at.top}px` : null}
   style:--tip={at ? `${at.tip}px` : null}
@@ -148,7 +165,8 @@
     visibility: visible;
   }
 
-  .nothing.in-place::before {
+  .nothing.in-place::before,
+  .nothing.under::before {
     display: none;
   }
 

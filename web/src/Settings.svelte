@@ -215,7 +215,7 @@
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone). Only once the parts' words are in:
   // till then only titles match, and "none" flashed before the rows came (the owner, 2026-11-02).
   const none = $derived(!!words.length && !shown.length && settingsWords.by !== null);
-  searchNone(() => (none ? 'settings' : null));
+  searchNone(() => none && { n: allowed.length, one: 'part' });
   const groups = $derived(GROUPS.map((g) => ({ ...g, parts: shown.filter((x) => keptOf(x) === g.kept) })));
 </script>
 
