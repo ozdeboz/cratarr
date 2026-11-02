@@ -31,6 +31,7 @@
     filterList,
     likeCurve,
     type LikeCurveData,
+    type FilterList,
     type ListProfileData,
     type CrateLook,
     crateToPlaylist,
@@ -172,7 +173,7 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { filtersOn, hiddenLibraries, inView, passing } from './listFilter.svelte';
+  import { filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
   import { matchesSearch, pageView, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
@@ -872,7 +873,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
     for (const pid of ids) untrack(() => loadSection(pid));
   });
   /** The list's profile (the owner, 2026-10-23: lib/ListProfile), worked out on the server over all its tracks, as
-   *  the Filter sheet's list is (lib/listFilter inView); asked again after an edit. Not a selection's. */
+   *  the Filter sheet's list is; asked again after an edit. Not a selection's. Every list's, its own question: only the
+   *  filter is a playlist's alone (2026-10-24), and the profile asked through the filter's list vanished from records,
+   *  crates and artists with it (the owner, 2026-11-02: "Profile everywhere"); Settings › Display says how much shows. */
+  const profileList = $derived.by((): { list: FilterList; source?: string } | null => {
+    if (crate) return { list: { kind: 'crate', id: crate }, source: prefs.source || undefined };
+    const ours = (source: string) => source !== DEVICE && !fromDiscover(source);
+    if (album) return ours(album.source) ? { list: { kind: 'album', source: album.source, id: album.id } } : null;
+    if (artist) return ours(artist.source) ? { list: { kind: 'artist', source: artist.source, name: artist.name } } : null;
+    return p ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null;
+  });
   let profile = $state<ListProfileData | null>(null);
   /** While the profile (or a Sounds like crate's curve) is on its way: the header holds its place rather than showing
    *  the tempo spread that would make way for it (the owner, 2026-10-23: no flash of what is not going to stay). */
@@ -880,7 +890,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** The list the profile is of. */
   let profileOf = '';
   $effect(() => {
-    const at = inView[kind];
+    const at = profileList;
     void saved;
     void undos.n;
     if (!at || multi || crateEditing || creating) {
