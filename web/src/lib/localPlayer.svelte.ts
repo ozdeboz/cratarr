@@ -71,8 +71,9 @@ export type Repeat = 'off' | 'one' | 'all';
 /** A sleep timer: pause at `atMs` (epoch ms), or when the playing track ends. */
 export type Sleep = { atMs: number | null; endOfTrack: boolean };
 /** Autoplay's modes (decision 0036, amended); off is null. */
-export type AutoplayMode = 'similar' | 'artist' | 'era' | 'random';
-export const AUTOPLAY_MODES: readonly AutoplayMode[] = ['similar', 'artist', 'era', 'random'];
+/** `taste`: Your taste, what fits the account's taste best (decision 0094; it says it follows the taste). */
+export type AutoplayMode = 'similar' | 'artist' | 'era' | 'random' | 'taste';
+export const AUTOPLAY_MODES: readonly AutoplayMode[] = ['similar', 'artist', 'era', 'random', 'taste'];
 /** What Radio's inserts are like (decision 0036, amended): the track (its artist weighed double), its artist, its era. */
 export type RadioBy = 'track' | 'artist' | 'era';
 export const RADIO_BYS: readonly RadioBy[] = ['track', 'artist', 'era'];
@@ -1457,7 +1458,7 @@ function autoplayOf(a: unknown): Autoplay | null {
 /** A radio from before the amendment (`{on, mode, seed, within}`), as Autoplay. */
 function fromOld(r: Record<string, unknown>): Record<string, unknown> | null {
   if (r.on === false) return null;
-  const mode = r.mode === 'artist' || r.mode === 'era' || r.mode === 'random' ? r.mode : 'similar';
+  const mode = r.mode === 'artist' || r.mode === 'era' || r.mode === 'random' || r.mode === 'taste' ? r.mode : 'similar';
   return { ...r, mode, albums: r.mode === 'album_mix', restart: r.mode === 'reshuffle' };
 }
 
