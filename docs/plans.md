@@ -46,9 +46,14 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   as a radio mode, skips keeping tracks away gently, one radio sheet wherever radio starts, own orders named); one way to
   say nothing ([0095](decisions/0095-one-way-to-say-nothing.md)); a library's quality limit
   ([0096](decisions/0096-libraries-equal.md)'s amendment); energy and danceability on the library's 0–100% in the
-  profile, the filter's window lit on the panel's bars (the sheet unchanged); a playlist's Sync into "Shared with other
-  users", Repair into Health, a record's own Health problems on its page; and, suggested, the tagged total ("05/06") for
-  missing tracks without a reference. Previews on staging along the way.
+  profile, the filter's window lit on the panel's bars (the sheet unchanged); a record's own Health problems on its page;
+  and, suggested, the tagged total ("05/06") for missing tracks without a reference. Added the same day: faster
+  previews (the image built on the tests' compiled parts) and a dependency check (duplicate crate versions, ts-rs out of
+  the server); the settings' section Resets from the panel's one declaration, opening its sheet; the global search
+  button always an extension on the back layer; the false "no sound" on some MP3s; the dev page's player reconnecting
+  every 3 s. Moved to 0.16 with 0096 (the owner, 2026-11-02): a playlist's Sync into "Shared with other users" and
+  Repair into Health (both rework the .m3u files 0096 replaces), and Health's check for records above their library's
+  quality limit (the limit itself for moves and Keep stays in 0.14). Previews on staging along the way.
 - **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**
   ([0091](decisions/0091-scrobbling-from-the-device.md)). Cratarr's mode is Cratarr's own library, its libraries still
   switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
