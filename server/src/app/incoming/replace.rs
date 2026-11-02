@@ -12,6 +12,7 @@ use crate::app::ToggleError;
 use crate::app::library::epoch_now;
 use crate::incoming::{AlbumFile, ReplacePlan, ReplaceRefusal};
 use crate::journal::{Entry, Event, TrackMove};
+use crate::settings;
 
 /// What Replace would do with an album, for the page to show before asking.
 #[derive(Debug, Serialize)]
@@ -303,9 +304,11 @@ impl IncomingService {
     /// Work out Replace for an album: the album it replaces and what moves, or why not. Changes nothing.
     async fn plan_replace(&self, at: &Located, year: Option<&str>) -> Result<Result<Planned, ReplaceRefused>, ToggleError> {
         let music = PathBuf::from(self.lib.music().ok_or_else(|| ToggleError::Refused("no Music library is set".into()))?);
-        let (library, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        let old_dir = verdicts(std::slice::from_ref(&at.album), &library, &incoming)
+        let (libraries, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        // Only an album matched in Music is replaced (one matched in another library is only told).
+        let old_dir = verdicts(std::slice::from_ref(&at.album), &libraries, &incoming, |_| None)
             .remove(&at.album.id)
+            .filter(|v| v.replaceable)
             .map(|v| v.library)
             .ok_or_else(|| ToggleError::Refused(format!("{} is not in Music", at.album.title)))?;
         let (c, folder, dir, root, year, template) =
@@ -341,9 +344,10 @@ impl IncomingService {
     /// What Replace would do with an album, for the page to show before asking. Changes nothing.
     pub async fn replace_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<ReplacePreview, ToggleError> {
         let at = self.locate(source_id, album_id).await?;
-        let (library, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        let old = verdicts(std::slice::from_ref(&at.album), &library, &incoming).remove(&at.album.id).map(|v| v.library).unwrap_or_default();
-        let convert = self.to_convert(&at).await.len();
+        let (libraries, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        let old = verdicts(std::slice::from_ref(&at.album), &libraries, &incoming, |_| None).remove(&at.album.id).filter(|v| v.replaceable).map(|v| v.library).unwrap_or_default();
+        // Converted where Music's format is CD format, as Keep's (the owner, 2026-11-02: a library's format holds).
+        let convert = if self.music_format(source_id) == settings::Format::Cd { self.to_convert(&at).await.len() } else { 0 };
         let acquisition = self.acquisition().is_some();
         let music = PathBuf::from(self.lib.music().unwrap_or_default());
         Ok(match self.plan_replace(&at, year).await? {
@@ -386,7 +390,8 @@ impl IncomingService {
     /// before, Incoming's), the new ones into Music
     /// named per the library's template, each taking over its old track's id. Lidarr stops fetching the album and the
     /// old tracks' play data goes to the new server items (handlers). Undo puts it all back.
-    /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
+    /// Hi-res files are converted first, in the queue, where Music's format is CD format: the plan is checked now, so a
+    /// refusal shows at once.
     pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
@@ -410,7 +415,7 @@ impl IncomingService {
                 tracing::warn!("replace: {e}");
             }
         }
-        let convert = self.to_convert(&at).await;
+        let convert = if self.music_format(source_id) == settings::Format::Cd { self.to_convert(&at).await } else { Vec::new() };
         if !convert.is_empty() {
             return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, planned.plan.folder, 0));
         }
