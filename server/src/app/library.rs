@@ -113,7 +113,7 @@ impl Active {
                 return Self { cfg, source: None, placement: Placement::default(), error: Some(format!("{e:#}")) };
             }
         };
-        let placement = placement::place(&*source, folders).await.unwrap_or_else(|e| {
+        let placement = placement::place(&*source, folders, &cfg.libraries).await.unwrap_or_else(|e| {
             tracing::warn!("source {}: cannot look at its libraries yet: {e:#}", cfg.id);
             Placement::default()
         });
@@ -473,7 +473,7 @@ impl Library {
         for a in live.iter() {
             match &a.source {
                 Some(s) if unplaced(a) => {
-                    let placement = placement::place(&**s, &places).await.unwrap_or_default();
+                    let placement = placement::place(&**s, &places, &a.cfg.libraries).await.unwrap_or_default();
                     if placement.roots.len() > a.placement.roots.len() {
                         tracing::info!("source {}: found its music in more folders", a.cfg.id);
                     }

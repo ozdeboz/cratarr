@@ -2136,11 +2136,12 @@ impl PlaylistService {
         Ok(rows)
     }
 
-    /// An export's plan (decision 0007): the playlists' lines as files in the Music folder, each file once, with its
-    /// size, the tags its name needs and its format for the estimates. Read from the disk and the catalogue; no request
-    /// to the server.
+    /// An export's plan (decision 0007): the playlists' lines as files, each file once, with its size, the tags its name
+    /// needs and its format for the estimates. Each line's file wherever the catalogue places it: the Music folder's, or
+    /// another library's for a line that climbs out of it (an Incoming track), never outside the catalogue's folders.
+    /// Read from the disk and the catalogue; no request to the server.
     pub async fn export_plan(&self, names: &[String]) -> Result<crate::export::Plan, ToggleError> {
-        let music = self.lib.music().ok_or(ToggleError::NoMusicFolder)?;
+        self.lib.music().ok_or(ToggleError::NoMusicFolder)?;
         let mut lists = Vec::new();
         for n in names {
             let r = self.reach(n)?;
@@ -2148,7 +2149,12 @@ impl PlaylistService {
         }
         let c = self.lib.catalogue();
         let plan = tokio::task::spawn_blocking(move || {
-            crate::export::plan(std::path::Path::new(&music), lists, |rels| {
+            let folders = c.folders();
+            let place = |line: &str| {
+                let (folder, rel) = c.place_of_line(line)?;
+                Some((folders.get(usize::try_from(folder).ok()?)?.clone(), rel))
+            };
+            crate::export::plan(lists, place, |rels| {
                 let rows = c.line_rows("", rels)?;
                 Ok(rels
                     .iter()
