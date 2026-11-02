@@ -409,6 +409,12 @@
     min-width: 0;
   }
 
+  /* Nothing to show (an album beside the page while music plays: no search there, nowhere else to play it): no glass,
+     not an empty one (the owner, 2026-11-02: "a shim of a button, unfilled and tiny"). */
+  .pill-row:not(:has(button, .work)) {
+    display: none;
+  }
+
   /* The page's search finding none (A2): one slim line hanging from the pill, its tip on the magnifier, the words a
      chip whose ✕ clears. */
   .none {
