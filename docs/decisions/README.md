@@ -280,3 +280,8 @@ by a later record that says so in its header. A new decision takes the next numb
   same states: loading keeps what shows, an error says so with Try again, nothing caused here is the popover on its
   cause with its reasons as chips, nothing truly is plain text in place; reasons are data, the server's where it
   decides them; one component each.
+- [0096: Libraries equal; playlists in Cratarr; Incoming a library's setting](0096-libraries-equal.md): accepted, to be
+  built in 0.15/0.16. Playlists in Cratarr's database, .m3u an export; any number of main libraries, each with its own
+  name, colour, naming and format; Incoming one library per fetcher, its records the only new ones, Keep into a chosen
+  main library; Health over every library; each user's own music a main library with an owner. Amends 0009, 0034 and
+  0084.
