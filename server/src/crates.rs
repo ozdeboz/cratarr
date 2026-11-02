@@ -870,6 +870,9 @@ pub struct Facts {
     /// Its labels (0.11, quick crates): its tags' (LABEL, ID3 TPUB, PUBLISHER), else what Discogs said of its album
     /// where that is kept (never asked for here: the Discogs rounds fill it in).
     pub labels: Vec<String>,
+    /// Its files' STYLE and MOOD words as read, for the words' store (decision 0097) to weigh beside AudioMuse's
+    /// (`styles`, `moods` until the store makes them its own); none where its tags hold neither, and once read.
+    pub file_words: Option<Box<(Vec<String>, Vec<String>)>>,
 }
 
 /// What a listener did with a line (the owner, 2026-10-23: crates on plays, last played and rating): how often it was

@@ -589,7 +589,7 @@ export const crateRows = (
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
   // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
-  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked }>(
+  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; word?: WordOf }>(
     `/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`,
   );
 };
@@ -2152,6 +2152,16 @@ export const reportPlays = (events: HeardEvent[]) => post<{ done: string[] }>('/
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
 /** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
+/** Decision 0097's words: a kind, a source (strongest first in a word's `sources`). */
+export type WordKind = 'genre' | 'style' | 'mood' | 'tag';
+export type WordSource = 'hand' | 'files' | 'audiomuse' | 'household' | 'musicbrainz' | 'discogs' | 'lastfm';
+/** A kind's words, strongest first; `hand`: set by hand (exactly the hand's list). */
+export type KindWords = { kind: WordKind; hand: boolean; words: { word: string; sources: WordSource[] }[] };
+/** A record's words (the album view's `words`, the server's one store): its kinds that have any, in the order genre,
+ *  style, mood, tag; its tracks whose words differ, each with its differing kinds whole (shared/words.json). */
+export type RecordWords = { kinds: KindWords[]; tracks: { id: string; kinds: KindWords[] }[] };
+/** A word's crate's word: its one spelling and every source that says it anywhere (its menu's header). */
+export type WordOf = { kind: WordKind; word: string; sources: WordSource[] };
 export type AlbumView = {
   /** As a listed album's (decision 0092). */
   files_state?: FilesState | null;
@@ -2180,6 +2190,8 @@ export type AlbumView = {
   tags?: string[];
   links?: { name: string; url: string }[];
   listeners?: number;
+  /** Its words by kind with their sources, and its tracks' own (decision 0097): Cratarr's own library's records. */
+  words?: RecordWords;
 };
 /** One search's answer from the server (decision 0072, 0.9.3): per kind, and the kinds merged for Top results. Each
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */

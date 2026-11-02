@@ -138,6 +138,10 @@ pub struct AlbumMore {
     /// Its tags that are not among its genres.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Its words by kind, with their sources, and its tracks' own (decision 0097, the one store): Cratarr's own
+    /// library's records.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub words: Option<super::words::store::Words>,
     /// Where it is elsewhere: its own page first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<super::discover::Link>,
@@ -711,6 +715,14 @@ impl PlayingService {
             }
         }
         let listening = s.album_listening(album_id).await.unwrap_or_default();
+        // Its words, from the one store (decision 0097).
+        let words = match crate::serve::instance() {
+            Some(served) if source_id == crate::source::cratarr::KIND.id => {
+                let id = album_id.to_string();
+                tokio::task::spawn_blocking(move || super::words::stored(&served).map(|s| s.records.get(&id).cloned())).await.ok().and_then(Result::ok).flatten()
+            }
+            _ => None,
+        };
         Ok(AlbumView {
             source: source_id.to_string(),
             id: album_id.to_string(),
@@ -724,7 +736,7 @@ impl PlayingService {
             added: listening.added,
             played: listening.played,
             plays: listening.plays,
-            more: AlbumMore::default(),
+            more: AlbumMore { words, ..AlbumMore::default() },
         })
     }
 

@@ -51,6 +51,9 @@ pub struct CratePage {
     /// What keeps each track out, by its `entry`, when asked (`explain`; decision 0095, amended 2026-11-02).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked: Option<crates::Blocked>,
+    /// A word's crate (`genre:`, `style:`, `mood:`, `tag:`): the word and every source that says it (decision 0097).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word: Option<super::words::WordOf>,
 }
 
 /// A Sounds like curve (lib/LikeCurve): how alike the closest are, closest first, and the profile at every step its
@@ -2778,7 +2781,16 @@ impl PlaylistService {
     /// looked at (its toggles, the libraries switched off).
     pub async fn crate_rows(&self, id: &str, want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
         let (shown, causes) = self.crate_causes(id, look).await?;
-        self.crate_page_saying(&shown, &causes, want, offset, limit, look).await
+        let mut page = self.crate_page_saying(&shown, &causes, want, offset, limit, look).await?;
+        // A word's crate names the word and its sources (decision 0097: its menu's header).
+        if let Some((kind, name)) = id.split_once(':')
+            && super::words::store::Kind::of(kind).is_some()
+            && let Some(served) = self.served.clone()
+        {
+            let (kind, name) = (kind.to_string(), name.trim().to_string());
+            page.word = tokio::task::spawn_blocking(move || super::words::stored(&served).ok().and_then(|s| s.word(&kind, &name))).await.ok().flatten();
+        }
+        Ok(page)
     }
 
     /// A crate's conditions as its toggles show it (as given, else as saved), with its left-out tracks and the filter on
@@ -3125,7 +3137,7 @@ impl PlaylistService {
         let page: Vec<String> = lines.iter().skip(offset).take(limit).cloned().collect();
         let mut rows = self.rows_of(page, &lib.source).await?;
         self.with_plays_and_added(&mut rows, &lib).await;
-        Ok(CratePage { source: lib.source, total, limit, rows, genres, reasons, all_back, blocked })
+        Ok(CratePage { source: lib.source, total, limit, rows, genres, reasons, all_back, blocked, word: None })
     }
 
     /// The lines these conditions select, in `look`'s order, and the server they are for: what Play plays as the list
