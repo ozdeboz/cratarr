@@ -186,12 +186,12 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { causeChip, conditionsFor, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
+  import { causeChip, conditionsFor, filterBlocked, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
   import { windowsOf } from './profileWindow';
   import NothingPopover, { type NothingChip } from './NothingPopover.svelte';
   import { answers, pointAt, type Answer } from './attribution';
   import { lastOf } from './lastChange.svelte';
-  import { matchesSearch, pageView, searchLines, searchNone, trackOrders, type TrackOrder } from './pageView.svelte';
+  import { explainHidden, matchesSearch, pageView, searchLines, searchNone, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
@@ -927,6 +927,42 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return list;
   });
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
+  // Part of it hidden (a long-press on the lit magnifier or funnel, lib/pageView explainHidden): how many, and each cause
+  // keeping one out, truly.
+  explainHidden(async () => {
+    if (!rows || !shown) return null;
+    const words = pageView.query.trim() !== '';
+    const searchOut = (r: PlaylistRow) => words && !matchesSearch(r.name ?? r.file, r.artist, r.album);
+    const c = crate;
+    if (c && !crateEditing) {
+      const r = await crateRows(c, 0, 1, prefs.source || undefined, favouritesOf(c), favouriteAlbumsOf(c), crateLook, { q: searchLines() });
+      const b = r.blocked;
+      const hiddenN = (b?.groups ?? []).reduce((n, g) => n + g.keys.length, 0);
+      if (!b || !hiddenN) return null;
+      const used = [...new Set(b.groups.flatMap((g) => g.causes))].sort();
+      const chipOf = (i: number): NothingChip => {
+        const x = b.causes[i];
+        if (x.kind === 'favourites') return { label: x.label, onclear: () => setFavourites(c, () => 'all') };
+        if (x.kind === 'favourite_albums') return { label: x.label, onclear: () => setFavouriteAlbums(c, () => 'all') };
+        return causeChip('crate', x, () => (excludedOpen = true));
+      };
+      return { said: `${hiddenN.toLocaleString()} of ${plural(hiddenN + r.total, 'track')} hidden by`, chips: used.map(chipOf) };
+    }
+    const b = filterable && p && !multi ? await filterBlocked('playlist', { kind: 'playlist', id: p.id }, prefs.source || undefined).catch(() => null) : null;
+    const causes = [...(b?.causes ?? []), ...(words ? [{ kind: 'search' as const, label: 'Search' }] : [])];
+    const search = words ? causes.length - 1 : -1;
+    const byKey = new Map<string, number[]>();
+    for (const g of b?.groups ?? []) for (const k of g.keys) byKey.set(k, g.causes);
+    const used = new Set<number>();
+    let hiddenN = 0;
+    for (const r of rows) {
+      const out = [...(byKey.get(r.entry) ?? []), ...(search >= 0 && searchOut(r) ? [search] : [])];
+      if (out.length) hiddenN++;
+      for (const x of out) used.add(x);
+    }
+    if (!hiddenN) return null;
+    return { said: `${hiddenN.toLocaleString()} of ${plural(rows.length, 'track')} hidden by`, chips: [...used].sort().map((i) => causeChip('playlist', causes[i], () => (excludedOpen = true))) };
+  }, 'panel');
   // A record's or a playlist's words leaving none of what its filter keeps (decision 0095): said from the magnifier. A
   // crate's search is one of its causes (its explain), an artist's said by lib/ArtistBody.
   searchNone(() => !crate && !artist && !!rows && !!shown && !shown.length && { n: rows.filter((r) => keeps(r)).length, one: 'track' }, 'panel');
