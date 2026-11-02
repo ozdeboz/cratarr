@@ -19,7 +19,8 @@ import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type QueueItem, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type Collection, type QueueItem, type TrackGain } from './api';
+import { collectionIn } from './within';
 import { commandOf } from './player/commands';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
@@ -81,7 +82,7 @@ export const RADIO_MAX = 10;
 /** Autoplay while on: its mode; whole albums (`albums`); a playlist that ends starts again instead (`restart`); the
  *  tracks it stays close to when started from an item, else the queue's own (`seed`); the crate it plays inside
  *  ("Play as radio": only the crate's tracks), when it does. */
-export type Autoplay = { mode: AutoplayMode; albums: boolean; restart: boolean; seed: string[]; within: string | null };
+export type Autoplay = { mode: AutoplayMode; albums: boolean; restart: boolean; seed: string[]; within: Collection | null };
 
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
  *  unknown), and the length the server read from the file (s), shown while the exact one is unknown. */
@@ -1449,7 +1450,7 @@ function autoplayOf(a: unknown): Autoplay | null {
     albums: albums === true,
     restart: restart === true,
     seed: Array.isArray(seed) ? seed.filter((x): x is string => typeof x === 'string') : [],
-    within: typeof within === 'string' && within ? within : null,
+    within: collectionIn(within),
   };
 }
 
@@ -1642,7 +1643,7 @@ export function sourcesChanged() {
 /** Autoplay in a mode, or 'stop' (decision 0036, amended): the player that plays appends its tracks when the queue runs
  *  out. What is not given stays as it was; another mode, albums or crate lets its earlier picks make way. On turns
  *  repeat all off. */
-export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolean; restart?: boolean; seed?: string[]; within?: string | null } = {}) {
+export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolean; restart?: boolean; seed?: string[]; within?: Collection | null } = {}) {
   if (mode === 'stop') {
     local.autoplay = null;
     dropAhead('autoplay');
@@ -1658,7 +1659,7 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
     seed: opts.seed ?? was?.seed ?? [],
     within: opts.within === undefined ? (was?.within ?? null) : opts.within,
   };
-  if (was && (was.mode !== next.mode || was.albums !== next.albums || was.within !== next.within)) dropAhead('autoplay');
+  if (was && (was.mode !== next.mode || was.albums !== next.albums || JSON.stringify(was.within) !== JSON.stringify(next.within))) dropAhead('autoplay');
   local.autoplay = next;
   if (local.repeat === 'all') local.repeat = 'off';
   // What is given only: the player keeps the rest (a player's view does not show the seed here).
@@ -1668,7 +1669,7 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
       ...(opts.albums !== undefined ? { albums: opts.albums } : {}),
       ...(opts.restart !== undefined ? { restart: opts.restart } : {}),
       ...(opts.seed ? { seed: opts.seed } : {}),
-      ...(opts.within !== undefined ? { within: opts.within ?? '' } : {}),
+      ...(opts.within !== undefined ? { within: opts.within } : {}),
     });
   }
   fillAutoplay();
@@ -1709,9 +1710,9 @@ function dropAhead(lane: 'radio' | 'autoplay') {
 }
 
 /** "Start radio" from an item (decision 0036; amended: it sets Autoplay): tracks like `seed` (its own left out) play,
- *  and Autoplay goes on with that seed. `within`: a crate's id, to play only the crate's tracks ("Play as radio"; its
- *  own then may play). `from`: its name, for the queue sheet. */
-export async function startRadio(seed: string[], from: string | null, within: string | null = null) {
+ *  and Autoplay goes on with that seed. `within`: what it plays inside, only its tracks (decision 0094: a crate, a
+ *  playlist, a record, an artist or tracks; "Play as radio"; its own then may play). `from`: its name, for the queue sheet. */
+export async function startRadio(seed: string[], from: string | null, within: Collection | null = null) {
   const mode = local.autoplay?.mode ?? 'similar';
   const albums = local.autoplay?.albums ?? false;
   const skip_favourites = local.skipFavourites;
@@ -1720,7 +1721,7 @@ export async function startRadio(seed: string[], from: string | null, within: st
   // Set before the play: a play of Autoplay's tracks only keeps its seed.
   local.autoplay = { mode, albums, restart: false, seed, within };
   if (local.repeat === 'all') local.repeat = 'off';
-  if (handed()) hand('autoplay', { mode, albums, restart: false, seed, within: within ?? '' });
+  if (handed()) hand('autoplay', { mode, albums, restart: false, seed, within });
   playQueue(tracks as LocalTrack[], 0, from);
 }
 
@@ -4350,7 +4351,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
           ...(typeof m.albums === 'boolean' ? { albums: m.albums } : {}),
           ...(typeof m.restart === 'boolean' ? { restart: m.restart } : {}),
           ...(Array.isArray(m.seed) ? { seed: m.seed as string[] } : {}),
-          ...(typeof m.within === 'string' || m.within === null ? { within: m.within as string | null } : {}),
+          ...(m.within === null || collectionIn(m.within) ? { within: collectionIn(m.within) } : {}),
         });
       return false;
     case 'skip_favourites':
