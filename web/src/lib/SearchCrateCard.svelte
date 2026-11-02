@@ -7,6 +7,9 @@
    *  global search's, each its own card) starts as it was, not gone until its tracks are asked again (the owner,
    *  2026-10-31: it hid for a moment, "I see no use for this at all"). */
   let last: { q: string; shown: Shown } | null = null;
+  /** Cards showing a crate now: a page's own search then found something, and its "No … for" says nothing (the owner,
+   *  2026-11-02: "No crates for Hip hop 90s" over the crate those words made; lib/ContentControls). */
+  export const crateCards = $state({ shown: 0 });
 </script>
 
 <script lang="ts">
@@ -49,6 +52,11 @@
   /** The crate shown: its terms, joins and first tracks, together, given only once all are in (the last one stays
    *  while the next words are read, so the card is not gone between keystrokes; the owner's no-flash rule). */
   let shown = $state<Shown | null>(untrack(() => (last?.q === q ? last.shown : null)));
+  $effect(() => {
+    if (!shown) return;
+    crateCards.shown++;
+    return () => void crateCards.shown--;
+  });
   $effect(() => {
     const s = shown;
     if (s) last = { q: untrack(() => q), shown: s };

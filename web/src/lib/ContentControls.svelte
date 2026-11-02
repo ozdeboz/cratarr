@@ -24,6 +24,7 @@
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
   import { inSpotify, SPOTIFY_FILTER } from './spotify.svelte';
   import { dimmedIn } from './quickCrate';
+  import { crateCards } from './SearchCrateCard.svelte';
 
   let {
     page = null,
@@ -242,7 +243,8 @@
   // The page's own search finding none (0.13; the owner, 2026-10-31: A2): said under the pill, its tip on the
   // magnifier (lit, folded, after another page; or the field open), the words a chip whose ✕ clears; everywhere's
   // count stays the globe's alone. Not while everywhere's results show.
-  const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn);
+  // Not while the words make a crate whose card shows (the owner, 2026-11-02: the crate card wins, the page found that).
+  const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn && crateCards.shown === 0);
   let row = $state<HTMLElement>();
   // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the
   // buttons it replaces took, besides its own wish (as wide as a phone's row allows, 320 px at most). Said on the field
