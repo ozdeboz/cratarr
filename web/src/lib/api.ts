@@ -1474,6 +1474,11 @@ export type HealthItem = {
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
+/** A record's own Health problems (0.14, `/api/albums/{source}/{id}/health`): each finding that names it, worst first, by
+ *  its kind (the report's key) and row, with only the record's items; its tracks' file problems as `files:{kind}`
+ *  findings, an item for each track (`track`, `files`, the problem in `line`). */
+export type RecordFinding = Pick<HealthFinding, 'key' | 'thing' | 'state' | 'detail' | 'level'> & { name: string; items: HealthItem[] };
+export type RecordHealth = { findings: RecordFinding[] };
 
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {

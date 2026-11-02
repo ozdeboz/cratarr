@@ -288,6 +288,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/health/fixes", get(health_fixes))
             .route("/api/health/fixes/apply", post(apply_fixes))
             .route("/api/albums/{source}/{album}/intake", get(album_intake))
+            // A record's own Health problems (0.14): its page's and its menu's.
+            .route("/api/albums/{source}/{album}/health", get(album_health))
             .route("/api/albums/{source}/{album}/release", get(album_release))
             .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
             // A record marked classical or not (0.10), library-wide.
@@ -6506,6 +6508,11 @@ async fn album_intake(State(app): State<Arc<App>>, Path((source, album)): Path<(
     fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.field.cmp(b.field)));
     let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
     Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
+}
+
+/// The findings Health has of one record, each with only its items, and its tracks' file problems (0.14).
+async fn album_health(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::health::RecordHealth>, ApiError> {
+    Ok(Json(app.record_health(&source, &album).await.map_err(ToggleError::from)?))
 }
 
 #[derive(Deserialize)]
