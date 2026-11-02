@@ -32,7 +32,6 @@
   import { installed } from './offline.svelte';
   import { ed } from './settings/editor.svelte';
   import { resetRows, runReset } from './settings/reset.svelte';
-  import SaveBar from './settings/SaveBar.svelte';
   import AccountPart from './settings/AccountPart.svelte';
   import AuthPart from './settings/AuthPart.svelte';
   import UsersPart from './settings/UsersPart.svelte';
@@ -112,6 +111,15 @@
     if (scrollEl) scrollEl.scrollTop = 0;
   });
 
+  // The server's settings saved as they are changed (the owner, 2026-11-02: "I thought we used to have instantly saving
+  // settings"; the Unsaved changes bar is gone): each sheet's OK, switch or choice is the decision, a connection's
+  // address and secrets one sheet together; a moment after the last change, while every server has what it needs.
+  $effect(() => {
+    if (!me.admin || !ed.dirty || !ed.complete || ed.saving || !ed.s?.settings_file) return;
+    const t = setTimeout(() => void ed.save(), 300);
+    return () => clearTimeout(t);
+  });
+
   // A part's Reset (lib/settings/reset): asked once more, in a sheet, before its preferences go back to their defaults.
   let resetting = $state(false);
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
@@ -123,7 +131,7 @@
   narrowSettings(() => narrowing);
   // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
   // its own beside it).
-  const resetAction = () => (resetRows().length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
+  const resetAction = () => (resetRows(section).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
   const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings', action: resetAction() } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
@@ -149,7 +157,7 @@
   {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
   <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar; handed to App's
        glass, it is the pill's own button. -->
-  {#if !thing && !handed && resetRows().length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
+  {#if !thing && !handed && resetRows(section).length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
   {#if !beside}<PanelPlace />{/if}
 {/snippet}
 
@@ -164,6 +172,7 @@
   {/if}
   <div class="scroll" class:away={handed && everywhere()} bind:this={scrollEl}>
     {#if ed.loadError && me.admin}<Notice text={ed.loadError} />{/if}
+    {#if me.admin && ed.s && !ed.s.settings_file && (section === 'connections' || section === 'libraries')}<Notice tone="warn" text="Cratarr can't write its settings file, so changes here are not kept." />{/if}
     {#if !allowed}
       <!-- Another user's view of an administrator's part: nothing. -->
     {:else if section === 'device'}
@@ -208,14 +217,11 @@
       <ImportPart {thing} />
     {/if}
 
-    {#if resetting && resetRows().length}
+    {#if resetting && resetRows(section).length}
       <!-- What Reset puts back, each one now → its default (lib/settings/ResetSheet). -->
-      <ResetSheet title={`Reset ${title}`} rows={resetRows()} onconfirm={runReset} onclose={() => (resetting = false)} />
+      <ResetSheet title={`Reset ${title}`} rows={resetRows(section)} onconfirm={() => runReset(section)} onclose={() => (resetting = false)} />
     {/if}
 
-    {#if ed.dirty}
-      <SaveBar saving={ed.saving} canSave={!!ed.s?.settings_file} onsave={ed.save} ondiscard={() => ed.s && ed.fill(ed.s)} />
-    {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     <!-- Its own search leaving no row (shown until one is left, lib/settings/narrow). -->
     {#if narrowing}<p class="none">No settings match.</p>{/if}

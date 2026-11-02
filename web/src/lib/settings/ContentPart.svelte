@@ -16,7 +16,7 @@
   import { contentItems, HOME, PROFILES } from './resetItems.svelte';
 
   // What Reset puts back: the part's declaration (lib/settings/resetItems), each section's Reset its own of it.
-  offerReset(contentItems);
+  offerReset('content', contentItems);
 
   /** The first section leads Home as the flow on top, so only one made of albums may be first (the owner, 2026-10-24):
    *  another dragged there lands under the first that can lead; the last that can lead stays switched on. */

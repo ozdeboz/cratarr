@@ -25,7 +25,7 @@
   ];
 
   // What Reset puts back (lib/settings/reset): the four choices, each its default once here; what is kept stays.
-  offerReset(() =>
+  offerReset('sync', () =>
     inApp
       ? [
           { name: 'Storage', now: () => appInfo.syncBudgetGb, def: 20, set: (v: number) => setDevice({ syncBudgetGb: v }), say: (v: number) => BUDGETS.find((b) => b.value === String(v))?.label ?? `${v} GB` },

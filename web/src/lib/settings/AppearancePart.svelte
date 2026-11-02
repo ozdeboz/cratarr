@@ -18,7 +18,7 @@
 
   // What Reset puts back (lib/settings/reset): each as its row names it, its default the prefs'.
   const THEMES: Record<string, string> = { auto: 'Automatic', light: 'Light', dark: 'Dark' };
-  offerReset(() => [
+  offerReset('appearance', () => [
     pref('theme', 'Theme', (v) => THEMES[v] ?? v),
     pref('animations', 'Animations'),
     pref('homeGreeting', 'Personal greeting'),

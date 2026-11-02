@@ -12,7 +12,7 @@
 
   // What Reset puts back: the part's declaration (lib/settings/resetItems), its bands' looks with it (they disagreed:
   // the owner, 2026-11-02).
-  offerReset(playerItems);
+  offerReset('player', playerItems);
   const SWIPE_ROWS: { key: keyof PlayerSwipes; name: string; options: { value: string; label: string }[] }[] = [
     { key: 'upLeft', name: 'Swipe up, left', options: SWIPES_UP },
     { key: 'upRight', name: 'Swipe up, right', options: SWIPES_UP },

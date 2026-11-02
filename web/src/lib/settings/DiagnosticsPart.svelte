@@ -132,7 +132,7 @@
   /** More detail: every area, or back to normal. */
   const detail = (on: boolean) => levels && setLevels(on ? Object.fromEntries(levels.areas.map((a) => [a, 'debug'])) : {});
   // What Reset puts back (lib/settings/reset): every area's logging to normal.
-  offerReset(() => (levels ? [{ name: 'More detail', now: () => detailed, def: false, set: () => setLevels({}) }] : null));
+  offerReset('diagnostics', () => (levels ? [{ name: 'More detail', now: () => detailed, def: false, set: () => setLevels({}) }] : null));
 
   const today = new Date().toDateString();
   /** The time, with the day when it is not today. */

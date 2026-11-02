@@ -28,7 +28,7 @@
 
   // What Reset puts back: the part's declaration (lib/settings/resetItems): the app's Stay ready and the tape (they
   // disagreed: the owner, 2026-11-02).
-  offerReset(deviceItems);
+  offerReset('device', deviceItems);
 
   $effect(() => {
     if (inApp && appInfo.deviceMusic === 'granted') askFolders();

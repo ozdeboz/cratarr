@@ -20,19 +20,27 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const sayOf = (i: ResetItem, v: unknown, first: boolean) =>
   i.say ? i.say(v as never) : typeof v === 'boolean' ? (v ? 'On' : 'Off') : v === null || typeof v === 'object' ? (first ? 'As you set it' : 'As it came') : String(v);
 
-export const partReset = $state<{ items: ResetItem[] }>({ items: [] });
+// Each part's preferences, by the part's id (the owner, 2026-11-02: the Import part's Reset listed the tape's): kept for
+// as long as that part shows, and read for the part shown by its id, never "whichever declared last". (A list kept in
+// state is a proxy of itself, so it never matched the list given and was never taken back: the last part's stayed for
+// a part that declares none.)
+const offered = $state<Record<string, { token: number; items: ResetItem[] }>>({});
+let tokens = 0;
 
-/** Declares this part's preferences while it shows; called in a part's script (null: none here now). */
-export function offerReset(items: () => ResetItem[] | null) {
+/** Declares part `part`'s preferences while it shows; called in a part's script (null: none here now). */
+export function offerReset(part: string, items: () => ResetItem[] | null) {
   $effect(() => {
     const list = items();
     if (!list) return;
-    partReset.items = list as ResetItem[];
+    const token = ++tokens;
+    offered[part] = { token, items: list };
     return () => {
-      if (partReset.items === list) partReset.items = [];
+      if (offered[part]?.token === token) delete offered[part];
     };
   });
 }
+
+const itemsOf = (part: string): ResetItem[] => offered[part]?.items ?? [];
 
 /** What a Reset of `items` would change (of `section` only, given one): each not at its default, now → default. */
 export function rowsOf(items: readonly ResetItem[], section?: string): { name: string; from: string; to: string }[] {
@@ -46,8 +54,8 @@ export async function resetOf(items: readonly ResetItem[], section?: string) {
   for (const i of items) if ((section === undefined || i.section === section) && !same(i.now(), i.def)) await i.set(structuredClone(i.def));
 }
 
-/** What the shown part's Reset would change. */
-export const resetRows = () => rowsOf(partReset.items);
+/** What part `part`'s Reset would change. */
+export const resetRows = (part: string) => rowsOf(itemsOf(part));
 
-/** Puts back what of the shown part is not at its default. */
-export const runReset = () => resetOf(partReset.items);
+/** Puts back what of part `part` is not at its default. */
+export const runReset = (part: string) => resetOf(itemsOf(part));

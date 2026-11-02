@@ -13,7 +13,7 @@
 
   // Its Reset: Prefer local network off; the addresses stay (lib/settings/reset).
   // What Reset puts back (lib/settings/reset): Prefer local network; the addresses stay.
-  offerReset(() => (inApp && appInfo.addresses ? [{ name: 'Prefer local network', now: () => !!appInfo.preferLocal, def: false, set: (v: boolean) => setDevice({ preferLocal: v }) }] : null));
+  offerReset('network', () => (inApp && appInfo.addresses ? [{ name: 'Prefer local network', now: () => !!appInfo.preferLocal, def: false, set: (v: boolean) => setDevice({ preferLocal: v }) }] : null));
 
   /** An address as typed (the app tries https:// and then http:// when no scheme is typed). The public address is
    *  never cleared: the app needs it. One the app does not take leaves the one before, and a row names it. */
