@@ -4344,12 +4344,14 @@ struct QueueAdd {
 enum QueueMode {
     Next,
     Last,
+    Now,
 }
 
 async fn queue_add(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(q): Json<QueueAdd>) -> Result<Json<serde_json::Value>, ApiError> {
     let how = match q.mode {
         QueueMode::Next => crate::source::PlayHow::Next,
         QueueMode::Last => crate::source::PlayHow::Last,
+        QueueMode::Now => crate::source::PlayHow::Now,
     };
     let ids: Vec<String> = q.id.into_iter().chain(q.ids).collect();
     if ids.is_empty() {

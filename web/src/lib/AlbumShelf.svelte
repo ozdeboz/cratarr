@@ -53,7 +53,7 @@
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
-  import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, searchNone, USE_ORDERS } from './pageView.svelte';
+  import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, searchNone, USE_ORDERS, explainHidden } from './pageView.svelte';
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
@@ -329,6 +329,23 @@
       clearAll: () => chips.forEach((x) => x.onclear?.()),
       more: found.filter((x) => x !== first).slice(0, 2).map((x) => ({ said: `or ${said(x)}`, chips: x.causes.map(chipOf) })),
     };
+  });
+  // Part of it hidden (a long-press on the lit magnifier or funnel): how many of the records switched on, and each
+  // cause keeping one out, the filter's (the server's explain) and the search's, truly (lib/pageView explainHidden).
+  explainHidden(async () => {
+    const all = (unfiltered ?? sources).flatMap((x) => x.albums.filter((a) => switchedOn(x, a)).map((a) => ({ x, a })));
+    const showing = shown.reduce((n, { albums }) => n + albums.length, 0);
+    if (showing >= all.length) return null;
+    const b = explain ? await explain().catch(() => null) : null;
+    const words = pageView.query.trim() !== '';
+    const causes = [...(b?.causes ?? []), ...(words ? [SEARCH] : [])];
+    const search = words ? causes.length - 1 : -1;
+    const byKey = new Map<string, number[]>();
+    for (const g of b?.groups ?? []) for (const k of g.keys) byKey.set(k, g.causes);
+    const used = new Set<number>();
+    for (const { x, a } of all) for (const c of [...(byKey.get(a.id) ?? []), ...(search >= 0 && !matches(x, a) ? [search] : [])]) used.add(c);
+    if (!used.size) return null;
+    return { said: `${(all.length - showing).toLocaleString()} of ${howManyRecords(all.length)} hidden by`, chips: [...used].sort().map((i) => causeChip(kind, causes[i], () => (excludedOpen = true))) };
   });
   searchNone(
     () =>

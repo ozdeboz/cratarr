@@ -8,7 +8,7 @@ export type Piece = {
   id: string;
   /** Its own width laid out whole (its margins too). */
   width: number;
-  /** Which goes first when there is no room: the highest. 0: never goes. */
+  /** Which goes first when there is no room: the highest. 0: never goes (cut first, where it may be, to its least). */
   rank: number;
   /** Narrower than whole down to this (its words cut with …) before it goes; none: whole or gone. */
   min?: number;
@@ -36,6 +36,14 @@ export function layoutRow(room: number, pieces: readonly Piece[], before: Readon
   // What went before needs room to spare to come back.
   const slack = (p: Piece) => (before && !before.has(p.id) ? RETURN : 0);
   const fits = () => pieces.every((p) => !shown.has(p.id) || used() + slack(p) <= room + 0.5) && used() <= room + 0.5;
+  // What never goes but may be cut (the open field) gives its room first, to its least, before anything else is cut or
+  // goes (the owner, 2026-11-02: the open search ate the title; "title whole, field shrinks").
+  for (const p of pieces) {
+    const over = used() - room;
+    if (over <= 0) break;
+    if (p.rank !== 0 || p.min === undefined || p.min >= p.width) continue;
+    width.set(p.id, Math.max(p.min, p.width - over));
+  }
   const ranks = [...new Set(pieces.map((p) => p.rank).filter((r) => r > 0))].sort((a, b) => b - a);
   for (const rank of ranks) {
     if (fits()) break;

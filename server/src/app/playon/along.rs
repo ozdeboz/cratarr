@@ -574,7 +574,7 @@ impl PlayOn {
     pub async fn accept(&self, id: &str, by: &str, admin: bool) -> Result<QueueRequest, ToggleError> {
         let r = self.waiting(id, by, admin)?;
         let track = QueueTrack { asked_by: Some(r.from.named()), ..r.track.clone() };
-        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track], at: None, after: None, how: Some(r.how.clone()) };
+        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track], at: None, after: None, how: Some(r.how.clone()), now: false };
         let leader = crate::serve::who::Who { user: r.leader.clone(), admin: false, scope: crate::serve::who::Scope::Full, home: true };
         crate::serve::who::acting_as(leader, self.command(&r.player, add)).await?;
         let done = self.requests.answer(id, State::Accepted).ok_or_else(|| ToggleError::Refused("That request was answered meanwhile.".into()))?;

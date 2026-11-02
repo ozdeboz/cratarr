@@ -1882,6 +1882,30 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   fill();
 }
 
+/** The queue place a Play now cut short (`index/source/id`): told as played for the time it got, not as a skip
+ *  (lib/output; the owner, 2026-11-02: "The interrupted song counts as played"). */
+export const cutForNow = { at: null as string | null };
+
+/** One track plays now and keeps the queue (the owner, 2026-11-02): put right after the playing track and started at
+ *  once; what was queued after it stays, and so do "Playing from" and Autoplay (its mode, seed and within: a detour,
+ *  not a new play). Nothing playing: it starts a queue of its own. */
+export function playNow(tracks: LocalTrack[], from: string | null = null) {
+  if (local.index < 0 || !local.queue.length) return playQueue(tracks, 0, from);
+  tracks = tracks.map((t) => ({ ...t, lane: 'next' as const }));
+  const at = local.index + 1;
+  const cur = local.queue[local.index];
+  cutForNow.at = cur ? `${local.index}/${cur.source}/${cur.id}` : null;
+  const after = cur?.entry;
+  local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
+  if (handed()) {
+    Object.assign(local, { index: at, position: 0, paused: false });
+    asking(at);
+    return hand('add', { at, tracks, ...(after === undefined ? {} : { after }), now: true });
+  }
+  cutFrom(at);
+  void skipRamped(() => jump(at));
+}
+
 /** Adds tracks by hand (decision 0033's two lanes): right after the playing one (`next`, so the newest come first), or
  *  after those added before (`last`), ahead of the rest of the album or playlist either way. */
 export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
@@ -4289,7 +4313,13 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       const at = after >= 0 ? after : typeof m.at === 'number' ? Math.min(Math.max(0, m.at), local.queue.length) : local.queue.length;
       local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
       if (local.index < 0) fresh(0, 0, false);
-      else cutFrom(at);
+      else if (m.now === true && at > local.index) {
+        // Played now (a5's Command::Add now): started at once, the one playing told as played.
+        const cur = local.queue[local.index];
+        cutForNow.at = cur ? `${local.index}/${cur.source}/${cur.id}` : null;
+        cutFrom(at);
+        void skipRamped(() => jump(at));
+      } else cutFrom(at);
       return false;
     }
     case 'move': {

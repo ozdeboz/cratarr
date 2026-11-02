@@ -8,7 +8,7 @@ import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
 import { albumView, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
 import { untrack } from 'svelte';
-import { canPlayHere, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
+import { canPlayHere, cutForNow, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { rewindNow } from './ramping.svelte';
 import { drivenName, follow, playOn, pointAt } from './playOn.svelte';
@@ -158,7 +158,10 @@ $effect.root(() => {
     // hearing waits until it plays on, where it landed.
     if (rewindNow.on) return;
     if (hearing && hearing.at !== at) {
-      if (!hearing.counted && hearing.heard >= 1) tell(hearing, t ? 'skipped' : 'stopped', false);
+      // Cut short by a Play now: played for the time it got, not skipped (the owner, 2026-11-02).
+      const cut = cutForNow.at === `${hearing.at.split('/')[0]}/${keyOf(hearing.track)}`;
+      if (cut) cutForNow.at = null;
+      if (!hearing.counted && hearing.heard >= 1) tell(hearing, cut ? 'stopped' : t ? 'skipped' : 'stopped', cut);
       hearing = null;
     }
     if (!t) return;

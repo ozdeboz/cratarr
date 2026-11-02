@@ -36,6 +36,7 @@ import {
   windHold,
   windRelease,
   type LocalTrack,
+  playNow,
 } from '../localPlayer.svelte';
 import { rewindNow } from '../ramping.svelte';
 import { drivenName, outputName } from '../playOn.svelte';
@@ -220,6 +221,25 @@ export function tookLocal(source: string, id: string, view: TrackState) {
   if (localState.key === `${source}/${id}`) localState.view = view;
 }
 
+/** A Play that replaces the queue (a list played, a row of another list tapped): a short Undo bringing the queue back
+ *  as it stood, its place, "Playing from", Autoplay and repeat with it (the owner, 2026-11-02). Nothing playing: none. */
+function replacing(play: () => void) {
+  const was = local.index >= 0 && local.queue.length ? { tracks: [...local.queue], index: local.index, position: local.position, from: local.from, autoplay: local.autoplay, repeat: local.repeat } : null;
+  play();
+  if (!was) return;
+  toast.show({
+    text: 'New queue',
+    act: {
+      label: 'Undo',
+      run: () => {
+        playQueue(was.tracks, was.index, was.from, was.position, false, true);
+        local.autoplay = was.autoplay;
+        local.repeat = was.repeat;
+      },
+    },
+  });
+}
+
 const here: PlayerPort = {
   holdsQueue: true,
   playing: localNowPlaying,
@@ -271,11 +291,12 @@ const here: PlayerPort = {
   },
   playTracks(tracks, how, name, _source, index = 0) {
     if (how === 'next' || how === 'last') enqueue(tracks, how);
-    else playQueue(tracks, index, name, 0, how === 'shuffle');
+    else if (how === 'now') playNow(tracks, name);
+    else replacing(() => playQueue(tracks, index, name, 0, how === 'shuffle'));
   },
   enqueue: (tracks, how) => enqueue(tracks, how),
   enqueueOne: (track, how) => enqueue([track], how),
-  playFrom: (name, _source, tracks, index, position) => playQueue(tracks, index, name, position),
+  playFrom: (name, _source, tracks, index, position) => replacing(() => playQueue(tracks, index, name, position)),
   current: () => (local.index < 0 ? null : { tracks: [...local.queue], index: local.index, position: local.position }),
   leave() {
     stop();

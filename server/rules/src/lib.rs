@@ -66,7 +66,8 @@ impl Rng {
     }
 }
 
-/// How a collection is played: Play (its order), Shuffle, Play next, Add to queue.
+/// How a collection is played: Play (its order), Shuffle, Play next, Add to queue, or Now: played at once, the queue
+/// kept (the owner, 2026-11-02: one track plays now; what was queued, "Playing from" and Autoplay stay).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum How {
@@ -74,6 +75,7 @@ pub enum How {
     Shuffle,
     Next,
     Last,
+    Now,
 }
 
 /// The tracks a play queues: places in the collection, in queue order, and the place in the queue that plays first.
@@ -97,7 +99,7 @@ fn draw(mut pool: Vec<usize>, k: usize, rng: &mut Rng) -> Vec<usize> {
 /// Which of a collection's `n` playable tracks go in the queue, and the one that plays first. `at`: the track asked to
 /// play first (its place in the collection); `most`: at most this many (at least 1; [`QUEUE_MOST`] for a play).
 ///
-/// - Play, Play next, Add to queue: `most` in the collection's order, from `at` on; when fewer than `most` follow it,
+/// - Play, Play next, Add to queue, Now: `most` in the collection's order, from `at` on; when fewer than `most` follow it,
 ///   those before it fill up the queue, so a collection that small is queued whole from that track.
 /// - Shuffle: `most` drawn evenly from all `n`, in a random order; `at` first, when given.
 pub fn pick(n: usize, how: How, at: Option<usize>, most: usize, rng: &mut Rng) -> Picked {
@@ -111,7 +113,7 @@ pub fn pick(n: usize, how: How, at: Option<usize>, most: usize, rng: &mut Rng) -
             }
             None => Picked { chosen: draw((0..n).collect(), most, rng), index: 0 },
         },
-        How::Play | How::Next | How::Last => {
+        How::Play | How::Next | How::Last | How::Now => {
             let a = at.unwrap_or(0);
             let start = a.min(n.saturating_sub(most));
             Picked { chosen: (start..n.min(start + most)).collect(), index: a - start }
@@ -330,6 +332,7 @@ mod tests {
         assert_eq!(pick(10_000, How::Play, None, QUEUE_MOST, &mut rng), played(0..500, 0));
         assert_eq!(pick(42, How::Play, None, QUEUE_MOST, &mut rng), played(0..42, 0));
         assert_eq!(pick(10_000, How::Next, None, QUEUE_MOST, &mut rng), played(0..500, 0));
+        assert_eq!(pick(1, How::Now, None, QUEUE_MOST, &mut rng), played(0..1, 0));
         assert_eq!(pick(10_000, How::Last, None, QUEUE_MOST, &mut rng).chosen.len(), QUEUE_MOST);
         // A smaller limit (Home Assistant's, a voice assistant's).
         assert_eq!(pick(10_000, How::Play, None, 100, &mut rng), played(0..100, 0));

@@ -61,3 +61,17 @@ test('what went comes back only with room to spare, so the row never flickers at
   assert.ok(!layoutRow(just, crumbs, before).shown.has('device'), 'exactly enough: stays gone');
   assert.ok(layoutRow(just + RETURN, crumbs, before).shown.has('device'), 'with room to spare: back');
 });
+
+test('the open field gives way first, to its least, before the title is cut', () => {
+  const row: Piece[] = [
+    { id: 'title', width: 90, rank: 10, min: 48 },
+    { id: 'field', width: 144, rank: 0, min: 96, max: 320 },
+  ];
+  const d = layoutRow(200, row);
+  assert.equal(ids(d), 'field,title');
+  assert.equal(d.width.get('field'), 110, 'the field cut');
+  assert.equal(d.width.has('title'), false, 'the title whole');
+  const tight = layoutRow(160, row);
+  assert.equal(tight.width.get('field'), 96, 'the field at its least');
+  assert.equal(tight.width.get('title'), 64, 'only then the title cut');
+});
