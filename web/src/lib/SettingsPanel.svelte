@@ -26,7 +26,9 @@
   import PanelPlace from './PanelPlace.svelte';
   import { askDevice, askDownloads, inApp } from './app.svelte';
   import { backFromThing, backOne, panel, SETTINGS, settingsThing, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
-  import type { Siblings } from './Crumbs.svelte';
+  import type { Level, Siblings } from './Crumbs.svelte';
+  import { groupsOf, landingOf, remembered } from './groupCrumb';
+  import { prefs } from './prefs.svelte';
   import { keptFor, partsFor, SECTIONS, SETTINGS_GROUPS, thingTitle, type SettingsSection } from './settingsSections.svelte';
   import { installed } from './offline.svelte';
   import { ed } from './settings/editor.svelte';
@@ -57,16 +59,35 @@
   const thing = $derived(settingsThing(panel.viewed));
   // The part's name, as its row on the Settings page has it; on a thing's page the thing's.
   const partTitle = $derived(section === 'device' ? deviceName() : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'));
-  // On a phone the part's name is a picker of Settings' other parts, in their groups (a move sideways; lib/Crumbs).
-  const siblings = $derived<Siblings>({
-    menuLabel: 'Settings shows',
-    options: partsFor(me.admin, inApp, installed).map((x) => ({
-      id: x.id,
-      label: x.id === 'device' ? deviceName() : x.title,
-      group: SETTINGS_GROUPS.find((g) => g.kept === keptFor(x, me.admin))?.title,
-    })),
-    chosen: section,
-    onchoose: (id) => viewSibling(SETTINGS + id),
+  // On a phone the part's name is a picker of the other parts of its group, and its group's a picker of the groups
+  // (lib/Crumbs, lib/groupCrumb; the owner, 2026-11-02: Settings › Device › Appearance, one list of every part was "way
+  // too tall"): a move sideways, a group's landing on the part last seen in it, else its top one.
+  const parts = $derived(partsFor(me.admin, inApp, installed).map((x) => ({ id: x.id as string, group: keptFor(x, me.admin) as string, title: x.id === 'device' ? deviceName() : x.title })));
+  const groupNow = $derived(parts.find((x) => x.id === section)?.group ?? null);
+  const groupTitle = (kept: string) => SETTINGS_GROUPS.find((g) => g.kept === kept)?.title ?? kept;
+  const siblings = $derived.by<Siblings | null>(() => {
+    const own = parts.filter((x) => x.group === groupNow);
+    return own.length > 1 ? { menuLabel: `${groupTitle(groupNow ?? '')} shows`, options: own.map((x) => ({ id: x.id, label: x.title })), chosen: section, onchoose: (id) => viewSibling(SETTINGS + id) } : null;
+  });
+  const groupLevel = $derived<Level | null>(
+    groupNow
+      ? {
+          label: groupTitle(groupNow),
+          pick: {
+            menuLabel: 'Settings groups',
+            options: groupsOf(parts).map((g) => ({ id: g, label: groupTitle(g) })),
+            chosen: groupNow,
+            onchoose: (g) => {
+              const to = g === groupNow ? null : landingOf(parts, g, prefs.groupLast[`settings/${g}`]);
+              if (to) viewSibling(SETTINGS + to);
+            },
+          },
+        }
+      : null,
+  );
+  // The part seen, remembered for its group's next pick.
+  $effect(() => {
+    if (groupNow) prefs.groupLast = remembered(prefs.groupLast, 'settings', groupNow, section);
   });
   const title = $derived(thing ? (thingTitle.text ?? '') : partTitle);
 
@@ -122,8 +143,9 @@
   {:else if !beside}
     <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
   {/if}
-  <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
-  {@const top = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }]}
+  <!-- Settings › its group › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25;
+       the group a picker, the owner 2026-11-02). -->
+  {@const top: Level[] = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }, ...(groupLevel ? [groupLevel] : [])]}
   {#if thing}
     <Crumbs trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
   {:else}

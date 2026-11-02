@@ -50,7 +50,9 @@
   import { byArea } from './healthThrough';
   import { AREAS } from './health';
   import { planTitle } from './fileChangeRules';
-  import type { Siblings } from './Crumbs.svelte';
+  import type { Level, Siblings } from './Crumbs.svelte';
+  import { groupsOf, landingOf, remembered } from './groupCrumb';
+  import { prefs } from './prefs.svelte';
   import FileChanges from './FileChanges.svelte';
   import { CHANGES, changesView, fileRuns, openChanges } from './fileRuns.svelte';
   import Crumbs from './Crumbs.svelte';
@@ -279,10 +281,38 @@
     await apply({ certain: problem }, problem, `Applied ${certain} certain ${certain === 1 ? 'fix' : 'fixes'}`);
     applyingAll = false;
   }
-  // The levels over a problem: Health (not beside its list, which names it). Not the problem's domain: no level of its
-  // own (it led to Health too), and often the problem's name again (the owner, 2026-10-26: "Health › Analysis ›
-  // Analysis").
-  const top = $derived(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }]);
+  // Every problem and Changes to files, in Health's areas, each area's most urgent first (as the page lists them).
+  const parts = $derived([
+    ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.finding?.thing ?? x.name }))),
+    ...(me.admin ? [{ id: CHANGES, group: 'Activity', label: 'Changes to files' }] : []),
+  ]);
+  const shownId = $derived(problem === CHANGES ? CHANGES : (p?.key ?? null));
+  const areaNow = $derived(parts.find((x) => x.id === shownId)?.group ?? null);
+  // The levels over a problem: Health (not beside its list, which names it), then its area as a picker of the areas
+  // (lib/Crumbs, lib/groupCrumb; the owner, 2026-11-02: the problems' one picker was "way too tall"), landing on the
+  // problem last seen in one, else its most urgent. Not the problem's domain: no level of its own (it led to Health
+  // too), and often the problem's name again (the owner, 2026-10-26: "Health › Analysis › Analysis").
+  const areaLevel = $derived<Level | null>(
+    areaNow
+      ? {
+          label: areaNow,
+          pick: {
+            menuLabel: 'Health areas',
+            options: groupsOf(parts).map((a) => ({ id: a, label: a })),
+            chosen: areaNow,
+            onchoose: (a) => {
+              const to = a === areaNow ? null : landingOf(parts, a, prefs.groupLast[`health/${a}`]);
+              if (to) viewSibling(HEALTH + to);
+            },
+          },
+        }
+      : null,
+  );
+  const top = $derived<Level[]>(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }, ...(areaLevel ? [areaLevel] : [])]);
+  // The problem seen, remembered for its area's next pick.
+  $effect(() => {
+    if (areaNow && shownId) prefs.groupLast = remembered(prefs.groupLast, 'health', areaNow, shownId);
+  });
   // Changes to files (decision 0092): its list, a plan to review, a run, under Health as a problem is.
   const changes = $derived(problem === CHANGES ? changesView(healthThing(panel.viewed)) : null);
   // The levels Back walks through (lib/Crumbs, one rule for every panel; the owner, 2026-11-01): Changes to files above a
@@ -291,21 +321,12 @@
   const changesHere = $derived(
     !changes ? '' : changes.view === 'list' ? 'Changes to files' : changes.view === 'plan' ? planTitle(changes.kind) : (fileRuns.list?.find((r) => r.id === changes.id)?.title ?? 'A change to files'),
   );
-  // On a phone the problem's name is a picker of the other problems, in their groups, and Changes to files (a move
-  // sideways, not up to Health's list and down again).
-  const siblings = $derived<Siblings | null>(
-    beside
-      ? null
-      : {
-          menuLabel: 'Health shows',
-          options: [
-            ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, label: x.finding?.thing ?? x.name, group: g.area }))),
-            ...(me.admin ? [{ id: CHANGES, label: 'Changes to files', group: 'Activity' }] : []),
-          ],
-          chosen: changes ? CHANGES : (p?.key ?? null),
-          onchoose: (id) => viewSibling(HEALTH + id),
-        },
-  );
+  // On a phone the problem's name is a picker of the other problems of its area, Changes to files among Activity's (a
+  // move sideways, not up to Health's list and down again).
+  const siblings = $derived.by<Siblings | null>(() => {
+    const own = parts.filter((x) => x.group === areaNow);
+    return beside || own.length < 2 ? null : { menuLabel: `${areaNow} shows`, options: own.map((x) => ({ id: x.id, label: x.label })), chosen: shownId, onchoose: (id) => viewSibling(HEALTH + id) };
+  });
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->

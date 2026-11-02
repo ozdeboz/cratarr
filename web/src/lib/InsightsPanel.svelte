@@ -17,7 +17,9 @@
   import { insights, mapFull } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
   import { backOne, INSIGHTS, isStep, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
-  import Crumbs from './Crumbs.svelte';
+  import Crumbs, { type Level, type Siblings } from './Crumbs.svelte';
+  import { groupsOf, landingOf, remembered } from './groupCrumb';
+  import { prefs } from './prefs.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
@@ -51,23 +53,46 @@
         }
       : null;
   handGlass(() => handed, { left: glassLeft, pill });
+
+  // Its group as a level above, a picker of the groups (lib/Crumbs, lib/groupCrumb; the owner, 2026-11-02: one picker of
+  // every view was "way too tall"), landing on the view last seen in one, else its first; the view's own name a picker
+  // of its group's other views. A view under another is seen as that one.
+  const parts = INSIGHTS_VIEWS.filter((x) => !x.under).map((x) => ({ id: x.id as string, group: x.group as string, label: x.label }));
+  const groupLevel = $derived<Level>({
+    label: v.group,
+    pick: {
+      menuLabel: 'Insights groups',
+      options: groupsOf(parts).map((g) => ({ id: g, label: g })),
+      chosen: v.group,
+      onchoose: (g) => {
+        const to = g === v.group ? null : landingOf(parts, g, prefs.groupLast[`insights/${g}`]);
+        if (to) viewSibling(INSIGHTS + to);
+      },
+    },
+  });
+  const siblings = $derived.by<Siblings | null>(() => {
+    const own = parts.filter((x) => x.group === v.group);
+    return beside || v.under || own.length < 2 ? null : { menuLabel: `${v.group} shows`, options: own.map((x) => ({ id: x.id, label: x.label })), chosen: v.id, onchoose: (id) => viewSibling(INSIGHTS + id) };
+  });
+  $effect(() => {
+    prefs.groupLast = remembered(prefs.groupLast, 'insights', v.group, v.under ?? v.id);
+  });
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   {@const parent = v.under ? INSIGHTS_VIEWS.find((x) => x.id === v.under) : null}
-  <!-- The levels Back walks through (lib/Crumbs): Insights, the view a deeper one was opened from; its group is a
-       heading of the page's list, not a place. On a phone the view's name picks another view. -->
+  <!-- The levels Back walks through (lib/Crumbs): Insights, the view a deeper one was opened from; between them its
+       group, a heading of the page's list and not a place: a picker of the groups (the owner, 2026-11-02). On a phone
+       the view's name picks another view of its group. -->
   <Crumbs
     trail={[
-      ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('#/insights') }]),
+      ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('#/insights') }, groupLevel]),
       ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: () => history.back() }] : []),
     ]}
     here={v.label}
-    siblings={beside || v.under
-      ? null
-      : { menuLabel: 'Insights shows', options: INSIGHTS_VIEWS.filter((x) => !x.under).map((x) => ({ id: x.id, label: x.label, group: x.group })), chosen: v.id, onchoose: (id) => viewSibling(INSIGHTS + id) }}
+    {siblings}
   />
 {/snippet}
 
