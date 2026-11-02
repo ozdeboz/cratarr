@@ -24,6 +24,7 @@ import {
   type LibraryUse,
   type LidarrView,
   type NamingView,
+  type Quality,
   type Settings,
   type SourceConfig,
   type SourceView,
@@ -62,10 +63,13 @@ export const USES: { id: LibraryUse; label: string }[] = [
   { id: 'incoming', label: 'Incoming' },
   { id: 'unused', label: 'Not used' },
 ];
-export const FORMATS = [
-  { id: 'cd', label: 'CD format' },
-  { id: 'as_is', label: 'As it is' },
-] as const;
+// A library's quality limit, highest first (the owner, 2026-11-02: four steps in place of CD format or as it is).
+export const QUALITIES: { id: Quality; label: string }[] = [
+  { id: 'none', label: 'No limit' },
+  { id: 'hr96', label: 'Up to 24-bit/96 kHz' },
+  { id: 'hr48', label: 'Up to 24-bit/48 kHz' },
+  { id: 'cd', label: 'CD quality' },
+];
 export const IMPORT_WHAT: { key: keyof ImportWhat; label: string }[] = [
   { key: 'plays', label: 'Plays' },
   { key: 'favorites', label: 'Favourites' },
@@ -353,18 +357,18 @@ class SettingsEditor {
     if (use !== 'unused') d.libraries[use].push(id);
   };
 
-  // A used library's own settings (decision 0034): what a move into it does to the files (CD format converts hi-res
-  // to 16-bit/44.1 kHz; as it is moves them unchanged), and for one other than the primary its dot's colour. Shown as
-  // they apply (the server's), changed here with the rest and saved with Save.
+  // A used library's own settings (decision 0034): its quality limit (the owner, 2026-11-02: only lossless files above
+  // it convert, to FLAC, on a move or Keep into it; not Sync or Export), and for one other than the primary its dot's
+  // colour. Shown as they apply (the server's), changed here with the rest and saved as they change.
   policyOf = (d: Draft, id: string) => ({
-    format: 'as_is' as 'cd' | 'as_is',
+    quality: 'none' as Quality,
     colour: null as string | null,
     /** Cratarr's own library's name (the owner, 2026-11-02); none: its folder's. */
     name: null as string | null,
     ...d.view?.policies?.[id],
     ...d.libraries.policies?.[id],
   });
-  setPolicy = (d: Draft, id: string, change: { format?: 'cd' | 'as_is'; colour?: string; name?: string | null }) => {
+  setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null }) => {
     d.libraries.policies = { ...(d.libraries.policies ?? {}), [id]: { ...this.policyOf(d, id), ...change } };
   };
 

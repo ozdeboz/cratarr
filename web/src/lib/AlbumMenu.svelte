@@ -400,6 +400,10 @@
   const primary = offer?.from?.use === 'music';
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
+  // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
+  // 2026-11-02).
+  const converted = (n: number, library: string) =>
+    `${n} lossless ${n === 1 ? 'file' : 'files'} above ${library}'s quality limit ${n === 1 ? 'is' : 'are'} converted to FLAC first.`;
   let ask = $state<false | Ask | 'really'>(false);
   /** The move's library. */
   let to = $state<LibraryInfo | null>(null);
@@ -531,8 +535,8 @@
       onclose();
     }
   }
-  // Done: the album leaves its library. Queued (hi-res files to convert first): its row shows the progress instead,
-  // and the queue says when it is done.
+  // Done: the album leaves its library. Queued (lossless files above the target's quality limit to convert first): its
+  // row shows the progress instead, and the queue says when it is done.
   function moved(r: AlbumMoved, words: string) {
     if (r.queued) {
       jobs.poke();
@@ -722,7 +726,7 @@
       {:else}
         <p class="ask">
           Move {a.title} into {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
-            {` ${keep.convert} hi-res ${keep.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !keep.acquisition && !primary}
+            {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
@@ -750,7 +754,7 @@
             ? `, ${swap.added} new`
             : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
           {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
-            {` ${swap.convert} hi-res ${swap.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !swap.acquisition}
+            {` ${converted(swap.convert, music)}`}{/if}{#if !swap.acquisition}
             {` ${NO_LIDARR}`}{/if}
         </p>
         <!-- Its cover (the owner, 2026-10-25): the one it has, or the new copy's; both shown. -->
