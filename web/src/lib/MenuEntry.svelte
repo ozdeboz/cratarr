@@ -9,6 +9,8 @@
   // `switched`: an entry that turns something on or off (Sync to this device), its switch at the end. `sub`: a toggle's
   // second line, smaller, after `subIcon` (another player's track and whether it plays, in Play On; no cover).
   // `progress` (0 to 1): the row fills behind its label as its work goes (Download… to this device, lib/DownloadEntry).
+  // `mark`: drawn in the icon's place, where the entry has its own (a snippet's, lib/SnippetMark).
+  import type { Snippet } from 'svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import SwitchTrack from './SwitchTrack.svelte';
 
@@ -29,6 +31,7 @@
     sub = null,
     subIcon = null,
     progress = null,
+    mark = null,
   }: {
     icon?: IconName | null;
     label: string;
@@ -46,6 +49,7 @@
     sub?: string | null;
     subIcon?: IconName | null;
     progress?: number | null;
+    mark?: Snippet | null;
   } = $props();
 </script>
 
@@ -74,7 +78,7 @@
     aria-busy={busy || progress !== null}
     {onclick}
   >
-    {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
+    {#if mark}{@render mark()}{:else if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
   </button>
 {:else if onmark}
   <div class="toggle split" class:on={checked}>
