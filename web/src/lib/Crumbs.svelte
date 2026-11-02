@@ -4,8 +4,9 @@
   // tap back there (without `go`, only said), then where one is.
   // One way on every device and every width (the owner, 2026-11-02: "there should never be a toggle between modes on any
   // device size. It should simply collapse the highest level that's no space for"): every level while they fit; short
-  // of room, the highest goes first, then the next, where one is last; only where one is, alone, is cut with …. Up (↑,
-  // right of back) goes one level up the tree, so a level that went is one tap away all the same.
+  // of room, a group first (not a place: the owner, the same day, "Groups go first", so the level left of where one is
+  // is always where Up goes), then the highest place, then the next, where one is last; only where one is, alone, is
+  // cut with …. Up (↑, right of back) goes one level up the tree, so a level that went is one tap away all the same.
   // One rule for every panel (the owner, 2026-11-01): the levels are those Back walks through, each a tap back there;
   // only places are levels. Where one is can be a picker of its siblings (Settings' other parts, Health's other
   // problems: a move sideways instead of up and down again, as the Library's "Records ▾"). No levels above: only where
@@ -37,8 +38,8 @@
   const up = $derived([...trail].reverse().find((l) => l.go) ?? null);
 
   let line = $state<HTMLElement>();
-  /** How many of the levels above have gone for want of room, the highest first. */
-  let gone = $state(0);
+  /** The levels above that have gone for want of room: groups first, then places, the highest first. */
+  let gone = $state<ReadonlySet<number>>(new Set());
   /** Each level's own width (with its ›) and where one is's, as laid out whole; measured again as they change. */
   let widths: number[] = [];
   let measuredFor = '';
@@ -71,9 +72,14 @@
     }
     const have = room(el);
     let need = widths.reduce((n, w) => n + w, 0);
-    let k = 0;
-    while (k < trail.length && need > have + 0.5) need -= widths[k++];
-    gone = k;
+    const order = [...trail.keys()].sort((a, b) => Number(!trail[a].pick) - Number(!trail[b].pick) || a - b);
+    const out = new Set<number>();
+    for (const i of order) {
+      if (need <= have + 0.5) break;
+      need -= widths[i];
+      out.add(i);
+    }
+    gone = out;
   }
 
   $effect(() => {
@@ -102,7 +108,7 @@
         onclick={() => u.go?.()}><Icon name="arrowUp" size={22} /></button
       >{/if}</span
   >{/if}<h2 class="crumbs" bind:this={line}>
-  {#each trail as level, i (i)}<span class="level" class:gone={i < gone}
+  {#each trail as level, i (i)}<span class="level" class:gone={gone.has(i)}
       >{#if level.pick}<span class="up pick"><GlassPicker shown={level.label} menuLabel={level.pick.menuLabel} options={level.pick.options} chosen={level.pick.chosen} onchoose={level.pick.onchoose} /></span>{:else if level.go}<button class="up" onclick={level.go}>{level.label}</button>{:else}<span class="up">{level.label}</span>{/if}<span class="sep" aria-hidden="true">›</span></span
     >{/each}{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<span class="here" aria-current="page">{here}</span>{/if}
 </h2>

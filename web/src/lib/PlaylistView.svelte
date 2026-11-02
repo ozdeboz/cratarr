@@ -60,6 +60,7 @@
     getDiscoverArtistAlbums,
     discoverArtistPhotoUrl,
     type ListedAlbum,
+    type ListReason,
     type PlaylistRow,
   } from './api';
   import {
@@ -74,6 +75,8 @@
     crateRadio as crateRadioOf,
     cycleFavouriteAlbums,
     cycleFavourites,
+    setFavouriteAlbums,
+    setFavourites,
     EDIT_CRATE,
     GENRE,
     FAVOURITE_ALBUMS,
@@ -176,7 +179,8 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { conditionsFor, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
+  import { conditionsFor, filterOf, filtersOn, hiddenLibraries, passing, setConditions } from './listFilter.svelte';
+  import NothingPopover, { type NothingChip } from './NothingPopover.svelte';
   import { matchesSearch, pageView, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
@@ -459,6 +463,10 @@
         shownFor = key;
         error = null;
         if (!same) rows = r.rows;
+        // Why nothing came (decision 0095): a crate's page says each cause that kept anything out.
+        const said = r as { reasons?: ListReason[]; all_back?: number };
+        reasons = c ? (said.reasons ?? []) : [];
+        allBack = c ? (said.all_back ?? 0) : 0;
         rowsFor = want;
         source = r.source;
         total = r.total;
@@ -472,6 +480,34 @@
         rowsFor = want;
       },
     );
+  });
+  /** What kept a crate's tracks out, and how many would come with every cause lifted (decision 0095). */
+  let reasons = $state.raw<ListReason[]>([]);
+  let allBack = $state(0);
+  let heartEl = $state<HTMLElement>();
+  let discEl = $state<HTMLElement>();
+  /** The excluded everywhere, opened from its cause's chip (the owner, 2026-11-02: too much for one ✕). */
+  let excludedOpen = $state(false);
+  /** Nothing, caused here: each cause a chip, the popover's tip on the one control that alone brings tracks back, or on
+   *  the Filter button where it takes more than one (decision 0095; the owner, 2026-11-02: a crate empty by its
+   *  heart or disc, "the user does not necessarily understand what's going on"). */
+  const nothing = $derived.by(() => {
+    if (!crate || !rows || rows.length || !reasons.length || allBack === 0) return null;
+    const c = crate;
+    const chipOf = (r: ListReason): NothingChip => {
+      if (r.kind === 'favourites') return { label: r.label, onclear: () => setFavourites(c, () => 'all') };
+      if (r.kind === 'favourite_albums') return { label: r.label, onclear: () => setFavouriteAlbums(c, () => 'all') };
+      if (r.kind === 'libraries_off') return { label: r.label, onclear: () => (prefs.hiddenLibraries = []) };
+      if (r.kind === 'excluded') return { label: r.label, onopen: () => (excludedOpen = true) };
+      return { label: r.label, onclear: () => setConditions('crate', filterOf('crate').conditions.filter((x) => x.axis !== r.key)) };
+    };
+    const chips = reasons.map(chipOf);
+    const alone = reasons.filter((r) => r.back > 0);
+    const funnel = () => (handed ? document.querySelector<HTMLElement>('.page-row .funnel') : pillsEl?.querySelector<HTMLElement>('.funnel')) ?? null;
+    const controlOf = (r: ListReason) => (r.kind === 'favourites' ? heartEl : r.kind === 'favourite_albums' ? discEl : null) ?? funnel();
+    const anchor = (alone.length === 1 ? controlOf(alone[0]) : funnel()) ?? heartEl ?? discEl ?? actbar ?? null;
+    const clearAll = () => chips.forEach((x) => x.onclear?.());
+    return { chips, anchor, clearAll };
   });
   /** The rows asked again for the same subject (its key), shown as they were meanwhile. */
   let waitingFor = $state<string | null>(null);
@@ -2052,12 +2088,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
             <button class="icon" aria-label={`Edit ${title}`} title="Edit" onclick={() => viewPlaylist(EDIT_CRATE + c)}><Icon name="pencil" size={22} /></button>
           {/if}
           {#if favState}
-            <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
+            <button class="icon" bind:this={heartEl} class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button
             >
           {/if}
           {#if albState}
-            <button class="icon" class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => crate && cycleFavouriteAlbums(crate)}
+            <button class="icon" bind:this={discEl} class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => crate && cycleFavouriteAlbums(crate)}
               ><Icon name={albState.icon} size={24} /></button
             >
           {/if}
@@ -2310,7 +2346,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {:else if waitSign.loader}
       <Asking now />
     {:else if rows && !rows.length}
-      <p class="empty">No tracks yet.</p>
+      {#if nothing}
+        <NothingPopover anchor={nothing.anchor} said="No tracks with" chips={nothing.chips} onclearall={nothing.clearAll} />
+      {:else}
+        <p class="empty">No tracks yet.</p>
+      {/if}
     {:else if rows && shown}
       {#if recordsView}
         <ListHead
@@ -2696,6 +2736,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {/if}
 {#if workMenu}{@const w = workMenu}<WorkMenu mbid={w.mbid} title={w.title} ids={w.ids} onopen={() => (workOpen = { mbid: w.mbid, title: w.title })} onclose={() => (workMenu = null)} />{/if}
 {#if workOpen}<WorkSheet mbid={workOpen.mbid} title={workOpen.title} onclose={() => (workOpen = null)} />{/if}
+{#if excludedOpen}
+  <ExcludedSheet onchange={() => saved++} onclose={() => (excludedOpen = false)} />
+{/if}
 {#if leftOutOpen && crate}
   <ExcludedSheet {crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
 {/if}

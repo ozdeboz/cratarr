@@ -44,11 +44,14 @@ export const FAVOURITES = {
 } as const;
 const NEXT: Record<CrateFavourites, CrateFavourites> = { none: 'only', only: 'all', all: 'none' };
 /** A tap on the toggle: No favourites, Only favourites, All tracks, and round again. */
-export function cycleFavourites(id: string) {
+export const cycleFavourites = (id: string) => setFavourites(id, (was) => NEXT[was]);
+/** The toggle set (`to` from what it was), shown at once, saved after; a failure puts it back. Its chip's ✕ in the
+ *  popover of a crate left empty (decision 0095) sets it to All. */
+export function setFavourites(id: string, to: (was: CrateFavourites) => CrateFavourites) {
   const c = crates.list?.find((x) => x.id === id);
   if (!c) return;
   const was = c.favourites;
-  const next = NEXT[was];
+  const next = to(was);
   c.favourites = pending[id] = next;
   saving = saving.then(() =>
     setCrateFavourites(id, next).then(
@@ -76,11 +79,13 @@ export const FAVOURITE_ALBUMS = {
   none: { icon: 'albumsOff', label: 'No favourite albums', filled: false },
 } as const;
 /** A tap on the albums toggle: No favourite albums, Only favourite albums, All albums, and round again. */
-export function cycleFavouriteAlbums(id: string) {
+export const cycleFavouriteAlbums = (id: string) => setFavouriteAlbums(id, (was) => NEXT[was]);
+/** The favourite albums toggle set, as setFavourites. */
+export function setFavouriteAlbums(id: string, to: (was: CrateFavourites) => CrateFavourites) {
   const c = crates.list?.find((x) => x.id === id);
   if (!c) return;
   const was = c.favourite_albums ?? 'all';
-  const next = NEXT[was];
+  const next = to(was);
   c.favourite_albums = pendingAlbums[id] = next;
   saving = saving.then(() =>
     setCrateFavouriteAlbums(id, next).then(
