@@ -52,3 +52,14 @@ dropped Incoming's tracks, and the page still said an Incoming track could not g
   Music-form id until the model is built.
 - The 0.13 fixes: the checks across every library (Replace stays into Music until this is built), Keep honouring its
   target's format, Health over every library, a playlist's export keeping Incoming's tracks, and the page's wording.
+
+## Amendment 2026-11-02: a quality limit in place of the format (for 0.14)
+
+The owner, by question set (relayed by 632): a library's "Albums moved in" (CD format or as they are) becomes a
+**quality limit** of four steps: none, up to 24-bit/96 kHz, up to 24-bit/48 kHz, CD (16-bit/44.1 kHz).
+
+- Only lossless files above the limit are converted, into FLAC at the limit; lossy files are never touched.
+- It applies to albums moved into the library and to Keep into it; not to Sync to a device or to Export.
+- Lowering a library's limit converts nothing already there: Health points out the albums above their library's
+  limit, each with its fix.
+- Built in 0.14, before the rest of this decision. The server's parts are a5's, the sheet and row 632's.
