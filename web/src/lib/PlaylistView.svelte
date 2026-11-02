@@ -101,6 +101,7 @@
     startCrate,
     viewGenre,
     type CrateDraft,
+    withoutFor,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { BANDCAMP } from './bandcampPreview';
@@ -469,7 +470,7 @@
             return { ...r, total: r.rows.length };
           })
         : ar
-          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name)).then((r) => {
+          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name, hiddenLibraries())).then((r) => {
               if (want === id) {
                 artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, mbid: (r as { mbid?: string }).mbid, studio: (r as { studio?: number | null }).studio };
                 // Their picture: their newest album's cover (Symfonium's, without an artist's photo); one from Discover's
@@ -858,7 +859,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const recordSort = $derived(recordOrderOf(crate, prefs.crateRecordSort));
   // As records: its tracks in Best match or its own order, the records ordered from them (lib/crateRecords).
   const crateLook = $derived<CrateLook>({
-    without: homeCrate(crate) ? undefined : hiddenLibraries(),
+    without: withoutFor(crate),
     filter: crateFilter,
     ...(recordsView ? { order: tracksForRecords(recordSort.key) } : { order: sortKey, down: sortDown }),
   });
@@ -1089,7 +1090,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
     if (untrack(() => profile) === null) profileComing = true;
     let gone = false;
-    filterList(at.list, [], at.source, at.list.kind === 'crate' && !homeCrate(at.list.id) ? hiddenLibraries() : undefined).then(
+    filterList(at.list, [], at.source, at.list.kind === 'crate' ? withoutFor(at.list.id) : undefined).then(
       (f) => {
         if (gone) return;
         profile = f.profile ?? null;
@@ -1514,7 +1515,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const name = making.name.trim();
     try {
       await favouritesSaved();
-      const { added, undo } = await crateToPlaylist(crate, name, prefs.source || undefined);
+      const { added, undo } = await crateToPlaylist(crate, name, prefs.source || undefined, withoutFor(crate));
       withUndo(`Made ${name}: ${added} ${added === 1 ? 'track' : 'tracks'}.`, [undo], {
         after: (undone) => (undone ? followDelete(name) : followCreate(name)),
       });

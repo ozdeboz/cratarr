@@ -179,7 +179,7 @@
     if (q.length < 2) return void (seedHits = []);
     let stale = false;
     const t = setTimeout(() => {
-      search(q, ['artist', 'album', 'track'], 4).then(
+      search(q, ['artist', 'album', 'track'], 4, 0, hiddenLibraries()).then(
         (r) => {
           if (stale) return;
           const hits: { id: string; named: Named }[] = [];

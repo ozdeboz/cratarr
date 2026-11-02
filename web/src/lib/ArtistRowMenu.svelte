@@ -1,6 +1,7 @@
 <script lang="ts">
   // An artist's menu from a list's row (the Library's Artists, its long-press; the owner, 2026-10-25: as the albums'):
   // the artist panel's own menu (lib/ArtistMenu), its tracks and heart read when it opens.
+  import { hiddenLibraries } from './listFilter.svelte';
   import { artistView, type ArtistView } from './api';
   import { setArtistHeart } from './favourites.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
@@ -13,7 +14,7 @@
   let view = $state<ArtistView | null>(null);
   let favorite = $state<boolean | undefined>(undefined);
   $effect(() => {
-    artistView(source, name).then(
+    artistView(source, name, hiddenLibraries()).then(
       (v) => ((view = v), (favorite = v.favorite ?? undefined)),
       (e) => (toast.fail(e, "The artist couldn't be read"), onclose()),
     );

@@ -5,6 +5,7 @@
   // in the app Sync to this device (decision 0038), Share, and their picture on this device (one chosen here, or their
   // newest album's cover again). No Instant mix (the owner: "a confusing thing"), no rating (the server keeps none for
   // artists).
+  import { hiddenLibraries } from './listFilter.svelte';
   import { albumCoverUrl, search } from './api';
   import { likeChip } from './quickCrate';
   import { grabCrate, openQuickCrate } from './quickCrates.svelte';
@@ -115,7 +116,7 @@
   function soundsLike() {
     const n = name;
     onclose();
-    search(n, ['artist'], 5).then(
+    search(n, ['artist'], 5, 0, hiddenLibraries()).then(
       (r) => {
         const id = r.groups.artist?.items.find((x) => x.title.toLowerCase() === n.toLowerCase())?.id;
         if (id) grabCrate([likeChip('artist', id, n)]);
