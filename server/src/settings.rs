@@ -331,14 +331,19 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
             return Err(ChangeError::Invalid(format!("{}: unknown kind of source {:?}", d.id, d.kind)));
         };
         let fields = (kind.fields)();
+        // Cratarr's own folders (decision 0044) are its values though no field of its form shows them (they are chosen in
+        // the folder browser): kept, or every save dropped them and the source then had no library (2026-11-02, found
+        // on the development instance: "a Music library is no longer on the server" for any change).
+        let own_folders = d.kind == crate::source::cratarr::KIND.id;
         d.values.retain(|k, v| {
-            fields.iter().any(|f| {
-                f.key == k
-                    && match f.kind {
-                        FieldKind::MultiChoice => v.is_array() || v.is_string(),
-                        _ => v.is_string(),
-                    }
-            })
+            (own_folders && k == "folders" && v.is_array())
+                || fields.iter().any(|f| {
+                    f.key == k
+                        && match f.kind {
+                            FieldKind::MultiChoice => v.is_array() || v.is_string(),
+                            _ => v.is_string(),
+                        }
+                })
         });
         let clean = |ids: &mut Vec<String>| {
             ids.retain(|l| !l.trim().is_empty());
@@ -428,6 +433,22 @@ mod tests {
         assert_eq!(r.colour_of("i1").as_deref(), Some("#112233"));
         // As saved: only what was set.
         assert_eq!(serde_json::to_value(&r.policies).unwrap(), serde_json::json!({ "i1": { "format": "cd", "colour": "#112233" } }));
+    }
+
+    #[test]
+    fn cratarrs_own_folders_are_kept_through_a_save() {
+        let own = |folders: serde_json::Value| SourceConfig {
+            id: "cratarr".into(),
+            kind: crate::source::cratarr::KIND.id.into(),
+            enabled: true,
+            libraries: Roles { music: vec!["/music".into()], incoming: vec!["/incoming".into()], policies: Default::default() },
+            values: [("folders".to_string(), folders)].into_iter().collect(),
+        };
+        let out = merge(&[], vec![own(serde_json::json!(["/music", "/incoming"]))]).unwrap();
+        assert_eq!(out[0].values.get("folders"), Some(&serde_json::json!(["/music", "/incoming"])));
+        // Only as a list, and only Cratarr's own: another kind's undeclared values still go.
+        let out = merge(&[], vec![own(serde_json::json!("/music"))]).unwrap();
+        assert!(out[0].values.get("folders").is_none());
     }
 
     #[test]
