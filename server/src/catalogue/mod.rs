@@ -436,6 +436,10 @@ impl Catalogue {
             if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 7) {
                 cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, READ])?;
             }
+            // Reader 8 checks a FLAC's seek table (0.14, a broken one ended tracks on a far seek): the FLACs read again.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 8) {
+                cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2 AND format = 'FLAC'", params![PENDING, READ])?;
+            }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
         // Track ids are this catalogue's own: one made afresh numbers them anew, and what holds ids from the old one
@@ -1466,6 +1470,14 @@ impl Catalogue {
     /// Files with a problem, worst first ("broken", then damaged tags, …), at most `each` of every kind: a kind past
     /// the others' files still has its own (2026-11-02: one cap over all kinds left the last kind on Home with none,
     /// and its Health panel said it was no longer a problem). Blocking.
+    /// The files with one kind of problem, by folder and line. Blocking.
+    pub fn with_issue(&self, kind: &str) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!("SELECT folder, rel FROM files WHERE issue = ?1 AND {PRESENT} ORDER BY rel"))?;
+        let rows = st.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn problems(&self, each: usize) -> Result<Vec<Problem>> {
         let folders = self.folders();
         let db = self.db();
