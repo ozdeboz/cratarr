@@ -23,6 +23,7 @@
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
   import { pageCovered, panelBeside } from './panel.svelte';
+  import { askHidden, type Hidden } from './pageView.svelte';
   import { globalAsked, globalGroups, globalSearch, pageKinds } from './globalSearch.svelte';
   import type { PanelKind } from './prefs.svelte';
   import type { Snippet } from 'svelte';
@@ -280,6 +281,24 @@
   const fieldLeast = $derived(Math.max(folded - LENS, 140));
   /** The magnifier: where the popover's tip points (lib/NothingPopover). */
   let lens = $state<HTMLElement>();
+  // What hides part of the list (lib/pageView explainHidden), on a long-press of the lit magnifier or funnel (the
+  // owner, 2026-11-02: taps keep doing what they do): the page's, and the panel's beside it; the panel's own pill its.
+  let hidden = $state<{ anchor: HTMLElement; said: Hidden[] } | null>(null);
+  async function showHidden(anchor: HTMLElement | undefined) {
+    if (!anchor) return;
+    const wheres: ('page' | 'panel')[] = page ? ['page', ...(panelBeside() ? (['panel'] as const) : [])] : search ? ['panel'] : [];
+    const said = (await Promise.all(wheres.map(askHidden))).filter((x): x is Hidden => !!x);
+    hidden = said.length ? { anchor, said } : null;
+  }
+  // Gone with a tap elsewhere, or once one of its causes is cleared.
+  $effect(() => {
+    if (!hidden) return;
+    const away = (e: PointerEvent) => !(e.target as Element | null)?.closest?.('.nothing') && (hidden = null);
+    addEventListener('pointerdown', away, true);
+    return () => removeEventListener('pointerdown', away, true);
+  });
+  const closing = (h: Hidden) => h.chips.map((c) => (c.onclear ? { ...c, onclear: () => (c.onclear?.(), (hidden = null)) } : c));
+  let funnelEl = $state<HTMLElement>();
   $effect(() => {
     if (!globeShown && untrack(() => globalSearch.scope) === 'everywhere') globalSearch.scope = 'page';
   });
@@ -316,6 +335,7 @@
       <button
         bind:this={lens}
         class="lens"
+        use:longpress={() => !searching && pageView.query.trim() !== '' && void showHidden(lens)}
         class:lit={!searching && pageView.query.trim() !== ''}
         aria-label={!searching && pageView.query.trim() !== '' ? `${words}: still narrowed by its words` : words}
         title={words}
@@ -357,7 +377,7 @@
         </span>
       {/if}
     {/if}
-    {#if filter && !searching && !(showing && page && pageAction)}<button class="funnel" class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))}
+    {#if filter && !searching && !(showing && page && pageAction)}<button class="funnel" bind:this={funnelEl} use:longpress={() => (filterLit ?? filtering) && void showHidden(funnelEl)} class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))}
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
     {#if view && (page || order?.columns?.shown.length || order?.view || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))}><Icon name="sliders" size={22} /></button>{/if}
@@ -377,6 +397,9 @@
       >
     {/if}
   </div>
+  {#if hidden}
+    {#each hidden.said as h, i (i)}<NothingPopover anchor={hidden.anchor} said={h.said} chips={closing(h)} onclearall={h.chips.filter((c) => c.onclear).length > 1 ? () => (h.chips.forEach((c) => c.onclear?.()), (hidden = null)) : null} />{/each}
+  {/if}
   {#if noneShown}
     <NothingPopover anchor={lens} said={noneSaid ?? ''} chips={[{ label: 'Search', onclear: clear }]} />
   {/if}

@@ -76,7 +76,15 @@
     stacks.set(a, [...(stacks.get(a) ?? []), box]);
     let raf = 0;
     let was = '';
+    // Under a sheet that covers its control (the Filter sheet over the page; the owner, 2026-11-02: it lay over the
+    // sheet): gone until the sheet is, the top layer being above every sheet.
+    const covered = () => [...document.querySelectorAll('[aria-modal="true"]')].some((d) => d !== box && !d.contains(a) && d.getClientRects().length > 0);
     const follow = () => {
+      if (covered()) {
+        if (was !== 'covered') (was = 'covered'), (at = null);
+        raf = requestAnimationFrame(follow);
+        return;
+      }
       const r = a.getBoundingClientRect();
       const now = `${r.left},${r.bottom},${r.width},${box.offsetWidth},${innerWidth},${above(a, box).map((b) => b.offsetHeight).join()}`;
       if (now !== was) {
@@ -108,6 +116,7 @@
   style:--tip={at ? `${at.tip}px` : null}
   transition:fade={{ duration: 150 }}
 >
+  <span class="line">
   <span class="said">{said}</span>
   {#each chips as c (c.label)}
     {#if c.onopen}
@@ -119,6 +128,7 @@
   {#if onclearall && chips.filter((c) => c.onclear).length > 1}
     <button class="all" onclick={onclearall}>Clear all</button>
   {/if}
+  </span>
   {#each more as line (line.said + line.chips.map((c) => c.label).join())}
     <span class="line">
       <span class="said">{line.said}</span>
@@ -131,15 +141,15 @@
 </div>
 
 <style>
-  /* One slim glass under its control (A2's look): its words, the causes as chips; several wrap. */
+  /* One slim glass under its control (A2's look): its words, the causes as chips; several wrap. Each answer a line of its
+     own, the glass as wide as the widest (the owner, 2026-11-02: a second line stretched it to the window's edge). */
   .nothing {
     position: fixed;
     inset: auto;
     z-index: 60;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 10px;
+    display: grid;
+    justify-items: start;
+    gap: 6px;
     max-width: min(440px, calc(100vw - 16px));
     margin: 0;
     padding: 6px 6px 6px 14px;
@@ -183,10 +193,9 @@
     box-shadow: -1px -1px 0 color-mix(in srgb, var(--text) 9%, transparent);
   }
 
-  /* Another answer: a line of its own under the first. */
+  /* An answer: a line of its own, the first and each other one under it. */
   .line {
     display: flex;
-    flex-basis: 100%;
     flex-wrap: wrap;
     align-items: center;
     gap: 6px 10px;

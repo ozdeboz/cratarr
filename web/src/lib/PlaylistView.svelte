@@ -186,12 +186,12 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { causeChip, conditionsFor, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
+  import { causeChip, conditionsFor, filterBlocked, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
   import { windowsOf } from './profileWindow';
   import NothingPopover, { type NothingChip } from './NothingPopover.svelte';
   import { answers, pointAt, type Answer } from './attribution';
   import { lastOf } from './lastChange.svelte';
-  import { matchesSearch, pageView, searchLines, searchNone, trackOrders, type TrackOrder } from './pageView.svelte';
+  import { explainHidden, matchesSearch, pageView, searchLines, searchNone, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
@@ -927,6 +927,42 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return list;
   });
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
+  // Part of it hidden (a long-press on the lit magnifier or funnel, lib/pageView explainHidden): how many, and each cause
+  // keeping one out, truly.
+  explainHidden(async () => {
+    if (!rows || !shown) return null;
+    const words = pageView.query.trim() !== '';
+    const searchOut = (r: PlaylistRow) => words && !matchesSearch(r.name ?? r.file, r.artist, r.album);
+    const c = crate;
+    if (c && !crateEditing) {
+      const r = await crateRows(c, 0, 1, prefs.source || undefined, favouritesOf(c), favouriteAlbumsOf(c), crateLook, { q: searchLines() });
+      const b = r.blocked;
+      const hiddenN = (b?.groups ?? []).reduce((n, g) => n + g.keys.length, 0);
+      if (!b || !hiddenN) return null;
+      const used = [...new Set(b.groups.flatMap((g) => g.causes))].sort();
+      const chipOf = (i: number): NothingChip => {
+        const x = b.causes[i];
+        if (x.kind === 'favourites') return { label: x.label, onclear: () => setFavourites(c, () => 'all') };
+        if (x.kind === 'favourite_albums') return { label: x.label, onclear: () => setFavouriteAlbums(c, () => 'all') };
+        return causeChip('crate', x, () => (excludedOpen = true));
+      };
+      return { said: `${hiddenN.toLocaleString()} of ${plural(hiddenN + r.total, 'track')} hidden by`, chips: used.map(chipOf) };
+    }
+    const b = filterable && p && !multi ? await filterBlocked('playlist', { kind: 'playlist', id: p.id }, prefs.source || undefined).catch(() => null) : null;
+    const causes = [...(b?.causes ?? []), ...(words ? [{ kind: 'search' as const, label: 'Search' }] : [])];
+    const search = words ? causes.length - 1 : -1;
+    const byKey = new Map<string, number[]>();
+    for (const g of b?.groups ?? []) for (const k of g.keys) byKey.set(k, g.causes);
+    const used = new Set<number>();
+    let hiddenN = 0;
+    for (const r of rows) {
+      const out = [...(byKey.get(r.entry) ?? []), ...(search >= 0 && searchOut(r) ? [search] : [])];
+      if (out.length) hiddenN++;
+      for (const x of out) used.add(x);
+    }
+    if (!hiddenN) return null;
+    return { said: `${hiddenN.toLocaleString()} of ${plural(rows.length, 'track')} hidden by`, chips: [...used].sort().map((i) => causeChip('playlist', causes[i], () => (excludedOpen = true))) };
+  }, 'panel');
   // A record's or a playlist's words leaving none of what its filter keeps (decision 0095): said from the magnifier. A
   // crate's search is one of its causes (its explain), an artist's said by lib/ArtistBody.
   searchNone(() => !crate && !artist && !!rows && !!shown && !shown.length && { n: rows.filter((r) => keeps(r)).length, one: 'track' }, 'panel');
@@ -2031,8 +2067,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // handed over while it shows its tracks (making a playlist and the playlists' other views keep their own bar).
   const handed = $derived(glass.one && full && !making && !other);
   const pill = () =>
-    !editing && !crateEditing
-      ? {
+    editing || crateEditing
+      ? selecting
+        ? null
+        : { view: false, device: false, filter: false, extra: editActions }
+      : {
           view: true,
           order: listOrder,
           device: !playing(),
@@ -2041,9 +2080,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           kind,
           counted: rows && shown ? { shown: shown.length, total: rows.length, pending: pass.pending } : null,
           search: full ? pageUnder : null,
-          extra: rowAway && !editing && barEnds.length ? endsGained : null,
-        }
-      : null;
+          extra: rowAway && barEnds.length ? endsGained : null,
+        };
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, item: true });
 </script>
 
@@ -2059,6 +2097,67 @@ ${r.album_artist ?? r.artist ?? ''}`;
         onclick={r.run}><Icon name={r.icon} size={22} /></button
       >{/each}</span
   >{/snippet}
+{#snippet editActions()}
+  <!-- Edit mode's buttons on the top right glass (the owner, 2026-11-02: "The bottom glass was a bad idea!! Should be
+       top right glass"), as the pill's own: a playlist's Delete, Cancel (in red once something changed), the heart,
+       Save; a crate's Delete (one's own; a second tap confirms), Cancel, the favourites toggles, Save. -->
+  {#if editing}
+
+        {#if creating}
+          <!-- New playlist: nothing to delete or favour yet; Cancel leaves, Save makes it once it has a name. -->
+          <button class="icon on-glass" aria-label="Cancel" title="Cancel" onclick={() => closePlaylist()} disabled={editing.saving}><Icon name="reset" size={22} /></button>
+          <button class="icon on-glass save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving || !newName} aria-busy={editing.saving}
+            ><Icon name="arrowDownToLine" size={22} /></button
+          >
+        {:else}
+        <button
+          class="icon on-glass"
+          aria-label={`Delete ${id}`}
+          title="Delete"
+          disabled={editing.saving}
+          onclick={() => {
+            menuStart = 'delete';
+            menuOpen = true;
+          }}><Icon name="trash" size={22} /></button
+        >
+        <button class="icon on-glass" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}
+          ><Icon name="reset" size={22} /></button
+        >
+        <button class="icon on-glass" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
+          ><Icon name="heart" size={22} /></button
+        >
+        <button class="icon on-glass save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={22} /></button>
+        {/if}
+  {:else if crateEditing}
+
+        {#if builder?.id}
+          <button
+            class="icon on-glass"
+            class:destructive={crateDeleteArmed}
+            aria-label={crateDeleteArmed ? `Tap again to delete ${title}` : `Delete ${title}`}
+            title="Delete"
+            disabled={crateSaving}
+            onclick={deleteOwnCrate}><Icon name="trash" size={22} /></button
+          >
+        {/if}
+        <button class="icon on-glass" aria-label="Cancel" title="Cancel" onclick={cancelCrate} disabled={crateSaving}><Icon name="reset" size={22} /></button>
+        {#if favState && crate}
+          {@const c = crate}
+          <button class="icon on-glass" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => cycleFavourites(c)}
+            ><Icon name={favState.icon} size={22} /></button
+          >
+        {/if}
+        {#if albState && crate}
+          {@const c = crate}
+          <button class="icon on-glass" class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => cycleFavouriteAlbums(c)}
+            ><Icon name={albState.icon} size={22} /></button
+          >
+        {/if}
+        <button class="icon on-glass save" aria-label="Save" title="Save" onclick={saveCrate} disabled={crateSaving || !(crateDraft?.name.trim() || crateNamed)} aria-busy={crateSaving}
+          ><Icon name="arrowDownToLine" size={22} /></button
+        >
+  {/if}
+{/snippet}
 {#snippet endButton(e: EndAction, size: number, glass = false)}<button class="icon" class:on-glass={glass} class:fav={e.on} aria-pressed={e.key === 'heart' ? e.on : undefined} aria-label={e.label} onclick={e.run}
     ><Icon name={e.key === 'heart' ? 'heart' : 'moreVert'} {size} /></button
   >{/snippet}
@@ -2519,70 +2618,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {#if (handed || full) && everywhere()}<GlobalResults />{/if}
   </div>
 
-  {#if editing && !selecting}
-    <!-- Edit mode's buttons in a floating glass over the panel's end, as the select bar's (the owner, 2026-11-02: "so
-         the buttons are always in sight"): Delete, then Cancel (in red once something changed), the heart, Save. -->
-    <SelectBar label="Edit">
-
-        {#if creating}
-          <!-- New playlist: nothing to delete or favour yet; Cancel leaves, Save makes it once it has a name. -->
-          <button class="icon" aria-label="Cancel" title="Cancel" onclick={() => closePlaylist()} disabled={editing.saving}><Icon name="reset" size={24} /></button>
-          <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving || !newName} aria-busy={editing.saving}
-            ><Icon name="arrowDownToLine" size={24} /></button
-          >
-        {:else}
-        <button
-          class="icon"
-          aria-label={`Delete ${id}`}
-          title="Delete"
-          disabled={editing.saving}
-          onclick={() => {
-            menuStart = 'delete';
-            menuOpen = true;
-          }}><Icon name="trash" size={22} /></button
-        >
-        <button class="icon" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}
-          ><Icon name="reset" size={24} /></button
-        >
-        <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
-          ><Icon name="heart" size={24} /></button
-        >
-        <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={24} /></button>
-        {/if}
-    </SelectBar>
-  {:else if crateEditing && !selecting}
-    <!-- A crate's edit buttons, as a playlist's: Delete (one's own; a second tap confirms), Cancel, the favourites
-         toggles, Save. -->
-    <SelectBar label="Edit">
-
-        {#if builder?.id}
-          <button
-            class="icon"
-            class:destructive={crateDeleteArmed}
-            aria-label={crateDeleteArmed ? `Tap again to delete ${title}` : `Delete ${title}`}
-            title="Delete"
-            disabled={crateSaving}
-            onclick={deleteOwnCrate}><Icon name="trash" size={22} /></button
-          >
-        {/if}
-        <button class="icon" aria-label="Cancel" title="Cancel" onclick={cancelCrate} disabled={crateSaving}><Icon name="reset" size={24} /></button>
-        {#if favState && crate}
-          {@const c = crate}
-          <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => cycleFavourites(c)}
-            ><Icon name={favState.icon} size={24} /></button
-          >
-        {/if}
-        {#if albState && crate}
-          {@const c = crate}
-          <button class="icon" class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => cycleFavouriteAlbums(c)}
-            ><Icon name={albState.icon} size={24} /></button
-          >
-        {/if}
-        <button class="icon save" aria-label="Save" title="Save" onclick={saveCrate} disabled={crateSaving || !(crateDraft?.name.trim() || crateNamed)} aria-busy={crateSaving}
-          ><Icon name="arrowDownToLine" size={24} /></button
-        >
-    </SelectBar>
-  {/if}
   {#if selecting}
     <SelectBar label="Selected tracks" count="{selecting.size}/{shown?.length ?? 0}" onclose={() => (selecting = null)} every={{ all: !!shown?.length && selecting.size === shown.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}>
         <button class="icon" aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => actOnTicked('play')}><Icon name="play" size={24} /></button>
