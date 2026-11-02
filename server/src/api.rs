@@ -5028,7 +5028,7 @@ async fn scrobble_lastfm_callback(ctx: Ctx, Path(code): Path<String>, Query(q): 
             );
             return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
         }
-        let to = format!("/#/settings?view=settings%3Atracking%2Flastfm{}", why.replacen('?', "&", 1));
+        let to = listening_service_return("lastfm", &why.replacen('?', "&", 1));
         axum::response::Redirect::to(&to).into_response()
     };
     let Some(pending) = pending else { return back(Some("That sign-in has expired; sign in again".into())) };
@@ -5121,8 +5121,19 @@ async fn spotify_callback(Query(q): Query<SpotifyBack>) -> Response {
         );
         return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
     }
-    let to = format!("/#/settings?view=settings%3Aaccount%2Fspotify{}", why.map(|w| format!("&{w}")).unwrap_or_default());
+    let to = spotify_return(&why.map(|w| format!("&{w}")).unwrap_or_default());
     axum::response::Redirect::to(&to).into_response()
+}
+
+/// Where a listening service's sign-in comes back to on the page, `rest` its `&scrobble=…` (the one table of the
+/// page's addresses, shared/addresses.json `links.listening_service`; checked against it in the tests).
+fn listening_service_return(service: &str, rest: &str) -> String {
+    format!("/#/settings?view=settings%3Atracking%2F{service}{rest}")
+}
+
+/// Where Spotify's sign-in comes back to, `rest` its `&spotify_error=…` (shared/addresses.json `links.spotify_account`).
+fn spotify_return(rest: &str) -> String {
+    format!("/#/settings?view=settings%3Aaccount%2Fspotify{rest}")
 }
 
 /// Disconnects the account's Spotify (the export's lists stay).
@@ -6713,6 +6724,19 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, PreviewOf, attachment, form_decode};
+
+    #[test]
+    fn the_sign_ins_come_back_where_the_table_of_addresses_says() {
+        // The one table of the page's addresses (shared/addresses.json, 2026-11-02), as the page and the app check it too.
+        let table: serde_json::Value = serde_json::from_str(include_str!("../../shared/addresses.json")).unwrap();
+        let link = |name: &str, service: &str| {
+            let l = &table["links"][name];
+            let view = super::urlencoding_lite(&l["view"].as_str().unwrap().replace("{service}", service));
+            format!("/#/{}?view={view}&{}=", l["page"].as_str().unwrap(), l["word"].as_str().unwrap())
+        };
+        assert_eq!(super::listening_service_return("lastfm", "&scrobble="), link("listening_service", "lastfm"));
+        assert_eq!(super::spotify_return("&spotify_error="), link("spotify_account", ""));
+    }
 
     #[test]
     fn a_condition_that_cannot_be_answered_is_unprocessable() {
