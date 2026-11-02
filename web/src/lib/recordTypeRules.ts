@@ -66,6 +66,24 @@ export function typeOfRows(on: readonly FilterCondition[]): string | null {
   return null;
 }
 
+/** The types the Type rows select, one tick each in the picker (the owner, 2026-11-02: "it could very well show one
+ *  check per selected type"): Records for none; the values of every row that takes them in (not those a Not row
+ *  leaves out). */
+export function typesTicked(on: readonly FilterCondition[]): string[] {
+  if (!on.length) return [ALL];
+  return [...new Set(on.flatMap((c) => (!c.not && (c.value.kind === 'any_of' || c.value.kind === 'all_of') ? c.value.values : [])))];
+}
+
+/** The Type rows with `id` taken in or out (a long-press in the picker, the owner the same day: "a quick way to modify
+ *  the selection"): one row of what is ticked, the server reading it as the Filter sheet's card says it ("or" within a
+ *  layer, "and" across); none left, Records. Records itself: none. */
+export function toggledRows(on: readonly FilterCondition[], id: string): FilterCondition[] {
+  if (id === ALL) return [];
+  const now = typesTicked(on).filter((v) => v !== ALL);
+  const next = now.includes(id) ? now.filter((v) => v !== id) : [...now, id];
+  return next.length ? [{ axis: 'type', not: false, value: { kind: 'any_of', values: next } }] : [];
+}
+
 /** The picker's label for the Type rows. */
 export function typesShown(on: readonly FilterCondition[]): string {
   const t = typeOfRows(on);
