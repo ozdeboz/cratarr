@@ -366,6 +366,11 @@ fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bool> {
         super::covers::undo_kept(w.kept.as_ref().context("its old cover is no longer kept")?)?;
         return Ok(true);
     }
+    // A track added: to the trash, the one it replaced back.
+    if w.op == "track" {
+        super::track_fetch::undo_at(w.kept.as_ref().context("that can no longer be undone")?)?;
+        return Ok(true);
+    }
     let now = print(path)?;
     if now == w.planned || w.kept.is_none() {
         return Ok(false);
@@ -560,6 +565,27 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         }
     });
     first
+}
+
+/// A change a writer makes itself (a track added to its record: its fetch's own steps), made under the one lock and
+/// kept as a run done (decision 0092's writers' map, 0.14): in Changes to files, its Undo the run's. `work` gives the
+/// proposal of what it wrote (its files as written). Returns the run's status, its Undo the kept run's.
+pub async fn made(app: &Arc<super::App>, work: impl FnOnce() -> Result<Proposal> + Send + 'static) -> Result<Status> {
+    let _turn = LOCK.lock().await;
+    let p = tokio::task::spawn_blocking(work).await??;
+    let at = super::moment::now_secs();
+    let account = crate::serve::who::current().map(|w| w.user);
+    let keep = i64::from(app.incoming.trash_days()) * 86_400;
+    let run = FileRun { what: p.kind.clone(), title: p.title.clone(), records: p.records.clone(), files: p.files.clone(), failed: p.failed.clone() };
+    let j = app.journal.record_run(at, &run, account.as_deref(), keep)?;
+    let id = format!("{RUN}{j}");
+    for (album, files) in albums_of(&p.files) {
+        set_state(&album, FilesState { state: "written".into(), done: Some(files.len()), of: Some(files.len()), run: Some(id.clone()), at: Some(at) });
+    }
+    let status = kept_status(j, at, &run, false);
+    tracing::info!(target: "library", what = %status.what, albums = status.of, "files changed");
+    let _ = channel().send(status.clone());
+    Ok(status)
 }
 
 /// A kept run's status, from the journal.

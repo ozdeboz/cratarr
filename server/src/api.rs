@@ -6304,9 +6304,9 @@ async fn start_file_fetch(Json(b): Json<FileFetch>) -> Result<Json<serde_json::V
 }
 
 /// A checked track into its album; Undo takes it out again (and puts back the one it replaced).
-async fn add_fetched_track(Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let token = crate::app::track_fetch::add(&id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
+async fn add_fetched_track(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    // A run on the one path (0.14): the copy chosen is the yes, Undo the run's.
+    Ok(Json(crate::app::track_fetch::add(&app, &id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// The bulk intake's queue (0.13, decision 0080 amended): each missing track, its state, its candidates (best first) and
@@ -6321,11 +6321,11 @@ struct IntakeAlbums {
 }
 
 /// These albums' missing tracks queued, searched in turn (paced); the queue.
-async fn track_intake_add(Json(b): Json<IntakeAlbums>) -> Result<Json<crate::app::track_intake::View>, ApiError> {
+async fn track_intake_add(State(app): State<Arc<App>>, Json(b): Json<IntakeAlbums>) -> Result<Json<crate::app::track_intake::View>, ApiError> {
     if b.albums.is_empty() || b.albums.iter().any(|a| a.trim().is_empty()) {
         return Err(ToggleError::BadSettings("Name the albums.".into()).into());
     }
-    let view = crate::app::track_intake::add_albums(&b.albums).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let view = crate::app::track_intake::add_albums(&app, &b.albums).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(view))
 }
 
@@ -6342,9 +6342,9 @@ struct IntakeApprove {
 }
 
 /// Found items approved (a candidate given, else the one preselected): fetched, gated and added in turn; the queue.
-async fn track_intake_approve(Json(b): Json<IntakeApprove>) -> Json<crate::app::track_intake::View> {
+async fn track_intake_approve(State(app): State<Arc<App>>, Json(b): Json<IntakeApprove>) -> Json<crate::app::track_intake::View> {
     let picked: Vec<(String, Option<usize>)> = b.items.into_iter().map(|p| (p.id, p.candidate)).collect();
-    Json(crate::app::track_intake::approve(&picked))
+    Json(crate::app::track_intake::approve(&app, &picked))
 }
 
 /// One item dropped, its staged file with it.

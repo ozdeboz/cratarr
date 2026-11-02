@@ -804,8 +804,10 @@ fn undo_file(id: &str) -> Result<PathBuf> {
     Ok(Path::new(&data).join("track-fetch-undo").join(format!("{id}.json")))
 }
 
-/// Adds a passed fetch to its album; the undo token.
-pub async fn add(fetch: &str) -> Result<String> {
+/// Adds a passed fetch to its album as a run on the one path (decision 0092's writers' map, 0.14: the copy chosen after
+/// Cratarr's check is the yes): "Missing tracks · Album", or "Better copy · Album" where it replaces one; its Undo the
+/// run's (the new track to the trash, the one it replaced back).
+pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super::file_runs::Status> {
     let (wanted, staged) = jobs(|j| {
         let f = j.fetches.get(fetch)?;
         (f.view.state == Fetching::Passed).then(|| (f.wanted.clone(), f.staged.clone()))
@@ -813,7 +815,32 @@ pub async fn add(fetch: &str) -> Result<String> {
     .context("That track has not passed the check")?;
     let staged = staged.context("That track is not staged")?;
     let s = served()?;
-    let token = tokio::task::spawn_blocking(move || place_track(&s, &wanted, &staged)).await??;
+    let status = super::file_runs::made(app, move || {
+        let (_, _, _, artist, title) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
+        let replaced = match &wanted.replace {
+            Some(id) => super::renumber::tracks_of(&wanted.album)?.0.into_iter().find(|t| &t.id == id).map(|t| t.title),
+            None => None,
+        };
+        let (dest, undo) = place_track(&s, &wanted, &staged)?;
+        let what = if wanted.replace.is_some() { "Better copy" } else { "Missing tracks" };
+        Ok(super::file_runs::Proposal {
+            kind: "track".into(),
+            title: format!("{what} · {title}"),
+            records: vec![crate::journal::RunRecord { album: wanted.album.clone(), title, artist }],
+            files: vec![crate::journal::FileWrite {
+                album: wanted.album.clone(),
+                path: dest,
+                track: Some(wanted.track.title.clone()),
+                before: vec![("track".into(), replaced.into_iter().collect())],
+                after: vec![("track".into(), vec![wanted.track.title.clone()])],
+                from: vec![("track".into(), "its check".into())],
+                undone: false,
+                whole: Some(crate::journal::Whole { op: "track".into(), ms: None, kept: Some(undo), planned: String::new(), wrote: None }),
+            }],
+            failed: Vec::new(),
+        })
+    })
+    .await?;
     jobs(|j| {
         if let Some(f) = j.fetches.get_mut(fetch) {
             f.view.state = Fetching::Added;
@@ -821,10 +848,11 @@ pub async fn add(fetch: &str) -> Result<String> {
     });
     tell(fetch);
     drop_fetch(fetch);
-    Ok(token)
+    Ok(status)
 }
 
-fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Result<String> {
+/// Places a passed track in its album: where it went, and what its Undo needs (`undo_at`).
+fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Result<(PathBuf, PathBuf)> {
     let (folder, dir, ..) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
     let (tracks, ..) = super::renumber::tracks_of(&wanted.album)?;
@@ -889,11 +917,11 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let file = undo_file(&id)?;
     std::fs::create_dir_all(file.parent().context("no folder")?)?;
     std::fs::write(&file, serde_json::to_vec(&undo)?)?;
-    let mut changed = vec![dest];
+    let mut changed = vec![dest.clone()];
     changed.extend(replaced.map(|r| r.path.clone()));
     s.reread(&changed);
     s.catalogue().poke();
-    Ok(format!("{UNDO}{id}"))
+    Ok((dest, file))
 }
 
 /// The quality limit of the library whose folder is `root`: as Cratarr's own source has it (its libraries are its
@@ -954,12 +982,17 @@ fn tag(track: &Path, neighbour: &Path, t: &ReleaseTrack) -> Result<()> {
     )
 }
 
-/// Undoes an Add to album: the new track to the trash, the one it replaced back.
+/// Undoes an Add to album: the new track to the trash, the one it replaced back (an Undo token from before 0.14).
 pub async fn undo(token: &str) -> Result<()> {
     let id = token.strip_prefix(UNDO).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric())).context("Not an added track's undo")?.to_string();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let file = undo_file(&id)?;
-        let a: Added = serde_json::from_slice(&std::fs::read(&file).context("That can no longer be undone")?)?;
+    tokio::task::spawn_blocking(move || undo_at(&undo_file(&id)?)).await?
+}
+
+/// An added track's Undo from what its add kept (`file`): the new track to the trash, the one it replaced back.
+/// Blocking.
+pub fn undo_at(file: &Path) -> Result<()> {
+    {
+        let a: Added = serde_json::from_slice(&std::fs::read(file).context("That can no longer be undone")?)?;
         let now = super::moment::now_secs();
         crate::trash::trash_file(&a.root, &a.added, now)?;
         let mut changed = vec![a.root.join(&a.added)];
@@ -967,14 +1000,13 @@ pub async fn undo(token: &str) -> Result<()> {
             let back = crate::trash::restore_file(&a.root, tok)?;
             changed.push(a.root.join(back));
         }
-        std::fs::remove_file(&file).ok();
+        std::fs::remove_file(file).ok();
         if let Some(s) = crate::serve::instance() {
             s.reread(&changed);
             s.catalogue().poke();
         }
         Ok(())
-    })
-    .await?
+    }
 }
 
 #[cfg(test)]
