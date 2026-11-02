@@ -3,12 +3,33 @@
 // twice (its answer lost) is made once; and the time it was made, sent as X-Cratarr-At, so a later change made
 // elsewhere wins (favourites and ratings, last change by time). The keeping and the sending are lib/later's.
 
-/** One change waiting: its request as it is sent, its op id (`key`) and when it was made (`at`, epoch ms). */
-export type Op = { key: string; method: string; path: string; body: string | null; type: string | null; at: number };
+/** One change waiting: its request as it is sent, its op id (`key`), when it was made (`at`, epoch ms) and the account
+ *  it was made under (`account`, lib/account's key; none yet: see `stamped`). */
+export type Op = { key: string; method: string; path: string; body: string | null; type: string | null; at: number; account?: string };
 
 /** A week waiting (each try turned away as though out of reach): let go, not to hold the rest back for ever. */
 export const STALE_MS = 7 * 86_400_000;
 export const stale = (op: Op, now: number) => now - op.at > STALE_MS;
+
+// Whose (the owner, 2026-11-02, a bug fixed in 0.13): the changes, and the plays not yet told (lib/output), are sent
+// only while the account they were made under is signed in. Another account's wait for it, not sent and not dropped,
+// as long as the app keeps its plays; one at the head of the outbox holds back only its own account's behind it.
+
+/** Something kept to send later: when made, and under which account. */
+type Kept = { at: number; account?: string };
+
+/** A month: how long another account's things wait for it to sign in here again (the app's plays, Plays.kt). */
+export const OTHERS_MS = 30 * 86_400_000;
+
+/** Whether `k` is the account signed in's (`account`: lib/account's key, null while not known): only those are sent. */
+export const ours = (k: Kept, account: string | null) => account !== null && k.account === account;
+
+/** Whether `k` is another account's, waited for long enough: let go unsent. */
+export const outlived = (k: Kept, account: string | null, now: number) => !ours(k, account) && now - k.at > OTHERS_MS;
+
+/** The account known: those carrying none take it. Made before any account was known here, or kept before 0.13 (the
+ *  account signed in then, as was taken until now). */
+export const stamped = <T extends Kept>(list: readonly T[], account: string): T[] => list.map((k) => (k.account === undefined ? { ...k, account } : k));
 
 /** What an answer means for the change at the head of the outbox. `sent`: taken, let go. `refused`: turned down (the
  *  playlist gone meanwhile), let go too: Cratarr's state is the truth. `wait`: not reached, not signed in, or Cratarr
@@ -51,6 +72,7 @@ export function opsFrom(v: unknown): Op[] {
       typeof (o as Op).key === 'string' &&
       typeof (o as Op).method === 'string' &&
       typeof (o as Op).path === 'string' &&
-      typeof (o as Op).at === 'number',
+      typeof (o as Op).at === 'number' &&
+      ((o as Op).account === undefined || typeof (o as Op).account === 'string'),
   );
 }
