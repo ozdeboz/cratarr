@@ -51,7 +51,8 @@
   import { inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, fromLabel, snippetable, snippetOn, startOf, toggleSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, fromLabel, heardShare, snippetable, snippetOn, startOf, toggleSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import SnippetMark from './SnippetMark.svelte';
   import { prefs } from './prefs.svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -561,7 +562,10 @@
         <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and Play snippet from there (again, it
              stops). -->
         <SnippetStrip track={snip} />
-        <MenuEntry icon={snippetOn(snip) ? 'pause' : 'play'} label={fromLabel(startOf(snip))} onclick={() => toggleSnippet(snip)} />
+        <!-- Its mark as every snippet's button (the owner, 2026-11-02): the circle fading, its progress as it sounds. -->
+        <MenuEntry label={fromLabel(startOf(snip))} onclick={() => toggleSnippet(snip)}>
+          {#snippet mark()}<SnippetMark open={snippetOn(snip)} share={snippetOn(snip) ? heardShare() : 0} size={24} />{/snippet}
+        </MenuEntry>
       {/if}
       <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
       <MenuTable kind="track" {entry} />

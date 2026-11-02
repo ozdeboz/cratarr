@@ -13,7 +13,7 @@
   import Row from './Row.svelte';
   import SnippetMark from './SnippetMark.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, snippet, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, heardShare, snippet, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import TrackCover from './TrackCover.svelte';
 
   let {
@@ -46,8 +46,6 @@
     openRow = i;
     startSnippet(t);
   }
-  /** How far its snippet has sounded, 0..1 (its button's ring). */
-  const heardShare = $derived(snippet.sounding && snippet.to > snippet.from ? Math.min(1, Math.max(0, (snippet.at - snippet.from) / (snippet.to - snippet.from))) : 0);
   $effect(() => {
     void key;
     untrack(() => {
@@ -78,7 +76,7 @@
           {#if st}
             {@const on = openRow === i && isOn(st) && snippet.sounding}
             <button class="snip" aria-label={openRow === i ? `Stop ${r.name ?? r.file}` : `Hear ${r.name ?? r.file}`} aria-pressed={openRow === i} onclick={() => snipTap(i, st)}>
-              <SnippetMark open={openRow === i} share={on ? heardShare : 0} />
+              <SnippetMark open={openRow === i} share={on ? heardShare() : 0} />
             </button>
           {/if}
           {#if onmenu && !off}

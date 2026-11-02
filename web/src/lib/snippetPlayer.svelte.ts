@@ -112,6 +112,8 @@ export function startSnippet(t: SnippetTrack) {
 
 /** Whether `t`'s snippet is on (starting or sounding). */
 export const snippetOn = (t: SnippetTrack | null | undefined) => !!t && snippet.key === keyOf(t);
+/** How far the snippet sounding has been heard, 0..1 (its mark's circle, lib/SnippetMark); 0 while none sounds. */
+export const heardShare = () => (snippet.sounding && snippet.to > snippet.from ? Math.min(1, Math.max(0, (snippet.at - snippet.from) / (snippet.to - snippet.from))) : 0);
 
 /** Play snippet: on, or off again. */
 export function toggleSnippet(t: SnippetTrack) {
