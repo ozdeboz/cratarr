@@ -55,7 +55,11 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   Repair into Health (both rework the .m3u files 0096 replaces), and Health's check for records above their library's
   quality limit (the limit itself for moves and Keep stays in 0.14). Previews on staging along the way.
 - **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**
-  ([0091](decisions/0091-scrobbling-from-the-device.md)). Cratarr's mode is Cratarr's own library, its libraries still
+  ([0091](decisions/0091-scrobbling-from-the-device.md)). With them, **Soulseek in Cratarr, Lidarr staying** (the
+  owner, 2026-11-02, below): soularr goes; Cratarr fetches whole albums from Soulseek its own way (Lidarr's wanted
+  albums through its API and Cratarr's own Requests, each searched by its release recording by recording, a folder
+  chosen by its tracks, every file gated), into Incoming for the intake card; Lidarr keeps watching artists and
+  grabbing torrents. Cratarr's mode is Cratarr's own library, its libraries still
   switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
   library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. Wants the
   owner's design choices first.
@@ -80,7 +84,8 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 ## Soulseek in Cratarr, not through Lidarr (explored 2026-10-31)
 
 The owner: "I want to explore whether it's time we left SoulSeek in the hands of Cratarr altogether instead of using
-Lidarr. But I'm not sure about this." Not decided; written down to read first. Only the bulk intake of missing
+Lidarr. But I'm not sure about this." Decided 2026-11-02: the first way below, *Cratarr does Soulseek, Lidarr stays*,
+in 0.15. Only the bulk intake of missing
 tracks below is being built (the owner, 2026-10-31: "Bulk search, you approve").
 
 **What happens now.** Lidarr keeps the wanted list (its monitored artists and albums, Cratarr's Requests among them)
@@ -144,6 +149,9 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
   miss too much. AudioMuse runs after import, so in Health, not on the intake card.
 - Mockups of the intake card first (632), then the server's checks and references (a5).
+- *All of it in 0.14* (the owner, 2026-11-02): Discogs' and Bandcamp's track lists and lengths as references, not only
+  MusicBrainz's; a record checked by hand its own reference for its type and year; references that disagree side by
+  side, and one found by guessing confirmed once; where a record came from for Lidarr and Bandcamp too.
 
 **From SoulSync and DroppedNeedle (reviewed 2026-11-02, the HomeAssistant session, placed by 632).** The owner's rule:
 0.14 stays light, only truly helpful bug fixes; the rest into 0.15 or 0.16, 0.17 only for a very good reason. Never
