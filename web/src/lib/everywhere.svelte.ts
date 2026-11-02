@@ -59,7 +59,7 @@ export function provideEverywhere(pages: () => PageLink[]) {
     { page: 'downloads', label: 'Downloads', parts: () => DOWNLOADS_LISTS.map((l) => ({ view: DOWNLOADS + l.id, label: l.label })) },
     { page: 'insights', label: 'Insights', parts: () => INSIGHTS_VIEWS.map((v) => ({ view: INSIGHTS + v.id, label: v.label, sub: v.group })) },
     // Its problems as far as its report is in (read when Health was opened).
-    { page: 'health', label: 'Health', parts: () => problems().map((x) => ({ view: HEALTH + x.key, label: x.title, sub: x.domain })) },
+    { page: 'health', label: 'Health', parts: () => problems().map((x) => ({ view: HEALTH + x.key, label: x.name, sub: x.title })) },
   ];
   for (const p of PARTS)
     provide({

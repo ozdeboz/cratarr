@@ -291,7 +291,7 @@
   }
   // Every problem and Changes to files, in Health's areas, each area's most urgent first (as the page lists them).
   const parts = $derived([
-    ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.finding?.thing ?? x.name }))),
+    ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.name }))),
     ...(me.admin ? [{ id: CHANGES, group: 'Activity', label: 'Changes to files' }] : []),
   ]);
   const shownId = $derived(problem === CHANGES ? CHANGES : (p?.key ?? null));

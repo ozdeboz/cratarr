@@ -54,7 +54,9 @@ export type Problem = {
   domain: string;
   /** Its area of Health (lib/health AREAS). */
   area: Area;
-  /** Its short name, the panel's breadcrumb (the owner, 2026-10-25: "Quality replacements", "Missing genres"). */
+  /** Its name, the one it goes by everywhere: Health's list, the panel's breadcrumb, its picker, Up, global search (the
+   *  owner, 2026-11-02: the picker said "Responses" and the breadcrumb "Slow responses"; "Shouldn't we use the short
+   *  ones everywhere?"): the finding's thing where it has one, else its name. */
   name: string;
   /** What it is, on its card ("12 albums without a genre"; a file kind's "Files without tags"). */
   title: string;
@@ -80,7 +82,7 @@ const fileItem = (p: FileProblem): HealthItem => {
 export function problems(): Problem[] {
   const out: Problem[] = health.findings
     .filter((f) => f.domain !== 'files')
-    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, area: areaOf(f.domain), name: f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
+    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, area: areaOf(f.domain), name: f.thing ?? f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
   const listed = health.problems ?? [];
   const counted = health.findings.filter((f) => f.domain === 'files').map((f) => f.key.split(':')[1]);
   const kinds = [...FILE_KINDS.map((k) => k.kind as string), ...counted.filter((k) => !FILE_KINDS.some((x) => x.kind === k))];
@@ -98,7 +100,7 @@ export function problems(): Problem[] {
       urgent: kind === 'broken',
       domain: DOMAINS.files.name,
       area: areaOf('files'),
-      name: f?.name ?? title,
+      name: f?.thing ?? f?.name ?? title,
       title,
       said: k ? `${nFiles(n)}${k.title.slice('Files'.length)}` : (f?.title ?? title),
       line: files.length < n ? `${files.length.toLocaleString()} of ${nFiles(n)} listed` : nFiles(n),
