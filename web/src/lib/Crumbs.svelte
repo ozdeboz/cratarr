@@ -4,8 +4,8 @@
   // then where one is. Short (the owner: "2 at most. So the current and one level above"): the last level above and
   // where one is, both cut with … when short of room. Whole: every level, nothing cut, scrolled to its end (the owner,
   // 2026-10-25: "in scroll mode, the entire breadcrumb should be visible. In the other mode, only one level
-  // difference"). A tap on where one is turns from one to the other while there is more to show (a level left out, or
-  // something cut), for every panel on this device ("global on the device": prefs.crumbsWhole). No levels above: only
+  // difference"). A long-press, and only that (the owner, 2026-11-02), turns from one to the other while there is more
+  // to show (a level left out, or something cut), for every panel on this device ("global on the device": prefs.crumbsWhole). No levels above: only
   // where one is, as beside the page whose name its list already shows (Settings › Display beside Settings' list said
   // Settings twice).
   // One rule for every panel (the owner, 2026-11-01): the levels are those Back walks through, each a tap back there;
@@ -41,8 +41,7 @@
 </script>
 
 <h2 class="crumbs" class:whole bind:this={line} use:longpress={show}>
-  {#each shown as up, i (i)}{#if up.pick}<span class="up pick"><GlassPicker shown={up.label} menuLabel={up.pick.menuLabel} options={up.pick.options} chosen={up.pick.chosen} onchoose={up.pick.onchoose} /></span>{:else if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <span class="here" aria-current="page" onclick={show}>{here}</span>{/if}
+  {#each shown as up, i (i)}{#if up.pick}<span class="up pick"><GlassPicker shown={up.label} menuLabel={up.pick.menuLabel} options={up.pick.options} chosen={up.pick.chosen} onchoose={up.pick.onchoose} /></span>{:else if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<span class="here" aria-current="page">{here}</span>{/if}
 </h2>
 
 <style>
