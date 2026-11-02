@@ -458,6 +458,7 @@ impl CrateLibrary {
     }
 
     fn resolved_of(&self, conditions: &[crates::Condition], every: bool) -> Vec<crates::Condition> {
+        let conditions = &one_spelling(conditions);
         if !conditions.iter().any(|c| c.value.ranks()) {
             return conditions.to_vec();
         }
@@ -559,6 +560,27 @@ fn words_find(queries: &[&str], texts: &[&str]) -> bool {
     let aliases = if kept.len() > 1 { kept.clone() } else { Vec::new() };
     let index = Index::new(vec![Name { text: kept.join(" "), aliases }]);
     queries.iter().any(|q| !index.query(q, 1).is_empty())
+}
+
+/// Conditions on words as the store spells them (decision 0097, rule 4: one spelling everywhere): "Hip-Hop" or "hip
+/// hop" asked finds the Hip Hop the tracks carry. A word the store does not know is asked as written.
+fn one_spelling(conditions: &[crates::Condition]) -> Vec<crates::Condition> {
+    let Some(stored) = super::words::stored_now() else { return conditions.to_vec() };
+    conditions
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            let axis = c.axis.clone();
+            if let crates::Value::AnyOf { values } | crates::Value::AllOf { values } = &mut c.value {
+                for v in values.iter_mut() {
+                    if let Some(w) = stored.word(&axis, v) {
+                        *v = w.word;
+                    }
+                }
+            }
+            c
+        })
+        .collect()
 }
 
 /// A cause among a crate's conditions as it is looked at (decision 0095): its chip's kind, key and word, and the

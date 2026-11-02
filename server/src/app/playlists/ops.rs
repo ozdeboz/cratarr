@@ -3,7 +3,6 @@
 //! written as one edit of the `.m3u` like every other.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use super::{PlaylistService, ToggleError};
 use crate::playlist_ops::{Do, plain_id};
@@ -13,8 +12,9 @@ use crate::source::PlaylistChange;
 const MOST: usize = 1_000;
 
 /// A track on a server: what an add brings, and what each entry plays.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct TrackRef {
     pub source: String,
     pub id: String,
@@ -22,9 +22,10 @@ pub struct TrackRef {
 
 /// One operation, as a page made it: its own id (`op_id`, made once: sent again, not applied again), when it was made
 /// on the device (`at`, epoch ms), and the entries it names (`after`: null for the start).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "op", rename_all = "snake_case")]
-#[ts(export)]
+#[cfg_attr(test, ts(export))]
 pub enum PlaylistOp {
     /// A track added as a new entry (its id the page's own) after `after`.
     Add { op_id: String, at: i64, entry: String, track: TrackRef, #[serde(default)] after: Option<String> },
@@ -58,16 +59,18 @@ impl PlaylistOp {
 }
 
 /// `POST /api/playlists/{id}/ops`: `{ops: [...]}`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct PlaylistOps {
     pub ops: Vec<PlaylistOp>,
 }
 
 /// One entry of the playlist as it now is: its id and its track on the server asked about (`?source=`, as the rows
 /// take it); `track` null where the line is not a track there (its file missing, or not matched).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct OpsEntry {
     pub entry: String,
     pub track: Option<TrackRef>,
@@ -75,8 +78,9 @@ pub struct OpsEntry {
 
 /// An operation not applied, and why in a short phrase ("not found": an add whose track Cratarr cannot find). Kept
 /// with its `op_id`: sent again, it is refused again; the page drops it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct RefusedOp {
     pub op_id: String,
     pub why: String,
@@ -84,8 +88,9 @@ pub struct RefusedOp {
 
 /// The answer: the change log's rev after the operations, the playlist as it now is, and the operations refused
 /// (empty when none).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct OpsAnswer {
     pub rev: i64,
     pub entries: Vec<OpsEntry>,

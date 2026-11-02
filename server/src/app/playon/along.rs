@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use super::{Command, Entry, OWN_MUSIC, PlayFrom, PlayOn, PlayerKind, PlayerView, QueueTrack, belongs_to, first_owner, key, view_in};
 use crate::app::ToggleError;
@@ -35,7 +34,8 @@ const SPANS: usize = 50;
 const SPANS_KEPT_SECS: i64 = 30 * 86_400;
 
 /// A player followed, by its user and name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FollowTarget {
     pub user: String,
     pub player: String,

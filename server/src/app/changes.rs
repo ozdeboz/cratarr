@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use ts_rs::TS;
 
 use super::{App, ToggleError};
 use crate::userdata::offline::{ChangeKind, Since};
@@ -14,8 +13,9 @@ pub const MOST: usize = 1_000;
 
 /// One change: its rev, what changed (`playlist`, `favourite`, `rating`, `excluded`), the item's id as the pages name
 /// it, and `changed` or `deleted`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct Change {
     pub rev: i64,
     pub kind: String,
@@ -31,18 +31,19 @@ pub struct Change {
 /// `GET /api/changes?since=<rev>&kinds=a,b`: `{rev, changes, more}`, at most 1,000 changes, the next asked from `rev`
 /// while `more`; or `{rev, reset: true}`: not known from `since` (none sent, older than what is kept, ahead of this
 /// server), so read everything again and go on from `rev`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct Changes {
     pub rev: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub changes: Option<Vec<Change>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub more: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub reset: Option<bool>,
 }
 

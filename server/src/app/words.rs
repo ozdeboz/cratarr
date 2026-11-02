@@ -89,6 +89,11 @@ pub struct WordOf {
 
 static STORED: Mutex<Option<Arc<Stored>>> = Mutex::new(None);
 
+/// The store as last built, without building it: for a reader that holds the facts it was built with.
+pub fn stored_now() -> Option<Arc<Stored>> {
+    STORED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// The store as built with the crates' facts, built now where they were not. Blocking.
 pub fn stored(serve: &crate::serve::Serve) -> Result<Arc<Stored>> {
     serve.catalogue().crate_facts()?;

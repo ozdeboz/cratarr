@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use cratarr_rules::{ByHand, Lane};
 
@@ -67,7 +66,8 @@ pub struct Queue {
 
 /// Where a queue was heard: on which player, through what (its app's audio output: `bluetooth`, `speaker`, `wired`,
 /// `usb`, `hdmi`, `remote`, `other`; none where the player does not say) and the device's name where it has one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct PlayedOn {
     pub player: String,
     #[serde(rename = "type", default)]
@@ -102,7 +102,8 @@ fn own_entries(tracks: &[QueueTrack]) -> impl Iterator<Item = &str> {
 
 /// Off: the queue ends. One: the playing track starts again. All: after the last track the album or playlist starts
 /// again (what was added by hand plays once).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum Repeat {
     #[default]
