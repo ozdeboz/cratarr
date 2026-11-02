@@ -8,6 +8,7 @@
   // top right of the screen that plays.
   import FilterSheet from './FilterSheet.svelte';
   import ProgressRing from './ProgressRing.svelte';
+  import NothingPopover from './NothingPopover.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import Meter from './Meter.svelte';
@@ -74,7 +75,7 @@
   let outputOpen = $state(false);
 
   // The search: the magnifier opens a field over the row (the whole row on a phone, the pill grown leftwards on a
-  // wide page); Esc or leaving it empty folds it, ✕ empties it. A search that applies keeps the magnifier lit.
+  // wide page); Esc, Enter or leaving it empty folds it, ✕ empties it. A search that applies keeps the magnifier lit.
   const words = $derived(page ? searchFor(page) : search ? searchFor(search) : null);
   let searching = $state(false);
   let field = $state<HTMLInputElement>();
@@ -276,23 +277,8 @@
   /** Back, the gap after it, the lens and a short title's room: what the row keeps beside the field it wants. */
   const BESIDE = 204;
   const fieldWants = $derived(Math.max(Math.min(320, (rowRoom ?? (innerWidth.current ?? 400) - 16) - BESIDE), folded - LENS, 140));
+  /** The magnifier: where the popover's tip points (lib/NothingPopover). */
   let lens = $state<HTMLElement>();
-  /** The magnifier's middle, from the row's right end: where the callout's tip points. */
-  let tip = $state(24);
-  $effect(() => {
-    const [r, l] = [row, lens];
-    if (!noneShown || !r || !l) return;
-    const place = () => {
-      const a = r.getBoundingClientRect();
-      const b = l.getBoundingClientRect();
-      tip = a.right - (b.left + b.width / 2);
-    };
-    place();
-    // The pill's outline changes (the field opening, at once; its glass then moves): the tip follows.
-    const seen = new ResizeObserver(place);
-    seen.observe(r);
-    return () => seen.disconnect();
-  });
   $effect(() => {
     if (!globeShown && untrack(() => globalSearch.scope) === 'everywhere') globalSearch.scope = 'page';
   });
@@ -352,7 +338,16 @@
               onscroll={follow}
               onkeyup={follow}
               onselect={follow}
-              onkeydown={(e) => e.key === 'Escape' && (searching = false)}
+              onkeydown={(e) => {
+                // Esc folds it; Enter too, the words kept and the magnifier lit while they apply (the owner, 2026-11-02:
+                // "The search input field should auto-close on pressing enter"), the keyboard going with it.
+                if (e.key === 'Escape') searching = false;
+                else if (e.key === 'Enter' && !e.isComposing) {
+                  e.preventDefault();
+                  field?.blur();
+                  searching = false;
+                }
+              }}
               onblur={() => pageView.query.trim() === '' && (searching = false)}
             />
           </span>
@@ -380,10 +375,7 @@
     {/if}
   </div>
   {#if noneShown}
-    <div class="none" role="status" style:--tip="{tip}px" transition:fade={{ duration: 150 }}>
-      <span class="said">No {pageView.none} for</span>
-      <span class="words"><span class="q">{pageView.query.trim()}</span><button class="clear" aria-label="Clear the search" title="Clear" onclick={clear}><Icon name="close" size={14} /></button></span>
-    </div>
+    <NothingPopover anchor={lens} said={`No ${pageView.none} for`} chips={[{ label: pageView.query.trim(), onclear: clear }]} />
   {/if}
 </span>
 {#if filterOpen}
@@ -407,65 +399,6 @@
     display: flex;
     align-items: center;
     min-width: 0;
-  }
-
-  /* The page's search finding none (A2): one slim line hanging from the pill, its tip on the magnifier, the words a
-     chip whose ✕ clears. */
-  .none {
-    position: absolute;
-    top: calc(100% + 12px);
-    right: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    max-width: calc(100vw - 24px);
-    padding: 6px 6px 6px 14px;
-    border-radius: 999px;
-    background: var(--surface);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 9%, transparent), 0 12px 32px rgb(0 0 0 / 0.4);
-    white-space: nowrap;
-  }
-
-  .none::before {
-    content: '';
-    position: absolute;
-    top: -6px;
-    right: calc(var(--tip) - 6px);
-    width: 12px;
-    height: 12px;
-    transform: rotate(45deg);
-    background: var(--surface);
-    box-shadow: -1px -1px 0 color-mix(in srgb, var(--text) 9%, transparent);
-  }
-
-  .said {
-    color: var(--muted);
-    font-size: 14px;
-  }
-
-  .words {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    padding: 4px 4px 4px 12px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text) 9%, transparent);
-    font-size: 14px;
-  }
-
-  .words .q {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .words .clear {
-    flex: none;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: var(--accent-text);
   }
 
   /* Everywhere's shown: lit. */
