@@ -77,7 +77,7 @@
           {#each g.problems as p (p.key)}
             <Item
               lead={dotOf(p)}
-              name={p.finding?.thing ?? p.name}
+              name={p.name}
               line={p.name === p.title ? p.line : p.title}
               value={countOf(p)}
               open={panelBeside() && healthOf(panel.viewed) === p.key}
