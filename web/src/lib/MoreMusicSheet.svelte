@@ -2,7 +2,7 @@
   import { panSafe } from './panSafe';
   import { local, type AutoplayMode, type RadioBy } from './localPlayer.svelte';
 
-  export const AUTOPLAY_NAMES: Record<AutoplayMode, string> = { similar: 'Similar', artist: 'Same artist', era: 'Same era', random: 'Random' };
+  export const AUTOPLAY_NAMES: Record<AutoplayMode, string> = { similar: 'Similar', artist: 'Same artist', era: 'Same era', random: 'Random', taste: 'Your taste' };
   export const RADIO_NAMES: Record<RadioBy, string> = { track: 'Similar to the track', artist: 'Same artist', era: 'Same era' };
 
   /** What is on, part by part, each with its icon (the icon follows what is on, the owner said): the queue's pill. */
