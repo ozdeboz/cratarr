@@ -132,7 +132,10 @@
   // all of them when the part's name has the words; a thing's page has none.
   const narrowing = $derived(handed && !thing && words(pageView.query).length > 0 && !matchesSearch(partTitle));
   narrowSettings(() => narrowing);
-  const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings' } : null);
+  // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
+  // its own beside it).
+  const resetAction = () => (resetRows().length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
+  const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings', action: resetAction() } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
@@ -155,8 +158,9 @@
 {#snippet glassExtra()}
   <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
   {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
-  <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
-  {#if !thing && resetRows().length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
+  <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar; handed to App's
+       glass, it is the pill's own button. -->
+  {#if !thing && !handed && resetRows().length}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
   {#if !beside}<PanelPlace />{/if}
 {/snippet}
 
