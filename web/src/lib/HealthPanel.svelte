@@ -61,6 +61,12 @@
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
   const p = $derived(problems().find((x) => x.key === problem) ?? null);
   const f = $derived(p?.finding ?? null);
+  // Opened for a problem the report, read whole, no longer has (fixed meanwhile): the Health page, never an empty panel
+  // over it saying so (the owner, 2026-11-02: "← Health" over "This is no longer a problem", and Back to the page with
+  // "← Health" again). Not after a failed read: that says so (errors are never shown as nothing).
+  $effect(() => {
+    if (problem !== CHANGES && !p && health.loaded && !health.reportError && !health.error) untrack(() => closePlaylist());
+  });
   const LEVEL = { critical: 'Critical', warning: 'Warning', info: 'To know' } as const;
   const WHERE: Record<string, string> = { library: 'Open the Library', playlists: 'Open Playlists', settings: 'Open Settings', health: 'Open Health', requests: 'Open Requests' };
   /** An Incoming album waiting (or not converted): compared with Music, its menu at hand (lib/HealthIncoming). */
