@@ -39,8 +39,9 @@ pub enum Collection {
         /// The filter on it (decision 0061): conditions, unsaved, besides its own.
         #[serde(default)]
         filter: Vec<crate::crates::Condition>,
-        /// The order its list shows (decision 0060), so Play plays as it is shown.
-        #[serde(default)]
+        /// The order its list shows (decision 0060), so Play plays as it is shown; none asked, Best match
+        /// (`CrateOrder::opened`).
+        #[serde(default = "super::CrateOrder::opened")]
         order: super::CrateOrder,
         #[serde(default)]
         down: bool,
@@ -256,6 +257,12 @@ pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
         duration_secs: Some(s.duration as f64).filter(|d| *d > 0.0),
         ..QueueTrack::default()
     }
+}
+
+/// The songs of Cratarr's own library a collection holds, in its order, read as a play reads them: what Radio and
+/// Autoplay stay inside (decision 0094). `owner`: whose favourites and exclusions.
+pub async fn own_songs(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Vec<String>, ToggleError> {
+    Ok(candidates(app, Some(source::cratarr::KIND.id), what, owner).await?.ids)
 }
 
 /// The favourites of `owner`, or all of Cratarr's own library, less what `owner` excluded from automatic picks.
@@ -514,13 +521,13 @@ mod tests {
             "what": { "kind": "crate", "id": "unlisted", "favourites": "only" }, "how": "shuffle", "on": "server"
         }))
         .unwrap();
-        assert_eq!(r.what, Collection::Crate { id: "unlisted".into(), favourites: Some(Favourites::Only), favourite_albums: None, without: Vec::new(), filter: Vec::new(), order: Default::default(), down: false });
+        assert_eq!(r.what, Collection::Crate { id: "unlisted".into(), favourites: Some(Favourites::Only), favourite_albums: None, without: Vec::new(), filter: Vec::new(), order: super::super::CrateOrder::opened(), down: false });
         assert_eq!((r.how, r.on), (How::Shuffle, Some(On::Server)));
         let w: Request = serde_json::from_value(serde_json::json!({
             "what": { "kind": "crate", "id": "unlisted", "without": ["cratarr//media/Incoming"] }, "how": "play"
         }))
         .unwrap();
-        assert_eq!(w.what, Collection::Crate { id: "unlisted".into(), favourites: None, favourite_albums: None, without: vec!["cratarr//media/Incoming".into()], filter: Vec::new(), order: Default::default(), down: false });
+        assert_eq!(w.what, Collection::Crate { id: "unlisted".into(), favourites: None, favourite_albums: None, without: vec!["cratarr//media/Incoming".into()], filter: Vec::new(), order: super::super::CrateOrder::opened(), down: false });
         let r: Request = serde_json::from_value(serde_json::json!({
             "what": { "kind": "tracks", "source": "cratarr", "ids": ["tr-1", "tr-2"] }, "how": "next", "on": { "player": "Lenovo Tab" }
         }))

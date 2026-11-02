@@ -3,4 +3,4 @@
 /**
  * Autoplay's mode in a command: `stop` switches it off.
  */
-export type AutoplayMode = "stop" | "similar" | "artist" | "era" | "random";
+export type AutoplayMode = "stop" | "similar" | "artist" | "era" | "random" | "taste";

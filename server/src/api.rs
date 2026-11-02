@@ -2157,8 +2157,9 @@ struct Page {
     favourite_albums: Option<crate::crates::Favourites>,
     filter: Option<String>,
     /// The order the list shows (decision 0060: own, title, artist, albumArtist, album, year, track, length, tempo,
-    /// plays, lastPlayed, added), `down` turned round; applied before the rows are paged.
-    #[serde(default)]
+    /// plays, lastPlayed, added; decision 0094's bestMatch, what it opens on: `CrateOrder::opened`), `down` turned
+    /// round; applied before the rows are paged.
+    #[serde(default = "crate::app::CrateOrder::opened")]
     order: crate::app::CrateOrder,
     #[serde(default)]
     down: bool,
@@ -2743,8 +2744,8 @@ async fn sync_measure(State(app): State<Arc<App>>) -> Json<crate::app::together:
 }
 
 /// The radio's next tracks for the player that plays (decision 0036): already in the radio lane.
-async fn radio_next(Json(r): Json<crate::app::radio::NextRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let tracks = crate::app::radio::next(r).await?;
+async fn radio_next(State(app): State<Arc<App>>, Json(r): Json<crate::app::radio::NextRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let tracks = crate::app::radio::next(&app, r).await?;
     Ok(Json(serde_json::json!({ "tracks": tracks })))
 }
 
@@ -5460,8 +5461,6 @@ struct TasteQuery {
     without: Option<String>,
     /// Insights' period (week, month, year, all; absent: all): the plays and skips within it.
     period: Option<crate::app::history::Period>,
-    /// Sources switched off, comma-separated: favourites, playlists, plays, skipped, excluded (absent: all on).
-    off: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -5858,8 +5857,7 @@ async fn artist_photo(ctx: Ctx, Path(id): Path<String>) -> Response {
 
 async fn taste_profile(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    let off: Vec<String> = q.off.as_deref().unwrap_or("").split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.taste(q.source.as_deref(), &without, q.period.unwrap_or(crate::app::history::Period::All), &off).await?))
+    Ok(Json(app.playlists.taste(q.source.as_deref(), &without, q.period.unwrap_or(crate::app::history::Period::All)).await?))
 }
 
 /// How many similar lists a list shows at its foot.
