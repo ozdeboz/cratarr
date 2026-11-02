@@ -6,6 +6,7 @@ import type { QueueTrack } from '../generated/QueueTrack';
 import type { Repeat } from '../generated/Repeat';
 import type { RadioBy } from '../generated/RadioBy';
 import type { AutoplayMode } from '../generated/AutoplayMode';
+import { collectionIn } from '../within';
 
 type Args = Record<string, unknown>;
 const num = (v: unknown) => (typeof v === 'number' ? v : undefined);
@@ -49,7 +50,7 @@ export function commandOf(op: string, args: Args = {}): PlayerCommand | null {
         albums: typeof args.albums === 'boolean' ? args.albums : undefined,
         restart: typeof args.restart === 'boolean' ? args.restart : undefined,
         seed: Array.isArray(args.seed) ? (args.seed as string[]) : undefined,
-        within: str(args.within),
+        within: args.within === null ? null : (collectionIn(args.within) ?? undefined),
       });
     case 'wind':
       return { command: 'wind', dir: str(args.dir) ?? '', phase: str(args.phase) ?? '' };

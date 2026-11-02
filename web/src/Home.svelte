@@ -187,7 +187,7 @@
     navigator.vibrate?.(8);
     starting = true;
     try {
-      await startRadio([], moment.name, `${LIKE}now`);
+      await startRadio([], moment.name, { kind: 'crate', id: `${LIKE}now` });
     } catch (e) {
       toast.fail(e, "The radio didn't start");
     } finally {
