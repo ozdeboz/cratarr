@@ -8,13 +8,19 @@
   import { withUndo } from './undo.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
+  import Notice from './Notice.svelte';
   import { toast } from './toast.svelte';
 
   let { playlist }: { playlist: string } = $props();
 
-  /** `typed`: the words were changed by hand (searched as words; until then the line is found again by what it says). */
-  type Missing = { entry: string; query: string; typed: boolean; found: FoundTrack[] | null; busy: boolean; fixed: string | null };
+  /** `typed`: the words were changed by hand (searched as words; until then the line is found again by what it says).
+   *  `error`: its search failed, said under it, never "Nothing found." (the owner, 2026-11-02: errors are never shown as
+   *  nothing). */
+  type Missing = { entry: string; query: string; typed: boolean; found: FoundTrack[] | null; busy: boolean; fixed: string | null; error: string | null };
   let lines = $state<Missing[] | null>(null);
+  /** The playlist could not be read: said in place, not "Nothing missing.". */
+  let error = $state<string | null>(null);
+  let readAgain = $state(0);
   /** What a line still says, as words to search by: its file's name without number or extension, and its folder's. */
   function words(entry: string): string {
     const parts = entry.split('/');
@@ -27,24 +33,28 @@
     m.busy = true;
     try {
       m.found = await findTracks(m.query, m.typed ? undefined : m.entry);
+      m.error = null;
     } catch (e) {
-      toast.fail(e, "The library couldn't be searched");
+      m.found = null;
+      m.error = e instanceof Error ? e.message : "The library couldn't be searched.";
     } finally {
       m.busy = false;
     }
   }
   $effect(() => {
     const id = playlist;
+    void readAgain;
     let gone = false;
     lines = null;
+    error = null;
     playlistRows(id).then(
       (r) => {
         if (gone) return;
-        lines = r.rows.filter((x) => x.missing).map((x) => ({ entry: x.entry, query: words(x.entry), typed: false, found: null, busy: false, fixed: null }));
+        lines = r.rows.filter((x) => x.missing).map((x) => ({ entry: x.entry, query: words(x.entry), typed: false, found: null, busy: false, fixed: null, error: null }));
         // Each found again at once, by what its line says.
         untrack(() => lines!.forEach(search));
       },
-      () => !gone && (lines = []),
+      (e) => !gone && (error = e instanceof Error ? e.message : "The playlist couldn't be read."),
     );
     return () => (gone = true);
   });
@@ -60,7 +70,9 @@
   }
 </script>
 
-{#if lines === null}
+{#if error}
+  <Notice text={error} onretry={() => readAgain++} />
+{:else if lines === null}
   <p class="muted">…</p>
 {:else if !lines.length}
   <p class="muted">Nothing missing.</p>
@@ -77,7 +89,9 @@
             <input bind:value={m.query} oninput={() => (m.typed = true)} aria-label="Search the library" />
             <button type="submit" disabled={m.busy}>Search</button>
           </form>
-          {#if m.found}
+          {#if m.error}
+            <Notice text={m.error} onretry={() => search(m)} />
+          {:else if m.found}
             {#if !m.found.length}
               <p class="muted">Nothing found.</p>
             {:else}

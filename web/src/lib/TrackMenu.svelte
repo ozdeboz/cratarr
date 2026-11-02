@@ -42,6 +42,7 @@
   import { withHeard } from './trackFacts.svelte';
   import type { IconName } from './Icon.svelte';
   import MarkLoader from './MarkLoader.svelte';
+  import Notice from './Notice.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
   import { excludedGloballyOf, loadExcludedIds, setExcludedGlobally } from './exclusions.svelte';
@@ -173,14 +174,19 @@
   // Other versions (0.10): the library's other recordings of its work (MusicBrainz's work links), asked as the menu
   // opens where the list says there are some, or does not say (a server without them answers 404: none shown).
   let versions = $state<TrackVersions | null>(null);
-  // Answered (with none, or failed): what a sheet opened at its versions says then.
+  // Answered (with none, or failed): what a sheet opened at its versions says then; failed, why, never "No other
+  // versions found." (the owner, 2026-11-02: errors are never shown as nothing).
   let versionsAnswered = $state(false);
+  let versionsError = $state<string | null>(null);
+  let versionsAgain = $state(0);
   // Asked again only for another track, as `details` below (the playing track's view is new at every report).
   const versionsOf = $derived(t && t.source === 'cratarr' && t.has_versions !== false && can('other_versions') !== false ? `${t.source}\n${t.id}` : null);
   $effect(() => {
     const key = versionsOf;
+    void versionsAgain;
     versions = null;
     versionsAnswered = false;
+    versionsError = null;
     if (!key) return void (versionsAnswered = true);
     const [source, id] = key.split('\n');
     let gone = false;
@@ -190,7 +196,7 @@
         if (v?.versions?.length) versions = v;
         versionsAnswered = true;
       },
-      () => !gone && (versionsAnswered = true),
+      (e) => !gone && ((versionsError = e instanceof Error ? e.message : "Other versions couldn't be read."), (versionsAnswered = true)),
     );
     return () => (gone = true);
   });
@@ -567,7 +573,7 @@
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}
       </PlaylistToggles>
     {:else if step === 'versions' && !versions}
-      {#if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
+      {#if versionsError}<Notice text={versionsError} onretry={() => versionsAgain++} />{:else if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
     {:else if step === 'versions' && versions}
       {@const v = versions}
       <p class="work">{v.work.title}{#if v.composers.length} · {v.composers.map((c) => c.name).join(', ')}{/if}</p>

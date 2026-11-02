@@ -11,7 +11,9 @@ import { toast } from './toast.svelte';
 
 export const CHANGES = 'changes';
 
-export const fileRuns = $state({ list: null as FileRun[] | null });
+/** `error`: the runs could not be read, said in place of the list (the owner, 2026-11-02: errors are never shown as
+ *  nothing, so never "No changes to files this month." after a failed read). */
+export const fileRuns = $state({ list: null as FileRun[] | null, error: null as string | null });
 
 let listening = false;
 /** The runs of the last month, then each one's news as it comes. */
@@ -22,8 +24,8 @@ export function loadRuns() {
     on<FileRun>('file_run', (s) => (fileRuns.list = withRun(fileRuns.list ?? [], s)));
   }
   getFileRuns().then(
-    (l) => (fileRuns.list = l),
-    () => (fileRuns.list ??= []),
+    (l) => ((fileRuns.list = l), (fileRuns.error = null)),
+    (e) => (fileRuns.error = e instanceof Error ? e.message : 'Unexpected error'),
   );
 }
 

@@ -179,7 +179,7 @@
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>
     {#if requests.error && !view}
-      <Notice text={requests.error} />
+      <Notice text={requests.error} onretry={loadRequests} />
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
@@ -194,7 +194,7 @@
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}

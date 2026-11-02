@@ -9,7 +9,7 @@
   import type { Playlist, PlayMode } from './lib/api';
   import { deepMatches } from './lib/deepSearch.svelte';
   import { prefs } from './lib/prefs.svelte';
-  import { live, queueTap } from './lib/live.svelte';
+  import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
   import Asking from './lib/Asking.svelte';
   import { keepWhile } from './lib/keepWhile.svelte';
@@ -95,7 +95,7 @@
       return pa === Infinity ? by(a, b) : pa - pb;
     });
   });
-  const shows = $derived(listShows(items.length, pageView.query, deepOf.answeredFor()));
+  const shows = $derived(listShows(items.length, pageView.query, deepOf.answeredFor(), deepOf.failedFor()));
   // None by name and the server's finds not in, or an order by facts not in yet (lib/loader, the one rule): the list as it
   // was, then the loader; opened by such an order, nothing to keep: the loader's wait, then it.
   const factsWait = $derived(byFacts && !statsIn);
@@ -106,8 +106,8 @@
 ${prefs.playlistOrder}`,
   );
   const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
-  // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
-  searchNone(() => (listed.shows === 'empty' ? 'playlists' : null));
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone); never before the playlists are read.
+  searchNone(() => (view && listed.shows === 'empty' ? 'playlists' : null));
 
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
@@ -227,15 +227,20 @@ ${prefs.playlistOrder}`,
   <!-- The search, size, favourites-only and New playlist are the pill's (lib/ContentControls), the order the list's header,
        what is ticked the select bar's (decided 2026-10-15/16). -->
   {#if error}
-    <Notice text={error} />
+    <Notice text={error} onretry={refresh} />
   {/if}
   {#if reach.away}<p class="away">New playlists need Cratarr.</p>{/if}
 
-  {#if (!view || waiting) && !error}
+  {#if error && !view}
+    <!-- Not read: the Notice alone, never "No playlists match." under it (the owner, 2026-11-02). -->
+  {:else if !view || waiting}
     <PageLoading />
   {:else if listed.shows === 'asking'}
     <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
     <Asking now={kept.loader} />
+  {:else if listed.shows === 'failed'}
+    <!-- None by name, the server's search failed: said so, never "No playlists match." (lib/search listShows). -->
+    <Notice text={deepOf.error() ?? "The playlists couldn't be searched."} onretry={deepOf.again} />
   {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     {#if !pageView.none}<p class="empty">No playlists match.</p>{/if}
