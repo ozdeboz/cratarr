@@ -73,15 +73,39 @@ const fileItem = (p: FileProblem): HealthItem => {
   return { title: p.rel.slice(at + 1), line: [p.rel.slice(0, Math.max(0, at)), p.detail].filter(Boolean).join(' · ') };
 };
 
-/** Every problem, the report's order (worst first); the files' kinds after their own findings would say the same. */
+/** Every problem, the report's order (worst first); the files' kinds after their own findings would say the same.
+ *  A kind of the files' is a problem wherever the report counts it, whether its files are listed yet or not: the list
+ *  holds the first files of every kind together, and a kind past them was no problem at all, so Home's row for it
+ *  opened "This is no longer a problem" (the owner, 2026-11-02). */
 export function problems(): Problem[] {
   const out: Problem[] = health.findings
     .filter((f) => f.domain !== 'files')
     .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, area: areaOf(f.domain), name: f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
-  for (const k of FILE_KINDS) {
-    const files = (health.problems ?? []).filter((p) => p.kind === k.kind);
-    if (files.length)
-      out.push({ key: `files-${k.kind}`, icon: DOMAINS.files.icon, urgent: k.kind === 'broken', domain: DOMAINS.files.name, area: areaOf('files'), name: health.findings.find((f) => f.key === `files:${k.kind}`)?.name ?? k.title, title: k.title, said: `${files.length.toLocaleString()} ${files.length === 1 ? 'file' : 'files'}${k.title.slice('Files'.length)}`, line: `${files.length} ${files.length === 1 ? 'file' : 'files'}`, finding: null, items: files.map(fileItem), hint: k.hint });
+  const listed = health.problems ?? [];
+  const counted = health.findings.filter((f) => f.domain === 'files').map((f) => f.key.split(':')[1]);
+  const kinds = [...FILE_KINDS.map((k) => k.kind as string), ...counted.filter((k) => !FILE_KINDS.some((x) => x.kind === k))];
+  for (const kind of kinds) {
+    const k = FILE_KINDS.find((x) => x.kind === kind);
+    const f = health.findings.find((x) => x.key === `files:${kind}`);
+    const files = listed.filter((p) => p.kind === kind);
+    const n = Math.max(f?.count ?? 0, files.length);
+    if (!n) continue;
+    const title = k?.title ?? f?.title ?? kind;
+    const nFiles = (x: number) => `${x.toLocaleString()} ${x === 1 ? 'file' : 'files'}`;
+    out.push({
+      key: `files-${kind}`,
+      icon: DOMAINS.files.icon,
+      urgent: kind === 'broken',
+      domain: DOMAINS.files.name,
+      area: areaOf('files'),
+      name: f?.name ?? title,
+      title,
+      said: k ? `${nFiles(n)}${k.title.slice('Files'.length)}` : (f?.title ?? title),
+      line: files.length < n ? `${files.length.toLocaleString()} of ${nFiles(n)} listed` : nFiles(n),
+      finding: null,
+      items: files.map(fileItem),
+      hint: k?.hint ?? null,
+    });
   }
   return out;
 }
