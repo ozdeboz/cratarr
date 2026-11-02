@@ -55,21 +55,21 @@
     } catch {
       /* shown already */
     }
+    // Its control moves without changing size (the search folding slides the magnifier along the glass; a panel's
+    // action row scrolls): followed each frame while it shows, placed again only when something moved.
     let raf = 0;
-    const soon = () => (raf ||= requestAnimationFrame(() => ((raf = 0), place())));
-    place();
-    const seen = new ResizeObserver(soon);
-    seen.observe(a);
-    seen.observe(box);
-    addEventListener('resize', soon);
-    // What it hangs from moves as what holds it scrolls (a panel's action row): it follows.
-    addEventListener('scroll', soon, true);
-    return () => {
-      cancelAnimationFrame(raf);
-      seen.disconnect();
-      removeEventListener('resize', soon);
-      removeEventListener('scroll', soon, true);
+    let was = '';
+    const follow = () => {
+      const r = a.getBoundingClientRect();
+      const now = `${r.left},${r.bottom},${r.width},${box.offsetWidth},${innerWidth}`;
+      if (now !== was) {
+        was = now;
+        place();
+      }
+      raf = requestAnimationFrame(follow);
     };
+    follow();
+    return () => cancelAnimationFrame(raf);
   });
 </script>
 
