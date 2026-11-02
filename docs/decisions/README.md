@@ -276,3 +276,7 @@ by a later record that says so in its header. A new decision takes the next numb
   account, its source switches on the server and read by every use; taste chosen, never mixed in unseen: Best match on
   every list, Your taste as a radio mode; skips keep tracks away gently; one radio sheet wherever radio starts (where,
   how, whole records); a list's own order named by what it is. Amends 0036 and 0060.
+- [0095: One way to say nothing](0095-one-way-to-say-nothing.md): accepted, for 0.14. Every list passes through the
+  same states: loading keeps what shows, an error says so with Try again, nothing caused here is the popover on its
+  cause with its reasons as chips, nothing truly is plain text in place; reasons are data, the server's where it
+  decides them; one component each.
