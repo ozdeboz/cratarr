@@ -1270,15 +1270,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let { full = false }: { full?: boolean } = $props();
   /** The page under the panel (its address), whose search the panel carries while it covers it (a phone). */
   const pageUnder = pageHere();
-  let canGoBack = $state(false);
-  $effect(() => {
-    void panel.viewed;
-    void panel.tab;
-    const on = () => (canGoBack = panelDepth() > 1);
-    on();
-    addEventListener('popstate', on);
-    return () => removeEventListener('popstate', on);
-  });
+  const canGoBack = $derived(panelDepth() > 1);
 
   // Resume (Symfonium's clock): where an album of Cratarr's own library was left, from the bookmarks apps keep
   // (decision 0030). Other sources' albums have none to offer.
@@ -2003,10 +1995,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
 {#snippet leave()}
   {#if full}
-    <button aria-label="Back" title="Back" onclick={() => (canGoBack ? history.back() : closePlaylist())}><Icon name="back" size={22} /></button>
+    <button aria-label="Back" title="Back" onclick={() => (canGoBack ? backOne() : closePlaylist())}><Icon name="back" size={22} /></button>
     <button aria-label="Home" title="Home" onclick={goHome}><Icon name="home" size={22} /></button>
   {:else}
-    {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
+    {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => backOne()}><Icon name="back" size={22} /></button>{/if}
     <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
   {/if}
 {/snippet}

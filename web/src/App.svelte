@@ -77,8 +77,8 @@
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
   import { tick, untrack } from 'svelte';
-  import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { followAddress } from './lib/panel.svelte';
+  import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
+  import { followAddress, setBeside } from './lib/panel.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
   import DownloadsPanel from './lib/DownloadsPanel.svelte';
@@ -259,6 +259,9 @@
   $effect(() => {
     panel.split = split;
   });
+  // Beside the page, the panel's history is its own: the device's and the browser's Back are the page's (the owner,
+  // 2026-11-02); full screen, Back steps back through the panel (lib/panel).
+  $effect(() => setBeside(split || sidePanel()));
   // Over the page unless the player is beside it: a split page (Settings, Health, Insights) has the panel, not the
   // player, so with the player not wanted beside, the mini-player's tap opens it over the page there too (the owner,
   // 2026-10-24: in Settings › Display it would not open).

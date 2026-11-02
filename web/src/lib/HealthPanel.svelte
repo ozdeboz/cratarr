@@ -325,7 +325,7 @@
   const changes = $derived(problem === CHANGES ? changesView(healthThing(panel.viewed)) : null);
   // The levels Back walks through (lib/Crumbs, one rule for every panel; the owner, 2026-11-01): Changes to files above a
   // run only where the run was opened from it (a step), and a tap there is that step back, never a jump to the list.
-  const changesTrail = $derived(changes && changes.view !== 'list' && isStep() ? [...top, { label: 'Changes to files', go: () => history.back() }] : top);
+  const changesTrail = $derived(changes && changes.view !== 'list' && isStep() ? [...top, { label: 'Changes to files', go: backOne }] : top);
   const changesHere = $derived(
     !changes ? '' : changes.view === 'list' ? 'Changes to files' : changes.view === 'plan' ? planTitle(changes.kind) : (fileRuns.list?.find((r) => r.id === changes.id)?.title ?? 'A change to files'),
   );
