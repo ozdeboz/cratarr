@@ -2338,7 +2338,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#each ids as sid, k (sid)}
         {@const s = sections[sid]}
         {@const count = shownPlaylists().find((x) => x.id === sid)?.count ?? 0}
-        <Section title={sid} dot={layerColor(k, ids.length)} count={playlistsKnown() ? plural(count, 'track') : ''} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
+        <!-- As the one list's: its filter and the page's words (the owner, 2026-11-02: it said 36 while 12 showed). -->
+        {@const all = s && 'rows' in s ? s.rows : null}
+        {@const left = all ? all.filter((r) => keeps(r) && matchesSearch(r.name ?? r.file, r.artist, r.album)) : null}
+        <Section
+          title={sid}
+          dot={layerColor(k, ids.length)}
+          count={all && left && left.length < all.length ? `${left.length.toLocaleString()} of ${plural(all.length, 'track')}` : playlistsKnown() ? plural(count, 'track') : ''} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
           {#if s && 'error' in s}
             <p class="error" role="alert">{s.error}</p>
           {:else if !s}
@@ -2347,7 +2353,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
             <p class="empty">No tracks yet.</p>
           {:else}
             <ol class="rows" bind:clientWidth={listWidth}>
-              {#each s.rows as r, i (i)}{#if keeps(r)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
+              {#each s.rows as r, i (i)}{#if keeps(r) && matchesSearch(r.name ?? r.file, r.artist, r.album)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
             </ol>
           {/if}
         </Section>
