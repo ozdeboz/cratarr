@@ -2124,6 +2124,12 @@ async fn library_tracks(State(app): State<Arc<App>>, Query(t): Query<TracksQuery
 
 /// The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched on):
 /// `without=<source>/<library>`, once for each, as the page's library switches keep them. None: every library.
+/// The page's search queries for a crate's `explain` (each `q`, any of them; decision 0095, amended 2026-11-02).
+fn search_of(query: Option<&str>) -> Vec<String> {
+    let pairs = query.unwrap_or("").split('&').filter_map(|p| p.split_once('='));
+    pairs.filter(|(k, _)| form_decode(k) == "q").map(|(_, v)| form_decode(v)).filter(|v| !v.trim().is_empty()).collect()
+}
+
 fn without_of(query: Option<&str>) -> Vec<String> {
     let pairs = query.unwrap_or("").split('&').filter_map(|p| p.split_once('='));
     pairs.filter(|(k, _)| form_decode(k) == "without").map(|(_, v)| form_decode(v)).filter(|v| !v.is_empty()).collect()
@@ -2175,6 +2181,7 @@ impl Page {
             order: self.order,
             down: self.down,
             explain: self.explain,
+            search: search_of(query),
         })
     }
 }
@@ -2412,9 +2419,9 @@ struct Previewed {
     covers: Vec<crate::app::home::WeekCover>,
 }
 
-async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
+async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, RawQuery(raw): RawQuery, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, explain: q.explain, ..Default::default() };
+    let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, explain: q.explain, search: search_of(raw.as_deref()), ..Default::default() };
     let page = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?;
     let names = app.playlists.condition_names(&p.conditions).await?;
     let n = p.covers.min(crate::app::home::CRATE_COVERS);

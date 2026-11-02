@@ -84,3 +84,7 @@ more cause per thing, and points at the set that truly empties the list.
 **An artist** is kept out by what keeps out the album of theirs that comes back with the fewest causes lifted, plus
 their own switches. A **Sounds like** is judged on the closest it picked among what every cause lets through. Lifting
 a cause picks again, so a crate with one still selects again for the counts.
+
+On a crate, the page's search words are judged on the server as one more cause (`q`, each of the page's queries, with
+`explain=1`). Its blocked tracks never reach the page as rows, so their words can only be judged there. They are
+matched as the page matches a row: by the same matcher, on the title (or file name), the artist and the album.

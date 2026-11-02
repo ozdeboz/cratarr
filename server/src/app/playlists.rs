@@ -463,7 +463,7 @@ impl CrateLibrary {
     /// The crate's lines as `select` gives them, why it left out what it did (decision 0095), how many it would hold
     /// with every cause lifted, and with `explain` what keeps each track out, all read from the one judgement
     /// (`crates::Verdicts`): `causes` among the conditions, and the libraries switched off (`without`, their keys).
-    fn select_saying(&self, conditions: &[crates::Condition], causes: &[Cause], without: &[String], explain: bool) -> (Vec<String>, Vec<crates::Reason>, usize, Option<crates::Blocked>) {
+    fn select_saying(&self, conditions: &[crates::Condition], causes: &[Cause], without: &[String], explain: bool) -> (Vec<String>, Vec<crates::Reason>, usize, Option<Judged>) {
         let resolved = self.resolved(conditions);
         let ranked: Vec<bool> = conditions.iter().map(|c| c.value.ranks()).collect();
         let at: Vec<std::ops::Range<usize>> = causes.iter().map(|c| c.at.clone()).collect();
@@ -476,7 +476,7 @@ impl CrateLibrary {
         if !mine.is_empty() {
             named.push(crates::Reason::libraries_off(&mine, 0).into());
         }
-        let blocked = explain.then(|| verdicts.blocked(named.clone()));
+        let blocked = explain.then(|| Judged { verdicts: verdicts.clone(), causes: named.clone() });
         if !ranked.contains(&true) {
             return (lines, verdicts.reasons(&named), verdicts.all(), blocked);
         }
@@ -504,6 +504,42 @@ impl CrateLibrary {
             .collect();
         (lines, reasons, all, blocked)
     }
+}
+
+/// A crate's verdicts as `explain` asks for them (decision 0095, amended 2026-11-02), with the causes their bits name:
+/// the page's search words still to be judged with them (`Judged::blocked`).
+#[derive(Debug, PartialEq)]
+struct Judged {
+    verdicts: crates::Verdicts,
+    causes: Vec<crates::BlockCause>,
+}
+
+impl Judged {
+    /// What keeps each track out, the page's search (`queries`, any of them: lib/search's, on the row's title or file,
+    /// artist and album) one more cause when it asks one; `passing` the lines the crate shows, `rows` each line's row.
+    fn blocked(mut self, passing: &[String], queries: &[String], rows: &HashMap<String, PlaylistRow>) -> crates::Blocked {
+        let queries: Vec<&str> = queries.iter().map(|q| q.trim()).filter(|q| !q.is_empty()).collect();
+        if !queries.is_empty() {
+            let bit = crates::cause_bit(self.causes.len());
+            self.causes.push(crates::BlockCause { kind: crates::Why::Search, key: None, label: "Search".into() });
+            let found = |line: &str| rows.get(line).is_some_and(|r| words_find(&queries, &[r.name.as_deref().unwrap_or(&r.file), r.artist.as_deref().unwrap_or(""), r.album.as_deref().unwrap_or("")]));
+            self.verdicts.add_cause(passing, bit, |line| !found(line));
+        }
+        self.verdicts.blocked(self.causes)
+    }
+}
+
+/// Whether any of `queries` meets these texts as the page's search meets a row (lib/search `matches`, lib/matcher's
+/// TextMatcher: the texts not blank, all as one name and each also its own).
+fn words_find(queries: &[&str], texts: &[&str]) -> bool {
+    use cratarr_rules::matcher::{Index, Name};
+    let kept: Vec<String> = texts.iter().filter(|t| !t.trim().is_empty()).map(|t| t.to_string()).collect();
+    if kept.is_empty() {
+        return false;
+    }
+    let aliases = if kept.len() > 1 { kept.clone() } else { Vec::new() };
+    let index = Index::new(vec![Name { text: kept.join(" "), aliases }]);
+    queries.iter().any(|q| !index.query(q, 1).is_empty())
 }
 
 /// A cause among a crate's conditions as it is looked at (decision 0095): its chip's kind, key and word, and the
@@ -539,6 +575,9 @@ pub struct CrateLook {
     /// shows is empty.
     #[serde(default)]
     pub explain: bool,
+    /// The page's search, its queries (any of them), judged as one more cause with `explain`.
+    #[serde(default)]
+    pub search: Vec<String>,
 }
 
 /// The orders a crate's list takes (decision 0060), as the page names them: its own (newest first) or by a field;
@@ -3058,7 +3097,22 @@ impl PlaylistService {
     /// `crate_page`, saying which of `causes` (and the libraries switched off) left what out (decision 0095).
     async fn crate_page_saying(&self, conditions: &[crates::Condition], causes: &[Cause], want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
         let lib = self.crate_library_for(conditions, want, &look.without).await?;
-        let (lines, reasons, all_back, blocked) = lib.select_saying(conditions, causes, &look.without, look.explain);
+        let (lines, reasons, all_back, judged) = lib.select_saying(conditions, causes, &look.without, look.explain);
+        let blocked = match judged {
+            Some(judged) => {
+                // The page's words are judged on each track's row: read for every track a cause keeps out, and those shown.
+                let searched = look.search.iter().any(|q| !q.trim().is_empty());
+                let rows: HashMap<String, PlaylistRow> = match searched {
+                    true => {
+                        let all: Vec<String> = judged.verdicts.kept_keys().chain(lines.iter().map(String::as_str)).map(str::to_string).collect();
+                        self.rows_of(all, &lib.source).await?.into_iter().map(|r| (r.entry.clone(), r)).collect()
+                    }
+                    false => HashMap::new(),
+                };
+                Some(judged.blocked(&lines, &look.search, &rows))
+            }
+            None => None,
+        };
         // On the first page only: the panel shows them on top.
         let genres = if offset == 0 {
             let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
@@ -4124,6 +4178,15 @@ mod library_tests {
         let only = [Cause { kind: crates::Why::Favourites, key: None, label: "Favourites only".into(), at: 1..2 }];
         let heart = crates::Reason::new(crates::Why::Favourites, None, "Favourites only", 2);
         assert_eq!(hearted.select_saying(&shown, &only, &[], false), (Vec::new(), vec![heart], 2, None), "no dub favourite");
+        // Asked to explain: the verdicts with their causes; the page's words judged on rows, as its search does.
+        let judged = hearted.select_saying(&shown, &only, &[], true).3.unwrap();
+        assert_eq!(judged.causes.len(), 1);
+        let row = |entry: &str, name: &str| (entry.to_string(), PlaylistRow { entry: entry.into(), name: Some(name.into()), ..Default::default() });
+        let rows: HashMap<String, PlaylistRow> = [row("A/1.flac", "Kingston Town"), row("../in/X/2.flac", "Other")].into();
+        let blocked = judged.blocked(&[], &["kingston".to_string()], &rows);
+        assert_eq!(blocked.causes.last().map(|c| c.kind), Some(crates::Why::Search));
+        assert!(words_find(&["kings"], &["Kingston Town", "UB40"]), "a word's start, as the page's search finds it");
+        assert!(!words_find(&["polka"], &["Kingston Town", "UB40"]));
         assert_eq!(hearted.select_saying(&shown[..1], &[], &[], false).0, hearted.select(&shown[..1]), "what it keeps is `select`'s");
         assert_eq!(library(&[1]).select_saying(&[genre("Polka")], &[], &without, false), (Vec::new(), Vec::new(), 0, None), "truly empty: no reason");
     }

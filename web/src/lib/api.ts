@@ -529,7 +529,7 @@ export type Filtered = {
  *  come back with only this cause lifted (0: it keeps them out together with another). None, with `all_back` 0: the
  *  list is truly empty. */
 export type ListReason = {
-  kind: 'filter' | 'favourites' | 'favourite_albums' | 'libraries_off' | 'excluded';
+  kind: 'filter' | 'favourites' | 'favourite_albums' | 'libraries_off' | 'excluded' | 'search';
   key?: string;
   label: string;
   back: number;

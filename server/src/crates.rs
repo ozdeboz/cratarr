@@ -1890,6 +1890,11 @@ impl Verdicts {
         }
     }
 
+    /// The keys of what is kept out (`new`'s `keys`), set by set.
+    pub fn kept_keys(&self) -> impl Iterator<Item = &str> {
+        self.sets.iter().flat_map(|(_, _, keys)| keys.iter().map(String::as_str))
+    }
+
     /// How many there would be with every cause lifted.
     pub fn all(&self) -> usize {
         self.passed + self.sets.iter().map(|(_, n, _)| n).sum::<usize>()
@@ -1942,6 +1947,18 @@ impl Verdicts {
         *self = judged;
     }
 
+    /// One more cause judged on what was judged (`passing`, the keys passing; these verdicts' keys kept): `fails`, the
+    /// things it keeps out, with `bit` (the page's search words on a crate's tracks).
+    pub fn add_cause(&mut self, passing: &[String], bit: u64, fails: impl Fn(&str) -> bool) {
+        debug_assert!(self.keys);
+        let mut judged = Verdicts::new(true);
+        let kept = self.sets.iter().flat_map(|(set, _, keys)| keys.iter().map(move |k| (*set, k)));
+        for (set, key) in kept.chain(passing.iter().map(|k| (0, k))) {
+            judged.judge(set | if fails(key) { bit } else { 0 }, || key.clone());
+        }
+        *self = judged;
+    }
+
     /// What keeps each thing out, `causes` as the bits number them (the keys kept: `new`'s `keys`).
     pub fn blocked(&self, causes: Vec<BlockCause>) -> Blocked {
         let groups = self.sets.iter().map(|(set, _, keys)| BlockGroup { causes: (0..MAX_CAUSES).filter(|&i| set & cause_bit(i) != 0).collect(), keys: keys.clone() }).collect();
@@ -1962,6 +1979,8 @@ pub enum Why {
     LibrariesOff,
     /// Tracks or artists excluded everywhere (decision 0024, amended 2026-10-19; decision 0083).
     Excluded,
+    /// The page's search words on a crate's tracks (decision 0095, amended 2026-11-02): only in what keeps each out.
+    Search,
 }
 
 /// An axis's name as the builder shows it.
@@ -3005,6 +3024,15 @@ mod tests {
         let keys = |k: &[&str]| k.iter().map(|k| k.to_string()).collect::<Vec<_>>();
         assert_eq!(groups, [(vec![2], keys(&["c"])), (vec![0, 1], keys(&["a"])), (vec![0], keys(&["b", "d"]))]);
         assert_eq!((verdicts.passed, verdicts.all()), (1, 5));
+        // One more cause, the search words: they keep out "p", which passed, and "d" besides the words.
+        let mut searched = Verdicts::new(true);
+        for (set, key) in [(words, "b"), (words, "d")] {
+            searched.judge(set, || key.to_string());
+        }
+        searched.add_cause(&["p".to_string()], cause_bit(3), |k| k == "p" || k == "d");
+        let groups: Vec<(Vec<usize>, Vec<String>)> = searched.blocked(Vec::new()).groups.into_iter().map(|g| (g.causes, g.keys)).collect();
+        assert_eq!(groups, [(vec![0], keys(&["b"])), (vec![0, 3], keys(&["d"])), (vec![3], keys(&["p"]))]);
+        assert_eq!(searched.passed, 0);
         // Truly empty: nothing judged, no reason.
         assert!(Verdicts::new(false).reasons(&causes).is_empty());
     }
