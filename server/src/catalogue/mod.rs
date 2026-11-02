@@ -1469,15 +1469,20 @@ impl Catalogue {
         served_fingerprint(&self.db())
     }
 
-    /// Files with a problem, worst first ("broken", then damaged tags, …), at most `limit`. Blocking.
-    pub fn problems(&self, limit: usize) -> Result<Vec<Problem>> {
+    /// Files with a problem, worst first ("broken", then damaged tags, …), at most `each` of every kind: a kind past
+    /// the others' files still has its own (2026-11-02: one cap over all kinds left the last kind on Home with none,
+    /// and its Health panel said it was no longer a problem). Blocking.
+    pub fn problems(&self, each: usize) -> Result<Vec<Problem>> {
         let folders = self.folders();
         let db = self.db();
         let mut st = db.prepare(&format!(
-            "SELECT folder, rel, issue, issue_detail FROM files WHERE issue IS NOT NULL AND {PRESENT}
-             ORDER BY CASE issue WHEN 'broken' THEN 0 WHEN 'damaged_tag' THEN 1 WHEN 'no_length' THEN 2 ELSE 3 END, rel LIMIT ?1"
+            "SELECT folder, rel, issue, issue_detail FROM (
+                 SELECT folder, rel, issue, issue_detail, ROW_NUMBER() OVER (PARTITION BY issue ORDER BY rel) AS n
+                 FROM files WHERE issue IS NOT NULL AND {PRESENT})
+             WHERE n <= ?1
+             ORDER BY CASE issue WHEN 'broken' THEN 0 WHEN 'damaged_tag' THEN 1 WHEN 'no_length' THEN 2 ELSE 3 END, rel"
         ))?;
-        let rows = st.query_map([limit as i64], |r| {
+        let rows = st.query_map([each as i64], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
         })?;
         rows.map(|r| {
@@ -2826,6 +2831,11 @@ mod tests {
         assert_eq!(s.tags_failed, 2);
         assert_eq!(s.issues.get("broken"), Some(&2), "unreadable files are classified as broken");
         assert_eq!(cat.problems(10).unwrap().len(), 2);
+        // Capped by kind: one of each, whatever the first kind holds.
+        cat.db().execute("UPDATE files SET issue = 'no_length' WHERE rel = 'A - B (2020)/02 Two.flac'", []).unwrap();
+        let kinds: Vec<String> = cat.problems(1).unwrap().into_iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, ["broken", "no_length"]);
+        cat.db().execute("UPDATE files SET issue = 'broken' WHERE rel = 'A - B (2020)/02 Two.flac'", []).unwrap();
         // A changed file is read again; a removed one is forgotten.
         std::fs::write(d.join("A - B (2020)/01 One.mp3"), b"changed and longer than before").unwrap();
         std::fs::remove_file(d.join("A - B (2020)/02 Two.flac")).unwrap();
