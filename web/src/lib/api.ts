@@ -526,7 +526,8 @@ export type ListProfileData = {
   styles: string[];
   artists: string[];
   /** `one`: every track has this value (an album's year): shown as the value, no graph. */
-  numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number; one?: number }[];
+  /** `percentiles`: energy's and danceability's rows are on the library's percentiles (lo 0, hi 100): the measure's value at each hundredth, to place a filter's range on the bar. */
+  numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number; one?: number; percentiles?: number[] }[];
   moods: { name: string; lift: number }[];
 };
 /** A filter on the list in view: its conditions and its own switches that are on (lib/pageView SWITCHES: the server
