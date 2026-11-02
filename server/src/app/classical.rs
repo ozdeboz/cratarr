@@ -1498,7 +1498,7 @@ mod tests {
         assert_eq!(facts[0].release_types, ["Album", "Classical"]);
         assert_eq!(facts[1].release_types, ["Album"], "ELO's Time, tagged only: no");
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let classical = || Value::AnyOf { values: vec!["classical".into()] };
         let not = [Condition::new("type", true, classical())];
         let only = [Condition::new("type", false, classical())];

@@ -632,7 +632,7 @@ mod tests {
             AlbumItem { id: "al-2".into(), artists: vec!["Moby".into()], tracks: vec![&moby], rated: true },
         ];
         let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
-        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let not_classical = [(Condition::new("type", true, Value::AnyOf { values: vec!["Classical".into()] }), 1)];
         let look = ArtistLook { conditions: &not_classical, world: &w, uses: None, hearted: None, unplayed: false, bit: &|_| 0 };
         let keys: Vec<String> = artists_of("cratarr", &albums, &look).iter().filter(|i| i.set(&not_classical, &w) == 0).map(|i| i.key.clone()).collect();
@@ -686,7 +686,7 @@ mod tests {
         // X has a rock album; Y (also spelt "y") two jazz ones; Z is on the rock one too.
         let albums = [album("al-1", &["X", "Z"], vec![&rock], true), album("al-2", &["Y"], vec![&jazz], true), album("al-3", &["y"], vec![&more], false)];
         let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
-        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let rock_only = [(Condition::new("genre", false, Value::AnyOf { values: vec!["rock".into()] }), 1)];
         let keys = |items: Vec<Item>, conditions: &[(Condition, u64)]| items.iter().filter(|i| i.set(conditions, &w) == 0).map(|i| i.key.clone()).collect::<Vec<_>>();
         let bit = |k: &str| -> u64 {

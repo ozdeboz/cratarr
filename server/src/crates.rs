@@ -412,7 +412,27 @@ fn lean_unlisted(ranked: &mut Vec<String>, listed: impl Fn(&str) -> bool) {
 /// 2026-10-14): any crate shows only its favourites, or none of them, with the panel's favourites toggle.
 pub fn permanent() -> Vec<CrateDef> {
     let unlisted = Condition::new("playlist", true, Value::AnyOf { values: Vec::new() });
-    vec![CrateDef { id: "unlisted".into(), name: "Unlisted".into(), conditions: vec![unlisted] }]
+    // Second chance (the owner, 2026-11-02): what one keeps skipping though it fits one's taste, not hearted, in no
+    // playlist; Best match first, as every crate opens.
+    let second = vec![
+        Condition::new("skips", false, Value::Range { min: Some(SECOND_CHANCE_SKIPS), max: None }),
+        Condition::new("fit", false, Value::Yes),
+        Condition::new("favourite", true, Value::Yes),
+        unlisted.clone(),
+    ];
+    vec![
+        CrateDef { id: "unlisted".into(), name: "Unlisted".into(), conditions: vec![unlisted] },
+        CrateDef { id: SECOND_CHANCE.into(), name: "Second chance".into(), conditions: second },
+    ]
+}
+
+/// Second chance's id, and how often a track is skipped to be in it.
+pub const SECOND_CHANCE: &str = "second-chance";
+const SECOND_CHANCE_SKIPS: f64 = 3.0;
+
+/// Whether conditions ask the viewer's taste (Fits your taste): the library's fits are worked out for them.
+pub fn needs_fits(conditions: &[Condition]) -> bool {
+    conditions.iter().any(|c| c.enabled && c.axis == "fit")
 }
 
 /// The crate panel's favourites toggle (decision 0024, amended): all a crate's tracks, only its favourites, or none of
@@ -879,6 +899,9 @@ pub struct Use {
     pub plays: u32,
     pub last: Option<i64>,
     pub rating: Option<u8>,
+    /// How often it was skipped (the owner, 2026-11-02: Second chance's Skips): its history's plays that ended skipped
+    /// before they counted.
+    pub skips: u32,
 }
 
 /// A file's quality as the crates offer it: lossless, else its bitrate's class.
@@ -957,15 +980,26 @@ pub struct World<'a> {
     pub uses: Option<&'a HashMap<String, Use>>,
     /// Now (epoch s): Last played and Added are counted in days back from it.
     pub now: i64,
+    /// The lines that fit the viewer's taste (Fits your taste: `FITS_SHARE` of the library, the best fitting), when a
+    /// condition asks; `None`: not known.
+    pub fits: Option<&'a HashSet<String>>,
 }
 
-const AXES: [(&str, &str, Kind); 23] = [
+/// The share of the library, the best fitting, that fits a taste (Fits your taste, the owner 2026-11-02: a yes or no
+/// where Best match is an order).
+pub const FITS_SHARE: f64 = 0.25;
+
+const AXES: [(&str, &str, Kind); 25] = [
     ("favourite", "Favourite", Kind::YesNo),
     ("favourite_album", "Favourite album", Kind::YesNo),
+    // The viewer's taste as a yes or no (the owner, 2026-11-02, Second chance): the best-fitting share of the library.
+    ("fit", "Fits your taste", Kind::YesNo),
     ("playlist", "In playlist", Kind::Membership),
     // The listener's (the owner, 2026-10-23: "a big oversight"): how often and how lately played (days ago; never played
     // is longer ago than any), how lately added (days ago), the album's stars.
     ("plays", "Play count", Kind::Range),
+    // How often skipped (the owner, 2026-11-02: "skipped often but fits your taste").
+    ("skips", "Skips", Kind::Range),
     ("played", "Last played", Kind::Range),
     ("added", "Added", Kind::Range),
     ("rating", "Rating", Kind::Range),
@@ -1117,6 +1151,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
             "length" => f.length.map(minutes),
             "added" => f.born.map(|b| days_ago(now, b)),
             "plays" => used(f).map(|u| f64::from(u.plays)),
+            "skips" => used(f).map(|u| f64::from(u.skips)),
             "played" => used(f).and_then(|u| u.last).map(|t| days_ago(now, t)),
             "rating" => used(f).and_then(|u| u.rating).map(f64::from),
             _ => None,
@@ -1272,6 +1307,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
     let all_of = |values: &[String], has: &[String]| !values.is_empty() && values.iter().all(|v| has.iter().any(|h| h.eq_ignore_ascii_case(v)));
     match (c.axis.as_str(), &c.value) {
         ("plays", Value::Range { min, max }) => within(used().map(|u| f64::from(u.plays)), min, max),
+        ("skips", Value::Range { min, max }) => within(used().map(|u| f64::from(u.skips)), min, max),
         // Never played: longer ago than any (in "not in the last year", out of "this month").
         ("played", Value::Range { min, max }) => within(used().map(|u| u.last.map_or(f64::INFINITY, |t| days_ago(w.now, t))), min, max),
         ("added", Value::Range { min, max }) => within(f.born.map(|b| days_ago(w.now, b)), min, max),
@@ -1287,6 +1323,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("key", Value::AnyOf { values }) => f.key.as_ref().is_some_and(|k| values.iter().any(|v| v.eq_ignore_ascii_case(k))),
         ("favourite", Value::Yes) => w.favourites.is_some_and(|s| s.contains(&f.rel)),
         ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| s.contains(&f.rel)),
+        ("fit", Value::Yes) => w.fits.is_some_and(|s| s.contains(&f.rel)),
         (LEFT_OUT, Value::AnyOf { values }) => values.iter().any(|v| *v == f.rel),
         (CREDITED, Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(v)),
         ("playlist", Value::AnyOf { values }) => match w.membership.get(&f.rel) {
@@ -1318,11 +1355,12 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
     match c.axis.as_str() {
         "favourite" => w.favourites.is_some(),
         "favourite_album" => w.favourite_albums.is_some(),
+        "fit" => w.fits.is_some(),
         "playlist" | LEFT_OUT | CREDITED => true,
         // How it was used, where that is read: every track has a count and a last play (never: longer ago than any).
         // These seven had none (2026-10-29, the Filter sheet's audit): All on them matched nothing, and All negated
         // everything.
-        "plays" | "played" => w.uses.is_some(),
+        "plays" | "played" | "skips" => w.uses.is_some(),
         // Stars only where some were given: All goes by the rated tracks, as All on a genre goes by the tagged ones.
         "rating" => w.uses.is_some_and(|u| u.get(&f.rel).is_some_and(|u| u.rating.is_some())),
         "added" => f.born.is_some(),
@@ -2565,7 +2603,7 @@ mod tests {
             ("new.flac".to_string(), Use { plays: 1, last: Some(now - day), rating: None }),
         ]);
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: Some(&uses), now };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: Some(&uses), now, fits: None };
         let pick = |axis: &str, value: Value| {
             let c = vec![Condition::new(axis, false, value)];
             files.iter().filter(|x| holds_besides_like(&c, x, &w)).map(|x| x.rel.as_str()).collect::<Vec<_>>()
@@ -2664,7 +2702,7 @@ mod tests {
         assert!(album.values.is_empty() && album.counts.is_empty());
         assert_eq!(album.known, 4);
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let by_album = [Condition::new("album", false, Value::AnyOf { values: vec!["al-b".into()] })];
         assert_eq!(select(&files, &by_album, &w), ["b/1.flac"]);
     }
@@ -2682,7 +2720,7 @@ mod tests {
         assert_eq!(label.counts, [2, 1]);
         assert_eq!(label.known, 2);
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let warp = genre_crate("label:Warp").unwrap();
         assert_eq!(select(&files, &warp.conditions, &w), ["1.flac", "2.flac"], "search's label opens its crate");
     }
@@ -2722,7 +2760,7 @@ mod tests {
         let week = week_crate("like:week@10", vec![("tr-1".into(), 1.0)], 10);
         assert_eq!(week.name, "Sounds like your week");
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let every: Vec<&Facts> = files.iter().collect();
         let mut lines: Vec<String> = select(&files, &resolved(&week.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL), &w).into_iter().map(String::from).collect();
         closest_first(&mut lines, &resolved(&week.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL));
@@ -2792,7 +2830,7 @@ mod tests {
         ]);
         let every: Vec<&Facts> = files.iter().collect();
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let pick = |target: Target| {
             let c = moment_crate("like:now@1", "Now", target, 1);
             select(&files, &resolved(&c.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL), &w)
@@ -2816,7 +2854,7 @@ mod tests {
         ];
         let like = like_crate("like:tr-1@2", "Seed", vec!["tr-1".into()], 2);
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let every: Vec<&Facts> = files.iter().collect();
         assert_eq!(select(&files, &resolved(&like.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL), &w), ["seed.flac", "near.flac"], "the closest two");
         let all = like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 10);
@@ -2906,15 +2944,15 @@ mod tests {
     #[test]
     fn the_permanent_crate_is_conditions_like_any_other_and_the_favourites_toggle_adds_one() {
         let (files, membership, favourites) = library();
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
-        assert_eq!(permanent().iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["unlisted"]);
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
+        assert_eq!(permanent().iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["unlisted", SECOND_CHANCE]);
         let unlisted = &permanent()[0].conditions;
         assert_eq!(select(&files, unlisted, &w), vec!["b", "d"]);
         assert_eq!(select(&files, &Favourites::All.with(unlisted), &w), vec!["b", "d"]);
         assert_eq!(select(&files, &Favourites::Only.with(unlisted), &w), vec!["b"], "only its favourites");
         assert_eq!(select(&files, &Favourites::None.with(unlisted), &w), vec!["d"], "none of them");
         assert_eq!(select(&files, &Favourites::Only.with(&[]), &w), vec!["a", "b"], "the whole library's favourites");
-        let unknown = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let unknown = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         assert!(select(&files, &Favourites::Only.with(unlisted), &unknown).is_empty(), "favourites not known: nothing, not everything");
     }
 
@@ -2923,7 +2961,7 @@ mod tests {
         let (files, membership, favourites) = library();
         // "a" and "c" are on a favourite album; "a" and "b" are favourite tracks.
         let albums = HashSet::from(["a".to_string(), "c".to_string()]);
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: None, now: 0, fits: None };
         let all = select(&files, &shown(&[], Favourites::All, Favourites::All), &w);
         let on: Vec<&str> = all.iter().copied().filter(|r| albums.contains(*r)).collect();
         let off: Vec<&str> = all.iter().copied().filter(|r| !albums.contains(*r)).collect();
@@ -2934,7 +2972,7 @@ mod tests {
         assert!(!needs_favourite_albums(&shown(&[], Favourites::Only, Favourites::All)));
         assert!(is_axis("favourite_album"));
         // Not known: nothing is shown on that ground.
-        let unknown = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let unknown = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         assert!(select(&files, &shown(&[], Favourites::All, Favourites::Only), &unknown).is_empty());
     }
 
@@ -2954,7 +2992,7 @@ mod tests {
             mk("c", None, None, &[], &[]),
         ];
         let (membership, favourites) = (HashMap::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let c = |axis: &str, value: Value| Condition::new(axis, false, value);
         assert_eq!(select(&files, &[c("mood", Value::AnyOf { values: vec!["Happy".into()] })], &w), vec!["a"]);
         assert_eq!(select(&files, &[c("energy", Value::Range { min: Some(50.0), max: None })], &w), vec!["a"]);
@@ -2970,7 +3008,7 @@ mod tests {
     #[test]
     fn tracks_left_out_by_hand_stay_out_over_conditions_and_both_toggles() {
         let (files, membership, favourites) = library();
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let left = vec!["a".to_string()];
         // "a" is a favourite: left out, it stays out with only favourites shown.
         assert_eq!(select(&files, &leaving_out(&left, &Favourites::Only.with(&[])), &w), vec!["b"]);
@@ -2980,10 +3018,28 @@ mod tests {
     }
 
     #[test]
+    fn second_chance_takes_the_often_skipped_that_fit_neither_hearted_nor_listed() {
+        // The owner, 2026-11-02: "skipped often but fits your taste", not favourited, unlisted.
+        let f = |rel: &str| Facts { rel: rel.into(), ..Facts::default() };
+        let files = vec![f("a"), f("b"), f("c"), f("d"), f("e")];
+        let uses: HashMap<String, Use> = [("a", 3), ("b", 5), ("c", 4), ("d", 1), ("e", 6)].map(|(r, n)| (r.to_string(), Use { skips: n, ..Use::default() })).into();
+        let fits: HashSet<String> = ["a", "b", "d", "e"].map(String::from).into();
+        let favourites: HashSet<String> = ["b"].map(String::from).into();
+        let membership = HashMap::from([("e".to_string(), vec!["Road".to_string()])]);
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: Some(&uses), now: 0, fits: Some(&fits) };
+        let second = &permanent()[1];
+        assert_eq!(second.id, SECOND_CHANCE);
+        assert_eq!(select(&files, &second.conditions, &w), vec!["a"], "b hearted, c fits not, d skipped once, e in a playlist");
+        assert!(needs_fits(&second.conditions));
+        let unknown = World { fits: None, ..w };
+        assert!(select(&files, &second.conditions, &unknown).is_empty(), "the taste not known: nothing fits");
+    }
+
+    #[test]
     fn a_selection_says_which_cause_kept_what_out() {
         let (mut files, membership, favourites) = library();
         files[2].folder = 1;
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let genre = |g: &str| Condition::new("genre", false, Value::AnyOf { values: vec![g.into()] });
         let saying = |conditions: &[Condition], causes: &[std::ops::Range<usize>], off: bool| {
             let (lines, verdicts) = select_saying(&files, |f| off && f.folder == 1, conditions, &[], causes, false, &w);
@@ -3055,7 +3111,7 @@ mod tests {
         // Decision 0083: the crate's own artist filter, as set by hand.
         let files = [by("a", &["Air"]), by("b", &["Bonobo"]), by("c", &["Caribou"])];
         let (membership, favourites) = (HashMap::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let electronic = vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Electronic".into()] })];
         let one = with_not_artist(&electronic, "Air").unwrap();
         assert_eq!(one[1], Condition::new("artist", true, Value::AnyOf { values: vec!["Air".into()] }));
@@ -3084,7 +3140,7 @@ mod tests {
             by("air", &["Air"]),
         ];
         let (membership, favourites) = (HashMap::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let artist = |not: bool, name: &str| vec![Condition::new("artist", not, Value::AnyOf { values: vec![name.to_string()] })];
         assert_eq!(select(&files, &artist(false, "Beck"), &w), vec!["feat", "and", "comma"], "a whole name, never Becky Hill");
         assert_eq!(select(&files, &artist(true, "Beck"), &w), vec!["becky", "acdc", "air"], "is not: featured and joint ones out");
@@ -3112,7 +3168,7 @@ mod tests {
         // The stored row is as it was; without featured or joint credits it picks what matching whole tags picked.
         let files = [by("a", &["Air"]), by("b", &["air", "Moon Safari Band"]), by("c", &["The Avalanches"]), by("d", &["Bonobo"]), by("e", &["Various Artists"])];
         let (membership, favourites) = (HashMap::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         for saved in [
             r#"{"axis":"artist","not":true,"value":{"kind":"any_of","values":["Air"]}}"#,
             r#"{"axis":"artist","not":false,"value":{"kind":"any_of","values":["AIR","The Avalanches"]}}"#,
@@ -3139,7 +3195,7 @@ mod tests {
         // toggles and a Sounds like's pool.
         let files = [by("a", &["Air feat. Beck"]), by("b", &["Bonobo", "Beck"]), by("c", &["Caribou & Beck"]), by("d", &["Daft Punk"]), by("e", &["Beckett"])];
         let (membership, favourites) = (HashMap::new(), HashSet::from(["a".to_string(), "d".to_string()]));
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let out = HashSet::from([crate::app::excluded_artists::key("Beck")]);
         let electronic = vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Electronic".into()] })];
         assert_eq!(select(&files, &leaving_out_artists(&out, &electronic), &w), vec!["d", "e"], "a whole name, not a part of one");
@@ -3153,7 +3209,7 @@ mod tests {
     #[test]
     fn conditions_combine_with_and_take_several_values_or_a_range_and_can_be_negated() {
         let (files, membership, favourites) = library();
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let c = |axis: &str, not: bool, value: Value| Condition::new(axis, not, value);
         let rock_or_jazz = c("genre", false, Value::AnyOf { values: vec!["ROCK".into(), "jazz".into()] });
         assert_eq!(select(&files, &[rock_or_jazz.clone()], &w), vec!["a", "b", "c"], "any of, case ignored");
@@ -3195,7 +3251,7 @@ mod tests {
 
     fn passing(items: &[Vec<Facts>], conditions: &[Condition]) -> Vec<usize> {
         let (membership, favourites) = (HashMap::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         items
             .iter()
             .enumerate()
@@ -3254,7 +3310,7 @@ mod tests {
         };
         let uses: HashMap<String, Use> = [("a/1".to_string(), Use { plays: 2, last: Some(1), rating: Some(4) })].into();
         let (membership, favourites, albums) = (HashMap::new(), HashSet::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: Some(&uses), now: 10 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: Some(&uses), now: 10, fits: None };
         for (axis, _, kind) in AXES {
             if matches!(kind, Kind::Like) {
                 continue;
@@ -3302,7 +3358,7 @@ mod tests {
         assert_eq!(passing(&items, &[muted.clone()]), [0, 1, 2], "nothing on: everything passes");
         let files: Vec<Facts> = items.into_iter().flatten().collect();
         let (membership, favourites) = (HashMap::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         assert_eq!(select(&files, &[muted], &w).len(), files.len(), "in a crate too");
         let fav = Condition { enabled: false, ..Condition::new("favourite", false, Value::Yes) };
         assert!(!needs_favourites(&[fav]), "a muted favourite needs no favourites");
@@ -3490,7 +3546,7 @@ mod tests {
     fn all_of_holds_where_a_track_has_every_value_and_only_on_the_axes_of_several() {
         // 0.13, decision 0088: "and" within an axis.
         let (files, membership, favourites) = library();
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let rock_and_indie = Condition::new("genre", false, Value::AllOf { values: vec!["ROCK".into(), "indie".into()] });
         assert_eq!(select(&files, std::slice::from_ref(&rock_and_indie), &w), vec!["c"], "every one of them, case ignored");
         assert_eq!(select(&files, &[Condition { not: true, ..rock_and_indie.clone() }], &w), vec!["a", "b", "d"], "negated: not all of them");
