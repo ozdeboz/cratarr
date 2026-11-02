@@ -1,5 +1,6 @@
-//! The conversion queue (decision 0013): an album with hi-res files waits here while they are converted to CD format,
-//! one album and one file at a time (the NAS stays free for the media server), then Keep or Replace runs on it.
+//! The conversion queue (decision 0013): an album with hi-res files waits here while they are converted to its target's
+//! quality limit (decision 0096's amendment), one album and one file at a time (the NAS stays free for the media
+//! server), then Keep or Replace runs on it.
 //!
 //! Each file is converted into `<Incoming folder>/.cratarr-convert/<album>/…`. When all are done, one plan of moves
 //! puts the originals in the trash and the converted files in their place; then the action runs, its event carrying
@@ -50,6 +51,8 @@ struct Job {
     year: Option<String>,
     /// The music files to convert, inside the album folder.
     files: Vec<String>,
+    /// The quality limit they are converted to: the target library's.
+    limit: crate::convert::Limit,
     /// How many are converted.
     done: usize,
     /// How far the one being converted is, 0 to 1 (not written down: it starts again from the file's beginning).
@@ -282,7 +285,7 @@ enum Outcome {
 impl IncomingService {
     /// Queue Keep or Replace of an album whose `files` need converting first. Returns at once.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, to: String, target: i64) -> KeepResult {
+    pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, limit: crate::convert::Limit, to: String, target: i64) -> KeepResult {
         let title = at.album.title.clone();
         self.queue.change(|jobs| {
             jobs.next += 1;
@@ -296,6 +299,7 @@ impl IncomingService {
                 action,
                 year: year.map(str::to_string),
                 files,
+                limit,
                 done: 0,
                 part: 0.0,
                 state: State::Waiting,
@@ -400,13 +404,13 @@ impl IncomingService {
                         let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
                         return Outcome::Cancelled;
                     }
-                    let (input, output) = (root.join(&job.dir).join(rel), root.join(staged(&job.dir, rel)));
+                    let (input, output, limit) = (root.join(&job.dir).join(rel), root.join(staged(&job.dir, rel)), job.limit);
                     let (tell, mut told) = tokio::sync::watch::channel(0f32);
                     let mut work = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                         // Written whole or not at all, and the same input gives the same bytes: one already there is done.
                         if !output.is_file() {
                             crate::moves::create_dirs_like_parent(output.parent().unwrap_or(Path::new(".")))?;
-                            crate::convert::to_cd_flac_told(&input, &output, |p| {
+                            crate::convert::to_flac_told(&input, &output, limit, |p| {
                                 let _ = tell.send(p);
                             })?;
                         }
@@ -580,6 +584,7 @@ mod tests {
             action: Action::Keep,
             year: None,
             files: vec!["01.flac".into()],
+            limit: crate::convert::CD,
             done: 0,
             part: 0.0,
             state,

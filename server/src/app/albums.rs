@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::incoming::VerdictView;
 use super::{App, KeepPreview, KeepResult, ToggleError};
 use super::library::epoch_now;
-use crate::settings::Format;
+use crate::settings::Quality;
 use crate::source;
 
 /// A used library of a server, as the page shows it.
@@ -23,8 +23,8 @@ pub struct LibraryView {
     pub use_: &'static str,
     /// The dot on its albums; none for the primary (Music).
     pub colour: Option<String>,
-    /// What a move into it does to the files.
-    pub format: Format,
+    /// Its quality limit on the way in (decision 0096's amendment).
+    pub quality: Quality,
 }
 
 /// An album that has an album of another library matched to it (the inverse of an Incoming album's verdict).
@@ -102,7 +102,7 @@ impl App {
                                 name: a.placement.libraries.iter().find(|p| &p.id == l).map_or_else(|| l.clone(), |p| p.name.clone()),
                                 use_: if roles.music.contains(l) { "music" } else { "incoming" },
                                 colour: roles.colour_of(l),
-                                format: roles.format_of(l),
+                                quality: roles.quality_of(l),
                             })
                             .collect()
                     })

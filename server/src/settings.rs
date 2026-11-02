@@ -47,9 +47,10 @@ pub struct Roles {
 /// A library's own settings (decision 0034).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibraryPolicy {
-    /// What a move into it does to the files; none: as its use says (Music: CD format; Incoming: as they are).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub format: Option<Format>,
+    /// Its quality limit on the way in; none: as its use says (Music: CD format; Incoming: no limit). Saved as
+    /// "format" before the limit (0.14).
+    #[serde(default, alias = "format", skip_serializing_if = "Option::is_none")]
+    pub quality: Option<Quality>,
     /// Its albums' dot, "#rrggbb" (a library other than the primary); none: one from the palette.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colour: Option<String>,
@@ -59,26 +60,45 @@ pub struct LibraryPolicy {
     pub name: Option<String>,
 }
 
-/// What a move into a library does to the files (decision 0034).
+/// A library's quality limit (decision 0096's amendment, the owner, 2026-11-02: in place of the format): lossless files
+/// above it become FLAC at it as they move in or are kept into it; lossy files and those within it move as they are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Format {
-    /// Lossless files above CD become 16-bit/44.1 kHz FLAC (decision 0013's Keep).
+pub enum Quality {
+    /// No limit: the files move as they are ("as_is", the format before the limit).
+    #[serde(alias = "as_is")]
+    None,
+    /// Up to 24-bit/96 kHz.
+    Hr96,
+    /// Up to 24-bit/48 kHz.
+    Hr48,
+    /// CD format, 16-bit/44.1 kHz (decision 0013's Keep).
     Cd,
-    /// The files move as they are.
-    AsIs,
+}
+
+impl Quality {
+    /// The bits and rate files are converted down to; none for no limit.
+    pub fn limit(self) -> Option<crate::convert::Limit> {
+        use crate::convert::Limit;
+        match self {
+            Quality::None => None,
+            Quality::Hr96 => Some(Limit { bits: 24, rate: 96_000 }),
+            Quality::Hr48 => Some(Limit { bits: 24, rate: 48_000 }),
+            Quality::Cd => Some(crate::convert::CD),
+        }
+    }
 }
 
 /// The colours a library other than the primary gets until one is chosen, in turn.
 pub const PALETTE: [&str; 6] = ["#e0a23a", "#5b8def", "#d4567f", "#3fae9a", "#9a6fdc", "#c8743c"];
 
 impl Roles {
-    /// The format a move into `library` follows.
-    pub fn format_of(&self, library: &str) -> Format {
-        match self.policies.get(library).and_then(|p| p.format) {
-            Some(f) => f,
-            None if self.music.iter().any(|m| m == library) => Format::Cd,
-            None => Format::AsIs,
+    /// The quality limit a move into `library` follows.
+    pub fn quality_of(&self, library: &str) -> Quality {
+        match self.policies.get(library).and_then(|p| p.quality) {
+            Some(q) => q,
+            None if self.music.iter().any(|m| m == library) => Quality::Cd,
+            None => Quality::None,
         }
     }
 
@@ -389,7 +409,7 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
                 return Err(ChangeError::Invalid(format!("{}: {lib}'s name is longer than {NAME_MOST} characters or holds control characters", d.id)));
             }
         }
-        d.libraries.policies.retain(|_, p| p.format.is_some() || p.colour.is_some() || p.name.is_some());
+        d.libraries.policies.retain(|_, p| p.quality.is_some() || p.colour.is_some() || p.name.is_some());
         for secret in fields.iter().filter(|f| f.kind == FieldKind::Secret) {
             if source::text(&d.values, secret.key).is_some() {
                 continue;
@@ -441,17 +461,32 @@ mod tests {
     #[test]
     fn a_library_follows_its_use_until_it_has_its_own_settings() {
         let mut r = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()], ..Roles::default() };
-        assert_eq!(r.format_of("m"), Format::Cd);
-        assert_eq!(r.format_of("i1"), Format::AsIs);
+        assert_eq!(r.quality_of("m"), Quality::Cd);
+        assert_eq!(r.quality_of("i1"), Quality::None);
         assert_eq!(r.colour_of("m"), None);
         assert_eq!(r.colour_of("i1").as_deref(), Some(PALETTE[0]));
         assert_eq!(r.colour_of("i2").as_deref(), Some(PALETTE[1]));
         assert_eq!(r.colour_of("unused"), None);
-        r.policies.insert("i1".into(), LibraryPolicy { format: Some(Format::Cd), colour: Some("#112233".into()), ..Default::default() });
-        assert_eq!(r.format_of("i1"), Format::Cd);
+        r.policies.insert("i1".into(), LibraryPolicy { quality: Some(Quality::Hr48), colour: Some("#112233".into()), ..Default::default() });
+        assert_eq!(r.quality_of("i1"), Quality::Hr48);
         assert_eq!(r.colour_of("i1").as_deref(), Some("#112233"));
         // As saved: only what was set.
-        assert_eq!(serde_json::to_value(&r.policies).unwrap(), serde_json::json!({ "i1": { "format": "cd", "colour": "#112233" } }));
+        assert_eq!(serde_json::to_value(&r.policies).unwrap(), serde_json::json!({ "i1": { "quality": "hr48", "colour": "#112233" } }));
+    }
+
+    #[test]
+    fn a_format_saved_before_the_quality_limit_reads_as_its_limit() {
+        let read = |v: serde_json::Value| serde_json::from_value::<LibraryPolicy>(v).unwrap().quality;
+        assert_eq!(read(serde_json::json!({ "format": "cd" })), Some(Quality::Cd));
+        assert_eq!(read(serde_json::json!({ "format": "as_is" })), Some(Quality::None));
+        assert_eq!(read(serde_json::json!({ "quality": "hr96" })), Some(Quality::Hr96));
+        assert_eq!(read(serde_json::json!({ "quality": "none" })), Some(Quality::None));
+        // Written only as the limit.
+        let p = LibraryPolicy { quality: Some(Quality::None), ..Default::default() };
+        assert_eq!(serde_json::to_value(&p).unwrap(), serde_json::json!({ "quality": "none" }));
+        assert_eq!(Quality::None.limit(), None);
+        assert_eq!(Quality::Hr96.limit().map(|l| (l.bits, l.rate)), Some((24, 96_000)));
+        assert_eq!(Quality::Cd.limit(), Some(crate::convert::CD));
     }
 
     #[test]
@@ -473,11 +508,11 @@ mod tests {
     #[test]
     fn library_settings_are_kept_when_the_page_sends_none_and_checked_when_it_does() {
         let mut saved = jf("jf", "http://a", Some("k"));
-        saved.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("#aabbcc".into()), ..Default::default() });
+        saved.libraries.policies.insert("i".into(), LibraryPolicy { quality: None, colour: Some("#aabbcc".into()), ..Default::default() });
         let out = merge(std::slice::from_ref(&saved), vec![jf("jf", "http://a", None)]).unwrap();
         assert_eq!(out[0].libraries.policies, saved.libraries.policies);
         let mut bad = jf("jf", "http://a", None);
-        bad.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("red".into()), ..Default::default() });
+        bad.libraries.policies.insert("i".into(), LibraryPolicy { quality: None, colour: Some("red".into()), ..Default::default() });
         assert!(merge(std::slice::from_ref(&saved), vec![bad]).is_err());
         // A name of its own, kept trimmed; blank is none again, and with nothing else set the entry goes.
         let mut named = jf("jf", "http://a", None);
@@ -490,7 +525,7 @@ mod tests {
         long.libraries.policies.insert("i".into(), LibraryPolicy { name: Some("x".repeat(81)), ..Default::default() });
         assert!(merge(std::slice::from_ref(&saved), vec![long]).is_err());
         let mut upper = jf("jf", "http://a", None);
-        upper.libraries.policies.insert("i".into(), LibraryPolicy { format: Some(Format::AsIs), colour: Some("#AABBCC".into()), ..Default::default() });
+        upper.libraries.policies.insert("i".into(), LibraryPolicy { quality: Some(Quality::None), colour: Some("#AABBCC".into()), ..Default::default() });
         assert_eq!(merge(&[saved], vec![upper]).unwrap()[0].libraries.policies["i"].colour.as_deref(), Some("#aabbcc"));
     }
 
