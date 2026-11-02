@@ -1120,7 +1120,7 @@ mod tests {
             library_id: library_id.map(Into::into),
             replaceable,
         };
-        let libraries = [crate::app::albums::LibraryView { id: "new".into(), name: "New music".into(), use_: "incoming", colour: None, format: crate::settings::Format::AsIs }];
+        let libraries = [crate::app::albums::LibraryView { id: "new".into(), name: "New music".into(), use_: "incoming", colour: None, quality: crate::settings::Quality::None }];
         assert!(replaces(&v("upgrade", Some("music"), true)));
         assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
         assert!(!replaces(&v("duplicate", Some("music"), true)));

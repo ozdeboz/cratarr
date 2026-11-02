@@ -837,13 +837,16 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         .min_by_key(|x| (x.disc.unwrap_or(1) != t.disc, x.track.map_or(u32::MAX, |n| n.abs_diff(t.position))))
         .context("The album has no other track to take its tags from")?;
     let album_dir = root.join(&dir);
-    // Hi-res is made CD's 16 bit / 44.1 kHz as Incoming's are (decision 0013).
-    let source = if crate::convert::needs_conversion(staged)?.is_some() {
-        let cd = staged.with_extension("cd.flac");
-        crate::convert::to_cd_flac_told(staged, &cd, |_| {})?;
-        cd
-    } else {
-        staged.to_path_buf()
+    // Lossless above its library's quality limit is made FLAC at it, as a move into that library is (decision 0096's
+    // amendment; before, always CD's 16 bit / 44.1 kHz).
+    let saved = s.data_dir.as_ref().and_then(|d| crate::settings::load(&d.join("settings.json"), &|k: &str| std::env::var(k).ok()).ok().flatten());
+    let source = match quality_at(saved.as_ref(), &root).limit() {
+        Some(limit) if crate::convert::needs_conversion(staged, limit)?.is_some() => {
+            let converted = staged.with_extension("converted.flac");
+            crate::convert::to_flac_told(staged, &converted, limit, |_| {})?;
+            converted
+        }
+        _ => staged.to_path_buf(),
     };
     let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("flac").to_ascii_lowercase();
     let name = name_like(&neighbour.file, t.position, &t.title, &ext);
@@ -891,6 +894,15 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     s.reread(&changed);
     s.catalogue().poke();
     Ok(format!("{UNDO}{id}"))
+}
+
+/// The quality limit of the library whose folder is `root`: as Cratarr's own source has it (its libraries are its
+/// folders); CD format, Music's by its use, while none is found there (as a move's `quality_in`).
+fn quality_at(saved: Option<&crate::settings::Saved>, root: &Path) -> crate::settings::Quality {
+    saved
+        .and_then(|s| s.sources.iter().find(|c| c.enabled && c.kind == crate::source::cratarr::KIND.id))
+        .and_then(|c| c.libraries.music.iter().chain(&c.libraries.incoming).find(|l| Path::new(l.as_str()) == root).map(|l| c.libraries.quality_of(l)))
+        .unwrap_or(crate::settings::Quality::Cd)
 }
 
 fn rel_of(root: &Path, p: &Path) -> Result<String> {
@@ -968,6 +980,22 @@ pub async fn undo(token: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_track_is_converted_to_its_librarys_limit() {
+        use crate::settings::{LibraryPolicy, Quality, Roles, Saved, SourceConfig};
+        let roles = Roles { music: vec!["/music".into()], incoming: vec!["/incoming".into(), "/hires".into()], ..Roles::default() };
+        let mut saved = Saved {
+            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: roles, values: Default::default() }],
+            ..Default::default()
+        };
+        saved.sources[0].libraries.policies.insert("/hires".into(), LibraryPolicy { quality: Some(Quality::Hr96), ..Default::default() });
+        assert_eq!(quality_at(Some(&saved), Path::new("/music")), Quality::Cd, "Music's by its use");
+        assert_eq!(quality_at(Some(&saved), Path::new("/incoming")), Quality::None, "Incoming's by its use: as it is");
+        assert_eq!(quality_at(Some(&saved), Path::new("/hires")), Quality::Hr96);
+        assert_eq!(quality_at(Some(&saved), Path::new("/elsewhere")), Quality::Cd);
+        assert_eq!(quality_at(None, Path::new("/incoming")), Quality::Cd, "nothing saved: CD format");
+    }
 
     #[test]
     fn a_new_track_is_named_as_its_neighbour_is() {

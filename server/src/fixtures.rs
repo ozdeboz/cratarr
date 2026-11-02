@@ -274,7 +274,7 @@ pub fn make(dir: &Path) -> Result<Vec<PathBuf>> {
             let tone = folder.join(format!(".{stem}.wav"));
             wav(&tone, a_n as u32 * 16 + i as u32)?;
             let flac = folder.join(format!("{stem}.flac"));
-            crate::convert::to_cd_flac_told(&tone, &flac, |_| {})?;
+            crate::convert::to_flac_told(&tone, &flac, crate::convert::CD, |_| {})?;
             std::fs::remove_file(&tone)?;
             // The tags, each as the field is spelt in a FLAC.
             let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&flac)?, ParseOptions::new())?;

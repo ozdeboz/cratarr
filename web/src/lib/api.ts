@@ -961,8 +961,11 @@ export type Values = Record<string, string | string[]>;
 
 /** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
 /** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
-/** A library's own settings (decision 0034): what a move into it does to the files, and its dot's colour. */
-export type LibraryPolicy = { format?: 'cd' | 'as_is'; colour?: string | null; name?: string | null };
+/** A library's quality limit on the way in (decision 0096's amendment): lossless files above it become FLAC at it as
+ *  they move in or are kept into it; `none`: as they are; `hr96`, `hr48`: up to 24-bit/96 or 48 kHz; `cd`: 16/44.1. */
+export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
+/** A library's own settings (decision 0034): its quality limit, its dot's colour and its name. */
+export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null };
 export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
 
 export type LibraryUse = 'music' | 'incoming' | 'unused';
@@ -990,7 +993,7 @@ export type SourceView = SourceConfig & {
   server_libraries: ServerLibrary[];
   error: string | null;
   /** Each used library's settings as they apply (its own, else its use's and the palette's). */
-  policies?: Record<string, { format: 'cd' | 'as_is'; colour: string | null }>;
+  policies?: Record<string, { quality: Quality; colour: string | null }>;
 };
 
 export type Kind = { id: string; label: string; fields: Field[] };
@@ -1535,13 +1538,13 @@ export type ShelfSource = {
   as_of: number;
   /** The libraries it was read from (the filter's library switches). */
   libraries?: string[];
-  /** Those libraries' names, uses, colours and formats (the Library's list, decision 0034). */
+  /** Those libraries' names, uses, colours and quality limits (the Library's list, decision 0034). */
   library_info?: LibraryInfo[];
 };
 
-/** A used library of a server (decision 0034): the dot on its albums (none for the primary, Music), and what a move
- *  into it does to the files. */
-export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; format: 'cd' | 'as_is' };
+/** A used library of a server (decision 0034): the dot on its albums (none for the primary, Music), and its quality
+ *  limit on the way in. */
+export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; quality: Quality };
 
 /** An album of a library other than Music, as it stands to the other used libraries (decision 0034, Music's first): an
  *  upgrade of an album there, or a duplicate. `library` is that album's folder, `library_id` the library it is in;
@@ -2263,7 +2266,7 @@ export type KeepPreview = {
   folder: string | null;
   files: number;
   refused: { kind: 'needs_year' } | { kind: 'other'; detail: string } | null;
-  /** Hi-res files converted to 16-bit/44.1 kHz first (the move then waits in the queue). */
+  /** Lossless files above the target's quality limit, converted first (the move then waits in the queue). */
   convert: number;
   /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
   acquisition: boolean;
@@ -2275,7 +2278,7 @@ const albumPath = (source: string, album: string) => `/api/albums/${encodeURICom
 export const movePreview = (source: string, album: string, to: string, year?: string) =>
   request<KeepPreview>(`${albumPath(source, album)}/move?to=${encodeURIComponent(to)}${year ? `&year=${encodeURIComponent(year)}` : ''}`);
 /** Move an album into another used library of its server, named and converted that library's way (Undo brings it
- *  back); into a library of CD format with hi-res files it is queued. */
+ *  back); with lossless files above that library's quality limit it is queued. */
 export const moveAlbum = (source: string, album: string, to: string, year?: string) =>
   request<AlbumMoved>(`${albumPath(source, album)}/move`, {
     method: 'POST',

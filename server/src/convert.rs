@@ -1,5 +1,6 @@
-//! Hi-res audio to CD format: 16-bit FLAC at 44.1 kHz (decision 0013). Pure Rust, so the image stays small: decode
-//! (symphonia), resample (rubato), TPDF dither to 16 bit, encode (flacenc). Tags and pictures are copied (lofty).
+//! Lossless audio above a quality limit to FLAC at it: CD format, 16 bit at 44.1 kHz (decision 0013), or 24 bit at
+//! 96 or 48 kHz (decision 0096's amendment). Pure Rust, so the image stays small: decode (symphonia), resample
+//! (rubato), TPDF dither to the output's bit depth, encode (flacenc). Tags and pictures are copied (lofty).
 //!
 //! Memory is bounded and small, whatever the length of the track: audio streams through in chunks of a few thousand
 //! frames and the FLAC frames go straight to disk. Only the source's tags and pictures are held whole.
@@ -7,7 +8,7 @@
 //! Blocking file operations; run on a blocking thread.
 //!
 //! The shape follows decision 0011: the decisions (what needs converting, to what rate, how long the output is, how
-//! a sample is quantised) are pure functions; `to_cd_flac` is the shell that reads and writes around them.
+//! a sample is quantised) are pure functions; `to_flac_told` is the shell that reads and writes around them.
 
 
 use std::fs::{File, OpenOptions};
@@ -27,6 +28,7 @@ use lofty::probe::Probe;
 use lofty::tag::{Tag, TagExt};
 use rubato::audioadapter_buffers::direct::SequentialSliceOfVecs;
 use rubato::{Fft, FixedSync, Indexing, Resampler, WindowFunction};
+use serde::{Deserialize, Serialize};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
@@ -42,6 +44,17 @@ pub const STAGING_DIR: &str = ".cratarr-convert";
 pub const CD_RATE: u32 = 44_100;
 /// The CD bit depth.
 pub const CD_BITS: u32 = 16;
+
+/// A quality limit (decision 0096's amendment, the owner, 2026-11-02): the most bits and the highest sample rate a
+/// lossless file keeps; one above it in either is converted down to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Limit {
+    pub bits: u32,
+    pub rate: u32,
+}
+
+/// CD format: decision 0013's Keep, and an export's FLAC.
+pub const CD: Limit = Limit { bits: CD_BITS, rate: CD_RATE };
 
 /// FLAC block size of the output, in frames: the reference encoder's for 44.1 kHz.
 const BLOCK_SIZE: usize = 4096;
@@ -79,26 +92,53 @@ pub struct SourceFormat {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Report {
     pub source: SourceFormat,
-    /// The output's sample rate: [`CD_RATE`], or the source's when that is lower.
+    /// The output's sample rate ([`target_rate`]).
     pub sample_rate: u32,
+    /// The output's bit depth ([`target_bits`]).
+    pub bits_per_sample: u32,
     /// The output's length in frames.
     pub frames: u64,
     /// The highest absolute sample value before quantising, in dBFS (above 0 means it had to clip).
     pub peak_dbfs: f64,
-    /// Output samples that hit the 16-bit limits and were clamped.
+    /// Output samples that hit the bit depth's limits and were clamped.
     pub clipped: u64,
 }
 
 // ---- The functional core ----
 
-/// Hi-res: more than CD in either sample rate or bit depth.
-pub fn is_hires(sample_rate: u32, bits_per_sample: u32) -> bool {
-    sample_rate > CD_RATE || bits_per_sample > CD_BITS
+impl Limit {
+    /// Above it: more in either sample rate or bit depth.
+    pub fn exceeded_by(self, sample_rate: u32, bits_per_sample: u32) -> bool {
+        sample_rate > self.rate || bits_per_sample > self.bits
+    }
 }
 
-/// The output rate: CD's, unless the source is already lower (that is not upsampled; only the bit depth drops).
-pub fn target_rate(source_rate: u32) -> u32 {
-    source_rate.min(CD_RATE)
+/// Hi-res: more than CD in either sample rate or bit depth.
+pub fn is_hires(sample_rate: u32, bits_per_sample: u32) -> bool {
+    CD.exceeded_by(sample_rate, bits_per_sample)
+}
+
+/// The output rate under `limit`: the source's when within it (that is not upsampled; only the bit depth drops), else
+/// the highest of the source's family at or below the limit (44.1 kHz's: 88.2, 176.4…; 48 kHz's: 96, 192…; the owner,
+/// 2026-11-02); the limit's own when the family has none there (48 kHz's under CD) or the source has no family.
+pub fn target_rate(source_rate: u32, limit: Limit) -> u32 {
+    if source_rate <= limit.rate {
+        return source_rate;
+    }
+    match [CD_RATE, 48_000].into_iter().find(|base| source_rate % base == 0) {
+        Some(mut rate) if rate <= limit.rate => {
+            while rate * 2 <= limit.rate {
+                rate *= 2;
+            }
+            rate
+        }
+        _ => limit.rate,
+    }
+}
+
+/// The output bit depth under `limit`: the source's, at most the limit's.
+pub fn target_bits(source_bits: u32, limit: Limit) -> u32 {
+    source_bits.min(limit.bits)
 }
 
 /// The output length for `frames` input frames: the same duration, rounded to the nearest frame.
@@ -123,13 +163,14 @@ pub fn resampler_chunk(from_rate: u32, to_rate: u32) -> usize {
     blocks * min_in
 }
 
-/// One sample, full scale ±1.0, plus `dither` in 16-bit steps, to 16 bit. True when it had to clamp.
-pub fn quantise(x: f32, dither: f64) -> (i32, bool) {
-    let y = (f64::from(x) * 32768.0 + dither).round();
-    if y > 32767.0 {
-        (32767, true)
-    } else if y < -32768.0 {
-        (-32768, true)
+/// One sample, full scale ±1.0, plus `dither` in steps of `bits`, to `bits`. True when it had to clamp.
+pub fn quantise(x: f32, dither: f64, bits: u32) -> (i32, bool) {
+    let top = f64::from(1u32 << (bits - 1));
+    let y = (f64::from(x) * top + dither).round();
+    if y > top - 1.0 {
+        ((top - 1.0) as i32, true)
+    } else if y < -top {
+        (-top as i32, true)
     } else {
         (y as i32, false)
     }
@@ -161,34 +202,27 @@ impl Tpdf {
 
 // ---- The shell ----
 
-/// `Some` when `path` is a lossless file (FLAC, WAV, AIFF, ALAC in MP4) above CD format; `None` for CD format or
-/// lower, and for lossy or unknown files. Reads only the headers.
-pub fn needs_conversion(path: &Path) -> Result<Option<SourceFormat>> {
+/// `Some` when `path` is a lossless file (FLAC, WAV, AIFF, ALAC in MP4) above `limit`; `None` within it, and for lossy
+/// or unknown files (never converted: a second lossy pass only loses more). Reads only the headers.
+pub fn needs_conversion(path: &Path, limit: Limit) -> Result<Option<SourceFormat>> {
     let Some(source) = Source::open(path)? else { return Ok(None) };
     let f = source.format;
-    Ok(is_hires(f.sample_rate, f.bits_per_sample).then_some(f))
+    Ok(limit.exceeded_by(f.sample_rate, f.bits_per_sample).then_some(f))
 }
 
-/// Convert a lossless file to 16-bit FLAC at 44.1 kHz (or the source's rate when lower), with all its tags and
+/// Convert a lossless file to FLAC at `limit` (the source's rate or bit depth where lower), with all its tags and
 /// pictures. The output appears whole or not at all: it is written to a temporary file next to it, then renamed.
 /// `output` may be `input` itself. It gets the input's permissions, as a copy would (a new file's own were 644 where
-/// the library's files are 664, so the group could not write the converted ones: NAS, 2026-10-15).
-/// (The queue converts through `to_cd_flac_told`, to show its progress; this is the tests'.)
-#[cfg(test)]
-pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
-    to_cd_flac_told(input, output, |_| {})
-}
-
-/// [`to_cd_flac`], telling `progress` how far it is (0 to 1 of the input read) at each whole percent, when the
-/// file's header gives its length.
-pub fn to_cd_flac_told(input: &Path, output: &Path, progress: impl FnMut(f32)) -> Result<Report> {
+/// the library's files are 664, so the group could not write the converted ones: NAS, 2026-10-15). Tells `progress`
+/// how far it is (0 to 1 of the input read) at each whole percent, when the file's header gives its length.
+pub fn to_flac_told(input: &Path, output: &Path, limit: Limit, progress: impl FnMut(f32)) -> Result<Report> {
     let dir = match output.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
     let name = output.file_name().context("the output has no file name")?;
     let temp = dir.join(format!(".{}.cratarr-part", name.to_string_lossy()));
-    let result = convert_to(input, &temp, None, progress);
+    let result = convert_to(input, &temp, limit, None, progress);
     match result {
         Ok(report) => {
             if let Ok(m) = std::fs::metadata(input) {
@@ -204,17 +238,23 @@ pub fn to_cd_flac_told(input: &Path, output: &Path, progress: impl FnMut(f32)) -
     }
 }
 
+/// [`to_flac_told`] at CD format, quietly: the tests'.
+#[cfg(test)]
+pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
+    to_flac_told(input, output, CD, |_| {})
+}
+
 /// The conversion itself, into `out` (overwritten). With `raw`, also writes the 32-bit float signal just before
 /// dithering, interleaved little-endian: the measurement hook for the SoX comparison.
-fn convert_to(input: &Path, out: &Path, raw: Option<&Path>, mut progress: impl FnMut(f32)) -> Result<Report> {
+fn convert_to(input: &Path, out: &Path, limit: Limit, raw: Option<&Path>, mut progress: impl FnMut(f32)) -> Result<Report> {
     let mut source = Source::open(input)?.with_context(|| format!("{} is not a lossless audio file", input.display()))?;
     let format = source.format.clone();
     if format.channels == 0 || format.channels > 8 {
         bail!("{} channels: FLAC takes 1 to 8", format.channels);
     }
-    let rate = target_rate(format.sample_rate);
+    let (rate, bits) = (target_rate(format.sample_rate, limit), target_bits(format.bits_per_sample, limit));
     let file = File::create(out).with_context(|| format!("creating {}", out.display()))?;
-    let mut sink = DitherSink::new(FlacWriter::new(file, rate, format.channels, CD_BITS as usize)?, format.channels);
+    let mut sink = DitherSink::new(FlacWriter::new(file, rate, format.channels, bits as usize)?, format.channels, bits);
     let mut raw_out = raw.map(File::create).transpose()?.map(BufWriter::new);
     let mut scratch = Vec::new();
     let mut tee = |planes: &[Vec<f32>], start: usize, len: usize| -> Result<()> {
@@ -258,6 +298,7 @@ fn convert_to(input: &Path, out: &Path, raw: Option<&Path>, mut progress: impl F
     Ok(Report {
         source: format,
         sample_rate: rate,
+        bits_per_sample: bits,
         frames,
         peak_dbfs: 20.0 * f64::from(peak.max(1e-10)).log10(),
         clipped,
@@ -457,11 +498,12 @@ fn alac_bit_depth(cookie: Option<&[u8]>) -> Option<u32> {
     c.get(5).copied().filter(|b| matches!(b, 16 | 20 | 24 | 32)).map(u32::from)
 }
 
-/// Dithers float frames to 16 bit and hands them to the FLAC writer one block at a time.
+/// Dithers float frames to the output's bit depth and hands them to the FLAC writer one block at a time.
 struct DitherSink {
     flac: FlacWriter,
     block: Vec<i32>,
     channels: usize,
+    bits: u32,
     dither: Tpdf,
     frames: u64,
     peak: f32,
@@ -469,11 +511,12 @@ struct DitherSink {
 }
 
 impl DitherSink {
-    fn new(flac: FlacWriter, channels: usize) -> Self {
+    fn new(flac: FlacWriter, channels: usize, bits: u32) -> Self {
         DitherSink {
             flac,
             block: Vec::with_capacity(BLOCK_SIZE * channels),
             channels,
+            bits,
             dither: Tpdf::new(),
             frames: 0,
             peak: 0.0,
@@ -486,7 +529,7 @@ impl DitherSink {
             for p in planes.iter().take(self.channels) {
                 let x = p[i];
                 self.peak = self.peak.max(x.abs());
-                let (q, clipped) = quantise(x, self.dither.next());
+                let (q, clipped) = quantise(x, self.dither.next(), self.bits);
                 self.clipped += u64::from(clipped);
                 self.block.push(q);
             }
@@ -721,17 +764,20 @@ pub(crate) mod tests {
         assert!(is_hires(48_000, 16));
         assert!(is_hires(44_100, 24));
         assert!(!is_hires(44_100, 16));
-        assert_eq!(target_rate(192_000), 44_100);
-        assert_eq!(target_rate(32_000), 32_000);
+        assert_eq!(target_rate(192_000, CD), 44_100);
+        assert_eq!(target_rate(32_000, CD), 32_000);
         assert_eq!(output_frames(96_000 * 60, 96_000, 44_100), 44_100 * 60);
         assert_eq!(output_frames(1, 48_000, 44_100), 1);
         assert_eq!(resampler_chunk(96_000, 44_100), 8320); // 26 blocks of 320 in, 147 out
         assert_eq!(resampler_chunk(192_000, 44_100), 8960); // 14 blocks of 640, not 13: an even output side
         assert_eq!(resampler_chunk(88_200, 44_100), 8192);
         assert_eq!(resampler_chunk(48_000, 44_100), 8320);
-        assert_eq!(quantise(1.0, 0.0), (32767, true));
-        assert_eq!(quantise(-1.0, 0.0), (-32768, false));
-        assert_eq!(quantise(0.5 / 32768.0, 0.6), (1, false));
+        assert_eq!(quantise(1.0, 0.0, 16), (32767, true));
+        assert_eq!(quantise(-1.0, 0.0, 16), (-32768, false));
+        assert_eq!(quantise(0.5 / 32768.0, 0.6, 16), (1, false));
+        assert_eq!(quantise(1.0, 0.0, 24), (8_388_607, true));
+        assert_eq!(quantise(-1.0, 0.0, 24), (-8_388_608, false));
+        assert_eq!(quantise(0.5 / 8_388_608.0, 0.6, 24), (1, false));
         let mut d = Tpdf::new();
         let v: Vec<f64> = (0..100_000).map(|_| d.next()).collect();
         assert!(v.iter().all(|x| x.abs() < 1.0));
@@ -741,13 +787,39 @@ pub(crate) mod tests {
         assert!((var - 1.0 / 6.0).abs() < 0.01, "{var}"); // triangular over ±1: variance 1/6
     }
 
+    const HR96: Limit = Limit { bits: 24, rate: 96_000 };
+    const HR48: Limit = Limit { bits: 24, rate: 48_000 };
+
+    #[test]
+    fn the_limit_decides_what_is_converted_and_to_what() {
+        assert!(!HR96.exceeded_by(96_000, 24));
+        assert!(HR96.exceeded_by(192_000, 24));
+        assert!(HR96.exceeded_by(96_000, 32));
+        assert!(HR48.exceeded_by(88_200, 16));
+        assert!(!HR48.exceeded_by(48_000, 16));
+        // The highest rate of the source's family at or below the limit (the owner, 2026-11-02).
+        assert_eq!(target_rate(192_000, HR96), 96_000);
+        assert_eq!(target_rate(176_400, HR96), 88_200);
+        assert_eq!(target_rate(352_800, HR96), 88_200);
+        assert_eq!(target_rate(88_200, HR48), 44_100);
+        assert_eq!(target_rate(192_000, HR48), 48_000);
+        assert_eq!(target_rate(96_000, CD), 44_100);
+        assert_eq!(target_rate(48_000, CD), 44_100, "48 kHz's family has nothing under CD: CD's own");
+        assert_eq!(target_rate(64_000, HR48), 48_000, "no family: the limit's own");
+        assert_eq!(target_rate(96_000, HR96), 96_000, "within: as it is");
+        assert_eq!(target_rate(44_100, HR48), 44_100, "never upsampled");
+        assert_eq!(target_bits(24, CD), 16);
+        assert_eq!(target_bits(32, HR96), 24);
+        assert_eq!(target_bits(16, HR48), 16, "never more bits than it had");
+    }
+
     #[test]
     fn hires_sine_to_cd() {
         let d = temp_dir();
         let (src, out) = (d.join("in.flac"), d.join("out.flac"));
         let secs = 3.0;
         write_flac(&src, 96_000, 24, &sine(96_000, 1000.0, 0.5, secs, 2));
-        let found = needs_conversion(&src).unwrap().unwrap();
+        let found = needs_conversion(&src, CD).unwrap().unwrap();
         assert_eq!((found.container, found.sample_rate, found.bits_per_sample, found.channels), (Container::Flac, 96_000, 24, 2));
         assert_eq!(found.frames, Some(288_000));
         #[cfg(unix)]
@@ -762,7 +834,7 @@ pub(crate) mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&out).unwrap().permissions().mode() & 0o777, 0o664, "the input's permissions, as a copy");
         }
-        assert_eq!(report.sample_rate, 44_100);
+        assert_eq!((report.sample_rate, report.bits_per_sample), (44_100, 16));
         assert_eq!(report.frames, 132_300);
         assert_eq!(report.clipped, 0);
         // -6 dBFS, plus the filter's ringing where the right channel jumps from silence to its crest at the start.
@@ -773,7 +845,7 @@ pub(crate) mod tests {
         assert_eq!((fmt.sample_rate, fmt.bits_per_sample, fmt.channels), (44_100, 16, 2));
         let len = planes[0].len() as i64;
         assert!((len - 132_300).abs() <= 2, "{len} frames");
-        assert_eq!(needs_conversion(&out).unwrap(), None);
+        assert_eq!(needs_conversion(&out, CD).unwrap(), None);
         for p in &planes {
             let f = frequency(&p[1000..p.len() - 1000], 44_100);
             assert!((f - 1000.0).abs() < 0.05, "{f} Hz");
@@ -796,7 +868,7 @@ pub(crate) mod tests {
         let (src, out) = (d.join("in.flac"), d.join("out.flac"));
         write_flac(&src, 96_000, 24, &sine(96_000, 1000.0, 0.5, 3.0, 2));
         let mut told = Vec::new();
-        to_cd_flac_told(&src, &out, |p| told.push(p)).unwrap();
+        to_flac_told(&src, &out, CD, |p| told.push(p)).unwrap();
         assert!(told.len() > 10, "{told:?}");
         assert!(told.windows(2).all(|w| w[0] < w[1]), "{told:?}");
         assert_eq!(told.last(), Some(&1.0));
@@ -808,7 +880,7 @@ pub(crate) mod tests {
         for rate in [48_000u32, 192_000] {
             let (src, out) = (d.join(format!("in{rate}.wav")), d.join(format!("out{rate}.flac")));
             write_wav24(&src, rate, &sine(rate, 997.0, 0.25, 2.0, 2));
-            let found = needs_conversion(&src).unwrap().unwrap();
+            let found = needs_conversion(&src, CD).unwrap().unwrap();
             assert_eq!((found.container, found.sample_rate, found.bits_per_sample), (Container::Wav, rate, 24));
             let report = to_cd_flac(&src, &out).unwrap();
             assert_eq!(report.frames, 88_200);
@@ -817,6 +889,33 @@ pub(crate) mod tests {
             let f = frequency(&planes[1][500..88_000], 44_100);
             assert!((f - 997.0).abs() < 0.05, "{rate}: {f} Hz");
         }
+    }
+
+    #[test]
+    fn a_hires_limit_halves_the_rate_in_its_family_and_keeps_24_bit() {
+        let d = temp_dir();
+        // 24/192 under 24/96: 96 kHz, still 24 bit; 24/176.4: 88.2 kHz.
+        for (rate, to) in [(192_000u32, 96_000u32), (176_400, 88_200)] {
+            let (src, out) = (d.join(format!("in{rate}.wav")), d.join(format!("out{rate}.flac")));
+            write_wav24(&src, rate, &sine(rate, 997.0, 0.25, 1.0, 2));
+            assert!(needs_conversion(&src, HR96).unwrap().is_some());
+            let report = to_flac_told(&src, &out, HR96, |_| {}).unwrap();
+            assert_eq!((report.sample_rate, report.bits_per_sample, report.frames, report.clipped), (to, 24, u64::from(to), 0));
+            let (fmt, planes) = decode(&out);
+            assert_eq!((fmt.sample_rate, fmt.bits_per_sample, planes[0].len()), (to, 24, to as usize));
+            let f = frequency(&planes[0][500..to as usize - 500], to);
+            assert!((f - 997.0).abs() < 0.05, "{rate}: {f} Hz");
+            assert_eq!(needs_conversion(&out, HR96).unwrap(), None, "at the limit now");
+            assert!(needs_conversion(&out, CD).unwrap().is_some(), "still above CD");
+        }
+        // Within 24/96 already: nothing to do. 16 bit at 96 kHz under 24/48: 48 kHz, its 16 bits kept.
+        let within = d.join("within.flac");
+        write_flac(&within, 96_000, 24, &sine(96_000, 440.0, 0.3, 0.2, 2));
+        assert_eq!(needs_conversion(&within, HR96).unwrap(), None);
+        let sixteen = d.join("sixteen.flac");
+        write_flac(&sixteen, 96_000, 16, &sine(96_000, 440.0, 0.3, 0.2, 2));
+        let report = to_flac_told(&sixteen, &sixteen, HR48, |_| {}).unwrap();
+        assert_eq!((report.sample_rate, report.bits_per_sample, report.frames), (48_000, 16, 9600));
     }
 
     #[test]
@@ -909,20 +1008,25 @@ pub(crate) mod tests {
         let d = temp_dir();
         let cd = d.join("cd.flac");
         write_flac(&cd, 44_100, 16, &sine(44_100, 440.0, 0.3, 0.2, 2));
-        assert_eq!(needs_conversion(&cd).unwrap(), None);
+        assert_eq!(needs_conversion(&cd, CD).unwrap(), None);
         // 24 bit at 44.1 kHz only loses bits: no resampling, same length.
         let hi = d.join("hi.flac");
         write_flac(&hi, 44_100, 24, &sine(44_100, 440.0, 0.3, 0.2, 2));
-        assert!(needs_conversion(&hi).unwrap().is_some());
+        assert!(needs_conversion(&hi, CD).unwrap().is_some());
+        assert_eq!(needs_conversion(&hi, HR48).unwrap(), None);
         let report = to_cd_flac(&hi, &hi).unwrap();
-        assert_eq!((report.sample_rate, report.frames), (44_100, 8820));
-        assert_eq!(needs_conversion(&hi).unwrap(), None);
-        // An MP3 (just a frame header and silence) is lossy: nothing to do.
-        let mp3 = d.join("x.mp3");
-        let mut b = vec![0xFF, 0xFB, 0x90, 0x64];
-        b.resize(417 * 4, 0);
-        std::fs::write(&mp3, b).unwrap();
-        assert_eq!(needs_conversion(&mp3).unwrap(), None);
+        assert_eq!((report.sample_rate, report.bits_per_sample, report.frames), (44_100, 16, 8820));
+        assert_eq!(needs_conversion(&hi, CD).unwrap(), None);
+        // An MP3 (just a frame header and silence) is lossy: nothing to do under any limit, at 48 kHz too.
+        for (name, rate_bits, frame) in [("x.mp3", 0x90u8, 417), ("x48.mp3", 0x94, 384)] {
+            let mp3 = d.join(name);
+            let mut b = vec![0xFF, 0xFB, rate_bits, 0x64];
+            b.resize(frame * 4, 0);
+            std::fs::write(&mp3, b).unwrap();
+            for limit in [CD, HR48, HR96] {
+                assert_eq!(needs_conversion(&mp3, limit).unwrap(), None, "{name} under {limit:?}");
+            }
+        }
     }
 
     #[test]
@@ -943,7 +1047,7 @@ pub(crate) mod tests {
     fn tool() {
         let Some((input, output, raw)) = _tool_paths() else { return };
         let start = std::time::Instant::now();
-        let report = convert_to(&input, &output, raw.as_deref(), |_| {}).unwrap();
+        let report = convert_to(&input, &output, CD, raw.as_deref(), |_| {}).unwrap();
         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
         let hwm = status.lines().find(|l| l.starts_with("VmHWM")).unwrap_or("VmHWM: ?").to_string();
         println!("REPORT {report:?} secs={:.2} {hwm}", start.elapsed().as_secs_f64());
