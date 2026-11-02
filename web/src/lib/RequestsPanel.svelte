@@ -6,6 +6,7 @@
   // requests: each with where it stands, a waiting one taken back from its menu, or many at once in Select (the owner,
   // 2026-10-27: what one has, several have). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
   // fetches now (how far), then what it watches for and has not found yet.
+  import ChoiceMark from './ChoiceMark.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { rowRoot } from './glassRow.svelte';
   import { hrefOf, viewOn } from './addresses';
@@ -171,7 +172,7 @@
   {#if tickable && selecting}
     <ReleaseRow cover={r.cover} title={r.album} line={line(r, who)} tone={tone(r)}>
       <button class="tick" class:on={selecting.has(r.id)} role="checkbox" aria-checked={selecting.has(r.id)} aria-label={`Select ${r.album}`} onclick={() => tick(r.id)}
-        ><Icon name={selecting.has(r.id) ? 'circleCheck' : 'circle'} size={24} /></button
+        ><ChoiceMark kind="several" on={selecting.has(r.id)} /></button
       >
     </ReleaseRow>
   {:else}

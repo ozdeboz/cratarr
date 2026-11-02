@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import ChoiceMark from './ChoiceMark.svelte';
   /** One choice; `group`: a heading it comes under (a menu's group), named once before the first of it; `count`: how
    *  many it shows (the Library's types), at its end. */
   export type PickerOption = { id: string; label: string; group?: string; count?: number };
@@ -32,6 +33,8 @@
     /** A long-press on a choice: taken in or out of what is chosen, the menu staying open. */
     onhold?: ((id: string) => void) | null;
   } = $props();
+  // One of many, the round mark (a tap chooses one); the square once several are chosen (by a long-press).
+  const markKind = $derived(Array.isArray(chosen) && chosen.length > 1 ? 'several' : 'one');
   const ticked = (id: string) => (typeof chosen === 'string' ? chosen === id : !!chosen?.includes(id));
 
   let open = $state(false);
@@ -65,7 +68,7 @@
           aria-label={o.group ? `${o.group} ${o.label.toLowerCase()}` : undefined}
           onclick={(e) => (onhold && (e.ctrlKey || e.metaKey) ? onhold(o.id) : choose(o.id))}
           use:longpress={() => onhold?.(o.id)}
-          >{o.label}{#if counted}<span class="end">{#if o.count !== undefined}<span class="count">{o.count.toLocaleString()}</span>{/if}<span class="tick">{#if ticked(o.id)}<Icon name="check" size={18} />{/if}</span></span>{:else if ticked(o.id)}<Icon name="check" size={18} />{/if}</button
+          >{o.label}{#if counted}<span class="end">{#if o.count !== undefined}<span class="count">{o.count.toLocaleString()}</span>{/if}<span class="tick"><ChoiceMark kind={markKind} on={ticked(o.id)} /></span></span>{:else}<ChoiceMark kind={markKind} on={ticked(o.id)} />{/if}</button
         >
       {/each}
     </GlassMenu>

@@ -4,8 +4,7 @@
   // page's list have it, and only it sets the order and direction (decision 0060). A field counted by use (Plays, Last
   // played, …) starts most first when chosen.
   import Icon from './Icon.svelte';
-  import MenuEntry from './MenuEntry.svelte';
-  import MenuSheet from './MenuSheet.svelte';
+  import ChoiceSheet from './settings/ChoiceSheet.svelte';
 
   let {
     fields,
@@ -58,19 +57,19 @@
   {/if}
 </div>
 {#if open}
-  <MenuSheet label="Order" title="Order" onclose={() => (open = false)}>
-    {#each fields as f (f.label)}
-      <MenuEntry
-        icon={f.value === value ? 'circleCheck' : 'circle'}
-        label={f.label}
-        onclick={() => {
-          if (f.value !== value) down = !!f.most;
-          value = f.value;
-          open = false;
-        }}
-      />
-    {/each}
-  </MenuSheet>
+  <!-- One of many: the one row with its round mark at the end (lib/ChoiceList), closing on a choice. -->
+  <ChoiceSheet
+    title="Order"
+    options={fields.map((f, i) => ({ value: String(i), label: f.label }))}
+    value={String(fields.findIndex((f) => f.value === value))}
+    onchange={(i) => {
+      const f = fields[Number(i)];
+      if (!f) return;
+      if (f.value !== value) down = !!f.most;
+      value = f.value;
+    }}
+    onclose={() => (open = false)}
+  />
 {/if}
 
 <style>

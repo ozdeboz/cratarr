@@ -6,6 +6,7 @@
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
   // the menu of one (a tile's menu is this way); several, their menu with what one album's has (lib/SeveralAlbums).
+  import ChoiceMark from './ChoiceMark.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import CoverWait from './CoverWait.svelte';
@@ -728,7 +729,7 @@
 {#snippet tickOf(s: ShelfSource, a: ListedAlbum)}
   {@const on = !!selecting && selecting.has(keyOf(s, a))}
   <button class="icon tick" class:on role="checkbox" aria-checked={on} aria-label="Select {a.title}" onclick={() => tick(s, a)}
-    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+    ><ChoiceMark kind="several" on={on} /></button
   >
 {/snippet}
 

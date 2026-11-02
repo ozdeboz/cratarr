@@ -3,12 +3,12 @@
   // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its quality limit
   // and dot (decision 0034); Music's names, how long deleted records are kept, the catalogue and tag splitting (its own
   // page, `tags`). Saved as they change (the owner, 2026-11-02: no Unsaved changes bar).
+  import ChoiceRow from './ChoiceRow.svelte';
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { fileFacts, loadFileFacts, switchFileFacts } from '../fileFacts.svelte';
   import { folderStatus, getCatalogue, type FolderStatus, type ServerLibrary } from '../api';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
-  import Seg from '../Seg.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
@@ -339,9 +339,14 @@
     <!-- The analysis on this server and Beat This! (0.9.8: the environment's until then; lib/serverRuntime). -->
     {#if runtime.value}
       {@const r = runtime.value}
-      <Item name="Analysis here" more={ANALYSIS_MORE} line={r.from_env?.analysis ? 'Set by the environment until changed here' : null}>
-        <Seg label="Analysis here" options={ANALYSIS} bind:value={() => r.analysis, (v) => void saveRuntime({ analysis: v })} />
-      </Item>
+      <ChoiceRow
+        name="Analysis here"
+        more={ANALYSIS_MORE}
+        line={r.from_env?.analysis ? 'Set by the environment until changed here' : null}
+        options={ANALYSIS}
+        value={r.analysis}
+        onchange={(v) => void saveRuntime({ analysis: v })}
+      />
       <Item
         name="Beats with Beat This!"
         more={BEAT_THIS_MORE}

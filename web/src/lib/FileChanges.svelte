@@ -4,6 +4,7 @@
   // as the files hold them, struck, and as Cratarr holds them, with where from; one button with the count), the runs
   // (Now, then by day; a run's meter while it writes), and a run as written (each record with its Undo, what was set
   // aside and why, Undo of all of it at the foot).
+  import ChoiceMark from './ChoiceMark.svelte';
   import { albumCoverUrl, getFilePlan, getFileRun, type FileChosen, type FileField, type FilePlan, type FileRecord, type FileRun } from './api';
   import GenrePick from './GenrePick.svelte';
   import Asking from './Asking.svelte';
@@ -161,7 +162,7 @@
       {#if end === 'tick'}
         {@const on = isTicked(r)}
         <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${r.title}`} onclick={() => tick(r)}
-          ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+          ><ChoiceMark kind="several" on={on} /></button
         >
       {:else if end === 'undo' && run}
         <button onclick={() => run && void undoRun(run.run.id, [r.album])}>Undo</button>
@@ -175,7 +176,7 @@
           {#if fieldTick}
             {@const on = fieldTicks.has(keyOf(r.album, f))}
             <button class="tick small" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${fieldLabel(f.field)}`} onclick={() => tickField(r.album, f)}
-              ><Icon name={on ? 'circleCheck' : 'circle'} size={20} /></button
+              ><ChoiceMark kind="several" on={on} /></button
             >
           {/if}{f.track ?? fieldLabel(f.field)}
         </dt>

@@ -10,6 +10,7 @@
   // you approve", 0080 amended): albums ticked, their missing tracks looked for in turn, each found one's best copy
   // chosen, and a review list over the albums where nothing goes in until it is ticked and added (lib/trackIntake).
   // Beside the list on a roomy window (no ✕ there), over it on a phone.
+  import ChoiceMark from './ChoiceMark.svelte';
   import { untrack } from 'svelte';
   import { rowRoot } from './glassRow.svelte';
   import { findsTracks, offers } from './capabilities.svelte';
@@ -497,7 +498,7 @@
               {#if tickable(i)}
                 {@const on = ticks.has(i.id)}
                 <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.title}`} onclick={() => tickItem(i.id)}
-                  ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                  ><ChoiceMark kind="several" on={on} /></button
                 >
               {:else if i.state === 'added' && i.undo && !undone.has(i.id)}
                 <button onclick={() => void undoItem(i)}>Undo</button>
@@ -521,7 +522,7 @@
                 {@const on = selecting.has(id)}
                 <ReleaseRow cover={albumCoverUrl(x.album[0], id)} title={x.title} line={x.line ?? null} onclick={() => tickAlbum(id)}>
                   <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Select ${x.title}`} onclick={() => tickAlbum(id)}
-                    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                    ><ChoiceMark kind="several" on={on} /></button
                   >
                 </ReleaseRow>
               {:else if x.album}
