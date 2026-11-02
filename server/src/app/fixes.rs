@@ -293,13 +293,11 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
         return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&k)).await?;
     }
     let served = app.served.clone().context("Cratarr's own library is not open")?;
-    let music = app.library.folders().music;
-    let folders = app.library.catalogue().folders();
-    let music = music.and_then(|m| folders.iter().position(|f| f == Path::new(&m))).map(|i| i as i64);
     let (s, k) = (served.clone(), key.to_string());
     // Year and genre from what is kept; album artist and MusicBrainz ids from a match (`matching`), its albums here.
+    // Every library in use's albums, as Health finds them (the owner, 2026-11-02).
     let (mut fixes, to_match) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Vec<String>)> {
-        let lacking: Vec<crate::serve::library::Lacks> = s.library.lacking()?.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect();
+        let lacking: Vec<crate::serve::library::Lacks> = s.library.lacking()?;
         let ids = |pick: fn(&crate::serve::library::Lacks) -> bool| lacking.iter().filter(|r| pick(r)).map(|r| r.id.clone()).collect::<Vec<_>>();
         Ok(match k.as_str() {
             "library:year" => (year_fixes(&s, lacking.iter().filter(|r| r.year).map(|r| r.id.as_str()))?, Vec::new()),

@@ -107,7 +107,8 @@ fn beyond(files: &[(String, i64)], r: &super::renumber::Release, used: &HashSet<
     Some(Incomplete { of, has: files.len(), release, release_group: None, release_id: Some(r.id.clone()).filter(|i| !i.is_empty()), missing, length_ms, longest_ms })
 }
 
-/// A round's batch: the Music albums with a release, never looked at first, then those looked at longest ago.
+/// A round's batch: the albums with a release, of every library in use (the owner, 2026-11-02: Incoming's too), never
+/// looked at first, then those looked at longest ago.
 pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::Client) -> Result<()> {
     let (s, now) = (served.clone(), super::moment::now_secs());
     let due: Vec<(String, String)> = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
@@ -115,9 +116,6 @@ pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::
         let checked = s.userdata.album_complete_now()?;
         let mut albums: Vec<(i64, String, String)> = Vec::new();
         for l in s.library.lacking()? {
-            if l.folder != 0 {
-                continue;
-            }
             let at = checked.get(&l.id).copied();
             if at.is_some_and(|at| now - at < AGAIN) || failed(|f| f.get(&l.id).is_some_and(|t| now - t < FAILED_WAIT)) {
                 continue;

@@ -533,15 +533,13 @@ impl App {
         Ok(out)
     }
 
-    /// Music's albums lacking what the library requires (the owner, 2026-10-24): Incoming's are marked there instead.
+    /// The albums of every library in use lacking what the library requires (the owner, 2026-11-02: Music's and
+    /// Incoming's alike; Incoming's are marked there too).
     async fn check_library(&self) -> anyhow::Result<Vec<Finding>> {
         let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
-        let music = self.library.folders().music;
-        let folders = self.library.catalogue().folders();
-        let music = music.and_then(|m| folders.iter().position(|f| f == std::path::Path::new(&m))).map(|i| i as i64);
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
         let (rows, numbering, matched, released) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            Ok((lib.lacking()?, lib.numbering(music)?, ud.renumber_matched()?, ud.album_discs()?))
+            Ok((lib.lacking()?, lib.numbering(None)?, ud.renumber_matched()?, ud.album_discs()?))
         })
         .await??;
         // Disc numbers lost (0.13) first: such an album's numbers twice are that, not Track numbers.
@@ -554,8 +552,8 @@ impl App {
                 off.push((id, name, artist, line));
             }
         }
-        let mut out = library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off, &discs);
-        out.extend(self.check_incomplete(&served, music).await?);
+        let mut out = library(&rows, &off, &discs);
+        out.extend(self.check_incomplete(&served).await?);
         // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
         let s = served.clone();
         let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
@@ -580,23 +578,22 @@ impl App {
     }
 
     /// Albums missing tracks (0.9.7, `app::incomplete`): each with what its release has beyond it and whether it is
-    /// asked for already; and the albums whose numbers have gaps that no release could be held against yet.
-    async fn check_incomplete(&self, served: &std::sync::Arc<crate::serve::Serve>, music: Option<i64>) -> anyhow::Result<Vec<Finding>> {
+    /// asked for already; and the albums whose numbers have gaps that no release could be held against yet. Every
+    /// library in use's (the owner, 2026-11-02).
+    async fn check_incomplete(&self, served: &std::sync::Arc<crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
         let s = served.clone();
         let (found, gaps) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
             for (album, json) in s.userdata.albums_incomplete()? {
                 let Ok(i) = serde_json::from_str::<super::incomplete::Incomplete>(&json) else { continue };
-                let Some((folder, _, _, artist, name)) = s.library.album_place(&album)? else { continue };
-                if music.is_some_and(|m| folder != m) {
-                    continue;
-                }
+                // One the library no longer has is left out.
+                let Some((_, _, _, artist, name)) = s.library.album_place(&album)? else { continue };
                 found.push((album, name, artist, i));
             }
             // Gaps in the numbers where no release was held against the album (no MusicBrainz id, no match yet).
             let checked = s.userdata.album_complete_at()?;
             let mut gaps = Vec::new();
-            for (id, name, artist, numbers) in s.library.numbering(music)? {
+            for (id, name, artist, numbers) in s.library.numbering(None)? {
                 if checked.contains_key(&id) {
                     continue;
                 }
@@ -935,6 +932,29 @@ mod tests {
         assert_eq!(incoming(0, 17, 0)[0].title, "17 albums are in two libraries at once");
         assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 album is in two libraries at once"]);
         assert!(incoming(0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn every_librarys_albums_are_found_each_opening_its_own_record() {
+        // An Incoming album (folder 1, its id its own: `serve::ids::album`) beside Music's of the same name.
+        let lacks = |id: &str, folder: i64| crate::serve::library::Lacks {
+            id: id.into(),
+            name: "Zebra".into(),
+            artist: "Arp".into(),
+            folder,
+            cover: true,
+            year: false,
+            genre: false,
+            album_artist: false,
+            track_no: false,
+            musicbrainz: false,
+        };
+        let numbers = [("al-in".to_string(), "Heads".to_string(), "Ott".to_string(), "01 twice".to_string())];
+        let found = library(&[lacks("al-music", 0), lacks("al-in", 1)], &numbers, &[]);
+        assert_eq!(found.iter().map(|f| (f.key.as_str(), f.title.as_str())).collect::<Vec<_>>(), [("library:cover", "2 albums without a cover"), ("library:track-numbers", "1 album with track numbers off")]);
+        let opens = |f: &Finding| f.items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
+        assert_eq!(opens(&found[0]), ["al-music", "al-in"]);
+        assert_eq!(opens(&found[1]), ["al-in"]);
     }
 
     #[test]
