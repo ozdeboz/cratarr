@@ -71,7 +71,8 @@ test('nothing but lib/addresses writes or reads an address by hand', () => {
   for (const f of files(src)) {
     if (f.replace(/\\/g, '/').endsWith('lib/addresses.ts')) continue;
     readFileSync(f, 'utf8')
-      .split('\n')
+      // Either line ending (a checkout on Windows has \r\n: the \r left on a line kept its comment from being seen).
+      .split(/\r?\n/)
       .forEach((line, i) => {
         const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
         if (/['"`]#\/|hash\.split\(/.test(code)) by.push(`${f.slice(src.length)}:${i + 1}: ${line.trim()}`);
