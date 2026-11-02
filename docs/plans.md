@@ -63,7 +63,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   and bass bands' percussive hits, against the strikes between them) and the time signature from Beat this!'s
   downbeats (4/4, 3/4; odd meters less sure); measured in the analysis from then on, the library measured again at
   night (AudioMuse paused); conditions in the filter and the crate, words in the crate sentence ("four on the floor",
-  "4/4"). The device index (0.16) carries them.
+  "4/4"). The device index (0.16) carries them. And the playlist map's fourth closeness signal, Sound (the owner, 2026-11-02): playlists compared
+  by their profiles (energy, danceability, tempo, the moods), so two that share no track or artist sit close when they
+  sound alike; a switch beside shared tracks, genre and artists.
 - **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and the whole library's index on the
   device** (offline first's fourth step).
 - **0.17: crates and the queue on the device** (offline first's fifth step); then all servers in one library, on the
