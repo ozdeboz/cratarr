@@ -2143,7 +2143,7 @@ mod tests {
             secondary: Some(vec!["live".into()]),
             year: Some(2008),
             genres: Some(vec!["Psybient".into()]),
-            classical: None,
+            ..Overrides::default()
         };
         let before = lib.originals_print();
         lib.set_overrides([(base, set)].into());

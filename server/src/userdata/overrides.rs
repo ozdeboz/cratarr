@@ -35,6 +35,13 @@ pub struct Overrides {
     pub genres: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classical: Option<bool>,
+    /// Its styles, moods and tags (decision 0097: the words' hand layer), each winning its kind until reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub styles: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moods: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 impl Overrides {
@@ -46,6 +53,9 @@ impl Overrides {
             ("year", self.year.is_some()),
             ("genres", self.genres.is_some()),
             ("classical", self.classical.is_some()),
+            ("styles", self.styles.is_some()),
+            ("moods", self.moods.is_some()),
+            ("tags", self.tags.is_some()),
         ];
         set.into_iter().filter(|(_, on)| *on).map(|(f, _)| f).collect()
     }
@@ -58,6 +68,9 @@ impl Overrides {
             "year" => self.year = value.as_u64().and_then(|y| u32::try_from(y).ok()),
             "genres" => self.genres = serde_json::from_value(value).ok(),
             "classical" => self.classical = value.as_bool(),
+            "styles" => self.styles = serde_json::from_value(value).ok(),
+            "moods" => self.moods = serde_json::from_value(value).ok(),
+            "tags" => self.tags = serde_json::from_value(value).ok(),
             _ => {}
         }
     }
@@ -68,7 +81,7 @@ impl Overrides {
 pub fn check(field: &str, value: &Value) -> std::result::Result<Option<Value>, String> {
     if value.is_null() {
         return match field {
-            "type" | "secondary" | "year" | "genres" | "classical" => Ok(None),
+            "type" | "secondary" | "year" | "genres" | "classical" | "styles" | "moods" | "tags" => Ok(None),
             _ => Err(format!("{field} cannot be set.")),
         };
     }
@@ -97,6 +110,9 @@ pub fn check(field: &str, value: &Value) -> std::result::Result<Option<Value>, S
         }
         "year" => value.as_u64().filter(|y| (1..=9999).contains(y)).map(|y| Some(Value::from(y))).ok_or_else(|| "A year is a number.".into()),
         "genres" => Ok(Some(Value::from(words("genres")?))),
+        "styles" => Ok(Some(Value::from(words("styles")?))),
+        "moods" => Ok(Some(Value::from(words("moods")?))),
+        "tags" => Ok(Some(Value::from(words("tags")?))),
         "classical" => value.as_bool().map(|c| Some(Value::from(c))).ok_or_else(|| "classical is yes or no.".into()),
         _ => Err(format!("{field} cannot be set.")),
     }

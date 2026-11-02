@@ -360,17 +360,19 @@ fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a
 /// The fix of each album without a genre that the library's words give one: its strongest genre, certain where two
 /// sources or more say it.
 fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a str>) -> Result<Vec<Fix>> {
-    let merged = super::words::merged(served)?;
+    use super::words::store::Kind;
+    let stored = super::words::stored(served)?;
     let mut out = Vec::new();
     for album in albums {
-        let Some(found) = merged.albums.get(album) else { continue };
-        let Some(best) = found.iter().find(|w| w.kind == "genre") else { continue };
+        let Some(found) = stored.records.get(album) else { continue };
+        let of = move |kind: Kind| found.kinds.iter().filter(move |k| k.kind == kind).flat_map(move |k| k.words.iter().map(move |w| (kind, w)));
+        let Some((_, best)) = of(Kind::Genre).next() else { continue };
         let paths = track_paths(album)?;
-        let sources = names(&best.sources);
-        let candidates: Vec<Choice> = found
-            .iter()
-            .filter(|w| matches!(w.kind, "genre" | "style"))
-            .map(|w| Choice { word: w.word.clone(), kind: w.kind, source: names(&w.sources), certainty: if w.sources.len() >= 2 { "certain" } else { "likely" } })
+        let said = |w: &super::words::store::Word| names(&w.sources.iter().map(|s| s.name().to_string()).collect::<Vec<_>>());
+        let sources = said(best);
+        let candidates: Vec<Choice> = of(Kind::Genre)
+            .chain(of(Kind::Style))
+            .map(|(kind, w)| Choice { word: w.word.clone(), kind: kind.name(), source: said(w), certainty: if w.sources.len() >= 2 { "certain" } else { "likely" } })
             .collect();
         out.push(Fix {
             id: format!("genre:{album}"),
