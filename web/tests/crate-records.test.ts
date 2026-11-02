@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { crateViewOf, holdsLine, orderRecords, recordCell, recordsOf } = await import('../src/lib/crateRecords.ts');
+const { crateViewOf, holdsLine, orderRecords, ownOrderOf, recordCell, recordOrderOf, recordOrders, recordsOf, tracksForRecords } = await import('../src/lib/crateRecords.ts');
 
 const row = (album_id: string | undefined, album: string, artist: string, year?: number, added?: number) => ({ album_id, album, artist, year, added });
 const rows = [
@@ -24,6 +24,7 @@ test('the album orders, equals in the crate order; the crate order turned round'
   const recs = recordsOf(rows);
   assert.deepEqual(orderRecords(recs, 'own', false).map((r) => r.title), ['Blue', 'Alpha', 'Loose One']);
   assert.deepEqual(orderRecords(recs, 'own', true).map((r) => r.title), ['Loose One', 'Alpha', 'Blue']);
+  assert.deepEqual(orderRecords(recs, 'bestMatch', false).map((r) => r.title), ['Blue', 'Alpha', 'Loose One'], 'Best match: as the server ordered the tracks');
   assert.deepEqual(orderRecords(recs, 'artist', false).map((r) => r.artist), ['Ann', 'Miles', 'Zed']);
   assert.deepEqual(orderRecords(recs, 'year', false).map((r) => r.title), ['Loose One', 'Blue', 'Alpha'], 'no year first');
   assert.deepEqual(orderRecords(recs, 'added', true).map((r) => r.title), ['Alpha', 'Blue', 'Loose One']);
@@ -72,4 +73,16 @@ test('as a table: ordered by how many of its tracks the crate holds and by their
   assert.equal(recordCell(blue, 'year', null, clock, day), '1959');
   assert.equal(recordCell(blue, 'added', null, clock, day), 'day 12');
   assert.equal(recordCell(blue, 'rating', null, clock, day), '', 'a column a record has no value for');
+});
+
+test('every crate opens on Best match; its own order is named by what it is, and only where it has one (decision 0094)', () => {
+  assert.equal(ownOrderOf('home:new'), 'As on Home');
+  assert.equal(ownOrderOf('like:now'), 'Closest first');
+  for (const id of ['7', 'genre:jazz', 'home:graves', null]) assert.equal(ownOrderOf(id), null, String(id));
+  assert.deepEqual(recordOrders('7').map((f) => f.label).slice(0, 2), ['Best match', 'Artist'], 'no "Crate order"');
+  assert.deepEqual(recordOrders('home:new').map((f) => f.label).slice(0, 2), ['Best match', 'As on Home']);
+  assert.deepEqual(recordOrderOf('7', { key: 'own', down: true }), { key: 'bestMatch', down: false }, 'its own where it has none: Best match');
+  assert.deepEqual(recordOrderOf('home:new', { key: 'own', down: true }), { key: 'own', down: true });
+  assert.equal(tracksForRecords('year'), 'bestMatch', 'records by a field: their tracks in Best match, equals so');
+  assert.equal(tracksForRecords('own'), 'own');
 });

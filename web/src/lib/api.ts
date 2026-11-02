@@ -437,15 +437,15 @@ export type Axis = {
  *  `order`, `down`: the order its list shows (decision 0060), applied on the server before the rows are paged (and
  *  by Play); a value a row does not have comes first, last turned round; equals keep the crate's own order. */
 export type CrateLook = { without?: string[]; filter?: Condition[]; order?: CrateOrder; down?: boolean };
-/** A crate's list's orders: its own (newest first), by a field, or Best match (by fit to the asking account's taste,
- *  decision 0094; with none, its own). */
+/** A crate's list's orders: Best match (by fit to the asking account's taste, decision 0094; what a crate opens on,
+ *  asked for or not), its own where it has one (lib/crateRecords ownOrderOf), or by a field. */
 export type CrateOrder = 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added' | 'bestMatch';
 /** `?source=…&without=…&filter=…&order=…&down=true` (each key once; the filter as JSON). */
 function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
   if (source) q.set('source', source);
   for (const k of look.without ?? []) q.append('without', k);
   if (look.filter?.length) q.set('filter', JSON.stringify(look.filter));
-  if (look.order && look.order !== 'own') q.set('order', look.order);
+  if (look.order) q.set('order', look.order);
   if (look.down) q.set('down', 'true');
   const t = q.toString();
   return t ? `?${t}` : '';
@@ -486,7 +486,7 @@ export const previewCrate = (conditions: Condition[], limit: number, source?: st
   const q = new URLSearchParams({ limit: String(limit) });
   if (offset) q.set('offset', String(offset));
   if (source) q.set('source', source);
-  if (look.order && look.order !== 'own') q.set('order', look.order);
+  if (look.order) q.set('order', look.order);
   if (look.down) q.set('down', 'true');
   return quietly<{ source: string; total: number; rows: PlaylistRow[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
     method: 'POST',

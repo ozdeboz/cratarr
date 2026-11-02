@@ -2,7 +2,7 @@
 // is remembered). Server-wide settings live on the server, see Settings.svelte.
 
 import { inApp, toApp } from './app.svelte';
-import { RECORD_ORDERS, type CrateView, type RecordOrder } from './crateRecords';
+import { RECORD_ORDER_KEYS, type CrateView, type RecordOrder } from './crateRecords';
 import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
@@ -514,7 +514,7 @@ export const DEFAULTS: Prefs = {
   crateDown: false,
   panelSorts: {},
   crateViews: {},
-  crateRecordSort: { key: 'own', down: false },
+  crateRecordSort: { key: 'bestMatch', down: false },
   filters: {},
 };
 
@@ -636,7 +636,7 @@ function read(): Prefs {
       if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
       if (saved.crateViews && typeof saved.crateViews === 'object')
         for (const [k, v] of Object.entries(saved.crateViews)) if (v === 'records' || v === 'tracks') p.crateViews[k] = v;
-      if (RECORD_ORDERS.some((o) => o.value === saved.crateRecordSort?.key) && typeof saved.crateRecordSort?.down === 'boolean')
+      if (RECORD_ORDER_KEYS.includes(saved.crateRecordSort?.key) && typeof saved.crateRecordSort?.down === 'boolean')
         p.crateRecordSort = { key: saved.crateRecordSort.key, down: saved.crateRecordSort.down };
       if (saved.panelSorts && typeof saved.panelSorts === 'object')
         for (const [k, v] of Object.entries(saved.panelSorts) as [PanelKind, ListSort][])
