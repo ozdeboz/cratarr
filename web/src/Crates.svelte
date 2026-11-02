@@ -29,7 +29,7 @@
   });
 
   // New crate: the panel's builder, empty (0.13; the owner, 2026-10-31: "one place where to show contents or building of
-  // a crate, and that is in the panel"): its sentence first, "Grab a crate" and an example, the caret in its field.
+  // a crate, and that is in the panel"): its sentence first, an example in its field, the caret there.
   usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => startCrate('') }));
   // The list's order (its header): as made, by name, or by what its cards show (decision 0060); either way round. A
   // crate whose card is not known yet (favourites not read) comes first, as made.

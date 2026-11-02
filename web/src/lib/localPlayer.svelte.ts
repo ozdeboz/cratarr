@@ -1323,7 +1323,11 @@ export function reportedBy(m: {
   }
   local.index = typeof m.index === 'number' ? m.index : -1;
   local.paused = m.paused !== false && !tape.heldThere;
-  local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
+  // Its length as the app tells it; a report without one (a player still preparing says 0) keeps the length known for
+  // the same track, else the queue's (the owner, 2026-11-02: a running page showed –:–– until reloaded).
+  const told = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
+  const sameTrack = trackKey(local.queue[local.index]) === trackBefore;
+  local.duration = told ?? (sameTrack ? local.duration : null) ?? lengthOf(local.index);
   local.error = typeof m.error === 'string' ? m.error : null;
   // The app's own level (0.9.8): what it applies now; 0 when it levels nothing or says nothing.
   local.levelDb = typeof m.levelDb === 'number' && m.levelDb < 0 ? m.levelDb : 0;

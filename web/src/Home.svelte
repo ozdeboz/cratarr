@@ -814,8 +814,9 @@
       linear-gradient(to bottom, var(--top), var(--foot));
   }
 
-  /* Under the page's row (back and the rest, floating over the page's top: App's .under-row), the sky goes on up behind
-     it to the page's top, its heading where it was (the owner, 2026-10-23); only when it is Home's first section. */
+  /* Under the page's row (the glasses floating over the page's top: App's .under-row), the sky goes on up behind them to
+     the page's top (the owner, 2026-10-23), its words under them, never in their band (2026-11-02); only when it is
+     Home's first section. */
   /* Without the row's room (Home opened first, beside the sidebar): its first content under the top-right glass, not
      behind it (the owner, 2026-10-28); the sky still from the page's top. */
   :global(.page:not(.under-row)) .home {
@@ -828,8 +829,8 @@
   }
 
   :global(.page.under-row) .moment.top {
-    margin-top: -76px;
-    padding-top: 80px;
+    margin-top: calc(-1 * (var(--glass-top) + 16px));
+    padding-top: calc(var(--glass-top) + 20px);
   }
 
   .moment[data-sky='sunny'] { --sky-top: #9a6424; --sky-foot: #3d2a16; }
