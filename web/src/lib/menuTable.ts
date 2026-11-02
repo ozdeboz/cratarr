@@ -163,7 +163,10 @@ export const MENUS: Record<MenuKind, Kind> = {
   selection: {
     actions: ['Play', 'Shuffle', 'Play next', 'Add to queue', 'Start radio'],
     cards: [
-      { group: 'feel', entries: ['excludeEverywhere'] },
+      // A record's tracks in a list: its album (the owner, 2026-11-02: Go to album and the crate's Excludes came last,
+      // apart from Exclude everywhere; every exclusion is one card).
+      { group: 'go', entries: ['goAlbum'] },
+      { group: 'feel', entries: ['excludeEverywhere', 'notInCrate'] },
       { group: 'collect', entries: ['addToPlaylist'] },
       { group: 'take', entries: ['download'] },
       { group: 'change', entries: ['adjustBpm'] },

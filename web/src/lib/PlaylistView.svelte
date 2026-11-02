@@ -2600,25 +2600,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {/if}
 {#if tickedMenu}
   {@const away = tickedOuts(tickedMenu.rows)}
-  <SelectionMenu title={plural(tickedMenu.tracks.length, 'track')} tracks={tickedMenu.tracks} onclose={() => ((tickedMenu = null), (selecting = null))}>
-    {#snippet extra(close)}
-      {#if away.length}
-        <MenuGroup>
-          {#each away as o (o.label)}
-            <MenuEntry
-              icon={o.icon}
-              label={o.label}
-              danger
-              onclick={() => {
-                close();
-                o.run();
-              }}
-            />
-          {/each}
-        </MenuGroup>
-      {/if}
-    {/snippet}
-  </SelectionMenu>
+  <SelectionMenu title={plural(tickedMenu.tracks.length, 'track')} tracks={tickedMenu.tracks} outs={away} onclose={() => ((tickedMenu = null), (selecting = null))} />
 {/if}
 {#if recordMenu}
   {@const rec = recordMenu}
@@ -2628,38 +2610,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     title={rec.title || 'Unknown album'}
     chips={[rec.artist ?? '', holdsLine(rec.at.length, albumTotal(rec))].filter(Boolean)}
     tracks={tracksOf(rs.filter((r) => r.id && !r.missing))}
+    album={rec.albumId ? () => viewOver(albumSubject(source, rec.albumId!)) : null}
+    outs={away}
     onclose={() => (recordMenu = null)}
-  >
-    {#snippet extra(close)}
-      {#if rec.albumId}
-        <MenuGroup>
-          <MenuEntry
-            icon="squareArrowOutUpRight"
-            label="Go to album"
-            onclick={() => {
-              close();
-              viewOver(albumSubject(source, rec.albumId!));
-            }}
-          />
-        </MenuGroup>
-      {/if}
-      {#if away.length}
-        <MenuGroup>
-          {#each away as o (o.label)}
-            <MenuEntry
-              icon={o.icon}
-              label={o.label}
-              danger
-              onclick={() => {
-                close();
-                o.run();
-              }}
-            />
-          {/each}
-        </MenuGroup>
-      {/if}
-    {/snippet}
-  </SelectionMenu>
+  />
 {/if}
 {#if badgeMenu}
   <SubjectMenu subject={badgeMenu} onclose={() => (badgeMenu = null)} />
