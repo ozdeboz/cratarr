@@ -13,7 +13,12 @@
   import { panelBeside } from './glass.svelte';
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
-  import { albumCoverUrl, search, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
+  import { albumCoverUrl, search, setAlbumFavorite, type ListBlocked, type ListedAlbum, type ShelfSource } from './api';
+  import { answers, pointAt, type Answer } from './attribution';
+  import { lastOf } from './lastChange.svelte';
+  import { causeChip } from './listFilter.svelte';
+  import NothingPopover from './NothingPopover.svelte';
+  import ExcludedSheet from './ExcludedSheet.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { plural } from './insights.svelte';
   import { recordsWord } from './recordTypeRules';
@@ -64,6 +69,9 @@
     onplay,
     actions,
     countMore,
+    unfiltered = null,
+    explain = null,
+    kind = 'library',
   }: {
     sources: ShelfSource[];
     /** Said for a server without albums. */
@@ -81,6 +89,13 @@
     actions?: Snippet<[{ s: ShelfSource; a: ListedAlbum }[], () => void]>;
     /** After the list header's count ("12 records · 1.2 GB"). */
     countMore?: string;
+    /** What it holds before the page's filter, and what keeps each out by it (the filter's answer with `explain`):
+     *  where it shows none, why, truly (decision 0095; the owner, 2026-11-02: "the real true attribution"), its
+     *  search one of the causes. */
+    unfiltered?: ShelfSource[] | null;
+    explain?: (() => Promise<ListBlocked | null>) | null;
+    /** Its kind of list (the filter's), for the causes' chips. */
+    kind?: string;
   } = $props();
   const playOf = (s: ShelfSource, a: ListedAlbum) => (onplay ? onplay(s, a) : playListedAlbum(s.id, a));
 
@@ -260,8 +275,60 @@
     }),
   );
   // Its words leave no record, every library answered: the pill says so, from its magnifier (pageView searchNone).
+  // None shown though it holds records: why, truly (lib/attribution). Each record's causes are its filter's (the
+  // server's `blocked`) and the search where its words leave it out; the answers are the smallest sets that bring any
+  // back, the one pointed at the smallest, the last change deciding between equals.
+  let blocked = $state.raw<{ for: string; of: ListBlocked | null } | null>(null);
+  const SEARCH = { kind: 'search' as const, label: 'Search' };
+  let excludedOpen = $state(false);
+  const noneShown = $derived(!kept.loader && shown.length > 0 && shown.every(({ albums }) => !albums.length) && (unfiltered ?? sources).some((x) => x.albums.length > 0));
+  $effect(() => {
+    if (!noneShown || (!explain && !pageView.query.trim())) return void (blocked = null);
+    const asked = JSON.stringify([pageView.query, $state.snapshot(prefs.filters[kind] ?? null), prefs.hiddenLibraries]);
+    if (untrack(() => blocked?.for) === asked) return;
+    let gone = false;
+    (explain ? explain() : Promise.resolve(null)).then(
+      (b) => !gone && (blocked = { for: asked, of: b }),
+      () => !gone && (blocked = { for: asked, of: null }),
+    );
+    return () => (gone = true);
+  });
+  const howManyRecords = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'record' : 'records'}`;
+  const attributed = $derived.by(() => {
+    if (!noneShown || !blocked) return null;
+    const b = blocked.of;
+    const words = pageView.query.trim() !== '';
+    const causes = [...(b?.causes ?? []), ...(words ? [SEARCH] : [])];
+    const search = words ? causes.length - 1 : -1;
+    const byKey = new Map<string, number[]>();
+    for (const g of b?.groups ?? []) for (const k of g.keys) byKey.set(k, g.causes);
+    const groups: { causes: number[]; keys: string[] }[] = [];
+    for (const x of unfiltered ?? sources)
+      for (const a of x.albums) {
+        const c = [...(byKey.get(a.id) ?? []), ...(search >= 0 && !matches(x, a) ? [search] : [])];
+        if (c.length) groups.push({ causes: c, keys: [a.id] });
+      }
+    const found = answers(groups);
+    const first = pointAt(found, lastOf(causes));
+    if (!first) return null;
+    const chipOf = (i: number) => causeChip(kind, causes[i], () => (excludedOpen = true));
+    const said = (x: Answer) => `${howManyRecords(x.frees)} without`;
+    const seen = (e: HTMLElement | null) => (e && e.getClientRects().length > 0 && e.getBoundingClientRect().width > 0 ? e : null);
+    const at = (sel: string) => seen(document.querySelector<HTMLElement>(`.page-row ${sel}`));
+    // The control that holds the one cause (the magnifier, the type picker beside back, else the Filter button), the
+    // Filter button for several; none in sight: in place, no tip.
+    const controlOf = (i: number) => (causes[i].kind === 'search' ? at('.lens') : causes[i].key === 'type' ? at('.title-box') : at('.funnel:not(.globe)'));
+    const chips = first.causes.map(chipOf);
+    return {
+      anchor: first.causes.length === 1 ? (controlOf(first.causes[0]) ?? at('.funnel:not(.globe)')) : at('.funnel:not(.globe)'),
+      said: said(first),
+      chips,
+      clearAll: () => chips.forEach((x) => x.onclear?.()),
+      more: found.filter((x) => x !== first).slice(0, 2).map((x) => ({ said: `or ${said(x)}`, chips: x.causes.map(chipOf) })),
+    };
+  });
   searchNone(() =>
-    shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty'
+    !attributed && shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty'
       ? 'records'
       : null,
   );
@@ -475,7 +542,9 @@
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). Words that match no record say so, not the libraries (under a
            crate card of 229 tracks it read as a contradiction; the owner, 2026-10-31). -->
-      {#if !s.albums.length}<p class="empty">{empty}</p>
+      {#if attributed && s === shown[0].s}<NothingPopover anchor={attributed.anchor} said={attributed.said} chips={attributed.chips} onclearall={attributed.clearAll} more={attributed.more} />
+      {:else if attributed}<!-- said once, above -->
+      {:else if !s.albums.length}<p class="empty">{empty}</p>
       {:else if !pageView.none}<p class="empty">{pageView.query.trim() ? 'No records match.' : 'None in the libraries switched on match.'}</p>{/if}
     {:else}
       <ListHead
@@ -691,6 +760,8 @@
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
+
+{#if excludedOpen}<ExcludedSheet onclose={() => (excludedOpen = false)} />{/if}
 
 <style>
   h2 {
