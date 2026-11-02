@@ -2010,11 +2010,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
         onclick={r.run}><Icon name={r.icon} size={22} /></button
       >{/each}</span
   >{/snippet}
-{#snippet endButton(e: EndAction, size: number)}<button class="icon" class:fav={e.on} aria-pressed={e.key === 'heart' ? e.on : undefined} aria-label={e.label} onclick={e.run}
+{#snippet endButton(e: EndAction, size: number, glass = false)}<button class="icon" class:on-glass={glass} class:fav={e.on} aria-pressed={e.key === 'heart' ? e.on : undefined} aria-label={e.label} onclick={e.run}
     ><Icon name={e.key === 'heart' ? 'heart' : 'moreVert'} {size} /></button
   >{/snippet}
 <!-- The row's end on the right glass once the row has scrolled away. -->
-{#snippet endsGained()}{#each barEnds as e (e.key)}{@render endButton(e, 22)}{/each}{/snippet}
+{#snippet endsGained()}{#each barEnds as e (e.key)}{@render endButton(e, 22, true)}{/each}{/snippet}
 {#snippet glassExtra()}<PanelPlace />{/snippet}
 
 {#snippet leave()}
@@ -3046,6 +3046,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
     background: none;
     color: inherit;
     cursor: pointer;
+  }
+
+  /* On the pill's glass (its heart and menu once the row has scrolled away): the pill's own buttons' size, so its glass
+     is the left one's height and the two line up (the owner, 2026-11-02: "not perfectly aligned vertically"). */
+  .icon.on-glass {
+    height: 44px;
+    border-radius: 22px;
   }
 
   /* The pencil while the tracks load: in its place, not yet usable. */
