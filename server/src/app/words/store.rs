@@ -151,6 +151,8 @@ pub struct Library {
     genres: HashSet<String>,
     curated: HashSet<String>,
     aliases: HashMap<Kind, HashMap<String, String>>,
+    /// Each word's one spelling across the library: the most written (rule 4, one spelling everywhere).
+    spellings: HashMap<String, String>,
 }
 
 impl Library {
@@ -170,8 +172,17 @@ impl Library {
                 (*kind, by)
             })
             .collect();
+        // Each word's spellings across the library, the most written shown everywhere.
+        let mut written: HashMap<String, HashMap<&str, usize>> = HashMap::new();
+        for r in records {
+            let tracks = r.tracks.iter().flat_map(|t| t.genre.iter().chain(&t.style).chain(&t.mood).chain(&t.tag).chain(&t.heard_styles).chain(&t.heard_moods));
+            for w in tracks.chain(r.said.iter().map(|s| &s.word)) {
+                *written.entry(super::key(w)).or_default().entry(w.trim()).or_default() += 1;
+            }
+        }
+        let spellings = written.into_iter().filter_map(|(k, s)| s.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0))).map(|(w, _)| (k, w.to_string()))).collect();
         // A genre alias's word is a genre wherever it comes from.
-        let mut lib = Self { genres, curated, aliases };
+        let mut lib = Self { genres, curated, aliases, spellings };
         let named: Vec<String> = lib.aliases.get(&Kind::Genre).map(|a| a.values().map(|w| super::key(w)).collect()).unwrap_or_default();
         lib.genres.extend(named);
         lib
@@ -308,9 +319,10 @@ impl Gathered {
     }
 }
 
-/// A word's one spelling: its alias's word, else the most written (the first such in order of their names).
+/// A word's one spelling: its alias's word, else the library's most written, else this record's (the first such in
+/// order of their names).
 fn shown(lib: &Library, kind: Kind, key: &str, spellings: &HashMap<String, usize>) -> String {
-    if let Some(named) = lib.named(kind, key) {
+    if let Some(named) = lib.named(kind, key).or_else(|| lib.spellings.get(key).map(String::as_str)) {
         return named.to_string();
     }
     spellings.iter().max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0))).map_or_else(|| key.to_string(), |(w, _)| w.clone())
@@ -351,7 +363,7 @@ fn by_hand(lib: &Library, kind: Kind, list: &[String]) -> KindWords {
         .iter()
         .filter_map(|w| {
             let key = lib.key(kind, w);
-            (!key.is_empty() && seen.insert(key.clone())).then(|| Word { word: lib.named(kind, &key).map_or_else(|| w.trim().to_string(), str::to_string), sources: vec![Source::Hand] })
+            (!key.is_empty() && seen.insert(key.clone())).then(|| Word { word: lib.named(kind, &key).or_else(|| lib.spellings.get(&key).map(String::as_str)).map_or_else(|| w.trim().to_string(), str::to_string), sources: vec![Source::Hand] })
         })
         .collect();
     KindWords { kind, hand: true, words }
