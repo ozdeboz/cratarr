@@ -193,6 +193,9 @@ export const pageView = $state({
   none: null as string | null,
   /** The panel's, the same ("12 tracks without"), while the page's search leaves none of what it holds. */
   panelNone: null as string | null,
+  /** A control page's panel shows what the words find in its siblings (Settings' parts, Health's problems, Insights'
+   *  views): its own none is not said then, the siblings are the answer (searchElsewhere). */
+  elsewhere: false,
 });
 
 /** What a list's words leave none of: how many come back without them, one and many of its kind. */
@@ -213,6 +216,17 @@ export function searchNone(without: () => Without | null | false | 0 | undefined
     // Gone with the page (or the panel's view), unless the next has said its own already.
     return () => {
       if (untrack(() => pageView[key]) === mine) pageView[key] = null;
+    };
+  });
+}
+
+/** A control page's panel finding the words in its siblings (an effect: it follows what `found` reads). */
+export function searchElsewhere(found: () => boolean) {
+  $effect(() => {
+    const mine = found();
+    pageView.elsewhere = mine;
+    return () => {
+      if (untrack(() => pageView.elsewhere) === mine) pageView.elsewhere = false;
     };
   });
 }

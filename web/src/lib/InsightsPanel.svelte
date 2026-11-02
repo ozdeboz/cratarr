@@ -23,9 +23,16 @@
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
+  import { matchesSearch, pageView, searchElsewhere } from './pageView.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
 
   let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
 
+  // The page's search through every view (the owner, 2026-11-02, as Settings' parts): under this view, the other
+  // views the words name; a tap opens one, the words still searched.
+  const otherViews = $derived(pageView.query.trim() ? INSIGHTS_VIEWS.filter((x) => x.id !== view && !x.under && matchesSearch(x.label, x.group)) : []);
+  searchElsewhere(() => otherViews.length > 0);
   // The views and their controls read the tab and its section: set before they draw.
   $effect.pre(() => showView(view));
   $effect(() => insights.load());
@@ -118,6 +125,12 @@
       <PageLoading />
     {:else}
       <InsightsCollection data={insights.data} />
+    {/if}
+    {#if otherViews.length}
+      <!-- The other views the search names (lib/settings/Group, Item). -->
+      <Group title="Other views">
+        {#each otherViews as o (o.id)}<Item name={o.label} line={o.group} onclick={() => viewSibling(INSIGHTS + o.id)} />{/each}
+      </Group>
     {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     {#if handed && everywhere()}<GlobalResults />{/if}
