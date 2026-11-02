@@ -771,7 +771,7 @@
     el.addEventListener('pointercancel', up);
   }
   /** A long-press on the grip (the owner, 2026-11-02): the panel locked, kept as the pages of music change, or unlocked
-   *  again; locked, the grip's handle is in the accent. */
+   *  again; locked, the pixel round the grip's handle is in the accent. */
   function toggleLock() {
     navigator.vibrate?.(8);
     prefs.panelLocked = !prefs.panelLocked;
