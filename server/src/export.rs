@@ -2,8 +2,8 @@
 //! or any list of tracks (an album, an artist's, a selection, a queue), as one download: the files as they are, hi-res
 //! ones at CD quality (decision 0013's converter) or lossless ones as Opus (decision 0033's copies) or MP3 (320 kb/s or
 //! V0), in one folder or in Artist/Album folders, with their playlist files or not. `plan` resolves the playlists'
-//! lines to files in the Music folder and `plan_files` takes tracks already found (each file once, with its size and
-//! what the catalogue knows of it; missing ones kept apart for the report), `layout` decides the names inside the
+//! lines to files in the catalogue's folders and `plan_files` takes tracks already found (each file once, with its size
+//! and what the catalogue knows of it; missing ones kept apart for the report), `layout` decides the names inside the
 //! bundle and the playlists' lines, and `stream` writes the ZIP as it goes (stored, sizes and CRCs in data
 //! descriptors, ZIP64 where a size or an offset needs it), one file at a time, so memory does not depend on the
 //! export's size. With every file as it is, its exact length is known before the first byte, so the browser shows real
@@ -107,16 +107,22 @@ pub struct Preview {
     pub estimate: bool,
 }
 
-/// Lines whose path stays inside the folder (no `..`, not absolute).
+/// Paths that stay inside their folder (no `..`, not absolute).
 fn inside(rel: &str) -> bool {
     let p = Path::new(rel);
     !rel.is_empty() && !p.is_absolute() && p.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
-/// Resolves the playlists' lines (relative to `music`) to files. `facts` gives what the catalogue knows of each file.
-pub fn plan(music: &Path, lists: Vec<(String, Vec<String>)>, facts: impl FnOnce(&[String]) -> Result<Vec<Facts>>) -> Result<Plan> {
+/// Resolves the playlists' lines to files. `place` gives the folder a line's file is in and its path there, as the
+/// catalogue places it (a line climbing out of the Music folder lands in another library's: an Incoming track); a path
+/// that would leave that folder is missing. `facts` gives what the catalogue knows of each line's file.
+pub fn plan(
+    lists: Vec<(String, Vec<String>)>,
+    place: impl Fn(&str) -> Option<(PathBuf, String)>,
+    facts: impl FnOnce(&[String]) -> Result<Vec<Facts>>,
+) -> Result<Plan> {
     let mut index = std::collections::HashMap::<String, usize>::new();
-    let mut rels: Vec<(String, u64)> = Vec::new();
+    let mut found: Vec<(String, PathBuf, String, u64)> = Vec::new();
     let mut missing = Vec::new();
     let mut out = Vec::new();
     for (name, lines) in lists {
@@ -126,24 +132,22 @@ pub fn plan(music: &Path, lists: Vec<(String, Vec<String>)>, facts: impl FnOnce(
                 at.push(i);
                 continue;
             }
-            let size = inside(&line).then(|| std::fs::metadata(music.join(&line)).ok()).flatten().filter(|m| m.is_file()).map(|m| m.len());
-            match size {
-                Some(size) => {
-                    index.insert(line.clone(), rels.len());
-                    at.push(rels.len());
-                    rels.push((line, size));
+            let file = place(&line).filter(|(_, rel)| inside(rel)).map(|(folder, rel)| (folder.join(&rel), rel));
+            let size = file.as_ref().and_then(|(path, _)| std::fs::metadata(path).ok()).filter(|m| m.is_file()).map(|m| m.len());
+            match (file, size) {
+                (Some((path, rel)), Some(size)) => {
+                    index.insert(line.clone(), found.len());
+                    at.push(found.len());
+                    found.push((line, path, rel, size));
                 }
-                None => missing.push((name.clone(), line)),
+                _ => missing.push((name.clone(), line)),
             }
         }
         out.push((name, at));
     }
-    let names: Vec<String> = rels.iter().map(|(r, _)| r.clone()).collect();
-    let mut known = facts(&names)?.into_iter();
-    let tracks = rels
-        .into_iter()
-        .map(|(rel, size)| Track { path: music.join(&rel), rel, size, facts: known.next().unwrap_or_default() })
-        .collect();
+    let lines: Vec<String> = found.iter().map(|(line, ..)| line.clone()).collect();
+    let mut known = facts(&lines)?.into_iter();
+    let tracks = found.into_iter().map(|(_, path, rel, size)| Track { path, rel, size, facts: known.next().unwrap_or_default() }).collect();
     Ok(Plan { lists: out, tracks, missing })
 }
 
@@ -1063,15 +1067,20 @@ mod tests {
         d.put("A - Alb/02 Two.flac", b"two");
         d.put("B - Alb/01 One.mp3", b"one-mp3!");
         let plan = plan(
-            &d.0,
             vec![
                 ("Chill".into(), lines(&["A - Alb/01 One.flac", "Gone/x.mp3", "A - Alb/02 Two.flac"])),
                 ("Jazz/Soul".into(), lines(&["A - Alb/02 Two.flac", "B - Alb/01 One.mp3", "../outside.mp3"])),
             ],
+            in_folder(&d.0),
             facts,
         )
         .unwrap();
         (d, plan)
+    }
+
+    /// Every line placed in one folder as it is (the catalogue's Music lines).
+    fn in_folder(folder: &Path) -> impl Fn(&str) -> Option<(PathBuf, String)> + '_ {
+        move |line| Some((folder.to_path_buf(), line.to_string()))
     }
 
     /// The whole ZIP, and the length told before it.
@@ -1127,6 +1136,26 @@ mod tests {
     }
 
     #[test]
+    fn a_line_into_another_library_goes_from_there_and_one_leaving_every_folder_is_missing() {
+        // As the playlists' export places them: an Incoming track's line climbs out of the Music folder.
+        let d = music();
+        d.put("Music/A/01 One.flac", b"one");
+        d.put("lidarr-music/X/01 New.flac", b"new!");
+        d.put("secret.mp3", b"no");
+        let cat = crate::catalogue::Catalogue::open(None, vec![d.0.join("Music"), d.0.join("lidarr-music")]).unwrap();
+        let folders = cat.folders();
+        let place = |line: &str| {
+            let (folder, rel) = cat.place_of_line(line)?;
+            Some((folders.get(folder as usize)?.clone(), rel))
+        };
+        let all = lines(&["A/01 One.flac", "../lidarr-music/X/01 New.flac", "../secret.mp3", "A/../../secret.mp3"]);
+        let p = plan(vec![("Mixed".into(), all)], place, facts).unwrap();
+        assert_eq!(p.tracks.iter().map(|t| (t.rel.as_str(), t.size)).collect::<Vec<_>>(), [("A/01 One.flac", 3), ("X/01 New.flac", 4)], "each its path in its own library");
+        assert_eq!(p.tracks[1].path, d.0.join("lidarr-music/X/01 New.flac"));
+        assert_eq!(p.missing, vec![("Mixed".into(), "../secret.mp3".into()), ("Mixed".into(), "A/../../secret.mp3".into())]);
+    }
+
+    #[test]
     fn a_list_of_tracks_has_each_file_once_and_keeps_those_not_found_apart() {
         let d = music();
         d.put("Alb/1.flac", b"1");
@@ -1178,7 +1207,7 @@ mod tests {
         let d = music();
         d.put("x/1.mp3", b"1");
         d.put("y/1.mp3", b"2");
-        let same = plan(&d.0, vec![("p".into(), lines(&["x/1.mp3", "y/1.mp3"]))], |r| Ok(r.iter().map(|_| named("A", "T")).collect())).unwrap();
+        let same = plan(vec![("p".into(), lines(&["x/1.mp3", "y/1.mp3"]))], in_folder(&d.0), |r| Ok(r.iter().map(|_| named("A", "T")).collect())).unwrap();
         let names: Vec<_> = layout(&same, &o).files.into_iter().map(|(n, _)| n).collect();
         assert_eq!(names, ["A - T.mp3", "A - T (2).mp3"]);
         assert_eq!(layout(&same, &o).lists[0].1, "A - T.mp3\r\nA - T (2).mp3\r\n", "the lines name the bundled files");
