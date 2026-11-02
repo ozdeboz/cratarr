@@ -1374,6 +1374,8 @@ pub struct PlaylistService {
     stats: StatsKept,
     /// The last crate put in an order other than its own (see `crate_in_order`).
     sorted: SortedKept,
+    /// The last account's fits to its taste (see `fits_of`).
+    fits: FitsKept,
     /// Cratarr's own library (decision 0030): its plays, stars and shared playlists, and who asks. `main` hands it; a
     /// test may not.
     served: Option<Arc<crate::serve::Serve>>,
@@ -1382,6 +1384,10 @@ pub struct PlaylistService {
 /// A crate's lines in an order (decision 0060), by what they were worked out from, and when: its pages are asked for
 /// one after the other, and each would otherwise read every row of it again.
 type SortedKept = std::sync::Mutex<Option<(String, std::time::Instant, Arc<Vec<String>>)>>;
+
+/// An account's fits to its taste, every track's by its song id, as last worked out and when (`fits_of`): a list's
+/// pages and its panels ask one after the other.
+type FitsKept = std::sync::Mutex<Option<(String, std::time::Instant, Arc<HashMap<String, f64>>)>>;
 
 /// How long a sorted crate is kept: the plays it may be ordered by change as it plays.
 const SORTED_KEEP: std::time::Duration = std::time::Duration::from_secs(30);
@@ -1689,7 +1695,7 @@ impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>, served: Option<Arc<crate::serve::Serve>>) -> Self {
         let crate_stores = CrateStores::new(lib.data_dir());
         let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json")), served.clone()));
-        Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default(), served }
+        Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default(), fits: FitsKept::default(), served }
     }
 
     /// Cratarr's own library, as the services built on this one (Play On, Playing, Insights) read it.
@@ -3925,6 +3931,23 @@ impl PlaylistService {
     /// 0094: Best match, Radio's Your taste), by its song id; none while there is no taste.
     pub async fn taste_fits(&self, user: &str, without: &[String]) -> Result<HashMap<String, f64>, ToggleError> {
         self.fits_to(user, without, taste_in).await
+    }
+
+    /// How well these tracks (song ids) fit the asking account's taste (decision 0094: Best match on every list; the
+    /// lists the page orders itself, a playlist's, a record's, an artist's, order by these): those whose fit is known.
+    /// Every library's, kept a little while (`SORTED_KEEP`). Signed out: refused.
+    pub async fn fits_of(&self, ids: &[String]) -> Result<HashMap<String, f64>, ToggleError> {
+        let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("Best match is an account's own: sign in.".into()))?;
+        let kept = self.fits.lock().unwrap_or_else(|p| p.into_inner()).as_ref().filter(|(u, at, _)| *u == user && at.elapsed() < SORTED_KEEP).map(|(_, _, f)| f.clone());
+        let all = match kept {
+            Some(all) => all,
+            None => {
+                let all = Arc::new(self.taste_fits(&user, &[]).await?);
+                *self.fits.lock().unwrap_or_else(|p| p.into_inner()) = Some((user, std::time::Instant::now(), all.clone()));
+                all
+            }
+        };
+        Ok(ids.iter().filter_map(|id| Some((id.clone(), *all.get(id)?))).collect())
     }
 
     /// How like each track of the libraries not in `without` is to what `user` skips (`skipped_in`; decision 0094:
