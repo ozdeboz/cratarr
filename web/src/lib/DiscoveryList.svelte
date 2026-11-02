@@ -14,6 +14,7 @@
     type MissingAlbum,
   } from './api';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
+  import { hrefOf } from './addresses';
   import Cover from './Cover.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import CoverBusy from './CoverBusy.svelte';
@@ -151,7 +152,7 @@
     <MenuCards>
       <MenuGroup label="Discover">
         {#if asked.includes(a.release_group)}
-          <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = '#/requests'))} />
+          <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = hrefOf('requests')))} />
         {:else}
           <MenuEntry icon="circlePlus" label="Want" onclick={() => want(a)} />
         {/if}

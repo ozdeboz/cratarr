@@ -5,6 +5,7 @@
 // it, a reload brings it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
 
 import { leaveOnArrival } from './navStep.svelte';
+import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
 
 export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
@@ -135,30 +136,15 @@ export const panel = $state({
   mark: null as { subject: string; track: string; n: number } | null,
 });
 
-const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
-// Every page has an address of its own (App's `fromHash` writes Home's where there is none).
-const base = () => location.hash.split('?')[0] || '#/home';
-/** What of the address is the page's own, kept as the panel opens and closes over it (the Library's composer, 0.10). */
-const PAGE_KEYS = ['composer'];
-function pageQuery() {
-  const q = query();
-  const out = new URLSearchParams();
-  for (const k of PAGE_KEYS) {
-    const v = q.get(k);
-    if (v) out.set(k, v);
-  }
-  return out;
-}
-/** The page's address, its own part kept. */
-const pageAddress = () => {
-  const q = pageQuery().toString();
-  return q ? `${base()}?${q}` : base();
-};
+const query = () => wordsIn();
+/** The page's address, its own words kept (lib/addresses: the Library's composer, Discover's Spotify playlist…). */
+const pageAddress = () => addressOf(pageHere(), ownWordsHere());
+/** The page's address with `names` viewed on `tab`, its own words kept. */
 function address(names: string[], tab: Tab) {
-  const q = pageQuery();
+  const q = ownWordsHere();
   for (const n of names) q.append('view', n);
   if (tab !== 'tracks') q.set('tab', tab);
-  return `${base()}?${q}`;
+  return addressOf(pageHere(), q);
 }
 
 // The history entries the panel added in this visit carry how many there are: closing goes Back over all of them, so
@@ -281,7 +267,7 @@ export const opening = (subject: string) => panel.viewed === subject && panel.sh
  *  over the navigation (the owner, 2026-10-24). */
 export function goHome() {
   panel.playerTop = false;
-  location.hash = '#/home';
+  location.hash = hrefOf(HOME);
   // Home's button starts it at its top, from Home itself too (the owner, 2026-10-25); back brings back where it was.
   window.scrollTo(0, 0);
 }
@@ -316,11 +302,11 @@ export function closePlaylist(then?: () => void) {
 
 /** A breadcrumb's page (lib/Crumbs, 0.9.3): the panel closed, as its ✕ closes it, and that page shown, wherever the
  *  panel was opened from (the owner, 2026-10-25: breadcrumbs as what global search needs, its results opening anywhere). */
-export function upToPage(href: string) {
+export function upToPage(page: PageId) {
   // Its layer stays over the page until the page gone to shows (lib/navStep), never the page before for a moment.
-  if (!location.hash.startsWith(href)) leaveOnArrival({ layer: true }, false, href);
+  if (pageHere() !== page) leaveOnArrival({ layer: true }, false, hrefOf(page));
   closePlaylist(() => {
-    if (!location.hash.startsWith(href)) location.hash = href;
+    if (pageHere() !== page) location.hash = hrefOf(page);
   });
 }
 
@@ -353,9 +339,10 @@ export function albumGone(source: string, id: string) {
 
 /** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own, Insights' panel
  *  Insights': they stay there. */
-export const keepViewed = (href: string) => {
-  const q = location.hash.split('?')[1];
-  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) && !panel.viewed.startsWith(HEALTH) && !panel.viewed.startsWith(INSIGHTS) && !panel.viewed.startsWith(REQUESTS) && !panel.viewed.startsWith(DOWNLOADS)
-    ? `${href}?${q}`
-    : href;
+export const keepViewed = (page: PageId) => {
+  const kept = panel.viewed && ![SETTINGS, HEALTH, INSIGHTS, REQUESTS, DOWNLOADS].some((p) => panel.viewed!.startsWith(p));
+  if (!kept) return hrefOf(page);
+  // The panel's words only: the page left keeps its own (the Library's composer is no word of Crates').
+  const w = wordsIn();
+  return addressOf(page, { view: w.getAll('view'), tab: w.get('tab') });
 };

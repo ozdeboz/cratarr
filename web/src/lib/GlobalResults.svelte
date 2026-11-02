@@ -9,6 +9,7 @@
   // card (lib/SearchCrateCard, mockup 1a; every page's own search leads with it too, App); else no crate at all. A
   // result's long-press, right-click or ⋮ opens its own menu, as the same thing's does in any list (decision 0058).
   import { fromAction } from 'svelte/attachments';
+  import { addressOf } from './addresses';
   import { includeArtist, takeBackExcluded } from './api';
   import { longpress } from './longpress';
   import WorkMenu from './WorkMenu.svelte';
@@ -146,7 +147,7 @@
     const words = q;
     // Emptied once Find shows (lib/navStep), not before.
     leaveOnArrival({ search: 'clear' });
-    location.hash = `#/find?q=${encodeURIComponent(words)}`;
+    location.hash = addressOf('find', { q: words });
   }
 </script>
 

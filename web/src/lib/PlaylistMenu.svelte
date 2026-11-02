@@ -16,7 +16,8 @@
   import { port } from './player/port.svelte';
   import { inApp } from './app.svelte';
   import { trackSteps } from './progress.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { untrack } from 'svelte';
   import { copyPlaylist, deletePlaylist, setPlaylistShared, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
   import { me } from './me.svelte';

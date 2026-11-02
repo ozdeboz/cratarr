@@ -48,9 +48,9 @@ const PAGE_KINDS: Record<string, string[]> = {
   playlists: ['playlist'],
   crates: ['crate', 'genre'],
   settings: ['setting'],
-  requests: ['page:#/requests'],
-  downloads: ['page:#/downloads'],
-  insights: ['page:#/insights'],
+  requests: ['page:requests'],
+  downloads: ['page:downloads'],
+  insights: ['page:insights'],
 };
 /** A few of each kind. */
 const EACH = 5;

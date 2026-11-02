@@ -18,7 +18,8 @@
   import { panel, viewPlaylist } from './panel.svelte';
   import { work } from './panelWork.svelte';
   import { prefs } from './prefs.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { toast } from './toast.svelte';
   import { plural } from './insights.svelte';
   import { wordChip } from './quickCrate';

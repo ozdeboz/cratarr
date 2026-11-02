@@ -7,6 +7,7 @@
   // 2026-10-27: what one has, several have). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
   // fetches now (how far), then what it watches for and has not found yet.
   import { askIfMany, fewAtATime } from './many.svelte';
+  import { hrefOf, viewOn } from './addresses';
   import { toast } from './toast.svelte';
   import { plural } from './insights.svelte';
   import { glass, handGlass } from './glass.svelte';
@@ -144,7 +145,7 @@
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   <Crumbs
-    trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]}
+    trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('requests') }]}
     here={L.name}
     siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
   />
@@ -183,18 +184,18 @@
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
-      {#if !view.fetcher}<p class="note">Approved requests need Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
+      {#if !view.fetcher}<p class="note">Approved requests need Lidarr: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
       <Group>
         {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}<Item name="None waiting" />{/each}
       </Group>
     {:else if list === 'mine'}
       <Group>
         {#each mine as r (r.id)}{@render row(r, false, canTakeBack(r))}{:else}
-          <Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = '#/discover')} />
+          <Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = hrefOf('discover'))} />
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}
@@ -248,7 +249,7 @@
         <MenuEntry icon="undo" label="Take back" danger onclick={() => (takeBack(r), (opened = null))} />
       {/if}
       {#if !answers && !canTakeBack(r)}
-        <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = '#/discover'))} />
+        <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = hrefOf('discover')))} />
       {/if}
     </div>
   </MenuSheet>

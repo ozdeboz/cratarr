@@ -145,7 +145,7 @@
   {/if}
   <!-- Settings › its group › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25;
        the group a picker, the owner 2026-11-02). -->
-  {@const top: Level[] = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }, ...(groupLevel ? [groupLevel] : [])]}
+  {@const top: Level[] = beside ? [] : [{ label: 'Settings', go: () => upToPage('settings') }, ...(groupLevel ? [groupLevel] : [])]}
   {#if thing}
     <Crumbs trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
   {:else}

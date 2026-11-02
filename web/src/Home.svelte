@@ -6,6 +6,7 @@
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and System status (lib/HomeStatus). A tile with nothing to show is left out.
   import { onMount, untrack, type Snippet } from 'svelte';
+  import { hrefOf } from './lib/addresses';
   import {
     albumView,
     coverUrl,
@@ -639,7 +640,7 @@
 {#snippet newestPart()}
   {#if turn('newest') && newest.length}
     <section aria-label="New for you">
-      <SectionHead title={local ? NEWEST_HERE : 'New for you'} onmore={() => (local ? (location.hash = '#/local/albums') : viewPlaylist(CRATE + 'home:new'))} />
+      <SectionHead title={local ? NEWEST_HERE : 'New for you'} onmore={() => (local ? (location.hash = hrefOf('local')) : viewPlaylist(CRATE + 'home:new'))} />
       <ul class="shelf">
         {#each newest as n (n.source + n.a.id)}
           <li><AlbumCard source={n.source} album={n.a} lines={[n.a.artist ?? '', `added ${addedOn(n.a.added!)}`]} /></li>

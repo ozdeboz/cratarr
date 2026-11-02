@@ -8,6 +8,7 @@
   // track its album so; an artist their page from Discover. A playlist opens its tracks here (`?spotify=` in the
   // address, so back returns).
   import { untrack } from 'svelte';
+  import { hereWith, wordHere } from './addresses';
   import {
     getSpotifyAlbums,
     getSpotifyArtists,
@@ -62,7 +63,7 @@
   });
 
   // A playlist opened: its tracks, by `?spotify=<id>` in the address.
-  const openedId = () => new URLSearchParams(location.hash.split('?')[1] ?? '').get('spotify');
+  const openedId = () => wordHere('spotify');
   let opened = $state<string | null>(openedId());
   let openList = $state<(SpotifyPlaylist & { tracks: SpotifyTrack[] }) | null>(null);
   $effect(() => {
@@ -80,10 +81,7 @@
       );
   });
   function openPlaylist(p: SpotifyPlaylist) {
-    const [h, rest] = location.hash.split('?');
-    const q = new URLSearchParams(rest ?? '');
-    q.set('spotify', p.id);
-    location.hash = `${h}?${q}`;
+    location.hash = hereWith((w) => w.set('spotify', p.id));
   }
 
   // What shows: through the Filter's Leave out and the search.

@@ -57,7 +57,7 @@ export function step(p: Pending, asked: Where, shown: Where, now: number): { pen
   if (!same(asked, p.from) && !same(asked, to)) to = asked;
   else if (to && same(asked, p.from)) return { pending: null, apply: null };
   if (!to) return now - p.at > MOVE_MS ? { pending: null, apply: null } : { pending: p, apply: null };
-  const there = !p.until || (asked.hash ?? '').startsWith(p.until);
+  const there = !p.until || asked.hash === p.until;
   const settled = there && shown.page === asked.page && (asked.viewed === null || shown.viewed === asked.viewed);
   return settled ? { pending: null, apply: p.leave } : { pending: { ...p, to }, apply: null };
 }

@@ -97,30 +97,29 @@
   // pill's lists read again when it is in.
   import { loadMatcherWhenIdle } from './lib/matcherLoad';
   import { matcherLoaded } from './lib/pageView.svelte';
+  import { addressOf, HOME as HOME_ID, hrefOf, pageIn, wordsIn, type PageId } from './lib/addresses';
   loadMatcherWhenIdle(matcherLoaded);
 
-  type Page = { id: string; href: string; label: string; icon: IconName };
+  type Page = { id: PageId; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
   // 0025: Health beside Settings, Insights beside Health).
-  const PLAYLISTS: Page = { id: 'playlists', href: '#/playlists', label: 'Playlists', icon: 'playlists' };
+  const PLAYLISTS: Page = { id: 'playlists', href: hrefOf('playlists'), label: 'Playlists', icon: 'playlists' };
   // Albums outside the library, from what is listened to (decision 0069): beside Playlists (the owner, 2026-10-24).
-  const DISCOVER: Page = { id: 'discover', href: '#/discover', label: 'Discover', icon: 'compass' };
+  const DISCOVER: Page = { id: 'discover', href: hrefOf('discover'), label: 'Discover', icon: 'compass' };
   // The quick look, the leftmost tab (the owner, 2026-10-23); where the app opens without an address.
-  const HOME: Page = { id: 'home', href: '#/home', label: 'Home', icon: 'home' };
+  const HOME: Page = { id: 'home', href: hrefOf('home'), label: 'Home', icon: 'home' };
   // Every used library's albums, Music and Incoming (decision 0034: one page; a dashboard will give the quick look).
-  const LIBRARY: Page = { id: 'library', href: '#/library', label: 'Library', icon: 'library' };
-  // Incoming's and Collection's addresses from before Library (decision 0034): they open Library.
-  const FORMER = ['#/incoming', '#/collection'];
-  const INSIGHTS: Page = { id: 'insights', href: '#/insights', label: 'Insights', icon: 'insights' };
+  const LIBRARY: Page = { id: 'library', href: hrefOf('library'), label: 'Library', icon: 'library' };
+  const INSIGHTS: Page = { id: 'insights', href: hrefOf('insights'), label: 'Insights', icon: 'insights' };
   // The second step after the Library (decision 0024).
-  const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
-  const HEALTH: Page = { id: 'health', href: '#/health', label: 'Health', icon: 'health' };
-  const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
+  const CRATES: Page = { id: 'crates', href: hrefOf('crates'), label: 'Crates', icon: 'crates' };
+  const HEALTH: Page = { id: 'health', href: hrefOf('health'), label: 'Health', icon: 'health' };
+  const SETTINGS: Page = { id: 'settings', href: hrefOf('settings'), label: 'Settings', icon: 'settings' };
   // Albums asked for from Discover, and their answers (decision 0070): left of Downloads (the owner, 2026-10-24), for
   // whoever may ask or answer.
-  const REQUESTS: Page = { id: 'requests', href: '#/requests', label: 'Requests', icon: 'inbox' };
+  const REQUESTS: Page = { id: 'requests', href: hrefOf('requests'), label: 'Requests', icon: 'inbox' };
   // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
-  const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
+  const DOWNLOADS: Page = { id: 'downloads', href: hrefOf('downloads'), label: 'Downloads', icon: 'download' };
   /** The pages that are an index with their lists in the panel (Requests, Downloads, Insights, Health, Settings): their
    *  name on the page beside back and their panel under the top bar, not over it, both wherever the bar of pages is
    *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
@@ -129,29 +128,25 @@
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings). Its records
   // alone, as the Library's (the owner, 2026-10-29: one rule for both modes; its Artists and Tracks went).
-  const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Records', icon: 'disc' };
-  const LOCAL = [LOCAL_ALBUMS];
+  const LOCAL: Page = { id: 'local', href: hrefOf('local'), label: 'Records', icon: 'disc' };
   /** Find more music (0.9.3): the words looked up on MusicBrainz, reached from a search that found nothing anywhere. */
-  const FIND: Page = { id: 'find', href: '#/find', label: 'Find more music', icon: 'search' };
+  const FIND: Page = { id: 'find', href: hrefOf('find'), label: 'Find more music', icon: 'search' };
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
   /** A tab's least width in the bar: more fit on a wider screen. */
   const BAR_SLOT_PX = 72;
 
-  // The page is the address before `?` (what is viewed rides along as `?view=`, decision 0023). One address a page
-  // (the owner, 2026-11-02): none, the bare `#/` (Playlists' once) or one no page has is Home's, written as `#/home`, so
-  // what builds an address from the one shown (lib/panel) never needs to know that none means Home: a moment's cover
-  // opened on Home as the app first showed it went to Playlists first.
+  // The page is the address's (lib/addresses). None, or one no page has, is Home's, written as Home's address as it is
+  // read, its words kept: what builds an address from the one shown never meets one without a page (the owner,
+  // 2026-11-02: a moment's cover, on Home as the app first showed it, went to Playlists first).
   /** Opened without an address of its own (the app's downloads away from home, below). */
-  const openedBare = !location.hash.replace(/^#\/?/, '');
-  const fromHash = () => {
-    const [h, rest] = location.hash.split('?');
-    const as = (to: Page) => (history.replaceState(history.state, '', to.href + (rest ? `?${rest}` : '')), to.id);
-    if (FORMER.includes(h)) return as(LIBRARY);
-    // 0.9.16's addresses of the Library's pages (`#/library/tracks`): the Library, its one page now.
-    if (h.startsWith(`${LIBRARY.href}/`)) return LIBRARY.id;
-    return [HOME, PLAYLISTS, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, FIND, ...LOCAL].find((p) => p.href === h)?.id ?? as(HOME);
+  const openedBare = !location.hash.replace(/^#\/?/, '').split('?')[0];
+  const fromHash = (): PageId => {
+    const p = pageIn();
+    if (p) return p;
+    history.replaceState(history.state, '', addressOf(HOME_ID, wordsIn()));
+    return HOME_ID;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -402,7 +397,7 @@
   // has a step before this one; on the right, on a page with something to play, the pill (lib/ContentControls): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
-  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local-albums'];
+  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local'];
   // A part of the settings in the panel (lib/SettingsPanel), when the panel shows one.
   const settingsShown = $derived(SECTIONS.find((x) => x.id === settingsOf(panel.viewed))?.id ?? (null as SettingsSection | null));
   // What the panel showed when this page was entered (panel.arrived, see openedHere).
@@ -613,7 +608,7 @@
             view: hasView(page),
             // Home's too (the owner, 2026-10-28: the device with nothing playing, as every page with the pill).
             device: (pagePill || page === 'home') && pillDevice,
-            filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover',
+            filter: (pagePill && page !== LOCAL.id && page !== 'downloads') || page === 'discover',
             action: pageView.action,
           }
         : null,
@@ -868,7 +863,7 @@
   $effect(() => {
     serverConnection.value = connection;
   });
-  const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
+  const MAIN: Page[] = $derived(localMode() ? [HOME, LOCAL] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
   // The sidebar's direct links under Library and Discover (the owner, 2026-10-29): what each one's picker beside back
   // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
   loadSpotify();
@@ -942,8 +937,8 @@
     if (local) untrack(() => (visuals.open = false));
     const p = untrack(() => page);
     if (p === 'settings' || p === HOME.id) return;
-    if (local && !p.startsWith('local-')) location.hash = HOME.href;
-    else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
+    if (local && p !== LOCAL.id) location.hash = HOME.href;
+    else if (!local && p === LOCAL.id) location.hash = LIBRARY.href;
   });
   const ALL = $derived([...MAIN, ...APART]);
   /** The page's search has its globe (lib/ContentControls): everywhere's shown in the page's place. */
@@ -1045,7 +1040,7 @@
         </div>
         <!-- Its line's room kept until the server answers, so the pages under it do not move (the owner, 2026-11-02). -->
         {#if connection}
-          <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
+          <a class="conn" class:down={!connection.ok} href={keepViewed(SETTINGS.id)}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
         {:else}
           <span class="conn" aria-hidden="true"><span class="label">&nbsp;</span></span>
         {/if}
@@ -1058,7 +1053,7 @@
             <!-- A section (Library, Discover): its name opens it, its links go there. -->
             <div class="section" data-section={p.id}>
               <a
-                href={keepViewed(p.href)}
+                href={keepViewed(p.id)}
                 aria-current={page === p.id ? 'page' : undefined}
                 aria-expanded={openSection === p.id}
                 onclick={(e) => sectionTap(e, p.id)}
@@ -1067,13 +1062,13 @@
               {#if openSection === p.id}
                 <div class="subs" role="group" aria-label="{p.label} shows" transition:slide={{ duration: reducedMotion() ? 0 : 150 }}>
                   {#each subs as s (s.id)}
-                    <a class="sub" href={keepViewed(p.href)} aria-current={page === p.id && s.on ? 'true' : undefined} onclick={() => ((peek = false), (opened = null), s.pick())}>{s.label}</a>
+                    <a class="sub" href={keepViewed(p.id)} aria-current={page === p.id && s.on ? 'true' : undefined} onclick={() => ((peek = false), (opened = null), s.pick())}>{s.label}</a>
                   {/each}
                 </div>
               {/if}
             </div>
           {:else}
-            <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
+            <a href={keepViewed(p.id)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
               ><Icon name={p.icon} /><span class="label">{p.label}</span></a
             >
           {/if}
@@ -1082,7 +1077,7 @@
 
       <div class="foot">
         {#each APART as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
+          <a href={keepViewed(p.id)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
         {/each}
         {#if status}<div class="version">Cratarr {status.version}</div>{:else}<div class="version" aria-hidden="true">&nbsp;</div>{/if}
       </div>
@@ -1121,7 +1116,7 @@
       <Downloads />
     {:else if page === 'library'}
       <Library />
-    {:else if page === 'local-albums'}
+    {:else if page === LOCAL.id}
       <LocalAlbums />
     {:else if status && !status.music && me.admin}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
@@ -1225,7 +1220,7 @@
          Library's and Discover's picker; or the panel's left part where it handed its glass. -->
     <NavigationControls
       left={handed?.left ?? null}
-      back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.href))) : null}
+      back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.id))) : null}
       name={panelPage && phone ? panelPage.label : null}
       picker={page === 'library' ? 'library' : page === 'discover' ? 'discover' : null}
       right={() => rightEl}

@@ -309,7 +309,7 @@
         }
       : null,
   );
-  const top = $derived<Level[]>(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }, ...(areaLevel ? [areaLevel] : [])]);
+  const top = $derived<Level[]>(beside ? [] : [{ label: 'Health', go: () => upToPage('health') }, ...(areaLevel ? [areaLevel] : [])]);
   // The problem seen, remembered for its area's next pick.
   $effect(() => {
     if (areaNow && shownId) prefs.groupLast = remembered(prefs.groupLast, 'health', areaNow, shownId);

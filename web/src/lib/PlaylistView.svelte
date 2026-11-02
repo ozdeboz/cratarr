@@ -1,5 +1,6 @@
 <script lang="ts">
   import PlayingDots from './PlayingDots.svelte';
+  import { pageHere } from './addresses';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { untrack } from 'svelte';
   import { holdUntil } from './holdPlace.svelte';
@@ -1160,7 +1161,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // of the panel the same, in the same place.
   let { full = false }: { full?: boolean } = $props();
   /** The page under the panel (its address), whose search the panel carries while it covers it (a phone). */
-  const pageHere = location.hash.split('?')[0].replace(/^#\/?/, '') || 'playlists';
+  const pageUnder = pageHere();
   let canGoBack = $state(false);
   $effect(() => {
     void panel.viewed;
@@ -1874,7 +1875,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           tempos: listTempos,
           kind,
           counted: rows && shown ? { shown: shown.length, total: rows.length, pending: pass.pending } : null,
-          search: full ? pageHere : null,
+          search: full ? pageUnder : null,
         }
       : null;
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, below: () => stuck && !own });

@@ -3,6 +3,7 @@
 // list narrowed to them. The composer rides in the address (`#/library?composer=<key>`, kept as the panel opens over
 // it, lib/panel), so back returns to the composers as any step does.
 import { getClassicalComposer, getClassicalComposers } from './api';
+import { hereWith, wordHere } from './addresses';
 import { CLASSICAL } from './recordTypeRules';
 import { classicalListed, typeNow } from './recordTypes.svelte';
 import { byComposer, type Composer } from './composers';
@@ -29,14 +30,11 @@ export function loadComposers(fresh = false) {
 }
 
 /** The composer the address names, if any. */
-export const composerInAddress = () => new URLSearchParams(location.hash.split('?')[1] ?? '').get('composer');
+export const composerInAddress = () => wordHere('composer');
 
 /** A composer opened: a step of its own in the address. */
 export function openComposer(c: Composer) {
-  const [h, rest] = location.hash.split('?');
-  const q = new URLSearchParams(rest ?? '');
-  q.set('composer', c.key);
-  location.hash = `${h}?${q}`;
+  location.hash = hereWith((w) => w.set('composer', c.key));
 }
 
 let shownKey: string | null = null;

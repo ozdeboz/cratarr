@@ -9,6 +9,7 @@
   // switched as Insights' Profile switches them (the same choice), how much of it AudioMuse has heard, and the profile
   // itself. Discover's own exclusions sit with the others (`thing` `discover`: lib/DiscoveryList's).
   import { getCrateFits, getDiscoverExcluded, getTasteProfile, traitLabel, type FitSummary, type TasteProfile } from '../api';
+  import { hrefOf } from '../addresses';
   import DiscoveryList from '../DiscoveryList.svelte';
   import { PROFILE_SOURCES } from '../insightsControls.svelte';
   import { prefs } from '../prefs.svelte';
@@ -68,7 +69,7 @@
   function openProfile() {
     prefs.insightsTab = 'listening';
     prefs.listeningView = 'profile';
-    location.hash = '#/insights';
+    location.hash = hrefOf('insights');
   }
   // Discover's own: albums and artists it leaves out.
   let discoverOut = $state<number | null>(null);
