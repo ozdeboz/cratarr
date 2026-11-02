@@ -265,6 +265,8 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
         "musicbrainz_albumartistid" => ItemKey::MusicBrainzReleaseArtistId,
         "musicbrainz_artistid" => ItemKey::MusicBrainzArtistId,
         "musicbrainz_trackid" => ItemKey::MusicBrainzRecordingId,
+        // A BPM as its tag type keeps it (ID3v2's whole-number TBPM): `write`.
+        "bpm" => ItemKey::Bpm,
         "tracknumber" => ItemKey::TrackNumber,
         "totaltracks" => ItemKey::TrackTotal,
         "discnumber" => ItemKey::DiscNumber,
@@ -276,7 +278,7 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
 /// Writes `fields` into a file (each field's values as items; none: the field cleared), read back before it takes
 /// the file's place.
 fn write(path: &Path, fields: &[(String, Vec<String>)]) -> Result<()> {
-    use lofty::tag::{ItemValue, TagItem};
+    use lofty::tag::{ItemKey, ItemValue, TagItem};
     let keys: Vec<(lofty::tag::ItemKey, &Vec<String>)> =
         fields.iter().map(|(n, v)| Ok((key_of(n).with_context(|| format!("no field {n}"))?, v))).collect::<Result<_>>()?;
     let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
@@ -285,8 +287,15 @@ fn write(path: &Path, fields: &[(String, Vec<String>)]) -> Result<()> {
         |tag| {
             for (k, values) in &keys {
                 tag.remove_key(*k);
+                let mut k = *k;
+                if k == ItemKey::Bpm {
+                    tag.remove_key(ItemKey::IntegerBpm);
+                    if tag.tag_type() == lofty::tag::TagType::Id3v2 {
+                        k = ItemKey::IntegerBpm;
+                    }
+                }
                 for v in *values {
-                    tag.push(TagItem::new(*k, ItemValue::Text(v.clone())));
+                    tag.push(TagItem::new(k, ItemValue::Text(v.clone())));
                 }
             }
         },

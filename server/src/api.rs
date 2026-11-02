@@ -2292,6 +2292,11 @@ async fn tempo_of(State(app): State<Arc<App>>, Json(b): Json<TempoBody>) -> Resu
 /// Adjust BPM: halve, double or reset the tracks' tempo (administrators; written into the files).
 async fn adjust_tempo(State(app): State<Arc<App>>, Json(b): Json<TempoBody>) -> Result<Json<serde_json::Value>, ApiError> {
     let how = b.adjust.ok_or_else(|| ApiError::from(ToggleError::Refused("Say how: half, double or reset.".into())))?;
+    // Cratarr's own tracks: a run on the one path (0.14), the tracks' tempos as they will be.
+    if b.source == crate::source::cratarr::KIND.id {
+        let (tracks, run) = app.playlists.tempo_run(&app, &b.ids, how).await?;
+        return Ok(Json(json!({ "tracks": tracks, "run": run })));
+    }
     let (tracks, undo) = app.playlists.adjust_tempo(&b.source, &b.ids, how).await?;
     Ok(Json(json!({ "tracks": tracks, "undo": undo })))
 }

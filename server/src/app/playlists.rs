@@ -3410,6 +3410,7 @@ impl PlaylistService {
         if !crate::serve::access::administering() {
             return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
         }
+        debug_assert!(source != crate::source::cratarr::KIND.id, "Cratarr's own tracks' tempo is a run: tempo_run");
         let (cat, src, list) = (self.lib.catalogue(), source.to_string(), ids.to_vec());
         let changes = tokio::task::spawn_blocking(move || -> Result<Vec<super::tempo::TempoChange>, ToggleError> {
             let mut changes = Vec::new();
@@ -3430,6 +3431,18 @@ impl PlaylistService {
         .map_err(|e| anyhow::anyhow!("{e}"))??;
         let undo = if changes.is_empty() { None } else { self.keep(Change::Tempo { tracks: changes }) };
         Ok((self.tempo_of(source, ids).await?, undo))
+    }
+
+    /// Cratarr's own tracks' tempo halved, doubled or reset as a run on the one path (decision 0092's writers' map,
+    /// 0.14): the tracks' tempos as they will be, and the run (none where nothing changes).
+    pub async fn tempo_run(&self, app: &Arc<super::App>, ids: &[String], how: super::tempo::Adjust) -> Result<(Vec<super::tempo::TrackTempo>, Option<super::file_runs::Status>), ToggleError> {
+        if !crate::serve::access::administering() {
+            return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
+        }
+        let (cat, list) = (self.lib.catalogue(), ids.to_vec());
+        let (p, tempos) = tokio::task::spawn_blocking(move || super::tempo::proposal(&cat, &list, how)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let run = (!p.files.is_empty()).then(|| super::file_runs::start(app, p));
+        Ok((tempos, run))
     }
 
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).
