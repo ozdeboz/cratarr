@@ -35,9 +35,8 @@
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
   import HealthRenumber from './HealthRenumber.svelte';
-  import HealthFixes from './HealthFixes.svelte';
-  import { apply, FIXABLE, healthFixes, readFixes } from './fixes.svelte';
-  import ConfirmSheet from './settings/ConfirmSheet.svelte';
+  import RecordReferences from './RecordReferences.svelte';
+  import { FIXABLE } from './fixes.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { releaseOf, type ReleaseTrack } from './replaceTrack';
@@ -56,7 +55,7 @@
   import { prefs } from './prefs.svelte';
   import FileChanges from './FileChanges.svelte';
   import Notice from './Notice.svelte';
-  import { CHANGES, changesView, fileRuns, openChanges } from './fileRuns.svelte';
+  import { CHANGES, changesView, fileRuns, openChanges, openFixes, undoRun } from './fileRuns.svelte';
   import Crumbs from './Crumbs.svelte';
 
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
@@ -280,14 +279,10 @@
     }
   }
   async function undoItem(i: IntakeItem) {
-    if (!i.undo) return;
-    try {
-      await undo([i.undo]);
-      undone = new Set([...undone, i.id]);
-      loadHealth();
-    } catch (e) {
-      toast.fail(e, "It wasn't undone");
-    }
+    // Its run's Undo (0.14: an added track is a run in Changes to files).
+    if (!i.undo || !(await undoRun(i.undo))) return;
+    undone = new Set([...undone, i.id]);
+    loadHealth();
   }
   /** A track of the review list tapped: its copies to pick from, looking for it by hand, or out of the list. */
   let pickOf = $state<IntakeItem | null>(null);
@@ -321,21 +316,9 @@
       asking = false;
     }
   }
-  // A library finding's fixes (0.9.7, the administrators' metadata workflow): read for its list (Apply all certain) and
-  // its items' rows (lib/HealthFixes).
+  // A library finding's fixes (the administrators' metadata workflow): reviewed on the one sheet, every record's fields
+  // with where from and how sure, certain ones ticked, written as one run (decision 0092's writers' map, 0.14).
   const fixable = $derived(me.admin && FIXABLE.has(problem));
-  $effect(() => {
-    if (fixable) readFixes(problem);
-  });
-  const certain = $derived(fixable ? (healthFixes[problem]?.certain ?? 0) : 0);
-  let applyingAll = $state(false);
-  let askAll = $state(false);
-  async function applyAll() {
-    askAll = false;
-    applyingAll = true;
-    await apply({ certain: problem }, problem, `Applied ${certain} certain ${certain === 1 ? 'fix' : 'fixes'}`);
-    applyingAll = false;
-  }
   // Every problem and Changes to files, in Health's areas, each area's most urgent first (as the page lists them).
   const parts = $derived([
     ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.name }))),
@@ -404,8 +387,8 @@
     {#if incoming && x.album}<div class="tool"><HealthIncoming source={x.album[0]} album={x.album[1]} ongone={gone} /></div>{/if}
     <!-- Track numbers off (unnumbered ones too), disc numbers: renumbered as a release has them (lib/HealthRenumber). -->
     {#if RENUMBERS.has(problem) && x.album?.[0] === 'cratarr' && offers('renumber')}<div class="tool"><HealthRenumber album={x.album[1]} title={x.title} ongone={gone} /></div>{/if}
-    <!-- Year, genre, album artist, MusicBrainz release, a rule's names: the fix proposed, Apply (lib/HealthFixes). -->
-    {#if fixable && x.album?.[0] === 'cratarr'}<div class="tool"><HealthFixes finding={problem} album={x.album[1]} track={x.track ?? null} title={x.title} ongone={gone} /></div>{/if}
+    <!-- Records none speaks for: a row per source, Use this, Paste a link, Checked by hand (lib/RecordReferences). -->
+    {#if problem === 'library:references' && x.album?.[0] === 'cratarr'}<div class="tool"><RecordReferences album={x.album[1]} /></div>{/if}
     {#if EVENTS[problem]}<div class="tool"><HealthEvents {...EVENTS[problem]} value={x.title} /></div>{/if}
     {#if x.missing?.length}
       <!-- An album missing tracks (0.9.7; the owner, 2026-10-26: "golden work"): each one, looked for on Soulseek one at a
@@ -471,7 +454,7 @@
         <p class="count"><b>{p.said}</b></p>
       {/if}
       <!-- All of it at once where it can be: its tracks in turn (Work through), every certain fix (asked once more). -->
-      {#if kind || certain > 0}
+      {#if kind || fixable}
         <Group>
           {#if kind}
             <Item name={kind === 'missing' ? 'Work through the missing tracks' : 'Work through the damaged files'} line={kind === 'missing' ? 'One at a time, most missing albums first' : 'One at a time, album by album'}>
@@ -485,8 +468,8 @@
               <Item name="Find missing tracks" line="Many at once, each approved by you" onclick={() => ((openKey = null), (selecting = new Set()))} />
             {/if}
           {/if}
-          {#if certain > 0}
-            <Item name={`Apply all certain (${certain.toLocaleString()})`} busy={applyingAll} disabled={applyingAll} onclick={() => (askAll = true)} />
+          {#if fixable}
+            <Item name="Review the fixes" line="Certain ones ticked, each written into its files" onclick={() => openFixes(problem)} />
           {/if}
         </Group>
       {/if}
@@ -629,16 +612,6 @@
       </MenuGroup>
     </MenuCards>
   </MenuSheet>
-{/if}
-{#if askAll}
-  <ConfirmSheet
-    title={`Apply ${certain.toLocaleString()} certain ${certain === 1 ? 'fix' : 'fixes'}?`}
-    text="Written into the files; Undo puts the old values back."
-    label="Apply"
-    icon="check"
-    onconfirm={applyAll}
-    onclose={() => (askAll = false)}
-  />
 {/if}
 
 <style>

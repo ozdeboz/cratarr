@@ -39,6 +39,7 @@
 </script>
 
 <script lang="ts">
+  import { whenWritten } from './fileRuns.svelte';
   // An album's menu, the one every album has wherever it is opened (a Library row or tile, the select bar's More, the
   // album panel's ⋮), after Symfonium's album sheet: the album at the top (its heart there), the large actions (Play,
   // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable),
@@ -348,10 +349,8 @@
   async function upload(src: string, id: string, title: string, file: File) {
     if (file.size > COVER_MAX) return toast.fail(null, 'That picture is too large (at most 12 MB)');
     try {
-      const { undo } = await uploadAlbumCover(src, id, file);
-      const again = () => void refreshCover(src, id, albumCoverUrl(src, id));
-      again();
-      withUndo(`Changed the cover of ${title}.`, undo, { after: again });
+      const run = await uploadAlbumCover(src, id, file);
+      whenWritten(run, `Changed the cover of ${title}.`, () => void refreshCover(src, id, albumCoverUrl(src, id)));
     } catch (e) {
       const big = e instanceof ApiError && e.status === 413;
       toast.fail(missingCall(e) || big ? null : e, big ? 'That picture is too large (at most 12 MB)' : missingCall(e) ? "This server can't take a cover yet" : "The cover wasn't uploaded");
@@ -482,11 +481,9 @@
     settingCover = c.url;
     stopLook();
     return act(async () => {
-      const { undo } = await setAlbumCover(source, a.id, c.url);
+      const run = await setAlbumCover(source, a.id, c.url);
       onclose();
-      const again = () => void refreshCover(source, a.id, albumCoverUrl(source, a.id));
-      again();
-      withUndo(`Changed the cover of ${a.title}.`, undo, { after: again });
+      whenWritten(run, `Changed the cover of ${a.title}.`, () => void refreshCover(source, a.id, albumCoverUrl(source, a.id)));
     }, 'Could not change the cover').finally(() => (settingCover = null));
   };
   const size = (c: CoverChoice) => (c.width && c.height ? `${c.width} × ${c.height}` : '');

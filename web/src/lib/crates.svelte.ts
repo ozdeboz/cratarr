@@ -58,7 +58,11 @@ export function setFavourites(id: string, to: (was: CrateFavourites) => CrateFav
   c.favourites = pending[id] = next;
   saving = saving.then(() =>
     setCrateFavourites(id, next).then(
-      () => pending[id] === next && delete pending[id],
+      ({ undo }) => {
+        if (pending[id] !== next) return;
+        delete pending[id];
+        saved(next, FAVOURITES, undo);
+      },
       (e) => {
         if (pending[id] !== next) return;
         delete pending[id];
@@ -93,10 +97,11 @@ export function setFavouriteAlbums(id: string, to: (was: CrateFavourites) => Cra
   c.favourite_albums = pendingAlbums[id] = next;
   saving = saving.then(() =>
     setCrateFavouriteAlbums(id, next).then(
-      () => {
+      ({ undo }) => {
         if (pendingAlbums[id] !== next) return;
         delete pendingAlbums[id];
         loadCrates();
+        saved(next, FAVOURITE_ALBUMS, undo);
       },
       (e) => {
         if (pendingAlbums[id] !== next) return;
@@ -107,6 +112,14 @@ export function setFavouriteAlbums(id: string, to: (was: CrateFavourites) => Cra
       },
     ),
   );
+}
+
+/** An own crate's toggle saved as the crate is (its Favourite or Favourite album condition, one truth): its Undo, the
+ *  crates read again after it (sizes, the toggle as it then is). A built-in's has none: a tap again. */
+function saved(to: CrateFavourites, shown: Record<CrateFavourites, { label: string }>, undo: string | null | undefined) {
+  if (!undo) return;
+  loadCrates();
+  withUndo(`${shown[to].label}.`, [undo], { after: () => loadCrates() });
 }
 
 // Before the setting was the server's (2026-10-14), each browser kept its own: sent once, then forgotten here.

@@ -641,15 +641,17 @@ export const crateToPlaylist = (id: string, name: string, source?: string, witho
     ...(without?.length ? { without } : {}),
   });
 /** A crate's favourites toggle, kept on the server for every device. */
+/** An own crate's toggle is its Favourite condition (the owner, 2026-11-02: one truth): saved as the crate is, `undo`
+ *  its Undo; a built-in's is a setting apart, no Undo (a tap again). */
 export const setCrateFavourites = (id: string, favourites: CrateFavourites) =>
-  request<{ crate: string; favourites: CrateFavourites }>(`/api/crates/${encodeURIComponent(id)}/favourites`, {
+  request<{ crate: string; favourites: CrateFavourites; undo?: string | null }>(`/api/crates/${encodeURIComponent(id)}/favourites`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ favourites }),
   });
 /** A crate's favourite albums toggle (decision 0024, amended 2026-10-19), kept on the server for every device. */
 export const setCrateFavouriteAlbums = (id: string, favourite_albums: CrateFavourites) =>
-  request<{ crate: string; favourite_albums: CrateFavourites }>(`/api/crates/${encodeURIComponent(id)}/favourite-albums`, {
+  request<{ crate: string; favourite_albums: CrateFavourites; undo?: string | null }>(`/api/crates/${encodeURIComponent(id)}/favourite-albums`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ favourite_albums }),
@@ -730,9 +732,10 @@ const post = <T>(path: string, body: unknown) =>
 export type TrackTempo = { id: string; bpm: number | null; measured: number | null };
 export type TempoAdjust = 'half' | 'double' | 'reset';
 export const getTempo = (source: string, ids: string[]) => post<{ tracks: TrackTempo[] }>('/api/tempo', { source, ids });
-/** Halves, doubles or resets the tracks' BPM, written into their files; tracks with nothing to go from stay. */
+/** Halves, doubles or resets the tracks' BPM, written into their files; tracks with nothing to go from stay. Cratarr's
+ *  own tracks: a run on the one path (`run`, none where nothing changes), else `undo`. */
 export const adjustTempo = (source: string, ids: string[], adjust: TempoAdjust) =>
-  request<{ tracks: TrackTempo[]; undo: string | null }>('/api/tempo', {
+  request<{ tracks: TrackTempo[]; undo?: string | null; run?: FileRun | null }>('/api/tempo', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source, ids, adjust }),
@@ -1098,11 +1101,24 @@ export const setFileFacts = (on: boolean) =>
 // Cratarr holds, and from where), applied as a run; every run in one shape, also told live (`file_run`).
 /** A field's change: its values as the files hold them and as Cratarr does ([] none); `track` where it differs by
  *  track (else the same in every file of the record). */
-export type FileField = { field: string; track?: string; before: string[]; after: string[]; from: string };
+export type FileField = {
+  field: string;
+  track?: string;
+  before: string[];
+  after: string[];
+  from: string;
+  /** A fix plan's (`fix:`, `intake:`): how sure; certain ones come ticked, likely ones not (the owner's choice 2). */
+  certainty?: 'certain' | 'likely';
+  /** What may be chosen instead (a genre's words found). */
+  options?: { value: string; kind?: 'genre' | 'style'; from: string; certainty: 'certain' | 'likely' }[];
+};
 /** A record in a plan, or in a run (`written` of its `files`, `undone`). */
 /** `stamp`: what the sheet shows of it, sent back with Write so a record changed since is set aside (a plan's, not a run's). */
 export type FileRecord = { album: string; title: string; artist: string; files: number; fields: FileField[]; stamp?: string | null; written?: number; undone?: boolean };
-export type FilePlan = { kind: string; title: string; records: FileRecord[] };
+/** `making`: still being made (a match looked for): asked again. */
+export type FilePlan = { kind: string; title: string; records: FileRecord[]; making?: boolean };
+/** A fix plan's choices besides the records ticked: per record the fields ticked, a genre's words picked. */
+export type FileChosen = { fields: Record<string, string[]>; genres: Record<string, string[]> };
 /** A run: `l…` while live, `r…` once kept (its undo token too); `done` of `of` records; `albums` how many. */
 export type FileRun = {
   id: string;
@@ -1124,8 +1140,11 @@ export type FilesState = { state: 'differs' | 'waiting' | 'writing' | 'written' 
 const posting = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 export const getFilePlan = (kind: string, albums?: string[]) =>
   request<FilePlan>(`/api/file-changes/plans/${encodeURIComponent(kind)}${albums?.length ? `?albums=${albums.map(encodeURIComponent).join(',')}` : ''}`);
-export const applyFilePlan = (kind: string, records: Pick<FileRecord, 'album' | 'stamp'>[]) =>
-  request<FileRun>(`/api/file-changes/plans/${encodeURIComponent(kind)}/apply`, posting({ albums: records.map((r) => r.album), stamps: Object.fromEntries(records.flatMap((r) => (r.stamp ? [[r.album, r.stamp]] : []))) }));
+export const applyFilePlan = (kind: string, records: Pick<FileRecord, 'album' | 'stamp'>[], chosen?: FileChosen) =>
+  request<FileRun>(
+    `/api/file-changes/plans/${encodeURIComponent(kind)}/apply`,
+    posting({ albums: records.map((r) => r.album), stamps: Object.fromEntries(records.flatMap((r) => (r.stamp ? [[r.album, r.stamp]] : []))), ...chosen }),
+  );
 export const getFileRuns = (since?: number) => request<FileRun[]>(`/api/file-changes/runs${since ? `?since=${since}` : ''}`);
 export const getFileRun = (id: string) => request<{ run: FileRun; kind: string; title: string; records: FileRecord[] }>(`/api/file-changes/runs/${encodeURIComponent(id)}`);
 export const undoFileRun = (id: string, albums?: string[]) => request<FileRun>(`/api/file-changes/runs/${encodeURIComponent(id)}/undo`, posting(albums ? { albums } : {}));
@@ -1511,6 +1530,67 @@ export type RecordHealth = { findings: RecordFinding[] };
 export const getRecordHealth = (source: string, id: string) =>
   quietly<RecordHealth>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(id)}/health`);
 
+/** The intake card (0.14; the owner, 2026-11-02: Health's "Records waiting for you", checks on top, tracks under): a
+ *  record waiting in an Incoming library of Cratarr's own, where it came from, its format, its checks (`waiting` while
+ *  its tracks are still heard: asked again), its tracks (length beside the reference's, 48 peaks 0–255, three snippets'
+ *  starts in ms), and Keep suggested where every check agrees. */
+export type IntakeCheckKey = 'reference' | 'acoustid' | 'sound' | 'one_record' | 'folder_name' | 'one_user' | 'in_library';
+export type CardCheck = { key: IntakeCheckKey; state: 'green' | 'amber' | 'red' | 'waiting'; said: string };
+export type IntakeTrack = {
+  id: string;
+  disc?: number | null;
+  position?: number | null;
+  title: string;
+  length_ms?: number | null;
+  reference_ms?: number | null;
+  peaks?: number[] | null;
+  snippets: { start: number; middle: number; end: number };
+};
+export type IntakeCard = {
+  source: string;
+  album: string;
+  title: string;
+  artist: string;
+  year?: number | null;
+  library?: string | null;
+  /** Bandcamp (its files' comment), Soulseek (slskd's downloads), Lidarr (its import history), else a folder. */
+  from: { kind: 'bandcamp' | 'soulseek' | 'lidarr' | 'folder'; user?: string | null; said: string };
+  format: string;
+  checks: CardCheck[];
+  tracks: IntakeTrack[];
+  suggested?: 'keep' | null;
+};
+export const getIntakeCard = (source: string, album: string) => request<IntakeCard>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/card`);
+
+/** A record's references (0.14; the owner, 2026-11-02: a row per source): what each source says of it, agreeing,
+ *  differing, found (nothing to compare yet) or missing; the one that counts (Use this, or a link pasted: its source
+ *  then counts), and whether it was checked by hand. `lengths`: ms per track in the source's own order, 0 where it
+ *  gives none; `guessed`: not certain to be this record (Discogs and Bandcamp until confirmed or pasted; MusicBrainz
+ *  where its release is not the one the files name). */
+export type ReferenceSource = 'musicbrainz' | 'discogs' | 'bandcamp' | 'acoustid';
+export type Reference = {
+  source: ReferenceSource;
+  state: 'agrees' | 'differs' | 'found' | 'missing';
+  tracks?: number | null;
+  year?: number | null;
+  type?: string | null;
+  url?: string | null;
+  said: string;
+  lengths?: number[] | null;
+  guessed?: true;
+  confirmed?: true;
+};
+export type References = { album: string; title: string; artist: string; sources: Reference[]; counting: ReferenceSource | null; by_hand: boolean };
+export const getReferences = (album: string) => request<References>(`/api/albums/cratarr/${encodeURIComponent(album)}/references`);
+/** Use this (`counting`), Confirm (`confirm`: a guessed one is this record), Paste a link (`link`: its source then
+ *  counts), Checked by hand (`by_hand`; the first time also the record's type and year, as set): the references then. */
+export const setReferences = (album: string, choice: { counting?: ReferenceSource | null; confirm?: ReferenceSource; link?: string; by_hand?: boolean }) =>
+  request<References>(`/api/albums/cratarr/${encodeURIComponent(album)}/references`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(choice),
+  });
+
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
   /** Not the library's (a Bandcamp album): asked for, where it stands (lib/CoverStatus). */
@@ -1856,36 +1936,6 @@ export type Renumbering = {
   totals: { discs: number; tracks_per_disc: number[] };
 };
 export const lookRenumber = (album: string) => post<Started>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber/look`, {});
-/** Writes the numbers shown (the preview's `to`), Undo puts the old ones back. */
-export const renumber = (album: string, tracks: { id: string; disc: number; track: number }[], totals?: Renumbering['totals']) =>
-  post<{ undo: string[] }>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber`, { tracks, totals });
-/** A fix Cratarr proposes for an album's tags (0.9.7, the administrators' metadata workflow; the owner, 2026-10-26:
- *  Cratarr proposes, an administrator approves, written into the files with Undo): its field, the value now and the one
- *  proposed, where that comes from, and how sure (`certain` ones may be applied as a list in one tap). */
-export type Fix = {
-  id: string;
-  album: string;
-  /** `reread`, `length`, `trim`: a track's length (2026-10-28: read again; written into its MP3; set to the sound it
-   *  holds), its id `<field>:<song id>`. */
-  field: 'year' | 'genre' | 'albumartist' | 'musicbrainz' | 'cover' | 'rule' | 'reread' | 'length' | 'trim';
-  from: string | null;
-  to: string;
-  source: string;
-  certainty: 'certain' | 'likely';
-  why: string;
-  /** A genre fix's every genre and style found, strongest first (0.9.8, Discogs with the rest): several may be
-   *  chosen; `to` is the strongest. */
-  candidates?: { word: string; kind: 'genre' | 'style'; source: string; certainty: 'certain' | 'likely' }[];
-};
-export type Fixes = { fixes: Fix[]; certain: number; matching?: boolean };
-/** A Health finding's fixes, for every album of it (certain ones first); `matching`: MusicBrainz is still being asked
- *  (ask again). */
-export const getFixes = (finding: string) => request<Fixes>(`/api/health/fixes?finding=${encodeURIComponent(finding)}`);
-/** An album's fixes wherever it is (Incoming's intake check, or Music). */
-export const getIntake = (source: string, album: string) => request<Fixes>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/intake`);
-/** Applies fixes (by id, or every certain one of a finding): what was applied, what failed and why, and Undo. */
-export const applyFixes = (which: ({ ids: string[] } | { certain: string }) & { chosen?: Record<string, string[]> }) =>
-  post<{ undo: string[]; applied: number; failed: { id: string; why: string }[] }>('/api/health/fixes/apply', which);
 /** What Discogs says of an album (0.9.8): its labels and catalogue numbers, credits (`tracks`: the positions as Discogs
  *  writes them; none for the whole release), genres and styles, and its page; `{}` where Discogs has none. */
 export type AlbumDiscogs = {
@@ -2669,14 +2719,15 @@ export const getAlbumCovers = (source: string, album: string) =>
  *  Archive, Discogs), its result the same as getAlbumCovers'. One already running for the album is given back. */
 export const lookAlbumCovers = (source: string, album: string) =>
   post<Started>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers/look`, {});
+/** A run on the one path (0.14): the choice is the yes, its Undo the run's (lib/fileRuns whenWritten). */
 export const setAlbumCover = (source: string, album: string, url: string) =>
-  post<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
+  post<FileRun>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
 /** A picture of one's own as the album's cover, for everyone (its administrators', the owner 2026-10-25): written as a
  *  chosen cover is, inside the files and beside them; Undo puts the old one back. JPEG, PNG or WebP, kept as sent, at
  *  most COVER_MAX (a FLAC's picture holds 16 MiB, and every track carries it). */
 export const COVER_MAX = 12 * 1024 * 1024;
 export const uploadAlbumCover = (source: string, album: string, file: Blob) =>
-  request<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, {
+  request<FileRun>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, {
     method: 'PUT',
     headers: { 'Content-Type': file.type || 'application/octet-stream' },
     body: file,
