@@ -5,6 +5,7 @@
   // counted, its sliders how it is shown (lib/InsightsSheet), each where the view has any. The views are the tabs' as they
   // were (Collection's sections, Listening's History and Profile, the Map).
   import InsightsCollection from './InsightsCollection.svelte';
+  import { rowRoot } from './glassRow.svelte';
   import DiscoveryList from './DiscoveryList.svelte';
   import InsightsListening from './InsightsListening.svelte';
   import InsightsMap from './InsightsMap.svelte';
@@ -97,7 +98,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>

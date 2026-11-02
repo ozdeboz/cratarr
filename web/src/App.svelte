@@ -1,5 +1,6 @@
 <script lang="ts">
   import { installed } from './lib/offline.svelte';
+  import { rowRoot } from './lib/glassRow.svelte';
   import { backdropUrl, nextBackdrop, SHUFFLE_EVERY_MS, shuffleStale, shuffleTurns } from './lib/backdrop.svelte';
   import Playlists from './Playlists.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
@@ -1221,7 +1222,6 @@
       back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.id))) : null}
       name={panelPage && phone ? panelPage.label : null}
       picker={page === 'library' ? 'library' : page === 'discover' ? 'discover' : null}
-      right={() => rightEl}
       bind:el={leadEl}
     />
   {/snippet}
@@ -1238,13 +1238,13 @@
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. Below
          1024 px each half at the edge its setting says (Display: Navigation controls, Content controls). -->
     {#if !leadBottom || !rightBottom}
-      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row" class:away={rowAway} class:beside={besideDrawn && !handed} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
+      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row" {@attach rowRoot()} class:away={rowAway} class:beside={besideDrawn && !handed} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
         {#if !leadBottom}{@render leadPart()}{:else}<span></span>{/if}
         {#if !rightBottom}{@render rightPart()}{/if}
       </div>
     {/if}
     {#if leadBottom || rightBottom}
-      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row at-bottom" class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
+      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row at-bottom" {@attach rowRoot()} class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
         {#if leadBottom && !typing}{@render leadPart()}{:else}<span></span>{/if}
         {#if rightBottom}{@render rightPart()}{/if}
       </div>

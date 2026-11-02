@@ -9,6 +9,7 @@
   // The pill's search narrows the two lists. Select: the ticked ones played, queued or removed from this device (the
   // owner, 2026-10-27: what one has, several have).
   import { glass, handGlass } from './glass.svelte';
+  import { rowRoot } from './glassRow.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
@@ -232,7 +233,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}

@@ -10,6 +10,7 @@
   // server's parts are its administrators' (decision 0051): for anyone else they show nothing, and the server's
   // settings are not asked for.
   import { deviceName } from './playOnTarget.svelte';
+  import { rowRoot } from './glassRow.svelte';
   import { glass, handGlass } from './glass.svelte';
   import ResetSheet from './settings/ResetSheet.svelte';
   import GlobalResults from './GlobalResults.svelte';
@@ -158,7 +159,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-  <div class="bar" class:beside={beside && !thing}>
+  <div class="bar" {@attach rowRoot()} class:beside={beside && !thing}>
     {@render glassLeft()}
     <span class="end">
       {@render glassExtra()}

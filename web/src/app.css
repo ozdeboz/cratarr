@@ -93,6 +93,11 @@
   display: none;
 }
 
+/* A row's piece there is no room for (lib/glassRow: one decision for the whole row). */
+[data-row-gone] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;

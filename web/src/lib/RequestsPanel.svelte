@@ -7,6 +7,7 @@
   // 2026-10-27: what one has, several have). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
   // fetches now (how far), then what it watches for and has not found yet.
   import { askIfMany, fewAtATime } from './many.svelte';
+  import { rowRoot } from './glassRow.svelte';
   import { hrefOf, viewOn } from './addresses';
   import { toast } from './toast.svelte';
   import { plural } from './insights.svelte';
@@ -172,7 +173,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}

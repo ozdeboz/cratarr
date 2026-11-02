@@ -11,6 +11,7 @@
   // chosen, and a review list over the albums where nothing goes in until it is ticked and added (lib/trackIntake).
   // Beside the list on a roomy window (no ✕ there), over it on a phone.
   import { untrack } from 'svelte';
+  import { rowRoot } from './glassRow.svelte';
   import { findsTracks, offers } from './capabilities.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
@@ -394,7 +395,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
