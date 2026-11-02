@@ -20,7 +20,8 @@
     onclearall = null,
     more = [],
   }: {
-    /** The control that caused it: the tip points at its middle. */
+    /** The control that caused it: the tip points at its middle. None in sight: it stands in place, in the empty
+     *  list, without a tip. */
     anchor: HTMLElement | null | undefined;
     /** What is not there ("No tracks with", "No records for"). */
     said: string;
@@ -42,6 +43,8 @@
     const box = el;
     if (!a || !box || !a.isConnected) return void (at = null);
     const r = a.getBoundingClientRect();
+    // Its control not drawn (hidden, gone): no tip on nothing.
+    if (!r.width && !r.height) return void (at = null);
     const w = box.offsetWidth;
     const mid = r.left + r.width / 2;
     const left = Math.max(EDGE, Math.min(mid - w / 2, innerWidth - EDGE - w));
@@ -51,7 +54,7 @@
   $effect(() => {
     const a = anchor;
     const box = el;
-    if (!a || !box) return;
+    if (!a || !box) return void (at = null);
     // The top layer: over a panel's edge and whatever scrolls it (a browser without it: fixed, as high as anything).
     try {
       box.showPopover?.();
@@ -78,7 +81,8 @@
 
 <div
   class="nothing"
-  popover="manual"
+  class:in-place={!anchor}
+  popover={anchor ? 'manual' : undefined}
   role="status"
   bind:this={el}
   class:placed={at !== null}
@@ -134,6 +138,18 @@
   /* Placed once its control is measured: never a frame in the wrong place. */
   .nothing.placed {
     visibility: visible;
+  }
+
+  /* No control to point at: in the list's place, as a line of the page. */
+  .nothing.in-place {
+    position: static;
+    width: fit-content;
+    margin: 24px 16px;
+    visibility: visible;
+  }
+
+  .nothing.in-place::before {
+    display: none;
   }
 
   /* The tip, on its control's middle. */

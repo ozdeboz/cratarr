@@ -510,7 +510,7 @@
     if (untrack(() => blocked?.for) === asked) return;
     let gone = false;
     crateRows(c, 0, 1, prefs.source || undefined, fav, alb, look, { q }).then(
-      (r) => (((window as unknown as { __blk?: unknown }).__blk = { gone, b: r.blocked ?? null }), !gone && (blocked = r.blocked ? { for: asked, of: r.blocked } : null)), // DEBUG
+      (r) => !gone && (blocked = r.blocked ? { for: asked, of: r.blocked } : null),
       () => !gone && (blocked = null),
     );
     return () => (gone = true);
@@ -538,7 +538,11 @@
       const k = b.causes[i].kind;
       return k === 'favourites' ? heartEl : k === 'favourite_albums' ? discEl : k === 'search' ? document.querySelector<HTMLElement>('.page-row .lens') : null;
     };
-    const anchor = (first.causes.length === 1 ? controlOf(first.causes[0]) : null) ?? funnel() ?? heartEl ?? discEl ?? actbar ?? null;
+    // Only a control that shows (the action row is set aside while the panel's own search narrows it): else the next.
+    const seen = (e: HTMLElement | null | undefined) => (e && e.isConnected && e.getClientRects().length > 0 && e.getBoundingClientRect().width > 0 ? e : null);
+    // The one control that holds the cause, or the Filter button for several; neither in sight: in the list, no tip
+    // (never on another control).
+    const anchor = first.causes.length === 1 ? seen(controlOf(first.causes[0]) ?? funnel()) : seen(funnel());
     const chips = first.causes.map(chipOf);
     return {
       anchor,
