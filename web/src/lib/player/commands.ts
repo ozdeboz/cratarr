@@ -27,8 +27,11 @@ export function commandOf(op: string, args: Args = {}): PlayerCommand | null {
       return { command: 'resume' };
     case 'sleep':
       return given({ command: 'sleep' as const, at_ms: num(args.atMs) ?? null, end_of_track: bool(args.endOfTrack) || undefined });
-    case 'add':
-      return given({ command: 'add' as const, tracks: tracks(args.tracks), at: num(args.at), after: str(args.after) });
+    case 'add': {
+      // `now`: played at once, after the playing track (a Play now, the owner 2026-11-02).
+      const add = { command: 'add' as const, tracks: tracks(args.tracks), at: num(args.at), after: str(args.after), now: args.now === true ? true : undefined };
+      return given(add);
+    }
     case 'move':
       return given({ command: 'move' as const, from: num(args.from), to: num(args.to), entry: str(args.entry), after: str(args.after) });
     case 'remove':

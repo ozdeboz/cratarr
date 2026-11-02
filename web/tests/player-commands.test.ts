@@ -33,6 +33,8 @@ test('the ops that are the command by name, with their fields as given', () => {
   assert.deepEqual(commandOf('skip_favourites', { on: false }), { command: 'skip_favourites', on: false });
   assert.deepEqual(commandOf('repeat', { mode: 'all' }), { command: 'repeat', mode: 'all' });
   assert.deepEqual(commandOf('radio', { on: true, by: 'artist', count: 2 }), { command: 'radio', on: true, by: 'artist', count: 2 });
+  // A Play now (the owner, 2026-11-02): added after the playing track and played at once.
+  assert.deepEqual(commandOf('add', { tracks: [t], at: 3, now: true }), { command: 'add', tracks: [t], at: 3, now: true });
   assert.deepEqual(commandOf('autoplay', { mode: 'stop' }), { command: 'autoplay', mode: 'stop' });
   assert.deepEqual(commandOf('autoplay', { mode: 'similar', albums: false, restart: false, seed: ['a'], within: null }), {
     command: 'autoplay',
