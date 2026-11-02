@@ -145,6 +145,31 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   miss too much. AudioMuse runs after import, so in Health, not on the intake card.
 - Mockups of the intake card first (632), then the server's checks and references (a5).
 
+**From SoulSync and DroppedNeedle (reviewed 2026-11-02, the HomeAssistant session, placed by 632).** The owner's rule:
+0.14 stays light, only truly helpful bug fixes; the rest into 0.15 or 0.16, 0.17 only for a very good reason. Never
+anything in without the owner's tick (0080); never a chat room.
+
+- *0.14: nothing.* gapfill's two bugs are not Cratarr's: a refused enqueue fails the item at once (slskd's status, its
+  failures, no batch: `slskd::fetch`), and a transfer slskd dropped fails it at the next read, every 2 s (the batch
+  gone or empty is an error in `track_fetch::follow`), not after the 45 minutes. What gapfill guards, Cratarr's add
+  already does: never overwriting (a file there already refuses), decoding whole, the length measured on the file
+  against the recording's, AcoustID, copied in under a hidden name then renamed (no move across filesystems half
+  done), a replaced track to the trash first and an Undo.
+- *0.15, with the bulk intake (0096: a library's fetcher is a setting):* on to the next candidate when a peer refuses,
+  errs or keeps it queued too long (its own queued limit, now one 30 minutes); a read of slskd that fails once is not
+  the end of a fetch (today it refuses it and leaves slskd's download running, its file in slskd's folder); the
+  intake's state on disk (in memory today: a restart forgets it); the peers that failed remembered per record; a
+  ladder of searches (record and year, the title stripped, the main artist only, wildcards for artists Soulseek's
+  server filters, none twice); a ladder of retries for missing tracks (none after 0 or 1 failures, 4 hours after 2, a
+  day after 3, a week after 4 and more; never given up; Search now overrides; a time that cannot be read counts as
+  due); each file set aside with why.
+- *0.16, with each user's own music (0084):* the intake per library, each user's own and their room. Maybe a whole
+  track's spectrum beside the 16 kHz gate (SoulSync's own detector is too crude to copy).
+- *Not planned:* other sources (Usenet, streaming).
+- To read again when building: DroppedNeedle's thin slskd client (429: one search or enqueue at a time; a circuit
+  breaker; a test that keeps Soulseek's protocol out of the app) and SoulSync's retry backoff and quarantine (a JSON
+  note beside each set-aside file).
+
 ## External library
 
 Taken up for 0.12 as modes per server (the runway above). What follows is the plan as it stood.
