@@ -119,6 +119,18 @@ pub fn profiles(alike: &Alike, sources: &Sources, off: &[&str]) -> (Profile, Pro
 /// The sources one can switch off (the owner, 2026-10-23: a switch for each on the page).
 pub const SOURCES: [&str; 5] = ["favourites", "playlists", "plays", "skipped", "excluded"];
 
+/// The sources an account switched off, as its settings keep them (`taste_off`; decision 0094: Settings › Profile's
+/// switches are the account's, and every use of the taste reads them); names not known left out, none kept: all on.
+pub fn off_in(settings: &serde_json::Value) -> Vec<&'static str> {
+    let off = settings["taste_off"].as_array();
+    SOURCES.into_iter().filter(|s| off.is_some_and(|o| o.iter().any(|x| x.as_str() == Some(s)))).collect()
+}
+
+/// An account's sources switched off (`off_in`). Blocking.
+pub fn off_of(ud: &crate::userdata::UserData, user: &str) -> Vec<&'static str> {
+    ud.settings_of(user).map(|(_, s)| off_in(&s)).unwrap_or_default()
+}
+
 /// The taste and what is avoided, from `sources`, over `alike`; a source in `off` adds nothing (its count stays, what
 /// it would add).
 pub fn taste(alike: &Alike, sources: &Sources, off: &[&str]) -> TasteView {
@@ -251,5 +263,18 @@ mod tests {
         let t = taste(&alike, &sources, &["plays", "skipped", "excluded"]);
         assert_eq!((t.taste.tracks, t.avoid.tracks, t.taste.sources["plays"], t.avoid.sources["excluded"]), (1, 0, 2, 1));
         assert!(t.avoid.words.is_empty() && t.avoid.numbers.is_empty());
+    }
+
+    #[test]
+    fn the_account_s_switches_off_leave_their_sources_out() {
+        assert!(off_in(&serde_json::json!({})).is_empty(), "none kept: every source on");
+        let off = off_in(&serde_json::json!({ "taste_off": ["skipped", "nonsense", "favourites"] }));
+        assert_eq!(off, ["favourites", "skipped"]);
+        let files = vec![file("a.flac", "Jazz", 1960.0), file("b.flac", "Techno", 1995.0)];
+        let alike = Alike::of(&files, &HashMap::new());
+        let at = |rel: &str| alike.place_of_line(rel).unwrap();
+        let sources = Sources { favourites: vec![at("a.flac")], skipped: vec![(at("b.flac"), 3)], plays: vec![(at("b.flac"), 2)], ..Sources::default() };
+        let (taste, avoid) = profiles(&alike, &sources, &off);
+        assert_eq!((taste.members(), avoid.tracks()), (&[at("b.flac")][..], 0), "the favourite and the skips add nothing");
     }
 }
