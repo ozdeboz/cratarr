@@ -236,6 +236,9 @@ export function matchesSearch(...texts: (string | null | undefined)[]): boolean 
   void matching.ready;
   return (listQueries?.value ?? pageQueries(pageView.query, null)).some((q) => matches(q, ...texts));
 }
+/** The page's search as lines of words, each one way it can match (as matchesSearch reads it): what the server judges
+ *  as the search where it says what keeps things out (decision 0095). None: no words. */
+export const searchLines = (): string[] => (pageView.query.trim() ? (listQueries?.value ?? pageQueries(pageView.query, null)).map((q) => q.join(' ')).filter(Boolean) : []);
 /** Whether the page's list gives its place to the loader: its words read as a crate for longer than the one rule keeps
  *  what it showed (lib/loader). */
 export const listReading = () => !!listQueries?.loader;

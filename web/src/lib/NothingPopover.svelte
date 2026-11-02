@@ -18,14 +18,18 @@
     said,
     chips,
     onclearall = null,
+    more = [],
   }: {
-    /** The control that caused it: the tip points at its middle. */
+    /** The control that caused it: the tip points at its middle. None in sight: it stands in place, in the empty
+     *  list, without a tip. */
     anchor: HTMLElement | null | undefined;
     /** What is not there ("No tracks with", "No records for"). */
     said: string;
     chips: NothingChip[];
     /** Every cause cleared at once; offered where there are several. */
     onclearall?: (() => void) | null;
+    /** Other true answers, each its own line under the first (decision 0095: what else would bring things back). */
+    more?: { said: string; chips: NothingChip[] }[];
   } = $props();
 
   const EDGE = 8;
@@ -39,6 +43,8 @@
     const box = el;
     if (!a || !box || !a.isConnected) return void (at = null);
     const r = a.getBoundingClientRect();
+    // Its control not drawn (hidden, gone): no tip on nothing.
+    if (!r.width && !r.height) return void (at = null);
     const w = box.offsetWidth;
     const mid = r.left + r.width / 2;
     const left = Math.max(EDGE, Math.min(mid - w / 2, innerWidth - EDGE - w));
@@ -48,7 +54,7 @@
   $effect(() => {
     const a = anchor;
     const box = el;
-    if (!a || !box) return;
+    if (!a || !box) return void (at = null);
     // The top layer: over a panel's edge and whatever scrolls it (a browser without it: fixed, as high as anything).
     try {
       box.showPopover?.();
@@ -75,7 +81,8 @@
 
 <div
   class="nothing"
-  popover="manual"
+  class:in-place={!anchor}
+  popover={anchor ? 'manual' : undefined}
   role="status"
   bind:this={el}
   class:placed={at !== null}
@@ -95,6 +102,15 @@
   {#if onclearall && chips.filter((c) => c.onclear).length > 1}
     <button class="all" onclick={onclearall}>Clear all</button>
   {/if}
+  {#each more as line (line.said + line.chips.map((c) => c.label).join())}
+    <span class="line">
+      <span class="said">{line.said}</span>
+      {#each line.chips as c (c.label)}
+        {#if c.onopen}<button class="chip open" onclick={c.onopen}>{c.label}<Icon name="chevronRight" size={14} /></button>
+        {:else}<span class="chip"><span class="q">{c.label}</span>{#if c.onclear}{@const clear = c.onclear}<button class="clear" aria-label={`Clear ${c.label}`} title="Clear" onclick={clear}><Icon name="close" size={14} /></button>{/if}</span>{/if}
+      {/each}
+    </span>
+  {/each}
 </div>
 
 <style>
@@ -124,6 +140,18 @@
     visibility: visible;
   }
 
+  /* No control to point at: in the list's place, as a line of the page. */
+  .nothing.in-place {
+    position: static;
+    width: fit-content;
+    margin: 24px 16px;
+    visibility: visible;
+  }
+
+  .nothing.in-place::before {
+    display: none;
+  }
+
   /* The tip, on its control's middle. */
   .nothing::before {
     content: '';
@@ -135,6 +163,15 @@
     transform: rotate(45deg);
     background: var(--surface);
     box-shadow: -1px -1px 0 color-mix(in srgb, var(--text) 9%, transparent);
+  }
+
+  /* Another answer: a line of its own under the first. */
+  .line {
+    display: flex;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
   }
 
   .said {

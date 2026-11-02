@@ -61,6 +61,7 @@
     getDiscoverArtistAlbums,
     discoverArtistPhotoUrl,
     type ListedAlbum,
+    type ListBlocked,
     type ListReason,
     type PlaylistRow,
   } from './api';
@@ -182,7 +183,9 @@
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
   import { conditionsFor, filterOf, filtersOn, hiddenLibraries, passing, setConditions } from './listFilter.svelte';
   import NothingPopover, { type NothingChip } from './NothingPopover.svelte';
-  import { matchesSearch, pageView, trackOrders, type TrackOrder } from './pageView.svelte';
+  import { answers, pointAt, type Answer } from './attribution';
+  import { lastOf } from './lastChange.svelte';
+  import { matchesSearch, pageView, searchLines, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
@@ -492,23 +495,62 @@
   /** Nothing, caused here: each cause a chip, the popover's tip on the one control that alone brings tracks back, or on
    *  the Filter button where it takes more than one (decision 0095; the owner, 2026-11-02: a crate empty by its
    *  heart or disc, "the user does not necessarily understand what's going on"). */
-  const nothing = $derived.by(() => {
-    if (!crate || !rows || rows.length || !reasons.length || allBack === 0) return null;
+  // What keeps every track out, asked when the panel shows none (a5's `blocked`): the true cause, not every cause that
+  // is on (the owner, 2026-11-02: "I want the real true attribution"; lib/attribution). The search is one of them.
+  let blocked = $state.raw<{ for: string; of: ListBlocked } | null>(null);
+  $effect(() => {
     const c = crate;
-    const chipOf = (r: ListReason): NothingChip => {
+    const empty = !!c && !crateEditing && !!rows && !!shown && shown.length === 0;
+    if (!empty || !c) return void (blocked = null);
+    const q = searchLines();
+    const fav = favouritesOf(c);
+    const alb = favouriteAlbumsOf(c);
+    const look = crateLook;
+    const asked = JSON.stringify([c, q, fav, alb, look]);
+    if (untrack(() => blocked?.for) === asked) return;
+    let gone = false;
+    crateRows(c, 0, 1, prefs.source || undefined, fav, alb, look, { q }).then(
+      (r) => !gone && (blocked = r.blocked ? { for: asked, of: r.blocked } : null),
+      () => !gone && (blocked = null),
+    );
+    return () => (gone = true);
+  });
+  const nothing = $derived.by(() => {
+    const b = blocked?.of;
+    const c = crate;
+    if (!b || !c) return null;
+    const found = answers(b.groups);
+    const first = pointAt(found, lastOf(b.causes));
+    if (!first) return null;
+    const chipOf = (i: number): NothingChip => {
+      const r = b.causes[i];
       if (r.kind === 'favourites') return { label: r.label, onclear: () => setFavourites(c, () => 'all') };
       if (r.kind === 'favourite_albums') return { label: r.label, onclear: () => setFavouriteAlbums(c, () => 'all') };
+      if (r.kind === 'search') return { label: r.label, onclear: () => (pageView.query = '') };
       if (r.kind === 'libraries_off') return { label: r.label, onclear: () => (prefs.hiddenLibraries = []) };
       if (r.kind === 'excluded') return { label: r.label, onopen: () => (excludedOpen = true) };
       return { label: r.label, onclear: () => setConditions('crate', filterOf('crate').conditions.filter((x) => x.axis !== r.key)) };
     };
-    const chips = reasons.map(chipOf);
-    const alone = reasons.filter((r) => r.back > 0);
+    const said = (a: Answer) => `${plural(a.frees, 'track')} without`;
     const funnel = () => (handed ? document.querySelector<HTMLElement>('.page-row .funnel') : pillsEl?.querySelector<HTMLElement>('.funnel')) ?? null;
-    const controlOf = (r: ListReason) => (r.kind === 'favourites' ? heartEl : r.kind === 'favourite_albums' ? discEl : null) ?? funnel();
-    const anchor = (alone.length === 1 ? controlOf(alone[0]) : funnel()) ?? heartEl ?? discEl ?? actbar ?? null;
-    const clearAll = () => chips.forEach((x) => x.onclear?.());
-    return { chips, anchor, clearAll };
+    // Its tip on the one control that holds the cause; a combination's on the Filter button.
+    const controlOf = (i: number) => {
+      const k = b.causes[i].kind;
+      return k === 'favourites' ? heartEl : k === 'favourite_albums' ? discEl : k === 'search' ? document.querySelector<HTMLElement>('.page-row .lens') : null;
+    };
+    // Only a control that shows (the action row is set aside while the panel's own search narrows it): else the next.
+    const seen = (e: HTMLElement | null | undefined) => (e && e.isConnected && e.getClientRects().length > 0 && e.getBoundingClientRect().width > 0 ? e : null);
+    // The one control that holds the cause, or the Filter button for several; neither in sight: in the list, no tip
+    // (never on another control).
+    const anchor = first.causes.length === 1 ? seen(controlOf(first.causes[0]) ?? funnel()) : seen(funnel());
+    const chips = first.causes.map(chipOf);
+    return {
+      anchor,
+      said: said(first),
+      chips,
+      clearAll: () => chips.forEach((x) => x.onclear?.()),
+      more: found.filter((a) => a !== first).slice(0, 2).map((a) => ({ said: `or ${said(a)}`, chips: a.causes.map(chipOf) })),
+    };
   });
   /** The rows asked again for the same subject (its key), shown as they were meanwhile. */
   let waitingFor = $state<string | null>(null);
@@ -2323,10 +2365,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <Asking now />
     {:else if rows && !rows.length}
       {#if nothing}
-        <NothingPopover anchor={nothing.anchor} said="No tracks with" chips={nothing.chips} onclearall={nothing.clearAll} />
+        <NothingPopover anchor={nothing.anchor} said={nothing.said} chips={nothing.chips} onclearall={nothing.clearAll} more={nothing.more} />
       {:else}
         <p class="empty">No tracks yet.</p>
       {/if}
+    {:else if nothing && shown && !shown.length}
+      <!-- What it holds, every track kept out by its words or its filter: why, at what did it (decision 0095). -->
+      <NothingPopover anchor={nothing.anchor} said={nothing.said} chips={nothing.chips} onclearall={nothing.clearAll} more={nothing.more} />
     {:else if rows && shown}
       {#if recordsView}
         <ListHead

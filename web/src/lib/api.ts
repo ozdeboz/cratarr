@@ -584,10 +584,16 @@ export const crateRows = (
   favourites?: CrateFavourites,
   favouriteAlbums?: CrateFavourites,
   look: CrateLook = {},
+  /** What keeps each track out (decision 0095), the page's search one of the causes: its words, each line one `q`. */
+  explain: { q: string[] } | null = null,
 ) => {
   const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
+  if (explain) {
+    q.set('explain', '1');
+    for (const w of explain.q) q.append('q', w);
+  }
   // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
   return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked }>(
     `/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`,
