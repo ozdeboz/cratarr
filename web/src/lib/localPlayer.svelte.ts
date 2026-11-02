@@ -15,6 +15,7 @@
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
 import { playback } from './deviceLog';
+import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
@@ -1182,6 +1183,7 @@ const handed = () => inApp || driven !== null;
 export function drive(name: string | null) {
   driven = name;
   // The next player's own, from its first report, on its own clock.
+  asked = null;
   deck = null;
   eased = null;
   clockGaps = [];
@@ -1275,6 +1277,15 @@ function gliding() {
 }
 /** A queue's track as itself (its entry too), or null. */
 const trackKey = (t: LocalTrack | undefined) => (t ? `${t.source}/${t.id}/${t.entry ?? ''}` : null);
+/** A track asked of the player that plays it (lib/player/asked): reports from before it are not taken. */
+let asked: Asked = null;
+const asking = (index: number) => (asked = ask(trackKey(local.queue[index]), index, performance.now()));
+function fromBefore(m: { queue?: unknown; index?: unknown }): boolean {
+  const queue = Array.isArray(m.queue) ? (m.queue as LocalTrack[]) : local.queue;
+  const v = heardAsked(asked, m.index, (i) => trackKey(queue[i]), performance.now());
+  asked = v.asked;
+  return v.before;
+}
 const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
   a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
@@ -1303,6 +1314,7 @@ export function reportedBy(m: {
   deckAtMs?: unknown;
   landing?: unknown;
 }) {
+  if (fromBefore(m)) return;
   const trackBefore = trackKey(local.queue[local.index]);
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -1854,6 +1866,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   if (handed()) {
     Object.assign(local, { index, position, paused: false, error: null });
     reported = { positionMs: position * 1000, at: performance.now() };
+    asking(index);
     hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled, name: from });
     if (anew) handArm();
     return;
@@ -1990,6 +2003,7 @@ export function jump(index: number) {
   if (handed() && index >= 0 && index < local.queue.length) {
     const entry = local.queue[index].entry;
     Object.assign(local, { index, position: 0, paused: false });
+    asking(index);
     return hand('jump', { index, ...(entry ? { entry } : {}) });
   }
   if (!audio || index < 0 || index >= local.queue.length) return;
