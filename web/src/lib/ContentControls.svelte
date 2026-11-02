@@ -393,6 +393,12 @@
     min-width: 0;
   }
 
+  /* Nothing to show (an album beside the page while music plays: no search there, nowhere else to play it): no glass,
+     not an empty one (the owner, 2026-11-02: "a shim of a button, unfilled and tiny"). */
+  .pill-row:not(:has(button, .work)) {
+    display: none;
+  }
+
   /* Everywhere's shown: lit. */
   button.globe.on {
     background: color-mix(in srgb, var(--accent) 22%, transparent);
