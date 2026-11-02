@@ -12,8 +12,9 @@
 #
 # The fixtures are an Incoming library: Cratarr has one Music folder (the first Music library with audio), the sample.
 #
-# Fenced off: no accounts (nobody signs in; it is for the machine's own network), MusicBrainz switched off at its
-# first start, no service keys, no Lidarr, slskd or Jellyfin. 768 MB, as production.
+# Fenced off: one account, the owner's, with sign-in off (nobody signs in; it is for the machine's own network: what is
+# an account's own, Home's shelves and an artist's page, needs an account to be, 2026-11-02), MusicBrainz switched off
+# at its first start, no service keys, no Lidarr, slskd or Jellyfin. 768 MB, as production.
 set -eu
 DIR=${1:?usage: scripts/dev-instance.sh <folder> [port]}
 PORT=${2:-8095}
@@ -60,6 +61,11 @@ if [ ! -f "$DIR/data/settings.json" ]; then
   ]
 }
 JSON
+  # The one account, there before the first start: a Cratarr that starts with an account keeps sign-in off (a new one
+  # without would require it, once someone has an account).
+  printf '%s
+' '[{ "name": "owner", "password": "", "admin": true }]' > "$DIR/data/subsonic-users.json"
+  chmod 600 "$DIR/data/subsonic-users.json"
   FIRST=1
 else
   FIRST=0
