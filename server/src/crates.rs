@@ -3309,8 +3309,8 @@ mod tests {
             ..Facts::default()
         };
         let uses: HashMap<String, Use> = [("a/1".to_string(), Use { plays: 2, last: Some(1), rating: Some(4), skips: 0 })].into();
-        let (membership, favourites, albums) = (HashMap::new(), HashSet::new(), HashSet::new());
-        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: Some(&uses), now: 10, fits: None };
+        let (membership, favourites, albums, fits) = (HashMap::new(), HashSet::new(), HashSet::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: Some(&uses), now: 10, fits: Some(&fits) };
         for (axis, _, kind) in AXES {
             if matches!(kind, Kind::Like) {
                 continue;
