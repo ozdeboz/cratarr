@@ -225,12 +225,10 @@ button.solid[aria-busy='true']::after {
   opacity: 1;
 }
 
-/* The panel locked (a long-press on its grip, the owner 2026-11-02): a pill of the accent round the handle, its fill as
-   it is ("either only subtly tinting the fill or only bordering"). */
+/* The panel locked (a long-press on its grip, the owner 2026-11-02): the handle in the accent, as it is otherwise (its
+   size, its see-through), only its colour changed ("I didn't want any extra thickness ... Only the color change"). */
 .edge-grip.locked::after {
-  opacity: 1;
-  background: color-mix(in srgb, var(--muted) 60%, transparent);
-  box-shadow: 0 0 0 2px var(--accent);
+  background: var(--accent);
 }
 
 /* Searching, Everywhere chosen (lib/SearchScope): the page's or the panel's own content is set aside (kept, not
