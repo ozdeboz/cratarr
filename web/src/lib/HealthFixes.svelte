@@ -4,10 +4,11 @@
   // writes them into the files (Undo puts the old values back), as Renumber's Fix does (lib/HealthRenumber). A genre's
   // genres are picked (lib/GenrePick); those picked are written as its genres.
   import type { Fix } from './api';
-  import { apply, FIELD_LABEL, fixesOf, healthFixes, readFixes } from './fixes.svelte';
+  import { apply, FIELD_LABEL, fixesErrors, fixesOf, healthFixes, readFixes } from './fixes.svelte';
   import GenrePick from './GenrePick.svelte';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
+  import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
 
   /** `track`: one track's (a length's fix), not the whole album's. */
@@ -36,7 +37,9 @@
   }
 </script>
 
-{#if !known || (matching && !mine.length)}
+{#if fixesErrors[finding]}
+  <Notice text={fixesErrors[finding]} onretry={() => readFixes(finding)} />
+{:else if !known || (matching && !mine.length)}
   <PageLoading />
 {:else if !mine.length}
   <p class="muted">Nothing to propose for it yet.</p>

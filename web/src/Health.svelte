@@ -63,11 +63,13 @@
 </script>
 
 <main>
-  {#if health.error}<Notice text={health.error} />{/if}
+  <!-- Either answer failed: said in place, never "All good." (the owner, 2026-11-02: errors are never shown as nothing). -->
+  {#if health.reportError}<Notice text={health.reportError} onretry={loadHealth} />{/if}
+  {#if health.error && health.error !== health.reportError}<Notice text={health.error} onretry={loadHealth} />{/if}
   {#if !health.loaded}
     <PageLoading />
   {:else if !list.length && !facts}
-    {#if !problems().length}<p class="empty">All good.</p>{:else if !pageView.none}<p class="empty">None of them match.</p>{/if}
+    {#if !problems().length}{#if !health.reportError && !health.error}<p class="empty">All good.</p>{/if}{:else if !pageView.none}<p class="empty">None of them match.</p>{/if}
   {:else}
     <div class="groups">
       {#each groups as g (g.area)}
