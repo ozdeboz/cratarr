@@ -503,8 +503,8 @@
         label={o.label}
         danger
         onclick={() => {
-          onclose();
           o.run();
+          onclose();
         }}
       />
     {/each}
@@ -530,8 +530,8 @@
             icon: 'playlists',
             label: 'Playlists',
             onclick: () => {
-              onclose();
               onplaylists();
+              onclose();
             },
           },
         ]

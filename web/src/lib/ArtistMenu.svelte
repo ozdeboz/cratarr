@@ -69,8 +69,8 @@
   const actions = $derived.by<SheetAction[]>(() => {
     if (exporting || step !== 'menu') return [];
     const act = (mode: Act) => () => {
-      onclose();
       onact(mode);
+      onclose();
     };
     const none = !tracks.length;
     return inOrder('artist', [
@@ -85,8 +85,8 @@
               label: 'Start radio',
               disabled: none,
               onclick: () => {
-                onclose();
                 onradio?.();
+                onclose();
               },
             },
           ]

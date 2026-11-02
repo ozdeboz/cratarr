@@ -224,10 +224,12 @@
     albumResume(id).then((r) => r.track && (resumeAt = { track: r.track, position: r.position_secs ?? 0 }), () => {});
   });
   async function forgetResume() {
+    // What it does once the server answered, fixed as it is chosen: the menu closes at once (tests/menus-run-first).
+    const [id, gone] = [a.id, onresumegone];
     onclose();
     try {
-      await forgetAlbumResume(a.id);
-      onresumegone?.();
+      await forgetAlbumResume(id);
+      gone?.();
     } catch (e) {
       toast.fail(e, "The resume point wasn't removed");
     }
