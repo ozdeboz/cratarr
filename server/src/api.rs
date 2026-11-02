@@ -2499,8 +2499,9 @@ async fn crate_favourites(
     Path(id): Path<String>,
     Json(req): Json<CrateFavouritesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.set_crate_favourites(&id, req.favourites).await?;
-    Ok(Json(json!({ "crate": id, "favourites": req.favourites })))
+    // An own crate's: its Favourite condition, saved with the crate's Undo (one truth, the owner 2026-11-02).
+    let undo = app.playlists.set_crate_favourites(&id, req.favourites).await?;
+    Ok(Json(json!({ "crate": id, "favourites": req.favourites, "undo": undo })))
 }
 
 /// Tracks of a crate, by their ids on a server (its default when not said), and albums of Cratarr's own library by id.
@@ -2584,8 +2585,8 @@ async fn crate_favourite_albums(
     Path(id): Path<String>,
     Json(req): Json<CrateFavouriteAlbumsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.set_crate_favourite_albums(&id, req.favourite_albums).await?;
-    Ok(Json(json!({ "crate": id, "favourite_albums": req.favourite_albums })))
+    let undo = app.playlists.set_crate_favourite_albums(&id, req.favourite_albums).await?;
+    Ok(Json(json!({ "crate": id, "favourite_albums": req.favourite_albums, "undo": undo })))
 }
 
 async fn crate_playlist(

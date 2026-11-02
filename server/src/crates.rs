@@ -469,6 +469,27 @@ impl Favourites {
     }
 }
 
+/// An own crate's heart and disc are its Favourite and Favourite album conditions (the owner, 2026-11-02: "Keep both
+/// but as one truth"): its conditions apart from those, and the toggles' settings they say (no such condition: all; a
+/// Favourite one: only; a Favourite not: none).
+pub fn toggles_apart(conditions: &[Condition]) -> (Vec<Condition>, Favourites, Favourites) {
+    let setting = |axis: &str| match conditions.iter().find(|c| c.enabled && c.axis == axis && c.value == Value::Yes) {
+        None => Favourites::All,
+        Some(c) if c.not => Favourites::None,
+        Some(_) => Favourites::Only,
+    };
+    let (tracks, albums) = (setting("favourite"), setting("favourite_album"));
+    let rest = conditions.iter().filter(|c| !(c.enabled && matches!(c.axis.as_str(), "favourite" | "favourite_album") && c.value == Value::Yes)).cloned().collect();
+    (rest, tracks, albums)
+}
+
+/// An own crate's conditions with its heart (`favourite`) or disc (`favourite_album`) set: that condition replaced.
+pub fn with_toggle(conditions: &[Condition], axis: &str, to: Favourites) -> Vec<Condition> {
+    let (rest, tracks, albums) = toggles_apart(conditions);
+    let (tracks, albums) = if axis == "favourite_album" { (tracks, to) } else { (to, albums) };
+    shown(&rest, tracks, albums)
+}
+
 /// A crate's conditions as its two toggles show it: favourite tracks (`tracks`), and favourite albums (`albums`).
 pub fn shown(conditions: &[Condition], tracks: Favourites, albums: Favourites) -> Vec<Condition> {
     albums.with_albums(&tracks.with(conditions))
@@ -1010,7 +1031,7 @@ const AXES: [(&str, &str, Kind); 25] = [
     ("artist", "Artist", Kind::Values),
     // By album (its id: names alike are not one album; no values listed, its chips come from search) and by label
     // (0.11, quick crates: "by this album" a chip as well as a seed; the label the tags name, else Discogs').
-    ("album", "Album", Kind::Values),
+    ("album", "Record", Kind::Values),
     ("label", "Label", Kind::Values),
     // The album's release type (0.9.6, the owner: hide EPs and singles); an album of no known type has none.
     ("type", "Type", Kind::Values),
@@ -3616,5 +3637,20 @@ mod tests {
         );
         let named = Named { name: "Air".into(), kind: NameKind::Artist };
         assert_eq!(serde_json::to_string(&named).unwrap(), r#"{"name":"Air","kind":"artist"}"#);
+    }
+
+    #[test]
+    fn an_own_crate_s_toggles_are_its_conditions() {
+        let jazz = Condition::new("genre", false, Value::AnyOf { values: vec!["Jazz".into()] });
+        let (rest, t, a) = toggles_apart(&[jazz.clone()]);
+        assert_eq!((rest.len(), t, a), (1, Favourites::All, Favourites::All));
+        let not_fav = with_toggle(&[jazz.clone()], "favourite", Favourites::None);
+        assert_eq!(toggles_apart(&not_fav).1, Favourites::None);
+        let both = with_toggle(&not_fav, "favourite_album", Favourites::Only);
+        assert_eq!(toggles_apart(&both), (vec![jazz.clone()], Favourites::None, Favourites::Only));
+        // Set again: replaced, never twice.
+        let only = with_toggle(&both, "favourite", Favourites::Only);
+        assert_eq!(only.iter().filter(|c| c.axis == "favourite").count(), 1);
+        assert_eq!(toggles_apart(&with_toggle(&only, "favourite", Favourites::All)), (vec![jazz], Favourites::All, Favourites::Only));
     }
 }
