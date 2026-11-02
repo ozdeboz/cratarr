@@ -30,6 +30,8 @@ export const requests = $state({
   view: null as RequestsView | null,
   watching: null as Watching | null,
   error: null as string | null,
+  /** Lidarr not asked (its error): said with Try again, never a loader for ever (the owner, 2026-11-02). */
+  watchError: null as string | null,
 });
 
 export const loadRequests = () =>
@@ -40,9 +42,10 @@ export const loadRequests = () =>
 
 /** Lidarr asked, not watched: while the page or its panel shows, again every half minute (its queue moves). */
 export const lookAtLidarr = () =>
-  getWatching()
-    .then((w) => (requests.watching = w))
-    .catch(() => {});
+  getWatching().then(
+    (w) => ((requests.watching = w), (requests.watchError = null)),
+    (e) => (requests.watchError = e instanceof Error ? e.message : 'Unexpected error'),
+  );
 
 /** Those who answer requests. */
 export const answersRequests = () => !!requests.view?.may.manage_requests;

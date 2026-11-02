@@ -38,7 +38,7 @@
 
 <main>
   {#if requests.error && !requests.view}
-    <Notice text={requests.error} />
+    <Notice text={requests.error} onretry={loadRequests} />
   {:else if !requests.view}
     <PageLoading />
   {:else}

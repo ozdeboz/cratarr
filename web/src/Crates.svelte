@@ -54,7 +54,7 @@
   });
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
-  const shows = $derived(listShows(sorted.length, pageView.query, deepOf.answeredFor()));
+  const shows = $derived(listShows(sorted.length, pageView.query, deepOf.answeredFor(), deepOf.failedFor()));
   // None by name and the server's finds not in (lib/loader, the one rule): the list as it was, then the loader.
   const kept = keepWhile(() => ({ shows, list: sorted }), () => shows === 'asking', () => pageView.query.trim());
   const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
@@ -64,12 +64,15 @@
 
 <main>
   {#if crates.error && !crates.list}
-    <Notice text={crates.error} />
+    <Notice text={crates.error} onretry={loadCrates} />
   {:else if !crates.list}
     <PageLoading />
   {:else if listed.shows === 'asking'}
     <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
     <Asking now={kept.loader} />
+  {:else if listed.shows === 'failed'}
+    <!-- None by name, the server's search failed: said so, never "No crates match." (lib/search listShows). -->
+    <Notice text={deepOf.error() ?? "The crates couldn't be searched."} onretry={deepOf.again} />
   {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
     {#if !pageView.none}<p class="empty">No crates match.</p>{/if}

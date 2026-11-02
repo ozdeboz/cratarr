@@ -63,6 +63,9 @@ export const globalSearch = $state({
   /** The server's last answer: kept while new words are asked, so the results stay until the new ones are in (the
    *  owner, 2026-10-25); none without words. */
   found: null as { q: string; r: ServerSearch } | null,
+  /** The words the server failed for, and why: said with Try again, never the wait for ever (the owner, 2026-11-02:
+   *  errors are never shown as nothing). */
+  failed: null as { q: string; error: string } | null,
   /** Asked again after something changed what it finds (an exclusion taken back). */
   again: 0,
   /** Beyond (decision 0076): what MusicBrainz (and Discogs, 0.9.13's server) find for the settled words. */
@@ -112,10 +115,16 @@ $effect.root(() => {
       search(q, KINDS, EACH).then(
         (r) => {
           keep(foundKept, q, r);
-          if (!gone) globalSearch.found = { q, r };
+          if (gone) return;
+          globalSearch.found = { q, r };
+          globalSearch.failed = null;
         },
         // Unanswered: nothing to read the words by, so they are read as no crate.
-        () => !gone && (globalSearch.readFor = q),
+        (e) => {
+          if (gone) return;
+          globalSearch.readFor = q;
+          globalSearch.failed = { q, error: e instanceof Error ? e.message : 'Unexpected error' };
+        },
       );
     }, 300);
     return () => {
@@ -230,8 +239,10 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
   const query = words(q);
   if (!query.length) return [];
   // The last answer, the words' own once it is in; where they read as a crate, what its terms find (the owner,
-  // 2026-10-31: a typed sentence still lists its artists, genres and their tracks).
-  const f = (globalSearch.crate?.q === q ? globalSearch.crate.r : null) ?? globalSearch.found?.r ?? null;
+  // 2026-10-31: a typed sentence still lists its artists, genres and their tracks). Failed for these words: not the last
+  // answer, which was for others (2026-11-02).
+  const failed = globalSearch.failed?.q === q;
+  const f = (globalSearch.crate?.q === q ? globalSearch.crate.r : null) ?? (failed ? null : globalSearch.found?.r) ?? null;
   const server = (kinds: typeof LIBRARY): FoundGroup[] =>
     f
       ? kinds
@@ -285,6 +296,10 @@ export const beyondAlbum = (subject: string) =>
 
 /** Whether the server has answered these words (else everywhere's count and its "nothing" wait). */
 export const globalAsked = () => globalSearch.found?.q === pageView.query.trim();
+/** Why the server failed for these words, if it did. */
+export const globalFailed = () => (globalSearch.failed?.q === pageView.query.trim() ? globalSearch.failed.error : null);
+/** The words asked again after a failure: the wait till the answer, not the failure. */
+export const searchAgain = () => ((globalSearch.failed = null), globalSearch.again++);
 
 /** Everywhere chosen while searching: a page's or a panel's own content set aside for everywhere's. */
 export const everywhere = () => globalSearch.scope === 'everywhere' && pageView.query.trim() !== '';

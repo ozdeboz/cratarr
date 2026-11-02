@@ -4,18 +4,27 @@ import { search, type SearchKind } from './api';
 import { pageView } from './pageView.svelte';
 import { matchLine, type Matched } from './search';
 
-/** One's why line (lib/search matchLine), or nothing; `answeredFor()`: the words the server last answered (or failed)
- *  for, for lib/search listShows. */
-export type Deep = ((id: string) => string | undefined) & { answeredFor: () => string };
+/** One's why line (lib/search matchLine), or nothing; `answeredFor()`: the words the server last answered for, and
+ *  `failedFor()` the words it last failed for, for lib/search listShows; `error()`: why it failed, `again()` asks again
+ *  (the owner, 2026-11-02: a failure is not an answer, so never "No … match." after one). */
+export type Deep = ((id: string) => string | undefined) & {
+  answeredFor: () => string;
+  failedFor: () => string;
+  error: () => string | null;
+  again: () => void;
+};
 /** Called in a page's script: the subjects of `kind` the server finds not by their name, keyed by what follows `prefix`
  *  (`playlist:` → the playlist's id). */
 export function deepMatches(kind: SearchKind, prefix: string): Deep {
-  const found = $state({ by: new Map<string, Matched>(), q: '' });
+  const found = $state({ by: new Map<string, Matched>(), q: '', failed: '', error: null as string | null, asks: 0 });
   $effect(() => {
     const q = pageView.query.trim();
+    void found.asks;
     if (!q) {
       found.by = new Map();
       found.q = '';
+      found.failed = '';
+      found.error = null;
       return;
     }
     let gone = false;
@@ -30,8 +39,14 @@ export function deepMatches(kind: SearchKind, prefix: string): Deep {
           }
           found.by = m;
           found.q = q;
+          found.failed = '';
+          found.error = null;
         },
-        () => !gone && (found.q = q),
+        (e) => {
+          if (gone) return;
+          found.failed = q;
+          found.error = e instanceof Error ? e.message : 'Unexpected error';
+        },
       );
     }, 250);
     return () => {
@@ -44,5 +59,9 @@ export function deepMatches(kind: SearchKind, prefix: string): Deep {
     return d ? (matchLine([d]) ?? undefined) : undefined;
   }) as Deep;
   deep.answeredFor = () => found.q;
+  deep.failedFor = () => found.failed;
+  deep.error = () => found.error;
+  // Asked again: the wait till its answer, not the failure.
+  deep.again = () => ((found.failed = ''), found.asks++);
   return deep;
 }

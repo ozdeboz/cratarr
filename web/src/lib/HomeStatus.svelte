@@ -9,6 +9,7 @@
   import { iconOf, openInHealth } from './health';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
+  import Notice from './Notice.svelte';
   import SectionHead from './SectionHead.svelte';
 
   /** At most this many rows. */
@@ -18,20 +19,29 @@
   let { onsettled }: { onsettled?: () => void } = $props();
 
   let findings = $state<HealthFinding[]>([]);
+  /** The report not read: one line in its place with Try again, never "nothing waits" (the owner, 2026-11-02). */
+  let error = $state<string | null>(null);
+  let readAgain = $state(0);
 
   $effect(() => {
     if (!me.admin) {
       if (me.known) onsettled?.();
       return;
     }
+    void readAgain;
     let gone = false;
     getHealthReport().then(
       (r) => {
         if (gone) return;
         findings = r.findings;
+        error = null;
         onsettled?.();
       },
-      () => !gone && onsettled?.(),
+      (e) => {
+        if (gone) return;
+        error = e instanceof Error ? e.message : 'Unexpected error';
+        onsettled?.();
+      },
     );
     return () => (gone = true);
   });
@@ -40,7 +50,9 @@
   const rows = $derived(findings.filter((f) => f.level !== 'info' || f.of !== undefined).slice(0, MOST));
 </script>
 
-{#if me.admin && rows.length}
+{#if me.admin && error}
+  <section class="failed" aria-label="System status"><Notice text={`System status: ${error}`} onretry={() => readAgain++} /></section>
+{:else if me.admin && rows.length}
   <section aria-label="System status">
     <!-- Its arrow: the Health page, where all of it is (decision 0063). -->
     <SectionHead title="System status" onmore={() => (location.hash = '#/health')} />
@@ -63,6 +75,11 @@
 {/if}
 
 <style>
+  /* As Home's own failed sections. */
+  .failed {
+    margin: 0 16px;
+  }
+
   /* As Home's other lists: 16 px in, 8 px apart. */
   .needs {
     display: grid;
