@@ -359,10 +359,12 @@ class SettingsEditor {
   policyOf = (d: Draft, id: string) => ({
     format: 'as_is' as 'cd' | 'as_is',
     colour: null as string | null,
+    /** Cratarr's own library's name (the owner, 2026-11-02); none: its folder's. */
+    name: null as string | null,
     ...d.view?.policies?.[id],
     ...d.libraries.policies?.[id],
   });
-  setPolicy = (d: Draft, id: string, change: { format?: 'cd' | 'as_is'; colour?: string }) => {
+  setPolicy = (d: Draft, id: string, change: { format?: 'cd' | 'as_is'; colour?: string; name?: string | null }) => {
     d.libraries.policies = { ...(d.libraries.policies ?? {}), [id]: { ...this.policyOf(d, id), ...change } };
   };
 
