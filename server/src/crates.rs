@@ -616,6 +616,28 @@ pub struct NumberRow {
     /// Every track has this one value: the row is the value, no density.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub one: Option<f64>,
+    /// Drawn on the library's percentiles (energy, danceability; `lo` 0, `hi` 100, the rest in percent): the measure's
+    /// value at each hundredth, 0% to 100%, for the page to place a filter's range (in the measure's own values) on
+    /// the bar (the owner, 2026-11-02: the filter's window lit on the panel's bars).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percentiles: Option<Vec<f64>>,
+}
+
+/// The profile's numbers drawn on the library's percentiles, not in their own values.
+const PERCENTILE_KEYS: [&str; 2] = ["energy", "danceability"];
+
+/// Where `v` falls among the library's hundredths (`table`, 101 values ascending), 0 to 100, between two of them in
+/// proportion.
+fn percent_in(table: &[f64], v: f64) -> f64 {
+    let above = table.partition_point(|t| *t <= v);
+    match above {
+        0 => 0.0,
+        n if n >= table.len() => 100.0,
+        n => {
+            let (a, b) = (table[n - 1], table[n]);
+            (n - 1) as f64 + if b > a { (v - a) / (b - a) } else { 0.0 }
+        }
+    }
 }
 
 /// One of CLAP's moods: the list's middle against the library's, -1 (far below) to 1 (far above).
@@ -637,6 +659,9 @@ pub fn profile(list: &[&Facts], library: &[&Facts]) -> Profile {
 /// and half its spread, and how many tracks have each style tag and artist (their rarity).
 pub struct Scales {
     numbers: [(f64, f64); 4],
+    /// Energy's and danceability's values at each hundredth of the library, 0% to 100% (`PERCENTILE_KEYS`): their
+    /// profile rows are drawn on the library's percentiles; none for tempo and year, kept in their units.
+    percentiles: [Option<Vec<f64>>; 4],
     moods: [(f64, f64); 5],
     styles: HashMap<String, usize>,
     artists: HashMap<String, usize>,
@@ -684,8 +709,13 @@ impl Scales {
             let half = (crate::similarity::quantile(&all, 0.95) - crate::similarity::quantile(&all, 0.05)) / 2.0;
             (crate::similarity::quantile(&all, 0.5), half.max(f64::EPSILON))
         });
+        let percentiles = PROFILE_NUMBERS.map(|(key, get)| {
+            let all = sorted(library.iter().filter_map(|f| get(f)));
+            (PERCENTILE_KEYS.contains(&key) && !all.is_empty())
+                .then(|| (0..=100).map(|p| crate::similarity::quantile(&all, f64::from(p) / 100.0)).collect())
+        });
         let counts = |names| name_counts(library, names).into_iter().map(|(k, (c, _))| (k, c)).collect();
-        Scales { numbers, moods, styles: counts(|f| &f.styles), artists: counts(|f| &f.artists), tracks: library.len() }
+        Scales { numbers, percentiles, moods, styles: counts(|f| &f.styles), artists: counts(|f| &f.artists), tracks: library.len() }
     }
 }
 
@@ -695,15 +725,20 @@ pub fn profile_in(list: &[&Facts], scales: &Scales) -> Profile {
     let mut out = Profile { tracks: n, heard: list.iter().filter(|f| f.clap_moods.is_some()).count(), ..Profile::default() };
     out.styles = telling(list, &scales.styles, scales.tracks, |f| &f.styles);
     out.artists = telling(list, &scales.artists, scales.tracks, |f| &f.artists);
-    for ((key, get), (lo, hi)) in PROFILE_NUMBERS.into_iter().zip(scales.numbers) {
-        let mine = sorted(list.iter().filter_map(|f| get(f)));
+    for (((key, get), (lo, hi)), table) in PROFILE_NUMBERS.into_iter().zip(scales.numbers).zip(&scales.percentiles) {
+        // Energy and danceability as the library's percentiles (the owner, 2026-11-02): "more than 40% of my library",
+        // evenly spread whatever the measure's own range, nothing off the bar; tempo and year in BPM and years.
+        let at = |v: f64| table.as_deref().map_or(v, |t| percent_in(t, v));
+        let (lo, hi) = if table.is_some() { (0.0, 100.0) } else { (lo, hi) };
+        let mine = sorted(list.iter().filter_map(|f| get(f)).map(at));
         let Some(&first) = mine.first() else { continue };
+        let percentiles = table.clone();
         if mine.last() == Some(&first) {
-            out.numbers.push(NumberRow { key, lo: first, hi: first, bins: Vec::new(), q1: first, mid: first, q3: first, one: Some(first) });
+            out.numbers.push(NumberRow { key, lo: first, hi: first, bins: Vec::new(), q1: first, mid: first, q3: first, one: Some(first), percentiles });
             continue;
         }
         let q = |p| crate::similarity::quantile(&mine, p);
-        out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75), one: None });
+        out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75), one: None, percentiles });
     }
     if out.heard > 0 {
         for (k, name) in crate::similarity::MOODS.into_iter().enumerate() {
@@ -2561,6 +2596,25 @@ mod tests {
         assert_eq!(p.styles, ["jungle"], "the rare one; electronic is everywhere, one track's odd tag not enough");
         assert_eq!(p.numbers.iter().map(|r| (r.key, r.one)).collect::<Vec<_>>(), [("tempo", None), ("year", Some(2003.0))], "the year is one value");
         assert_eq!(p.numbers[0].mid, 170.0);
+    }
+
+    #[test]
+    fn energy_is_drawn_on_the_librarys_percentiles_tempo_in_bpm() {
+        // The owner, 2026-11-02: a quiet playlist's energy sits where it is among the library, 0% to 100%.
+        let t = |rel: &str, energy: f64, bpm: f64| Facts { rel: rel.into(), energy: Some(energy), bpm: Some(bpm), ..Facts::default() };
+        let library: Vec<Facts> = (0..100).map(|n| t(&format!("L/{n}.flac"), f64::from(n) / 1000.0, 100.0 + f64::from(n))).collect();
+        let quiet = [t("Q/1.flac", 0.010, 110.0), t("Q/2.flac", 0.020, 112.0), t("Q/3.flac", 0.030, 114.0)];
+        let (list, all): (Vec<&Facts>, Vec<&Facts>) = (quiet.iter().collect(), library.iter().collect());
+        let p = profile(&list, &all);
+        let row = |k: &str| p.numbers.iter().find(|r| r.key == k).unwrap();
+        let energy = row("energy");
+        assert_eq!((energy.lo, energy.hi), (0.0, 100.0), "on the library's percentiles");
+        assert!((energy.mid - 20.0).abs() < 1.5, "more energy than about a fifth of the library: {}", energy.mid);
+        assert_eq!(energy.percentiles.as_ref().map(Vec::len), Some(101), "the value at each hundredth, for a filter's range");
+        let tempo = row("tempo");
+        assert!(tempo.percentiles.is_none() && tempo.mid == 112.0, "tempo stays in BPM");
+        assert_eq!(super::percent_in(&[0.0; 101], 0.0), 100.0, "a library of one value: all of it at or below");
+        assert_eq!(super::percent_in(&(0..=100).map(f64::from).collect::<Vec<_>>(), 42.5), 42.5);
     }
 
     #[test]
