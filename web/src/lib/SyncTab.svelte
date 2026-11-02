@@ -7,6 +7,7 @@
   import { linkPlaylist, unlinkPlaylist, type Link } from './api';
   import { refresh } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
+  import ChoiceMark from './ChoiceMark.svelte';
   import Row from './Row.svelte';
   import { toast } from './toast.svelte';
 
@@ -73,19 +74,21 @@
 <div class="tab">
   <Row
     size="large"
-    as="label"
     title="Shared with everyone"
     count={sharedCount > 0 && sharedCount < ids.length ? `${sharedCount} of ${ids.length}` : undefined}
     wrap
   >
-    {#snippet lead()}
-      <input
-        type="checkbox"
-        checked={sharedCount === ids.length}
-        indeterminate={sharedCount > 0 && sharedCount < ids.length}
+    <!-- Several of many (the owner, 2026-11-02: one row, its end says what kind): the square at its end, filled when all
+         of them are shared. -->
+    {#snippet action()}
+      <button
+        class="tick"
+        role="checkbox"
+        aria-checked={sharedCount === ids.length ? true : sharedCount > 0 ? 'mixed' : false}
+        aria-label="Shared with everyone"
         disabled={working}
-        onchange={(e) => share(e.currentTarget.checked)}
-      />
+        onclick={() => share(sharedCount !== ids.length)}><ChoiceMark kind="several" on={sharedCount === ids.length} /></button
+      >
     {/snippet}
   </Row>
   {#each accounts as a (a.label)}
@@ -96,21 +99,24 @@
 </div>
 
 <style>
-  /* Large rows (lib/Row.svelte); what is the tab's own is the box. */
+  /* Large rows (lib/Row.svelte); what is the tab's own is the square at the end. */
   .tab {
     padding: 0 8px;
-  }
-
-  input[type='checkbox'] {
-    flex: none;
-    width: 18px;
-    height: 18px;
-    margin: 0 4px 0 12px;
-    accent-color: var(--accent);
   }
 
   .error {
     color: var(--danger-ink);
     white-space: normal;
+  }
+
+  .tick {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
   }
 </style>

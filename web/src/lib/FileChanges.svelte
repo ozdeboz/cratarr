@@ -4,7 +4,9 @@
   // as the files hold them, struck, and as Cratarr holds them, with where from; one button with the count), the runs
   // (Now, then by day; a run's meter while it writes), and a run as written (each record with its Undo, what was set
   // aside and why, Undo of all of it at the foot).
-  import { albumCoverUrl, getFilePlan, getFileRun, type FilePlan, type FileRecord, type FileRun } from './api';
+  import ChoiceMark from './ChoiceMark.svelte';
+  import { albumCoverUrl, getFilePlan, getFileRun, type FileChosen, type FileField, type FilePlan, type FileRecord, type FileRun } from './api';
+  import GenrePick from './GenrePick.svelte';
   import Asking from './Asking.svelte';
   import { asideOf, changeOf, fieldLabel, runGroups, runLine, type SetAside } from './fileChangeRules';
   import { library } from './albums.svelte';
@@ -31,36 +33,91 @@
   let writing = $state(false);
   /** A failed plan or run read again (its Notice's Try again). */
   let readAgain = $state(0);
+  // A fix plan (`fix:`, `intake:`; decision 0092's writers' map, 0.14): each field ticked as sure as it is (certain ones
+  // ticked, likely ones not: the owner's choice 2), a record ticked while any of its fields is; a genre's words picked
+  // among those found. Asked again while it is still being made (a match looked for), what was ticked kept.
+  const keyOf = (album: string, f: FileField) => `${album}\u0000${f.field}`;
+  let fieldTicks = $state(new Set<string>());
+  let genres = $state<Record<string, string[]>>({});
+  let seen = new Set<string>();
+  let shownKind = '';
+  const byField = $derived(!!plan?.records.some((r) => r.fields.some((f) => f.certainty)));
   $effect(() => {
     if (v.view !== 'plan') return;
     const { kind, album } = v;
     void readAgain;
-    plan = null;
+    const thing = `${kind}/${album ?? ''}`;
+    if (thing !== shownKind) {
+      shownKind = thing;
+      plan = null;
+      showing = STEP;
+      seen = new Set();
+      genres = {};
+    }
     failed = null;
-    showing = STEP;
     let gone = false;
+    let again: ReturnType<typeof setTimeout> | undefined;
     getFilePlan(kind, album ? [album] : undefined).then(
       (p) => {
         if (gone) return;
+        const fresh = (k: string) => !seen.has(k) && (seen.add(k), true);
+        const records = new Set(ticks);
+        const fields = new Set(fieldTicks);
+        for (const r of p.records) {
+          if (fresh(r.album)) records.add(r.album);
+          for (const f of r.fields) if (fresh(keyOf(r.album, f)) && f.certainty !== 'likely') fields.add(keyOf(r.album, f));
+        }
         plan = p;
-        ticks = new Set(p.records.map((r) => r.album));
+        ticks = records;
+        fieldTicks = fields;
+        if (p.making) again = setTimeout(() => readAgain++, 2000);
       },
       (e) => !gone && (failed = e instanceof Error ? e.message : String(e)),
     );
-    return () => (gone = true);
+    return () => {
+      gone = true;
+      clearTimeout(again);
+    };
   });
   const many = $derived((plan?.records.length ?? 0) > 1);
-  const ticked = $derived(plan ? plan.records.filter((r) => ticks.has(r.album)) : []);
+  const fieldsOn = (r: FileRecord) => r.fields.filter((f) => fieldTicks.has(keyOf(r.album, f)));
+  const ticked = $derived(plan ? plan.records.filter((r) => (byField ? fieldsOn(r).length > 0 : ticks.has(r.album))) : []);
   const filesTicked = $derived(ticked.reduce((n, r) => n + r.files, 0));
-  function tick(album: string) {
+  const isTicked = (r: FileRecord) => (byField ? fieldsOn(r).length === r.fields.length : ticks.has(r.album));
+  function tick(r: FileRecord) {
+    if (byField) return tickAll([r], !isTicked(r));
     const next = new Set(ticks);
-    if (!next.delete(album)) next.add(album);
+    if (!next.delete(r.album)) next.add(r.album);
     ticks = next;
   }
+  function tickAll(records: FileRecord[], on: boolean) {
+    if (!byField) return (ticks = new Set(on ? records.map((r) => r.album) : []));
+    const next = new Set(fieldTicks);
+    for (const r of records)
+      for (const f of r.fields) {
+        if (on) next.add(keyOf(r.album, f));
+        else next.delete(keyOf(r.album, f));
+      }
+    fieldTicks = next;
+  }
+  function tickField(album: string, f: FileField) {
+    const next = new Set(fieldTicks);
+    if (!next.delete(keyOf(album, f))) next.add(keyOf(album, f));
+    fieldTicks = next;
+  }
+  const pickedOf = (album: string, f: FileField) => genres[album] ?? f.after;
+  /** A genre ticked with none of its words picked: nothing to write it as. */
+  const nonePicked = $derived(ticked.some((r) => fieldsOn(r).some((f) => f.options?.length && !pickedOf(r.album, f).length)));
   async function write() {
     if (v.view !== 'plan' || !ticked.length) return;
     writing = true;
-    await apply(v.kind, ticked);
+    const chosen: FileChosen | undefined = byField
+      ? {
+          fields: Object.fromEntries(ticked.map((r) => [r.album, [...new Set(fieldsOn(r).map((f) => f.field))]])),
+          genres: Object.fromEntries(ticked.flatMap((r) => (r.album in genres && fieldsOn(r).some((f) => f.options?.length) ? [[r.album, genres[r.album]]] : []))),
+        }
+      : undefined;
+    await apply(v.kind, ticked, chosen);
     writing = false;
   }
 
@@ -103,9 +160,9 @@
   <div class="rec">
     <ReleaseRow cover={albumCoverUrl('cratarr', r.album)} title={`${r.artist} – ${r.title}`} {line}>
       {#if end === 'tick'}
-        {@const on = ticks.has(r.album)}
-        <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${r.title}`} onclick={() => tick(r.album)}
-          ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+        {@const on = isTicked(r)}
+        <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${r.title}`} onclick={() => tick(r)}
+          ><ChoiceMark kind="several" on={on} /></button
         >
       {:else if end === 'undo' && run}
         <button onclick={() => run && void undoRun(run.run.id, [r.album])}>Undo</button>
@@ -114,11 +171,30 @@
     <dl class="fields">
       {#each r.fields as f, i (i)}
         {@const c = changeOf(f)}
-        <dt>{f.track ?? fieldLabel(f.field)}</dt>
+        {@const fieldTick = end === 'tick' && byField}
+        <dt>
+          {#if fieldTick}
+            {@const on = fieldTicks.has(keyOf(r.album, f))}
+            <button class="tick small" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${fieldLabel(f.field)}`} onclick={() => tickField(r.album, f)}
+              ><ChoiceMark kind="several" on={on} /></button
+            >
+          {/if}{f.track ?? fieldLabel(f.field)}
+        </dt>
         <dd>
-          {#if f.track}<span class="what">{fieldLabel(f.field)}</span>{/if}
-          {#each c.gone as g (g)}<s>{g}</s>{/each}{#if c.kind === 'set'}<span class="to">→</span>{:else if c.kind === 'add'}<span class="to">+</span>{/if}{#each c.came as n (n)}<b>{n}</b>{/each}
-          <span class="from">{f.from}</span>
+          {#if fieldTick && f.options?.length}
+            <span class="pick"
+              ><GenrePick
+                fix={{ from: f.before.join('; '), candidates: f.options.map((o) => ({ word: o.value, kind: o.kind ?? 'genre', source: o.from, certainty: o.certainty })) }}
+                bind:picked={() => pickedOf(r.album, f), (w) => (genres[r.album] = w)}
+              /></span
+            >
+          {:else if f.field === 'cover' && f.after[0]?.startsWith('http')}
+            <img class="pic" src={f.after[0]} alt="" />
+          {:else}
+            {#if f.track}<span class="what">{fieldLabel(f.field)}</span>{/if}
+            {#each c.gone as g (g)}<s>{g}</s>{/each}{#if c.kind === 'set'}<span class="to">→</span>{:else if c.kind === 'add'}<span class="to">+</span>{/if}{#each c.came as n (n)}<b>{n}</b>{/each}
+          {/if}
+          <span class="from">{f.from}{#if f.certainty === 'likely'} · likely{/if}</span>
         </dd>
       {/each}
     </dl>
@@ -128,26 +204,26 @@
 {#if v.view === 'plan'}
   {#if failed}
     <Notice text={failed} onretry={() => readAgain++} />
-  {:else if !plan}
+  {:else if !plan || (plan.making && !plan.records.length)}
     <Asking />
   {:else if !plan.records.length}
     <p class="muted">Its files agree with Cratarr.</p>
   {:else}
-    <p class="lead">{plan.title} · {plural(plan.records.length, 'record')}</p>
+    <p class="lead">{plan.title} · {plural(plan.records.length, 'record')}{#if plan.making} · looking for more{/if}</p>
     {#if many}
       <Group>
-        <Item name="All of them" toggle={{ checked: ticked.length === plan.records.length, onchange: (on) => (ticks = new Set(on ? plan!.records.map((r) => r.album) : [])) }} />
+        <Item name="All of them" toggle={{ checked: plan.records.every(isTicked), onchange: (on) => tickAll(plan!.records, on) }} />
       </Group>
     {/if}
     <Group>
-      {#each plan.records.slice(0, showing) as r (r.album)}{@render record(r, plural(r.files, 'file'), many ? 'tick' : null)}{/each}
+      {#each plan.records.slice(0, showing) as r (r.album)}{@render record(r, plural(r.files, 'file'), many || byField ? 'tick' : null)}{/each}
       {#if plan.records.length > showing}<Item name={`${(plan.records.length - showing).toLocaleString()} more`} onclick={() => (showing += STEP)} />{/if}
     </Group>
     <SaveBar
       label={many ? `${ticked.length.toLocaleString()} of ${plan.records.length.toLocaleString()} ticked · ${plural(filesTicked, 'file')}` : plural(filesTicked, 'file')}
       action={many ? `Write ${ticked.length.toLocaleString()}` : 'Write'}
       saving={writing}
-      canSave={ticked.length > 0}
+      canSave={ticked.length > 0 && !nonePicked}
       onsave={() => void write()}
     />
   {/if}
@@ -291,5 +367,27 @@
 
   .tick.on {
     color: var(--accent);
+  }
+
+  /* A field's own tick, before its name. */
+  .tick.small {
+    display: inline-grid;
+    width: 28px;
+    height: 28px;
+    margin: -4px 4px -4px -32px;
+    vertical-align: middle;
+  }
+
+  .pic {
+    width: 96px;
+    height: 96px;
+    border-radius: 6px;
+    object-fit: cover;
+  }
+
+  .pick {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
   }
 </style>

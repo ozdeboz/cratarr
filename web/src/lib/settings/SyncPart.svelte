@@ -2,7 +2,7 @@
   // Sync (decision 0038): how this device keeps music: the storage budget, over which network, only while charging,
   // and in which quality. This device's own; it acts at once. Only in the app. Its Reset: all four back to their
   // defaults (lib/settings/reset); what is kept stays.
-  import Seg from '../Seg.svelte';
+  import ChoiceRow from './ChoiceRow.svelte';
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import { kept } from '../kept.svelte';
   import { downloadedSize } from './editor.svelte';
@@ -48,9 +48,13 @@
       value={BUDGETS.find((b) => b.value === String(appInfo.syncBudgetGb))?.label ?? null}
       onclick={() => (choosingStorage = true)}
     />
-    <Item name="Quality" more="Originals: the files as they are. Smaller copies: Cratarr makes 160 kb/s Opus copies of lossless files; lossy files come as they are.">
-      <Seg label="Quality" options={QUALITY} bind:value={() => appInfo.downloadQuality, (v) => setDevice({ downloadQuality: v })} />
-    </Item>
+    <ChoiceRow
+      name="Quality"
+      more="Originals: the files as they are. Smaller copies: Cratarr makes 160 kb/s Opus copies of lossless files; lossy files come as they are."
+      options={QUALITY}
+      value={appInfo.downloadQuality}
+      onchange={(v) => setDevice({ downloadQuality: v })}
+    />
     <Item name="Download over mobile data" toggle={{ checked: appInfo.downloadOverMobile, onchange: (on) => setDevice({ downloadOverMobile: on }) }} />
     <Item name="Only while charging" toggle={{ checked: appInfo.syncOnlyCharging, onchange: (on) => setDevice({ syncOnlyCharging: on }) }} />
   </Group>
@@ -60,9 +64,13 @@
        2026-10-26: Opus in the options too). -->
   <Group>
     <Item name="Kept in this browser" value={`${Object.keys(offline.kept).length} tracks · ${downloadedSize(keptBytes())}`} />
-    <Item name="Quality" more="Smaller copies: Cratarr makes Opus copies of lossless files (AAC where this browser plays no Opus), about a fifth of the size; lossy files come as they are. Originals: the files as they are, where this browser plays them.">
-      <Seg label="Quality" options={QUALITY} bind:value={() => prefs.offlineQuality, (v) => (prefs.offlineQuality = v)} />
-    </Item>
+    <ChoiceRow
+      name="Quality"
+      more="Smaller copies: Cratarr makes Opus copies of lossless files (AAC where this browser plays no Opus), about a fifth of the size; lossy files come as they are. Originals: the files as they are, where this browser plays them."
+      options={QUALITY}
+      value={prefs.offlineQuality}
+      onchange={(v) => (prefs.offlineQuality = v)}
+    />
   </Group>
 {/if}
 {#if choosingStorage}

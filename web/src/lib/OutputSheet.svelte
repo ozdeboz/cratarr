@@ -172,8 +172,8 @@
       <MenuEntry label="Take over" onclick={() => choose(`player:${name}`, moveTo)} />
       <MenuEntry label="Don't take over" onclick={() => choose(`player:${name}`, joinTo)} />
     {:else if choosingOutput}
-      <!-- One choice: the chosen one ticked, the others plain (no group's +). -->
-      <MenuEntry label="Automatic" checked={appInfo.output === null ? true : null} onclick={() => chooseOutput(null)} />
+      <!-- One of many: the round mark at each one's end, the chosen one's filled. -->
+      <MenuEntry label="Automatic" checked={appInfo.output === null} plus={false} onclick={() => chooseOutput(null)} />
       <MenuEntry icon="order" label="My order" switched={appInfo.ordered} onclick={() => setOrdered(!appInfo.ordered)} />
       {#if appInfo.ordered}
         <ol class="order" class:dragging={!!reorder.drag} bind:this={orderList}>
@@ -200,7 +200,7 @@
         </ol>
       {:else}
         {#each appInfo.outputs as o (o.id)}
-          <MenuEntry icon={OUT_ICON[o.type]} label={outName(o)} checked={appInfo.output === o.id ? true : null} onclick={() => chooseOutput(o.id)} />
+          <MenuEntry icon={OUT_ICON[o.type]} label={outName(o)} checked={appInfo.output === o.id} plus={false} onclick={() => chooseOutput(o.id)} />
         {/each}
       {/if}
     {:else}

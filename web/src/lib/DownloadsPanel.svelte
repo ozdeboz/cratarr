@@ -8,6 +8,7 @@
   // a crate's own; an artist (or what is not known well enough for its own menu) a short one: Go to it, Stop syncing.
   // The pill's search narrows the two lists. Select: the ticked ones played, queued or removed from this device (the
   // owner, 2026-10-27: what one has, several have).
+  import ChoiceMark from './ChoiceMark.svelte';
   import { glass, handGlass } from './glass.svelte';
   import { rowRoot } from './glassRow.svelte';
   import GlobalResults from './GlobalResults.svelte';
@@ -229,7 +230,7 @@
 {#snippet tickOf(k: string, name: string)}
   {@const on = !!selecting?.has(k)}
   <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Select ${name}`} onclick={() => tick(k)}
-    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+    ><ChoiceMark kind="several" on={on} /></button
   >
 {/snippet}
 
