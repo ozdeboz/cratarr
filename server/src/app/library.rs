@@ -339,7 +339,7 @@ impl Library {
 
     /// The catalogue folders of the libraries switched off (`without`, `<source>/<library>` keys as the pages keep them),
     /// by their place in it: what a list from Cratarr's own library leaves out.
-    pub(super) fn folders_off(&self, without: &[String]) -> Vec<i64> {
+    pub fn folders_off(&self, without: &[String]) -> Vec<i64> {
         if without.is_empty() {
             return Vec::new();
         }

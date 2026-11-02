@@ -180,7 +180,7 @@ impl Cratarr {
     async fn search(&self, Parameters(a): Parameters<SearchArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let who = who(&ctx)?;
         let limit = a.limit.unwrap_or(20).clamp(1, 100);
-        let found = acting_as(who, crate::app::search::search(&self.app, &a.query, &a.kinds, limit, 0)).await.map_err(failed)?;
+        let found = acting_as(who, crate::app::search::search(&self.app, &a.query, &a.kinds, limit, 0, &[])).await.map_err(failed)?;
         answer(&found)
     }
 

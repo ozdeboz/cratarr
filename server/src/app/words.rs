@@ -214,9 +214,10 @@ fn hand_of(o: &crate::userdata::overrides::Overrides) -> HashMap<store::Kind, Ve
 /// AudioMuse's styles and moods, and the merged words): what search finds a word by. A word shown as a genre is not
 /// also a style. The labels too (0.11, quick crates: search's label), a kind apart: a label named as a genre is both.
 /// Blocking.
-pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>) -> Vec<(&'static str, String, usize)> {
+pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>, off: &HashSet<i64>) -> Vec<(&'static str, String, usize)> {
     let mut by: HashMap<(&'static str, String), (HashMap<String, usize>, HashSet<&str>)> = HashMap::new();
-    for f in facts {
+    // Of the libraries switched on (`off`: the folders of those switched off): what a word's crate holds.
+    for f in facts.iter().filter(|f| !off.contains(&f.folder)) {
         let Some(album) = f.track.and_then(|t| album_of.get(&crate::serve::ids::song(t))) else { continue };
         for (kind, list) in [("genre", &f.genres), ("style", &f.styles), ("mood", &f.moods), ("tag", &f.tags), ("label", &f.labels)] {
             for w in list {
@@ -244,18 +245,21 @@ pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>)
 }
 
 /// The search index (`index`) as of the files' crate facts: made again when they are.
-static INDEX: Mutex<Option<(usize, usize, Arc<Vec<(&'static str, String, usize)>>)>> = Mutex::new(None);
+static INDEX: Mutex<Option<(usize, usize, Vec<i64>, Arc<Vec<(&'static str, String, usize)>>)>> = Mutex::new(None);
 
 /// Every word of the library by kind with how many albums carry it, for search. Blocking.
-pub fn search_index(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue) -> Result<Arc<Vec<(&'static str, String, usize)>>> {
+pub fn search_index(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue, off: &HashSet<i64>) -> Result<Arc<Vec<(&'static str, String, usize)>>> {
     let facts = cat.crate_facts()?;
     let of = (Arc::as_ptr(&facts) as usize, facts.len());
-    if let Some((p, n, i)) = INDEX.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+    let mut folders: Vec<i64> = off.iter().copied().collect();
+    folders.sort_unstable();
+    if let Some((p, n, f, i)) = INDEX.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
         && (*p, *n) == of
+        && *f == folders
     {
         return Ok(i.clone());
     }
-    let made = Arc::new(index(&facts, &serve.library.song_album_map()?));
-    *INDEX.lock().unwrap_or_else(|e| e.into_inner()) = Some((of.0, of.1, made.clone()));
+    let made = Arc::new(index(&facts, &serve.library.song_album_map()?, off));
+    *INDEX.lock().unwrap_or_else(|e| e.into_inner()) = Some((of.0, of.1, folders, made.clone()));
     Ok(made)
 }

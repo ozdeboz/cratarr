@@ -816,7 +816,7 @@ mod tests {
         let mut q = Queue::default();
         q.edit(Command::play(tracks, 0, 0)).unwrap();
         q.edit(Command::Radio { on: true, mode: None, seed: None, within: None, by: None, count: None }).unwrap();
-        q.edit(Command::Autoplay { mode: AutoplayMode::Similar, albums: None, restart: None, seed: Some(vec!["s".into()]), within: Some(Some(Within::Crate { id: "c1".into() })) }).unwrap();
+        q.edit(Command::Autoplay { mode: AutoplayMode::Similar, albums: None, restart: None, seed: Some(vec!["s".into()]), within: Some(Some(Within::Crate { id: "c1".into(), without: Vec::new() })) }).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(2), after: None, how: None }, Some(0)).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY), in_lane("p2", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();

@@ -187,7 +187,7 @@ pub async fn genre_aliases(app: &super::App) -> anyhow::Result<BTreeMap<String, 
     let cat = app.library.catalogue();
     tokio::task::spawn_blocking(move || -> anyhow::Result<BTreeMap<String, Vec<String>>> {
         let mut genres: Vec<String> = served.library.genres()?.into_iter().map(|(g, _, _)| g).collect();
-        match super::words::search_index(&served, &cat) {
+        match super::words::search_index(&served, &cat, &std::collections::HashSet::new()) {
             Ok(index) => genres.extend(index.iter().filter(|(kind, ..)| *kind == "genre").map(|(_, g, _)| g.clone())),
             Err(e) => tracing::debug!("genre aliases: the library's words not read: {e:#}"),
         }
@@ -513,22 +513,24 @@ async fn all_missing(app: &super::App, served: &Arc<crate::serve::Serve>) -> any
 }
 
 /// The asking account's crates with their tracks, kept a minute (`CRATES_KEEP`).
-async fn crate_members(app: &super::App) -> anyhow::Result<Members> {
-    static KEPT: OnceLock<Mutex<HashMap<Option<String>, (Instant, Members)>>> = OnceLock::new();
-    let account = app.playlists.asking_account();
+async fn crate_members(app: &super::App, without: &[String]) -> anyhow::Result<Members> {
+    static KEPT: OnceLock<Mutex<HashMap<(Option<String>, Vec<String>), (Instant, Members)>>> = OnceLock::new();
+    let account = (app.playlists.asking_account(), without.to_vec());
     let kept = KEPT.get_or_init(Default::default);
     if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned()
         && at.elapsed() < CRATES_KEEP
     {
         return Ok(m);
     }
-    let m: Members = Arc::new(app.playlists.crate_members().await?);
+    let m: Members = Arc::new(app.playlists.crate_members(without).await?);
     kept.lock().unwrap_or_else(|p| p.into_inner()).insert(account, (Instant::now(), m.clone()));
     Ok(m)
 }
 
 /// Answers a query for the asking account (its playlists and crates): every kind asked for (`kinds`, all when empty).
-pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, offset: usize) -> anyhow::Result<Answer> {
+/// `without`: the libraries switched off (`source/library` keys): a word's albums and a crate's tracks are counted, and
+/// found, in those switched on, as what they open shows them (the owner, 2026-11-02).
+pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, offset: usize, without: &[String]) -> anyhow::Result<Answer> {
     let w = words(q);
     let mut answer = Answer { q: q.to_string(), ..Answer::default() };
     if w.is_empty() {
@@ -695,7 +697,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         && let Some(served) = app.served.clone()
     {
         let (s, cat) = (served.clone(), app.library.catalogue());
-        match tokio::task::spawn_blocking(move || super::words::search_index(&s, &cat)).await? {
+        let off: std::collections::HashSet<i64> = app.library.folders_off(without).into_iter().collect();
+        match tokio::task::spawn_blocking(move || super::words::search_index(&s, &cat, &off)).await? {
             Ok(index) => {
                 for kind in super::words::KINDS.into_iter().chain(["label"]).filter(|k| wants(k)) {
                     let hits = word_hits(&index, kind, &w);
@@ -774,7 +777,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     }
     if wants("crate") {
         // By name from the names alone; by tracks only where a track was found (making every crate is not cheap).
-        let members = if deep.is_empty() { None } else { Some(crate_members(app).await?) };
+        let members = if deep.is_empty() { None } else { Some(crate_members(app, without).await?) };
         let names = match &members {
             Some(m) => m.iter().map(|(id, name, _)| (id.clone(), name.clone())).collect(),
             None => app.playlists.crate_names().await?,
