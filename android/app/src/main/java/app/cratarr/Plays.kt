@@ -86,11 +86,16 @@ object Plays {
         JSONObject().put("type", "device-plays").put("plays", JSONArray(loadArray(context, PLAYED_HERE)))
 
     /** The page signed in (another session): whose it is, learnt now, so the plays heard from now on carry it; then that
-     *  account's own plays are told. Signed out (no session), nothing: asked, Cratarr would only refuse. */
+     *  account's own plays are told. Signed out (no session): the account is forgotten, so plays heard before the next
+     *  one is learnt wait unstamped and take its key, not the one signed out's (632's review, 2026-11-02); asked,
+     *  Cratarr would only refuse. */
     fun signedIn(context: Context) {
         val app = context.applicationContext
         val server = Prefs(app).serverUrl?.trimEnd('/') ?: return
-        if (Sessions.tokenIn(Net.cookie(server)) == null) return
+        if (Sessions.tokenIn(Net.cookie(server)) == null) {
+            Prefs.shared(app).edit().remove(ACCOUNT).apply()
+            return
+        }
         sender.execute { learn(app, server) }
         tell(app)
     }

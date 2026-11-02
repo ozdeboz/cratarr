@@ -34,3 +34,11 @@ export function accountLearnt(name: string | null) {
   set(name ?? '');
   void keep(NAME, key);
 }
+
+/** Signing out here: the account is forgotten, kept one too, so what is made before the next /api/me answers waits
+ *  unstamped and takes that account's key, not the one signed out (632's review, 2026-11-02). */
+export function accountForgotten() {
+  learnt = false;
+  key = null;
+  void keep(NAME, null);
+}
