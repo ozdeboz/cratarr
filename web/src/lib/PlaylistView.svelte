@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChoiceMark from './ChoiceMark.svelte';
   import PlayingDots from './PlayingDots.svelte';
   import { rowRoot, rowPiece } from './glassRow.svelte';
   import { pageHere } from './addresses';
@@ -2705,7 +2706,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <button class="tool add" aria-label="Add to {suggestsFor.name}" onclick={() => suggestion(r, src, true)}><Icon name="plus" size={22} /></button>
   {:else if selecting && i !== null}
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
-      ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
+      ><ChoiceMark kind="several" on={selecting.has(i)} /></button
     >
   {:else if !offServer}
     <RowHeart
@@ -2780,7 +2781,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#snippet action()}
         {#if selecting}
           <button class="tool tick" class:on={all} role="checkbox" aria-checked={all} aria-label={`Select ${rec.title}`} onclick={() => tickRecord(rec)}
-            ><Icon name={all ? 'circleCheck' : 'circle'} size={24} /></button
+            ><ChoiceMark kind="several" on={all} /></button
           >
         {:else}
           <button class="tool" aria-label={`Menu of ${rec.title}`} onclick={() => (recordMenu = rec)}><Icon name="moreVert" size={22} /></button>

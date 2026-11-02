@@ -65,6 +65,58 @@ pub fn adjusted(t: &TrackTempo, how: Adjust) -> Option<u32> {
     }
 }
 
+/// The tracks' BPMs halved, doubled or reset as a run on the one path (decision 0092's writers' map, 0.14: the tap is
+/// the yes; Undo is the run's): each of Cratarr's own tracks whose tag changes, its BPM now → after. With the tracks'
+/// tempos as they will be. Blocking for the plan; the run writes in the background.
+pub(super) fn proposal(cat: &crate::catalogue::Catalogue, ids: &[String], how: Adjust) -> Result<(super::file_runs::Proposal, Vec<TrackTempo>)> {
+    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let own = crate::source::cratarr::KIND.id;
+    let mut p = super::file_runs::Proposal { kind: "tempo".into(), ..Default::default() };
+    let mut tempos = Vec::new();
+    for id in ids {
+        let Some(now) = tempo_of(cat, own, id) else { continue };
+        let Some(to) = adjusted(&now, how) else {
+            tempos.push(now);
+            continue;
+        };
+        tempos.push(TrackTempo { bpm: Some(to), ..now.clone() });
+        let (_, _, path) = place(cat, own, id).context("a track's file is not known")?;
+        let had = crate::retag::bpm(&path);
+        if whole(had.as_deref().and_then(|v| v.trim().parse().ok())) == Some(to) {
+            continue;
+        }
+        let Some((_, _, album, title)) = served.library.song_file(id)? else { continue };
+        if !p.records.iter().any(|r| r.album == album)
+            && let Some((_, _, _, artist, name)) = served.library.album_place(&album)?
+        {
+            p.records.push(crate::journal::RunRecord { album: album.clone(), title: name, artist });
+        }
+        let from = match how {
+            Adjust::Half => "halved",
+            Adjust::Double => "doubled",
+            Adjust::Reset => "Cratarr's measure",
+        };
+        p.files.push(crate::journal::FileWrite {
+            album,
+            path,
+            track: Some(title),
+            before: vec![("bpm".into(), had.into_iter().collect())],
+            after: vec![("bpm".into(), vec![to.to_string()])],
+            from: vec![("bpm".into(), from.into())],
+            undone: false,
+            whole: None,
+        });
+    }
+    let n = p.files.len();
+    let what = match how {
+        Adjust::Half => "Tempo halved",
+        Adjust::Double => "Tempo doubled",
+        Adjust::Reset => "Tempo measured",
+    };
+    p.title = format!("{what} · {n} track{}", if n == 1 { "" } else { "s" });
+    Ok((p, tempos))
+}
+
 /// Writes a track's BPM tag (none: removes it); the catalogue reads it again at once and carries Cratarr's analysis of
 /// it over to the rewritten file, so its measure and beats stay (`Catalogue::reread`). Blocking.
 pub(super) fn write(cat: &crate::catalogue::Catalogue, source: &str, id: &str, to: Option<u32>) -> Result<()> {

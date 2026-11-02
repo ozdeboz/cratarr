@@ -49,9 +49,11 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   profile, the filter's window lit on the panel's bars (the sheet unchanged); a record's own Health problems on its page;
   and, suggested, the tagged total ("05/06") for missing tracks without a reference. Added the same day: faster
   previews (the image built on the tests' compiled parts) and a dependency check (duplicate crate versions, ts-rs out of
-  the server); the settings' section Resets from the panel's one declaration, opening its sheet; the global search
-  button always an extension on the back layer; the false "no sound" on some MP3s; the dev page's player reconnecting
-  every 3 s. Moved to 0.16 with 0096 (the owner, 2026-11-02): a playlist's Sync into "Shared with other users" and
+  the server); the settings' section Resets from the panel's one declaration, opening its sheet; the choice controls
+  streamlined (the owner, 2026-11-02, as the preview.4 review decided: one row everywhere, one of many, several, a
+  switch or a value, rows never carrying a pill); the global search
+  button always an extension on the back layer; the false "no sound" on some MP3s (the dev page's player reconnecting every 3 s left out: no one
+  could see it again, the owner included). Moved to 0.16 with 0096 (the owner, 2026-11-02): a playlist's Sync into "Shared with other users" and
   Repair into Health (both rework the .m3u files 0096 replaces), and Health's check for records above their library's
   quality limit (the limit itself for moves and Keep stays in 0.14). Previews on staging along the way.
 - **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**

@@ -3,6 +3,7 @@
   // of them. Each is switched on or off by its mark and dragged by its handle (or moved with the arrow keys on it) into
   // the order wanted: the first counts most, the next half as much, and so on. Until one is touched they all count the
   // same. Kept with the account's settings; the server reads them for each choice.
+  import ChoiceMark from './ChoiceMark.svelte';
   import Icon from './Icon.svelte';
   import { SIGNALS, setSimilarBy, similar, type Signal } from './mySettings.svelte';
   import { Reorder } from './reorder.svelte';
@@ -58,7 +59,7 @@
     <ol class="signals" class:dragging={!!reorder.drag} bind:this={listEl} aria-label="Similar by">
       {#each items as s, i (s.id)}
         <li class:lifted={reorder.drag?.from === i} class:off={!s.on} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
-          <button class="mark" role="switch" aria-checked={s.on} aria-label={s.label} onclick={() => toggle(i)}><Icon name={s.on ? 'circleCheck' : 'circle'} size={22} /></button>
+          <button class="mark" role="switch" aria-checked={s.on} aria-label={s.label} onclick={() => toggle(i)}><ChoiceMark kind="several" on={s.on} /></button>
           <span class="name">{s.label}</span>
           <button
             class="grip"

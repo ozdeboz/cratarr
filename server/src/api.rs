@@ -285,10 +285,9 @@ pub fn router(app: Arc<App>) -> Router {
             )
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
-            .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
-            .route("/api/health/fixes", get(health_fixes))
-            .route("/api/health/fixes/apply", post(apply_fixes))
-            .route("/api/albums/{source}/{album}/intake", get(album_intake))
+            .route("/api/intake/cards", get(intake_cards))
+            .route("/api/albums/{source}/{album}/references", get(album_references).put(choose_references))
+            .route("/api/albums/{source}/{album}/card", get(intake_card))
             // A record's own Health problems (0.14): its page's and its menu's.
             .route("/api/albums/{source}/{album}/health", get(album_health))
             .route("/api/albums/{source}/{album}/release", get(album_release))
@@ -2292,6 +2291,11 @@ async fn tempo_of(State(app): State<Arc<App>>, Json(b): Json<TempoBody>) -> Resu
 /// Adjust BPM: halve, double or reset the tracks' tempo (administrators; written into the files).
 async fn adjust_tempo(State(app): State<Arc<App>>, Json(b): Json<TempoBody>) -> Result<Json<serde_json::Value>, ApiError> {
     let how = b.adjust.ok_or_else(|| ApiError::from(ToggleError::Refused("Say how: half, double or reset.".into())))?;
+    // Cratarr's own tracks: a run on the one path (0.14), the tracks' tempos as they will be.
+    if b.source == crate::source::cratarr::KIND.id {
+        let (tracks, run) = app.playlists.tempo_run(&app, &b.ids, how).await?;
+        return Ok(Json(json!({ "tracks": tracks, "run": run })));
+    }
     let (tracks, undo) = app.playlists.adjust_tempo(&b.source, &b.ids, how).await?;
     Ok(Json(json!({ "tracks": tracks, "undo": undo })))
 }
@@ -2494,8 +2498,9 @@ async fn crate_favourites(
     Path(id): Path<String>,
     Json(req): Json<CrateFavouritesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.set_crate_favourites(&id, req.favourites).await?;
-    Ok(Json(json!({ "crate": id, "favourites": req.favourites })))
+    // An own crate's: its Favourite condition, saved with the crate's Undo (one truth, the owner 2026-11-02).
+    let undo = app.playlists.set_crate_favourites(&id, req.favourites).await?;
+    Ok(Json(json!({ "crate": id, "favourites": req.favourites, "undo": undo })))
 }
 
 /// Tracks of a crate, by their ids on a server (its default when not said), and albums of Cratarr's own library by id.
@@ -2579,8 +2584,8 @@ async fn crate_favourite_albums(
     Path(id): Path<String>,
     Json(req): Json<CrateFavouriteAlbumsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.set_crate_favourite_albums(&id, req.favourite_albums).await?;
-    Ok(Json(json!({ "crate": id, "favourite_albums": req.favourite_albums })))
+    let undo = app.playlists.set_crate_favourite_albums(&id, req.favourite_albums).await?;
+    Ok(Json(json!({ "crate": id, "favourite_albums": req.favourite_albums, "undo": undo })))
 }
 
 async fn crate_playlist(
@@ -4158,14 +4163,6 @@ async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json:
             );
         } else if token.starts_with('c') {
             redo.extend(app.playlists.undo(token).await?);
-        } else if token.starts_with(crate::app::covers::UNDO) {
-            crate::app::covers::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        } else if token.starts_with(crate::app::renumber::UNDO) {
-            crate::app::renumber::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        } else if token.starts_with(crate::app::fixes::UNDO) {
-            crate::app::fixes::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        } else if token.starts_with(crate::app::track_fetch::UNDO) {
-            crate::app::track_fetch::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -6301,9 +6298,9 @@ async fn start_file_fetch(Json(b): Json<FileFetch>) -> Result<Json<serde_json::V
 }
 
 /// A checked track into its album; Undo takes it out again (and puts back the one it replaced).
-async fn add_fetched_track(Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let token = crate::app::track_fetch::add(&id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
+async fn add_fetched_track(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    // A run on the one path (0.14): the copy chosen is the yes, Undo the run's.
+    Ok(Json(crate::app::track_fetch::add(&app, &id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// The bulk intake's queue (0.13, decision 0080 amended): each missing track, its state, its candidates (best first) and
@@ -6318,11 +6315,11 @@ struct IntakeAlbums {
 }
 
 /// These albums' missing tracks queued, searched in turn (paced); the queue.
-async fn track_intake_add(Json(b): Json<IntakeAlbums>) -> Result<Json<crate::app::track_intake::View>, ApiError> {
+async fn track_intake_add(State(app): State<Arc<App>>, Json(b): Json<IntakeAlbums>) -> Result<Json<crate::app::track_intake::View>, ApiError> {
     if b.albums.is_empty() || b.albums.iter().any(|a| a.trim().is_empty()) {
         return Err(ToggleError::BadSettings("Name the albums.".into()).into());
     }
-    let view = crate::app::track_intake::add_albums(&b.albums).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let view = crate::app::track_intake::add_albums(&app, &b.albums).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(view))
 }
 
@@ -6339,9 +6336,9 @@ struct IntakeApprove {
 }
 
 /// Found items approved (a candidate given, else the one preselected): fetched, gated and added in turn; the queue.
-async fn track_intake_approve(Json(b): Json<IntakeApprove>) -> Json<crate::app::track_intake::View> {
+async fn track_intake_approve(State(app): State<Arc<App>>, Json(b): Json<IntakeApprove>) -> Json<crate::app::track_intake::View> {
     let picked: Vec<(String, Option<usize>)> = b.items.into_iter().map(|p| (p.id, p.candidate)).collect();
-    Json(crate::app::track_intake::approve(&picked))
+    Json(crate::app::track_intake::approve(&app, &picked))
 }
 
 /// One item dropped, its staged file with it.
@@ -6480,10 +6477,10 @@ async fn look_album_covers(ctx: Ctx, Path((source, album)): Path<(String, String
 }
 
 /// Upload cover (0.9.6): the picture sent as the body (JPEG, PNG or WebP) set as a chosen cover is; Undo as there.
-async fn upload_album_cover(Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<serde_json::Value>, ApiError> {
+async fn upload_album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
     own_album(&source)?;
-    let token = crate::app::covers::upload(&album, body.to_vec()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
+    // A run on the one path (0.14): the upload is the yes, Undo the run's.
+    Ok(Json(crate::app::covers::run(&app, &album, None, Some(body.to_vec())).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// Renumber's look (0.9.6) as a task: its result the preview, what `POST …/renumber` would write.
@@ -6493,66 +6490,38 @@ async fn look_renumber(ctx: Ctx, Path((source, album)): Path<(String, String)>) 
     started(crate::app::renumber::start(&account, &album))
 }
 
-/// The numbers shown in the preview written into the album's tracks; Undo puts the old ones back.
-async fn renumber_album(Path((source, album)): Path<(String, String)>, Json(b): Json<crate::app::renumber::Asked>) -> Result<Json<serde_json::Value>, ApiError> {
+/// Every record waiting in an Incoming library as its intake card (0.14, the owner: Health's "Records waiting for you").
+async fn intake_cards(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::app::intake_card::Card>>, ApiError> {
+    Ok(Json(crate::app::intake_card::cards(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// A record's references (0.14): each source agreeing, differing, found or missing, the one that counts, by hand.
+async fn album_references(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::references::References>, ApiError> {
     own_album(&source)?;
-    let token = crate::app::renumber::apply(&album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
+    Ok(Json(crate::app::references::of(&app, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
-#[derive(Deserialize)]
-struct FixesOf {
-    finding: String,
-}
-
-/// A Health finding's fixes (0.9.7, `app::fixes`): each album's, the certain first, and how many are certain.
-async fn health_fixes(ctx: Ctx, Query(q): Query<FixesOf>) -> Result<Json<serde_json::Value>, ApiError> {
-    let app = ctx.app.clone();
-    let fixes = crate::app::fixes::of_finding(&app, &q.finding).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
-    // Album artist and MusicBrainz ids come from matches made in a task (`match`): the page asks again as it runs.
-    let matching = ctx.account().is_some_and(|a| crate::app::matching::running(&a));
-    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
-}
-
-/// Fixes to apply: these (`ids`), or every certain one of a finding (`certain`: its key).
-#[derive(Deserialize)]
-struct ApplyFixes {
-    #[serde(default)]
-    ids: Vec<String>,
-    #[serde(default)]
-    certain: Option<String>,
-    /// Genre fixes' chosen genres (0.9.8), by fix id: written as several genres.
-    #[serde(default)]
-    chosen: std::collections::HashMap<String, Vec<String>>,
-}
-
-/// Fixes written into the files (0.9.7, an administrator's tap): `{undo: [token], applied, failed: [{id, why}]}`.
-async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> Result<Json<serde_json::Value>, ApiError> {
-    let refused = |e: anyhow::Error| ToggleError::Refused(format!("{e:#}"));
-    let fixes = match &b.certain {
-        Some(finding) => crate::app::fixes::of_finding(&app, finding).await.map_err(refused)?.into_iter().filter(|f| f.certainty == "certain").collect(),
-        None => crate::app::fixes::by_ids(&app, &b.ids).await.map_err(refused)?,
-    };
-    let mut fixes = fixes;
-    crate::app::fixes::choose(&mut fixes, &b.chosen).map_err(refused)?;
-    if fixes.is_empty() {
-        return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
-    }
-    // Written whole only (0.9.8: `applied` counted those tried, and said a fix was in when it had failed).
-    let (tokens, written, failed) = crate::app::fixes::apply_all(fixes).await.map_err(refused)?;
-    let failed: Vec<serde_json::Value> = failed.into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect();
-    Ok(Json(json!({ "undo": tokens, "applied": written, "failed": failed })))
-}
-
-/// An arrival's intake (0.9.7): every fix the album would get before it is kept (year, genre, album artist,
-/// MusicBrainz ids, cover), the certain first; `matching` while its match is looked for. Applied as Health's are.
-async fn album_intake(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+/// "Use this" (`counting`: a source, or null), "Paste a link" (`link`), "Checked by hand" (`by_hand`): the record's
+/// references as they are then.
+async fn choose_references(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    Json(b): Json<crate::app::references::Choose>,
+) -> Result<Json<crate::app::references::References>, ApiError> {
     own_album(&source)?;
-    let (mut fixes, matching) = crate::app::fixes::of_album(&app, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.field.cmp(b.field)));
-    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
-    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
+    Ok(Json(crate::app::references::choose(&app, &album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// One record's intake card.
+async fn intake_card(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::intake_card::Card>, ApiError> {
+    own_album(&source)?;
+    let view = app.incoming.list(Some(&source)).await;
+    let (library, verdict) = view
+        .sources
+        .iter()
+        .find_map(|s| s.albums.iter().find(|a| a.id == album).map(|a| (a.library.clone(), s.verdicts.get(&album).cloned())))
+        .unwrap_or((None, None));
+    Ok(Json(crate::app::intake_card::card(&app, &album, library, verdict.as_ref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// The findings Health has of one record, each with only its items, and its tracks' file problems (0.14).
@@ -6566,10 +6535,10 @@ struct SetCover {
 }
 
 /// An album's cover set to one of its candidates: beside its tracks and inside each; Undo puts the old one back.
-async fn set_album_cover(Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn set_album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
     own_album(&source)?;
-    let token = crate::app::covers::set(&album, &b.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
+    // A run on the one path (0.14): the choice is the yes, Undo the run's.
+    Ok(Json(crate::app::covers::run(&app, &album, Some(&b.url), None).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// How MusicBrainz stands (0.9.6, Settings › Connections): when last reached, the last failure, the background pass.
@@ -6661,6 +6630,9 @@ struct Ticked {
     /// Each ticked record's stamp from the sheet: a record no longer as it showed is set aside.
     #[serde(default)]
     stamps: Option<std::collections::HashMap<String, String>>,
+    /// A fix plan's choices: the fields ticked of each record, a genre's words chosen.
+    #[serde(default, flatten)]
+    chosen: crate::app::fix_plans::Chosen,
 }
 
 #[derive(Deserialize)]
@@ -6674,10 +6646,16 @@ fn file_change_refused(e: anyhow::Error) -> ApiError {
 
 /// A kind's review sheet (`types`; Health's fixes and Renumber as they move onto the path): per record its fields old
 /// → new and where the new comes from.
-async fn file_change_plan(Path(kind): Path<String>, Query(q): Query<PlanOf>) -> Result<Json<crate::app::file_runs::PlanView>, ApiError> {
+async fn file_change_plan(State(app): State<Arc<App>>, Path(kind): Path<String>, Query(q): Query<PlanOf>) -> Result<Json<crate::app::file_runs::PlanView>, ApiError> {
     let albums = q.albums.map(|a| a.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect());
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::plan(albums).await.map_err(file_change_refused)?)),
+        // Health's fixes (`fix:<finding>`) and an arrival's (`intake:<album>`): decision 0092's writers' map.
+        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::plan(&app, k).await.map_err(file_change_refused)?)),
+        k if k.starts_with("renumber:") => {
+            let account = crate::serve::who::current().map(|w| w.user).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+            Ok(Json(crate::app::renumber::plan(&account, &k["renumber:".len()..]).await.map_err(file_change_refused)?))
+        }
         _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
     }
 }
@@ -6687,6 +6665,11 @@ async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>
     let albums = b.albums.unwrap_or_default();
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums, b.stamps).await.map_err(file_change_refused)?)),
+        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::apply(&app, k, albums, b.stamps, b.chosen).await.map_err(file_change_refused)?)),
+        k if k.starts_with("renumber:") => {
+            let account = crate::serve::who::current().map(|w| w.user).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+            Ok(Json(crate::app::renumber::apply_plan(&app, &account, &k["renumber:".len()..], b.stamps).await.map_err(file_change_refused)?))
+        }
         _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
     }
 }

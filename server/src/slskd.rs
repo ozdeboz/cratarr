@@ -129,6 +129,23 @@ impl Slskd {
         r.json().await.context("slskd's answer could not be read")
     }
 
+    /// Every download slskd remembers, by the user it came from: each file's name as that user shares it (the intake
+    /// card's "where from", 0.14).
+    pub async fn downloads(&self) -> Result<Vec<(String, Vec<String>)>> {
+        let users: serde_json::Value = self.get("transfers/downloads").await?;
+        Ok(users
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|u| {
+                        let files = u["directories"].as_array().into_iter().flatten().flat_map(|d| d["files"].as_array().into_iter().flatten()).filter_map(|f| f["filename"].as_str().map(str::to_string)).collect();
+                        (u["username"].as_str().unwrap_or_default().to_string(), files)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Its version, which also says it answers and the key works.
     pub async fn version(&self) -> Result<String> {
         self.get("application/version").await
