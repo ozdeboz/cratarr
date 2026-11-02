@@ -1548,6 +1548,13 @@ impl Alike {
         signals.known().then(|| signals.score(by))
     }
 
+    /// How well the file at a place fits a profile (a taste: decision 0094's Best match, an artist's top tracks), by
+    /// `by`, as Sounds like ranks a file against its seed; none when nothing is known of it.
+    pub fn fit(&self, p: &crate::similarity::Profile, i: usize, by: &Weights) -> Option<f64> {
+        let signals = p.to_track(&self.lib, i, &self.tracks[i]);
+        signals.known().then(|| signals.score(by))
+    }
+
     /// Whether AudioMuse heard the file at a place.
     pub fn heard(&self, i: usize) -> bool {
         self.lib.sound(i).is_some()

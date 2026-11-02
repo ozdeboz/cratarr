@@ -437,8 +437,9 @@ export type Axis = {
  *  `order`, `down`: the order its list shows (decision 0060), applied on the server before the rows are paged (and
  *  by Play); a value a row does not have comes first, last turned round; equals keep the crate's own order. */
 export type CrateLook = { without?: string[]; filter?: Condition[]; order?: CrateOrder; down?: boolean };
-/** A crate's list's orders: its own (newest first), or by a field. */
-export type CrateOrder = 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
+/** A crate's list's orders: its own (newest first), by a field, or Best match (by fit to the asking account's taste,
+ *  decision 0094; with none, its own). */
+export type CrateOrder = 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added' | 'bestMatch';
 /** `?source=…&without=…&filter=…&order=…&down=true` (each key once; the filter as JSON). */
 function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
   if (source) q.set('source', source);
@@ -2518,7 +2519,8 @@ export type LibraryTrack = {
   album_artist?: string;
   last_played?: number;
 };
-export type LibraryTrackOrder = 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed';
+/** `bestMatch`: by fit to the asking account's taste (decision 0094); with none, as `album`. */
+export type LibraryTrackOrder = 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed' | 'bestMatch';
 /** A page of the library's tracks: the words (as the search reads them), the order, the libraries switched off, and
  *  the Library's filter on the tracks themselves (its switches, its conditions, decision 0061). `total`: how many pass,
  *  `all`: how many before the filter. */

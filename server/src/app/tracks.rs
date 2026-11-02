@@ -19,7 +19,7 @@ fn ci(a: &str, b: &str) -> Ordering {
 }
 
 /// The rows in `order` (`title`, `artist`, `album`, `added`, `year`, `plays`, `duration`, and 0.9.7's `tempo`,
-/// `lastPlayed`, `albumArtist`; any other: `album`), the other
+/// `lastPlayed`, `albumArtist`; any other: `album`; `bestMatch` is `by_fit`), the other
 /// way round where `down`; equals in their album's order (album, disc, track), always the same way.
 pub fn sort(rows: &mut [TrackRow], order: &str, down: bool) {
     rows.sort_by(|a, b| {
@@ -41,6 +41,17 @@ pub fn sort(rows: &mut [TrackRow], order: &str, down: bool) {
             .then_with(|| a.disc_no.cmp(&b.disc_no))
             .then_with(|| a.track_no.cmp(&b.track_no))
             .then_with(|| ci(&a.title, &b.title))
+    });
+}
+
+/// The rows by fit to the asking account's taste (Best match, decision 0094; `fit` by song id), the best first, the
+/// other way round where `down`; those it knows nothing of after, and equals, in their album's order.
+pub fn by_fit(rows: &mut [TrackRow], fit: &HashMap<String, f64>, down: bool) {
+    sort(rows, "album", false);
+    let of = |r: &TrackRow| fit.get(&r.id).copied().unwrap_or(f64::NEG_INFINITY);
+    rows.sort_by(|a, b| {
+        let first = of(b).total_cmp(&of(a));
+        if down { first.reverse() } else { first }
     });
 }
 
@@ -83,6 +94,11 @@ pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &
     };
     let off = app.library.folders_off(without);
     let (words, order, user) = (crate::search::words(q), order.to_string(), served.current_user());
+    // Best match (decision 0094): by the account's taste; no one asking, or no taste yet: the album order.
+    let fit = match &user {
+        Some(user) if order == "bestMatch" => app.playlists.taste_fits(user, without).await?,
+        _ => HashMap::new(),
+    };
     tokio::task::spawn_blocking(move || -> Result<Listed> {
         let mut rows = served.library.track_rows(&words, &off)?;
         let all = rows.len();
@@ -94,7 +110,11 @@ pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &
             None => None,
         };
         rows.retain(|r| keeps(r, &narrow, ratings.as_ref(), passing.as_ref()));
-        sort(&mut rows, &order, down);
+        if fit.is_empty() {
+            sort(&mut rows, &order, down);
+        } else {
+            by_fit(&mut rows, &fit, down);
+        }
         let total = rows.len();
         Ok(Listed { rows: rows.into_iter().skip(offset).take(limit.clamp(1, MOST)).collect(), total, all })
     })
@@ -229,5 +249,10 @@ mod tests {
         assert_eq!(titles(&rows)[..2], ["Hunter", "Jóga"], "the fastest first, those without a tempo last");
         sort(&mut rows, "nonsense", false);
         assert_eq!(titles(&rows)[0], "Little Fluffy Clouds", "the album order");
+        let fit: HashMap<String, f64> = [("tr-Jóga".to_string(), 0.4), ("tr-Hunter".to_string(), 0.8)].into();
+        by_fit(&mut rows, &fit, false);
+        assert_eq!(titles(&rows), ["Hunter", "Jóga", "Little Fluffy Clouds", "The Bachelorette"], "Best match: the closest first, then the album order");
+        by_fit(&mut rows, &fit, true);
+        assert_eq!(titles(&rows), ["Little Fluffy Clouds", "The Bachelorette", "Jóga", "Hunter"]);
     }
 }

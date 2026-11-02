@@ -463,8 +463,8 @@ pub struct CrateLook {
     pub down: bool,
 }
 
-/// The orders a crate's list takes (decision 0060), as the page names them: its own (newest first) or by a field;
-/// `down` turns it round.
+/// The orders a crate's list takes (decision 0060), as the page names them: its own (newest first), by a field, or by
+/// fit to the asking account's taste (Best match, decision 0094); `down` turns it round.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CrateOrder {
@@ -481,6 +481,7 @@ pub enum CrateOrder {
     Plays,
     LastPlayed,
     Added,
+    BestMatch,
 }
 
 /// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
@@ -574,6 +575,18 @@ fn sort_rows(rows: &mut Vec<PlaylistRow>, by: CrateOrder, down: bool) {
         }
         _ => rows.sort_by(|a, b| way(number(a).partial_cmp(&number(b)).unwrap_or(std::cmp::Ordering::Equal))),
     }
+}
+
+/// Lines by how well each fits the taste (Best match, decision 0094), the best first; those it knows nothing of after,
+/// in their own order (all of them, while there is no taste: the list's own order); `down` turns it all round.
+fn by_fit(mut lines: Vec<String>, fit: impl Fn(&str) -> Option<f64>, down: bool) -> Vec<String> {
+    let fits: HashMap<String, f64> = lines.iter().filter_map(|l| Some((l.clone(), fit(l)?))).collect();
+    let of = |l: &String| fits.get(l).copied().unwrap_or(f64::NEG_INFINITY);
+    lines.sort_by(|a, b| of(b).total_cmp(&of(a)));
+    if down {
+        lines.reverse();
+    }
+    lines
 }
 
 
@@ -2981,8 +2994,8 @@ impl PlaylistService {
         Ok((lib.source.clone(), lines.to_vec()))
     }
 
-    /// A crate's lines (in its own order) in `look`'s order. By a field, every row of it is read and sorted, and the
-    /// answer kept a little while for the next pages (`SORTED_KEEP`).
+    /// A crate's lines (in its own order) in `look`'s order. By a field, every row of it is read and sorted (by Best
+    /// match, every line's fit), and the answer kept a little while for the next pages (`SORTED_KEEP`).
     async fn crate_in_order(&self, lib: &CrateLibrary, mut lines: Vec<String>, conditions: &[crates::Condition], look: &CrateLook) -> Result<Arc<Vec<String>>, ToggleError> {
         if look.order == CrateOrder::Own {
             if look.down {
@@ -2999,10 +3012,21 @@ impl PlaylistService {
         {
             return Ok(kept.clone());
         }
-        let mut rows = self.rows_of(lines, &lib.source).await?;
-        self.with_plays_and_added(&mut rows, lib).await;
-        sort_rows(&mut rows, look.order, look.down);
-        let sorted = Arc::new(rows.into_iter().map(|r| r.entry).collect::<Vec<_>>());
+        let sorted = if look.order == CrateOrder::BestMatch {
+            // By fit to the asking account's taste; no one asking: its own order.
+            let fit = match asking_user(self.served.as_deref()) {
+                Some(user) => self.taste_fits(&user, &look.without).await?,
+                None => HashMap::new(),
+            };
+            let alike = lib.alike();
+            let song = |line: &str| Some(crate::serve::ids::song(lib.files[alike.place_of_line(line)?].track?));
+            Arc::new(by_fit(lines, |l| fit.get(&song(l)?).copied(), look.down))
+        } else {
+            let mut rows = self.rows_of(lines, &lib.source).await?;
+            self.with_plays_and_added(&mut rows, lib).await;
+            sort_rows(&mut rows, look.order, look.down);
+            Arc::new(rows.into_iter().map(|r| r.entry).collect::<Vec<_>>())
+        };
         *self.sorted.lock().unwrap_or_else(|p| p.into_inner()) = Some((key, std::time::Instant::now(), sorted.clone()));
         Ok(sorted)
     }
@@ -3716,9 +3740,25 @@ impl PlaylistService {
         .map_err(|e| anyhow::anyhow!("{e}"))?
     }
 
+    /// How well each track of the libraries not in `without` fits `user`'s taste (`taste_in`, `Alike::fit`; decision
+    /// 0094: Best match), by its song id; none while there is no taste.
+    pub async fn taste_fits(&self, user: &str, without: &[String]) -> Result<HashMap<String, f64>, ToggleError> {
+        let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let lib = self.crate_library(None, false, false, without).await?;
+        let excluded = self.own_crates()?.excluded().await?;
+        let user = user.to_string();
+        tokio::task::spawn_blocking(move || -> Result<HashMap<String, f64>, ToggleError> {
+            let taste = taste_in(&lib, &serve.userdata, &user, &excluded)?;
+            let alike = lib.alike();
+            Ok(lib.files.iter().enumerate().filter(|(i, _)| lib.on(*i)).filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.fit(&taste, i, lib.by())?))).collect())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
     /// An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste", in place of
     /// their most played): their tracks of the libraries switched on, those that fit the asking account's taste best
-    /// first (`taste_in`, as Grave digging's), at most `count`, as song ids.
+    /// first (`taste_in`, `Alike::fit`: as Best match), at most `count`, as song ids.
     pub async fn artist_picks(&self, name: &str, without: &[String], count: usize) -> Result<Vec<String>, ToggleError> {
         let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("Recommendations are an account's own: sign in.".into()))?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -3733,7 +3773,7 @@ impl PlaylistService {
                 .iter()
                 .enumerate()
                 .filter(|(i, f)| lib.on(*i) && f.artists.iter().any(|a| a.eq_ignore_ascii_case(&name)))
-                .filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.compare(&taste, &alike.profile(&[(i, 1.0)]), lib.by())?)))
+                .filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.fit(&taste, i, lib.by())?)))
                 .collect();
             fit.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
             Ok(fit.into_iter().take(count).map(|(id, _)| id).collect())
@@ -4073,6 +4113,22 @@ mod order_tests {
         let look: CrateLook = serde_json::from_value(serde_json::json!({ "order": "lastPlayed" })).unwrap();
         assert_eq!((look.order, look.down), (CrateOrder::LastPlayed, false));
         assert_eq!(CrateLook::default().order, CrateOrder::Own);
+        let look: CrateLook = serde_json::from_value(serde_json::json!({ "order": "bestMatch" })).unwrap();
+        assert_eq!(look.order, CrateOrder::BestMatch);
+    }
+
+    #[test]
+    fn best_match_puts_the_closest_to_the_taste_first_and_without_one_keeps_its_own_order() {
+        let lines = || ["a", "b", "c", "d"].map(str::to_string).to_vec();
+        let fit = |l: &str| match l {
+            "a" => Some(0.2),
+            "c" => Some(0.9),
+            "d" => Some(0.5),
+            _ => None,
+        };
+        assert_eq!(by_fit(lines(), fit, false), ["c", "d", "a", "b"], "nothing known of b: last");
+        assert_eq!(by_fit(lines(), fit, true), ["b", "a", "d", "c"]);
+        assert_eq!(by_fit(lines(), |_| None, false), ["a", "b", "c", "d"], "no taste: the list's own order");
     }
 }
 
