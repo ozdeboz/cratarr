@@ -549,7 +549,7 @@ pub enum Command {
         /// one it cuts counts as played (it ended, not skipped) and the queue goes on after the added ones; Radio and
         /// Autoplay go on as they were (no new seed). Nothing playing: the first added plays.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        #[cfg_attr(test, ts(optional))]
+        #[cfg_attr(test, ts(as = "Option<bool>", optional))]
         now: bool,
     },
     /// Entry `entry` (or the one at place `from`) to after entry `after` ("" for first), or to place `to`.
