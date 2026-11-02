@@ -20,6 +20,7 @@
   import { listShows, matchLine, type Matched } from './search';
   import { keepWhile } from './keepWhile.svelte';
   import Asking from './Asking.svelte';
+  import Notice from './Notice.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
   import { libraryLayoutShown } from './layouts';
@@ -141,14 +142,20 @@
   // Deep (decision 0072, 0.9.3): Cratarr's own albums the server finds by one of their tracks, with why; asked a moment
   // after the words stop changing. The rest as every search reads, in the browser.
   let deep = $state<Map<string, Matched>>(new Map());
-  /** The words the server has answered (or failed) for: till then no "none match" (the owner, 2026-10-25: it said so
-   *  before the albums found by a track were in). */
+  /** The words the server has answered for: till then no "none match" (the owner, 2026-10-25: it said so before the
+   *  albums found by a track were in). */
   let deepFor = $state('');
+  /** The words it failed for, and why: said with Try again, never "No records match." (the owner, 2026-11-02: a failure
+   *  is not an answer). */
+  let deepFailed = $state<{ q: string; text: string } | null>(null);
+  let deepAgain = $state(0);
   $effect(() => {
     const q = pageView.query.trim();
+    void deepAgain;
     if (!q) {
       deep = new Map();
       deepFor = '';
+      deepFailed = null;
       return;
     }
     let gone = false;
@@ -163,8 +170,9 @@
           }
           deep = m;
           deepFor = q;
+          deepFailed = null;
         },
-        () => !gone && (deepFor = q),
+        (e) => !gone && (deepFailed = { q, text: e instanceof Error ? e.message : 'Unexpected error' }),
       );
     }, 250);
     return () => {
@@ -214,7 +222,7 @@
   );
   // Searching, the server's finds not in yet and the browser's own none: the last list stays (the owner, 2026-10-25: the
   // list and its header went and came back with the albums found by a track), then the loader (lib/loader, the one rule).
-  const pending = $derived(!!pageView.query.trim() && deepFor !== pageView.query.trim());
+  const pending = $derived(!!pageView.query.trim() && deepFor !== pageView.query.trim() && deepFailed?.q !== pageView.query.trim());
   const none = (l: typeof found) => l.every((x) => !x.albums.length);
   const kept = keepWhile(() => found, () => pending && none(found), () => pageView.query.trim());
   const shown = $derived(kept.loader ? found : kept.value);
@@ -231,7 +239,7 @@
   );
   // Its words leave no record, every library answered: the pill says so, from its magnifier (pageView searchNone).
   searchNone(() =>
-    shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor) !== 'asking'
+    shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty'
       ? 'records'
       : null,
   );
@@ -436,9 +444,11 @@
       <p class="empty">{s.label} can't list records.</p>
     {:else if s.error && s.albums.length === 0}
       <p class="error" role="alert">{s.error}</p>
-    {:else if listShows(albums.length, pageView.query, deepFor) === 'asking'}
+    {:else if listShows(albums.length, pageView.query, deepFor, deepFailed?.q) === 'asking'}
       <!-- Searching: the server's finds not in yet, so nothing said before the answer (lib/search listShows). -->
       <Asking now={kept.loader} />
+    {:else if listShows(albums.length, pageView.query, deepFor, deepFailed?.q) === 'failed' && deepFailed}
+      <Notice text={deepFailed.text} onretry={() => ((deepFailed = null), deepAgain++)} />
     {:else if albums.length === 0}
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). Words that match no record say so, not the libraries (under a

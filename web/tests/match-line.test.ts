@@ -38,3 +38,10 @@ test('a list says none match only once the words as they are now are answered', 
   // No words: nothing asked, so the filter's own none is said at once.
   assert.equal(listShows(0, '  ', ''), 'empty');
 });
+
+test('a failed answer is not an answer: the list says it failed, never none', () => {
+  assert.equal(listShows(0, 'hip hop', '', 'hip hop'), 'failed');
+  assert.equal(listShows(2, 'hip hop', '', 'hip hop'), 'rows');
+  // Failed for other words: these are still asked for.
+  assert.equal(listShows(0, 'hip hop', '', 'hip ho'), 'asking');
+});

@@ -20,7 +20,7 @@
   import CoverBusy from './CoverBusy.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import Icon from './Icon.svelte';
-  import { beyondAlbum, globalAsked, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, showAll } from './globalSearch.svelte';
+  import { beyondAlbum, globalAsked, globalFailed, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, searchAgain, showAll } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Row from './Row.svelte';
@@ -32,6 +32,7 @@
   import { leaveOnArrival } from './navStep.svelte';
   import { matchLine, type SearchResult } from './search';
   import Asking from './Asking.svelte';
+  import Notice from './Notice.svelte';
   import { keepWhile } from './keepWhile.svelte';
   import { toast } from './toast.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
@@ -46,9 +47,11 @@
   const q = $derived(pageView.query.trim());
   const groups = $derived(globalGroups(except));
   const asked = $derived(globalAsked());
+  // Failed for these words: said with Try again over what shows, never the wait for ever (the owner, 2026-11-02).
+  const failed = $derived(globalFailed());
   // The server's answer for the words as they are now not in (lib/loader, the one rule): the groups as they were shown,
   // then the loader in their place.
-  const kept = keepWhile(() => groups, () => !!q && !asked, () => q);
+  const kept = keepWhile(() => groups, () => !!q && !asked && !failed, () => q);
   const shownGroups = $derived(kept.loader ? [] : kept.value);
   // An album's or a track's library, as a dot before its title, as the Library's lists show it (0.9.5): from its
   // album's subject (`album:<source>/<id>`), the Library's list knowing which library each is in.
@@ -183,8 +186,9 @@
       {#if all && !all.done}<li class="more" {@attach nearEnd(() => loadAll(all.q, all.kind))}></li>{/if}
     </ul>
   </section>
-{:else if q && (shownGroups.length || asked)}
+{:else if q && (shownGroups.length || asked || failed)}
   <section class="global" aria-label="Everywhere">
+    {#if failed}<Notice text={failed} onretry={searchAgain} />{/if}
     {#if quickOn()}
       <SearchCrateCard {q} />
     {/if}
