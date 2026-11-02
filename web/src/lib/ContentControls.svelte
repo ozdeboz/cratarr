@@ -316,12 +316,12 @@
         bind:this={lens}
         class="lens"
         class:lit={!searching && pageView.query.trim() !== ''}
-        aria-label={words}
+        aria-label={!searching && pageView.query.trim() !== '' ? `${words}: still narrowed by its words` : words}
         title={words}
         onmousedown={(e) => searching && e.preventDefault()}
         onclick={() => (searching = !searching)}
        
-        ><Icon name="search" size={22} /></button
+        ><Icon name="search" size={22} />{#if !searching && pageView.query.trim() !== ''}<span class="badge" aria-hidden="true">!</span>{/if}</button
       >
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
@@ -476,6 +476,12 @@
   /* A search or a filter that applies. */
   button.lit {
     color: var(--accent-ink);
+  }
+
+  /* Folded with words kept (the owner, 2026-11-02: they narrow every list, so a lit lens alone hid them): the funnel's
+     badge on the magnifier, an exclamation mark in it ("an exclamation mark instead of a dot"). */
+  .lens {
+    position: relative;
   }
 
   /* How many filters are on: a small count on the funnel's corner, the list itself left clean (decision 0061). */
