@@ -247,8 +247,10 @@
   const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn && crateCards.shown === 0);
   let row = $state<HTMLElement>();
   // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the
-  // buttons it replaces took, besides its own wish (as wide as a phone's row allows, 320 px at most). Said on the field
-  // (`data-wants`) for the title beside it to give way where it would squeeze it (lib/NavigationControls).
+  // buttons it replaces took, besides its own wish (as wide as its row allows, 320 px at most). Its row's, not the
+  // window's: beside a panel or the player the row is narrower, and a field sized by the window pushed back aside or
+  // sent the title away to fill the row (the owner, 2026-11-02). Said on the field (`data-wants`) for the title beside
+  // it to give way where it would squeeze it (lib/NavigationControls).
   let pill = $state<HTMLElement>();
   let folded = $state(0);
   $effect(() => {
@@ -260,9 +262,20 @@
     seen.observe(p);
     return () => seen.disconnect();
   });
+  /** The width of the row the pill is in: App's page row, or a panel's own bar. */
+  let rowRoom = $state<number | null>(null);
+  $effect(() => {
+    const line = row?.closest<HTMLElement>('.page-row, .bar, .pills');
+    if (!line) return void (rowRoom = null);
+    const seen = new ResizeObserver(() => (rowRoom = line.clientWidth));
+    seen.observe(line);
+    return () => seen.disconnect();
+  });
   /** The lens and the pill's own room, beside the field. */
   const LENS = 52;
-  const fieldWants = $derived(Math.max(Math.min(320, (innerWidth.current ?? 400) - 220), folded - LENS, 140));
+  /** Back, the gap after it, the lens and a short title's room: what the row keeps beside the field it wants. */
+  const BESIDE = 204;
+  const fieldWants = $derived(Math.max(Math.min(320, (rowRoom ?? (innerWidth.current ?? 400) - 16) - BESIDE), folded - LENS, 140));
   let lens = $state<HTMLElement>();
   /** The magnifier's middle, from the row's right end: where the callout's tip points. */
   let tip = $state(24);
@@ -551,6 +564,7 @@
     align-items: center;
     width: min(320px, calc(100vw - 220px));
     min-width: 140px;
+    flex-shrink: 1;
     overflow: hidden;
   }
 

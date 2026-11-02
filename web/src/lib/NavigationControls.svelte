@@ -42,6 +42,14 @@
   // stays as it is. Library's view (its picker is never cut: the field's glass slides over it) gives way the same
   // where the two glasses would meet (the owner, 2026-10-26).
   let away = $state(false);
+  /** The width a glass's children take laid out side by side (its padding and gaps too), without their motion: not its
+   *  layers, nor the copies of what leaves (lib/glassMotion). */
+  function heldWidth(box: HTMLElement): number {
+    const s = getComputedStyle(box);
+    const kids = [...box.children].filter((e): e is HTMLElement => e instanceof HTMLElement && !e.matches('.glass, .shade, [data-glass-ghost]'));
+    const gap = parseFloat(s.columnGap) || 0;
+    return kids.reduce((n, e) => n + e.offsetWidth, 0) + Math.max(0, kids.length - 1) * gap + (parseFloat(s.paddingLeft) || 0) + (parseFloat(s.paddingRight) || 0);
+  }
   // Said to the pill beside it: the open search then takes the room the title left, to the gap beside back.
   $effect(() => {
     pageView.leadAway = away;
@@ -64,10 +72,11 @@
       const field = r?.querySelector<HTMLElement>('.field');
       const squeezed = !!field && field.getBoundingClientRect().width < Number(field.dataset.wants ?? 0) - 2;
       // Or the pill narrower than what it holds (its buttons never squeezed, its work's line never cut: the owner,
-      // 2026-11-02).
+      // 2026-11-02). By what it holds laid out, not its scrolled width: what slides in (the field from the lens) counts
+      // there at its start, and the title went away beside room to spare (the owner, 2026-11-02, Discover on the tablet).
       const pill = r?.querySelector<HTMLElement>('[role="toolbar"]');
       const work = r?.querySelector<HTMLElement>('.work');
-      const over = (!!pill && pill.scrollWidth > pill.clientWidth + 1) || (!!work && work.scrollWidth > work.clientWidth + 1);
+      const over = (!!pill && heldWidth(pill) > pill.clientWidth + 1) || (!!work && work.scrollWidth > work.clientWidth + 1);
       away = parts.length > 0 && (met || squeezed || over || cut > 36 || room < 48 || room < 0.7 * (room + cut));
     };
     tick().then(measure);
@@ -161,8 +170,10 @@
   }
 
   /* The search open with no room for the title (`away`; not the class `away`, app.css's for what slides away): only the
-     round button. The panel's left part hides its own (its breadcrumbs, its name); the page's are not drawn. */
-  .lead.title-away :global(:is(.page-name, .crumbs, .title, .views)) {
+     round button. The panel's left part hides its own (its breadcrumbs, its name); the page's are not drawn. Not inside
+     a leaving copy (lib/glassMotion): its picker hidden, its words fell to the top of its box, above back's middle
+     (the owner, 2026-11-02). */
+  .lead.title-away :global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost] *)) {
     display: none;
   }
 

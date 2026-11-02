@@ -87,9 +87,9 @@
   }
   const flip = (kind: JoinKind) => (modes = { ...modes, [kind]: flipped(joinOf(modes, kind)) });
 
-  // Nothing read yet: "Grab a crate" leads, not the sentence's "Tracks" (the owner, 2026-10-31); the example after it
-  // shows the sentence's own words at work.
-  const parts = $derived(chips.length || brief ? sentenceOf(chips, modes, brief) : [{ text: 'Grab a crate' }]);
+  // Nothing read yet: no words before the field, only the example in it, the sentence's own words at work (the owner,
+  // 2026-11-02: no "Grab a crate" above it).
+  const parts = $derived(chips.length || brief ? sentenceOf(chips, modes, brief) : []);
   const EXAMPLE = 'hip hop and jazz from the 90s like Miles Davis';
   /** The sentence already leaves something out: the crate's own exclusions follow with "not", else "but not". */
   const saysBut = $derived(parts.some((p) => p.text === 'but not'));
@@ -251,8 +251,7 @@
     outline: none;
   }
 
-  /* Nothing typed yet: the line alone, its field the list's width. */
-  /* Nothing typed yet: "Grab a crate" and the example after it, the field as wide as the example. */
+  /* Nothing typed yet: the example alone, the field as wide as it. */
   .empty input[type='search'] {
     min-width: min(100%, 12ch);
   }
