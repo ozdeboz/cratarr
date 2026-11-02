@@ -281,7 +281,7 @@ impl SettingsService {
         };
         let Some(s) = source else { return view };
         let places = self.lib.place_folders();
-        let (status, choices, placed) = tokio::join!(s.status(), s.options(), placement::place(s, &places));
+        let (status, choices, placed) = tokio::join!(s.status(), s.options(), placement::place(s, &places, &cfg.libraries));
         view.status = status.unwrap_or_default();
         match choices {
             Ok(c) => view.choices = c,

@@ -946,7 +946,7 @@ export type Values = Record<string, string | string[]>;
 /** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
 /** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
 /** A library's own settings (decision 0034): what a move into it does to the files, and its dot's colour. */
-export type LibraryPolicy = { format?: 'cd' | 'as_is'; colour?: string | null };
+export type LibraryPolicy = { format?: 'cd' | 'as_is'; colour?: string | null; name?: string | null };
 export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
 
 export type LibraryUse = 'music' | 'incoming' | 'unused';
