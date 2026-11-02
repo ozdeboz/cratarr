@@ -7,12 +7,13 @@
 import { DEFAULTS, prefs, type Prefs } from '../prefs.svelte';
 
 /** One preference: its name as its row says it, what it is now, its default, how to set it, and how to say a value
- *  (none: on and off for a switch, else "As you set it" and "As it came"). */
-export type ResetItem<T = unknown> = { name: string; now(): T; def: T; set(v: T): unknown; say?(v: T): string };
+ *  (none: on and off for a switch, else "As you set it" and "As it came"); `section`: the section of the part it is
+ *  in, whose own Reset puts back only those (the owner, 2026-11-02: a section's and the part's Reset disagreed). */
+export type ResetItem<T = unknown> = { name: string; now(): T; def: T; set(v: T): unknown; say?(v: T): string; section?: string };
 
 /** A preference kept in `prefs`, its default `DEFAULTS`'. */
-export function pref<K extends keyof Prefs>(key: K, name: string, say?: (v: Prefs[K]) => string): ResetItem<Prefs[K]> {
-  return { name, now: () => prefs[key], def: DEFAULTS[key], set: (v) => (prefs[key] = structuredClone(v)), say };
+export function pref<K extends keyof Prefs>(key: K, name: string, say?: (v: Prefs[K]) => string, section?: string): ResetItem<Prefs[K]> {
+  return { name, now: () => prefs[key], def: DEFAULTS[key], set: (v) => (prefs[key] = structuredClone(v)), say, section };
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -33,12 +34,20 @@ export function offerReset(items: () => ResetItem[] | null) {
   });
 }
 
-/** What Reset would change: each preference not at its default, now → default. */
-export function resetRows(): { name: string; from: string; to: string }[] {
-  return partReset.items.filter((i) => !same(i.now(), i.def)).map((i) => ({ name: i.name, from: sayOf(i, i.now(), true), to: sayOf(i, i.def, false) }));
+/** What a Reset of `items` would change (of `section` only, given one): each not at its default, now → default. */
+export function rowsOf(items: readonly ResetItem[], section?: string): { name: string; from: string; to: string }[] {
+  return items
+    .filter((i) => (section === undefined || i.section === section) && !same(i.now(), i.def))
+    .map((i) => ({ name: i.name, from: sayOf(i, i.now(), true), to: sayOf(i, i.def, false) }));
 }
 
-/** Puts back what is not at its default. */
-export async function runReset() {
-  for (const i of partReset.items) if (!same(i.now(), i.def)) await i.set(structuredClone(i.def));
+/** Puts back what of `items` (of `section` only, given one) is not at its default. */
+export async function resetOf(items: readonly ResetItem[], section?: string) {
+  for (const i of items) if ((section === undefined || i.section === section) && !same(i.now(), i.def)) await i.set(structuredClone(i.def));
 }
+
+/** What the shown part's Reset would change. */
+export const resetRows = () => rowsOf(partReset.items);
+
+/** Puts back what of the shown part is not at its default. */
+export const runReset = () => resetOf(partReset.items);

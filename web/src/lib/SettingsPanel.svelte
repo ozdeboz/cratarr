@@ -11,6 +11,7 @@
   // settings are not asked for.
   import { deviceName } from './playOnTarget.svelte';
   import { glass, handGlass } from './glass.svelte';
+  import ResetSheet from './settings/ResetSheet.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { untrack } from 'svelte';
@@ -19,8 +20,6 @@
   import { words } from './search';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
-  import MenuEntry from './MenuEntry.svelte';
-  import MenuSheet from './MenuSheet.svelte';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
@@ -115,16 +114,6 @@
 
   // A part's Reset (lib/settings/reset): asked once more, in a sheet, before its preferences go back to their defaults.
   let resetting = $state(false);
-  let resetBusy = $state(false);
-  async function reset() {
-    resetBusy = true;
-    try {
-      await runReset();
-      resetting = false;
-    } finally {
-      resetBusy = false;
-    }
-  }
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
   const handed = $derived(glass.one && !beside);
@@ -220,12 +209,8 @@
     {/if}
 
     {#if resetting && resetRows().length}
-      <!-- What Reset puts back, each one now → its default (the owner, 2026-11-01: a list, from what Reset does). -->
-      <MenuSheet label="Reset" icon="resetSettings" title={`Reset ${title}`} onclose={() => (resetting = false)}>
-        <ul class="reset">{#each resetRows() as r (r.name)}<li><span class="name">{r.name}</span><span class="to">{r.from} → {r.to}</span></li>{/each}</ul>
-        <MenuEntry icon="resetSettings" label="Reset" danger busy={resetBusy} disabled={resetBusy} onclick={reset} />
-        <MenuEntry icon="close" label="Cancel" disabled={resetBusy} onclick={() => (resetting = false)} />
-      </MenuSheet>
+      <!-- What Reset puts back, each one now → its default (lib/settings/ResetSheet). -->
+      <ResetSheet title={`Reset ${title}`} rows={resetRows()} onconfirm={runReset} onclose={() => (resetting = false)} />
     {/if}
 
     {#if ed.dirty}
@@ -271,24 +256,8 @@
 
   /* Padding, not margin: the sheet measures its content's height. */
   /* What Reset puts back: a row each, its name, then now → its default. */
-  .reset {
-    display: grid;
-    gap: 8px;
-    margin: 0;
-    padding: 4px 24px 12px;
-    list-style: none;
-  }
 
-  .reset li {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 2px 12px;
-  }
 
-  .reset .to {
-    color: var(--muted);
-  }
 
   .navpill {
     display: flex;
