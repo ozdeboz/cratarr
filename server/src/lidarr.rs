@@ -402,6 +402,23 @@ impl Lidarr {
         Ok(resp.json().await.context("Lidarr's answer was not understood")?)
     }
 
+    /// The folders Lidarr imported tracks into lately (its history's imports, newest first): each one's own name, once
+    /// (the intake card's "where from", 0.14).
+    pub async fn imported_folders(&self) -> Result<Vec<String>> {
+        let v: serde_json::Value = self
+            .get("/api/v1/history", &[("page", "1"), ("pageSize", "500"), ("sortKey", "date"), ("sortDirection", "descending"), ("eventType", "3")])
+            .await?;
+        let mut out: Vec<String> = Vec::new();
+        for r in v["records"].as_array().into_iter().flatten() {
+            let Some(path) = r["data"]["importedPath"].as_str() else { continue };
+            let folder = path.replace('\\', "/").rsplit('/').nth(1).unwrap_or_default().to_string();
+            if !folder.is_empty() && !out.contains(&folder) {
+                out.push(folder);
+            }
+        }
+        Ok(out)
+    }
+
     /// Lidarr looks for these albums now.
     async fn search(&self, ids: &[i64]) -> Result<()> {
         let url = format!("{}/api/v1/command", self.base);

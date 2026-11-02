@@ -266,10 +266,21 @@ fn reference_check(matched: Option<&super::matching::Match>, looking: bool, disc
     }
 }
 
-/// Where the record came from: the Soulseek user its files were downloaded from (slskd's transfers), else a folder.
-async fn from_of(files: &[String]) -> From {
+/// Where the record came from: Bandcamp where its files say so (Bandcamp's own comment, "Visit https://….bandcamp.com"),
+/// the Soulseek user its files were downloaded from (slskd's transfers), Lidarr where it imported its folder; else a
+/// folder.
+async fn from_of(app: &super::App, files: &[String], folder: &str, tags: &[crate::catalogue::tags::FileTags]) -> From {
+    let bandcamp = tags.iter().any(|t| t.items.iter().any(|(k, _, v)| k.to_ascii_lowercase().contains("comm") && v.contains(".bandcamp.com")));
+    if bandcamp {
+        return From { kind: "bandcamp", user: None, said: "Bandcamp".into() };
+    }
     if let Some(user) = soulseek_user(files).await {
         return From { kind: "soulseek", said: format!("Soulseek · {user}"), user: Some(user) };
+    }
+    if let Some(l) = super::discover::lidarr(app)
+        && l.imported_folders().await.is_ok_and(|f| f.iter().any(|x| x.eq_ignore_ascii_case(folder)))
+    {
+        return From { kind: "lidarr", user: None, said: "Lidarr".into() };
     }
     From { kind: "folder", user: None, said: "A folder".into() }
 }
@@ -320,7 +331,8 @@ pub async fn card(app: &Arc<super::App>, album: &str, library: Option<String>, v
         hear(app, &a);
     }
     let files: Vec<String> = tracks.iter().map(|t| t.file.clone()).collect();
-    let from = from_of(&files).await;
+    let folder = tracks.first().and_then(|t| t.path.parent()).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let from = from_of(app, &files, &folder, &tags).await;
     let mut checks = vec![reference_check(matched.as_ref(), looking, discogs.as_ref(), tracks.len())];
     let (sound, acoustid) = heard_checks(heard.as_ref(), &tracks, matched.as_ref());
     checks.push(acoustid);

@@ -35,8 +35,31 @@ pub struct Source {
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Its tracks' lengths (ms), in its order, where it has them: side by side with the record's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lengths: Option<Vec<i64>>,
+    /// Found by guessing (a search by name, not an id the files carry), until confirmed once.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub guessed: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub confirmed: bool,
     /// One sentence: what it says, or why it differs.
     pub said: String,
+}
+
+/// A track's length this close to the record's agrees (ms), as matching's likely.
+const NEAR_MS: i64 = 5_000;
+
+/// A source's track list held against the record's: agrees where as many tracks, each this near; else differs, said.
+fn held(lengths: &[Option<i64>], record: &[i64]) -> (&'static str, String) {
+    if lengths.len() != record.len() {
+        return ("differs", format!("{} tracks; the record has {}", lengths.len(), record.len()));
+    }
+    let off = lengths.iter().zip(record).filter(|(l, r)| l.is_some_and(|l| (l - **r).abs() > NEAR_MS)).count();
+    match off {
+        0 => ("agrees", format!("All {} tracks, each within {} s", record.len(), NEAR_MS / 1000)),
+        n => ("differs", format!("{n} of {} lengths differ", record.len())),
+    }
 }
 
 /// What was chosen of a record's references, kept (`record_references`).
@@ -49,6 +72,9 @@ pub struct Chosen {
     /// Links pasted by hand, by source.
     #[serde(default)]
     pub links: std::collections::BTreeMap<String, String>,
+    /// Sources found by guessing that were confirmed once.
+    #[serde(default)]
+    pub confirmed: std::collections::BTreeSet<String>,
 }
 
 /// The source a pasted link is of: MusicBrainz's release, Discogs' release or master, a Bandcamp album page.
@@ -91,6 +117,9 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
     })
     .await??;
     let n = rec.song_count as usize;
+    let a = album.to_string();
+    let record: Vec<i64> = tokio::task::spawn_blocking(move || super::renumber::tracks_of(&a).map(|t| t.0.iter().map(|t| i64::from(t.secs) * 1000).collect::<Vec<_>>()))
+        .await??;
     let mut sources = Vec::new();
     // MusicBrainz: the release matched (certain: it agrees), else the one the files name.
     let mb = match (&matched, &mbid) {
@@ -101,6 +130,10 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
             year: m.year,
             kind: types.get(&format!("mb:{}", m.release)).and_then(|t| t.0.clone()),
             url: Some(format!("https://musicbrainz.org/release/{}", m.release)),
+            lengths: (!m.lengths.is_empty()).then(|| m.lengths.iter().map(|l| l.unwrap_or(0) * 1000).collect()),
+            // Found by its name, not named by the files.
+            guessed: mbid.as_deref() != Some(m.release.as_str()),
+            confirmed: false,
             said: m.why.clone(),
         },
         (None, Some(id)) => Source {
@@ -110,35 +143,71 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
             year: None,
             kind: types.get(&format!("mb:{id}")).and_then(|t| t.0.clone()),
             url: Some(format!("https://musicbrainz.org/release/{id}")),
+            lengths: None,
+            guessed: false,
+            confirmed: false,
             said: "The files name this release".into(),
         },
         (None, None) => missing("musicbrainz", "No release matched yet"),
     };
     sources.push(mb);
-    // Discogs: its year held against the record's.
+    // Discogs: its release's track list held against the record's (read now: Discogs is paced), else its year.
+    let discogs_tracks = match discogs.as_ref().and_then(|d| d.release) {
+        Some(r) => super::discogs::release_raw(r).await.ok().flatten().map(|v| super::renumber::discogs_release(&v)),
+        None => None,
+    };
     sources.push(match &discogs {
-        Some(d) => Source {
-            source: "discogs",
-            state: match (d.year, rec.year) {
-                (Some(a), Some(b)) if a != b => "differs",
-                (Some(_), Some(_)) => "agrees",
-                _ => "found",
-            },
-            tracks: None,
-            year: d.year,
-            kind: None,
-            url: d.url.clone(),
-            said: match (d.year, rec.year) {
-                (Some(a), Some(b)) if a != b => format!("Its year is {a}, the record's {b}"),
-                _ => "Discogs knows it".into(),
-            },
-        },
+        Some(d) => {
+            let lengths: Option<Vec<Option<i64>>> = discogs_tracks.as_ref().map(|r| r.media.iter().flat_map(|m| m.tracks.iter().map(|t| t.1.map(|s| i64::from(s) * 1000))).collect());
+            let (state, said) = match (&lengths, d.year, rec.year) {
+                (Some(l), ..) if !l.is_empty() => held(l, &record),
+                (_, Some(a), Some(b)) if a != b => ("differs", format!("Its year is {a}, the record's {b}")),
+                (_, Some(_), Some(_)) => ("agrees", "Its year is the record's".into()),
+                _ => ("found", "Discogs knows it".into()),
+            };
+            Source {
+                source: "discogs",
+                state,
+                tracks: lengths.as_ref().map(Vec::len),
+                year: d.year,
+                kind: None,
+                url: d.url.clone(),
+                lengths: lengths.map(|l| l.into_iter().map(|x| x.unwrap_or(0)).collect()),
+                // Discogs is found by the record's name.
+                guessed: true,
+                confirmed: false,
+                said,
+            }
+        }
         None => missing("discogs", "Discogs has not said"),
     });
-    // Bandcamp: its page, looked up now where it never was (kept a month).
-    let page = super::discover::find_on_bandcamp(&served, &rec.artist, &rec.name, matched.as_ref().and_then(|m| m.release_group.as_deref())).await.ok().flatten();
+    // Bandcamp: its page, looked up now where it never was (kept a month), its track list held against the record's.
+    let page = match chosen.links.get("bandcamp") {
+        Some(l) => Some(l.clone()),
+        None => super::discover::find_on_bandcamp(&served, &rec.artist, &rec.name, matched.as_ref().and_then(|m| m.release_group.as_deref())).await.ok().flatten(),
+    };
     sources.push(match page {
-        Some(url) => Source { source: "bandcamp", state: "found", tracks: None, year: None, kind: None, url: Some(url), said: "Its page on Bandcamp".into() },
+        Some(url) => {
+            let read = crate::bandcamp::Bandcamp::get().album(&url).await.ok();
+            let lengths: Option<Vec<Option<i64>>> = read.as_ref().map(|a| a.tracks.iter().map(|t| t.duration_secs.map(|s| (s * 1000.0).round() as i64)).collect());
+            let (state, said) = match &lengths {
+                Some(l) if !l.is_empty() => held(l, &record),
+                _ => ("found", "Its page on Bandcamp".into()),
+            };
+            Source {
+                source: "bandcamp",
+                state,
+                tracks: lengths.as_ref().map(Vec::len),
+                year: read.as_ref().and_then(|a| a.released.as_deref()).and_then(|d| d.get(..4)?.parse().ok()),
+                kind: None,
+                url: Some(url),
+                lengths: lengths.map(|l| l.into_iter().map(|x| x.unwrap_or(0)).collect()),
+                // Bandcamp is found through its search box's answers.
+                guessed: true,
+                confirmed: false,
+                said,
+            }
+        }
         None => missing("bandcamp", "No page found on Bandcamp"),
     });
     // AcoustID: its tracks as heard (the intake's hearing).
@@ -152,24 +221,33 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
                 year: None,
                 kind: None,
                 url: None,
+                lengths: None,
+                guessed: false,
+                confirmed: false,
                 said: format!("AcoustID knows {known} of {} tracks", h.tracks.len()),
             }
         }
         None => missing("acoustid", "Not heard yet"),
     });
-    // A link pasted by hand stands for its source.
+    // A link pasted by hand stands for its source (no guess); a guess confirmed once says so.
     for s in &mut sources {
         if let Some(url) = chosen.links.get(s.source) {
             s.url = Some(url.clone());
-            s.state = "agrees";
-            s.said = "Pasted by hand".into();
+            s.guessed = false;
+            if s.state == "missing" || s.state == "found" {
+                s.state = "agrees";
+                s.said = "Pasted by hand".into();
+            }
+        }
+        if s.guessed && chosen.confirmed.contains(s.source) {
+            s.confirmed = true;
         }
     }
     Ok(References { album: album.to_string(), title: rec.name, artist: rec.artist, sources, counting: chosen.counting, by_hand: chosen.by_hand })
 }
 
 fn missing(source: &'static str, said: &str) -> Source {
-    Source { source, state: "missing", tracks: None, year: None, kind: None, url: None, said: said.into() }
+    Source { source, state: "missing", tracks: None, year: None, kind: None, url: None, lengths: None, guessed: false, confirmed: false, said: said.into() }
 }
 
 /// What the administrator chose of a record's references: the source that counts ("Use this"; none: none chosen), a
@@ -182,6 +260,9 @@ pub struct Choose {
     pub link: Option<String>,
     #[serde(default)]
     pub by_hand: Option<bool>,
+    /// A source found by guessing, confirmed once.
+    #[serde(default)]
+    pub confirm: Option<String>,
 }
 
 pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<References> {
@@ -203,12 +284,39 @@ pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<Ref
             kept.links.insert(src.to_string(), link);
             kept.counting = Some(src.to_string());
         }
+        if let Some(src) = c.confirm {
+            if !SOURCES.contains(&src.as_str()) {
+                bail!("No such source: {src}");
+            }
+            kept.confirmed.insert(src);
+        }
+        let checked = c.by_hand == Some(true) && !kept.by_hand;
         if let Some(b) = c.by_hand {
             kept.by_hand = b;
         }
-        keep(&s, &a, &kept)
+        keep(&s, &a, &kept)?;
+        // Checked by hand: the record is its own reference for its type and year from now on, as it shows them (set as
+        // by hand, so no source's guess changes them after).
+        if checked {
+            let rec = s.library.album(&a)?.context("No such album in Cratarr's own library")?;
+            let mut facts: Vec<(String, Option<serde_json::Value>)> = Vec::new();
+            if let Some(kind) = rec.release.kind.clone() {
+                facts.push(("type".into(), Some(serde_json::Value::String(kind))));
+            }
+            if let Some(y) = rec.year.filter(|y| *y >= 1000) {
+                facts.push(("year".into(), Some(serde_json::json!(y))));
+            }
+            if !facts.is_empty() {
+                let base = s.library.album_base(&a)?.context("That record is not in the library.")?;
+                s.userdata.set_overrides(&[base], &facts, super::moment::now_secs())?;
+                s.refresh()?;
+            }
+        }
+        Ok(())
     })
     .await??;
+    app.collection.refresh().await;
+    app.collection.tell_changed();
     of(app, album).await
 }
 
@@ -251,5 +359,14 @@ mod tests {
         assert_eq!(source_of_link("https://air.bandcamp.com/track/la-femme"), None, "a track, not an album");
         assert_eq!(source_of_link("https://example.com/release/1"), None);
         assert_eq!(source_of_link("not a link"), None);
+    }
+
+    #[test]
+    fn a_track_list_agrees_where_as_many_tracks_each_near() {
+        let record = [200_000, 180_000];
+        assert_eq!(held(&[Some(201_000), Some(182_000)], &record).0, "agrees");
+        assert_eq!(held(&[Some(201_000), Some(190_000)], &record), ("differs", "1 of 2 lengths differ".to_string()));
+        assert_eq!(held(&[Some(201_000)], &record), ("differs", "1 tracks; the record has 2".to_string()));
+        assert_eq!(held(&[None, Some(180_000)], &record).0, "agrees", "a length it does not give is not held against it");
     }
 }

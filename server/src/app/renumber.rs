@@ -297,7 +297,7 @@ fn medium_of(position: &str) -> String {
     p.chars().take_while(|c| c.is_ascii_alphabetic()).collect()
 }
 
-fn discogs_release(v: &Value) -> Release {
+pub(super) fn discogs_release(v: &Value) -> Release {
     let format = v["formats"].as_array().and_then(|f| f.first()).and_then(|f| f["name"].as_str()).unwrap_or_default().to_string();
     let mut media: Vec<(String, Medium)> = Vec::new();
     for t in v["tracklist"].as_array().into_iter().flatten().filter(|t| t["type_"].as_str().is_none_or(|k| k == "track")) {
