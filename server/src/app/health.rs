@@ -423,6 +423,35 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     out
 }
 
+/// The track numbers a record of one disc lacks where no release was held against it: those below its highest number,
+/// and those above it up to the total its tags agree on (0.14, the owner, 2026-11-02: "05/06" lacks 06 too). None for
+/// a record of several discs.
+fn gaps_in(numbers: &[(Option<u32>, Option<u32>)], totals: &[u32]) -> Vec<String> {
+    if numbers.iter().any(|(d, _)| d.unwrap_or(1) > 1) {
+        return Vec::new();
+    }
+    let mut seen: Vec<u32> = numbers.iter().filter_map(|(_, t)| *t).filter(|t| *t > 0).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    // A record numbered nowhere lacks nothing its numbers tell.
+    let Some(&highest) = seen.last() else { return Vec::new() };
+    let top = highest.max(agreed_total(totals));
+    (1..=top).filter(|n| !seen.contains(n)).map(|n| format!("{n:02}")).collect()
+}
+
+/// The total a record's tags agree on: the largest said by two tracks or more, or the one every track that says one
+/// says (a single track's "/12" among "/06"s is that track's slip, not six tracks missing); 0 for none.
+fn agreed_total(totals: &[u32]) -> u32 {
+    let mut by: BTreeMap<u32, usize> = BTreeMap::new();
+    for &t in totals.iter().filter(|t| **t > 0) {
+        *by.entry(t).or_default() += 1;
+    }
+    if by.len() == 1 {
+        return by.keys().next().copied().unwrap_or(0);
+    }
+    by.iter().rev().find(|(_, n)| **n >= 2).map_or(0, |(t, _)| *t)
+}
+
 /// A better copy Replace can take: an upgrade of Music's album (`incoming`'s upgrades; any other verdict is an album in
 /// two libraries at once).
 fn replaces(v: &super::incoming::VerdictView) -> bool {
@@ -675,17 +704,14 @@ impl App {
             }
             // Gaps in the numbers where no release was held against the album (no MusicBrainz id, no match yet).
             let checked = s.userdata.album_complete_at()?;
+            let totals = s.library.track_totals()?;
             let mut gaps = Vec::new();
             for (id, name, artist, numbers) in s.library.numbering(None)? {
                 if checked.contains_key(&id) {
                     continue;
                 }
-                let mut seen: Vec<u32> = numbers.iter().filter_map(|(_, t)| *t).filter(|t| *t > 0).collect();
-                seen.sort_unstable();
-                seen.dedup();
-                let top = seen.last().copied().unwrap_or(0);
-                let missing: Vec<String> = (1..top).filter(|n| !seen.contains(n)).map(|n| format!("{n:02}")).collect();
-                if !missing.is_empty() && numbers.iter().all(|(d, _)| d.unwrap_or(1) <= 1) {
+                let missing = gaps_in(&numbers, totals.get(&id).map_or(&[][..], Vec::as_slice));
+                if !missing.is_empty() {
                     gaps.push((id, name, artist, missing));
                 }
             }
@@ -1067,6 +1093,21 @@ mod tests {
         );
         assert_eq!(health.findings[0].detail.as_deref(), Some("Their files hold less than they say."));
         assert!(record(&[], &own, &[]).findings.is_empty());
+    }
+
+    #[test]
+    fn a_records_gaps_reach_up_to_the_total_its_tags_agree_on() {
+        let one_disc = |tracks: &[u32]| tracks.iter().map(|t| (Some(1), Some(*t))).collect::<Vec<_>>();
+        let numbers = one_disc(&[1, 2, 3, 5]);
+        assert_eq!(gaps_in(&numbers, &[6, 6, 6, 6]), ["04", "06"], "05/06: 06 is missing too");
+        assert_eq!(gaps_in(&numbers, &[]), ["04"], "without a total, as before");
+        assert_eq!(gaps_in(&numbers, &[5, 5]), ["04"], "a total no higher than the numbers adds nothing");
+        assert_eq!(gaps_in(&numbers, &[6, 6, 6, 12]), ["04", "06"], "one track's slip is not the record's total");
+        assert_eq!(gaps_in(&one_disc(&[1, 2, 3]), &[4]), ["04"], "one track saying it, the others none");
+        assert!(gaps_in(&one_disc(&[1, 2, 3, 4, 5, 6]), &[6; 6]).is_empty(), "whole");
+        let two_discs = [(Some(1), Some(1)), (Some(1), Some(2)), (Some(2), Some(1))];
+        assert!(gaps_in(&two_discs, &[3, 3, 3]).is_empty(), "several discs: not this check's");
+        assert!(gaps_in(&[(None, None), (None, None)], &[6, 6]).is_empty(), "numbered nowhere");
     }
 
     #[test]

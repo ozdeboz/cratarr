@@ -324,7 +324,7 @@ pub struct RowAnalysis {
 }
 
 impl ServedRow {
-    pub const TAGS: [&'static str; 26] = [
+    pub const TAGS: [&'static str; 27] = [
         "title",
         "artist",
         "artists",
@@ -332,6 +332,8 @@ impl ServedRow {
         "albumartists",
         "album",
         "tracknumber",
+        // The record's track count its tags say (0.14, Health's missing tracks without a reference).
+        "totaltracks",
         "discnumber",
         "date",
         "originaldate",
