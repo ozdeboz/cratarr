@@ -279,6 +279,9 @@
   const LENS = 52;
   /** The field's least: the room the buttons it replaces took. */
   const fieldLeast = $derived(Math.max(folded - LENS, 140));
+  /** Short of room the field gives way first, down to this, before the title is cut (the owner, 2026-11-02: "title
+   *  whole, field shrinks"; lib/rowLayout). */
+  const FIELD_MIN = 96;
   /** The magnifier: where the popover's tip points (lib/NothingPopover). */
   let lens = $state<HTMLElement>();
   // What hides part of the list (lib/pageView explainHidden), on a long-press of the lit magnifier or funnel (the
@@ -347,7 +350,7 @@
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: fieldLeast, max: 320 }))}>
+        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: Math.min(fieldLeast, FIELD_MIN), max: 320 }))}>
           <span class="typed" class:layered={!!layered}>
             {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
             <input
