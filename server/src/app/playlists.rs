@@ -132,6 +132,15 @@ fn uses_of(serve: Option<&crate::serve::Serve>, user: &str, files: &[crates::Fac
     let stars = |kind| -> anyhow::Result<HashMap<String, u8>> {
         Ok(serve.userdata.used(user, kind)?.into_iter().filter(|(_, a)| a.rating > 0).map(|(id, a)| (id, a.rating)).collect())
     };
+    // Skips as the taste counts them (`sources_in`): plays that ended skipped before they counted.
+    for l in super::history::own(serve.userdata.heard_since(user, 0)?) {
+        if l.ended == crate::userdata::Ended::Skipped
+            && !l.counted
+            && let Some(line) = line(&l.song)
+        {
+            out.entry(line.to_string()).or_default().skips += 1;
+        }
+    }
     let (own, rated) = (stars(crate::userdata::Kind::Song)?, stars(crate::userdata::Kind::Album)?);
     if !own.is_empty() || !rated.is_empty() {
         for (song, album) in serve.library.song_albums()? {
@@ -397,6 +406,8 @@ pub(super) struct CrateLibrary {
     uses: Option<HashMap<String, crates::Use>>,
     /// What makes music alike to the viewer: their Similar by (the radio's), else all signals alike.
     by: crate::similarity::Weights,
+    /// The lines that fit the viewer's taste (Fits your taste), when a condition asks (`crate_library_for`).
+    fits: Option<HashSet<String>>,
 }
 
 impl CrateLibrary {
@@ -439,6 +450,7 @@ impl CrateLibrary {
             favourite_albums: self.favourite_albums.as_ref(),
             uses: self.uses.as_ref(),
             now: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64),
+            fits: self.fits.as_ref(),
         }
     }
 
@@ -2460,7 +2472,11 @@ impl PlaylistService {
             crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
         });
         let needed_albums = all.iter().any(|(_, c)| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
-        let lib = self.crate_library(want, needed, needed_albums, without).await?;
+        let mut lib = self.crate_library(want, needed, needed_albums, without).await?;
+        // Fits your taste where a crate asks it (Second chance): its count unknown where it cannot be (signed out).
+        if all.iter().any(|(_, c)| crates::needs_fits(&c.conditions)) {
+            lib.fits = self.fitting(&lib, without).await.ok();
+        }
         // Home's crates show what Home showed, of every library whatever is switched off (the owner, 2026-10-24), as their
         // panel does: counted so too (2026-11-02: New for you's card said 0 tracks with Incoming switched off).
         let every = if without.is_empty() { None } else { Some(self.crate_library(want, needed, needed_albums, &[]).await?) };
@@ -2812,7 +2828,10 @@ impl PlaylistService {
         if let Some(why) = crates::not_taken(conditions) {
             return Err(ToggleError::Unanswerable(why));
         }
-        let lib = self.crate_library(want, crates::needs_favourites(conditions), crates::needs_favourite_albums(conditions), without).await?;
+        let mut lib = self.crate_library(want, crates::needs_favourites(conditions), crates::needs_favourite_albums(conditions), without).await?;
+        if crates::needs_fits(conditions) {
+            lib.fits = Some(self.fitting(&lib, without).await?);
+        }
         if crates::needs_favourites(conditions) && lib.favourites.is_none() {
             return Err(ToggleError::CannotPlay("The server's favourites could not be read.".into()));
         }
@@ -3431,7 +3450,7 @@ impl PlaylistService {
             }
             None => None,
         };
-        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums, alike: Default::default(), uses, by })
+        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums, alike: Default::default(), uses, by, fits: None })
     }
 
     /// The favourite tracks' lines, from the media server. What was heard last is answered at once, with Cratarr's own
@@ -3968,6 +3987,21 @@ impl PlaylistService {
         self.fits_to(user, without, skipped_in).await
     }
 
+    /// The lines of `lib`'s libraries switched on (those not in `without`) that fit the asking account's taste (Fits
+    /// your taste): the best fitting `crates::FITS_SHARE` of those whose fit is known, as Best match orders them.
+    /// Signed out, or no taste yet: refused.
+    async fn fitting(&self, lib: &CrateLibrary, without: &[String]) -> Result<HashSet<String>, ToggleError> {
+        let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::CannotPlay("Fits your taste is an account's own: sign in.".into()))?;
+        let mut fit: Vec<(String, f64)> = self.taste_fits(&user, without).await?.into_iter().collect();
+        if fit.is_empty() {
+            return Err(ToggleError::CannotPlay("Fits your taste needs a taste: favourites, playlists or plays.".into()));
+        }
+        fit.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let keep = ((fit.len() as f64 * crates::FITS_SHARE).ceil() as usize).max(1);
+        let songs: HashSet<String> = fit.into_iter().take(keep).map(|(song, _)| song).collect();
+        Ok(lib.files.iter().filter(|f| f.track.is_some_and(|t| songs.contains(&crate::serve::ids::song(t)))).map(|f| f.rel.clone()).collect())
+    }
+
     async fn fits_to(&self, user: &str, without: &[String], profile: ProfileOf) -> Result<HashMap<String, f64>, ToggleError> {
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lib = self.crate_library(None, false, false, without).await?;
@@ -4256,6 +4290,7 @@ mod library_tests {
             alike: Default::default(),
             uses: None,
             by: crate::similarity::Weights::EQUAL,
+            fits: None,
         }
     }
 

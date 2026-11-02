@@ -632,7 +632,7 @@ mod tests {
             AlbumItem { id: "al-2".into(), artists: vec!["Moby".into()], tracks: vec![&moby], rated: true },
         ];
         let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
-        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let not_classical = [(Condition::new("type", true, Value::AnyOf { values: vec!["Classical".into()] }), 1)];
         let look = ArtistLook { conditions: &not_classical, world: &w, uses: None, hearted: None, unplayed: false, bit: &|_| 0 };
         let keys: Vec<String> = artists_of("cratarr", &albums, &look).iter().filter(|i| i.set(&not_classical, &w) == 0).map(|i| i.key.clone()).collect();
@@ -670,9 +670,9 @@ mod tests {
         let mut uses: HashMap<String, Use> = HashMap::new();
         assert!(never_played(&f, None), "no account: nothing known played");
         assert!(never_played(&f, Some(&uses)), "no entry: never played");
-        uses.insert("a/1".into(), Use { plays: 0, last: Some(5), rating: None });
+        uses.insert("a/1".into(), Use { plays: 0, last: Some(5), rating: None, skips: 0 });
         assert!(!never_played(&f, Some(&uses)), "a last play counts, whatever the count says");
-        uses.insert("a/1".into(), Use { plays: 2, last: None, rating: None });
+        uses.insert("a/1".into(), Use { plays: 2, last: None, rating: None, skips: 0 });
         assert!(!never_played(&f, Some(&uses)));
     }
 
@@ -686,7 +686,7 @@ mod tests {
         // X has a rock album; Y (also spelt "y") two jazz ones; Z is on the rock one too.
         let albums = [album("al-1", &["X", "Z"], vec![&rock], true), album("al-2", &["Y"], vec![&jazz], true), album("al-3", &["y"], vec![&more], false)];
         let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
-        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let rock_only = [(Condition::new("genre", false, Value::AnyOf { values: vec!["rock".into()] }), 1)];
         let keys = |items: Vec<Item>, conditions: &[(Condition, u64)]| items.iter().filter(|i| i.set(conditions, &w) == 0).map(|i| i.key.clone()).collect::<Vec<_>>();
         let bit = |k: &str| -> u64 {
@@ -711,7 +711,7 @@ mod tests {
         let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: Some(&hearted), unplayed: false, bit: &bit };
         assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"]);
         // Unplayed only: none of their tracks played.
-        let uses: HashMap<String, Use> = [("x/1".to_string(), Use { plays: 1, last: Some(1), rating: None })].into();
+        let uses: HashMap<String, Use> = [("x/1".to_string(), Use { plays: 1, last: Some(1), rating: None, skips: 0 })].into();
         let look = ArtistLook { conditions: &[], world: &w, uses: Some(&uses), hearted: None, unplayed: true, bit: &bit };
         assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"], "X and Z share the played album");
     }
