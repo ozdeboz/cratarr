@@ -1782,6 +1782,111 @@ pub fn select<'a>(files: impl IntoIterator<Item = &'a Facts>, conditions: &[Cond
     files.into_iter().filter(|f| on.iter().all(|c| holds(c, f, w))).map(|f| f.rel.as_str()).collect()
 }
 
+/// Why a list's answer left things out (decision 0095: reasons are data): each a cause the page shows as a chip whose
+/// ✕ lifts it. One per cause that keeps something out, even when lifting it alone brings nothing back (it keeps out
+/// with another); none where nothing would come back with every cause lifted: the list is truly empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Reason {
+    pub kind: Why,
+    /// Which one, where it matters: a condition's axis, a switch, the library switched off (`source/library`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The chip's word ("Favourites only", "2 libraries off", "Energy").
+    pub label: String,
+    /// How many would come back with this cause alone lifted, the others kept.
+    pub back: usize,
+}
+
+impl Reason {
+    pub fn new(kind: Why, key: Option<String>, label: impl Into<String>, back: usize) -> Self {
+        Self { kind, key, label: label.into(), back }
+    }
+
+    /// The libraries switched off (`without`, their keys): one chip for them all, its key the library's when one.
+    pub fn libraries_off(without: &[String], back: usize) -> Self {
+        let key = match without {
+            [one] => Some(one.clone()),
+            _ => None,
+        };
+        let label = if without.len() == 1 { "1 library off".to_string() } else { format!("{} libraries off", without.len()) };
+        Self::new(Why::LibrariesOff, key, label, back)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Why {
+    /// A condition of the filter, or one of its switches (decision 0061).
+    Filter,
+    /// A crate's favourites toggle (the heart), on only or none.
+    Favourites,
+    /// A crate's favourite albums toggle (the disc), on only or none.
+    FavouriteAlbums,
+    /// Libraries switched off on the page (decision 0024, amended 2026-10-23).
+    LibrariesOff,
+    /// Tracks or artists excluded everywhere (decision 0024, amended 2026-10-19; decision 0083).
+    Excluded,
+}
+
+/// An axis's name as the builder shows it.
+pub fn axis_label(key: &str) -> Option<&'static str> {
+    AXES.iter().find(|(k, _, _)| *k == key).map(|(_, l, _)| *l)
+}
+
+/// What `select` keeps, and what each cause kept out (decision 0095), in the one pass: `causes` are ranges of
+/// `conditions` (a crate's toggles, what is excluded everywhere, each condition of the filter on it; the rest are its
+/// own), and a file `off` (its library switched off) is kept out by one more, the last. For each: whether it keeps out
+/// a file its own conditions take, and how many it alone keeps out (lifting it brings those back); and how many its
+/// own conditions take, every library's (every cause lifted). `ranked` marks the conditions that picked their closest
+/// (resolved: `resolved_in`): not its own here, as the closest were picked among what every cause let through, so the
+/// counts are not theirs to give (`CrateLibrary::select_saying` selects again).
+pub fn select_saying<'a>(
+    files: impl IntoIterator<Item = &'a Facts>,
+    off: impl Fn(&Facts) -> bool,
+    conditions: &[Condition],
+    ranked: &[bool],
+    causes: &[std::ops::Range<usize>],
+    w: &World,
+) -> (Vec<&'a str>, Vec<(bool, usize)>, usize) {
+    let own: Vec<(&Condition, bool)> =
+        conditions.iter().enumerate().filter(|(i, c)| c.enabled && !causes.iter().any(|r| r.contains(i))).map(|(i, c)| (c, ranked.get(i).copied().unwrap_or(false))).collect();
+    let mut kept = vec![(false, 0); causes.len() + 1];
+    let mut failed: Vec<usize> = Vec::new();
+    let mut lines = Vec::new();
+    let mut all = 0;
+    'files: for f in files {
+        let mut close = true;
+        for (c, ranks) in &own {
+            if !holds(c, f, w) {
+                if !ranks {
+                    continue 'files;
+                }
+                close = false;
+            }
+        }
+        all += 1;
+        failed.clear();
+        if off(f) {
+            failed.push(causes.len());
+        }
+        for (k, r) in causes.iter().enumerate() {
+            // Two failed: no count changes, a cause is only asked whether it keeps anything out.
+            if (failed.len() < 2 || !kept[k].0) && conditions[r.clone()].iter().any(|c| c.enabled && !holds(c, f, w)) {
+                failed.push(k);
+            }
+        }
+        for &k in &failed {
+            kept[k].0 = true;
+        }
+        match failed.as_slice() {
+            [] if close => lines.push(f.rel.as_str()),
+            [k] => kept[*k].1 += 1,
+            _ => {}
+        }
+    }
+    (lines, kept, all)
+}
+
 /// Whether working the conditions out needs the media server's favourites.
 pub fn needs_favourites(conditions: &[Condition]) -> bool {
     conditions.iter().any(|c| c.enabled && c.axis == "favourite")
@@ -2719,6 +2824,31 @@ mod tests {
         assert_eq!(select(&files, &leaving_out(&left, &[]), &w), vec!["b", "c", "d"]);
         assert_eq!(leaving_out(&[], &[]), Vec::new(), "nothing left out, nothing added");
         assert!(!is_axis("line"), "not an axis one builds with");
+    }
+
+    #[test]
+    fn a_selection_says_which_cause_kept_what_out() {
+        let (mut files, membership, favourites) = library();
+        files[2].folder = 1;
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let genre = |g: &str| Condition::new("genre", false, Value::AnyOf { values: vec![g.into()] });
+        let saying = |conditions: &[Condition], causes: &[std::ops::Range<usize>], off: bool| {
+            let (lines, kept, all) = select_saying(&files, |f| off && f.folder == 1, conditions, &[], causes, &w);
+            (lines.into_iter().map(str::to_string).collect::<Vec<_>>(), kept, all)
+        };
+        // Emptied by the library switched off: "c" alone is Indie, and would come back.
+        assert_eq!(saying(&[genre("Indie")], &[], true), (vec![], vec![(true, 1)], 1));
+        assert_eq!(saying(&[genre("Indie")], &[], false), (vec!["c".to_string()], vec![(false, 0)], 1));
+        // Favourites only and a filter, each a cause: "c" is Indie but no favourite, "a" and "b" favourites but not
+        // Indie; "d" is neither, so it comes back with neither alone, with both.
+        let shown = [Favourites::Only.with(&[]), vec![genre("Indie")]].concat();
+        assert_eq!(saying(&shown, &[0..1, 1..2], false), (vec![], vec![(true, 1), (true, 2), (false, 0)], 4));
+        // What it keeps is what `select` keeps.
+        let only = Favourites::Only.with(&[]);
+        assert_eq!(saying(&only, &[0..1], false).0, select(&files, &only, &w));
+        // Truly empty: nothing its own conditions take, no cause keeps anything out.
+        assert_eq!(saying(&[genre("Polka")], &[], true), (vec![], vec![(false, 0)], 0));
+        assert_eq!(axis_label("energy"), Some("Energy"));
     }
 
     /// A file by these artists (its track's and its album's), credited as the catalogue credits it.

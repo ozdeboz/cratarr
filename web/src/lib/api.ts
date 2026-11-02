@@ -487,7 +487,7 @@ export const previewCrate = (conditions: Condition[], limit: number, source?: st
   if (source) q.set('source', source);
   if (look.order && look.order !== 'own') q.set('order', look.order);
   if (look.down) q.set('down', 'true');
-  return quietly<{ source: string; total: number; rows: PlaylistRow[]; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
+  return quietly<{ source: string; total: number; rows: PlaylistRow[]; reasons: ListReason[]; all_back: number; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}), ...(look.covers ? { covers: look.covers } : {}) }),
@@ -516,6 +516,21 @@ export type Filtered = {
   tempo: TempoBands;
   /** A list of tracks' profile (lib/ListProfile); none for albums and playlists. */
   profile?: ListProfileData | null;
+  /** What left everything out, when nothing passes: each condition and switch, the Library's libraries switched off;
+   *  none while something passes. */
+  reasons: ListReason[];
+  /** How many would pass with every cause lifted (`total` while something passes); 0: truly empty. */
+  all_back: number;
+};
+/** Why a list's answer left things out (decision 0095: reasons are data), one chip each. `key`: which one where it
+ *  matters (a condition's axis, a switch, the one library switched off); `label`: the chip's word; `back`: how many
+ *  come back with only this cause lifted (0: it keeps them out together with another). None, with `all_back` 0: the
+ *  list is truly empty. */
+export type ListReason = {
+  kind: 'filter' | 'favourites' | 'favourite_albums' | 'libraries_off' | 'excluded';
+  key?: string;
+  label: string;
+  back: number;
 };
 /** What a list's tracks are like (the server's crates::Profile): telling style tags and artists, each number's density
  *  on one scale with its middle half and middle (a number all share: that value), and CLAP's moods against the
@@ -564,7 +579,7 @@ export const crateRows = (
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
   // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
-  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[] }>(
+  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number }>(
     `/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`,
   );
 };

@@ -43,6 +43,11 @@ pub struct CratePage {
     pub limit: usize,
     pub rows: Vec<PlaylistRow>,
     pub genres: Vec<String>,
+    /// What it left out, and why (decision 0095): the libraries switched off, its toggles, what is excluded everywhere,
+    /// each condition of the filter on it.
+    pub reasons: Vec<crates::Reason>,
+    /// How many it would hold with every cause lifted (its left-out list kept: that is the crate's own).
+    pub all_back: usize,
 }
 
 /// A Sounds like curve (lib/LikeCurve): how alike the closest are, closest first, and the profile at every step its
@@ -396,7 +401,12 @@ impl CrateLibrary {
 
     /// The files of the libraries switched on, newest first.
     pub(super) fn files(&self) -> impl Iterator<Item = &crates::Facts> {
-        self.files.iter().filter(|f| !self.switched_off.contains(&f.folder))
+        self.files_of(false)
+    }
+
+    /// `files`, or every library's (`every`: what switching them all on would show).
+    fn files_of(&self, every: bool) -> impl Iterator<Item = &crates::Facts> {
+        self.files.iter().filter(move |f| every || !self.switched_off.contains(&f.folder))
     }
 
     /// What the axes test about the library as a whole.
@@ -422,22 +432,77 @@ impl CrateLibrary {
 
     /// The conditions with their Sounds like worked out (`crates::resolved`), once for all the files.
     pub(super) fn resolved(&self, conditions: &[crates::Condition]) -> Vec<crates::Condition> {
+        self.resolved_of(conditions, false)
+    }
+
+    fn resolved_of(&self, conditions: &[crates::Condition], every: bool) -> Vec<crates::Condition> {
         if !conditions.iter().any(|c| c.value.ranks()) {
             return conditions.to_vec();
         }
         // The closest among what the crate may show: its libraries switched on, its other conditions held.
         let w = self.world();
-        let among: Vec<&crates::Facts> = self.files().filter(|f| crates::holds_besides_like(conditions, f, &w)).collect();
+        let among: Vec<&crates::Facts> = self.files_of(every).filter(|f| crates::holds_besides_like(conditions, f, &w)).collect();
         crates::resolved_in(conditions, self.alike(), &among, &self.by, &self.membership)
     }
 
     /// The crate's lines, newest first; a Sounds like crate's closest first (`crates::closest_first`).
     pub(super) fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
-        let resolved = self.resolved(conditions);
-        let mut lines: Vec<String> = crates::select(self.files(), &resolved, &self.world()).into_iter().map(str::to_string).collect();
+        self.select_of(conditions, false)
+    }
+
+    fn select_of(&self, conditions: &[crates::Condition], every: bool) -> Vec<String> {
+        let resolved = self.resolved_of(conditions, every);
+        let mut lines: Vec<String> = crates::select(self.files_of(every), &resolved, &self.world()).into_iter().map(str::to_string).collect();
         crates::closest_first(&mut lines, &resolved);
         lines
     }
+
+    /// The crate's lines as `select` gives them, why it left out what it did (decision 0095), and how many it would
+    /// hold with every cause lifted, in the same pass: `causes` among the conditions, and the libraries switched off
+    /// (`without`, their keys).
+    fn select_saying(&self, conditions: &[crates::Condition], causes: &[Cause], without: &[String]) -> (Vec<String>, Vec<crates::Reason>, usize) {
+        let resolved = self.resolved(conditions);
+        let ranked: Vec<bool> = conditions.iter().map(|c| c.value.ranks()).collect();
+        let at: Vec<std::ops::Range<usize>> = causes.iter().map(|c| c.at.clone()).collect();
+        let (lines, kept, all) = crates::select_saying(self.files.iter(), |f| self.switched_off.contains(&f.folder), &resolved, &ranked, &at, &self.world());
+        let mut lines: Vec<String> = lines.into_iter().map(str::to_string).collect();
+        crates::closest_first(&mut lines, &resolved);
+        let mut backs: Vec<usize> = kept.iter().map(|(_, back)| *back).collect();
+        let mut all = all;
+        // A Sounds like picks its closest among what every cause lets through: with one lifted it picks again, so the
+        // crate is selected again, once a cause, and only when nothing shows.
+        if ranked.contains(&true) {
+            if !lines.is_empty() {
+                let n = lines.len();
+                return (lines, Vec::new(), n);
+            }
+            let lifting = |out: &[std::ops::Range<usize>]| -> Vec<crates::Condition> {
+                conditions.iter().enumerate().filter(|(i, _)| !out.iter().any(|r| r.contains(i))).map(|(_, c)| c.clone()).collect()
+            };
+            backs = at.iter().map(|r| self.select(&lifting(std::slice::from_ref(r))).len()).collect();
+            backs.push(self.select_of(conditions, true).len());
+            all = self.select_of(&lifting(&at), true).len();
+        }
+        if all == 0 {
+            return (lines, Vec::new(), 0);
+        }
+        let mine: Vec<String> = without.iter().filter(|k| k.starts_with(&format!("{}/", self.source))).cloned().collect();
+        let mut reasons: Vec<crates::Reason> =
+            causes.iter().zip(&kept).zip(&backs).filter(|((_, (any, _)), _)| *any).map(|((c, _), back)| crates::Reason::new(c.kind, c.key.clone(), c.label.clone(), *back)).collect();
+        if kept.last().is_some_and(|(any, _)| *any) {
+            reasons.push(crates::Reason::libraries_off(&mine, backs.last().copied().unwrap_or(0)));
+        }
+        (lines, reasons, all)
+    }
+}
+
+/// A cause among a crate's conditions as it is looked at (decision 0095): its chip's kind, key and word, and the
+/// conditions it added.
+struct Cause {
+    kind: crates::Why,
+    key: Option<String>,
+    label: String,
+    at: std::ops::Range<usize>,
 }
 
 /// How a crate is looked at, besides its definition: its two toggles as the page shows them (a tap may be on its way;
@@ -2659,13 +2724,19 @@ impl PlaylistService {
     /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size, as it is
     /// looked at (its toggles, the libraries switched off).
     pub async fn crate_rows(&self, id: &str, want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
-        let shown = self.crate_shown(id, look).await?;
-        self.crate_page(&shown, want, offset, limit, look).await
+        let (shown, causes) = self.crate_causes(id, look).await?;
+        self.crate_page_saying(&shown, &causes, want, offset, limit, look).await
     }
 
     /// A crate's conditions as its toggles show it (as given, else as saved), with its left-out tracks and the filter on
     /// it.
     pub(super) async fn crate_shown(&self, id: &str, look: &CrateLook) -> Result<Vec<crates::Condition>, ToggleError> {
+        Ok(self.crate_causes(id, look).await?.0)
+    }
+
+    /// `crate_shown`'s conditions, and which of them each cause added (decision 0095): its own and its left-out list
+    /// first (what the crate is), then its toggles, what is excluded everywhere and each condition of the filter.
+    async fn crate_causes(&self, id: &str, look: &CrateLook) -> Result<(Vec<crates::Condition>, Vec<Cause>), ToggleError> {
         let def = self.crate_def(id).await?;
         let fav = match look.favourites {
             Some(f) => f,
@@ -2679,12 +2750,23 @@ impl PlaylistService {
         let album_tracks = album_lines(self.served.clone(), self.lib.catalogue(), left.albums.iter().cloned().collect()).await;
         let excluded = self.own_crates()?.excluded().await?;
         let artists = self.artists_out().await?;
-        let mut shown = crates::leaving_out_artists(
-            &artists,
-            &crates::leaving_out(&left_lines(&left, &album_tracks, &excluded), &crates::shown(&def.conditions, fav, albums)),
-        );
-        shown.extend(look.filter.iter().cloned());
-        Ok(shown)
+        let mut shown = crates::leaving_out(&left_lines(&left, &album_tracks, &[]), &def.conditions);
+        let mut causes = Vec::new();
+        let mut add = |kind: crates::Why, key: Option<String>, label: &str, more: Vec<crates::Condition>| {
+            let at = shown.len()..shown.len() + more.len();
+            shown.extend(more);
+            if !at.is_empty() {
+                causes.push(Cause { kind, key, label: label.to_string(), at });
+            }
+        };
+        let only = |f: crates::Favourites| f == crates::Favourites::Only;
+        add(crates::Why::Favourites, None, if only(fav) { "Favourites only" } else { "No favourites" }, fav.with(&[]));
+        add(crates::Why::FavouriteAlbums, None, if only(albums) { "Favourite albums only" } else { "No favourite albums" }, albums.with_albums(&[]));
+        add(crates::Why::Excluded, None, "Excluded", crates::leaving_out_artists(&artists, &crates::leaving_out(&excluded, &[])));
+        for c in &look.filter {
+            add(crates::Why::Filter, Some(c.axis.clone()), crates::axis_label(&c.axis).unwrap_or(c.axis.as_str()), vec![c.clone()]);
+        }
+        Ok((shown, causes))
     }
 
     /// Not in this crate (decision 0083, the owner 2026-10-30): "Artist is not `name`" added to the crate, once. One's
@@ -2956,7 +3038,13 @@ impl PlaylistService {
     /// decision 0024, issue 6), from the libraries not in `look.without`, in `look`'s order (its toggles and filter are
     /// in the conditions already).
     pub async fn crate_page(&self, conditions: &[crates::Condition], want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
-        let (lib, lines) = self.crate_selection(conditions, want, &look.without).await?;
+        self.crate_page_saying(conditions, &[], want, offset, limit, look).await
+    }
+
+    /// `crate_page`, saying which of `causes` (and the libraries switched off) left what out (decision 0095).
+    async fn crate_page_saying(&self, conditions: &[crates::Condition], causes: &[Cause], want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
+        let lib = self.crate_library_for(conditions, want, &look.without).await?;
+        let (lines, reasons, all_back) = lib.select_saying(conditions, causes, &look.without);
         // On the first page only: the panel shows them on top.
         let genres = if offset == 0 {
             let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
@@ -2969,7 +3057,7 @@ impl PlaylistService {
         let page: Vec<String> = lines.iter().skip(offset).take(limit).cloned().collect();
         let mut rows = self.rows_of(page, &lib.source).await?;
         self.with_plays_and_added(&mut rows, &lib).await;
-        Ok(CratePage { source: lib.source, total, limit, rows, genres })
+        Ok(CratePage { source: lib.source, total, limit, rows, genres, reasons, all_back })
     }
 
     /// The lines these conditions select, in `look`'s order, and the server they are for: what Play plays as the list
@@ -4005,6 +4093,25 @@ mod library_tests {
         assert_eq!(crates::axes(library(&[1]).files(), &[]).iter().find(|a| a.key == "genre").unwrap().values, ["Dub", "Rock"], "the axes of what is on");
         let off = library(&[1]);
         assert_eq!((0..4).map(|i| off.on(i)).collect::<Vec<_>>(), [false, true, false, true], "the taste's places: Incoming off");
+    }
+
+    #[test]
+    fn a_crate_says_why_it_left_things_out() {
+        // Decision 0095: the libraries switched off, a toggle, nothing; the page makes them chips.
+        let genre = |g: &str| crates::Condition::new("genre", false, crates::Value::AnyOf { values: vec![g.into()] });
+        let without = ["cratarr/Incoming".to_string(), "other/Music".to_string()];
+        let (lines, reasons, all) = library(&[1]).select_saying(&[genre("Jazz")], &[], &without);
+        assert!(lines.is_empty());
+        let off = crates::Reason::new(crates::Why::LibrariesOff, Some("cratarr/Incoming".into()), "1 library off", 1);
+        assert_eq!((reasons, all), (vec![off], 1), "Incoming's one jazz track would come back; another server's library is not this one's");
+        let mut hearted = library(&[]);
+        hearted.favourites = Some(HashSet::from(["B/1.flac".to_string()]));
+        let shown = [vec![genre("Dub")], crates::Favourites::Only.with(&[])].concat();
+        let only = [Cause { kind: crates::Why::Favourites, key: None, label: "Favourites only".into(), at: 1..2 }];
+        let heart = crates::Reason::new(crates::Why::Favourites, None, "Favourites only", 2);
+        assert_eq!(hearted.select_saying(&shown, &only, &[]), (Vec::new(), vec![heart], 2), "no dub favourite");
+        assert_eq!(hearted.select_saying(&shown[..1], &[], &[]).0, hearted.select(&shown[..1]), "what it keeps is `select`'s");
+        assert_eq!(library(&[1]).select_saying(&[genre("Polka")], &[], &without), (Vec::new(), Vec::new(), 0), "truly empty: no reason");
     }
 
     #[test]
