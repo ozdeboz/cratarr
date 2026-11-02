@@ -100,6 +100,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/not-artist/{key}", delete(crate_not_artist_back))
         .route("/api/excluded", get(excluded).post(exclude).delete(include_again))
         .route("/api/me/excluded-artists", get(excluded_artists))
+        .route("/api/me/taste/fits", post(taste_fits))
         .route("/api/me/excluded-artists/{key}", put(exclude_artist).delete(include_artist))
         .route(
             "/api/crates/{id}/image",
@@ -2342,6 +2343,17 @@ async fn crate_not_artist(State(app): State<Arc<App>>, Path(id): Path<String>, J
 async fn crate_not_artist_back(State(app): State<Arc<App>>, Path((id, key)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
     let (not_artists, undo) = app.playlists.crate_not_artist_back(&id, &key).await?;
     Ok(Json(json!({ "crate": id, "not_artists": not_artists, "undo": undo })))
+}
+
+#[derive(Deserialize)]
+struct FitsAsked {
+    ids: Vec<String>,
+}
+
+/// How well these tracks fit the account's taste (decision 0094: Best match on every list the page orders itself):
+/// `{id: fit}` for those whose fit is known, the higher the better.
+async fn taste_fits(State(app): State<Arc<App>>, Json(b): Json<FitsAsked>) -> Result<Json<std::collections::HashMap<String, f64>>, ApiError> {
+    Ok(Json(app.playlists.fits_of(&b.ids).await?))
 }
 
 /// The artists the account excluded everywhere (decision 0083), the newest first: `[{key, name, at}]`.

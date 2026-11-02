@@ -1246,6 +1246,10 @@ export async function serverAnswers(): Promise<boolean> {
  *  counts its saves (0: none kept yet). A save names the version it changed, and is refused (409) if another came first. */
 export type MySettings = { version: number; settings: Record<string, unknown> };
 export const getMySettings = () => quietly<MySettings>('/api/me/settings');
+/** How well these tracks (song ids) fit the account's taste (decision 0094: Best match on the lists the page orders
+ *  itself, a playlist's, a record's, an artist's): `{id: fit}` for those whose fit is known, the higher the better. */
+export const tasteFits = (ids: string[]) =>
+  quietly<Record<string, number>>('/api/me/taste/fits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
 export const putMySettings = (base: number, settings: Record<string, unknown>) =>
   request<{ version: number }>('/api/me/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base, settings }) });
 /** Each server's own name and libraries, and what each library is used as, for everyone (the filter): the part of the
