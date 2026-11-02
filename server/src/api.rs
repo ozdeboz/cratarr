@@ -6681,6 +6681,10 @@ async fn file_change_plan(State(app): State<Arc<App>>, Path(kind): Path<String>,
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::plan(albums).await.map_err(file_change_refused)?)),
         // Health's fixes (`fix:<finding>`) and an arrival's (`intake:<album>`): decision 0092's writers' map.
         k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::plan(&app, k).await.map_err(file_change_refused)?)),
+        k if k.starts_with("renumber:") => {
+            let account = crate::serve::who::current().map(|w| w.user).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+            Ok(Json(crate::app::renumber::plan(&account, &k["renumber:".len()..]).await.map_err(file_change_refused)?))
+        }
         _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
     }
 }
@@ -6691,6 +6695,10 @@ async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums, b.stamps).await.map_err(file_change_refused)?)),
         k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::apply(&app, k, albums, b.stamps, b.chosen).await.map_err(file_change_refused)?)),
+        k if k.starts_with("renumber:") => {
+            let account = crate::serve::who::current().map(|w| w.user).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+            Ok(Json(crate::app::renumber::apply_plan(&app, &account, &k["renumber:".len()..], b.stamps).await.map_err(file_change_refused)?))
+        }
         _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
     }
 }

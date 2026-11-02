@@ -416,6 +416,106 @@ pub fn start(account: &str, album: &str) -> Result<super::tasks::Task, String> {
     })
 }
 
+/// Renumber on the one path (decision 0092's writers' map, 0.14): its kind of change, `renumber:<album>`.
+pub const KIND: &str = "renumber";
+
+/// The numbers a look's preview gives each track (its JSON, as the task keeps it), with the totals, as the tag reader
+/// names the fields: each track's tracknumber, totaltracks, discnumber and totaldiscs.
+fn planned(preview: &serde_json::Value) -> (Vec<(String, Vec<(String, u32)>)>, String) {
+    let totals = &preview["totals"];
+    let discs = totals["discs"].as_u64().unwrap_or(1) as u32;
+    let per: Vec<u32> = totals["tracks_per_disc"].as_array().map(|a| a.iter().filter_map(|n| n.as_u64()).map(|n| n as u32).collect()).unwrap_or_default();
+    let tracks = preview["tracks"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| {
+                    let (disc, track) = (r["to"]["disc"].as_u64()? as u32, r["to"]["track"].as_u64()? as u32);
+                    let mut fields = vec![("tracknumber".to_string(), track)];
+                    if let Some(total) = per.get(disc.saturating_sub(1) as usize).copied().filter(|n| *n >= track) {
+                        fields.push(("totaltracks".to_string(), total));
+                    }
+                    fields.push(("discnumber".to_string(), disc));
+                    fields.push(("totaldiscs".to_string(), discs.max(disc)));
+                    Some((r["id"].as_str()?.to_string(), fields))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let r = &preview["release"];
+    let title = match (r["format"].as_str(), r["year"].as_u64()) {
+        (Some(f), Some(y)) => format!("Renumber · the {y} {f} release"),
+        (Some(f), None) => format!("Renumber · the {f} release"),
+        _ => "Renumber · the files' order".to_string(),
+    };
+    (tracks, title)
+}
+
+/// The proposal of a finished look: each track's numbers now → as the release has them, only where they differ.
+/// Blocking.
+fn proposal(album: &str, preview: &serde_json::Value) -> Result<super::file_runs::Proposal> {
+    let (tracks, artist, name) = tracks_of(album).map(|(t, _, a, n)| (t, a, n))?;
+    let (numbers, title) = planned(preview);
+    let mut p = super::file_runs::Proposal { kind: format!("{KIND}:{album}"), title, ..Default::default() };
+    for (id, fields) in numbers {
+        let Some(t) = tracks.iter().find(|t| t.id == id) else { continue };
+        let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+        let now = super::file_runs::fields_of(&t.path, &names)?;
+        let (mut before, mut after, mut from) = (Vec::new(), Vec::new(), Vec::new());
+        for (n, v) in fields {
+            let had = now.get(&n).cloned().unwrap_or_default();
+            let want = vec![v.to_string()];
+            if super::file_runs::flat(&had) != want {
+                before.push((n.clone(), had));
+                after.push((n.clone(), want));
+                from.push((n, preview["from"].as_str().unwrap_or("files").to_string()));
+            }
+        }
+        if !after.is_empty() {
+            p.files.push(crate::journal::FileWrite { album: album.to_string(), path: t.path.clone(), track: Some(t.title.clone()), before, after, from, undone: false, whole: None });
+        }
+    }
+    if !p.files.is_empty() {
+        p.records.push(crate::journal::RunRecord { album: album.to_string(), title: name, artist });
+    }
+    Ok(p)
+}
+
+/// The look's task for the album, started where none is (Discogs is paced); its preview once found.
+fn looked(account: &str, album: &str) -> Result<Option<serde_json::Value>> {
+    let t = start(account, album).map_err(|e| anyhow::anyhow!(e))?;
+    if t.finished.is_none() {
+        return Ok(None);
+    }
+    if let Some(e) = t.error {
+        bail!("{e}");
+    }
+    t.result.context("The look found nothing").map(Some)
+}
+
+/// Renumber's review sheet: each track's disc and number now → after; `making` while the release is looked up (the
+/// sheet asks again).
+pub async fn plan(account: &str, album: &str) -> Result<super::file_runs::PlanView> {
+    let Some(preview) = looked(account, album)? else {
+        return Ok(super::file_runs::PlanView { kind: format!("{KIND}:{album}"), title: "Renumber".into(), records: Vec::new(), making: true });
+    };
+    let a = album.to_string();
+    let p = tokio::task::spawn_blocking(move || proposal(&a, &preview)).await??;
+    Ok(super::file_runs::view(&p.kind, &p.title, &p.records, &p.files, false))
+}
+
+/// The numbers as the sheet showed them written (an administrator's yes): a run on the one path, set aside where the
+/// files changed since (its stamp).
+pub async fn apply_plan(app: &std::sync::Arc<super::App>, account: &str, album: &str, stamps: Option<std::collections::HashMap<String, String>>) -> Result<super::file_runs::Status> {
+    let kind = format!("{KIND}:{album}");
+    anyhow::ensure!(!super::file_runs::busy(&kind), "Already writing");
+    let preview = looked(account, album)?.context("The release is still being looked up")?;
+    let a = album.to_string();
+    let p = tokio::task::spawn_blocking(move || -> Result<super::file_runs::Proposal> { Ok(super::file_runs::ticked(proposal(&a, &preview)?, &[a.clone()], stamps.as_ref())) }).await??;
+    anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Its numbers are as the release has them already");
+    Ok(super::file_runs::start(app, p))
+}
+
 /// A track's numbers as its tag has them: (disc, disc total, track, track total).
 type Numbers = (Option<u32>, Option<u32>, Option<u32>, Option<u32>);
 
@@ -706,5 +806,18 @@ mod tests {
         assert_eq!(r.media.len(), 2);
         assert_eq!(r.media[1].tracks[0], ("Two".to_string(), Some(3605)));
         assert_eq!(medium_of("2-5"), "2");
+    }
+
+    #[test]
+    fn a_look_s_preview_is_each_track_s_numbers() {
+        let preview = serde_json::json!({
+            "from": "musicbrainz", "release": { "title": "A", "format": "CD", "year": 1998 },
+            "tracks": [{ "id": "s1", "to": { "disc": 1, "track": 1 } }, { "id": "s2", "to": { "disc": 2, "track": 1 } }],
+            "totals": { "discs": 2, "tracks_per_disc": [1, 1] }
+        });
+        let (tracks, title) = planned(&preview);
+        assert_eq!(title, "Renumber · the 1998 CD release");
+        let n = |v: &[(&str, u32)]| v.iter().map(|(k, x)| (k.to_string(), *x)).collect::<Vec<_>>();
+        assert_eq!(tracks[1], ("s2".to_string(), n(&[("tracknumber", 1), ("totaltracks", 1), ("discnumber", 2), ("totaldiscs", 2)])));
     }
 }

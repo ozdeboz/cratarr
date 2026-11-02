@@ -221,13 +221,17 @@ pub fn busy(what: &str) -> bool {
 }
 
 /// A field's values as compared: each item split where several are kept in one (ID3v2's NUL, a "; "), trimmed, a
-/// byte-order mark left off, in lower case, in order.
+/// byte-order mark left off, in lower case, in order; a number as its number ("03" is 3, "3/12" is 3).
 pub fn flat(values: &[String]) -> Vec<String> {
     values
         .iter()
         .flat_map(|v| v.split(['\0', ';']))
         .map(|v| v.trim().trim_start_matches('\u{feff}').to_lowercase())
         .filter(|v| !v.is_empty())
+        .map(|v| match v.split('/').next().and_then(|n| n.trim().parse::<u32>().ok()) {
+            Some(n) if v.chars().all(|c| c.is_ascii_digit() || c == '/' || c == ' ') => n.to_string(),
+            _ => v,
+        })
         .collect()
 }
 
@@ -262,7 +266,9 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
         "musicbrainz_artistid" => ItemKey::MusicBrainzArtistId,
         "musicbrainz_trackid" => ItemKey::MusicBrainzRecordingId,
         "tracknumber" => ItemKey::TrackNumber,
+        "totaltracks" => ItemKey::TrackTotal,
         "discnumber" => ItemKey::DiscNumber,
+        "totaldiscs" => ItemKey::DiscTotal,
         _ => return None,
     })
 }
