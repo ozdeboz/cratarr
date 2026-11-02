@@ -16,8 +16,9 @@ export type OrderField<K extends string = string> = { value: K; label: string; m
 /** The page's own button at the pill's end: a + where it makes something, or with things ticked their menu (⋮). */
 /** `progress`: a ring around the icon, 0 to 1, while work goes on (the Downloads page's sync, decision 0038). */
 /** The page's own button in its pill. `progress` (0 to 1; null while nothing runs): work it starts and shows, ringed on
- *  the button and unfolded in the pill after a tap (lib/ContentControls); `line`: what that work is at, said there. */
-export type PageAction = { icon: IconName; label: string; run: () => void; progress?: number | null; line?: string | null };
+ *  the button and unfolded in the pill after a tap (lib/ContentControls); `line`: what that work is at, said there,
+ *  also once it ended; `level`: its bar then (0 to 1; full where none). */
+export type PageAction = { icon: IconName; label: string; run: () => void; progress?: number | null; line?: string | null; level?: number | null };
 /** A page's mode, a button that stays lit while on, left of its own button (Playlists' Quick add, 0.9.18). */
 export type PageMode = { icon: IconName; label: string; on: boolean; toggle: () => void };
 

@@ -69,7 +69,7 @@ test('the glass parts take no Svelte transition that sizes them, and their motio
   assert.ok(!/class="more-tabs"[\s\S]{0,200}transition:slide/.test(app), "More's tabs slide a size");
   // lib/glassMotion's keyframes: clip-path, opacity, transform and translate only.
   const motion = read('lib/glassMotion.ts');
-  const animated = [...motion.matchAll(/\.animate\(\s*\[([\s\S]*?)\],/g), ...motion.matchAll(/: Keyframe\[\] =([\s\S]*?);\r?\n/g)];
+  const animated = [...motion.matchAll(/\.animate\(\s*\[([\s\S]*?)\],/g), ...motion.matchAll(/\bframes = ([\s\S]*?\]);\r?\n/g)];
   assert.ok(animated.length >= 4, 'its moves found');
   for (const frames of animated) {
     for (const k of frames[1].matchAll(/([a-zA-Z]+):/g)) {

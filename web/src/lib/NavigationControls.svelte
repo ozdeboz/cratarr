@@ -1,9 +1,9 @@
 <script lang="ts">
   // The navigation controls (Display: Navigation controls; the owner, 2026-11-01, beside ContentControls): back, and
   // beside it the page's name where the page is an index, the Library's and Discover's picker, or the panel's left part
-  // where it handed its glass (lib/glass), its breadcrumbs or name. At the top or along the bottom. A title has a
-  // thinner glass than the button's, more light through (the owner, 2026-10-25, mockup 3: content scrolling under a
-  // bare title made it hard to read), the button's round glass in front of it. A glass part (lib/glassMotion): as
+  // where it handed its glass (lib/glass), its breadcrumbs or name. At the top or along the bottom. Two parts
+  // (the owner, 2026-11-02): the buttons and one glass behind them, a title beside back that glass stretched (it was a
+  // thinner glass of its own, the button's in front: the button changed colour as it went). A glass part (lib/glassMotion): as
   // what it holds changes, its glass reaches from the old outline to the new, the pill beside it doing the same as the
   // two share the row.
   import type { Snippet } from 'svelte';
@@ -19,7 +19,6 @@
     back = null,
     name = null,
     picker = null,
-    still = false,
     right,
     el = $bindable(),
   }: {
@@ -32,8 +31,6 @@
     /** What the page shows, as a control page's name (the owner, 2026-10-25): the Library's kind of record, Discover's
      *  mode (the owner, 2026-10-29). */
     picker?: 'library' | 'discover' | null;
-    /** No motion now (an index page's panel coming or going under the bar: the owner, 2026-10-25, no fade there). */
-    still?: boolean;
     /** The pill's side of the row, to give way to. */
     right: () => HTMLElement | undefined;
     el?: HTMLElement;
@@ -66,7 +63,12 @@
       // "Why did records not collapse??" beside a field cut short.
       const field = r?.querySelector<HTMLElement>('.field');
       const squeezed = !!field && field.getBoundingClientRect().width < Number(field.dataset.wants ?? 0) - 2;
-      away = parts.length > 0 && (met || squeezed || cut > 36 || room < 48 || room < 0.7 * (room + cut));
+      // Or the pill narrower than what it holds (its buttons never squeezed, its work's line never cut: the owner,
+      // 2026-11-02).
+      const pill = r?.querySelector<HTMLElement>('[role="toolbar"]');
+      const work = r?.querySelector<HTMLElement>('.work');
+      const over = (!!pill && pill.scrollWidth > pill.clientWidth + 1) || (!!work && work.scrollWidth > work.clientWidth + 1);
+      away = parts.length > 0 && (met || squeezed || over || cut > 36 || room < 48 || room < 0.7 * (room + cut));
     };
     tick().then(measure);
     const r = right();
@@ -80,7 +82,7 @@
   });
 </script>
 
-<span class="lead" class:title-away={away} bind:this={el} {@attach glassPart({ radius: 26, still: () => still })}>
+<span class="lead" class:title-away={away} bind:this={el} {@attach glassPart({ radius: 26 })}>
   <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
   {#if left}
     {@render left()}
@@ -92,8 +94,8 @@
 </span>
 
 <style>
-  /* Embedded always as with its extension (the owner, 2026-10-26: the glass moved a few pixels between the Library,
-     with its view picker's thin glass, and Home, without): the extension's 2 px, whether it shows or not. */
+  /* One height whatever it holds (the owner, 2026-10-26: the glass moved a few pixels between the Library, with its
+     picker, and Home, without). */
   .lead {
     position: relative;
     isolation: isolate;
@@ -101,9 +103,20 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
-    padding: 2px;
+    /* As tall as the pill's glass (lib/ContentControls: its 44 px buttons and 2 px), back's 2 px its own. */
+    min-height: 48px;
+    padding: 0;
   }
 
+  /* No back at its start (a picker, a name): their room from the glass's round end. */
+  .lead:not(:has(:global(.navpill))) {
+    padding-left: 12px;
+  }
+
+  /* Two parts (the owner, 2026-11-02): the buttons and the glass behind them. A title or a picker beside back is that
+     glass stretched, never a glass of its own beside the button's: it grows out of the button and shrinks back into it
+     (lib/glassMotion), its colour the button's throughout ("I don't want this button to change the color when the
+     extension removes"). Hidden only where nothing is in it. */
   .lead > .glass,
   .lead > .shade {
     position: absolute;
@@ -115,45 +128,42 @@
   }
 
   .lead > .glass {
-    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
-    -webkit-backdrop-filter: blur(10px) saturate(1.3);
-    backdrop-filter: blur(10px) saturate(1.3);
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
   }
 
   .lead > .shade {
-    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
-  /* A title in it: its thin glass, the round button's glass in front of it. Not a fading copy's (lib/glassMotion), nor a
-     title given way (the panel's is hidden, not gone: its glass stayed as a sliver beside back, the owner 2026-11-01). */
-  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) {
-    padding: 2px 18px 2px 2px;
-  }
-
-  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) > :is(.glass, .shade) {
+  /* A panel's left part (`left`) is not this file's markup: matched as anyone's. */
+  .lead:has(> :global(:not(.glass, .shade, [data-glass-ghost]))) > :is(.glass, .shade) {
     opacity: 1;
   }
 
-  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) :global(.navpill) {
+  /* A title in it: the glass stretched past it. Not a fading copy's (lib/glassMotion), nor a title given way. */
+  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) {
+    padding-right: 18px;
+  }
+
+  /* The buttons on the lead's glass: none of their own (a panel's left part brings its back as a `navpill`). */
+  .lead :global(.navpill) {
+    flex: none;
+    background: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
     box-shadow: none;
   }
 
-  /* The search open with no room for the title (`away`; not the class `away`, app.css's for what slides away): only the round button. The panel's left part hides its own
-     (its breadcrumbs, its name); the page's are not drawn. */
+  .lead :global(.navpill button) {
+    flex: none;
+  }
+
+  /* The search open with no room for the title (`away`; not the class `away`, app.css's for what slides away): only the
+     round button. The panel's left part hides its own (its breadcrumbs, its name); the page's are not drawn. */
   .lead.title-away :global(:is(.page-name, .crumbs, .title, .views)) {
     display: none;
-  }
-
-  .lead.title-away {
-    padding: 2px;
-  }
-
-  .lead.title-away > :is(.glass, .shade) {
-    opacity: 0;
-  }
-
-  .lead.title-away :global(.navpill) {
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   .page-name {
@@ -165,19 +175,17 @@
     white-space: nowrap;
   }
 
-  /* Back, round as the pill (lib/ContentControls). */
+  /* Back, round as the pill (lib/ContentControls), on the lead's glass; never squeezed by a narrow row. */
   .navpill {
     display: flex;
+    flex: none;
     padding: 2px;
     border-radius: 26px;
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   .navpill button {
     display: grid;
+    flex: none;
     place-items: center;
     width: 44px;
     height: 44px;
