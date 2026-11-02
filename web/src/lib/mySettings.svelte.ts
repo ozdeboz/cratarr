@@ -25,6 +25,8 @@ export type Choices = {
    *  the queue at once. */
   followable?: boolean;
   auto_accept?: string[];
+  /** Settings › Profile's sources switched off (decision 0094: the account's, which every use of the taste reads). */
+  taste_off?: string[];
 };
 export type MoreFrom = { libraries: string[] | null; bandcamp: boolean };
 
@@ -112,6 +114,17 @@ export function turnLibrary(id: string, on: boolean, all: string[]) {
   const now = all.filter((x) => (x === id ? on : libraryOn(x)));
   return setMoreFrom({ libraries: now.length === all.length ? null : now });
 }
+/** The taste's sources switched off, as kept; `read` counts the changes the server has, for what shows the taste to
+ *  ask for it again. */
+export const taste = $state({ off: [] as string[], read: 0 });
+export const tasteSourceOn = (id: string) => !taste.off.includes(id);
+/** A source of the taste on or off, for the account: saved at once, then what shows the taste asks again. */
+export async function setTasteSource(id: string, on: boolean) {
+  taste.off = [...taste.off.filter((x) => x !== id), ...(on ? [] : [id])];
+  keep({ taste_off: taste.off });
+  await flush();
+  taste.read++;
+}
 export function setTracking(on: boolean) {
   mine.tracking = on;
   keep({ tracking: on });
@@ -138,6 +151,8 @@ export async function loadMine(): Promise<Choices | null> {
     const auto = (settings as Choices).auto_accept;
     mine.autoAccept = Array.isArray(auto) ? auto.filter((u) => typeof u === 'string') : [];
     mine.known = true;
+    const off = (settings as Choices).taste_off;
+    taste.off = Array.isArray(off) ? off.filter((x) => typeof x === 'string') : [];
     const skip = (settings as Choices).discover_pick_skip;
     mine.pickSkip = Array.isArray(skip) ? skip.filter((k) => typeof k === 'string') : [];
     const c = settings as Choices;
