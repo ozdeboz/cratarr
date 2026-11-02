@@ -9,6 +9,7 @@
 
 import { leaveOnArrival } from './navStep.svelte';
 import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
+import { prefs } from './prefs.svelte';
 
 export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
@@ -150,7 +151,7 @@ const steps = $state({ n: 0, how: 'view' as Step['how'] });
 /** How many levels the panel's history has: Back goes to the one before where there is more than one. */
 export const panelDepth = () => steps.n;
 /** Whether the panel shows beside the page (set by App): its history then is its own, out of the page's. */
-const layout = { beside: false };
+const layout = $state({ beside: false });
 export function setBeside(beside: boolean) {
   if (layout.beside === beside) return;
   layout.beside = beside;
@@ -416,10 +417,16 @@ export function albumGone(source: string, id: string) {
   if (panel.viewed === albumSubject(source, id)) backOne();
 }
 
+/** The pages of music, whose panels show the same kinds of things (the owner, 2026-11-02): between them a locked panel
+ *  stays, an unlocked one closes. */
+const MUSIC_PAGES: readonly PageId[] = ['home', 'crates', 'playlists', 'library', 'discover'];
 /** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own, Insights' panel
- *  Insights': they stay there. */
+ *  Insights': they stay there. Beside the page, from one page of music to another, only while the panel is locked
+ *  (prefs.panelLocked); a link to the page that shows keeps it. */
 export const keepViewed = (page: PageId) => {
-  const kept = panel.viewed && ![SETTINGS, HEALTH, INSIGHTS, REQUESTS, DOWNLOADS].some((p) => panel.viewed!.startsWith(p));
+  const here = pageHere();
+  const leaves = layout.beside && !prefs.panelLocked && page !== here && MUSIC_PAGES.includes(page) && MUSIC_PAGES.includes(here);
+  const kept = panel.viewed && !leaves && ![SETTINGS, HEALTH, INSIGHTS, REQUESTS, DOWNLOADS].some((p) => panel.viewed!.startsWith(p));
   if (!kept) return hrefOf(page);
   // The panel's words only: the page left keeps its own (the Library's composer is no word of Crates').
   const w = wordsIn();
