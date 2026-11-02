@@ -1209,6 +1209,22 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const favState = $derived(crate && !seeded(crate) && crates.list ? FAVOURITES[favouritesOf(crate)] : null);
   // Beside it, its favourite albums toggle (decision 0024, amended 2026-10-19).
   const albState = $derived(crate && !seeded(crate) ? FAVOURITE_ALBUMS[favouriteAlbumsOf(crate)] : null);
+  // The row's end, one list for the row and the glass: the list's heart (not a crate's: its toggles are what it shows)
+  // and its menu. Once the row has scrolled away they are on the right glass (the owner, 2026-11-02: "Menu and heart go
+  // in top right"); a crate's own Edit and toggles stay in the row.
+  type EndAction = { key: 'heart' | 'menu'; label: string; run: () => void; on?: boolean };
+  const barEnds = $derived.by((): EndAction[] => {
+    const menu = (label: string, open: () => void): EndAction => ({ key: 'menu', label, run: open });
+    const heart = (on: boolean, run: () => void): EndAction => ({ key: 'heart', label: 'Favourite', run, on });
+    if (crate) return [menu(`Menu of ${title}`, () => (crateMenuOpen = true))];
+    // A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu).
+    if (album?.source === BANDCAMP) return [menu(`Menu of ${title}`, () => (bandcampMenuOpen = true))];
+    // The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu.
+    if (offServer) return [];
+    if (artist) return [...(artistHead?.favorite !== undefined ? [heart(artistHead.favorite, toggleArtistFavorite)] : []), menu(`Menu of ${artist.name}`, () => (artistMenuOpen = true))];
+    if (album) return [heart(albumFav, toggleAlbumFavorite), menu(`Menu of ${title}`, () => (albumMenuOpen = true))];
+    return [heart(allFav, () => setPlaylistFavorites([...ids], !allFav)), menu(`Menu of ${title}`, () => (menuOpen = true))];
+  });
   const closeLabel = $derived(
     crate ? 'Close the crate' : album ? 'Close the album' : artist ? 'Close the artist' : multi ? 'Close the playlists' : 'Close the playlist',
   );
@@ -1247,8 +1263,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let pillsEl = $state<HTMLElement>();
   let rowAway = $state(false);
   /** What the glass takes once the row is under it, and in which order they go for want of room: Play first, Radio
-   *  last (the owner, 2026-11-02: "the priority is radio shuffle play"); the row decides (lib/glassRow). */
-  const GAINED: Record<string, number> = { radio: 40, shuffle: 41, play: 42 };
+   *  last (the owner, 2026-11-02: "the priority is radio shuffle play"); then Resume, Play next and Add to queue, which
+   *  go before them (the owner, the same day); the row decides (lib/glassRow). */
+  const GAINED: Record<string, number> = { radio: 40, shuffle: 41, play: 42, resume: 43, next: 44, last: 45 };
   function onScroll() {
     const a = actbar;
     // The glass on top: this panel's own pills, or App's row it is handed to (lib/glass).
@@ -1975,6 +1992,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           kind,
           counted: rows && shown ? { shown: shown.length, total: rows.length, pending: pass.pending } : null,
           search: full ? pageUnder : null,
+          extra: rowAway && !editing && barEnds.length ? endsGained : null,
         }
       : null;
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, item: true });
@@ -1992,6 +2010,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
         onclick={r.run}><Icon name={r.icon} size={22} /></button
       >{/each}</span
   >{/snippet}
+{#snippet endButton(e: EndAction, size: number)}<button class="icon" class:fav={e.on} aria-pressed={e.key === 'heart' ? e.on : undefined} aria-label={e.label} onclick={e.run}
+    ><Icon name={e.key === 'heart' ? 'heart' : 'moreVert'} {size} /></button
+  >{/snippet}
+<!-- The row's end on the right glass once the row has scrolled away. -->
+{#snippet endsGained()}{#each barEnds as e (e.key)}{@render endButton(e, 22)}{/each}{/snippet}
 {#snippet glassExtra()}<PanelPlace />{/snippet}
 
 {#snippet leave()}
@@ -2118,29 +2141,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
               ><Icon name={albState.icon} size={24} /></button
             >
           {/if}
-          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (crateMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
-        {:else if album?.source === BANDCAMP}
-          <!-- A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu). -->
-          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (bandcampMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
-        {:else if offServer}
-          <!-- The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu. -->
-        {:else if artist}
-          {#if artistHead?.favorite !== undefined}
-            <button class="icon" class:fav={artistHead.favorite} aria-pressed={artistHead.favorite} aria-label="Favourite" onclick={toggleArtistFavorite}
-              ><Icon name="heart" size={24} /></button
-            >
-          {/if}
-          <button class="icon" aria-label={`Menu of ${artist.name}`} onclick={() => (artistMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
-        {:else if album}
-          <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
-          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
-        {:else}
-          {#if p && p.mine !== false}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
-          <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
-            ><Icon name="heart" size={24} /></button
-          >
-          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
+        {:else if !album && !artist && !offServer && p && p.mine !== false}
+          <button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>
         {/if}
+        {#each barEnds as e (e.key)}{@render endButton(e, 24)}{/each}
       </div>
       {/if}
       {#if editWaits}<p class="note">Editing this playlist needs Cratarr.</p>{/if}

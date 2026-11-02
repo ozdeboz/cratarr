@@ -24,6 +24,7 @@
   import { pageView, searchFor } from './pageView.svelte';
   import { globalAsked, globalGroups, globalSearch, pageKinds } from './globalSearch.svelte';
   import type { PanelKind } from './prefs.svelte';
+  import type { Snippet } from 'svelte';
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
   import { inSpotify, SPOTIFY_FILTER } from './spotify.svelte';
   import { dimmedIn } from './quickCrate';
@@ -42,6 +43,7 @@
     search = null,
     onview = null,
     filterLit = null,
+    extra = null,
     action = undefined,
   }: {
     /** The page it is on (its search, its own filters and View), or null in the panel. */
@@ -69,6 +71,9 @@
     search?: string | null;
     onview?: (() => void) | null;
     filterLit?: boolean | null;
+    /** Buttons of the list's own on the pill's glass, after its tools (a panel's heart and menu once its action row has
+     *  scrolled away, the owner 2026-11-02). */
+    extra?: Snippet | null;
   } = $props();
   /** The page's own button: App's say, else the page that set it last. */
   const pageAction = $derived(action !== undefined ? action : pageView.action);
@@ -353,6 +358,7 @@
     {#if view && (page || order?.columns?.shown.length || order?.view || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))}><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
     {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
+    {#if extra && !searching}{@render extra()}{/if}
     <!-- The page's mode (Playlists' Quick add), lit while on. -->
     {#if page && pageView.mode && !searching && !(showing && pageAction)}
       {@const m = pageView.mode}
