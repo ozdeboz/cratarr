@@ -138,7 +138,7 @@
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordKey, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { stateLine } from './fileChangeRules';
   import { openReview, undoRun } from './fileRuns.svelte';
@@ -593,7 +593,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     // One cover an album (the owner, 2026-10-23: duplicates consolidated): by its name and album artist in any case (the
     // same album in Music and in Incoming, or without its id), and no cover twice.
     const seen = new Set<string>();
-    const out: { url: string; album: { id: string; title: string; artist: string | null } | null }[] = [];
+    const out: { url: string; key: string; album: { id: string; title: string; artist: string | null } | null }[] = [];
     for (const r of rows ?? []) {
       if (!r.id || r.missing) continue;
       const named = r.album ? `${r.album}\n${r.album_artist ?? r.artist ?? ''}`.toLowerCase() : null;
@@ -602,7 +602,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       if (keys.some((k) => seen.has(k))) continue;
       for (const k of keys) seen.add(k);
       // Its album, for the long-press's menu (the owner, 2026-10-24).
-      out.push({ url, album: r.album_id ? { id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null } : null });
+      out.push({ url, key: recordKey(r), album: r.album_id ? { id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null } : null });
       if (out.length === 60) break;
     }
     return out;
@@ -789,12 +789,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** A record opened: its crate tracks in a sheet over the list (lib/RecordSheet; the owner, 2026-11-02: it replaced
    *  the crate's list in place). */
   let recordOpen = $state<string | null>(null);
-  const openRecord = $derived(recordsView && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
+  // Of the records view, or of the flow in the header (a crate's, a wide playlist's) whichever way the list shows.
+  const openRecord = $derived(recordOpen && shown ? (recordsOf(shown).find((r) => r.key === recordOpen) ?? null) : null);
   const recordShown = $derived(openRecord && shown ? shown.filter((x) => openRecord.at.includes(x.i)) : []);
-  // Another crate, or tracks chosen: no record open.
+  // Another list: no record open.
   $effect(() => {
-    void crate;
-    void recordsView;
+    void panel.viewed;
     untrack(() => (recordOpen = null));
   });
   /** A record's menu: its crate tracks as a selection's (lib/SelectionMenu), with Go to album and out of this crate. */
@@ -1946,7 +1946,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <!-- Its art on its way: the place kept, empty. -->
         {:else if flowing}
           <!-- A crate's albums as a coverflow on a light canvas (the owner, 2026-10-23); a drag or a tap moves through them. -->
-          <CoverFlow covers={flowShown} onmenu={(i) => (flowMenu = flowItems[i]?.album ?? null)} />
+          <!-- A tap on the front cover opens its record's tracks here in a sheet (lib/RecordSheet), one beside it comes to the
+               front (the owner, 2026-11-02). -->
+          <CoverFlow covers={flowShown} onopen={(i) => flowItems[i] && (recordOpen = flowItems[i].key)} onmenu={(i) => (flowMenu = flowItems[i]?.album ?? null)} />
         {:else if oneWide}
           <!-- Alone, it takes the top row's middle too (the glass is at that row's far ends) and comes nearer the action
                bar (the owner, 2026-10-26: at least twice the size it had). -->

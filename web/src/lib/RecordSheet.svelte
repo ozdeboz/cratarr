@@ -1,8 +1,9 @@
 <script lang="ts">
-  // A crate's record opened (the owner, 2026-11-02: it replaced the crate's list in place; "it should open a sheet with
-  // all the tracks in that playlist of that record"): the record on its card (its cover, artist, how much of it the
-  // crate holds), Play and Shuffle of those tracks, then each as the crate search's row (lib/SnippetRows): a tap plays
-  // the record's crate tracks from it, its round button its snippet on its waveform, ⋮ its menu (`onmenu`).
+  // A record of a list opened (the owner, 2026-11-02: in a crate's records it replaced the crate's list in place; "it
+  // should open a sheet with all the tracks in that playlist of that record"; a flow's front cover too): the record on
+  // its card (its cover, artist, how much of it the list holds), Play and Shuffle of those tracks, then each as the
+  // crate search's row (lib/SnippetRows): a tap plays the record's tracks here from it, its round button its snippet on
+  // its waveform, ⋮ its menu (`onmenu`).
   import { coverUrl, type PlaylistRow } from './api';
   import MenuSheet from './MenuSheet.svelte';
   import { playCollection } from './play.svelte';
@@ -53,7 +54,7 @@
   {onclose}
 >
   <div class="tracks">
-    <SnippetRows {source} {items} key={title} label={`The crate's tracks of ${title}`} onplay={(r) => r.id && play('play', r.id)} {onmenu} />
+    <SnippetRows {source} {items} key={title} label={`Its tracks of ${title}`} onplay={(r) => r.id && play('play', r.id)} {onmenu} />
   </div>
 </MenuSheet>
 
