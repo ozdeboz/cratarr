@@ -97,7 +97,8 @@ function play(p: Part) {
   // Where each child that was there is seen now: its rest, moved by what it is still moving.
   const was = new Map<Element, Rect>();
   for (const [el, r] of p.kids) {
-    const [dx, dy] = el.isConnected ? offsetNow(el) : [0, 0];
+    // Read only while a move is under way: at rest there is none, and the read costs the tap's task a style pass.
+    const [dx, dy] = p.run && el.isConnected ? offsetNow(el) : [0, 0];
     was.set(el, { ...r, x: r.x + dx, y: r.y + dy });
   }
   const glassWas = p.seen;
