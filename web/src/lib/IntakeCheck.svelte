@@ -69,7 +69,7 @@
     {#if error}
       <Notice text={error} onretry={read} />
     {:else if !found || (found.matching && !found.fixes.length)}
-      <PageLoading size={40} />
+      <PageLoading />
     {:else if !found.fixes.length}
       <p class="muted">Nothing to set: its tags are complete.</p>
     {:else}

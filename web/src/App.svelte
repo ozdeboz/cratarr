@@ -1512,6 +1512,16 @@
     height: calc(var(--app-h, 100dvh) - var(--top-h, 0px) - env(safe-area-inset-top));
   }
 
+  /* Beside the page the panel starts under the bar and a mini-player along the top (--top-h, above): neither is over
+     it, so it states that for what it holds (each container its own room, as --mini-h along the foot). The layer
+     (.playlist-layer) fills the screen under them and keeps App's. The owner, 2026-11-02: the action row stuck, and a
+     crate's own search started, a bar's height too low beside the page. */
+  .player-side {
+    --bar-top: 0px;
+    --bar-room: 0px;
+    --mini-top: 0px;
+  }
+
   /* The edge between page and player wears the shared handle (app.css .edge-grip). Beside Settings' list it is a plain
      line: no handle, so no cut in the panel for one (.whole). */
   .grip.line {

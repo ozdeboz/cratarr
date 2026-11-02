@@ -1151,24 +1151,55 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   // As Symfonium's album screen: two floating pills over the cover (back and ✕; the filter and where it plays), and the
   // action bar at the cover's foot. It scrolls away with the rest (the owner, 2026-11-02: it stuck, and beside the page
-  // a bar's height below the panel's top); once it is under the glass, its Radio is in the glass's left part.
+  // a bar's height below the panel's top); once it is under the glass, the glass's left part takes its Radio, then
+  // Shuffle, then Play, as many as there is room for beside the right part ("the priority is radio shuffle play").
   let actbar = $state<HTMLElement>();
-  let leftGlass = $state<HTMLElement>();
+  let pillsEl = $state<HTMLElement>();
+  /** The glass's left part: this panel's own beside the page, App's row's when handed to it (drawn there). */
+  const glassLeftEl = () => (handed ? document.querySelector<HTMLElement>('.page-row .lead .navpill') : pillsEl?.querySelector<HTMLElement>('.navpill')) ?? null;
   let rowAway = $state(false);
+  /** How many of the row's actions the glass has room for. */
+  let glassRoom = $state(0);
+  const GAINED = ['radio', 'shuffle', 'play'] as const;
+  /** One of the glass's round buttons (lib/NavigationControls' 44 px), and what a glass keeps clear around it. */
+  const BUTTON = 44;
+  const CLEAR = 24;
   function onScroll() {
     const a = actbar;
     // The glass on top: this panel's own pills, or App's row it is handed to (lib/glass).
-    const g = handed ? document.querySelector('.page-row .lead') : leftGlass;
+    const g = handed ? document.querySelector('.page-row .lead') : pillsEl?.querySelector('.navpill');
     if (!a || !g) return void (rowAway = false);
     rowAway = a.getBoundingClientRect().bottom <= g.getBoundingClientRect().bottom + 0.5;
+    measureRoom();
+  }
+  function measureRoom() {
+    const row = handed ? document.querySelector<HTMLElement>('.page-row') : pillsEl;
+    const right = row?.querySelector<HTMLElement>(handed ? '.right' : '.end');
+    const left = glassLeftEl();
+    if (!row || !right || !left) return;
+    // Back and ✕ (Home): what the glass holds of its own, not what it took.
+    const own = [...left.querySelectorAll<HTMLElement>(':scope > button:not(.gained)')].reduce((n, b) => n + b.offsetWidth, 0);
+    glassRoom = Math.max(0, Math.min(GAINED.length, Math.floor((row.clientWidth - right.offsetWidth - own - CLEAR) / BUTTON)));
   }
   $effect(() => {
     // Another subject shows from its cover.
     void id;
     rowAway = false;
   });
-  /** The row's Radio, in the glass once the row is away (one action, two places: the radio sheet's, decision 0094). */
-  const radioAction = $derived(barActions.find((a) => a.key === 'radio') ?? null);
+  $effect(() => {
+    const row = handed ? document.querySelector<HTMLElement>('.page-row') : pillsEl;
+    if (!row) return;
+    const seen = new ResizeObserver(() => measureRoom());
+    seen.observe(row);
+    return () => seen.disconnect();
+  });
+  /** The row's actions the glass has taken, in the row's order (one action, two places; Radio the radio sheet's,
+   *  decision 0094). */
+  const gained = $derived.by(() => {
+    if (!rowAway || editing || crateEditing) return [];
+    const chosen = GAINED.filter((k) => barActions.some((a) => a.key === k)).slice(0, glassRoom);
+    return barActions.filter((a) => (chosen as readonly string[]).includes(a.key));
+  });
   // How it is left (ui-conventions, Panels; the owner, 2026-10-24): full screen (a phone; a window without room beside
   // the page), Back always, closing it where there is no view before this one, and Home beside it, as the navigation
   // under it is out of reach; beside the page, ✕, and Back where there is a view before this one. Every mode and view
@@ -1894,14 +1925,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
 </script>
 
 <!-- This panel's glass: its floating pills, or App's row on a phone (lib/glass). -->
-{#snippet glassLeft()}<span class="navpill" bind:this={leftGlass}
-    >{@render leave()}{#if rowAway && radioAction && !editing && !crateEditing}{@const r = radioAction}<button
+{#snippet glassLeft()}<span class="navpill"
+    >{@render leave()}{#each gained as r (r.key)}<button
+        class="gained"
         aria-label={r.label}
         title={r.label}
         disabled={r.disabled || (!!starting && starting !== r.key)}
         aria-busy={starting === r.key}
         onclick={r.run}><Icon name={r.icon} size={22} /></button
-      >{/if}</span
+      >{/each}</span
   >{/snippet}
 {#snippet glassExtra()}<PanelPlace />{/snippet}
 
@@ -1944,7 +1976,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
          filter, View and where it plays, and the panel's place, on the right (in edit mode the place only). Once the
          action bar has the top they float just under it. -->
     {#if !handed}
-      <div class="pills">
+      <div class="pills" bind:this={pillsEl}>
         {@render glassLeft()}
         <span class="end">{#if pill()}<ContentControls {...pill()!} />{/if}<PanelPlace /></span>
       </div>

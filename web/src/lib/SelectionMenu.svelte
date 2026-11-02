@@ -107,9 +107,9 @@
   {#if e === 'excludeEverywhere'}
     {#if source && source !== 'device'}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
   {:else if e === 'goAlbum'}
-    {#if album}<MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={() => (onclose(), album())} />{/if}
+    {#if album}<MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={() => (album(), onclose())} />{/if}
   {:else if e === 'notInCrate'}
-    {#each outs as o (o.label)}<MenuEntry icon={o.icon} label={o.label} danger onclick={() => (onclose(), o.run())} />{/each}
+    {#each outs as o (o.label)}<MenuEntry icon={o.icon} label={o.label} danger onclick={() => (o.run(), onclose())} />{/each}
   {:else if e === 'addToPlaylist'}
     {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
   {:else if e === 'download'}

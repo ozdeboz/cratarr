@@ -1,14 +1,23 @@
 <script lang="ts">
   // A page's or a panel's whole content loading: the mark in motion (lib/MarkLoader.svelte), in the middle of what can
   // be seen of the page or the component it is in (the window between the bar of pages and the mini-player, or the
-  // panel or sheet that scrolls it); lower only where what comes before it reaches that far.
+  // panel or sheet that scrolls it); lower only where what comes before it reaches that far. Its size is where it is:
+  // a page's large, a panel's or a sheet's small, as a panel's swap (lib/Hold) and a sheet's own (the owner,
+  // 2026-11-02: the large one in a crate's panel, "we're using smaller kinds these days in smaller panels").
   import { untrack } from 'svelte';
   import MarkLoader from './MarkLoader.svelte';
   import { holdUntil } from './holdPlace.svelte';
 
   /** `children`: what goes under the mark, where the work can say how far it is (the owner, 2026-10-24: Discover's
    *  first look, its progress under the loader at its usual place). */
-  let { size = 96, children }: { size?: number; children?: import('svelte').Snippet } = $props();
+  let { children }: { children?: import('svelte').Snippet } = $props();
+
+  /** A page's mark; in a panel (beside the page or over it) or a sheet, the small one. */
+  const LARGE = 96;
+  const SMALL = 40;
+  /** Whether it is in a panel or a sheet: known once it is placed (its mark shows from then). */
+  let held = $state<boolean | null>(null);
+  const size = $derived(held ? SMALL : LARGE);
 
   // A page or panel loading as a whole is not ready (lib/Hold): what it showed stays while this is here.
   holdUntil(
@@ -45,6 +54,7 @@
     let raf = 0;
     const measure = () => {
       raf = 0;
+      held = !!el.closest('.player-side, .playlist-layer, .sheet');
       const { top, bottom, at } = seen();
       const middle = Math.max((top + bottom) / 2, at + size / 2);
       const next = { height: Math.round(Math.max(bottom - at, size * 2)), top: Math.round(middle - at - size / 2) };
@@ -76,7 +86,7 @@
   style:height={fit ? `${fit.height}px` : null}
   style:padding-top={fit ? `${fit.top}px` : null}
 >
-  <MarkLoader {size} />
+  {#if held !== null}<MarkLoader {size} />{/if}
   {#if children}<div class="under">{@render children()}</div>{/if}
 </div>
 
