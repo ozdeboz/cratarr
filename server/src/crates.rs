@@ -1813,6 +1813,142 @@ impl Reason {
     }
 }
 
+/// What keeps each thing out (decision 0095, amended 2026-11-02, the owner: "the real true attribution", so the page
+/// points at the filter or at its search, whichever truly empties the list): the causes that are on, as reasons name
+/// them, and every thing one of them at least keeps out, grouped by the exact set that does. What none keeps out is
+/// not listed. Asked for (`explain`) only when what the page shows is empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Blocked {
+    pub causes: Vec<BlockCause>,
+    pub groups: Vec<BlockGroup>,
+}
+
+/// A cause that is on: a reason's kind, key and word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BlockCause {
+    pub kind: Why,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub label: String,
+}
+
+impl From<Reason> for BlockCause {
+    fn from(r: Reason) -> Self {
+        Self { kind: r.kind, key: r.key, label: r.label }
+    }
+}
+
+/// The things one set of causes keeps out (`causes`: indices into `Blocked::causes`): their keys, as the answer's
+/// `keys` name them (a crate's rows: their `entry`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BlockGroup {
+    pub causes: Vec<usize>,
+    pub keys: Vec<String>,
+}
+
+/// The most causes a list weighs at once: one bit each in a verdict's set.
+pub const MAX_CAUSES: usize = 64;
+
+/// The bit of the `i`th cause in a verdict's set (`i` below `MAX_CAUSES`).
+pub fn cause_bit(i: usize) -> u64 {
+    debug_assert!(i < MAX_CAUSES);
+    1 << i
+}
+
+/// A list judged once (decision 0095, amended 2026-11-02): how many of its things pass, and the others by the exact
+/// set of causes failing each (a bit a cause, `cause_bit`), in the order first met, with their keys when asked for.
+/// Everything said of why a list is empty is read from it, so no two of them disagree: the reasons and what lifting
+/// each alone brings back (`per_cause`), all there would be with every cause lifted (`all`), and what keeps each thing
+/// out (`blocked`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Verdicts {
+    pub passed: usize,
+    sets: Vec<(u64, usize, Vec<String>)>,
+    at: HashMap<u64, usize>,
+    keys: bool,
+}
+
+impl Verdicts {
+    /// None judged yet; with `keys`, each thing kept out keeps its key (`blocked` lists them).
+    pub fn new(keys: bool) -> Self {
+        Self { keys, ..Self::default() }
+    }
+
+    /// A thing judged: `set` the causes failing it (none: it passes), `key` its key (asked for only when kept).
+    pub fn judge(&mut self, set: u64, key: impl FnOnce() -> String) {
+        if set == 0 {
+            self.passed += 1;
+            return;
+        }
+        let i = *self.at.entry(set).or_insert_with(|| {
+            self.sets.push((set, 0, Vec::new()));
+            self.sets.len() - 1
+        });
+        self.sets[i].1 += 1;
+        if self.keys {
+            self.sets[i].2.push(key());
+        }
+    }
+
+    /// How many there would be with every cause lifted.
+    pub fn all(&self) -> usize {
+        self.passed + self.sets.iter().map(|(_, n, _)| n).sum::<usize>()
+    }
+
+    /// For each of the first `n` causes: whether it keeps anything out, and how many lifting it alone brings back
+    /// (those it alone keeps out).
+    pub fn per_cause(&self, n: usize) -> Vec<(bool, usize)> {
+        (0..n)
+            .map(|i| {
+                let bit = cause_bit(i);
+                (self.sets.iter().any(|(s, ..)| s & bit != 0), self.sets.iter().filter(|(s, ..)| *s == bit).map(|(_, n, _)| n).sum())
+            })
+            .collect()
+    }
+
+    /// The reasons (`causes` as the bits number them): one a cause that keeps anything out, its `back` from
+    /// `per_cause`. None where nothing would come back with every cause lifted: the list is truly empty.
+    pub fn reasons(&self, causes: &[BlockCause]) -> Vec<Reason> {
+        if self.all() == 0 {
+            return Vec::new();
+        }
+        causes.iter().zip(self.per_cause(causes.len())).filter(|(_, (any, _))| *any).map(|(c, (_, back))| Reason::new(c.kind, c.key.clone(), c.label.clone(), back)).collect()
+    }
+
+    /// The libraries switched off judged as one more cause (`bit`), from `every`: the same list judged from every
+    /// library (its keys kept, `every_passing` those passing there); `passing`, those passing here (these verdicts'
+    /// keys kept too). A thing only there is kept out by the libraries and whatever keeps it out there; one in both by
+    /// what keeps it out here, unless the libraries and fewer others would bring it back (an artist with an album in
+    /// a library switched off).
+    pub fn add_off(&mut self, passing: &[String], every: &Verdicts, every_passing: &[String], bit: u64) {
+        debug_assert!(self.keys && every.keys);
+        let here: HashMap<&str, u64> =
+            passing.iter().map(|k| (k.as_str(), 0)).chain(self.sets.iter().flat_map(|(set, _, keys)| keys.iter().map(move |k| (k.as_str(), *set)))).collect();
+        let there = every_passing.iter().map(|k| (k, 0)).chain(every.sets.iter().flat_map(|(set, _, keys)| keys.iter().map(move |k| (k, *set))));
+        let mut judged = Verdicts::new(true);
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (key, set) in there {
+            seen.insert(key.as_str());
+            let set = match here.get(key.as_str()) {
+                Some(&own) if (set | bit).count_ones() < own.count_ones() => set | bit,
+                Some(&own) => own,
+                None => set | bit,
+            };
+            judged.judge(set, || key.clone());
+        }
+        for (key, set) in here.iter().filter(|(k, _)| !seen.contains(*k)) {
+            judged.judge(*set, || key.to_string());
+        }
+        *self = judged;
+    }
+
+    /// What keeps each thing out, `causes` as the bits number them (the keys kept: `new`'s `keys`).
+    pub fn blocked(&self, causes: Vec<BlockCause>) -> Blocked {
+        let groups = self.sets.iter().map(|(set, _, keys)| BlockGroup { causes: (0..MAX_CAUSES).filter(|&i| set & cause_bit(i) != 0).collect(), keys: keys.clone() }).collect();
+        Blocked { causes, groups }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Why {
@@ -1833,27 +1969,25 @@ pub fn axis_label(key: &str) -> Option<&'static str> {
     AXES.iter().find(|(k, _, _)| *k == key).map(|(_, l, _)| *l)
 }
 
-/// What `select` keeps, and what each cause kept out (decision 0095), in the one pass: `causes` are ranges of
-/// `conditions` (a crate's toggles, what is excluded everywhere, each condition of the filter on it; the rest are its
-/// own), and a file `off` (its library switched off) is kept out by one more, the last. For each: whether it keeps out
-/// a file its own conditions take, and how many it alone keeps out (lifting it brings those back); and how many its
-/// own conditions take, every library's (every cause lifted). `ranked` marks the conditions that picked their closest
-/// (resolved: `resolved_in`): not its own here, as the closest were picked among what every cause let through, so the
-/// counts are not theirs to give (`CrateLibrary::select_saying` selects again).
+/// What `select` keeps, and the verdict on every other file its own conditions take (decision 0095), in the one pass:
+/// `causes` are ranges of `conditions` (a crate's toggles, what is excluded everywhere, each condition of the filter on
+/// it; the rest are its own), and a file `off` (its library switched off) is kept out by one more, the last
+/// (`cause_bit(causes.len())`); each file's key is its line. `ranked` marks the conditions that picked their closest
+/// (resolved: `resolved_in`): a file only they leave out is not judged, as the closest were picked among what every
+/// cause let through, so lifting a cause picks again (`CrateLibrary::select_saying` selects again for the counts).
 pub fn select_saying<'a>(
     files: impl IntoIterator<Item = &'a Facts>,
     off: impl Fn(&Facts) -> bool,
     conditions: &[Condition],
     ranked: &[bool],
     causes: &[std::ops::Range<usize>],
+    keys: bool,
     w: &World,
-) -> (Vec<&'a str>, Vec<(bool, usize)>, usize) {
+) -> (Vec<&'a str>, Verdicts) {
     let own: Vec<(&Condition, bool)> =
         conditions.iter().enumerate().filter(|(i, c)| c.enabled && !causes.iter().any(|r| r.contains(i))).map(|(i, c)| (c, ranked.get(i).copied().unwrap_or(false))).collect();
-    let mut kept = vec![(false, 0); causes.len() + 1];
-    let mut failed: Vec<usize> = Vec::new();
+    let mut verdicts = Verdicts::new(keys);
     let mut lines = Vec::new();
-    let mut all = 0;
     'files: for f in files {
         let mut close = true;
         for (c, ranks) in &own {
@@ -1864,27 +1998,20 @@ pub fn select_saying<'a>(
                 close = false;
             }
         }
-        all += 1;
-        failed.clear();
-        if off(f) {
-            failed.push(causes.len());
-        }
+        let mut set = if off(f) { cause_bit(causes.len()) } else { 0 };
         for (k, r) in causes.iter().enumerate() {
-            // Two failed: no count changes, a cause is only asked whether it keeps anything out.
-            if (failed.len() < 2 || !kept[k].0) && conditions[r.clone()].iter().any(|c| c.enabled && !holds(c, f, w)) {
-                failed.push(k);
+            if conditions[r.clone()].iter().any(|c| c.enabled && !holds(c, f, w)) {
+                set |= cause_bit(k);
             }
         }
-        for &k in &failed {
-            kept[k].0 = true;
-        }
-        match failed.as_slice() {
-            [] if close => lines.push(f.rel.as_str()),
-            [k] => kept[*k].1 += 1,
+        match (set, close) {
+            (0, true) => lines.push(f.rel.as_str()),
+            (0, false) => continue,
             _ => {}
         }
+        verdicts.judge(set, || f.rel.clone());
     }
-    (lines, kept, all)
+    (lines, verdicts)
 }
 
 /// Whether working the conditions out needs the media server's favourites.
@@ -2833,8 +2960,8 @@ mod tests {
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
         let genre = |g: &str| Condition::new("genre", false, Value::AnyOf { values: vec![g.into()] });
         let saying = |conditions: &[Condition], causes: &[std::ops::Range<usize>], off: bool| {
-            let (lines, kept, all) = select_saying(&files, |f| off && f.folder == 1, conditions, &[], causes, &w);
-            (lines.into_iter().map(str::to_string).collect::<Vec<_>>(), kept, all)
+            let (lines, verdicts) = select_saying(&files, |f| off && f.folder == 1, conditions, &[], causes, false, &w);
+            (lines.into_iter().map(str::to_string).collect::<Vec<_>>(), verdicts.per_cause(causes.len() + 1), verdicts.all())
         };
         // Emptied by the library switched off: "c" alone is Indie, and would come back.
         assert_eq!(saying(&[genre("Indie")], &[], true), (vec![], vec![(true, 1)], 1));
@@ -2843,12 +2970,43 @@ mod tests {
         // Indie; "d" is neither, so it comes back with neither alone, with both.
         let shown = [Favourites::Only.with(&[]), vec![genre("Indie")]].concat();
         assert_eq!(saying(&shown, &[0..1, 1..2], false), (vec![], vec![(true, 1), (true, 2), (false, 0)], 4));
+        // What keeps each out, by the exact set: "a" and "b" the filter alone, "c" the heart alone, "d" both.
+        let (_, verdicts) = select_saying(&files, |_| false, &shown, &[], &[0..1, 1..2], true, &w);
+        let group = |causes: &[usize], keys: &[&str]| BlockGroup { causes: causes.to_vec(), keys: keys.iter().map(|k| k.to_string()).collect() };
+        assert_eq!(verdicts.blocked(Vec::new()).groups, [group(&[1], &["a", "b"]), group(&[0], &["c"]), group(&[0, 1], &["d"])]);
         // What it keeps is what `select` keeps.
         let only = Favourites::Only.with(&[]);
         assert_eq!(saying(&only, &[0..1], false).0, select(&files, &only, &w));
         // Truly empty: nothing its own conditions take, no cause keeps anything out.
         assert_eq!(saying(&[genre("Polka")], &[], true), (vec![], vec![(false, 0)], 0));
         assert_eq!(axis_label("energy"), Some("Energy"));
+    }
+
+    #[test]
+    fn one_judgement_says_the_reasons_their_counts_and_what_keeps_each_out() {
+        // Decision 0095, amended 2026-11-02: the words keep "a" out with the heart, "b" alone, "c" with the libraries.
+        let (words, heart, off) = (cause_bit(0), cause_bit(1), cause_bit(2));
+        let mut verdicts = Verdicts::new(true);
+        for (set, key) in [(words | heart, "a"), (words, "b"), (0, "p"), (words, "d")] {
+            verdicts.judge(set, || key.to_string());
+        }
+        let cause = |label: &str| BlockCause { kind: Why::Filter, key: None, label: label.into() };
+        let causes = [cause("Genre"), cause("Favourites only")];
+        assert_eq!(verdicts.per_cause(2), [(true, 2), (true, 0)], "the heart keeps out only together with the words");
+        assert_eq!(verdicts.reasons(&causes).iter().map(|r| (r.label.as_str(), r.back)).collect::<Vec<_>>(), [("Genre", 2), ("Favourites only", 0)]);
+        assert_eq!(verdicts.all(), 4);
+        // The libraries switched off: "c" only there; "p" passes here whatever it is there.
+        let mut every = Verdicts::new(true);
+        for (set, key) in [(words | heart, "a"), (words, "b"), (heart, "p"), (words, "d"), (0, "c")] {
+            every.judge(set, || key.to_string());
+        }
+        verdicts.add_off(&["p".to_string()], &every, &["c".to_string()], off);
+        let groups: Vec<(Vec<usize>, Vec<String>)> = verdicts.blocked(Vec::new()).groups.into_iter().map(|g| (g.causes, g.keys)).collect();
+        let keys = |k: &[&str]| k.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        assert_eq!(groups, [(vec![2], keys(&["c"])), (vec![0, 1], keys(&["a"])), (vec![0], keys(&["b", "d"]))]);
+        assert_eq!((verdicts.passed, verdicts.all()), (1, 5));
+        // Truly empty: nothing judged, no reason.
+        assert!(Verdicts::new(false).reasons(&causes).is_empty());
     }
 
     /// A file by these artists (its track's and its album's), credited as the catalogue credits it.

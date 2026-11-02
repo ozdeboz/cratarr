@@ -51,6 +51,10 @@ pub struct Request {
     /// refused.
     #[serde(default)]
     pub switches: Vec<String>,
+    /// What keeps each item out too (`Filtered::blocked`; decision 0095, amended 2026-11-02), asked when what the page
+    /// shows is empty. Not for a crate: its rows say it (`CrateLook::explain`).
+    #[serde(default)]
+    pub explain: bool,
 }
 
 /// The switches each list has, as the page's SWITCHES (lib/pageView) has them, each with one meaning (the filter API,
@@ -115,6 +119,9 @@ pub struct Filtered {
     pub reasons: Vec<crates::Reason>,
     /// How many would pass with every cause lifted; `total` while something passes.
     pub all_back: usize,
+    /// What keeps each item out, by its key, when asked (`Request::explain`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<crates::Blocked>,
 }
 
 /// A line's facts; none for a line the catalogue has no file for (a missing one, or switched off).
@@ -122,57 +129,86 @@ fn facts_of<'a>(by_line: &HashMap<&str, &'a Facts>, none: &'a Facts, line: Optio
     line.and_then(|l| by_line.get(l).copied()).unwrap_or(none)
 }
 
-/// Works a filter out on a list (`want`: the server, else the first connected; an album's or an artist's own). When
-/// nothing passes, says why (decision 0095): the list worked out again with each cause lifted alone (how many pass
-/// then, its axes not counted), and with every one (all its items, and those only the libraries switched off hold).
+/// Works a filter out on a list (`want`: the server, else the first connected; an album's or an artist's own), each
+/// item judged once (`crates::Verdicts`, decision 0095 amended 2026-11-02): by the exact set of causes failing it. When
+/// nothing passes, or `explain` asks, the list is judged from every library too, so what only the libraries switched
+/// off hold is judged with them as one more cause; the reasons, what lifting each brings back, all there would be with
+/// every cause lifted, and what keeps each item out are all read from those verdicts.
 pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Filtered, ToggleError> {
-    let (mut answer, off_held) = work_out(app, want, &r, true).await?;
-    answer.all_back = answer.total;
-    if answer.passed > 0 {
-        return Ok(answer);
-    }
-    answer.all_back += off_held;
-    if answer.all_back == 0 {
-        return Ok(answer);
-    }
-    let lifts = lifts(&r);
-    let asked = !lifts.is_empty();
-    for (lifted, mut reason) in lifts {
-        reason.back = work_out(app, want, &lifted, false).await?.0.passed;
-        answer.reasons.push(reason);
-    }
-    if off_held > 0 {
+    let causes = Causes::of(&r)?;
+    let drawn_off = matches!(r.list, List::Library | List::Artists) && !r.without.is_empty();
+    let (mut answer, mut verdicts) = work_out(app, want, &r, &causes, true, r.explain || drawn_off).await?;
+    let mut named = causes.named.clone();
+    if drawn_off && (answer.passed == 0 || r.explain) {
         let mine: Vec<String> = r.without.iter().filter(|k| k.starts_with(&format!("{}/", answer.source))).cloned().collect();
-        // Nothing else asked: what they hold is what comes back.
-        let back = match asked {
-            true => work_out(app, want, &Request { without: Vec::new(), ..r.clone() }, false).await?.0.passed,
-            false => off_held,
-        };
-        answer.reasons.push(crates::Reason::libraries_off(&mine, back));
+        if !mine.is_empty() {
+            let bit = crates::cause_bit(named.len());
+            named.push(crates::Reason::libraries_off(&mine, 0).into());
+            let (every, judged) = work_out(app, want, &Request { without: Vec::new(), ..r.clone() }, &causes, false, true).await?;
+            verdicts.add_off(&answer.keys, &judged, &every.keys, bit);
+        }
+    }
+    if r.explain && !matches!(r.list, List::Crate { .. }) {
+        answer.blocked = Some(verdicts.blocked(named.clone()));
+    }
+    answer.all_back = answer.total;
+    if answer.passed == 0 {
+        answer.reasons = verdicts.reasons(&named);
+        answer.all_back = verdicts.all();
     }
     Ok(answer)
 }
 
-/// The filter's causes, each with the request it lifted (decision 0095): every condition that is on and asks
-/// something, every switch on; their reasons' `back` to be counted.
-fn lifts(r: &Request) -> Vec<(Request, crates::Reason)> {
-    let mut lifts = Vec::new();
-    for (i, c) in r.conditions.iter().enumerate().filter(|(_, c)| c.enabled && c.complete()) {
-        let mut lifted = r.clone();
-        lifted.conditions.remove(i);
-        lifts.push((lifted, crates::Reason::new(crates::Why::Filter, Some(c.axis.clone()), crates::axis_label(&c.axis).unwrap_or(c.axis.as_str()), 0)));
-    }
-    for (i, k) in r.switches.iter().enumerate() {
-        let mut lifted = r.clone();
-        lifted.switches.remove(i);
-        lifts.push((lifted, crates::Reason::new(crates::Why::Filter, Some(k.clone()), switch_label(k), 0)));
-    }
-    lifts
+/// The filter's causes on a list (decision 0095), as the verdicts' bits number them: each condition that is on and
+/// asks something, then each switch that is on (the libraries switched off are one more, last: `filter` adds it).
+struct Causes {
+    named: Vec<crates::BlockCause>,
+    /// Each bit, as the request has its conditions that ask something (`Condition::complete`); 0 for one that is off.
+    conditions: Vec<u64>,
+    switches: Vec<String>,
 }
 
-/// The filter's answer on a list (its axes, tempo spread and profile counted when `full`), and how many items only
-/// the libraries switched off hold (the Library's albums, or artists).
-async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -> Result<(Filtered, usize), ToggleError> {
+impl Causes {
+    fn of(r: &Request) -> Result<Self, ToggleError> {
+        let mut named: Vec<crates::BlockCause> = Vec::new();
+        let mut conditions = Vec::new();
+        for c in r.conditions.iter().filter(|c| c.complete()) {
+            conditions.push(match c.enabled {
+                true => {
+                    named.push(crates::Reason::new(crates::Why::Filter, Some(c.axis.clone()), crates::axis_label(&c.axis).unwrap_or(c.axis.as_str()), 0).into());
+                    crates::cause_bit(named.len() - 1)
+                }
+                false => 0,
+            });
+        }
+        named.extend(r.switches.iter().map(|k| crates::Reason::new(crates::Why::Filter, Some(k.clone()), switch_label(k), 0).into()));
+        // One bit is kept for the libraries switched off.
+        if named.len() >= crates::MAX_CAUSES {
+            return Err(ToggleError::Refused(format!("A filter asks {} things at most.", crates::MAX_CAUSES - 1)));
+        }
+        Ok(Self { named, conditions, switches: r.switches.clone() })
+    }
+
+    /// A switch's bit; 0 while it is off.
+    fn switch(&self, k: &str) -> u64 {
+        let first = self.named.len() - self.switches.len();
+        self.switches.iter().position(|s| s == k).map_or(0, |j| crates::cause_bit(first + j))
+    }
+}
+
+/// `bit` unless `ok`.
+fn unless(ok: bool, bit: u64) -> u64 {
+    if ok { 0 } else { bit }
+}
+
+/// The bits of the conditions an item's tracks fail (each condition with its bit).
+fn fails(tracks: &[&Facts], conditions: &[(Condition, u64)], w: &crates::World) -> u64 {
+    conditions.iter().filter(|(c, _)| !crates::passes(tracks, std::slice::from_ref(c), w)).fold(0, |set, (_, bit)| set | bit)
+}
+
+/// The filter's answer on a list (its axes, tempo spread and profile counted when `full`), and the verdict on each of
+/// its items (their keys kept with `keys`).
+async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Causes, full: bool, keys: bool) -> Result<(Filtered, crates::Verdicts), ToggleError> {
     if let Some(c) = r.conditions.iter().find(|c| !crates::is_axis(&c.axis)) {
         return Err(ToggleError::Refused(format!("Unknown axis: {}.", c.axis)));
     }
@@ -181,6 +217,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -
         return Err(ToggleError::Refused(format!("Unknown switch: {k}.")));
     }
     let on = |k: &str| r.switches.iter().any(|s| s == k);
+    let bit = |k: &str| causes.switch(k);
     // Rows that ask nothing yet are left out: not sent on, not read for (Condition::complete).
     let asked: Vec<Condition> = r.conditions.iter().filter(|c| c.complete()).cloned().collect();
     // A switch on hearts asks for them to be read, as a condition on them would: an album's, a track's.
@@ -207,26 +244,25 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -
     let by_line: HashMap<&str, &Facts> = lib.files().map(|f| (f.rel.as_str(), f)).collect();
     let none = Facts::default();
     let uses = lib.uses();
-    let one = |key: String, line: Option<&str>| Item::of(key, vec![facts_of(&by_line, &none, line)], true);
+    let one = |key: String, line: Option<&str>| Item::of(key, vec![facts_of(&by_line, &none, line)], 0);
     // A heart's switch is its condition (read above): the album's for an album, the track's for a track.
     let w = lib.world();
-    let conditions: Vec<Condition> = lib.resolved(&asked).into_iter().chain(hearts.clone()).collect();
+    let conditions: Vec<(Condition, u64)> =
+        lib.resolved(&asked).into_iter().zip(causes.conditions.iter().copied()).chain(hearts.clone().map(|h| (h, bit("favourites")))).collect();
     // The Library's records are weighed on their types by the record (0.10): its Type rows apart, on each record's
     // types as listed (Classical among them; 0.13: every one, the layers joined as `crates::types_hold` joins them).
-    let (kind_rows, conditions): (Vec<Condition>, Vec<Condition>) = match r.list {
-        List::Library => conditions.into_iter().partition(|c| c.axis == "type"),
+    let (kind_rows, conditions): (Vec<(Condition, u64)>, Vec<(Condition, u64)>) = match r.list {
+        List::Library => conditions.into_iter().partition(|(c, _)| c.axis == "type"),
         _ => (Vec::new(), conditions),
     };
     let mut record_kinds: Option<Vec<Vec<String>>> = None;
-    // What only the libraries switched off hold: the Library's albums, or artists (decision 0095).
-    let mut off_held = 0;
     let (items, grouped): (Items, Vec<Item>) = match &r.list {
         List::Crate { .. } => (Items::Tracks, lib.select(&shown).iter().map(|l| one(String::new(), Some(l.as_str()))).collect()),
         List::Playlist { id } => {
             let rows = app.playlists.entries(id).await?;
             let row = |l: &String| {
                 let f = facts_of(&by_line, &none, Some(l.as_str()));
-                Item::of(l.clone(), vec![f], (!on("unplayed") || never_played(f, uses)) && (!on("missing") || !f.rel.is_empty()))
+                Item::of(l.clone(), vec![f], unless(!on("unplayed") || never_played(f, uses), bit("unplayed")) | unless(!on("missing") || !f.rel.is_empty(), bit("missing")))
             };
             (Items::Tracks, rows.iter().map(row).collect())
         }
@@ -242,8 +278,8 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -
             };
             let of = |lines: &[String]| lines.iter().map(|l| facts_of(&by_line, &none, Some(l.as_str()))).collect();
             let item = |(id, lines, _): (String, Vec<String>, usize)| {
-                let ok = hearted.as_ref().is_none_or(|h| h.contains(&id)) && mine.as_ref().is_none_or(|m| m.contains(&id));
-                Item::of(id, of(&lines), ok)
+                let set = unless(hearted.as_ref().is_none_or(|h| h.contains(&id)), bit("favourites")) | unless(mine.as_ref().is_none_or(|m| m.contains(&id)), bit("mine"));
+                Item::of(id, of(&lines), set)
             };
             (Items::Playlists, lists.into_iter().map(item).collect())
         }
@@ -256,7 +292,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
         List::Library | List::Artists => {
-            let (listed, off_artists) = library_albums(app, &lib.source, &r.without).await;
+            let (listed, _) = library_albums(app, &lib.source, &r.without).await;
             // Cratarr's own albums by their own tracks, wherever their files are (2026-10-29, the owner's "Stellar -
             // Tunnel": two copies in two artists' folders, so the album's folder was the library's root, and the
             // filter found none of its files and left it out of every answer, negated ones too).
@@ -283,29 +319,36 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -
                 let items = albums
                     .iter()
                     .zip(&kinds)
-                    .map(|(a, k)| Item::of(a.id.clone(), a.tracks.clone(), a.rated && (!unplayed || a.tracks.iter().all(|f| never_played(f, uses))) && kinds_pass(&kind_rows, k)))
+                    .map(|(a, k)| {
+                        let set = unless(a.rated, bit("topRated")) | unless(!unplayed || a.tracks.iter().all(|f| never_played(f, uses)), bit("unplayed")) | kinds_fail(&kind_rows, k);
+                        Item::of(a.id.clone(), a.tracks.clone(), set)
+                    })
                     .collect();
                 record_kinds = Some(kinds);
-                off_held = off_artists.len();
                 (Items::Albums, items)
             } else {
                 let hearted: Option<std::collections::HashSet<String>> = match on("favourites") {
                     true => Some(app.playing.favorite_artists(&lib.source).await?.iter().map(|n| n.to_lowercase()).collect()),
                     false => None,
                 };
-                let looks = ArtistLook { conditions: &conditions, world: &w, uses, hearted: hearted.as_ref(), unplayed: on("unplayed") };
-                let named: std::collections::HashSet<String> = listed.iter().flat_map(|a| a.artists.iter().map(|n| n.to_lowercase())).collect();
-                off_held = off_artists.iter().flatten().map(|n| n.to_lowercase()).filter(|n| !named.contains(n)).collect::<std::collections::HashSet<_>>().len();
+                let looks = ArtistLook { conditions: &conditions, world: &w, uses, hearted: hearted.as_ref(), unplayed: on("unplayed"), bit: &bit };
                 (Items::Artists, artists_of(&lib.source, &albums, &looks))
             }
         }
     };
-    let keys: Vec<String> = grouped.iter().filter(|i| i.passes(&conditions, &w)).flat_map(|i| i.keys.iter().cloned()).collect();
-    let passed = grouped.iter().filter(|i| i.passes(&conditions, &w)).count();
-    let (source, total) = (lib.source.clone(), grouped.len());
+    let mut verdicts = crates::Verdicts::new(keys);
+    let mut keys: Vec<String> = Vec::new();
+    for i in &grouped {
+        let set = i.set(&conditions, &w);
+        if set == 0 {
+            keys.push(i.key.clone());
+        }
+        verdicts.judge(set, || i.key.clone());
+    }
+    let (source, total, passed) = (lib.source.clone(), grouped.len(), verdicts.passed);
     if !full {
-        let answer = Filtered { source, items, keys: Vec::new(), passed, total, axes: Vec::new(), tempo: Default::default(), profile: None, reasons: Vec::new(), all_back: 0 };
-        return Ok((answer, off_held));
+        let answer = Filtered { source, items, keys, passed, total, axes: Vec::new(), tempo: Default::default(), profile: None, reasons: Vec::new(), all_back: 0, blocked: None };
+        return Ok((answer, verdicts));
     }
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|i| i.tracks.as_slice()).collect();
     let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
@@ -323,8 +366,8 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, full: bool) -
     });
     // A crate's rows are paged on the server: they come filtered there, so its thousands of lines are not sent here.
     let keys = if matches!(r.list, List::Crate { .. }) { Vec::new() } else { keys };
-    let answer = Filtered { source, items, keys, passed, total, axes, tempo, profile, reasons: Vec::new(), all_back: 0 };
-    Ok((answer, off_held))
+    let answer = Filtered { source, items, keys, passed, total, axes, tempo, profile, reasons: Vec::new(), all_back: 0, blocked: None };
+    Ok((answer, verdicts))
 }
 
 /// Cratarr's own albums' files (`source` its own library's), by each album's id: its tracks', through the library's
@@ -399,6 +442,11 @@ const TOP_RATED: u8 = 4;
 
 /// Whether a record's kinds (as weighed: its primary view, or all) pass the Type rows, as a condition on a value axis
 /// holds (`crates::holds`): any of the values, or none of them negated; a value the axis does not take never holds.
+/// The bits of the Type rows a record's kinds fail (each row with its bit).
+fn kinds_fail(rows: &[(Condition, u64)], kinds: &[String]) -> u64 {
+    rows.iter().filter(|(c, _)| !kinds_pass(std::slice::from_ref(c), kinds)).fold(0, |set, (_, bit)| set | bit)
+}
+
 fn kinds_pass(rows: &[Condition], kinds: &[String]) -> bool {
     rows.iter().filter(|c| c.enabled && c.complete()).all(|c| {
         let matched = match &c.value {
@@ -436,20 +484,22 @@ fn kind_axis(axis: &mut crates::AxisView, kinds: &[Vec<String>]) {
 /// An item of a list: the keys it is answered by (an artist by every spelling of their name), its tracks (what its
 /// axes count), whether its switches hold, and whether that is its whole answer (an artist, judged by their albums).
 struct Item<'a> {
-    keys: Vec<String>,
+    key: String,
     tracks: Vec<&'a Facts>,
-    switches: bool,
+    /// The causes it fails besides the conditions over its tracks (its switches, its types); or, `judged` (an
+    /// artist's, album by album), all it fails.
+    set: u64,
     judged: bool,
 }
 
 impl<'a> Item<'a> {
-    fn of(key: String, tracks: Vec<&'a Facts>, switches: bool) -> Self {
-        Self { keys: vec![key], tracks, switches, judged: false }
+    fn of(key: String, tracks: Vec<&'a Facts>, set: u64) -> Self {
+        Self { key, tracks, set, judged: false }
     }
 
-    /// Whether it passes: its switches, and the conditions over its tracks (an artist's were judged album by album).
-    fn passes(&self, conditions: &[Condition], w: &crates::World) -> bool {
-        self.switches && (self.judged || crates::passes(&self.tracks, conditions, w))
+    /// The causes it fails (none: it passes): its own, and the conditions its tracks fail.
+    fn set(&self, conditions: &[(Condition, u64)], w: &crates::World) -> u64 {
+        if self.judged { self.set } else { self.set | fails(&self.tracks, conditions, w) }
     }
 }
 
@@ -467,42 +517,46 @@ struct AlbumItem<'a> {
     rated: bool,
 }
 
-/// How the Artists view looks: the conditions and their world (an album's), the plays log, the hearted artists (lower
-/// case; none: Favourites only is off), Unplayed only.
+/// How the Artists view looks: the conditions (each with its bit) and their world (an album's), the plays log, the
+/// hearted artists (lower case; none: Favourites only is off), Unplayed only, and each switch's bit.
 struct ArtistLook<'a, 'w> {
-    conditions: &'a [Condition],
+    conditions: &'a [(Condition, u64)],
     world: &'a crates::World<'w>,
     uses: Option<&'a HashMap<String, Use>>,
     hearted: Option<&'a std::collections::HashSet<String>>,
     unplayed: bool,
+    bit: &'a dyn Fn(&str) -> u64,
 }
 
 /// The Library's artists from its albums (each album counts for each of its album artists): an artist (by name, in any
 /// case) passes when one of their albums passes the conditions and 4 stars and up, they are hearted (Favourites only)
-/// and none of their tracks was played (Unplayed only) (the page's meaning before, here now). Keyed
-/// `{source}\u{0}{name in lower case}`, as the page's LibraryArtists keys them.
+/// and none of their tracks was played (Unplayed only) (the page's meaning before, here now). What keeps an artist out
+/// is what keeps out their album that comes back with the fewest causes lifted (the first such), and their own
+/// switches. Keyed `{source}\u{0}{name in lower case}`, as the page's LibraryArtists keys them.
 fn artists_of<'a>(source: &str, albums: &[AlbumItem<'a>], look: &ArtistLook) -> Vec<Item<'a>> {
     let mut order: Vec<String> = Vec::new();
-    let mut by: HashMap<String, (Vec<&'a Facts>, bool)> = HashMap::new();
+    let mut by: HashMap<String, (Vec<&'a Facts>, Option<u64>)> = HashMap::new();
     for a in albums {
-        let passes = a.rated && crates::passes(&a.tracks, look.conditions, look.world);
+        let set = unless(a.rated, (look.bit)("topRated")) | fails(&a.tracks, look.conditions, look.world);
         for name in &a.artists {
             let low = name.to_lowercase();
             let e = by.entry(low.clone()).or_insert_with(|| {
                 order.push(low.clone());
-                (Vec::new(), false)
+                (Vec::new(), None)
             });
             e.0.extend(a.tracks.iter().copied());
-            e.1 |= passes;
+            if e.1.is_none_or(|best| set.count_ones() < best.count_ones()) {
+                e.1 = Some(set);
+            }
         }
     }
     order
         .into_iter()
         .map(|low| {
-            let (tracks, passes) = by.remove(&low).unwrap_or_default();
-            let hearted = look.hearted.is_none_or(|h| h.contains(&low));
-            let unplayed = !look.unplayed || tracks.iter().all(|f| never_played(f, look.uses));
-            Item { keys: vec![format!("{source}\u{0}{low}")], tracks, switches: passes && hearted && unplayed, judged: true }
+            let (tracks, best) = by.remove(&low).unwrap_or_default();
+            let hearted = unless(look.hearted.is_none_or(|h| h.contains(&low)), (look.bit)("favourites"));
+            let unplayed = unless(!look.unplayed || tracks.iter().all(|f| never_played(f, look.uses)), (look.bit)("unplayed"));
+            Item { key: format!("{source}\u{0}{low}"), tracks, set: best.unwrap_or(0) | hearted | unplayed, judged: true }
         })
         .collect()
 }
@@ -579,9 +633,9 @@ mod tests {
         ];
         let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
         let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
-        let not_classical = [Condition::new("type", true, Value::AnyOf { values: vec!["Classical".into()] })];
-        let look = ArtistLook { conditions: &not_classical, world: &w, uses: None, hearted: None, unplayed: false };
-        let keys: Vec<String> = artists_of("cratarr", &albums, &look).iter().filter(|i| i.passes(&not_classical, &w)).flat_map(|i| i.keys.clone()).collect();
+        let not_classical = [(Condition::new("type", true, Value::AnyOf { values: vec!["Classical".into()] }), 1)];
+        let look = ArtistLook { conditions: &not_classical, world: &w, uses: None, hearted: None, unplayed: false, bit: &|_| 0 };
+        let keys: Vec<String> = artists_of("cratarr", &albums, &look).iter().filter(|i| i.set(&not_classical, &w) == 0).map(|i| i.key.clone()).collect();
         assert_eq!(keys, ["cratarr\u{0}moby"]);
     }
 
@@ -598,14 +652,14 @@ mod tests {
             "switches": ["favourites"]
         }))
         .unwrap();
-        let lifts = lifts(&r);
-        let said: Vec<(Option<&str>, &str)> = lifts.iter().map(|(_, w)| (w.key.as_deref(), w.label.as_str())).collect();
+        let causes = Causes::of(&r).unwrap();
+        let said: Vec<(Option<&str>, &str)> = causes.named.iter().map(|c| (c.key.as_deref(), c.label.as_str())).collect();
         assert_eq!(said, [(Some("energy"), "Energy"), (Some("favourites"), "Favourites only")], "a row asking nothing, or muted, is no cause");
-        assert!(lifts.iter().all(|(_, w)| w.kind == crates::Why::Filter));
-        assert_eq!((lifts[0].0.conditions.len(), lifts[0].0.switches.len()), (2, 1), "the energy row lifted");
-        assert_eq!((lifts[1].0.conditions.len(), lifts[1].0.switches.len()), (3, 0), "the switch lifted");
-        let json = serde_json::to_value(&lifts[0].1).unwrap();
-        assert_eq!(json, serde_json::json!({ "kind": "filter", "key": "energy", "label": "Energy", "back": 0 }));
+        assert!(causes.named.iter().all(|c| c.kind == crates::Why::Filter));
+        // The bits: the energy row's first, the muted row none (the row asking nothing is not among them), the switch's next.
+        assert_eq!((causes.conditions.as_slice(), causes.switch("favourites"), causes.switch("unplayed")), (&[1, 0][..], 2, 0));
+        let json = serde_json::to_value(&causes.named[0]).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "filter", "key": "energy", "label": "Energy" }));
         let off = serde_json::to_value(crates::Reason::libraries_off(&["cratarr/A".into(), "cratarr/B".into()], 3)).unwrap();
         assert_eq!(off, serde_json::json!({ "kind": "libraries_off", "label": "2 libraries off", "back": 3 }));
     }
@@ -633,21 +687,32 @@ mod tests {
         let albums = [album("al-1", &["X", "Z"], vec![&rock], true), album("al-2", &["Y"], vec![&jazz], true), album("al-3", &["y"], vec![&more], false)];
         let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
         let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
-        let rock_only = [Condition::new("genre", false, Value::AnyOf { values: vec!["rock".into()] })];
-        let keys = |items: Vec<Item>, conditions: &[Condition]| items.iter().filter(|i| i.passes(conditions, &w)).flat_map(|i| i.keys.clone()).collect::<Vec<_>>();
-        let look = ArtistLook { conditions: &rock_only, world: &w, uses: None, hearted: None, unplayed: false };
+        let rock_only = [(Condition::new("genre", false, Value::AnyOf { values: vec!["rock".into()] }), 1)];
+        let keys = |items: Vec<Item>, conditions: &[(Condition, u64)]| items.iter().filter(|i| i.set(conditions, &w) == 0).map(|i| i.key.clone()).collect::<Vec<_>>();
+        let bit = |k: &str| -> u64 {
+            match k {
+                "favourites" => 2,
+                "unplayed" => 4,
+                "topRated" => 8,
+                _ => 0,
+            }
+        };
+        let look = ArtistLook { conditions: &rock_only, world: &w, uses: None, hearted: None, unplayed: false, bit: &bit };
         assert_eq!(keys(artists_of("cratarr", &albums, &look), &rock_only), ["cratarr\u{0}x", "cratarr\u{0}z"]);
-        let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: None, unplayed: false };
+        // What keeps Y out of rock: their album that comes back with the fewest causes lifted, the rated one.
+        let sets: Vec<u64> = artists_of("cratarr", &albums, &look).iter().map(|i| i.set(&rock_only, &w)).collect();
+        assert_eq!(sets, [0, 0, 1]);
+        let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: None, unplayed: false, bit: &bit };
         let all = artists_of("cratarr", &albums, &look);
         assert_eq!(all.len(), 3, "three artists, Y in either spelling once");
         assert_eq!(keys(all, &[]), ["cratarr\u{0}x", "cratarr\u{0}z", "cratarr\u{0}y"], "keyed by the name in lower case");
         // Favourites only: the artist hearted, in any case.
         let hearted: std::collections::HashSet<String> = ["y".to_string()].into();
-        let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: Some(&hearted), unplayed: false };
+        let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: Some(&hearted), unplayed: false, bit: &bit };
         assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"]);
         // Unplayed only: none of their tracks played.
         let uses: HashMap<String, Use> = [("x/1".to_string(), Use { plays: 1, last: Some(1), rating: None })].into();
-        let look = ArtistLook { conditions: &[], world: &w, uses: Some(&uses), hearted: None, unplayed: true };
+        let look = ArtistLook { conditions: &[], world: &w, uses: Some(&uses), hearted: None, unplayed: true, bit: &bit };
         assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"], "X and Z share the played album");
     }
 

@@ -2154,6 +2154,9 @@ struct Page {
     order: crate::app::CrateOrder,
     #[serde(default)]
     down: bool,
+    /// `explain=1`: what keeps each track out too (decision 0095, amended 2026-11-02), asked when what shows is empty.
+    #[serde(default, deserialize_with = "flag")]
+    explain: bool,
 }
 
 impl Page {
@@ -2171,6 +2174,7 @@ impl Page {
             filter,
             order: self.order,
             down: self.down,
+            explain: self.explain,
         })
     }
 }
@@ -2410,7 +2414,7 @@ struct Previewed {
 
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, ..Default::default() };
+    let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, explain: q.explain, ..Default::default() };
     let page = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?;
     let names = app.playlists.condition_names(&p.conditions).await?;
     let n = p.covers.min(crate::app::home::CRATE_COVERS);

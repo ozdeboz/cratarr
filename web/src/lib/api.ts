@@ -487,7 +487,7 @@ export const previewCrate = (conditions: Condition[], limit: number, source?: st
   if (source) q.set('source', source);
   if (look.order && look.order !== 'own') q.set('order', look.order);
   if (look.down) q.set('down', 'true');
-  return quietly<{ source: string; total: number; rows: PlaylistRow[]; reasons: ListReason[]; all_back: number; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
+  return quietly<{ source: string; total: number; rows: PlaylistRow[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}), ...(look.covers ? { covers: look.covers } : {}) }),
@@ -521,6 +521,8 @@ export type Filtered = {
   reasons: ListReason[];
   /** How many would pass with every cause lifted (`total` while something passes); 0: truly empty. */
   all_back: number;
+  /** What keeps each item out, by its key, when asked (`explain`). */
+  blocked?: ListBlocked;
 };
 /** Why a list's answer left things out (decision 0095: reasons are data), one chip each. `key`: which one where it
  *  matters (a condition's axis, a switch, the one library switched off); `label`: the chip's word; `back`: how many
@@ -531,6 +533,14 @@ export type ListReason = {
   key?: string;
   label: string;
   back: number;
+};
+/** What keeps each thing out (decision 0095, amended 2026-11-02; the server's crates::Blocked), asked for with
+ *  `explain` when what the page shows is empty: the causes that are on (a reason's kind, key and word), and every
+ *  thing one of them at least keeps out, grouped by the exact set that does (`causes`: indices into `causes`; `keys`:
+ *  as the answer's `keys`, or a crate row's `entry`). What none keeps out is not listed. */
+export type ListBlocked = {
+  causes: { kind: ListReason['kind']; key?: string; label: string }[];
+  groups: { causes: number[]; keys: string[] }[];
 };
 /** What a list's tracks are like (the server's crates::Profile): telling style tags and artists, each number's density
  *  on one scale with its middle half and middle (a number all share: that value), and CLAP's moods against the
@@ -579,7 +589,7 @@ export const crateRows = (
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
   // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
-  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number }>(
+  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[]; reasons: ListReason[]; all_back: number; blocked?: ListBlocked }>(
     `/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`,
   );
 };

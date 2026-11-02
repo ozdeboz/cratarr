@@ -55,3 +55,32 @@ anchor positioning. The phone's and the tablet's WebViews (155, 156) have both.
   out because it has nothing stays left out, one that failed says so.
 - docs/ui-conventions.md's Loading and Empty follow this text.
 - A new list gets the four states by using the components, not by writing them again.
+
+## Amendment, 2026-11-02: the true attribution
+
+The owner: "I want the real true attribution so that if the filters leave a beautiful list but the search narrows it
+to zero, then we know where to point at. And if the search has a list but the filter narrows it down, we should point
+to the filter." Counts of what lifting one cause brings back cannot say that. They miss a combination, and the page's
+own search words cannot be combined with them.
+
+**One judgement.** The server judges each thing a list holds once, by the exact set of causes that fail it: each
+condition of the filter, each switch, a crate's toggles and what is excluded everywhere, and the libraries switched
+off. Everything said about an empty list is read from those sets, so no two parts can disagree:
+
+- the reasons;
+- each reason's `back` (the things only that cause keeps out);
+- `all_back` (everything held);
+- `blocked`, the page's attribution.
+
+**`blocked`, on request.** With `explain` (the filter's body, a crate's rows and its preview as `explain=1`), the
+answer carries:
+
+- the causes that are on;
+- every thing one of them keeps out, grouped by the exact set that does, with its keys as the answer gives them.
+
+What no cause keeps out is not listed. The page asks only when what it shows is empty. It adds its own search as one
+more cause per thing, and points at the set that truly empties the list.
+
+**An artist** is kept out by what keeps out the album of theirs that comes back with the fewest causes lifted, plus
+their own switches. A **Sounds like** is judged on the closest it picked among what every cause lets through. Lifting
+a cause picks again, so a crate with one still selects again for the counts.

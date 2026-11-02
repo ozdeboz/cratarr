@@ -291,6 +291,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
                 filter: filter.clone(),
                 order: *order,
                 down: *down,
+                explain: false,
             };
             let shown = app.playlists.crate_shown(id, &look).await?;
             let (source, lines) = app.playlists.crate_lines_in_order(&shown, want, &look).await?;
