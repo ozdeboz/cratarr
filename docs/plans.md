@@ -66,15 +66,15 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   "4/4"). The device index (0.16) carries them. And the playlist map's fourth closeness signal, Sound (the owner, 2026-11-02): playlists compared
   by their profiles (energy, danceability, tempo, the moods), so two that share no track or artist sit close when they
   sound alike; a switch beside shared tracks, genre and artists.
-- **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and the whole library's index on the
-  device** (offline first's fourth step).
-- **0.17: crates and the queue on the device** (offline first's fifth step); then all servers in one library, on the
-  device (below), as a view over the modes' indexes.
+- **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)), **the whole library's index on the
+  device, and crates and the queue on the device** (offline first's fourth and fifth steps, one version: the owner,
+  2026-11-02, "17 sounds like 16 work"). Then all servers in one library, on the device (below), as a view over the
+  modes' indexes.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
   own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
-  done); the whole library's index on the device (0.16); crates and the queue on the device (0.17).
+  done); the whole library's index on the device, and crates and the queue on the device (0.16).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
 
 ## Soulseek in Cratarr, not through Lidarr (explored 2026-10-31)
