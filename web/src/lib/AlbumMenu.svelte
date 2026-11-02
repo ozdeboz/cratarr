@@ -21,14 +21,16 @@
   };
 
   /** For an album of the Library's list. One already in Music (an upgrade or a duplicate) does not move there again:
-   *  an upgrade replaces. */
+   *  an upgrade replaces. Verdicts compare against every library now (2026-11-02, decision 0096's 0.13 fixes): only a
+   *  pair in Music replaces (`replaceable`), and only then is Music no target for a move. */
   export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
     const deletable = s.deletable.includes(a.id);
     const verdict = s.verdicts[a.id];
+    const inMusic = !!verdict?.replaceable;
     return {
       from: s.library_info.find((l) => l.id === a.library) ?? null,
-      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(verdict && l.use === 'music')) : [],
-      replaceable: deletable && verdict?.kind === 'upgrade',
+      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(inMusic && l.use === 'music')) : [],
+      replaceable: deletable && verdict?.kind === 'upgrade' && inMusic,
       deletable,
       job: jobs.of(s.id, a.id)?.id ?? null,
     };
