@@ -33,6 +33,7 @@
     type LikeCurveData,
     type FilterList,
     type ListProfileData,
+    type Condition,
     type CrateLook,
     crateToPlaylist,
     createCrate,
@@ -173,7 +174,7 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
+  import { conditionsFor, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
   import { matchesSearch, pageView, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
@@ -200,6 +201,12 @@
    *  its tracks were (decision 0024). */
   const builder = $derived(builderOf(panel.viewed));
   const crateEditing = $derived(builder !== null);
+  /** One's own crate, which its Edit changes (not Home's, nor a seeded one: lib/CrateMenu's). */
+  const ownCrate = $derived.by(() => {
+    const c = crate;
+    const it = c ? crates.list?.find((x) => x.id === c) : null;
+    return !!c && !!it && !it.permanent && !seeded(c);
+  });
   let crateDraft = $state<CrateDraft | null>(null);
   /** The name the builder's sentence gives a crate not named yet (lib/quickCrate nameOf): it saves under it. */
   let crateNamed = $state('');
@@ -695,20 +702,34 @@ ${r.album_artist ?? r.artist ?? ''}`;
     down: sortDown,
     set: setSort,
     columns: { kind: 'tracks' as const, shown: cols.map((c) => c.id), offered: sortFields.map((f) => f.value) },
-    view: crate && !crateEditing ? { value: crateViewOf(crate, prefs.crateViews), set: (v: 'records' | 'tracks') => (prefs.crateViews = { ...prefs.crateViews, [crate]: v }) } : undefined,
+    view: crate && !crateEditing ? { value: crateViewOf(crate, prefs.crateViews), set: (v: 'records' | 'tracks') => setCrateView(crate, v) } : undefined,
   });
   // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches (Favourites only, Unplayed
   // only, Hide missing tracks) and its conditions (any of what the server knows of a track: genre, mood, tempo, …),
   // both the server's, which says which rows pass (the owner, 2026-10-29: one filter, one engine). A crate's rows come
   // filtered and ordered by the server, as they are paged, from the libraries switched on.
-  // A playlist's only (the owner, 2026-10-24): an album is too short and alike to filter, a crate is a filter already,
-  // an artist's lists are theirs; a filter left on there from before goes by nothing.
-  const filterable = $derived(kind === 'playlist');
+  // A playlist's (the owner, 2026-10-24: an album is too short and alike to filter, an artist's lists are theirs; a
+  // filter left on there from before goes by nothing), and a crate's that cannot be edited (the owner, 2026-11-02:
+  // Home's, a Sounds like's; one's own crate is a filter already, its conditions edited in it). A crate's conditions go
+  // to the server with its rows (CrateLook.filter), 300 ms after the last change.
+  const fixedCrate = $derived(!!crate && !crateEditing && !creating && !ownCrate);
+  const filterable = $derived(kind === 'playlist' || fixedCrate);
+  let crateFilter = $state<Condition[] | undefined>(undefined);
+  $effect(() => {
+    const now = fixedCrate ? $state.snapshot(conditionsFor('crate')) : undefined;
+    if (JSON.stringify(now) === JSON.stringify(untrack(() => crateFilter))) return;
+    const t = setTimeout(() => (crateFilter = now), 300);
+    return () => clearTimeout(t);
+  });
   // A Home shelf's crate shows what Home showed, of every library, whatever is switched off (the owner, 2026-10-24).
-  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: undefined, order: sortKey, down: sortDown });
+  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: crateFilter, order: sortKey, down: sortDown });
   const lookKey = $derived(JSON.stringify(crateLook));
   const pass = passing(() => kind, () =>
-    filterable && !crate && !album && !artist && p && !multi ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null,
+    fixedCrate && crate && !multi
+      ? { list: { kind: 'crate', id: crate, favourites: favouritesOf(crate), favourite_albums: favouriteAlbumsOf(crate) }, source: prefs.source || undefined }
+      : filterable && !crate && !album && !artist && p && !multi
+        ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined }
+        : null,
   );
   const keeps = (r: PlaylistRow) => !pass.keys || pass.keys.has(r.entry);
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
@@ -742,6 +763,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return list;
   });
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
+  /** A crate as records or as tracks, chosen in View or by a tap on the list's count (the owner, 2026-11-02). */
+  const setCrateView = (c: string, v: 'records' | 'tracks') => (prefs.crateViews = { ...prefs.crateViews, [c]: v });
   // A crate as records or tracks (0.10; the owner, 2026-10-30: lib/crateRecords): its tracks grouped by album, in the
   // crate's order or an album order, each saying how much of its album the crate holds; a record opened shows its crate
   // tracks, a step of the history. Playing the crate is as ever: its tracks in its order, whichever way it shows.
@@ -2021,7 +2044,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <span class="grow"></span>
         {#if crate}
           <!-- What shows the crate stays here (its favourites filters); what is done with it is its menu's (decision
-               0058: Sync to this device, Edit, Save as playlist, Start a crate from a genre). -->
+               0058: Sync to this device, Save as playlist, Start a crate from a genre). Edit, one's own crate's, left
+               of the heart (the owner, 2026-11-02): edit mode's Cancel takes its place, the heart and the albums'
+               button staying where they are. -->
+          {#if ownCrate}
+            {@const c = crate}
+            <button class="icon" aria-label={`Edit ${title}`} title="Edit" onclick={() => viewPlaylist(EDIT_CRATE + c)}><Icon name="pencil" size={22} /></button>
+          {/if}
           {#if favState}
             <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button
@@ -2293,6 +2322,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           bind:value={() => prefs.crateRecordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: prefs.crateRecordSort.down })}
           bind:down={() => prefs.crateRecordSort.down, (d) => (prefs.crateRecordSort = { key: prefs.crateRecordSort.key, down: d })}
           count={plural(records.length, 'record')}
+          oncount={() => crate && setCrateView(crate, 'tracks')}
+          countLabel="Show as tracks"
           selecting={!!selecting}
           onselect={() => (selecting ? (selecting = null) : startSelect())}
         />
@@ -2307,6 +2338,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
         bind:down={() => sortDown, (d) => setSort(sortKey, d)}
         bind:open={sortOpen}
         count={plural(crate ? total : shownPlayable.length, 'track')}
+        oncount={crate && !crateEditing ? () => crate && setCrateView(crate, 'records') : null}
+        countLabel="Show as records"
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
       />
