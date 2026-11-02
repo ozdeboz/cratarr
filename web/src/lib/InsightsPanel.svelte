@@ -89,7 +89,7 @@
     back={beside ? null : backOne}
     trail={[
       ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('insights') }, groupLevel]),
-      ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: () => history.back() }] : []),
+      ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: backOne }] : []),
     ]}
     here={v.label}
     {siblings}
