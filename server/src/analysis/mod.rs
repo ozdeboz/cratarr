@@ -269,17 +269,19 @@ fn open_from(path: &Path, start: u64) -> Result<Opened> {
     Ok(Opened { reader, decoder, track: id, codec: params.codec, rate, channels, time_base })
 }
 
-/// Opens the file; one that does not probe is tried again after its ID3v2 tag.
+/// Opens the file at its sound: after an ID3v2 tag where it has one, else from its start, and from its start where
+/// the sound cannot be opened after the tag. The tag holds nothing the decoder needs (the tags are read elsewhere), and
+/// some it cannot get past: a large ID3v2.4 tag let the probe succeed and every frame then decode to nothing, so a
+/// whole album was reported without sound while it played (Roll the Dice, 2026-11-02; the same file with its tag
+/// taken off was analysed).
 fn open(path: &Path) -> Result<Opened> {
-    match open_from(path, 0) {
+    let start = after_id3(path);
+    if start == 0 {
+        return open_from(path, 0);
+    }
+    match open_from(path, start) {
         Ok(o) => Ok(o),
-        Err(e) => {
-            let start = after_id3(path);
-            if start == 0 {
-                return Err(e);
-            }
-            open_from(path, start).map_err(|e2| anyhow!("{e:#}; after the ID3 tag too: {e2:#}"))
-        }
+        Err(e) => open_from(path, 0).map_err(|e2| anyhow!("after the ID3 tag: {e:#}; from the start too: {e2:#}")),
     }
 }
 
