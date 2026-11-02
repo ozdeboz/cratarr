@@ -59,6 +59,11 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
   library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. Wants the
   owner's design choices first.
+  With it, rhythm (the owner, 2026-11-02): four on the floor as a score (the share of beats a kick lands on, in the sub
+  and bass bands' percussive hits, against the strikes between them) and the time signature from Beat this!'s
+  downbeats (4/4, 3/4; odd meters less sure); measured in the analysis from then on, the library measured again at
+  night (AudioMuse paused); conditions in the filter and the crate, words in the crate sentence ("four on the floor",
+  "4/4"). The device index (0.16) carries them.
 - **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and the whole library's index on the
   device** (offline first's fourth step).
 - **0.17: crates and the queue on the device** (offline first's fifth step); then all servers in one library, on the
