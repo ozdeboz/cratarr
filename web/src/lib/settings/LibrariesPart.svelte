@@ -1,7 +1,7 @@
 <script lang="ts">
   // Libraries: each server library (Cratarr's own: each folder, decision 0044) a row with its use and where it is;
   // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its format and dot
-  // (decision 0034); Music's names, how long deleted albums are kept, the catalogue and tag splitting (its own page,
+  // (decision 0034); Music's names, how long deleted records are kept, the catalogue and tag splitting (its own page,
   // `tags`). Saved with the Save bar (the settings' North Star, 2026-10-19).
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { fileFacts, loadFileFacts, switchFileFacts } from '../fileFacts.svelte';
@@ -146,7 +146,6 @@
   /** The library whose use is being chosen (the choice sheet). */
   let choosingUse = $state<Lib | null>(null);
   let removing = $state<Lib | null>(null);
-  const incomingUsed = $derived(ed.drafts.some((d) => d.enabled && d.libraries.incoming.length));
   const lines = (t: string) => t.split('\n').map((l) => l.trim()).filter(Boolean);
   // The server's own settings (lib/serverRuntime), read once here.
   loadRuntime();
@@ -293,22 +292,22 @@
       />
     </Group>
   {/if}
-  {#if incomingUsed}
-    <Group title="Incoming">
+  <!-- How long what is deleted is kept, from any library (the owner, 2026-11-02: "we can delete from any library, so
+       this should probably be called retention instead of incoming"). -->
+  <Group title="Retention">
       <Item
-        name="Keep deleted albums"
+        name="Keep deleted records"
         value={`${ed.trashDays} ${ed.trashDays === 1 ? 'day' : 'days'}`}
         onclick={() =>
           (typing = {
-            title: 'Keep deleted albums',
+            title: 'Keep deleted records',
             value: String(ed.trashDays),
             type: 'number',
             suffix: 'days',
             save: (v) => (ed.trashDays = Math.min(3650, Math.max(1, Math.round(Number(v)) || 1))),
           })}
       />
-    </Group>
-  {/if}
+  </Group>
   <Group title="Catalogue">
     {#if ed.cat}
       {@const c = ed.catalogueLine(ed.cat)}
