@@ -138,18 +138,13 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if thing}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromThing(section)}><Icon name="back" size={22} /></button></span>
-  {:else if !beside}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
-  {/if}
   <!-- Settings › its group › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25;
        the group a picker, the owner 2026-11-02). -->
   {@const top: Level[] = beside ? [] : [{ label: 'Settings', go: () => upToPage('settings') }, ...(groupLevel ? [groupLevel] : [])]}
   {#if thing}
-    <Crumbs trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
+    <Crumbs back={() => backFromThing(section)} trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
   {:else}
-    <Crumbs trail={top} here={partTitle} siblings={beside ? null : siblings} />
+    <Crumbs back={beside ? null : backOne} trail={top} here={partTitle} siblings={beside ? null : siblings} />
   {/if}
 {/snippet}
 {#snippet glassExtra()}
