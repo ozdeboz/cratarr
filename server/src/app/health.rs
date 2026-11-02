@@ -214,6 +214,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "library:track-numbers" => ("Track numbers", "off"),
         "library:discs" => ("Disc numbers", "off"),
         "library:incomplete" => ("Records", "missing tracks"),
+        "library:references" => ("Records", "without a reference"),
         "library:rules" => ("Names", "set by a rule"),
         "files:broken" => ("Files", "unreadable"),
         "files:cut-short" => ("Files", "cut off"),
@@ -263,6 +264,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "library:discs" => "Disc numbers",
         "library:musicbrainz" => "Missing MusicBrainz ids",
         "library:incomplete" => "Albums missing tracks",
+        "library:references" => "References",
         "library:rules" => "Named otherwise by a rule",
         "incoming:upgrades" => "Quality replacements",
         "incoming:duplicates" => "Duplicates",
@@ -667,6 +669,7 @@ impl App {
         }
         let mut out = library(&rows, &off, &discs);
         out.extend(self.check_incomplete(&served).await?);
+        out.extend(self.check_references(&served).await?);
         // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
         let s = served.clone();
         let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
@@ -748,6 +751,26 @@ impl App {
         items.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.title.cmp(&b.title)));
         let count = items.len() as u64;
         let mut f = finding("library", "library:incomplete", Level::Warning, count, n(count, "album missing tracks", "albums missing tracks"));
+        f.items = items;
+        Ok(vec![f])
+    }
+
+    /// Records no reference speaks for (0.14, the owner, 2026-11-02: one Health item for references): each opens to its
+    /// sources, one to choose, a link to paste, or checked by hand (`app::references`).
+    async fn check_references(&self, served: &std::sync::Arc<crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
+        let s = served.clone();
+        let found = tokio::task::spawn_blocking(move || super::references::unreferenced(&s)).await??;
+        if found.is_empty() {
+            return Ok(Vec::new());
+        }
+        let count = found.len() as u64;
+        let mut f = finding("library", "library:references", Level::Info, count, n(count, "record without a reference", "records without a reference"));
+        let mut items: Vec<Item> = found
+            .into_iter()
+            .map(|(album, name, artist)| Item { title: name, line: Some(artist), album: Some((crate::source::cratarr::KIND.id.to_string(), album)), ..Item::default() })
+            .collect();
+        items.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.title.cmp(&b.title)));
+        items.truncate(ITEMS);
         f.items = items;
         Ok(vec![f])
     }

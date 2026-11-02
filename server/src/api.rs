@@ -287,6 +287,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
             .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
             .route("/api/intake/cards", get(intake_cards))
+            .route("/api/albums/{source}/{album}/references", get(album_references).put(choose_references))
             .route("/api/albums/{source}/{album}/card", get(intake_card))
             .route("/api/health/fixes", get(health_fixes))
             .route("/api/health/fixes/apply", post(apply_fixes))
@@ -6564,6 +6565,23 @@ async fn album_intake(State(app): State<Arc<App>>, Path((source, album)): Path<(
 /// Every record waiting in an Incoming library as its intake card (0.14, the owner: Health's "Records waiting for you").
 async fn intake_cards(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::app::intake_card::Card>>, ApiError> {
     Ok(Json(crate::app::intake_card::cards(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// A record's references (0.14): each source agreeing, differing, found or missing, the one that counts, by hand.
+async fn album_references(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::references::References>, ApiError> {
+    own_album(&source)?;
+    Ok(Json(crate::app::references::of(&app, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// "Use this" (`counting`: a source, or null), "Paste a link" (`link`), "Checked by hand" (`by_hand`): the record's
+/// references as they are then.
+async fn choose_references(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    Json(b): Json<crate::app::references::Choose>,
+) -> Result<Json<crate::app::references::References>, ApiError> {
+    own_album(&source)?;
+    Ok(Json(crate::app::references::choose(&app, &album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// One record's intake card.
