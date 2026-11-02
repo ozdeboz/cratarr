@@ -15,6 +15,7 @@
   import Item from './settings/Item.svelte';
   import SaveBar from './settings/SaveBar.svelte';
   import Icon from './Icon.svelte';
+  import Notice from './Notice.svelte';
 
   let { thing }: { thing: string | null } = $props();
   const v = $derived(changesView(thing));
@@ -28,9 +29,12 @@
   let ticks = $state(new Set<string>());
   let showing = $state(STEP);
   let writing = $state(false);
+  /** A failed plan or run read again (its Notice's Try again). */
+  let readAgain = $state(0);
   $effect(() => {
     if (v.view !== 'plan') return;
     const { kind, album } = v;
+    void readAgain;
     plan = null;
     failed = null;
     showing = STEP;
@@ -75,6 +79,8 @@
     if (v.view !== 'run' || v.id.startsWith('l')) return;
     const id = v.id;
     void news;
+    void readAgain;
+    failed = null;
     let gone = false;
     getFileRun(id).then(
       (r) => !gone && (run = r),
@@ -121,7 +127,7 @@
 
 {#if v.view === 'plan'}
   {#if failed}
-    <p class="muted">{failed}</p>
+    <Notice text={failed} onretry={() => readAgain++} />
   {:else if !plan}
     <Asking />
   {:else if !plan.records.length}
@@ -162,6 +168,8 @@
         {#each asideOf(live.failed) as x (x.album)}<Item lead="warn" name={titleOf(x)} line={[x.files ? plural(x.files, 'file') : '', ...x.why].filter(Boolean).join(' · ')} tone="warn" wrap />{/each}
       </Group>
     {/if}
+  {:else if fileRuns.error && !fileRuns.list}
+    <Notice text={fileRuns.error} onretry={loadRuns} />
   {:else if !fileRuns.list}
     <Asking />
   {:else}
@@ -169,7 +177,7 @@
   {/if}
 {:else if v.view === 'run'}
   {#if failed}
-    <p class="muted">{failed}</p>
+    <Notice text={failed} onretry={() => readAgain++} />
   {:else if !run}
     <Asking />
   {:else}
@@ -192,6 +200,8 @@
       <SaveBar label={`${plural(r.albums, 'record')} written`} action="Undo all" onsave={() => void undoRun(r.id)} />
     {/if}
   {/if}
+{:else if fileRuns.error}
+  <Notice text={fileRuns.error} onretry={loadRuns} />
 {:else if !fileRuns.list}
   <Asking />
 {:else if !fileRuns.list.length}
