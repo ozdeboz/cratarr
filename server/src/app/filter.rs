@@ -670,9 +670,9 @@ mod tests {
         let mut uses: HashMap<String, Use> = HashMap::new();
         assert!(never_played(&f, None), "no account: nothing known played");
         assert!(never_played(&f, Some(&uses)), "no entry: never played");
-        uses.insert("a/1".into(), Use { plays: 0, last: Some(5), rating: None });
+        uses.insert("a/1".into(), Use { plays: 0, last: Some(5), rating: None, skips: 0 });
         assert!(!never_played(&f, Some(&uses)), "a last play counts, whatever the count says");
-        uses.insert("a/1".into(), Use { plays: 2, last: None, rating: None });
+        uses.insert("a/1".into(), Use { plays: 2, last: None, rating: None, skips: 0 });
         assert!(!never_played(&f, Some(&uses)));
     }
 
@@ -711,7 +711,7 @@ mod tests {
         let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: Some(&hearted), unplayed: false, bit: &bit };
         assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"]);
         // Unplayed only: none of their tracks played.
-        let uses: HashMap<String, Use> = [("x/1".to_string(), Use { plays: 1, last: Some(1), rating: None })].into();
+        let uses: HashMap<String, Use> = [("x/1".to_string(), Use { plays: 1, last: Some(1), rating: None, skips: 0 })].into();
         let look = ArtistLook { conditions: &[], world: &w, uses: Some(&uses), hearted: None, unplayed: true, bit: &bit };
         assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"], "X and Z share the played album");
     }

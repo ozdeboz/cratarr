@@ -2599,8 +2599,8 @@ mod tests {
         let f = |rel: &str, born: i64, artist: &str, secs: f64| Facts { born: Some(born), length: Some(secs), ..by(rel, &[artist]) };
         let files = vec![f("old.flac", now - 400 * day, "Ana", 180.0), f("new.flac", now - 3 * day, "Bo", 420.0), f("never.flac", now - 50 * day, "Ana", 240.0)];
         let uses = HashMap::from([
-            ("old.flac".to_string(), Use { plays: 12, last: Some(now - 200 * day), rating: Some(5) }),
-            ("new.flac".to_string(), Use { plays: 1, last: Some(now - day), rating: None }),
+            ("old.flac".to_string(), Use { plays: 12, last: Some(now - 200 * day), rating: Some(5), skips: 0 }),
+            ("new.flac".to_string(), Use { plays: 1, last: Some(now - day), rating: None, skips: 0 }),
         ]);
         let membership = HashMap::new();
         let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: Some(&uses), now, fits: None };
@@ -3308,7 +3308,7 @@ mod tests {
             labels: vec!["Warp".into()],
             ..Facts::default()
         };
-        let uses: HashMap<String, Use> = [("a/1".to_string(), Use { plays: 2, last: Some(1), rating: Some(4) })].into();
+        let uses: HashMap<String, Use> = [("a/1".to_string(), Use { plays: 2, last: Some(1), rating: Some(4), skips: 0 })].into();
         let (membership, favourites, albums) = (HashMap::new(), HashSet::new(), HashSet::new());
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: Some(&uses), now: 10, fits: None };
         for (axis, _, kind) in AXES {
