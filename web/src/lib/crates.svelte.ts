@@ -1,6 +1,7 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { noteChange } from './lastChange.svelte';
 import { port } from './player/port.svelte';
 import { dropFromQueue, local, startRadio } from './localPlayer.svelte';
 import { shownPlaylists } from './output.svelte';
@@ -52,6 +53,7 @@ export function setFavourites(id: string, to: (was: CrateFavourites) => CrateFav
   if (!c) return;
   const was = c.favourites;
   const next = to(was);
+  noteChange('favourites');
   c.favourites = pending[id] = next;
   saving = saving.then(() =>
     setCrateFavourites(id, next).then(
@@ -86,6 +88,7 @@ export function setFavouriteAlbums(id: string, to: (was: CrateFavourites) => Cra
   if (!c) return;
   const was = c.favourite_albums ?? 'all';
   const next = to(was);
+  noteChange('favourite_albums');
   c.favourite_albums = pendingAlbums[id] = next;
   saving = saving.then(() =>
     setCrateFavouriteAlbums(id, next).then(

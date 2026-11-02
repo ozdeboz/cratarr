@@ -2,6 +2,7 @@
 // (lib/pageView SWITCHES), remembered per kind of list (a page's id, or a panel kind) in the prefs. The Filter sheet
 // changes them (lib/FilterSheet); the lists read them.
 import { filterList, type Condition, type FilterList } from './api';
+import { noteChange } from './lastChange.svelte';
 import { complete } from './filterRow';
 import { SWITCHES } from './pageView.svelte';
 import { prefs, type FilterCondition, type ListFilter } from './prefs.svelte';
@@ -16,12 +17,18 @@ export const filterOf = (kind: string): ListFilter => prefs.filters[kind] ?? NO_
 export const switchOn = (kind: string, key: string) => filterOf(kind).on.includes(key);
 
 export function setSwitch(kind: string, key: string, on: boolean) {
+  noteChange('filter', key);
   const f = filterOf(kind);
   const rest = f.on.filter((k) => k !== key);
   prefs.filters[kind] = { ...f, on: on ? [...rest, key] : rest };
 }
 
 export function setConditions(kind: string, conditions: FilterCondition[]) {
+  // The axis that changed, where one did (decision 0095: the popover points at what was changed last).
+  const was = filterOf(kind).conditions;
+  const of = (list: readonly FilterCondition[], axis: string) => JSON.stringify(list.filter((c) => c.axis === axis));
+  const changed = [...new Set([...was, ...conditions].map((c) => c.axis))].filter((a) => of(was, a) !== of(conditions, a));
+  if (changed.length) noteChange('filter', changed.length === 1 ? changed[0] : undefined);
   prefs.filters[kind] = { ...filterOf(kind), conditions };
 }
 

@@ -7,6 +7,7 @@
   // make something, its ticked ones' ⋮; pageView.usePageAction). Google's Cast guidelines put the device button at the
   // top right of the screen that plays.
   import FilterSheet from './FilterSheet.svelte';
+  import { noteChange } from './lastChange.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import NothingPopover from './NothingPopover.svelte';
   import { rowPiece } from './glassRow.svelte';
@@ -304,6 +305,7 @@
     {#if words && !(showing && page && pageAction)}
       <button
         bind:this={lens}
+        class="lens"
         class:lit={!searching && pageView.query.trim() !== ''}
         aria-label={words}
         title={words}
@@ -324,7 +326,7 @@
               placeholder={words}
               aria-label={words}
               bind:value={pageView.query}
-              oninput={() => ((typedHere = true), follow())}
+              oninput={() => ((typedHere = true), noteChange('search'), follow())}
               onscroll={follow}
               onkeyup={follow}
               onselect={follow}
