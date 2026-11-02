@@ -32,7 +32,7 @@ test('no menu closes before running an action its parent handed it', () => {
       .map((p) => p.trim().split(/[=:]/)[0].trim())
       .filter((p) => /^[a-z]\w*$/.test(p) && p !== 'onclose' && p !== 'children');
     for (const m of s.matchAll(/\{#each (\w+) as (\w+)/g)) if (props.includes(m[1])) props.push(m[2]);
-    const lines = s.split('\n');
+    const lines = s.split(/\r?\n/);
     lines.forEach((line, i) => {
       for (const m of line.matchAll(/onclose\(\)/g)) {
         const rest = after(lines, i, (m.index ?? 0) + m[0].length);
