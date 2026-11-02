@@ -34,6 +34,6 @@ export function onceAlbums(): OnceAlbum[] {
 /** An item where it lives: its own page, the item opened there (an album or an artist in the Library, a playlist in
  *  Playlists, a crate in Crates). */
 export function goTo(kind: 'album' | 'artist' | 'playlist' | 'crate', subject: string) {
-  const page = kind === 'crate' ? 'crates' : kind === 'playlist' ? '' : 'library';
+  const page = kind === 'crate' ? 'crates' : kind === 'playlist' ? 'playlists' : 'library';
   location.hash = `#/${page}?${new URLSearchParams({ view: subject })}`;
 }
