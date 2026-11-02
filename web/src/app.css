@@ -227,8 +227,9 @@ button.solid[aria-busy='true']::after {
 
 /* The panel locked (a long-press on its grip, the owner 2026-11-02): the pixel clear round the handle (the panel's cut,
    App's .player-side) in the accent, the handle's fill as it is ("no fill change, only the border"; "I didn't want any
-   extra thickness"). */
+   extra thickness"), and fully opaque ("instead of transparent when locked"). */
 .edge-grip.locked::after {
+  opacity: 1;
   box-shadow: 0 0 0 1px var(--accent);
 }
 
