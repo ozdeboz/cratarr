@@ -1,6 +1,6 @@
 // The health report and the files' problems (decision 0063), read once for the Health page's list and its panel
 // (lib/HealthPanel) alike, and again on each visit to the page.
-import { getFileProblems, getHealthReport, type FileProblem, type HealthFinding, type HealthItem } from './api';
+import { getFileProblems, getHealthReport, type FileProblem, type HealthFinding, type HealthItem, type RecordFinding } from './api';
 import { type Area, areaOf, DOMAINS, iconOf } from './health';
 import type { IconName } from './Icon.svelte';
 
@@ -110,4 +110,24 @@ export function problems(): Problem[] {
     });
   }
   return out;
+}
+
+/** A record's own problem (the owner, 2026-11-02: its Health problems on its page, a line each under its title): the
+ *  Health problem it is of (a file kind's as problems() names it, `files-…`), its line, and whether it is urgent.
+ *  Missing tracks say how many (`missing`), the line the page has for them. */
+export function recordProblem(f: RecordFinding): { key: string; text: string; urgent: boolean; missing: number } {
+  const kind = f.key.startsWith('files:') ? f.key.slice('files:'.length) : null;
+  const n = f.items.length;
+  const missing = f.items.reduce((m, x) => m + (x.missing?.length ?? 0), 0);
+  if (kind) {
+    const k = FILE_KINDS.find((x) => x.kind === kind);
+    return { key: `files-${kind}`, text: `${k?.title ?? f.thing ?? f.name}${n > 1 ? ` · ${n} tracks` : ''}`, urgent: kind === 'broken', missing: 0 };
+  }
+  const text = [f.thing ?? f.name, f.state].filter(Boolean).join(' ');
+  return { key: f.key, text: text.charAt(0).toUpperCase() + text.slice(1), urgent: f.level === 'critical', missing };
+}
+/** A record narrowed to in Health's panel (`health:<problem>/<the record's subject>`): its server and id. */
+export function recordIn(thing: string | null): { source: string; id: string } | null {
+  const m = thing?.match(/^album:(.+)\/([^/]+)$/);
+  return m ? { source: m[1], id: m[2] } : null;
 }

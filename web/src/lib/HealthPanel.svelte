@@ -18,7 +18,7 @@
   import { everywhere } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import MoreInfo from './MoreInfo.svelte';
-  import { albumCoverUrl, undo, wantAlbum, type HealthItem } from './api';
+  import { albumCoverUrl, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
   import { plural } from './insights.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -29,7 +29,7 @@
   import { anyOver, approvePayload, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } from './trackIntake';
   import { toast } from './toast.svelte';
   import { openFinding } from './health';
-  import { health, loadHealth, problems } from './healthReport.svelte';
+  import { health, loadHealth, problems, recordIn, recordProblem } from './healthReport.svelte';
   import { damagedStops, missingStops, throughKind, throughTotal, type Stop } from './healthThrough';
   import HealthEvents from './HealthEvents.svelte';
   import HealthIncoming from './HealthIncoming.svelte';
@@ -60,7 +60,39 @@
   import Crumbs from './Crumbs.svelte';
 
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
-  const p = $derived(problems().find((x) => x.key === problem) ?? null);
+  // Opened from elsewhere than the Health page (a record's page): the report read here too.
+  $effect(() => {
+    if (!health.loaded) untrack(() => loadHealth());
+  });
+  const whole = $derived(problems().find((x) => x.key === problem) ?? null);
+  // Narrowed to one record (its page's Health line, the owner 2026-11-02: "The problem, this record only"): its own items
+  // as the record's answer has them (the report keeps a finding's first 100), said as its page says it.
+  const record = $derived(recordIn(healthThing(panel.viewed)));
+  let recordFound = $state.raw<{ for: string; finding: RecordFinding | null } | null>(null);
+  $effect(() => {
+    const r = record;
+    void health.findings;
+    if (!r) return void (recordFound = null);
+    const key = `${r.source}/${r.id}`;
+    let gone = false;
+    getRecordHealth(r.source, r.id).then(
+      (h) => !gone && (recordFound = { for: key, finding: h.findings.find((f) => recordProblem(f).key === problem) ?? null }),
+      () => !gone && (recordFound = { for: key, finding: null }),
+    );
+    return () => (gone = true);
+  });
+  const narrowed = $derived(record && recordFound?.for === `${record.source}/${record.id}` ? recordFound.finding : null);
+  // The record's problem gone (fixed here): back to the record.
+  $effect(() => {
+    if (record && recordFound && recordFound.for === `${record.source}/${record.id}` && !recordFound.finding) untrack(() => backOne());
+  });
+  const p = $derived(
+    whole && record ? (narrowed ? { ...whole, items: narrowed.items, said: recordProblem(narrowed).text } : { ...whole, items: [] }) : whole,
+  );
+  // One record's one item: open at once.
+  $effect(() => {
+    if (narrowed?.items.length === 1) untrack(() => (openKey = keyOf(narrowed.items[0])));
+  });
   const f = $derived(p?.finding ?? null);
   // Opened for a problem the report, read whole, no longer has (fixed meanwhile): the Health page, never an empty panel
   // over it saying so (the owner, 2026-11-02: "← Health" over "This is no longer a problem", and Back to the page with
@@ -416,7 +448,7 @@
         {#if f?.detail || p.hint}<MoreInfo label={p.name} text={(f?.detail ?? p.hint)!} />{/if}
       </p>
       <!-- How much. -->
-      {#if f && f.of}
+      {#if f && f.of && !record}
         <div class="meter" role="meter" aria-valuemin="0" aria-valuemax={f.of} aria-valuenow={f.count} aria-label={p.title}>
           <!-- What it is, in its sentence (the owner, 2026-10-25), over how much of the whole. -->
           <div class="head"><span>{p.said}</span><b>{Math.round((100 * f.count) / f.of)}%</b></div>

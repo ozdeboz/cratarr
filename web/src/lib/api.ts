@@ -1504,6 +1504,8 @@ export const getHealthReport = () => request<{ findings: HealthFinding[]; checke
  *  findings, an item for each track (`track`, `files`, the problem in `line`). */
 export type RecordFinding = Pick<HealthFinding, 'key' | 'thing' | 'state' | 'detail' | 'level'> & { name: string; items: HealthItem[] };
 export type RecordHealth = { findings: RecordFinding[] };
+export const getRecordHealth = (source: string, id: string) =>
+  quietly<RecordHealth>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(id)}/health`);
 
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
