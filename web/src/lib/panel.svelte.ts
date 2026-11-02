@@ -1,15 +1,14 @@
 // The panel's subject (decisions 0023, 0025): the player, or what is viewed lying under it: a selection of one or more
-// playlists in tabs (Tracks, Info, Export, Repair, Sync), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
+// playlists in tabs (Tracks, Export, Repair, Sync; Info is a step of their menu since 2026-11-02), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
 // or an album (`album:<server>/<id>`).
 // It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (Back closes
 // it, a reload brings it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
 
 import { leaveOnArrival } from './navStep.svelte';
 
-export type Tab = 'tracks' | 'info' | 'export' | 'repair' | 'sync';
+export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
   { tab: 'tracks', label: 'Tracks' },
-  { tab: 'info', label: 'Info' },
   { tab: 'export', label: 'Export' },
   { tab: 'repair', label: 'Repair' },
   { tab: 'sync', label: 'Sync' },

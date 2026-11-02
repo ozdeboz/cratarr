@@ -867,8 +867,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     multi ? Object.values(sections).flatMap((s) => ('rows' in s ? s.rows.map((r) => r.bpm) : [])) : (rows?.map((r) => r.bpm) ?? null),
   );
   $effect(() => {
-    if (tab !== 'info' && !multi) return;
-    // Info's spread, and a selection's stacked one in the header (decision 0041).
+    if (!multi) return;
+    // A selection's stacked spread in the header (decision 0041).
     for (const pid of ids) untrack(() => loadSection(pid));
   });
   /** The list's profile (the owner, 2026-10-23: lib/ListProfile), worked out on the server over all its tracks, as
@@ -2165,17 +2165,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       </header>
     {/if}
 
-    {#if tab === 'info'}
-      <div class="info-tab">
-        {#each ids as pid (pid)}
-          {#if multi}
-            <Section title={pid}>{@render about(pid)}</Section>
-          {:else}
-            {@render about(pid)}
-          {/if}
-        {/each}
-      </div>
-    {:else if tab === 'export'}
+    {#if tab === 'export'}
       <ExportTab {ids} />
     {:else if tab === 'repair'}
       <RepairTab {ids} />
@@ -2374,40 +2364,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
 </section>
 
 <!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap views one). -->
-{#snippet about(pid: string)}
-  {@const i = insights.indexOf(pid)}
-  {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
-  {@const near = insights.closest(i)}
-  <div class="about" aria-label={`About ${pid}`}>
-    {#if !pt}
-      {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
-    {:else}
-      {#if pt.focus !== null && insights.focus[i] !== undefined}
-        <p class="note">More focused than {Math.round(100 * insights.focus[i])}% of your playlists</p>
-      {/if}
-      {#if near.length}
-        <h3 class="list-head">Closest playlists</h3>
-        <ul class="plain">
-          {#each near as c (c.index)}
-            <li>
-              <PlaylistItem
-                p={shownPlaylists().find((x) => x.id === c.name) ?? { id: c.name, name: c.name }}
-                size="large"
-                sub={c.shares}
-                label={`View ${c.name}`}
-                onclick={() => viewPlaylist(c.name)}
-                attach={fromAction(longpress, () => () => (badgeMenu = c.name))}
-              />
-            </li>
-          {/each}
-        </ul>
-      {:else if pt.focus === null}
-        <p class="note">Nothing is known about it yet.</p>
-      {/if}
-    {/if}
-  </div>
-{/snippet}
-
 <!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe right plays it next, a swipe left takes
      it out of its crate or playlist, a long-press is its menu, the heart adds it to playlists. -->
 <!-- The list's column names over its tracks (decision 0042): a row of the same shape, so they line up. A tap on one
@@ -3039,14 +2995,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     cursor: pointer;
   }
 
-  .info-tab {
-    padding: 0 8px;
-  }
-
-  .about {
-    padding: 4px 0 8px;
-  }
-
   /* The list's column names (decision 0042): in from the sides as a track's row is, a cover's room in front. */
   .column-head {
     padding: 0 8px;
@@ -3116,20 +3064,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     margin: 4px 8px;
     color: var(--muted);
     font-size: 13px;
-  }
-
-  /* A list's heading inside a tab (Closest playlists): small, over its large rows. */
-  .list-head {
-    margin: 12px 8px 4px;
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  ul.plain {
-    margin: 0;
-    padding: 0;
-    list-style: none;
   }
 
   /* Several playlists on Tracks: a section each, its header folding it. */
