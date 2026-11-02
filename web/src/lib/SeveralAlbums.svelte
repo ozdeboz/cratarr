@@ -181,7 +181,7 @@
       `${named(go.map((y) => y.x.a.title))}.`,
       refused.length ? `Not moved: ${refused.slice(0, 8).map((y) => `${y.x.a.title} (${why(y.p)})`).join(', ')}${refused.length > 8 ? ` and ${refused.length - 8} more` : ''}.` : '',
       unread.length ? `${plural(unread.length, word)} couldn't be looked at.` : '',
-      convert ? `${plural(convert, 'hi-res file')} ${convert === 1 ? 'is' : 'are'} converted to 16-bit/44.1 kHz first.` : '',
+      convert ? `${plural(convert, 'lossless file')} above ${name}'s quality limit ${convert === 1 ? 'is' : 'are'} converted to FLAC first.` : '',
       go.some((y) => !y.p.acquisition && !y.x.primary) ? NO_LIDARR : '',
     ]
       .filter(Boolean)
@@ -200,7 +200,7 @@
           go,
           async ({ x }) => {
             const r = await moveAlbum(x.s.id, x.a.id, x.to.id);
-            // Queued (hi-res files to convert first): its row shows the progress instead.
+            // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
             if (r.queued) queued = true;
             else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id }));
           },

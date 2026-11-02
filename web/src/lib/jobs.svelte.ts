@@ -1,4 +1,5 @@
-// The conversion queue (decision 0013): albums waiting for their hi-res files to be converted before Keep or Replace.
+// The conversion queue (decision 0013): albums waiting for their lossless files above the target library's quality
+// limit to be converted, to FLAC, before Keep or Replace.
 // Followed app-wide: the Incoming tab shows how many wait, Incoming's rows show their progress, and a finished job
 // says so in a toast on whatever page is open. Only jobs this page saw unfinished are told, so a reload never replays
 // old ones. The live channel brings every change (`jobs`); only while it is down does this poll.
