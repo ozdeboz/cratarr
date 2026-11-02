@@ -378,10 +378,12 @@
   });
   /** Download… (decision 0058, amended 0.10): its tracks, in lib/DownloadStep. */
   let exporting = $state(false);
-  // Opened at the playlists for an album outside Music: there is nothing to add it to.
+  // Opened at the playlists for one that cannot go in them: there is nothing to add it to. Since 2026-10-15 every
+  // library's tracks can; not only where no Music library is set up (playlists are kept there) or its library is not
+  // in use (the owner, 2026-11-02: it said "isn't in Music", untrue of Incoming).
   $effect(() => {
     if (step === 'lists' && toList.first && !toList.first.addable) {
-      toast.fail(null, `This ${word} isn't in Music, so it can't go in a playlist`);
+      toast.fail(null, `This ${word} can't go in a playlist: its library isn't in use, or no Music library is set up`);
       onclose();
     }
   });
