@@ -65,6 +65,7 @@
     type ListReason,
     type PlaylistRow,
     tasteFits,
+    getRecordHealth,
   } from './api';
   import {
     builderOf,
@@ -114,14 +115,13 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
-  import { can, findsTracks, offers } from './capabilities.svelte';
+  import { can, offers } from './capabilities.svelte';
   import { later, laterKey } from './later.svelte';
   import { applyOps, opsFor, type PlaylistOp } from './playlistOps';
   import { reach } from './reach.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
-  import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -157,7 +157,8 @@
   import { playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
-  import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
+  import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
+  import { health, recordProblem } from './healthReport.svelte';
   import { reveal } from './reveal';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
@@ -328,6 +329,27 @@
     return s && la ? { s, a: la } : null;
   });
   const filesLine = $derived(album ? stateLine(filesState ?? listedHere?.a.files_state) : null);
+  // Its own Health problems (the owner, 2026-11-02: "on its page", a line each under its title; its missing tracks one
+  // of them): an administrator's, as Health is; a tap opens that problem narrowed to this record, Back returns here.
+  let recordHealth = $state.raw<{ for: string; lines: ReturnType<typeof recordProblem>[] } | null>(null);
+  $effect(() => {
+    const a = album;
+    void health.findings;
+    void saved;
+    void undos.n;
+    if (!a || offServer || !me.admin) return void (recordHealth = null);
+    const key = `${a.source}/${a.id}`;
+    if (untrack(() => recordHealth?.for) !== key) recordHealth = null;
+    let gone = false;
+    getRecordHealth(a.source, a.id).then(
+      (h) => !gone && (recordHealth = { for: key, lines: h.findings.map(recordProblem) }),
+      () => !gone && (recordHealth = { for: key, lines: [] }),
+    );
+    return () => (gone = true);
+  });
+  const healthLines = $derived(album && recordHealth?.for === `${album.source}/${album.id}` ? recordHealth.lines : []);
+  /** Its problem narrowed to it, over it (Back returns to it). */
+  const openRecordProblem = (key: string) => album && viewOver(`${HEALTH}${key}/${encodeURIComponent(albumSubject(album.source, album.id))}`);
 
   // The album's artist chip: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
   // their own panel's chip).
@@ -1334,8 +1356,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
   // An album's menu (its ⋮ in the action bar).
   let albumMenuOpen = $state(false);
-  /** Its missing tracks open (lib/ReplaceTrackSheet), from its details line. */
-  let missingOpen = $state(false);
   let bandcampMenuOpen = $state(false);
   let artistMenuOpen = $state(false);
   async function resumeAlbum() {
@@ -2251,7 +2271,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
           <!-- Its missing tracks over it, to look for (the owner, 2026-11-01: it opened Health's whole list, a U-turn);
                where they can't be looked for here, only said. -->
-          {#if album && listedHere?.a.whole_tracks}<button class="details left-out" disabled={!(me.admin && album.source === 'cratarr' && findsTracks())} onclick={() => (missingOpen = true)}><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></button>{/if}
+          {#if album && me.admin && !offServer}
+            {#each healthLines as l (l.key)}
+              {@const whole = l.key === 'library:incomplete' ? listedHere?.a.whole_tracks : null}
+              <button class="details left-out" class:warn={l.urgent} onclick={() => openRecordProblem(l.key)}
+                ><Icon name={l.key === 'library:incomplete' ? 'search' : 'bang'} size={14} /><span
+                  >{whole ? `${listedHere!.a.tracks} of ${plural(whole, 'track')}` : l.missing ? `${plural(l.missing, 'track')} missing` : l.text}</span
+                ></button
+              >
+            {/each}
+          {:else if album && listedHere?.a.whole_tracks}<span class="details left-out"><Icon name="search" size={14} /><span>{listedHere.a.tracks} of {plural(listedHere.a.whole_tracks, 'track')}</span></span>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy, album.source === BANDCAMP ? { id: album.id, title } : null)}
               >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
@@ -2834,9 +2863,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
   />
 {/if}
 
-{#if missingOpen && album}
-  <ReplaceTrackSheet source={album.source} album={{ id: album.id, title: albumHead?.title ?? title }} onclose={() => (missingOpen = false)} />
-{/if}
 
 <style>
   .view {
