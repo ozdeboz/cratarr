@@ -1713,9 +1713,10 @@ function dropAhead(lane: 'radio' | 'autoplay') {
 /** "Start radio" from an item (decision 0036; amended: it sets Autoplay): tracks like `seed` (its own left out) play,
  *  and Autoplay goes on with that seed. `within`: what it plays inside, only its tracks (decision 0094: a crate, a
  *  playlist, a record, an artist or tracks; "Play as radio"; its own then may play). `from`: its name, for the queue sheet. */
-export async function startRadio(seed: string[], from: string | null, within: Collection | null = null) {
-  const mode = local.autoplay?.mode ?? 'similar';
-  const albums = local.autoplay?.albums ?? false;
+export async function startRadio(seed: string[], from: string | null, within: Collection | null = null, how?: { mode: AutoplayMode; albums: boolean }) {
+  // As the radio sheet chose (lib/RadioSheet), else as Autoplay is.
+  const mode = how?.mode ?? local.autoplay?.mode ?? 'similar';
+  const albums = how?.albums ?? local.autoplay?.albums ?? false;
   const skip_favourites = local.skipFavourites;
   const { tracks } = await radioNext({ mode, albums, seed, exclude: within ? [] : seed, last: null, count: BATCH, within, skip_favourites });
   if (!tracks.length) throw new Error('Nothing like it was found.');

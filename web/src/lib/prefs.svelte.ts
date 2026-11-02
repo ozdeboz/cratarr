@@ -249,6 +249,8 @@ export type Prefs = {
   /** The panel beside the page locked (the owner, 2026-11-02, a long-press on its grip): moving between the pages of
    *  music (Home, Crates, Playlists, Library, Discover) keeps what it shows; unlocked, the page gone to closes it. */
   panelLocked: boolean;
+  /** The radio sheet's last choices (decision 0094 #5: it opens on them): where, how it moves on, whole records. */
+  radioLast: { where: 'within' | 'like'; mode: 'similar' | 'artist' | 'era' | 'random' | 'taste'; albums: boolean };
   /** The navigation folded to a strip of icons on a wide window (decision 0042). */
   navFolded: boolean;
   /** The part of the settings last open: Settings opens on it beside its list on a roomy window ('' = the first). */
@@ -487,6 +489,7 @@ export const DEFAULTS: Prefs = {
   playerWidth: 400,
   sidebar: true,
   panelLocked: false,
+  radioLast: { where: 'like', mode: 'similar', albums: false },
   navFolded: false,
   settingsPart: '',
   healthPart: '',
@@ -626,6 +629,9 @@ function read(): Prefs {
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
       if (typeof saved.panelLocked === 'boolean') p.panelLocked = saved.panelLocked;
+      const r = saved.radioLast;
+      if (r && (r.where === 'within' || r.where === 'like') && ['similar', 'artist', 'era', 'random', 'taste'].includes(r.mode) && typeof r.albums === 'boolean')
+        p.radioLast = { where: r.where, mode: r.mode, albums: r.albums };
       if (typeof saved.navFolded === 'boolean') p.navFolded = saved.navFolded;
       if (typeof saved.settingsPart === 'string') p.settingsPart = saved.settingsPart;
       if (typeof saved.healthPart === 'string') p.healthPart = saved.healthPart;

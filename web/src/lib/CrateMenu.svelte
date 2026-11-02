@@ -167,7 +167,7 @@
     : inOrder(kind, [
         { icon: 'play', label: 'Play', disabled: working, onclick: () => run(() => playCrate(id, name, 'play'), null, 'Could not start playing') },
         { icon: 'shuffle', label: 'Shuffle', disabled: working, onclick: () => run(() => shuffleCrate(id, name), null, 'Could not start playing') },
-        { icon: 'radio', label: 'Start radio', disabled: working, onclick: () => run(() => crateRadio(id, name), null, "The radio didn't start") },
+        { icon: 'radio', label: 'Start radio', disabled: working, onclick: () => run(async () => crateRadio(id, name), null, "The radio didn't start") },
       ])}
   onback={step === 'menu' ? null : () => (step = 'menu')}
   {step}

@@ -3,13 +3,14 @@
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
 import { noteChange } from './lastChange.svelte';
 import { port } from './player/port.svelte';
-import { dropFromQueue, local, startRadio } from './localPlayer.svelte';
+import { dropFromQueue, local } from './localPlayer.svelte';
 import { shownPlaylists } from './output.svelte';
 import { pickOf, playCollection } from './play.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
 import { viewOver } from './panel.svelte';
 import { toast } from './toast.svelte';
+import { openRadio } from './radioAsk.svelte';
 import { withUndo } from './undo.svelte';
 
 export const crates = $state<{ list: Crate[] | null; error: string | null }>({ list: null, error: null });
@@ -272,14 +273,15 @@ export function startCrate(name: string, conditions: Condition[] = [], more: Omi
 // 500 at most). Shuffle: 500 drawn from all of it, mixed (all of it when it is that small); Play: its first 500.
 export const shuffleCrate = (id: string, name: string) => playCollection({ kind: 'crate', id }, 'shuffle', name);
 export const playCrate = (id: string, name: string, mode: 'play' | 'next' | 'last') => playCollection({ kind: 'crate', id }, mode, name);
-/** Start radio: tracks like the crate's from the whole library, seeded with up to 300 of its tracks drawn from all of
- *  it (decision 0036). */
-export async function crateRadio(id: string, name: string) {
-  const { tracks } = await pickOf({ kind: 'crate', id }, 'shuffle', 'cratarr');
-  await startRadio(
-    tracks.slice(0, 300).map((t) => t.id),
+/** Start radio from a crate (decision 0036): the radio sheet (decision 0094 #5), only its tracks or like it, seeded with
+ *  up to 300 of its tracks drawn from all of it. */
+export function crateRadio(id: string, name: string) {
+  openRadio({
     name,
-  );
+    kind: 'crate',
+    within: { kind: 'crate', id, ...(withoutFor(id) ? { without: withoutFor(id) } : {}) },
+    seed: async () => (await pickOf({ kind: 'crate', id }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id),
+  });
 }
 /** One's own crate deleted, Undo bringing it back. */
 export async function deleteOwnCrate(id: string) {

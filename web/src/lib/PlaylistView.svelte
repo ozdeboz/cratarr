@@ -151,7 +151,7 @@
   import { stateLine } from './fileChangeRules';
   import { openReview, undoRun } from './fileRuns.svelte';
   import { refresh } from './live.svelte';
-  import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
+  import { enqueue, type LocalTrack } from './localPlayer.svelte';
   import { inApp } from './app.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
@@ -161,6 +161,7 @@
   import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
+  import { openRadio } from './radioAsk.svelte';
   import { reveal } from './reveal';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
@@ -1420,16 +1421,17 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
   }
 
-  async function artistRadio() {
+  function artistRadio() {
     navigator.vibrate?.(8);
     const a = artist;
-    try {
+    const shown = playable.map((r) => r.id!);
+    openRadio({
+      name: title,
+      kind: 'artist',
+      within: a ? { kind: 'artist', source: a.source, name: a.name, ...(hiddenLibraries() ? { without: hiddenLibraries() } : {}) } : null,
       // The seed: 300 of all their tracks, the server's fair draw (decision 0059), not the rows shown.
-      const ids = a ? (await pickOf({ kind: 'artist', source: a.source, name: a.name }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id) : playable.map((r) => r.id!);
-      await startRadio(ids, title);
-    } catch (e) {
-      toast.fail(e, "The radio didn't start");
-    }
+      seed: async () => (a ? (await pickOf({ kind: 'artist', source: a.source, name: a.name }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id) : shown),
+    });
   }
 
   // The artist's heart: shows the change at once, back as it was when the server refuses.
@@ -1471,15 +1473,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   /** The crate as the radio's input (decision 0036): tracks like the crate's, from the whole library (up to 300 of its
    *  tracks as the seed). */
-  async function crateRadio() {
+  function crateRadio() {
     const c = crate;
     if (!c) return;
     navigator.vibrate?.(8);
-    try {
-      await crateRadioOf(c, title);
-    } catch (e) {
-      toast.fail(e, "The radio didn't start");
-    }
+    crateRadioOf(c, title);
   }
 
   /** An album's actions (a sorted playlist's too) work on the tracks it has shown, in the order shown; a crate's on the

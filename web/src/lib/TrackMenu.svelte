@@ -16,6 +16,7 @@
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
+  import { openRadio } from './radioAsk.svelte';
   import { can, findsTracks } from './capabilities.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { leavePlayer } from './navStep.svelte';
@@ -57,7 +58,7 @@
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
-  import { enqueue, jump as localJump, moveUpcoming, removeUpcoming, startRadio } from './localPlayer.svelte';
+  import { enqueue, jump as localJump, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
   import { playUpcoming } from './remote.svelte';
   import { setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
@@ -389,12 +390,9 @@
   async function radio() {
     const tr = t;
     if (!tr) return;
-    working = true;
     onclose();
     try {
-      await startRadio([tr.id], tr.name);
-    } catch (e) {
-      toast.fail(e, "The radio didn't start");
+      openRadio({ name: tr.name, kind: 'track', within: null, seed: async () => [tr.id] });
     } finally {
       working = false;
     }

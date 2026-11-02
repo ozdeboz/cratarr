@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { openRadio } from './radioAsk.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import RecordEdit from './RecordEdit.svelte';
   import { leavePlayer } from './navStep.svelte';
@@ -79,7 +80,7 @@
   import { grabCrate } from './quickCrates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player } from './live.svelte';
-  import { startRadio, type LocalTrack } from './localPlayer.svelte';
+  import { type LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
@@ -284,7 +285,10 @@
       { icon: 'listAdd', label: 'Add to queue', onclick: () => run(() => (source === DEVICE ? playAlbums(listed(), 'last') : playCollection({ kind: 'album', source, id: a.id }, 'last', a.title)), 'Added to the queue.') },
     );
     // Start radio (decision 0058, as a playlist's): tracks like the album's, from the whole library; on this device.
-    if (port().radio && t?.length) list.push({ icon: 'radio', label: 'Start radio', onclick: () => run(() => startRadio(t.map((x) => x.id), a.title)) });
+    if (port().radio && t?.length) {
+      const seed = t.map((x) => x.id);
+      list.push({ icon: 'radio', label: 'Start radio', onclick: () => (onclose(), openRadio({ name: a.title, kind: 'record', within: source === DEVICE ? null : { kind: 'album', source, id: a.id }, seed: async () => seed })) });
+    }
     return inOrder('album', list);
   });
 

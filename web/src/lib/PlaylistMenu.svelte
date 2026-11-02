@@ -12,6 +12,7 @@
   // Repair…, Sync… and Delete take one's own.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
+  import { openRadio } from './radioAsk.svelte';
   import { batchDelete, batchRows, missingCall, playlistRows, type PlaylistRow } from './api';
   import { port } from './player/port.svelte';
   import { inApp } from './app.svelte';
@@ -21,7 +22,6 @@
   import { untrack } from 'svelte';
   import { copyPlaylist, deletePlaylist, setPlaylistShared, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
   import { me } from './me.svelte';
-  import { startRadio } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import type { Downloadable } from './app.svelte';
   import DownloadStep from './DownloadStep.svelte';
@@ -144,20 +144,19 @@
   }
 
   /** Radio from these playlists (decision 0036): tracks like theirs, none of their own, and the radio goes on. */
-  async function radio() {
-    if (working) return;
-    working = true;
+  function radio() {
     const list = [...ids];
     onclose();
-    try {
-      const seed = new Set<string>();
-      for (const id of list) for (const t of (await playlistTrackIds(id, 'cratarr')).ids) seed.add(t);
-      await startRadio([...seed], one?.name ?? null);
-    } catch (e) {
-      fail(e, "The radio didn't start");
-    } finally {
-      working = false;
-    }
+    openRadio({
+      name: one?.name ?? null,
+      kind: 'playlist',
+      within: list.length === 1 ? { kind: 'playlist', id: list[0] } : null,
+      seed: async () => {
+        const seed = new Set<string>();
+        for (const id of list) for (const t of (await playlistTrackIds(id, 'cratarr')).ids) seed.add(t);
+        return [...seed];
+      },
+    });
   }
 
   // Another user's among them: only its owner changes it.
