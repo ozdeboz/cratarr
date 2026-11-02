@@ -19,6 +19,11 @@ user's own music moved to 0.15 and 0.16 ([plans](plans.md)). The notes for each 
   it loads, and nothing where the words make no crate.
 - **Play spreads records:** never two tracks of one record back to back, with the same spread on the server and the
   page. The built-in crates say in a few words what they are ("sounds like your week").
+- **A record in a crate opens in a sheet** of its crate tracks: Play and Shuffle, each track with its snippet. In a
+  crate's or playlist's flow of covers, a tap on the right half brings the next record forward, on the left the one
+  before, and on the front cover opens its tracks.
+- **A crate's head:** Edit left of the heart for a crate of your own; a tap on its count switches records and tracks;
+  the crates that can't be edited (Home's, Sounds like) have the Filter.
 
 ## Search and moving about
 
@@ -42,6 +47,12 @@ user's own music moved to 0.15 and 0.16 ([plans](plans.md)). The notes for each 
 - **The loading sign sits still** while the page under it is scrolled.
 - **Back undoes a filter.** A pick beside back, or what was changed while the Filter sheet was open, is one step: Back
   shows the list as it was (Library, Playlists, Downloads).
+- **Breadcrumbs:** a tap on a level opens its siblings; a long-press switches between the short trail and the whole
+  one. Settings, Health and Insights lead with their group.
+- **Back and the pill are one glass each,** their buttons on it; what goes beside them stretches the glass. Menus
+  from the glass have its look and stay inside the window.
+- **Asked in a sheet:** what needs a yes (Reset, Remove, Replace) asks in a sheet from the bottom.
+- **An error says so,** with Try again, never shown as an empty list or a wait without end.
 
 ## The Library's types
 
@@ -97,3 +108,12 @@ user's own music moved to 0.15 and 0.16 ([plans](plans.md)). The notes for each 
   allows.
 - **The tape deck** keeps its narrow-panel size at any width, and its row keeps its height.
 - **A track's menu** has Exclude this track everywhere as a switch beside the artist's.
+
+## Settings
+
+- **Saved as they change:** each sheet's OK, switch or choice saves, no Unsaved changes bar. A connection's address,
+  user and secrets are one sheet with one Save; refused, the settings stand as they were and why is said.
+- **One Reset sheet:** a part's Reset (on a phone in the pill) puts back all of it, a section's Reset its own, each
+  listing what changes.
+- **Libraries of Cratarr's own have a name,** their folder's until another is given. Checks, Keep and Replace, and
+  Health look across every library; Incoming's tracks go in playlists and exports.
