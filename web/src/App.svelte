@@ -673,9 +673,7 @@
     addEventListener('scroll', scrolled, { capture: true, passive: true });
     return () => removeEventListener('scroll', scrolled, { capture: true });
   });
-  // In a panel whose action bar sticks (lib/glass's `below`), the bar is away exactly while it sticks, scrolling up
-  // too (the owner, 2026-10-25).
-  // And while a library item is open, where the user wants it so (Display; its panel hands a `below`).
+  // While a library item is open, where the user wants it so (Display; its panel hands `item`).
   // The keyboard up on a phone (lib/keyboard): along the bottom only the glass being typed in stays, over the keyboard;
   // the bar, the mini-player and the navigation controls there make way (the owner, 2026-11-01: "But only input glass
   // needs that").
@@ -683,7 +681,7 @@
   const navHidden = $derived(
     navBottom
       ? typing
-      : navAway || (phone && !!handedNow?.below && (prefs.navHidesOnItem || (prefs.stickyActions && handedNow.below()))),
+      : navAway || (phone && !!handedNow?.item && prefs.navHidesOnItem),
   );
   // Somewhere else: the bar shows again.
   $effect(() => {
@@ -1240,7 +1238,7 @@
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. Below
          1024 px each half at the edge its setting says (Display: Navigation controls, Content controls). -->
     {#if !leadBottom || !rightBottom}
-      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row" class:away={rowAway} class:beside={besideDrawn && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
+      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row" class:away={rowAway} class:beside={besideDrawn && !handed} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
         {#if !leadBottom}{@render leadPart()}{:else}<span></span>{/if}
         {#if !rightBottom}{@render rightPart()}{/if}
       </div>
@@ -1433,11 +1431,6 @@
       translate 200ms ease;
   }
 
-  /* The panel's action bar has the top: its glass slides just under it (52 px), as its own pills did (the owner,
-     2026-10-25: "the top panel used to slide down when this sticky action bar took its space"). */
-  .page-row.below {
-    transform: translateY(52px);
-  }
 
   /* An index page's glass on a phone stays over its panel's layer as that fades out on closing, instead of showing
      through it (the owner, 2026-10-25: "the top glass and title show a fade in"); under the More sheet while it is open. */

@@ -193,6 +193,8 @@
   import MarkLoader from './MarkLoader.svelte';
   import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
+  import Asking from './Asking.svelte';
+  import { keepWhile } from './keepWhile.svelte';
   import type { PlayMode } from './api';
   import { flowOpened } from './backdrop.svelte';
 
@@ -409,7 +411,12 @@
     const alb = c && crates.list ? favouriteAlbumsOf(c) : undefined;
     const look = c ? untrack(() => crateLook) : {};
     const key = `${want}\n${fav}\n${alb}\n${c ? lookKey : ''}`;
-    if (key !== shownFor) {
+    // The same subject asked again otherwise (a crate's heart or disc, its look): what shows stays until the answer is
+    // in, the waiting sign in its place only after LOADER_AFTER_MS (decision 0095's first rule; the owner, 2026-11-02:
+    // the list cleared to the large loader and came back, changing more than once).
+    const again = untrack(() => key !== shownFor && rowsFor === want && rows !== null);
+    if (again) untrack(() => (waitingFor = key));
+    else if (key !== shownFor) {
       rows = null;
       error = null;
       albumHead = null;
@@ -446,9 +453,12 @@
     asked.then(
       (r) => {
         if (want !== id || shownFav() !== fav) return;
+        if (waitingFor === key) waitingFor = null;
+        // The same rows again (the crates read anew after a setting was saved): nothing that shows changes.
+        const same = shownFor === key && rows !== null && rows.length === r.rows.length && rows.every((x, i) => x.entry === r.rows[i].entry && x.id === r.rows[i].id);
         shownFor = key;
         error = null;
-        rows = r.rows;
+        if (!same) rows = r.rows;
         rowsFor = want;
         source = r.source;
         total = r.total;
@@ -457,11 +467,15 @@
       },
       (e) => {
         if (want !== id) return;
+        if (waitingFor === key) waitingFor = null;
         error = e instanceof Error ? e.message : 'Unexpected error';
         rowsFor = want;
       },
     );
   });
+  /** The rows asked again for the same subject (its key), shown as they were meanwhile. */
+  let waitingFor = $state<string | null>(null);
+  const waitSign = keepWhile(() => null, () => waitingFor !== null, () => waitingFor);
   /** The item the rows (or their error) are of. */
   let rowsFor = $state('');
   // One commit (lib/holdPlace; the owner, 2026-10-26, "All together"): the panel keeps what it showed until this item's
@@ -1095,11 +1109,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (album || artist) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
     // An artist as the radio's input (decision 0036), as a crate is: their tracks, and like them from anywhere.
     if (artist && port().radio && source === 'cratarr') list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: artistRadio, disabled: !canPlay });
-    // A crate as the radio's input (decision 0036): like it, from anywhere; or only its tracks, endlessly.
-    else if (crate && port().radio) {
-      list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: () => crateRadio(false), disabled: !canPlay });
-      list.push({ key: 'station', icon: 'radioTower', label: 'Play as radio', run: () => crateRadio(true), disabled: !canPlay });
-    }
+    // A crate as the radio's input (decision 0036): like it, from anywhere. Its Play as radio went (decision 0094, the
+    // owner 2026-11-02): only this list, endlessly, is the radio sheet's Where.
+    else if (crate && port().radio) list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: crateRadio, disabled: !canPlay });
     return list;
   });
   // A genre shows all its tracks: no favourites toggles.
@@ -1138,23 +1150,25 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const shownGenres = $derived(multi || crateEditing ? [] : plain ? (listGenres ?? []) : (point?.genres ?? []));
 
   // As Symfonium's album screen: two floating pills over the cover (back and ✕; the filter and where it plays), and the
-  // action bar at the cover's foot. Scrolled up to the top, the action bar stays there, and the pills float just under
-  // it (chosen 2026-10-15), over the list that scrolls under them.
+  // action bar at the cover's foot. It scrolls away with the rest (the owner, 2026-11-02: it stuck, and beside the page
+  // a bar's height below the panel's top); once it is under the glass, its Radio is in the glass's left part.
   let actbar = $state<HTMLElement>();
-  let stuck = $state(false);
+  let leftGlass = $state<HTMLElement>();
+  let rowAway = $state(false);
   function onScroll() {
-    const sc = scroller;
     const a = actbar;
-    if (!sc || !a) return;
-    // Its distance from the top: where it docks while it stays there (a sticky element's offset is where it shows);
-    // not sticky (Display), never.
-    stuck = prefs.stickyActions && a.offsetTop - sc.scrollTop <= (parseFloat(getComputedStyle(a).top) || 0) + 0.5;
+    // The glass on top: this panel's own pills, or App's row it is handed to (lib/glass).
+    const g = handed ? document.querySelector('.page-row .lead') : leftGlass;
+    if (!a || !g) return void (rowAway = false);
+    rowAway = a.getBoundingClientRect().bottom <= g.getBoundingClientRect().bottom + 0.5;
   }
   $effect(() => {
     // Another subject shows from its cover.
     void id;
-    stuck = false;
+    rowAway = false;
   });
+  /** The row's Radio, in the glass once the row is away (one action, two places: the radio sheet's, decision 0094). */
+  const radioAction = $derived(barActions.find((a) => a.key === 'radio') ?? null);
   // How it is left (ui-conventions, Panels; the owner, 2026-10-24): full screen (a phone; a window without room beside
   // the page), Back always, closing it where there is no view before this one, and Home beside it, as the navigation
   // under it is out of reach; beside the page, ✕, and Back where there is a view before this one. Every mode and view
@@ -1251,9 +1265,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
   }
 
-  /** The crate as the radio's input (decision 0036). Start radio: tracks like the crate's, from the whole library (up
-   *  to 300 of its tracks as the seed). Play as radio: only the crate's tracks, as its favourites toggle is set, never
-   *  ending and never in the same order; Cratarr reads the crate itself on each refill. */
   async function artistRadio() {
     navigator.vibrate?.(8);
     const a = artist;
@@ -1303,12 +1314,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // words; what leads off the panel (similar ones, More by, suggestions, related artists) goes.
   const own = $derived(words(pageView.query).length > 0);
 
-  async function crateRadio(inside: boolean) {
+  /** The crate as the radio's input (decision 0036): tracks like the crate's, from the whole library (up to 300 of its
+   *  tracks as the seed). */
+  async function crateRadio() {
     const c = crate;
     if (!c) return;
     navigator.vibrate?.(8);
     try {
-      if (inside) return await startRadio([], title, c);
       await crateRadioOf(c, title);
     } catch (e) {
       toast.fail(e, "The radio didn't start");
@@ -1878,11 +1890,19 @@ ${r.album_artist ?? r.artist ?? ''}`;
           search: full ? pageUnder : null,
         }
       : null;
-  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, below: () => stuck && !own });
+  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, item: true });
 </script>
 
 <!-- This panel's glass: its floating pills, or App's row on a phone (lib/glass). -->
-{#snippet glassLeft()}<span class="navpill">{@render leave()}</span>{/snippet}
+{#snippet glassLeft()}<span class="navpill" bind:this={leftGlass}
+    >{@render leave()}{#if rowAway && radioAction && !editing && !crateEditing}{@const r = radioAction}<button
+        aria-label={r.label}
+        title={r.label}
+        disabled={r.disabled || (!!starting && starting !== r.key)}
+        aria-busy={starting === r.key}
+        onclick={r.run}><Icon name={r.icon} size={22} /></button
+      >{/if}</span
+  >{/snippet}
 {#snippet glassExtra()}<PanelPlace />{/snippet}
 
 {#snippet leave()}
@@ -1924,14 +1944,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
          filter, View and where it plays, and the panel's place, on the right (in edit mode the place only). Once the
          action bar has the top they float just under it. -->
     {#if !handed}
-      <div class="pills" class:below={stuck}>
+      <div class="pills">
         {@render glassLeft()}
         <span class="end">{#if pill()}<ContentControls {...pill()!} />{/if}<PanelPlace /></span>
       </div>
     {/if}
   {/if}
 
-  <div class="scroll" class:away={(handed || full) && everywhere()} class:own style:--act-h={prefs.stickyActions ? '52px' : '0px'} bind:this={scroller} onscroll={onScroll}>
+  <div class="scroll" class:away={(handed || full) && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
     {#if making}
       <header class="head">
         <div class="top">
@@ -1980,72 +2000,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
           </span>
         {/if}
       </div>
-      {#if editing}
-      <!-- Edit mode's bar in the action bar's place, its buttons where the bar's were: Delete, then Cancel (in red once
-           something changed) in the pencil's place, the heart staying, Save in the menu's place. -->
-      <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Edit">
-        <span class="grow"></span>
-        {#if creating}
-          <!-- New playlist: nothing to delete or favour yet; Cancel leaves, Save makes it once it has a name. -->
-          <button class="icon" aria-label="Cancel" title="Cancel" onclick={() => closePlaylist()} disabled={editing.saving}><Icon name="reset" size={24} /></button>
-          <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving || !newName} aria-busy={editing.saving}
-            ><Icon name="arrowDownToLine" size={24} /></button
-          >
-        {:else}
-        <button
-          class="icon"
-          aria-label={`Delete ${id}`}
-          title="Delete"
-          disabled={editing.saving}
-          onclick={() => {
-            menuStart = 'delete';
-            menuOpen = true;
-          }}><Icon name="trash" size={22} /></button
-        >
-        <button class="icon" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}
-          ><Icon name="reset" size={24} /></button
-        >
-        <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
-          ><Icon name="heart" size={24} /></button
-        >
-        <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={24} /></button>
-        {/if}
-      </div>
-      {:else if crateEditing}
-      <!-- A crate's edit bar, as a playlist's: Delete (one's own; a second tap confirms), Cancel in the pencil's place,
-           the favourites toggle staying, Save in the last place. -->
-      <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Edit">
-        <span class="grow"></span>
-        {#if builder?.id}
-          <button
-            class="icon"
-            class:destructive={crateDeleteArmed}
-            aria-label={crateDeleteArmed ? `Tap again to delete ${title}` : `Delete ${title}`}
-            title="Delete"
-            disabled={crateSaving}
-            onclick={deleteOwnCrate}><Icon name="trash" size={22} /></button
-          >
-        {/if}
-        <button class="icon" aria-label="Cancel" title="Cancel" onclick={cancelCrate} disabled={crateSaving}><Icon name="reset" size={24} /></button>
-        {#if favState && crate}
-          {@const c = crate}
-          <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => cycleFavourites(c)}
-            ><Icon name={favState.icon} size={24} /></button
-          >
-        {/if}
-        {#if albState && crate}
-          {@const c = crate}
-          <button class="icon" class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => cycleFavouriteAlbums(c)}
-            ><Icon name={albState.icon} size={24} /></button
-          >
-        {/if}
-        <button class="icon save" aria-label="Save" title="Save" onclick={saveCrate} disabled={crateSaving || !(crateDraft?.name.trim() || crateNamed)} aria-busy={crateSaving}
-          ><Icon name="arrowDownToLine" size={24} /></button
-        >
-      </div>
-      {:else}
-      <!-- The action bar, at the cover's foot; at the top it stays. -->
-      <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Play">
+      {#if !editing && !crateEditing}
+      <!-- The action bar, at the cover's foot; it scrolls away with the rest (the owner, 2026-11-02), Radio then in
+           the top left glass. -->
+      <div class="actbar" bind:this={actbar} role="toolbar" aria-label="Play">
         {#each barActions as a (a.key)}
           <button class="icon" aria-label={a.label} title={a.label} disabled={a.disabled || (!!starting && starting !== a.key)} aria-busy={starting === a.key} onclick={a.run}
             >{#if starting === a.key}<span class="ring-in"><ProgressRing progress={null} size={24} spin /></span>{:else}<Icon name={a.icon} size={24} />{/if}</button
@@ -2317,6 +2275,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#snippet topList()}
         <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows, null, false)}{/each}</ol>
       {/snippet}
+    {:else if waitSign.loader}
+      <Asking now />
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
     {:else if rows && shown}
@@ -2393,6 +2353,70 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {#if (handed || full) && everywhere()}<GlobalResults />{/if}
   </div>
 
+  {#if editing && !selecting}
+    <!-- Edit mode's buttons in a floating glass over the panel's end, as the select bar's (the owner, 2026-11-02: "so
+         the buttons are always in sight"): Delete, then Cancel (in red once something changed), the heart, Save. -->
+    <SelectBar label="Edit">
+
+        {#if creating}
+          <!-- New playlist: nothing to delete or favour yet; Cancel leaves, Save makes it once it has a name. -->
+          <button class="icon" aria-label="Cancel" title="Cancel" onclick={() => closePlaylist()} disabled={editing.saving}><Icon name="reset" size={24} /></button>
+          <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving || !newName} aria-busy={editing.saving}
+            ><Icon name="arrowDownToLine" size={24} /></button
+          >
+        {:else}
+        <button
+          class="icon"
+          aria-label={`Delete ${id}`}
+          title="Delete"
+          disabled={editing.saving}
+          onclick={() => {
+            menuStart = 'delete';
+            menuOpen = true;
+          }}><Icon name="trash" size={22} /></button
+        >
+        <button class="icon" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}
+          ><Icon name="reset" size={24} /></button
+        >
+        <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
+          ><Icon name="heart" size={24} /></button
+        >
+        <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={24} /></button>
+        {/if}
+    </SelectBar>
+  {:else if crateEditing && !selecting}
+    <!-- A crate's edit buttons, as a playlist's: Delete (one's own; a second tap confirms), Cancel, the favourites
+         toggles, Save. -->
+    <SelectBar label="Edit">
+
+        {#if builder?.id}
+          <button
+            class="icon"
+            class:destructive={crateDeleteArmed}
+            aria-label={crateDeleteArmed ? `Tap again to delete ${title}` : `Delete ${title}`}
+            title="Delete"
+            disabled={crateSaving}
+            onclick={deleteOwnCrate}><Icon name="trash" size={22} /></button
+          >
+        {/if}
+        <button class="icon" aria-label="Cancel" title="Cancel" onclick={cancelCrate} disabled={crateSaving}><Icon name="reset" size={24} /></button>
+        {#if favState && crate}
+          {@const c = crate}
+          <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => cycleFavourites(c)}
+            ><Icon name={favState.icon} size={24} /></button
+          >
+        {/if}
+        {#if albState && crate}
+          {@const c = crate}
+          <button class="icon" class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => cycleFavouriteAlbums(c)}
+            ><Icon name={albState.icon} size={24} /></button
+          >
+        {/if}
+        <button class="icon save" aria-label="Save" title="Save" onclick={saveCrate} disabled={crateSaving || !(crateDraft?.name.trim() || crateNamed)} aria-busy={crateSaving}
+          ><Icon name="arrowDownToLine" size={24} /></button
+        >
+    </SelectBar>
+  {/if}
   {#if selecting}
     <SelectBar label="Selected tracks" count="{selecting.size}/{shown?.length ?? 0}" onclose={() => (selecting = null)} every={{ all: !!shown?.length && selecting.size === shown.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}>
         <button class="icon" aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => actOnTicked('play')}><Icon name="play" size={24} /></button>
@@ -2737,14 +2761,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
     white-space: nowrap;
   }
 
-  /* Edit mode's Save: the accent, as a filled round. Cancel in red once there is something to lose. */
-  .actbar .icon.save {
+  /* Edit mode's Save (in its floating glass): the accent, as a filled round. Cancel in red once there is something to
+     lose. */
+  .icon.save {
     border-radius: 50%;
     background: var(--accent);
     color: var(--accent-text);
   }
 
-  .actbar .icon.destructive {
+  .icon.destructive {
     color: var(--danger-ink);
   }
 
@@ -2936,8 +2961,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     /* On a phone the mini-player floats over the end of the list (as Finamp's now-playing bar): room to scroll past it. */
     padding-bottom: calc(32px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
     /* What scrolls to a track stops clear of what is drawn over the list (lib/reveal): the bar and a mini-player along
-       the top, the action bar where it sticks, the glass under it; the mini-player and the glass along the foot. */
-    scroll-padding-top: calc(var(--bar-top, 0px) + var(--mini-top, 0px) + var(--act-h, 0px) + var(--glass-top) + var(--gutter-y));
+       the top, the glass under them; the mini-player and the glass along the foot. */
+    scroll-padding-top: calc(var(--bar-top, 0px) + var(--mini-top, 0px) + var(--glass-top) + var(--gutter-y));
     scroll-padding-bottom: calc(var(--mini-h, 0px) + var(--glass-bottom) + env(safe-area-inset-bottom) + var(--gutter-y));
   }
 
@@ -3169,7 +3194,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     opacity: 0.6;
   }
 
-  /* Symfonium's floating pills, over the cover; under the action bar once that has the top (its 52 px). */
+  /* Symfonium's floating pills, over the cover and the list scrolling under them. */
   .pills {
     position: absolute;
     inset: 0 0 auto;
@@ -3179,16 +3204,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
     justify-content: space-between;
     padding: 6px 8px 0;
     pointer-events: none;
-    transition: transform 150ms ease;
   }
 
   .pills > * {
     pointer-events: auto;
   }
 
-  .pills.below {
-    transform: translateY(52px);
-  }
 
   .pills .end {
     display: flex;
@@ -3314,13 +3335,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     pointer-events: none;
   }
 
-  /* The action bar, icons only: over the cover's foot, then staying at the top (with back and the panel's place). */
-  /* Not sticky (Display's Sticky action bar off): it scrolls away with the rest. */
-  .actbar.loose {
-    position: relative;
-    top: auto;
-  }
-
   /* A Play under way: the shared ring where its icon was (lib/ProgressRing centres itself on what holds it). */
   .ring-in {
     position: relative;
@@ -3329,10 +3343,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     height: 24px;
   }
 
+  /* The action bar, icons only: over the cover's foot, scrolling away with the rest. */
   .actbar {
-    position: sticky;
-    /* Docked under the bar of pages and a mini-player along the top, both drawn over the panel (App). */
-    top: calc(var(--bar-top, 0px) + var(--mini-top, 0px));
+    position: relative;
     z-index: 2;
     display: flex;
     align-items: center;
@@ -3341,10 +3354,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     padding: 0 4px;
   }
 
-  .actbar.stuck {
-    background: var(--surface);
-    box-shadow: 0 1px 0 var(--border);
-  }
 
   .actbar .icon {
     flex: none;
