@@ -12,6 +12,10 @@
 //!
 //! Its writers so far: types, years and Classical into the files (`file_facts`). Health's fixes, Renumber, the tempo,
 //! the covers, the length fixes and single-track intake move here in that order (0092).
+//!
+//! The album actions (Keep, a move between libraries, Replace, Delete) are on the one list too (the owner, 2026-11-02:
+//! a move "was hard to see … Health activity had no listing of this"): told as they go (`Tracked`: moving, then adding
+//! while the library reads it), then from the journal, each with its own Undo (`m…`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -108,7 +112,7 @@ pub struct Status {
     pub id: String,
     pub what: String,
     pub title: String,
-    /// waiting, writing or done.
+    /// waiting, writing, adding (an album action's files moved, its library reading it) or done.
     pub state: &'static str,
     /// Records done of all.
     pub done: usize,
@@ -139,6 +143,10 @@ pub struct FilesState {
 
 /// What a run's id and undo token start with (a kept run: its journal id).
 pub const RUN: char = 'r';
+/// An album action's (its journal event's id).
+pub const MOVE: char = 'm';
+/// How long a Keep or a move waits for its library to read the record before it says done anyway.
+const ADDING_MOST: std::time::Duration = std::time::Duration::from_secs(600);
 /// A run not kept yet (waiting or writing).
 const LIVE: char = 'l';
 /// Albums apart, so a run never takes the disk from playback.
@@ -453,12 +461,95 @@ fn kept_status(id: i64, at: i64, run: &FileRun, undone: bool) -> Status {
     }
 }
 
-/// Every run since `since`: those waiting or writing, then those kept, newest first.
+/// Every run since `since`: those going, then those kept and the album actions, newest first.
 pub fn runs(app: &super::App, since: i64) -> Result<Vec<Status>> {
     let mut out: Vec<Status> = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.values().cloned().collect()).unwrap_or_default();
     out.retain(|s| s.state != "done");
-    out.extend(app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)));
+    let mut kept: Vec<Status> = app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
+    kept.extend(app.journal.album_events_since(since)?.iter().filter(|(id, ..)| !out.iter().any(|s| s.id == format!("{MOVE}{id}"))).map(|(id, at, e, undone)| moved_status(*id, *at, e, *undone)));
+    kept.sort_by(|a, b| b.at.cmp(&a.at));
+    out.extend(kept);
     Ok(out)
+}
+
+/// What an album action is called on the list, and its title.
+fn named(e: &crate::journal::Event) -> (&'static str, String) {
+    use crate::journal::Event;
+    match e {
+        Event::AlbumAdopted { title, to_dir, .. } if to_dir.0 == 0 => ("keep", format!("Kept into Music: {title}")),
+        Event::AlbumAdopted { title, .. } => ("move", format!("Moved: {title}")),
+        Event::AlbumReplaced { title, .. } => ("replace", format!("Replaced: {title}")),
+        Event::AlbumRejected { title, .. } => ("delete", format!("Deleted: {title}")),
+    }
+}
+
+/// An album action's status, from the journal.
+fn moved_status(id: i64, at: i64, e: &crate::journal::Event, undone: bool) -> Status {
+    let (what, title) = named(e);
+    Status { id: format!("{MOVE}{id}"), what: what.into(), title, state: "done", done: 1, of: 1, failed: Vec::new(), at: Some(at), undo: Some(format!("{MOVE}{id}")), undone, albums: 1 }
+}
+
+/// An album action told on the list as it goes (`track`): moving, then adding until its library has read it, then done
+/// with its Undo; or failed, with why.
+pub struct Tracked {
+    status: Status,
+}
+
+/// An album action starting (`what`: keep, move, replace; `title` as the list names it): told moving.
+pub fn track(what: &str, title: String) -> Tracked {
+    let status = Status {
+        id: format!("{LIVE}{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        what: what.into(),
+        title,
+        state: "writing",
+        done: 0,
+        of: 1,
+        failed: Vec::new(),
+        at: None,
+        undo: None,
+        undone: false,
+        albums: 1,
+    };
+    tell(&status);
+    Tracked { status }
+}
+
+impl Tracked {
+    /// It could not be done: why, and done.
+    pub fn failed(mut self, album: &str, why: String) {
+        self.status.failed.push(RunFailed { album: album.into(), title: None, artist: None, file: None, why });
+        self.end(None);
+    }
+
+    /// Its files moved (`undo`: the action's journal id): adding while `added` says its library has not read it yet,
+    /// asked every few seconds for at most `ADDING_MOST`, then done.
+    pub fn moved<F, Fut>(mut self, undo: Option<String>, added: F)
+    where
+        F: Fn() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
+        self.status.state = "adding";
+        self.status.done = 1;
+        tell(&self.status);
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            while started.elapsed() < ADDING_MOST && !added().await {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+            self.end(undo);
+        });
+    }
+
+    fn end(mut self, undo: Option<String>) {
+        self.status.state = "done";
+        self.status.at = Some(super::moment::now_secs());
+        self.status.undo = undo.map(|id| format!("{MOVE}{id}"));
+        tell(&self.status);
+        // Its id from now on: the journal's, as the list reads it.
+        if let Some(kept) = self.status.undo.clone() {
+            let _ = channel().send(Status { id: kept, ..self.status.clone() });
+        }
+    }
 }
 
 /// A kept run's id as the journal's.
@@ -466,8 +557,24 @@ fn kept_id(token: &str) -> Result<i64> {
     token.strip_prefix(RUN).and_then(|n| n.parse().ok()).context("Not a kept run")
 }
 
-/// A kept run, its records as written.
+/// A kept run, its records as written; an album action, its folder before and after.
 pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
+    if let Some(id) = token.strip_prefix(MOVE).and_then(|n| n.parse::<i64>().ok()) {
+        use crate::journal::Event;
+        let entry = app.journal.get(id)?.filter(|e| e.applied).context("That is no longer kept")?;
+        let status = moved_status(id, entry.at, &entry.event, entry.undone);
+        let folders = app.library.catalogue().folders();
+        let place = |(f, rel): &(i64, String)| folders.get(*f as usize).map_or_else(|| rel.clone(), |root| root.join(rel).display().to_string());
+        let (album, title, before, after) = match &entry.event {
+            Event::AlbumAdopted { album_id, title, from_dir, to_dir, .. } => (album_id, title, vec![place(from_dir)], vec![place(to_dir)]),
+            Event::AlbumReplaced { album_id, title, .. } => (album_id, title, Vec::new(), Vec::new()),
+            Event::AlbumRejected { album_id, title, folder, dir, .. } => (album_id, title, vec![place(&(*folder, dir.clone()))], vec!["the trash".to_string()]),
+        };
+        let fields = if before.is_empty() { Vec::new() } else { vec![FieldView { field: "folder".into(), track: None, before, after, from: status.what.clone() }] };
+        let record = RecordView { album: album.clone(), title: title.clone(), artist: String::new(), files: 0, fields, written: None, undone: Some(entry.undone), stamp: None };
+        let sheet = PlanView { kind: status.what.clone(), title: status.title.clone(), records: vec![record] };
+        return Ok((status, sheet));
+    }
     let id = kept_id(token)?;
     let (run, at, undone) = app.journal.file_run(id)?.context("That run is no longer kept")?;
     Ok((kept_status(id, at, &run, undone), view(&run.what, &run.title, &run.records, &run.files, true)))
@@ -476,6 +583,15 @@ pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
 /// Undoes a run (`r…`), or its records `albums`: each file put back where it still holds what the run wrote, the
 /// others set aside ("changed since it was written"). Its status, `undone` once all of it is.
 pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>>) -> Result<Status> {
+    // An album action: its own Undo (Incoming's), then its status as the list has it.
+    if let Some(key) = token.strip_prefix(MOVE) {
+        app.incoming.undo(key).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let id: i64 = key.parse().context("Not an album action")?;
+        let entry = app.journal.get(id)?.context("That is no longer kept")?;
+        let status = moved_status(id, entry.at, &entry.event, true);
+        tell(&status);
+        return Ok(status);
+    }
     let id = kept_id(token)?;
     let (run, at, undone) = app.journal.file_run(id)?.context("That run is no longer kept")?;
     if undone {

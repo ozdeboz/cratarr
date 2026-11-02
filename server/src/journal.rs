@@ -380,6 +380,22 @@ impl Journal {
 
     /// The last album action done (and not undone) on a server's album: what became of it, for a page still showing
     /// the album by its old id.
+    /// The album actions applied since `since` (epoch seconds), newest first: id, when, the event, whether undone.
+    pub fn album_events_since(&self, since: i64) -> Result<Vec<(EventId, i64, Event, bool)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, at, event, undone_at FROM events WHERE applied = 1 AND at >= ?1 ORDER BY id DESC")?;
+        let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, at, event, undone) = row?;
+            // An event of another kind than the album actions is not one of them.
+            if let Ok(e) = serde_json::from_str::<Event>(&event) {
+                out.push((id, at, e, undone.is_some()));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn album_fate(&self, source: &str, album_id: &str) -> Result<Option<Event>> {
         let db = self.db();
         let event: Option<String> = db
