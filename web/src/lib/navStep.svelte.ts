@@ -15,7 +15,7 @@ export const onArrival = (f: (l: Leave) => void) => void letGo.push(f);
 
 let pending: Pending | null = null;
 let timer: ReturnType<typeof setTimeout> | undefined;
-const asked = (): Where => ({ page: navPlace.page, viewed: panel.viewed, hash: location.hash.split('?')[0] || '#/' });
+const asked = (): Where => ({ page: navPlace.page, viewed: panel.viewed, hash: location.hash.split('?')[0] || '#/home' });
 const shown = (): Where => ({ page: navPlace.shownPage, viewed: panel.shown });
 
 function run() {
