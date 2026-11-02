@@ -76,6 +76,8 @@ android {
 
     buildFeatures {
         buildConfig = true
+        // The app's name per build (a preview's "Cratarr preview": `cratarr.preview.server`).
+        resValues = true
     }
 
     compileOptions {

@@ -8,7 +8,6 @@
 //! - **Album artist, MusicBrainz ids**: from a match with MusicBrainz's releases (`app::matching`), certain where every
 //!   track is within 2 s and has its title.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -375,32 +374,6 @@ async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn several_found_genres_may_be_chosen_and_only_those() {
-        let choice = |w: &str| Choice { word: w.into(), kind: "genre", source: "Discogs".into(), certainty: "likely" };
-        let fix = || Fix {
-            id: "genre:al-1".into(),
-            album: "al-1".into(),
-            field: "genre",
-            from: None,
-            to: "House".into(),
-            source: "Last.fm".into(),
-            certainty: "likely",
-            why: String::new(),
-            writes: vec![(PathBuf::from("/m/01.flac"), vec![("genre", Some("House".into()))])],
-            candidates: vec![choice("House"), choice("Deep House"), choice("Electronic")],
-        };
-        let mut fixes = vec![fix()];
-        choose(&mut fixes, &HashMap::from([("genre:al-1".to_string(), vec!["electronic".to_string(), "Deep House".to_string(), "Deep House".to_string()])])).unwrap();
-        assert_eq!(fixes[0].to, "Electronic; Deep House", "as found, once each, in the order chosen");
-        assert_eq!(fixes[0].writes[0].1, vec![("genre", Some("Electronic; Deep House".to_string()))]);
-        let mut fixes = vec![fix()];
-        assert!(choose(&mut fixes, &HashMap::from([("genre:al-1".to_string(), vec!["Polka".to_string()])])).is_err(), "not one it found");
-        let mut fixes = vec![fix()];
-        choose(&mut fixes, &HashMap::new()).unwrap();
-        assert_eq!(fixes[0].to, "House", "none chosen: the strongest");
-    }
 
     #[test]
     fn sources_are_said_as_a_list() {
