@@ -490,7 +490,7 @@ mod tests {
         let lib = Library::of(&[r.clone(), other], &HashMap::new());
         let w = record(&lib, &r);
         assert_eq!(kind(&w, Kind::Genre), [("Techno", &[Source::Files][..])]);
-        assert_eq!(kind(&w, Kind::Style), [("religious", &[Source::Files, Source::Discogs][..])]);
+        assert_eq!(kind(&w, Kind::Style), [("Religious", &[Source::Files, Source::Discogs][..])], "one spelling, the library's");
         assert_eq!(kind(&w, Kind::Mood), [("sad", &[Source::Audiomuse][..])], "mood measured only");
         let tags: Vec<&str> = kind(&w, Kind::Tag).into_iter().map(|(w, _)| w).collect();
         assert_eq!(tags, ["melancholic", "dark"], "the files' word kept, the service's above the floor");
