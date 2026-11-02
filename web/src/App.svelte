@@ -78,6 +78,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { tick, untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
+  import { longpress } from './lib/longpress';
   import { followAddress, setBeside } from './lib/panel.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
@@ -769,6 +770,12 @@
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
   }
+  /** A long-press on the grip (the owner, 2026-11-02): the panel locked, kept as the pages of music change, or unlocked
+   *  again; locked, the grip's handle has a pill of the accent round it. */
+  function toggleLock() {
+    navigator.vibrate?.(8);
+    prefs.panelLocked = !prefs.panelLocked;
+  }
   function gripKey(e: KeyboardEvent) {
     const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0;
     if (!step) return;
@@ -1157,8 +1164,10 @@
         aria-valuemin={PLAYER_MIN}
         aria-valuemax={area.w - PAGE_MIN}
         tabindex="0"
+        class:locked={prefs.panelLocked}
         onpointerdown={grip}
         onkeydown={gripKey}
+        use:longpress={toggleLock}
       ></div>
     {/if}
     {#if besideDrawn}
