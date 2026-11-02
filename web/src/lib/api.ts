@@ -330,7 +330,8 @@ export type Collection =
   | { kind: 'tracks'; source: string; ids: string[] };
 /** play: in its order (from a track, or its first 500) · shuffle: 500 from all of it, mixed · next: after the playing
  *  track · last: at the end of the queue. */
-export type PlayHow = 'play' | 'shuffle' | 'next' | 'last';
+/** now: one track (a list of one) at once, after the playing one, the rest of the queue kept (the owner, 2026-11-02). */
+export type PlayHow = 'play' | 'shuffle' | 'next' | 'last' | 'now';
 /** A crate with its two toggles as the page shows them (a tap may be on its way); else as saved. `without`: the
  *  libraries switched off (CrateLook). */
 export type Picking =

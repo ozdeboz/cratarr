@@ -47,6 +47,8 @@ export async function playCollection(what: Collection, how: PlayHow, name: strin
   // on, it says so (0.12: no longer handed to the media server's player).
   if (!port().holdsQueue) return choosePlayer();
   const got = await pickHereOr(shown(what, look), how, from, source);
-  // The server's shuffle is in its pick already: played as it comes, not shuffled again.
-  return port().playTracks(got.tracks, how === 'shuffle' ? 'play' : how, name, got.source, got.index);
+  // A list of one is one track: it plays now and the queue stays (the owner, 2026-11-02); else the server's shuffle is
+  // in its pick already, played as it comes, not shuffled again.
+  const one = got.tracks.length === 1 && (how === 'play' || how === 'shuffle' || how === 'now');
+  return port().playTracks(got.tracks, one ? 'now' : how === 'shuffle' ? 'play' : how, name, got.source, got.index);
 }
