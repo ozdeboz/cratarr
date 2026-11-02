@@ -35,7 +35,7 @@ const AREA_OF: Record<string, Area> = {
 };
 export const areaOf = (domain: string): Area => AREA_OF[domain] ?? 'Connections';
 
-const PAGES: Record<string, string> = { library: '#/library', playlists: '#/', settings: '#/settings', health: '#/health', requests: '#/requests' };
+const PAGES: Record<string, string> = { library: '#/library', playlists: '#/playlists', settings: '#/settings', health: '#/health', requests: '#/requests' };
 
 /** Opens where a finding is dealt with (a switch turned on there first); none: nothing. */
 export function openFinding(f: HealthFinding) {

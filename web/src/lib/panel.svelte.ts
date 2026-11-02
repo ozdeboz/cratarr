@@ -136,7 +136,8 @@ export const panel = $state({
 });
 
 const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
-const base = () => location.hash.split('?')[0] || '#/';
+// Every page has an address of its own (App's `fromHash` writes Home's where there is none).
+const base = () => location.hash.split('?')[0] || '#/home';
 /** What of the address is the page's own, kept as the panel opens and closes over it (the Library's composer, 0.10). */
 const PAGE_KEYS = ['composer'];
 function pageQuery() {

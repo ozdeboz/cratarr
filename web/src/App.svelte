@@ -102,7 +102,7 @@
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
   // 0025: Health beside Settings, Insights beside Health).
-  const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
+  const PLAYLISTS: Page = { id: 'playlists', href: '#/playlists', label: 'Playlists', icon: 'playlists' };
   // Albums outside the library, from what is listened to (decision 0069): beside Playlists (the owner, 2026-10-24).
   const DISCOVER: Page = { id: 'discover', href: '#/discover', label: 'Discover', icon: 'compass' };
   // The quick look, the leftmost tab (the owner, 2026-10-23); where the app opens without an address.
@@ -139,19 +139,19 @@
   /** A tab's least width in the bar: more fit on a wider screen. */
   const BAR_SLOT_PX = 72;
 
-  // Playlists are created, renamed, deleted and repaired on the Playlists page and its panel now; old Manage and
-  // Repairs links land there (decision 0025). The page is the address before `?` (what is viewed rides along as
-  // `?view=`, decision 0023).
+  // The page is the address before `?` (what is viewed rides along as `?view=`, decision 0023). One address a page
+  // (the owner, 2026-11-02): none, the bare `#/` (Playlists' once) or one no page has is Home's, written as `#/home`, so
+  // what builds an address from the one shown (lib/panel) never needs to know that none means Home: a moment's cover
+  // opened on Home as the app first showed it went to Playlists first.
+  /** Opened without an address of its own (the app's downloads away from home, below). */
+  const openedBare = !location.hash.replace(/^#\/?/, '');
   const fromHash = () => {
     const [h, rest] = location.hash.split('?');
-    if (FORMER.includes(h)) {
-      history.replaceState(history.state, '', LIBRARY.href + (rest ? `?${rest}` : ''));
-      return LIBRARY.id;
-    }
-    if (!h) return HOME.id;
+    const as = (to: Page) => (history.replaceState(history.state, '', to.href + (rest ? `?${rest}` : '')), to.id);
+    if (FORMER.includes(h)) return as(LIBRARY);
     // 0.9.16's addresses of the Library's pages (`#/library/tracks`): the Library, its one page now.
     if (h.startsWith(`${LIBRARY.href}/`)) return LIBRARY.id;
-    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, FIND, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    return [HOME, PLAYLISTS, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, FIND, ...LOCAL].find((p) => p.href === h)?.id ?? as(HOME);
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -801,7 +801,7 @@
     if (!inApp || openedAway || reach.answered || !reach.away || localMode()) return;
     if (!downloads.known) return askDownloads();
     openedAway = true;
-    if (downloads.tracks.length && (page === HOME.id || page === PLAYLISTS.id) && !location.hash.replace(/^#\/?/, '')) {
+    if (downloads.tracks.length && page === HOME.id && openedBare) {
       history.replaceState(history.state, '', DOWNLOADS.href);
       page = DOWNLOADS.id;
     }
