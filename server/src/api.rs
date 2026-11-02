@@ -4278,6 +4278,7 @@ async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::cat
     Ok(Json(status.map_err(ToggleError::from)?))
 }
 
+/// The files with a problem: 500 of each kind at most (`Catalogue::problems`), so each kind's Health panel lists its own.
 async fn catalogue_problems(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::catalogue::Problem>>, ApiError> {
     let c = app.library.catalogue();
     let list = tokio::task::spawn_blocking(move || c.problems(500)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
