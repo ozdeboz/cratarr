@@ -334,6 +334,8 @@ pub struct OwnPlaylist {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayHow {
     /// Replace what plays, in the given order.
+    Replace,
+    /// Played at once, right after the current track, the rest of the queue kept (one track plays now, 2026-11-02).
     Now,
     /// Right after the current track, in the given order.
     Next,

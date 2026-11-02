@@ -408,10 +408,11 @@ impl JellyfinSource {
         // Finamp re-sorts a multi-track PlayNext/PlayLast batch by track number, so those go one track per
         // command (decision 0006).
         let commands: Vec<(&str, Vec<String>)> = match how {
-            super::PlayHow::Now => vec![("PlayNow", ids.to_vec())],
+            super::PlayHow::Replace => vec![("PlayNow", ids.to_vec())],
             // In file order, not reversed: Finamp puts each "play next" track after the ones already queued
-            // as next (verified on the tablet 2026-10-12: reversed sending played them backwards).
-            super::PlayHow::Next => ids.iter().map(|i| ("PlayNext", vec![i.clone()])).collect(),
+            // as next (verified on the tablet 2026-10-12: reversed sending played them backwards). Now: as next, then
+            // on to it (Jellyfin has no "play now, keep the queue").
+            super::PlayHow::Next | super::PlayHow::Now => ids.iter().map(|i| ("PlayNext", vec![i.clone()])).collect(),
             super::PlayHow::Last => ids.iter().map(|i| ("PlayLast", vec![i.clone()])).collect(),
         };
         let mut last_error = None;
@@ -425,6 +426,10 @@ impl JellyfinSource {
                     ok = false;
                     break;
                 }
+            }
+            // Every session of the device, as `transport` sends: the one that takes NextTrack does.
+            if ok && how == super::PlayHow::Now {
+                let _ = self.jf.playstate(session, "NextTrack").await;
             }
             if ok {
                 sent += 1;
@@ -733,7 +738,7 @@ impl Source for JellyfinSource {
                 .map(|s| s.now_playing_queue_full_items.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
                 .find(|q| q.iter().any(|i| i == track))
                 .context("that track is no longer in the player's queue")?;
-            self.cast(&from_track(&queue, track), super::PlayHow::Now, None).await
+            self.cast(&from_track(&queue, track), super::PlayHow::Replace, None).await
         })
     }
 
@@ -975,7 +980,7 @@ impl Source for JellyfinSource {
     }
 
     fn play_from<'a>(&'a self, ids: &'a [String], start_secs: f64) -> Fut<'a, String> {
-        Box::pin(self.cast(ids, super::PlayHow::Now, Some((start_secs * 10_000_000.0) as i64)))
+        Box::pin(self.cast(ids, super::PlayHow::Replace, Some((start_secs * 10_000_000.0) as i64)))
     }
 
     fn album_cover<'a>(&'a self, album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
