@@ -2149,8 +2149,9 @@ struct Page {
     favourite_albums: Option<crate::crates::Favourites>,
     filter: Option<String>,
     /// The order the list shows (decision 0060: own, title, artist, albumArtist, album, year, track, length, tempo,
-    /// plays, lastPlayed, added; decision 0094's bestMatch), `down` turned round; applied before the rows are paged.
-    #[serde(default)]
+    /// plays, lastPlayed, added; decision 0094's bestMatch, what it opens on: `CrateOrder::opened`), `down` turned
+    /// round; applied before the rows are paged.
+    #[serde(default = "crate::app::CrateOrder::opened")]
     order: crate::app::CrateOrder,
     #[serde(default)]
     down: bool,

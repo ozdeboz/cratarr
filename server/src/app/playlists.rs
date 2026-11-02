@@ -471,8 +471,9 @@ pub struct CrateLook {
     pub without: Vec<String>,
     #[serde(default)]
     pub filter: Vec<crates::Condition>,
-    /// The order its list shows (decision 0060), applied before its rows are paged, and to what Play plays.
-    #[serde(default)]
+    /// The order its list shows (decision 0060), applied before its rows are paged, and to what Play plays; asked
+    /// for none, Best match (`CrateOrder::opened`).
+    #[serde(default = "CrateOrder::opened")]
     pub order: CrateOrder,
     #[serde(default)]
     pub down: bool,
@@ -497,6 +498,15 @@ pub enum CrateOrder {
     LastPlayed,
     Added,
     BestMatch,
+}
+
+impl CrateOrder {
+    /// What every crate opens on when the page or a play names no order (the owner, 2026-11-02, amending decision
+    /// 0094: "Every crate"; there is no crate order of its own to show). `Default` stays the crate as saved, newest
+    /// first: what Home's shelf, a download, Home Assistant and voice take, asking no one's taste.
+    pub fn opened() -> Self {
+        CrateOrder::BestMatch
+    }
 }
 
 /// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
@@ -4137,7 +4147,9 @@ mod order_tests {
         assert_eq!((look.order, look.down), (CrateOrder::AlbumArtist, true));
         let look: CrateLook = serde_json::from_value(serde_json::json!({ "order": "lastPlayed" })).unwrap();
         assert_eq!((look.order, look.down), (CrateOrder::LastPlayed, false));
-        assert_eq!(CrateLook::default().order, CrateOrder::Own);
+        assert_eq!(CrateLook::default().order, CrateOrder::Own, "as saved, for those asking no one's taste");
+        let look: CrateLook = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(look.order, CrateOrder::BestMatch, "a crate opens on Best match");
         let look: CrateLook = serde_json::from_value(serde_json::json!({ "order": "bestMatch" })).unwrap();
         assert_eq!(look.order, CrateOrder::BestMatch);
     }

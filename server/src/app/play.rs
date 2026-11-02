@@ -39,8 +39,9 @@ pub enum Collection {
         /// The filter on it (decision 0061): conditions, unsaved, besides its own.
         #[serde(default)]
         filter: Vec<crate::crates::Condition>,
-        /// The order its list shows (decision 0060), so Play plays as it is shown.
-        #[serde(default)]
+        /// The order its list shows (decision 0060), so Play plays as it is shown; none asked, Best match
+        /// (`CrateOrder::opened`).
+        #[serde(default = "super::CrateOrder::opened")]
         order: super::CrateOrder,
         #[serde(default)]
         down: bool,

@@ -49,3 +49,15 @@
 - Radio's fixed nudge for favourites stays as part of Similar; Your taste is where favourites weigh fully.
 - The Profile switches leave the browser's preferences; a browser's old switches are not carried over (no backwards
   compatibility): each account starts with every source on.
+
+## Amendment, 2026-11-02: every crate opens on Best match
+
+The owner, asked which lists open on Best match: "Every crate." This covers one's own crates and the built-in ones:
+New for you, Sounds like, the genres and Grave digging. It amends #3 and #6. An own crate's default is Best match, not
+Added. New for you's As on Home and Sounds like's Closest first stay as choices, but neither is the default. The
+header names the order. Playlists keep their own order, and the Library keeps the one chosen there; Best match is
+still offered on every list.
+
+On the server, a crate's rows, its preview and a play of it are ordered by Best match when no order is asked for
+(`CrateOrder::opened`). Callers that ask no one's taste keep the crate as saved, newest first: Home's shelf, a
+download, Home Assistant and voice. Without an account, Best match is the crate's own order anyway.
