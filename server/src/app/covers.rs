@@ -13,8 +13,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use super::reach::Sent as _;
 
-/// What an undo token starts with.
-pub const UNDO: char = 'v';
 /// The most of an image's bytes taken: a FLAC's picture holds at most 16 MiB, and every track carries it.
 const MOST_BYTES: usize = 12 * 1024 * 1024;
 /// Discogs releases of the master looked at for their own images.
@@ -301,14 +299,6 @@ fn uploaded(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Sets an album's cover to the image at `url` (one of its candidates' hosts): written as `cover.<ext>` beside its
-/// tracks (the old cover file taken away) and inside each FLAC and MP3 track. Returns the undo token (Health's cover
-/// fix, until it is on the one path).
-pub async fn set(album: &str, url: &str) -> Result<String> {
-    let data = fetch(url).await?;
-    write(album, data).await
-}
-
 /// The cover the administrator chose (`url`) or uploaded (`data`) as a run on the one path (decision 0092's writers'
 /// map, 0.14: the choice is the yes; Undo is the run's).
 pub async fn run(app: &std::sync::Arc<super::App>, album: &str, url: Option<&str>, data: Option<Vec<u8>>) -> Result<super::file_runs::Status> {
@@ -355,12 +345,6 @@ pub async fn prepared(album: &str, url: &str) -> Result<(PathBuf, String)> {
     tokio::task::spawn_blocking(move || prepare(&a, &data)).await?
 }
 
-/// Sets an album's cover to a picture of the administrator's own, as a chosen one is set. Returns the undo token.
-pub async fn upload(album: &str, data: Vec<u8>) -> Result<String> {
-    uploaded(&data)?;
-    write(album, data).await
-}
-
 /// A picture's type and its cover file's extension; refused where it is no image Cratarr can use (its header read
 /// only: nothing is decoded).
 fn kind_of(data: &[u8]) -> Result<(&'static str, &'static str)> {
@@ -394,18 +378,6 @@ fn prepare(album: &str, data: &[u8]) -> Result<(PathBuf, String)> {
     Ok((keep, size.map_or(kind.clone(), |(w, h)| format!("{w}×{h} {kind}"))))
 }
 
-/// The picture written as the album's cover, beside its tracks and inside each, the old one kept for Undo first.
-async fn write(album: &str, data: Vec<u8>) -> Result<String> {
-    let a = album.to_string();
-    tokio::task::spawn_blocking(move || -> Result<String> {
-        let (keep, _) = prepare(&a, &data)?;
-        write_kept(&keep)?;
-        let id = keep.file_name().and_then(|n| n.to_str()).context("no id")?;
-        Ok(format!("{UNDO}{id}"))
-    })
-    .await?
-}
-
 /// The picture kept in `keep` (`prepare`) written: the old pictures kept first (written ahead), then the old cover file
 /// out, the new one beside the tracks and inside each; the tracks read again. Blocking.
 pub fn write_kept(keep: &Path) -> Result<()> {
@@ -435,13 +407,6 @@ pub fn write_kept(keep: &Path) -> Result<()> {
         served.reread(&tracks);
     }
     Ok(())
-}
-
-/// Undoes a cover change (`v…`): the new cover file taken away, the old one back, the old picture inside the tracks
-/// again (none where there was none). Safe to repeat.
-pub async fn undo(token: &str) -> Result<()> {
-    let id = token.strip_prefix(UNDO).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())).context("Not a cover's undo")?.to_string();
-    tokio::task::spawn_blocking(move || undo_kept(&kept_dir(&id)?)).await?
 }
 
 /// A cover change put back from what `write_kept` kept. Blocking.
@@ -487,11 +452,10 @@ mod tests {
         assert!(!allowed("https://localhost/x.jpg"));
     }
 
-    #[tokio::test]
-    async fn an_upload_is_a_picture_of_a_size_a_flac_can_carry() {
-        let refused = |r: Result<String>| r.unwrap_err().to_string();
-        assert!(refused(upload("al-x", b"not a picture".to_vec()).await).contains("JPEG, PNG or WebP"));
-        assert!(refused(upload("al-x", vec![0xFF; MOST_BYTES + 1]).await).contains("too large"));
-        assert!(refused(upload("al-x", vec![0xFF, 0xD8, 0xFF, 0x00, 0x01]).await).contains("not an image"), "a JPEG's mark, no picture");
+    #[test]
+    fn an_upload_is_a_picture_of_a_size_a_flac_can_carry() {
+        assert!(uploaded(b"not a picture").unwrap_err().to_string().contains("JPEG, PNG or WebP"));
+        assert!(uploaded(&vec![0xFF; MOST_BYTES + 1]).unwrap_err().to_string().contains("too large"));
+        assert!(kind_of(&[0xFF, 0xD8, 0xFF, 0x00, 0x01]).unwrap_err().to_string().contains("not an image"), "a JPEG's mark, no picture");
     }
 }

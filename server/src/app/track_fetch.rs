@@ -7,7 +7,7 @@
 //!    without flaws (`analysis::flaws`, 0.10: lossless or of its bitrate by where its highs stop, no clicks, no pop at
 //!    the end, not clipped), and named that recording by AcoustID at [`crate::acoustid::SURE`] or more;
 //! 4. "Add to album" (`add`): tagged from MusicBrainz and the album's own tags, named as its neighbours are, the cover
-//!    inside, into the album's folder; a track it replaces goes to the trash. Undo (`UNDO`) puts it all back.
+//!    inside, into the album's folder; a track it replaces goes to the trash. Undo (the run's, `undo_at`) puts it all back.
 //!
 //! A track can come from a file already on the server instead of a search (0.9.19, the owner: tracks found on old
 //! drives): one in Cratarr's own folder under slskd's (`files`), copied into staging with the original left where it is
@@ -28,8 +28,6 @@ use serde_json::Value;
 use super::musicbrainz::Asked as _;
 use crate::slskd::{Candidate, Slskd};
 
-/// What an undo token starts with.
-pub const UNDO: char = 'a';
 /// Where the connection's choices are kept (user data's server choices, as Discogs' key).
 pub const SLSKD_URL: &str = "slskd:url";
 pub const SLSKD_KEY: &str = "slskd:key";
@@ -980,12 +978,6 @@ fn tag(track: &Path, neighbour: &Path, t: &ReleaseTrack) -> Result<()> {
             Ok(())
         },
     )
-}
-
-/// Undoes an Add to album: the new track to the trash, the one it replaced back (an Undo token from before 0.14).
-pub async fn undo(token: &str) -> Result<()> {
-    let id = token.strip_prefix(UNDO).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric())).context("Not an added track's undo")?.to_string();
-    tokio::task::spawn_blocking(move || undo_at(&undo_file(&id)?)).await?
 }
 
 /// An added track's Undo from what its add kept (`file`): the new track to the trash, the one it replaced back.

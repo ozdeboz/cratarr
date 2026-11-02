@@ -8,8 +8,8 @@
 //!   MP3's info frame's counts (one written where it has none), a FLAC's STREAMINFO total. Replacing the track is the
 //!   album's single-track replacement (`track_fetch`), which the finding's items lead to.
 //!
-//! A file is written in place (its folder's owner and group kept), its original copied beside the undo first
-//! (`fix-undo/<id>/`); Undo copies it back.
+//! A file is written in place (its folder's owner and group kept), as a run on the one path (`fix_plans`, decision
+//! 0092): the run keeps its original first, and its Undo copies it back (`file_runs`).
 
 use std::path::{Path, PathBuf};
 
@@ -147,35 +147,6 @@ pub fn file_write(served: &Serve, fix: &Fix) -> Result<Option<crate::journal::Fi
         whole: Some(crate::journal::Whole { op: fix.field.to_string(), ms, kept: None, planned: super::file_runs::print(&path)?, wrote: None }),
         path,
     }))
-}
-
-/// Applies one fix: the file to read again, and its original's copy where it was written (`backups`, a folder of the
-/// undo's). Blocking.
-pub fn apply(fix: &Fix, backups: &Path, n: usize) -> Result<(PathBuf, Option<PathBuf>)> {
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let song = fix.id.split_once(':').map(|(_, s)| s).context("not a fix")?;
-    let (folder, rel, path, ..) = file_of(&served, song)?.context("that track is gone")?;
-    if fix.field == "reread" {
-        return Ok((path, None));
-    }
-    std::fs::create_dir_all(backups)?;
-    let backup = backups.join(format!("{n}-{}", path.file_name().and_then(|f| f.to_str()).unwrap_or("track")));
-    std::fs::copy(&path, &backup).with_context(|| format!("keeping {} first", path.display()))?;
-    let written = if fix.field == "seektable" {
-        crate::catalogue::tags::flac_drop_seektable(&path)
-    } else if is_flac(&path) {
-        let ms = served.catalogue().heard_ms(folder, &rel).context("its sound's length is not known")?;
-        set_flac_total(&path, ms)
-    } else {
-        set_mp3_length(&path)
-    };
-    if let Err(e) = written {
-        // Nothing half-written stays: the original back.
-        let _ = std::fs::copy(&backup, &path);
-        let _ = std::fs::remove_file(&backup);
-        return Err(e);
-    }
-    Ok((path, Some(backup)))
 }
 
 /// An MP3's info frame set to the frames and bytes its sound has; one written before its sound where it has none.

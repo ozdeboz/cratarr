@@ -3607,7 +3607,7 @@ mod tests {
         for axis in ALL_OF_AXES {
             assert_eq!(not_taken(&all(axis, ["x", "y"])), None, "{axis}");
         }
-        assert!(not_taken(&all("album", ["al-1", "al-2"])).unwrap().contains("Album"));
+        assert!(not_taken(&all("album", ["al-1", "al-2"])).unwrap().contains("Record"));
         assert!(select(&files, &[years], &w).is_empty());
     }
 

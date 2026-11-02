@@ -12,10 +12,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
-
-/// What an undo token starts with.
-pub const UNDO: char = 'f';
+use serde::Serialize;
 
 /// A fix as the page shows it, its JSON kept stable (the page builds on it).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -53,35 +50,6 @@ pub struct Choice {
     pub source: String,
     /// certain where two sources or more say it.
     pub certainty: &'static str,
-}
-
-/// The genres chosen for genre fixes (by fix id), each among what the fix offers: written as several genres ("; "
-/// between them, as the rules split them). A fix chosen for that is not a genre fix, or offered none of them, refused.
-pub fn choose(fixes: &mut [Fix], chosen: &HashMap<String, Vec<String>>) -> Result<()> {
-    for (id, words) in chosen {
-        let Some(fix) = fixes.iter_mut().find(|f| &f.id == id) else { continue };
-        if fix.field != "genre" {
-            bail!("Only a genre fix takes chosen genres");
-        }
-        let mut picked: Vec<String> = Vec::new();
-        for w in words {
-            let found = fix.candidates.iter().map(|c| c.word.as_str()).chain(std::iter::once(fix.to.as_str())).find(|c| c.eq_ignore_ascii_case(w.trim()));
-            if let Some(c) = found
-                && !picked.iter().any(|p| p.eq_ignore_ascii_case(c))
-            {
-                picked.push(c.to_string());
-            }
-        }
-        if picked.is_empty() {
-            bail!("None of those genres was found for it");
-        }
-        let to = picked.join("; ");
-        for (_, set) in fix.writes.iter_mut() {
-            *set = vec![("genre", Some(to.clone()))];
-        }
-        fix.to = to;
-    }
-    Ok(())
 }
 
 /// The tags a fix may write, by their names as the tag reader names them.
@@ -135,153 +103,9 @@ pub(crate) fn write(track: &Path, set: &[(&'static str, Option<String>)]) -> Res
     )
 }
 
-/// What Undo needs: each track's values before, by tag name.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Before {
-    tracks: Vec<(PathBuf, Vec<(String, Option<String>)>)>,
-    /// Files written whole (0.9.14, a length's fixes: `length_fixes`): each with its original's copy.
-    #[serde(default)]
-    files: Vec<(PathBuf, PathBuf)>,
-}
-
-fn undo_file(id: &str) -> Result<PathBuf> {
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let data = served.data_dir.clone().context("Cratarr's data folder is needed")?;
-    Ok(Path::new(&data).join("fix-undo").join(format!("{id}.json")))
-}
-
 /// An album's tracks' files (as Renumber reads them).
 fn track_paths(album: &str) -> Result<Vec<PathBuf>> {
     Ok(super::renumber::tracks_of(album)?.0.into_iter().map(|t| t.path).collect())
-}
-
-/// Writes the fixes into their albums' tracks, the values before kept first, and reads them again at once; a cover is
-/// set as a chosen one is (`covers::set`, its own undo). Returns the undo tokens, and the fixes that could not be
-/// written with why (the rest stand).
-pub async fn apply(fixes: Vec<Fix>) -> Result<(Vec<String>, Vec<(String, String)>)> {
-    let (covers, fixes): (Vec<Fix>, Vec<Fix>) = fixes.into_iter().partition(|f| f.field == "cover");
-    let mut tokens = Vec::new();
-    let mut failed = Vec::new();
-    for c in covers {
-        match super::covers::set(&c.album, &c.to).await {
-            Ok(t) => tokens.push(t),
-            Err(e) => failed.push((c.id, super::plain(format!("{e:#}")))),
-        }
-    }
-    let (token, more) = tokio::task::spawn_blocking(move || -> Result<(String, Vec<(String, String)>)> {
-        let id = format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis());
-        let file = undo_file(&id)?;
-        std::fs::create_dir_all(file.parent().context("no folder")?)?;
-        let mut before = Before::default();
-        let mut failed = Vec::new();
-        let mut written = Vec::new();
-        for fix in &fixes {
-            for (track, set) in &fix.writes {
-                let names: Vec<&str> = set.iter().map(|(n, _)| *n).collect();
-                let was = match values(track, &names) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        failed.push((fix.id.clone(), super::plain(format!("{}: {e:#}", track.display()))));
-                        continue;
-                    }
-                };
-                // Kept before anything changes, so Undo has every track that may have been written.
-                before.tracks.push((track.clone(), names.iter().map(|n| n.to_string()).zip(was).collect()));
-                std::fs::write(&file, serde_json::to_vec(&before)?)?;
-                match write(track, set) {
-                    Ok(()) => written.push(track.clone()),
-                    Err(e) => failed.push((fix.id.clone(), super::plain(format!("{}: {e:#}", track.display())))),
-                }
-            }
-        }
-        // A length's fixes (0.9.14): a file read again, or its length written into it, its original kept first.
-        let backups = file.with_extension("");
-        for (n, fix) in fixes.iter().filter(|f| super::length_fixes::FIELDS.contains(&f.field)).enumerate() {
-            match super::length_fixes::apply(fix, &backups, n) {
-                Ok((path, kept)) => {
-                    if let Some(kept) = kept {
-                        before.files.push((path.clone(), kept));
-                        std::fs::write(&file, serde_json::to_vec(&before)?)?;
-                    }
-                    written.push(path);
-                }
-                Err(e) => failed.push((fix.id.clone(), super::plain(format!("{e:#}")))),
-            }
-        }
-        if let Some(served) = crate::serve::instance() {
-            served.reread(&written);
-        }
-        Ok((format!("{UNDO}{id}"), failed))
-    })
-    .await??;
-    tokens.push(token);
-    failed.extend(more);
-    Ok((tokens, failed))
-}
-
-/// Applies fixes as `apply`, in a task of its own (0.9.8: a page that stops waiting, a phone gone to sleep, does not cut
-/// it off half-way), and a line in the log. The undo tokens, how many fixes were written whole, and those not with why.
-pub async fn apply_all(fixes: Vec<Fix>) -> Result<(Vec<String>, usize, Vec<(String, String)>)> {
-    let started = std::time::Instant::now();
-    let done: Vec<(String, String, &'static str)> = fixes.iter().map(|f| (f.id.clone(), f.album.clone(), f.field)).collect();
-    let (tokens, failed) = tokio::spawn(apply(fixes)).await??;
-    let mut written = 0;
-    for (id, ..) in &done {
-        if !failed.iter().any(|(f, _)| f == id) {
-            written += 1;
-        }
-    }
-    tracing::info!(target: "library", fixes = done.len(), written, failed = failed.len(), ms = started.elapsed().as_millis() as u64, "fixes applied");
-    Ok((tokens, written, failed))
-}
-
-/// Undoes fixes (`f…`): each track's values as they were. Safe to repeat.
-pub async fn undo(token: &str) -> Result<()> {
-    let id = token.strip_prefix(UNDO).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())).context("Not a fix's undo")?.to_string();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let file = undo_file(&id)?;
-        let before: Before = serde_json::from_slice(&std::fs::read(&file).context("Those fixes can no longer be undone")?)?;
-        let mut back = Vec::new();
-        // Files written whole: their originals back, in place.
-        for (path, kept) in &before.files {
-            match std::fs::copy(kept, path) {
-                Ok(_) => back.push(path.clone()),
-                Err(e) => tracing::warn!("fixes: {} not given back: {e:#}", path.display()),
-            }
-        }
-        for (track, was) in &before.tracks {
-            let set: Vec<(&'static str, Option<String>)> = was.iter().filter_map(|(n, v)| Some((static_name(n)?, v.clone()))).collect();
-            match write(track, &set) {
-                Ok(()) => back.push(track.clone()),
-                Err(e) => tracing::warn!("fixes: {} not given its tags back: {e:#}", track.display()),
-            }
-        }
-        std::fs::remove_file(&file).ok();
-        std::fs::remove_dir_all(file.with_extension("")).ok();
-        if let Some(served) = crate::serve::instance() {
-            served.reread(&back);
-        }
-        Ok(())
-    })
-    .await?
-}
-
-/// A tag name as `item_key` knows it.
-fn static_name(n: &str) -> Option<&'static str> {
-    [
-        "date",
-        "genre",
-        "albumartist",
-        "musicbrainz_albumid",
-        "musicbrainz_releasegroupid",
-        "musicbrainz_albumartistid",
-        "musicbrainz_artistid",
-        "musicbrainz_trackid",
-        "tracknumber",
-        "discnumber",
-    ]
-    .into_iter()
-        .find(|k| *k == n)
 }
 
 /// The fixes of a finding (`library:year`, `library:genre`, `library:album-artist`, `library:musicbrainz`), for each of
@@ -484,32 +308,6 @@ fn names(sources: &[String]) -> String {
     }
 }
 
-/// The fixes asked for by id (`<field>:<album>`), worked out again now for their albums (a fix applies as it stands,
-/// not as it was shown), in Music or in Incoming.
-pub async fn by_ids(app: &super::App, ids: &[String]) -> Result<Vec<Fix>> {
-    let mut albums: HashMap<&str, Vec<&String>> = HashMap::new();
-    let mut out = Vec::new();
-    for id in ids {
-        let (field, album) = id.split_once(':').with_context(|| format!("Not a fix: {id}"))?;
-        // A length's (0.9.14): by its song, worked out again now.
-        if super::length_fixes::FIELDS.contains(&field) {
-            let served = app.served.clone().context("Cratarr's own library is not open")?;
-            let (f, s) = (field.to_string(), album.to_string());
-            if let Some(fix) = tokio::task::spawn_blocking(move || super::length_fixes::fix(&served, &f, &s)).await?? {
-                out.push(fix);
-            }
-            continue;
-        }
-        albums.entry(album).or_default().push(id);
-    }
-    for (album, wanted) in albums {
-        // Only the fields asked for (0.9.8: a genre's apply worked out the album's cover candidates and match too).
-        let fields: Vec<&str> = wanted.iter().filter_map(|id| id.split_once(':').map(|(f, _)| f)).collect();
-        out.extend(of_album_only(app, album, Some(&fields)).await?.0.into_iter().filter(|f| wanted.contains(&&f.id)));
-    }
-    Ok(out)
-}
-
 /// Every fix one album has (0.9.7, Incoming's intake: what an arrival would get before it is kept), wherever it is: a
 /// year, a genre, the album artist and MusicBrainz ids from a match, a cover where it has none (the first the cover
 /// look finds; certain from the Cover Art Archive). And whether its match is still being looked for.
@@ -614,7 +412,7 @@ mod tests {
     #[test]
     fn every_tag_a_fix_writes_has_its_key() {
         for n in ["date", "genre", "albumartist", "musicbrainz_albumid", "musicbrainz_releasegroupid", "musicbrainz_albumartistid", "musicbrainz_artistid", "musicbrainz_trackid"] {
-            assert!(item_key(n).is_some() && static_name(n) == Some(n), "{n}");
+            assert!(item_key(n).is_some(), "{n}");
         }
     }
 }

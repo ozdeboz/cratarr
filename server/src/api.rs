@@ -285,13 +285,9 @@ pub fn router(app: Arc<App>) -> Router {
             )
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
-            .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
             .route("/api/intake/cards", get(intake_cards))
             .route("/api/albums/{source}/{album}/references", get(album_references).put(choose_references))
             .route("/api/albums/{source}/{album}/card", get(intake_card))
-            .route("/api/health/fixes", get(health_fixes))
-            .route("/api/health/fixes/apply", post(apply_fixes))
-            .route("/api/albums/{source}/{album}/intake", get(album_intake))
             // A record's own Health problems (0.14): its page's and its menu's.
             .route("/api/albums/{source}/{album}/health", get(album_health))
             .route("/api/albums/{source}/{album}/release", get(album_release))
@@ -4167,14 +4163,6 @@ async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json:
             );
         } else if token.starts_with('c') {
             redo.extend(app.playlists.undo(token).await?);
-        } else if token.starts_with(crate::app::covers::UNDO) {
-            crate::app::covers::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        } else if token.starts_with(crate::app::renumber::UNDO) {
-            crate::app::renumber::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        } else if token.starts_with(crate::app::fixes::UNDO) {
-            crate::app::fixes::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        } else if token.starts_with(crate::app::track_fetch::UNDO) {
-            crate::app::track_fetch::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -6498,68 +6486,6 @@ async fn look_renumber(ctx: Ctx, Path((source, album)): Path<(String, String)>) 
     own_album(&source)?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
     started(crate::app::renumber::start(&account, &album))
-}
-
-/// The numbers shown in the preview written into the album's tracks; Undo puts the old ones back.
-async fn renumber_album(Path((source, album)): Path<(String, String)>, Json(b): Json<crate::app::renumber::Asked>) -> Result<Json<serde_json::Value>, ApiError> {
-    own_album(&source)?;
-    let token = crate::app::renumber::apply(&album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
-}
-
-#[derive(Deserialize)]
-struct FixesOf {
-    finding: String,
-}
-
-/// A Health finding's fixes (0.9.7, `app::fixes`): each album's, the certain first, and how many are certain.
-async fn health_fixes(ctx: Ctx, Query(q): Query<FixesOf>) -> Result<Json<serde_json::Value>, ApiError> {
-    let app = ctx.app.clone();
-    let fixes = crate::app::fixes::of_finding(&app, &q.finding).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
-    // Album artist and MusicBrainz ids come from matches made in a task (`match`): the page asks again as it runs.
-    let matching = ctx.account().is_some_and(|a| crate::app::matching::running(&a));
-    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
-}
-
-/// Fixes to apply: these (`ids`), or every certain one of a finding (`certain`: its key).
-#[derive(Deserialize)]
-struct ApplyFixes {
-    #[serde(default)]
-    ids: Vec<String>,
-    #[serde(default)]
-    certain: Option<String>,
-    /// Genre fixes' chosen genres (0.9.8), by fix id: written as several genres.
-    #[serde(default)]
-    chosen: std::collections::HashMap<String, Vec<String>>,
-}
-
-/// Fixes written into the files (0.9.7, an administrator's tap): `{undo: [token], applied, failed: [{id, why}]}`.
-async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> Result<Json<serde_json::Value>, ApiError> {
-    let refused = |e: anyhow::Error| ToggleError::Refused(format!("{e:#}"));
-    let fixes = match &b.certain {
-        Some(finding) => crate::app::fixes::of_finding(&app, finding).await.map_err(refused)?.into_iter().filter(|f| f.certainty == "certain").collect(),
-        None => crate::app::fixes::by_ids(&app, &b.ids).await.map_err(refused)?,
-    };
-    let mut fixes = fixes;
-    crate::app::fixes::choose(&mut fixes, &b.chosen).map_err(refused)?;
-    if fixes.is_empty() {
-        return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
-    }
-    // Written whole only (0.9.8: `applied` counted those tried, and said a fix was in when it had failed).
-    let (tokens, written, failed) = crate::app::fixes::apply_all(fixes).await.map_err(refused)?;
-    let failed: Vec<serde_json::Value> = failed.into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect();
-    Ok(Json(json!({ "undo": tokens, "applied": written, "failed": failed })))
-}
-
-/// An arrival's intake (0.9.7): every fix the album would get before it is kept (year, genre, album artist,
-/// MusicBrainz ids, cover), the certain first; `matching` while its match is looked for. Applied as Health's are.
-async fn album_intake(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
-    own_album(&source)?;
-    let (mut fixes, matching) = crate::app::fixes::of_album(&app, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.field.cmp(b.field)));
-    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
-    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
 }
 
 /// Every record waiting in an Incoming library as its intake card (0.14, the owner: Health's "Records waiting for you").
