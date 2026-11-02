@@ -47,6 +47,7 @@ pub mod around;
 pub mod words;
 pub mod harvest;
 pub mod fixes;
+pub mod fix_plans;
 pub mod file_facts;
 pub mod file_runs;
 pub mod matching;

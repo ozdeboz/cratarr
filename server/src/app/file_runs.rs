@@ -75,6 +75,9 @@ pub struct PlanView {
     pub kind: String,
     pub title: String,
     pub records: Vec<RecordView>,
+    /// Still being made (a match looked for): the sheet asks again.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub making: bool,
 }
 
 /// A record on the sheet (and in a run as written: `written` of `of` files).
@@ -104,6 +107,24 @@ pub struct FieldView {
     pub before: Vec<String>,
     pub after: Vec<String>,
     pub from: String,
+    /// How sure what is proposed is (certain ones come ticked, likely ones not: decision 0092, the owner's choice 2);
+    /// none where the sheet ticks per record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certainty: Option<&'static str>,
+    /// What may be chosen instead (a genre's words found).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<FieldOption>,
+}
+
+/// One value a field may be given instead, where it was found and how sure.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FieldOption {
+    pub value: String,
+    /// genre or style, as the sources have it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    pub from: String,
+    pub certainty: &'static str,
 }
 
 /// A run's status, the same for every writer (0092).
@@ -234,6 +255,14 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
         "releasetype" => ItemKey::MusicBrainzReleaseType,
         "date" => ItemKey::RecordingDate,
         "genre" => ItemKey::Genre,
+        "albumartist" => ItemKey::AlbumArtist,
+        "musicbrainz_albumid" => ItemKey::MusicBrainzReleaseId,
+        "musicbrainz_releasegroupid" => ItemKey::MusicBrainzReleaseGroupId,
+        "musicbrainz_albumartistid" => ItemKey::MusicBrainzReleaseArtistId,
+        "musicbrainz_artistid" => ItemKey::MusicBrainzArtistId,
+        "musicbrainz_trackid" => ItemKey::MusicBrainzRecordingId,
+        "tracknumber" => ItemKey::TrackNumber,
+        "discnumber" => ItemKey::DiscNumber,
         _ => return None,
     })
 }
@@ -313,7 +342,7 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
                         let after = f.after.iter().find(|(n, _)| n == name)?.1.clone();
                         let before = f.before.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_default();
                         let from = f.from.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_default();
-                        Some(FieldView { field: name.clone(), track: f.track.clone(), before, after, from })
+                        Some(FieldView { field: name.clone(), track: f.track.clone(), before, after, from, certainty: None, options: Vec::new() })
                     })
                     .collect();
                 // The same change in every file of the record: said once.
@@ -335,7 +364,7 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
             })
         })
         .collect();
-    PlanView { kind: kind.to_string(), title: title.to_string(), records }
+    PlanView { kind: kind.to_string(), title: title.to_string(), records, making: false }
 }
 
 /// Starts a run of a proposal's ticked records (an administrator's yes, given by the route): one album at a time under
@@ -570,9 +599,9 @@ pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
             Event::AlbumReplaced { album_id, title, .. } => (album_id, title, Vec::new(), Vec::new()),
             Event::AlbumRejected { album_id, title, folder, dir, .. } => (album_id, title, vec![place(&(*folder, dir.clone()))], vec!["the trash".to_string()]),
         };
-        let fields = if before.is_empty() { Vec::new() } else { vec![FieldView { field: "folder".into(), track: None, before, after, from: status.what.clone() }] };
+        let fields = if before.is_empty() { Vec::new() } else { vec![FieldView { field: "folder".into(), track: None, before, after, from: status.what.clone(), certainty: None, options: Vec::new() }] };
         let record = RecordView { album: album.clone(), title: title.clone(), artist: String::new(), files: 0, fields, written: None, undone: Some(entry.undone), stamp: None };
-        let sheet = PlanView { kind: status.what.clone(), title: status.title.clone(), records: vec![record] };
+        let sheet = PlanView { kind: status.what.clone(), title: status.title.clone(), records: vec![record], making: false };
         return Ok((status, sheet));
     }
     let id = kept_id(token)?;

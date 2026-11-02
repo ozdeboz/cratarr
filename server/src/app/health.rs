@@ -244,8 +244,8 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// A finding's short name, by its key (the breadcrumb's; its title stays the sentence).
-fn name_of(key: &str) -> &'static str {
+/// A finding's short name, by its key (the breadcrumb's; its title stays the sentence): a fix plan's sheet's too.
+pub(super) fn name_of(key: &str) -> &'static str {
     match key {
         "files:broken" => "Unreadable files",
         "files:damaged_tag" => "Damaged tags",

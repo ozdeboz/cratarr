@@ -6659,6 +6659,9 @@ struct Ticked {
     /// Each ticked record's stamp from the sheet: a record no longer as it showed is set aside.
     #[serde(default)]
     stamps: Option<std::collections::HashMap<String, String>>,
+    /// A fix plan's choices: the fields ticked of each record, a genre's words chosen.
+    #[serde(default, flatten)]
+    chosen: crate::app::fix_plans::Chosen,
 }
 
 #[derive(Deserialize)]
@@ -6672,10 +6675,12 @@ fn file_change_refused(e: anyhow::Error) -> ApiError {
 
 /// A kind's review sheet (`types`; Health's fixes and Renumber as they move onto the path): per record its fields old
 /// → new and where the new comes from.
-async fn file_change_plan(Path(kind): Path<String>, Query(q): Query<PlanOf>) -> Result<Json<crate::app::file_runs::PlanView>, ApiError> {
+async fn file_change_plan(State(app): State<Arc<App>>, Path(kind): Path<String>, Query(q): Query<PlanOf>) -> Result<Json<crate::app::file_runs::PlanView>, ApiError> {
     let albums = q.albums.map(|a| a.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect());
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::plan(albums).await.map_err(file_change_refused)?)),
+        // Health's fixes (`fix:<finding>`) and an arrival's (`intake:<album>`): decision 0092's writers' map.
+        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::plan(&app, k).await.map_err(file_change_refused)?)),
         _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
     }
 }
@@ -6685,6 +6690,7 @@ async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>
     let albums = b.albums.unwrap_or_default();
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums, b.stamps).await.map_err(file_change_refused)?)),
+        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::apply(&app, k, albums, b.stamps, b.chosen).await.map_err(file_change_refused)?)),
         _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
     }
 }
