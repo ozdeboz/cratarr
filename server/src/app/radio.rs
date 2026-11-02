@@ -1498,7 +1498,7 @@ mod tests {
         let mut index = Index::new((0..10).map(|n| song(&format!("t{n}"), n, n, 1, 1990, &[])).collect());
         index.songs[0].skipped = 1.0;
         let (mut first, mut came, mut others) = (0, 0, 0);
-        for n in 0..400 {
+        for n in 0..400u64 {
             let req = NextRequest { seed: vec![], exclude: vec![], last: None, count: Some(5), ..ask(Mode::Random) };
             // Seeds spread over the generator's range: small ones give xorshift small first draws, and t0 is drawn first.
             let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded((n + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))));
