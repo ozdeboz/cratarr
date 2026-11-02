@@ -545,6 +545,12 @@ pub enum Command {
         after: Option<String>,
         #[serde(default, skip_serializing)]
         how: Option<String>,
+        /// Played at once (the owner, 2026-11-02: one track plays now): the first added plays now, the queue kept. The
+        /// one it cuts counts as played (it ended, not skipped) and the queue goes on after the added ones; Radio and
+        /// Autoplay go on as they were (no new seed). Nothing playing: the first added plays.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(test, ts(as = "Option<bool>", optional))]
+        now: bool,
     },
     /// Entry `entry` (or the one at place `from`) to after entry `after` ("" for first), or to place `to`.
     Move {
@@ -2486,14 +2492,16 @@ impl PlayOn {
                 Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle: false, paused, queue_id, queue_name: Some(queue_name) }
             }
             // By name too (a playlist, an album, the favourites), as `play` takes them: Home Assistant's "add this album".
-            Command::Add { from, mut tracks, at, after, how } => {
+            Command::Add { from, mut tracks, at, after, how, now } => {
+                // Now goes where Play next goes (right after the playing track), and plays.
+                let how = if now { Some("next".into()) } else { how };
                 let by = if how.as_deref() == Some("next") { How::Next } else { How::Last };
                 tracks.truncate(QUEUE_MOST);
                 let tracks = self.picked(name, &from, by, None).await?.map_or(tracks, |(t, _)| t);
                 if tracks.is_empty() {
                     return Err(ToggleError::Refused("Add what? Give tracks, a playlist, an album or the favourites.".into()));
                 }
-                Command::Add { from: PlayFrom::default(), tracks: self.named(tracks).await, at, after, how }
+                Command::Add { from: PlayFrom::default(), tracks: self.named(tracks).await, at, after, how, now }
             }
             Command::Seek { position_ms: None, percent: Some(p), wind, .. } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
@@ -4193,7 +4201,7 @@ mod tests {
         p.command("Phone", Command::Pause).await.unwrap();
         p.command("Phone", Command::Stop { moved_to: None }).await.unwrap();
         assert_eq!(said(&mut phone), ["pause", "pause"]);
-        let add = Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: None, how: None };
+        let add = Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: None, how: None, now: false };
         assert!(matches!(p.command("Phone", add).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
         let _tablet = p.connect("tablet").unwrap();
         assert!(matches!(p.command("Phone", Command::Handover { to: "tablet".into() }).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
@@ -4508,7 +4516,7 @@ mod tests {
         for c in [
             Command::Next,
             Command::Previous,
-            Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()) },
+            Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()), now: false },
             Command::Remove { index: Some(0), entry: None },
             Command::Upcoming { tracks: Vec::new(), shuffled: None },
         ] {
@@ -4548,7 +4556,7 @@ mod tests {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         assert!(p.was_following("Bob phone", now - 3), "a play told later is known as heard while following");
         assert!(!p.was_following("Bob phone", now + 10));
-        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()) };
+        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()), now: false };
         assert!(p.answer("Bob phone", add).await.is_ok());
     }
 
@@ -4628,7 +4636,7 @@ mod tests {
         assert_eq!(add["tracks"][0]["asked_by"], "bob");
         // A guest's, accepted at once; an ordinary add says nothing.
         p.ask_for(Asker::Guest("Sam".into()), "Ann phone", "ann", track("tr-8"), "last", Some("tok".into()), true).await.unwrap();
-        let plain = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-7")], at: None, after: None, how: Some("last".into()) };
+        let plain = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-7")], at: None, after: None, how: Some("last".into()), now: false };
         p.command("Ann phone", plain).await.unwrap();
         let q = queue(&p);
         assert_eq!((who(&q, "tr-9").as_deref(), who(&q, "tr-8").as_deref()), (Some("bob"), Some("Guest Sam")));

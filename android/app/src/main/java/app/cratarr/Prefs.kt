@@ -11,7 +11,7 @@ class Prefs(context: Context) {
 
     /** Cratarr's public address (the one used from anywhere), with its scheme; null until set. */
     var publicAddress: String?
-        get() = p.getString(SERVER_URL, null)?.trim()?.takeIf { it.isNotEmpty() }
+        get() = p.getString(SERVER_URL, null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.PREVIEW_SERVER.takeIf { it.isNotEmpty() }
         set(value) {
             p.edit().putString(SERVER_URL, value).apply()
         }

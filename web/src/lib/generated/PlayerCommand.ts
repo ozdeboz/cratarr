@@ -53,6 +53,12 @@ name?: string | null,
  */
 radio?: boolean, } | { "command": "add", tracks: Array<QueueTrack>, at?: number, after?: string, how?: string | null, 
 /**
+ * Played at once (the owner, 2026-11-02: one track plays now): the first added plays now, the queue kept. The
+ * one it cuts counts as played (it ended, not skipped) and the queue goes on after the added ones; Radio and
+ * Autoplay go on as they were (no new seed). Nothing playing: the first added plays.
+ */
+now?: boolean, 
+/**
  * A playlist, by name.
  */
 playlist?: string | null, 

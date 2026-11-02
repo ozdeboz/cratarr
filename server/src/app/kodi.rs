@@ -304,7 +304,8 @@ impl Driver {
                     }
                 }
             }
-            Command::Add { tracks, at, after, .. } => {
+            Command::Add { tracks, at, after, now, .. } => {
+                let first = tracks.first().map(|t| t.entry.clone());
                 let place = match after.as_deref() {
                     Some("") => Some(0),
                     Some(e) => self.queue.iter().position(|t| t.entry == e).map(|p| p + 1),
@@ -323,6 +324,10 @@ impl Driver {
                 }
                 self.queue.splice(place..place, tracks);
                 self.queue_changed = true;
+                // Played at once: on to the first added, as a tap in the queue goes.
+                if now && let Some(entry) = first {
+                    return Box::pin(self.run(Command::Jump { index: None, entry: Some(entry) })).await;
+                }
             }
             Command::Remove { index, entry } => {
                 if let Some(p) = self.place_of(entry.as_deref(), index) {
@@ -784,7 +789,7 @@ mod tests {
         assert_eq!(d.report().queue, None);
 
         // Edits by entry: one after the playing track, the last to the front, the first out.
-        d.run(Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: Some("e-tr-2".into()), how: None }).await.unwrap();
+        d.run(Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: Some("e-tr-2".into()), how: None, now: false }).await.unwrap();
         d.run(Command::Move { from: None, to: None, entry: Some("e-tr-3".into()), after: Some(String::new()) }).await.unwrap();
         d.run(Command::Remove { index: None, entry: Some("e-tr-1".into()) }).await.unwrap();
         let files: Vec<String> = kodi.lock().unwrap().playlist.iter().map(|f| f.rsplit('/').next().unwrap().to_string()).collect();
@@ -830,7 +835,7 @@ mod tests {
 
         // Past what Kodi holds, an added track waits for the fill; new upcoming tracks replace what it held after the
         // playing one.
-        d.run(Command::Add { from: Default::default(), tracks: vec![t("tr-new")], at: None, after: Some("e-tr-200".into()), how: None }).await.unwrap();
+        d.run(Command::Add { from: Default::default(), tracks: vec![t("tr-new")], at: None, after: Some("e-tr-200".into()), how: None, now: false }).await.unwrap();
         assert!(!kodi.lock().unwrap().calls.iter().any(|(m, _)| m == "Playlist.Insert"));
         d.run(Command::Upcoming { tracks: (0..60).map(|i| t(&format!("up-{i}"))).collect(), shuffled: None }).await.unwrap();
         assert_eq!((d.queue.len(), kodi.lock().unwrap().playlist.len()), (161, 101));
