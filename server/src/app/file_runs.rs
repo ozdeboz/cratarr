@@ -338,6 +338,10 @@ pub fn print(path: &Path) -> Result<String> {
 /// `keep` first, the change made, the original back where it fails. Its copy and its print as written kept.
 fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize) -> Result<()> {
     let Some(w) = f.whole.as_mut() else { bail!("not a whole file's change") };
+    // A cover: its folder's picture and its tracks', from what `covers` kept.
+    if w.op == "cover" {
+        return super::covers::write_kept(w.kept.as_ref().context("the picture is no longer kept")?);
+    }
     if print(&f.path)? != w.planned {
         bail!("changed since it was planned");
     }
@@ -358,6 +362,10 @@ fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize) -> Result<()> {
 
 /// A file written whole put back: as planned already, nothing (false); as written, its copy back (true); else set aside.
 fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bool> {
+    if w.op == "cover" {
+        super::covers::undo_kept(w.kept.as_ref().context("its old cover is no longer kept")?)?;
+        return Ok(true);
+    }
     let now = print(path)?;
     if now == w.planned || w.kept.is_none() {
         return Ok(false);
@@ -830,7 +838,8 @@ async fn reread(paths: &[PathBuf]) {
         return;
     }
     let Some(served) = crate::serve::instance() else { return };
-    let paths = paths.to_vec();
+    // Files only: a cover's run names its folder (its tracks read again by `covers`).
+    let paths: Vec<PathBuf> = paths.iter().filter(|p| !p.is_dir()).cloned().collect();
     let _ = tokio::task::spawn_blocking(move || served.reread(&paths)).await;
 }
 

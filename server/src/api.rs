@@ -6483,10 +6483,10 @@ async fn look_album_covers(ctx: Ctx, Path((source, album)): Path<(String, String
 }
 
 /// Upload cover (0.9.6): the picture sent as the body (JPEG, PNG or WebP) set as a chosen cover is; Undo as there.
-async fn upload_album_cover(Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<serde_json::Value>, ApiError> {
+async fn upload_album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
     own_album(&source)?;
-    let token = crate::app::covers::upload(&album, body.to_vec()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
+    // A run on the one path (0.14): the upload is the yes, Undo the run's.
+    Ok(Json(crate::app::covers::run(&app, &album, None, Some(body.to_vec())).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// Renumber's look (0.9.6) as a task: its result the preview, what `POST …/renumber` would write.
@@ -6569,10 +6569,10 @@ struct SetCover {
 }
 
 /// An album's cover set to one of its candidates: beside its tracks and inside each; Undo puts the old one back.
-async fn set_album_cover(Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn set_album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
     own_album(&source)?;
-    let token = crate::app::covers::set(&album, &b.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "undo": [token] })))
+    // A run on the one path (0.14): the choice is the yes, Undo the run's.
+    Ok(Json(crate::app::covers::run(&app, &album, Some(&b.url), None).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// How MusicBrainz stands (0.9.6, Settings › Connections): when last reached, the last failure, the background pass.
