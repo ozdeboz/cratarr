@@ -83,7 +83,8 @@
         return {
           d,
           id: path,
-          name: folderName(path),
+          // Its own name where given (the owner, 2026-11-02), else its folder's.
+          name: ed.policyOf(d, path).name?.trim() || folderName(path),
           where: path,
           problem: st && !st.exists ? 'Not found. Mount it into Cratarr and restart it.' : st && !st.writable && u !== 'unused' ? 'Read only' : null,
           status: st && st.exists ? statusLine(st, u) : null,
@@ -165,6 +166,16 @@
   {@const u = ed.useOf(l.d, l.id)}
   {@const pol = ed.policyOf(l.d, l.id)}
   <Group>
+    {#if l.folder}
+      <!-- Cratarr's own library: its name, the folder's until another is given (the owner, 2026-11-02: it could not be
+           changed, "It just picks the path"); emptied, the folder's again. -->
+      <Item
+        name="Name"
+        value={l.name}
+        onclick={() =>
+          (typing = { title: 'Name', value: l.name, placeholder: folderName(l.id), save: (v) => ed.setPolicy(l.d, l.id, { name: v.trim() && v.trim() !== folderName(l.id) ? v.trim() : null }) })}
+      />
+    {/if}
     <!-- The row says it, the choice sheet picks it (the owner, 2026-10-25). -->
     <Item name="Use" more={USE_MORE} value={useLabel(u)} onclick={() => (choosingUse = l)} />
     {#if u !== 'unused'}

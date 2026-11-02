@@ -51,7 +51,9 @@
     const want = kept.items.reduce((n, i) => n + i.total - i.over_budget, 0);
     const done = kept.items.reduce((n, i) => n + i.done, 0);
     const busy = keptBusy();
-    return { icon: 'refresh', label: 'Sync now', run: syncKept, progress: busy ? (want ? done / want : 0) : null, line: busy ? `Syncing · ${done} of ${want}` : null };
+    // Ended, it says where it got (the pill shows it for its moment, or held: the owner, 2026-11-02).
+    const level = want ? done / want : 1;
+    return { icon: 'refresh', label: 'Sync now', run: syncKept, progress: busy ? level : null, line: busy ? `Syncing · ${done} of ${want}` : done < want ? `Synced · ${done} of ${want}` : 'Up to date', level };
   });
 </script>
 

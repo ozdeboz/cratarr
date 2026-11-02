@@ -3,8 +3,8 @@
 import type { ExportFormat, ExportLayout, ExportPreview, ExportRequest, ExportWhat } from './api';
 
 export type ExportOptions = {
-  /** Playlists: with their tracks, else only the playlist files. */
-  tracks: boolean;
+  /** Playlists: only the playlist files, not their tracks (the owner, 2026-11-02: "Playlist only", off as it comes). */
+  playlistOnly: boolean;
   /** Several playlists: combined into one. */
   combine: boolean;
   /** The combined playlist's name; it follows the selection until typed in (`named`). */
@@ -35,7 +35,7 @@ export const LAYOUTS: { value: ExportLayout; label: string }[] = [
 ];
 
 export const blankExport = (): ExportOptions => ({
-  tracks: false,
+  playlistOnly: false,
   combine: false,
   name: '',
   named: false,
@@ -47,12 +47,12 @@ export const blankExport = (): ExportOptions => ({
 });
 
 /** The choices as kept in this browser, each that is not one of today's left at its default; an older version's "All
- *  tracks in one folder" is the one-folder layout. */
+ *  tracks in one folder" is the one-folder layout. The old "Include tracks" is not read: Playlist only starts off. */
 export function keptExport(k: unknown): ExportOptions {
   const out = blankExport();
   if (!k || typeof k !== 'object') return out;
   const o = k as Record<string, unknown>;
-  for (const key of ['tracks', 'combine', 'named', 'm3u'] as const) if (typeof o[key] === 'boolean') out[key] = o[key];
+  for (const key of ['playlistOnly', 'combine', 'named', 'm3u'] as const) if (typeof o[key] === 'boolean') out[key] = o[key];
   if (typeof o.name === 'string') out.name = o.name;
   if (FORMATS.some((f) => f.value === o.format)) out.format = o.format as ExportFormat;
   if (typeof o.bitrate === 'number' && BITRATES.includes(o.bitrate)) out.bitrate = o.bitrate;
@@ -62,8 +62,11 @@ export function keptExport(k: unknown): ExportOptions {
   return out;
 }
 
-/** Whether the export carries tracks: a list of tracks always does, playlists when asked. */
-export const withTracks = (what: ExportWhat, o: ExportOptions) => what.kind === 'tracks' || o.tracks;
+/** Whether the export carries tracks: a list of tracks always does, playlists unless only their files. */
+export const withTracks = (what: ExportWhat, o: ExportOptions) => what.kind === 'tracks' || !o.playlistOnly;
+
+/** A list of tracks may take a playlist file of them; one track does not (the owner, 2026-11-02). */
+export const playlistFileOffered = (what: ExportWhat) => what.kind === 'tracks' && what.tracks.length > 1;
 
 /** Several playlists, which may be combined into one. */
 export const several = (what: ExportWhat) => what.kind === 'playlists' && what.names.length > 1;
@@ -76,7 +79,7 @@ export function exportRequest(what: ExportWhat, o: ExportOptions): ExportRequest
     layout: o.layout,
     tracks: withTracks(what, o),
     combine: several(what) && o.combine ? o.name.trim() : null,
-    m3u: what.kind === 'tracks' && o.m3u,
+    m3u: playlistFileOffered(what) && o.m3u,
   };
 }
 
@@ -87,13 +90,21 @@ export const exportReady = (r: ExportRequest) =>
 export const size = (b: number) =>
   b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : `${Math.max(1, Math.round(b / 1e3))} kB`;
 
-/** "312 tracks, about 9.4 GB, 3 missing are left out". */
-export function exportLine(p: ExportPreview): string {
-  const parts = [`${p.tracks.toLocaleString()} ${p.tracks === 1 ? 'track' : 'tracks'}`];
-  if (p.bytes !== null) parts.push(`about ${size(p.bytes)}`);
-  if (p.missing > 0) parts.push(`${p.missing.toLocaleString()} missing ${p.missing === 1 ? 'is' : 'are'} left out`);
-  return parts.join(', ');
+/** The Download button's words, as offline listening's ("Download 312 tracks · about 9.4 GB"; the owner, 2026-11-02:
+ *  the size on the button, not in a line above), only the playlist files counted where the tracks stay out. */
+export function exportLabel(p: ExportPreview | null, r: ExportRequest): string {
+  if (!r.tracks) {
+    const files = r.combine !== null || r.what.kind !== 'playlists' ? 1 : r.what.names.length;
+    return files === 1 ? 'Download the playlist file' : `Download ${files.toLocaleString()} playlist files`;
+  }
+  if (!p) return 'Download';
+  const n = `Download ${p.tracks.toLocaleString()} ${p.tracks === 1 ? 'track' : 'tracks'}`;
+  return p.bytes !== null ? `${n} · about ${size(p.bytes)}` : n;
 }
+
+/** Under it, what stays out: "3 missing are left out". */
+export const exportLeftOut = (p: ExportPreview | null) =>
+  p && p.missing > 0 ? `${p.missing.toLocaleString()} missing ${p.missing === 1 ? 'is' : 'are'} left out` : null;
 
 /** The combined playlist's name from the playlists': up to three joined, else the first two and how many more. */
 export const suggestedName = (names: string[]) =>

@@ -2,7 +2,8 @@
   // The menu of what is ticked (decision 0058: a selection is an object, its menu the same as one's; the select bars'
   // ⋮ at their far right): several tracks, or several albums' tracks. Play, Shuffle, Play next and Add to queue as the
   // large actions (the server's choice of them, 500 at most: lib/play), and Start radio from them all (Cratarr's own,
-  // played here: lib/TrackMenu's); then in the table's order (lib/menuTable) Exclude everywhere (one Undo for all); Add
+  // played here: lib/TrackMenu's); then in the table's order (lib/menuTable) Go to album (`album`); Exclude everywhere (one Undo for all) and the
+  // list's own Excludes (`outs`); Add
   // to playlist; Download…; Adjust BPM (administrators: lib/TempoStep). `extra`: what the list's own items have
   // besides their tracks (several albums' Keep, Delete…; the owner, 2026-10-27: what one has, several have), its
   // groups last, given the menu's close; `chips`: what is ticked, said as the list says it ("5 albums").
@@ -24,14 +25,27 @@
   import { toast } from './toast.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import type { Snippet } from 'svelte';
+  import type { IconName } from './Icon.svelte';
 
   let {
     title,
     tracks,
     chips = null,
+    album = null,
+    outs = [],
     extra,
     onclose,
-  }: { title: string; tracks: LocalTrack[]; chips?: string[] | null; extra?: Snippet<[() => void]>; onclose: () => void } = $props();
+  }: {
+    title: string;
+    tracks: LocalTrack[];
+    chips?: string[] | null;
+    /** Go to album: a record's tracks in a list. */
+    album?: (() => void) | null;
+    /** Out of the list it is opened in (a crate's Exclude from, Exclude album from), beside Exclude everywhere. */
+    outs?: { label: string; icon: IconName; run: () => void }[];
+    extra?: Snippet<[() => void]>;
+    onclose: () => void;
+  } = $props();
 
   const source = $derived(tracks[0]?.source ?? '');
   const ids = $derived(tracks.map((t) => t.id));
@@ -92,6 +106,10 @@
 {#snippet entry(e: EntryId)}
   {#if e === 'excludeEverywhere'}
     {#if source && source !== 'device'}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
+  {:else if e === 'goAlbum'}
+    {#if album}<MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={() => (onclose(), album())} />{/if}
+  {:else if e === 'notInCrate'}
+    {#each outs as o (o.label)}<MenuEntry icon={o.icon} label={o.label} danger onclick={() => (onclose(), o.run())} />{/each}
   {:else if e === 'addToPlaylist'}
     {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
   {:else if e === 'download'}

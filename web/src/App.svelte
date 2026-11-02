@@ -602,9 +602,6 @@
   const handed = $derived(handedNow ?? (rowAway && phone ? keptGlass : null));
   /** The layer under the top bar (an index page's panel) or over all of it (a playlist's, an album's, an artist's). */
   const underBar = $derived(phone && !!panelPage && !!(settingsShown || healthShown || insightsShown || requestsShown || downloadsShown));
-  /** An index page and its panel share the row's place: going one level deeper (or back) changes what the glass holds,
-   *  at once, instead of fading it in anew (the owner, 2026-10-25: "the top left and top right glass hide"). */
-  const leadStill = $derived(phone && !!panelPage && (underBar || !layerShown));
   /** The one pill's settings: the panel's where it handed them, else the page's. */
   const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(page));
   const pillNow = $derived(
@@ -1228,7 +1225,6 @@
       back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.href))) : null}
       name={panelPage && phone ? panelPage.label : null}
       picker={page === 'library' ? 'library' : page === 'discover' ? 'discover' : null}
-      still={leadStill}
       right={() => rightEl}
       bind:el={leadEl}
     />
@@ -1451,16 +1447,20 @@
     z-index: 22;
   }
 
+  /* Never squeezed by what is beside back (the owner, 2026-11-02: long breadcrumbs pushed the pill past the window's
+     edge once its buttons kept their shape): the title or the breadcrumbs give way, cut or gone. Only the open search
+     grown to meet back gives, its field first. */
   .page-row .right {
     display: flex;
+    flex-shrink: 0;
     align-items: flex-start;
     justify-content: flex-end;
     gap: 8px;
     min-width: 0;
   }
 
-  /* The pill's work unfolded (lib/ContentControls): the right side takes the row's room. */
-  .page-row .right:has(:global(.pill-row.wide, .pill-row.fill)) {
+  /* The open search grown to meet back (lib/ContentControls): the right side takes the row's room. */
+  .page-row .right:has(:global(.pill-row.fill)) {
     flex: 1 1 auto;
   }
 

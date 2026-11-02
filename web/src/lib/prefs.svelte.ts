@@ -111,6 +111,9 @@ export type Prefs = {
   /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
    *  owner 2026-10-25: "global on the device"); whole by default (the owner, the same day). */
   crumbsWhole: boolean;
+  /** The part last seen in each group of a panel (`settings/device` → `appearance`; lib/groupCrumb): a group's pick in
+   *  the breadcrumb lands there (the owner, 2026-11-02: "automatically remembered"). */
+  groupLast: Record<string, string>;
   /** The mode switch (Cratarr | Local, decision 0052) in the bar (the phone's) or the sidebar; off, at the top of
    *  Settings (the owner, 2026-10-25: off by default). */
   modeSwitchInBar: boolean;
@@ -426,6 +429,7 @@ export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
   crumbsWhole: true,
+  groupLast: {},
   modeSwitchInBar: false,
   discoverMode: 'fresh',
   navAt: 'top',
@@ -523,13 +527,15 @@ export const DEFAULTS: Prefs = {
 };
 
 function read(): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {} } as Prefs;
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {} } as Prefs;
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
+      if (saved.groupLast && typeof saved.groupLast === 'object')
+        for (const [k, v] of Object.entries(saved.groupLast)) if (typeof v === 'string') p.groupLast[k] = v;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
       if (isDiscoverMode(saved.discoverMode)) p.discoverMode = saved.discoverMode;
       // A Spotify list left on in the Library before it moved: on in Discover.

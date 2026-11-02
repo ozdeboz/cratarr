@@ -9,14 +9,16 @@
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { panSafe } from '../panSafe';
-  import { MOTION, prefs, RAMP_MS, startsOf, TAPE, type Motion, type StartStop } from '../prefs.svelte';
+  import { MOTION, prefs, RAMP_MS, TAPE, type Motion, type StartStop } from '../prefs.svelte';
   import SettingRow from '../SettingRow.svelte';
   import { RATE_TOP } from '../rates';
   import { HOLD_TOP, holdWind, pointWind, type PointMotion } from '../startStop';
   import Group from './Group.svelte';
   import HoldGraph from './HoldGraph.svelte';
   import Item from './Item.svelte';
-  import { resetWithUndo } from './OrderReset.svelte';
+  import ResetSheet from './ResetSheet.svelte';
+  import { MOTIONS, TAPE_NAME, tapeItems } from './resetItems.svelte';
+  import { rowsOf, resetOf } from './reset.svelte';
   import WindGraph from './WindGraph.svelte';
 
   // Each choice a row showing it, opening a sheet of its options (the owner, 2026-10-27: no pills here, they took two
@@ -44,16 +46,6 @@
   let choosing = $state<keyof typeof CHOICES | null>(null);
   const chosen = (k: keyof typeof CHOICES) => CHOICES[k].options.find((o) => o.value === CHOICES[k].value())?.label ?? '';
 
-  /** The six motions, in pairs, back then forward (the owner, 2026-10-28): to the start and the end, the seeks, the
-   *  holds. */
-  const MOTIONS: { m: Motion; name: string; line: string }[] = [
-    { m: 'toStart', name: 'Back to start', line: 'Previous' },
-    { m: 'toEnd', name: 'Forward to end', line: 'Next' },
-    { m: 'seekBack', name: 'Seek back', line: 'The waveform, a swipe on the cover' },
-    { m: 'seekFwd', name: 'Seek forward', line: 'The waveform, a swipe on the cover' },
-    { m: 'holdBack', name: 'Holding back', line: 'Previous, held' },
-    { m: 'holdFwd', name: 'Holding forward', line: 'Next, held' },
-  ];
   const isHold = (m: Motion) => m === 'holdBack' || m === 'holdFwd';
   const backwards = (m: Motion) => m === 'toStart' || m === 'seekBack' || m === 'holdBack';
 
@@ -88,7 +80,6 @@
   const titleOf = (p: Part) => (p === 'tape' ? 'The tape' : MOTIONS.find((x) => x.m === p)!.name);
   const tuningsOf = (p: Part): Tuning[] =>
     p === 'tape' ? TAPE_TUNINGS : [{ key: p, label: isHold(p) ? 'Time to top speed' : 'Duration', range: MOTION[p], text: motionText(p, true) }];
-  const startsOfPart = (p: Part): Record<string, number> => (p === 'tape' ? startsOf(TAPE) : { [p]: MOTION[p].start });
   /** A part's settings in `s`, and `s` with some changed. */
   const groupOf = (s: StartStop, p: Part): Record<string, number> => (p === 'tape' ? s.tape : s.motions);
   const changed = (s: StartStop, p: Part, change: Record<string, number>): StartStop =>
@@ -104,15 +95,11 @@
   });
   const valueOf = (part: Part, key: string) => groupOf(shown, part)[key];
   const setPart = (part: Part, change: Record<string, number>) => setSS(changed(ss, part, change));
-  /** A sheet's settings back to their defaults, as every reset is (its header's reset, dimmed at them; Undo in the toast). */
-  const atStarts = (part: Part) => Object.entries(startsOfPart(part)).every(([k, v]) => valueOf(part, k) === v);
-  function resetPart(part: Part) {
-    const was = Object.fromEntries(Object.keys(startsOfPart(part)).map((k) => [k, groupOf(ss, part)[k]]));
-    resetWithUndo(titleOf(part), () => {
-      setPart(part, startsOfPart(part));
-      return () => setPart(part, was);
-    });
-  }
+  /** A sheet's own of the Device part's declaration (lib/settings/resetItems): the tape's, or one motion's. */
+  const partItems = (part: Part) => tapeItems().filter((i) => i.name === (part === 'tape' ? TAPE_NAME : titleOf(part)));
+  /** Asked in the Reset sheet (lib/settings/ResetSheet), as every section's (the owner, 2026-11-02). */
+  let resetting = $state<Part | null>(null);
+  const resetPart = (part: Part) => (resetting = part);
 </script>
 
 {#snippet slider(t: Tuning, value: number, set: (v: number) => void)}
@@ -202,7 +189,7 @@
   <MenuSheet
     label={title}
     {title}
-    end={{ icon: 'reset', label: `Reset ${title.toLowerCase()}`, disabled: atStarts(part), onclick: () => resetPart(part) }}
+    end={{ icon: 'reset', label: `Reset ${title.toLowerCase()}`, disabled: !rowsOf(partItems(part)).length, onclick: () => resetPart(part) }}
     onclose={() => ((open = null), (drag = null))}
   >
     <div class="sheet">
@@ -218,6 +205,16 @@
       {#each tuningsOf(part) as t (t.key)}{@render slider(t, valueOf(part, t.key), (v) => setPart(part, { [t.key]: v }))}{/each}
     </div>
   </MenuSheet>
+{/if}
+
+{#if resetting}
+  {@const part = resetting}
+  <ResetSheet
+    title={`Reset ${titleOf(part).toLowerCase()}`}
+    rows={rowsOf(partItems(part))}
+    onconfirm={() => resetOf(partItems(part))}
+    onclose={() => (resetting = null)}
+  />
 {/if}
 
 <style>

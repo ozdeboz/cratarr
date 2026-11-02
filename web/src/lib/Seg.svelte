@@ -7,15 +7,19 @@
     label,
     options,
     value = $bindable(),
+    fill = false,
   }: {
     /** The group's accessible name. */
     label: string;
     options: { value: T; label: string; icon?: IconName; title?: string }[];
     value: T;
+    /** A row of its own: as wide as its container, the choices sharing it evenly (the owner, 2026-11-02: pills fill
+     *  their container). */
+    fill?: boolean;
   } = $props();
 </script>
 
-<div class="seg" role="group" aria-label={label}>
+<div class="seg" class:fill role="group" aria-label={label}>
   {#each options as o (o.value)}
     <!-- type="button": in a form (a sheet's fields) a choice is no submit. -->
     <button
@@ -40,6 +44,17 @@
     padding: 3px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--text) 9%, transparent);
+  }
+
+  .seg.fill {
+    display: flex;
+  }
+
+  .fill button {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* A choice's words on one line: where they do not fit, the row puts the whole control under its name instead. */

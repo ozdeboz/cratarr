@@ -2,7 +2,7 @@
   // A crate's tracks, as conditions select them (0.13, decision 0088; the owner, 2026-10-31: one start, one list): its
   // count with Shuffle and Play (and what the place adds, `actions`), the Records / Tracks switch a saved crate has
   // (lib/crateRecords), its tracks a page at a time, more as the list's end comes into sight, each with its round
-  // snippet button opening it on its waveform (lib/SnippetStrip). A crate grabbed, made or changed (the panel's builder,
+  // snippet button opening it on its waveform (lib/SnippetRows); a record opens in a sheet (lib/RecordSheet). A crate grabbed, made or changed (the panel's builder,
   // lib/CrateEditor) shows this one list.
   import { onDestroy, untrack, type Snippet } from 'svelte';
   import { coverUrl, previewCrate, type Condition, type CrateName, type PlaylistRow } from './api';
@@ -20,8 +20,8 @@
   import SectionHead from './SectionHead.svelte';
   import Seg from './Seg.svelte';
   import { shuffled } from './shuffle';
-  import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, snippet, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import RecordSheet from './RecordSheet.svelte';
+  import SnippetRows from './SnippetRows.svelte';
   import { matcherModule } from './matcherLoad';
   import { spreadRecords } from './spread';
   import { toast } from './toast.svelte';
@@ -121,7 +121,7 @@
   const records = $derived(
     view === 'records' && preview ? orderRecords(recordsOf(preview.rows.map((r, i) => ({ r, i }))), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : [],
   );
-  /** A record opened: the crate's tracks of it, back to the records. */
+  /** A record opened: the crate's tracks of it, in a sheet over the list (lib/RecordSheet; the owner, 2026-11-02). */
   let recordOpen = $state<string | null>(null);
   const openRecord = $derived(view === 'records' && recordOpen ? (records.find((r) => r.key === recordOpen) ?? null) : null);
   $effect(() => {
@@ -148,32 +148,6 @@
     }
   }
 
-  // A row's snippet (0.12, the owner: "as buttons which when pressed expand a waveform as A2"): its round button plays
-  // the track's liveliest 20 s and opens the row on its waveform, with Play from here; again, it stops and folds. One
-  // row open at a time; leaving ends it.
-  let openRow = $state<number | null>(null);
-  const snipOf = (src: string, r: PlaylistRow): SnippetTrack | null =>
-    r.id && !r.missing ? { source: src, id: r.id, name: r.name ?? r.file, duration_secs: r.duration_secs ?? null } : null;
-  const isOn = (t: SnippetTrack | null) => !!t && snippet.key === `${t.source}/${t.id}`;
-  function snipTap(i: number, t: SnippetTrack) {
-    if (openRow === i) {
-      openRow = null;
-      return endSnippet();
-    }
-    openRow = i;
-    startSnippet(t);
-  }
-  /** How far its snippet has sounded, 0..1 (its button's ring). */
-  const heardShare = $derived(snippet.sounding && snippet.to > snippet.from ? Math.min(1, Math.max(0, (snippet.at - snippet.from) / (snippet.to - snippet.from))) : 0);
-  // Other conditions: nothing open (more of the same rows leave it be).
-  $effect(() => {
-    void key;
-    untrack(() => {
-      if (openRow !== null) endSnippet();
-      openRow = null;
-    });
-  });
-  onDestroy(() => openRow !== null && endSnippet());
 </script>
 
 <div class="sum">
@@ -187,12 +161,7 @@
 {:else if preview}
   {@const src = preview.source}
   <div class="views"><Seg label="Show the crate as" options={VIEWS} bind:value={() => view, setView} /></div>
-  {#if view === 'records' && openRecord}
-    <SectionHead title={`${openRecord.title || 'Unknown album'} · ${holdsLine(openRecord.at.length, openRecord.of)}`} onback={() => (recordOpen = null)} />
-    <ol class="preview" aria-label={`The crate's tracks of ${openRecord.title || 'an unknown album'}`}>
-      {#each openRecord.at as i (i)}{@render trackRow(src, preview.rows[i], i)}{/each}
-    </ol>
-  {:else if view === 'records'}
+  {#if view === 'records'}
     <ListHead
       fields={RECORD_ORDERS}
       bind:value={() => prefs.crateRecordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: prefs.crateRecordSort.down })}
@@ -210,9 +179,17 @@
       {/each}
     </ol>
   {:else}
-    <ol class="preview" aria-label="The crate's tracks">
-      {#each preview.rows as r, i (i)}{@render trackRow(src, r, i)}{/each}
-    </ol>
+    <SnippetRows source={src} items={preview.rows.map((r, i) => ({ r, i }))} {key} label="The crate's tracks" />
+  {/if}
+  {#if openRecord}
+    {@const rec = openRecord}
+    <RecordSheet
+      source={src}
+      title={rec.title || 'Unknown album'}
+      chips={[rec.artist ?? '', holdsLine(rec.at.length, rec.of)].filter(Boolean)}
+      items={rec.at.map((i) => ({ r: preview!.rows[i], i }))}
+      onclose={() => (recordOpen = null)}
+    />
   {/if}
   {#if preview.rows.length < preview.total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
 {:else if conditions.length}
@@ -220,33 +197,6 @@
        nothing, no spinner either). A later change keeps the list shown until its answer. -->
   <Asking />
 {/if}
-
-<!-- A track of the crate: its cover, name, artist and length, its round snippet button opening it on its waveform. -->
-{#snippet trackRow(src: string, r: PlaylistRow, i: number)}
-  {@const st = snipOf(src, r)}
-  <li>
-    <Row size="large" title={r.name ?? r.file} sub={r.artist ?? ''} count={r.duration_secs ? clockText(r.duration_secs) : undefined} off={!r.id || !!r.missing}>
-      {#snippet lead()}<TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} />{/snippet}
-      {#snippet action()}
-        {#if st}
-          {@const on = openRow === i && isOn(st) && snippet.sounding}
-          <button class="snip" aria-label={openRow === i ? `Stop ${r.name ?? r.file}` : `Hear ${r.name ?? r.file}`} aria-pressed={openRow === i} onclick={() => snipTap(i, st)}>
-            <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
-              <circle class="ring" cx="18" cy="18" r="16" />
-              {#if on}<circle class="fill" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{heardShare * 100} 100" transform="rotate(-90 18 18)" />{/if}
-              {#if openRow === i}<rect x="13" y="12" width="3.5" height="12" /><rect x="19.5" y="12" width="3.5" height="12" />{:else}<path d="M14 11v14l11-7z" />{/if}
-            </svg>
-          </button>
-        {/if}
-      {/snippet}
-    </Row>
-    {#if openRow === i && st}
-      <div class="snipped">
-        <SnippetStrip track={st} />
-      </div>
-    {/if}
-  </li>
-{/snippet}
 
 <style>
   .sum {
@@ -296,37 +246,11 @@
     padding: 16px 0;
   }
 
-  /* A row's snippet button (the owner's mockup C2) and its open row (A2's strip). */
-  .snip {
-    display: grid;
-    place-items: center;
-    padding: 4px;
-    border: 0;
-    background: none;
-    color: var(--text);
-    cursor: pointer;
-  }
 
-  .snip svg {
-    fill: currentColor;
-  }
 
-  .snip .ring {
-    fill: none;
-    stroke: var(--border);
-    stroke-width: 3;
-  }
 
-  .snip .fill {
-    fill: none;
-    stroke: var(--art-accent, var(--accent));
-    stroke-width: 3;
-  }
 
-  .snipped {
-    display: grid;
-    padding: 0 16px 8px;
-  }
+
 
   .preview {
     margin: 0 -8px;

@@ -38,7 +38,7 @@
 
 <span class="views" class:open bind:this={el}>
   <button class="shown" aria-haspopup="listbox" aria-expanded={open} aria-label={`Shows ${shown.toLowerCase()}`} onclick={() => (place(), (open = !open))}
-    >{shown}<Icon name="chevronDown" size={18} /></button
+    >{#if shown}<span class="label">{shown}</span>{/if}<Icon name="chevronDown" size={18} /></button
   >
   {#if open}
     <GlassMenu {at} keep={() => el} label={menuLabel} onclose={() => (open = false)}>
@@ -53,9 +53,27 @@
 </span>
 
 <style>
+  /* Short of room (a breadcrumb's level: the owner, 2026-11-02, a group's picker left only its ▾), its name cut with …,
+     its ▾ whole. */
   .views {
     position: relative;
     display: flex;
+    min-width: 0;
+  }
+
+  .shown {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .shown :global(svg) {
+    flex: none;
   }
 
   button {
