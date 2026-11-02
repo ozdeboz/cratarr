@@ -18,6 +18,7 @@
     said,
     chips,
     onclearall = null,
+    more = [],
   }: {
     /** The control that caused it: the tip points at its middle. */
     anchor: HTMLElement | null | undefined;
@@ -26,6 +27,8 @@
     chips: NothingChip[];
     /** Every cause cleared at once; offered where there are several. */
     onclearall?: (() => void) | null;
+    /** Other true answers, each its own line under the first (decision 0095: what else would bring things back). */
+    more?: { said: string; chips: NothingChip[] }[];
   } = $props();
 
   const EDGE = 8;
@@ -95,6 +98,15 @@
   {#if onclearall && chips.filter((c) => c.onclear).length > 1}
     <button class="all" onclick={onclearall}>Clear all</button>
   {/if}
+  {#each more as line (line.said + line.chips.map((c) => c.label).join())}
+    <span class="line">
+      <span class="said">{line.said}</span>
+      {#each line.chips as c (c.label)}
+        {#if c.onopen}<button class="chip open" onclick={c.onopen}>{c.label}<Icon name="chevronRight" size={14} /></button>
+        {:else}<span class="chip"><span class="q">{c.label}</span>{#if c.onclear}{@const clear = c.onclear}<button class="clear" aria-label={`Clear ${c.label}`} title="Clear" onclick={clear}><Icon name="close" size={14} /></button>{/if}</span>{/if}
+      {/each}
+    </span>
+  {/each}
 </div>
 
 <style>
@@ -135,6 +147,15 @@
     transform: rotate(45deg);
     background: var(--surface);
     box-shadow: -1px -1px 0 color-mix(in srgb, var(--text) 9%, transparent);
+  }
+
+  /* Another answer: a line of its own under the first. */
+  .line {
+    display: flex;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
   }
 
   .said {
