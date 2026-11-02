@@ -116,12 +116,21 @@ class Row {
   }
 }
 
+/** Pieces attached before their row was (a title mounted with the row on a fresh load: its attachment runs first),
+ *  taken in by the row once it is. */
+const waiting = new Set<Entry>();
+
 /** A row laid out in one place: App's row over the page, a panel's own bar. */
 export function rowRoot(): Attachment<HTMLElement> {
   return (el) => {
     const row = new Row(el);
     rows.set(el, row);
     el.setAttribute('data-row', '');
+    for (const e of waiting) {
+      if (!el.contains(e.el) || e.el.parentElement?.closest('[data-row]') !== el) continue;
+      waiting.delete(e);
+      row.add(e);
+    }
     return () => {
       row.destroy();
       rows.delete(el);
@@ -140,10 +149,14 @@ export function rowPiece(spec: () => Omit<Spec, 'id'> & { id?: string }): Attach
     const row = host ? rows.get(host) : undefined;
     const s = spec();
     const id = s.id ?? own;
-    if (!row) return;
-    row.add({ el, spec: { ...s, id } });
+    const entry: Entry = { el, spec: { ...s, id } };
+    // No row yet: one may still be made around it (rowRoot takes it in); outside any, always shown whole.
+    if (row) row.add(entry);
+    else waiting.add(entry);
     return () => {
-      row.remove(id, el);
+      waiting.delete(entry);
+      const host = el.parentElement?.closest('[data-row]');
+      (host ? rows.get(host) : row)?.remove(id, el);
       el.removeAttribute(GONE);
       el.style.width = '';
       el.style.flex = '';
