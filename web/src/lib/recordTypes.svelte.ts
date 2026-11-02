@@ -8,7 +8,7 @@ import { library } from './albums.svelte';
 import { can } from './capabilities.svelte';
 import { localMode } from './deviceMusic.svelte';
 import { complete } from './filterRow';
-import { filterOf, filterStep, hiddenLibraries, setConditions } from './listFilter.svelte';
+import { askAtOnce, filterOf, filterStep, hiddenLibraries, setConditions } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
 import { ALL, rowsOfType, typeOfRows, typeOptions, typesShown, type TypeAxis, type TypeOption } from './recordTypeRules';
 
@@ -54,7 +54,11 @@ export function typesOffered(): TypeOption[] {
 /** The filter's Type rows replaced by the pick's (none for Records): one step of the history (`step`: on the Library;
  *  a sidebar link elsewhere goes there instead). */
 export function chooseType(id: string, step = true) {
-  const set = () => setConditions(KIND, [...filterOf(KIND).conditions.filter((c) => c.axis !== 'type'), ...rowsOfType(id)]);
+  const set = () => {
+    const was = JSON.stringify(filterOf(KIND).conditions);
+    setConditions(KIND, [...filterOf(KIND).conditions.filter((c) => c.axis !== 'type'), ...rowsOfType(id)]);
+    if (JSON.stringify(filterOf(KIND).conditions) !== was) askAtOnce(KIND);
+  };
   if (step) filterStep(KIND, set);
   else set();
 }

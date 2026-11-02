@@ -48,6 +48,11 @@ export function filterChange(kind: string): () => void {
     history.pushState({ ...st, filters: { ...st.filters, [kind]: after } }, '');
   };
 }
+/** The kinds of list whose next change is one choice, not typing (a pick beside back, Back to the list as it was): its
+ *  answer asked at once, without the 300 ms a row being typed waits (the owner, 2026-11-02: the Library's picker kept
+ *  the old records until long after the pick). */
+const atOnce = new Set<string>();
+export const askAtOnce = (kind: string) => atOnce.add(kind);
 /** One change, one step (a pick beside back). */
 export function filterStep(kind: string, change: () => void) {
   const end = filterChange(kind);
@@ -57,7 +62,11 @@ export function filterStep(kind: string, change: () => void) {
 if (typeof window !== 'undefined')
   addEventListener('popstate', () => {
     const kept = history.state?.filters as Record<string, ListFilter> | undefined;
-    for (const [k, f] of Object.entries(kept ?? {})) if (STEPPED.includes(k)) prefs.filters[k] = f;
+    for (const [k, f] of Object.entries(kept ?? {}))
+      if (STEPPED.includes(k)) {
+        if (JSON.stringify(f) !== JSON.stringify(prefs.filters[k])) askAtOnce(k);
+        prefs.filters[k] = f;
+      }
   });
 
 /** A kind of list's conditions that apply: not muted, and saying what they ask (lib/filterRow). */
@@ -86,7 +95,8 @@ export const inView = $state<Record<string, { list: FilterList; source?: string 
 
 /** The keys of a list's items (of the kind `kindOf` says) its filter lets through: its conditions and its own switches,
  *  one question to the server, which holds what each switch means (lib/api filterList; the owner, 2026-10-29: one
- *  filter, one engine, so no list filters a switch itself), asked again 300 ms after they change; null while none apply
+ *  filter, one engine, so no list filters a switch itself), asked again 300 ms after they change (at once after a
+ *  choice: askAtOnce); null while none apply
  *  (a failed ask keeps the last answer, and says so). `pending`: they apply and their answer is on its way; the last
  *  answer for the same list stays meanwhile, and before the first a list shows as loading rather than unfiltered (the
  *  owner, 2026-10-23: nothing shown that something else then replaces). */
@@ -102,6 +112,7 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
     const conditions = $state.snapshot(conditionsFor(kind)) ?? [];
     const switches = switchesOn(kind);
     const without = at && (at.list.kind === 'library' || at.list.kind === 'artists') ? hiddenLibraries() : undefined;
+    const wait = atOnce.delete(kind) ? 0 : 300;
     // A crate's rows come filtered (CrateLook.filter): its answer has no keys.
     if (!at || (!conditions.length && !switches.length) || at.list.kind === 'crate') {
       out.keys = null;
@@ -132,7 +143,7 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
           toast.fail(e, "The filter couldn't be applied");
         },
       );
-    }, 300);
+    }, wait);
     return () => {
       gone = true;
       clearTimeout(t);

@@ -116,6 +116,14 @@
   };
   const blocks = new NearBlocks();
   $effect(() => () => blocks.dispose());
+  // The blocks themselves are made a few at a time (the owner, 2026-11-02: the Library's picker took long before the
+  // page responded): a whole Library is hundreds of blocks (a phone's 3,300 records, 412), each a box watched for
+  // coming near, and making them all at once held the page for most of a second. The first screens' at once, the rest
+  // in short tasks after (the page answering a tap between them), one box as tall as they will be meanwhile, so the
+  // page has its length from the start.
+  const FIRST_BLOCKS = 12;
+  const MORE_BLOCKS = 40;
+  let reach = $state(FIRST_BLOCKS);
   /** A grid row's height as the blocks made so far measure it, else a row's usual height (a tile: its column's width
    *  and two lines), for the blocks not made yet. */
   const rowHeight = $derived.by(() => {
@@ -185,7 +193,14 @@
   });
   // Artists without a leading "The", numbers in number order, accents and case aside.
   const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
-  const name = (s: string | null) => (s ?? '').replace(/^the\s+/i, '');
+  // Each artist's name as it sorts, made once (a whole Library's sort compares tens of thousands of times).
+  const names = new Map<string, string>();
+  const name = (s: string | null) => {
+    const k = s ?? '';
+    let n = names.get(k);
+    if (n === undefined) names.set(k, (n = k.replace(/^the\s+/i, '')));
+    return n;
+  };
   const byArtist = (x: ListedAlbum, y: ListedAlbum) => collator.compare(name(x.artist), name(y.artist)) || (x.year ?? 0) - (y.year ?? 0);
   const byTitle = (x: ListedAlbum, y: ListedAlbum) => collator.compare(x.title, y.title);
   // An order of one server's albums: how you used them (plays, last played, rating) is per server.
@@ -218,6 +233,13 @@
   const none = (l: typeof found) => l.every((x) => !x.albums.length);
   const kept = keepWhile(() => found, () => pending && none(found), () => pageView.query.trim());
   const shown = $derived(kept.loader ? found : kept.value);
+  // The rest of the blocks, MORE_BLOCKS a task, until each list's are all made.
+  $effect(() => {
+    const most = Math.max(0, ...shown.map(({ albums }) => Math.ceil(albums.length / perBlock)));
+    if (reach >= most) return;
+    const t = setTimeout(() => (reach += MORE_BLOCKS));
+    return () => clearTimeout(t);
+  });
   // An album the panel opened beside the page is brought into sight here (lib/reveal, App): one in a block not made
   // yet is that block first.
   $effect(() =>
@@ -482,7 +504,8 @@
           details={front ? detailsOf(s, front) : null}
         />
       {:else}
-      {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${layout}:${bi}`)}
+      {@const all = blocksOf(albums)}
+      {#each all.slice(0, reach) as block, bi (`${s.id}:${perBlock}:${layout}:${bi}`)}
         {@const key = `${s.id}:${perBlock}:${layout}:${bi}`}
         {@const made = blocks.made(key, bi === 0)}
         <div class="block" {@attach blocks.watch(key, Math.ceil(block.length / cols))} style:height={made ? null : `${blocks.heights[key] ?? estimate(block.length)}px`}>
@@ -578,6 +601,7 @@
           {/if}
         </div>
       {/each}
+      {#if all.length > reach}<div class="block" style:height="{estimate(albums.length - reach * perBlock)}px"></div>{/if}
       {/if}
     {/if}
   {/each}
