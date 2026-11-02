@@ -7,6 +7,7 @@ import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
+import { layeredRows } from './recordTypeRules';
 import { savedOutput } from './player/commands';
 
 /** The bands' Speed (lib/BandSlider): Ultra slow to Radical, times each look's own pace (Radical: four times the first
@@ -110,6 +111,9 @@ export type Prefs = {
   /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
    *  owner 2026-10-25: "global on the device"); whole by default (the owner, the same day). */
   crumbsWhole: boolean;
+  /** The part last seen in each group of a panel (`settings/device` → `appearance`; lib/groupCrumb): a group's pick in
+   *  the breadcrumb lands there (the owner, 2026-11-02: "automatically remembered"). */
+  groupLast: Record<string, string>;
   /** The mode switch (Cratarr | Local, decision 0052) in the bar (the phone's) or the sidebar; off, at the top of
    *  Settings (the owner, 2026-10-25: off by default). */
   modeSwitchInBar: boolean;
@@ -274,6 +278,9 @@ export type Prefs = {
    *  Crates' own order. */
   libraryOrder: CollectionOrder;
   libraryDown: boolean;
+  /** Classical's composers' order (lib/ComposerList), and turned round. */
+  composerOrder: ComposerOrder;
+  composerDown: boolean;
   /** Downloads' order (the Library's orders), and turned round. */
   downloadsOrder: CollectionOrder;
   downloadsDown: boolean;
@@ -303,9 +310,12 @@ export type AlbumLayout = 'rows' | 'grid' | 'table' | 'flow';
 /** How long the screen is left alone before the visuals open by themselves (ms). */
 export const VISUALS_AFTER = [30_000, 60_000, 120_000, 300_000, 600_000];
 export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating' | 'quality' | 'tracks' | 'length';
+export type ComposerOrder = 'name' | 'records';
 const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating', 'quality', 'tracks', 'length'];
-export type PlaylistOrder = 'name' | 'tracks' | 'playing' | 'missing';
-const PLAYLIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'playing', 'missing'];
+/** The Playlists page's orders (lib/playlistOrder); `playing` (those holding the item first) is a menu's only. */
+export type PlaylistOrder = 'name' | 'tracks' | 'length' | 'lastPlayed' | 'missing' | 'playing';
+const PLAYLIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'length', 'lastPlayed', 'missing'];
+const LIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'playing'];
 export type CrateOrder = 'own' | 'name' | 'tracks' | 'length' | 'unplayed' | 'newWeek';
 const CRATE_ORDERS: readonly CrateOrder[] = ['own', 'name', 'tracks', 'length', 'unplayed', 'newWeek'];
 /** The panel's kinds of track list, each with its own remembered order and filter (decision 0060: per kind, not per
@@ -419,6 +429,7 @@ export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
   crumbsWhole: true,
+  groupLast: {},
   modeSwitchInBar: false,
   discoverMode: 'fresh',
   navAt: 'top',
@@ -498,6 +509,8 @@ export const DEFAULTS: Prefs = {
   // Newest first, as Incoming always showed, so a new arrival is on top.
   libraryOrder: 'added',
   libraryDown: true,
+  composerOrder: 'name',
+  composerDown: false,
   downloadsOrder: 'artist',
   downloadsDown: false,
   playlistOrder: 'name',
@@ -514,13 +527,15 @@ export const DEFAULTS: Prefs = {
 };
 
 function read(): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {} } as Prefs;
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {} } as Prefs;
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
+      if (saved.groupLast && typeof saved.groupLast === 'object')
+        for (const [k, v] of Object.entries(saved.groupLast)) if (typeof v === 'string') p.groupLast[k] = v;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
       if (isDiscoverMode(saved.discoverMode)) p.discoverMode = saved.discoverMode;
       // A Spotify list left on in the Library before it moved: on in Discover.
@@ -537,17 +552,16 @@ function read(): Prefs {
       if (['rows', 'grid', 'table', 'flow'].includes(saved.albumLayout)) p.albumLayout = saved.albumLayout;
       if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
       if (COLLECTION_ORDERS.includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
+      if (saved.composerOrder === 'name' || saved.composerOrder === 'records') p.composerOrder = saved.composerOrder;
       if (COLLECTION_ORDERS.includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (PLAYLIST_ORDERS.includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
       if (saved.playlistLayout === 'chips' || saved.playlistLayout === 'table') p.playlistLayout = saved.playlistLayout;
       if (typeof saved.playlistQuickAdd === 'boolean') p.playlistQuickAdd = saved.playlistQuickAdd;
       if (typeof saved.queueRequestsShown === 'boolean') p.queueRequestsShown = saved.queueRequestsShown;
-      if (PLAYLIST_ORDERS.includes(saved.listOrder) && saved.listOrder !== 'missing') p.listOrder = saved.listOrder;
+      if (LIST_ORDERS.includes(saved.listOrder)) p.listOrder = saved.listOrder;
       if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
-      // Before the list header: "✓ first" was the playlists' only other order.
-      else if (saved.membersFirst === true) p.playlistOrder = 'playing';
       if (CRATE_ORDERS.includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
-      for (const k of ['libraryDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
+      for (const k of ['libraryDown', 'composerDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
@@ -640,7 +654,7 @@ function read(): Prefs {
       if (saved.filters && typeof saved.filters === 'object')
         for (const [k, v] of Object.entries(saved.filters) as [string, ListFilter][])
           if (Array.isArray(v?.conditions) && Array.isArray(v.on))
-            p.filters[k] = { conditions: v.conditions.filter((c) => typeof c?.axis === 'string' && c.value), on: v.on.filter((x) => typeof x === 'string') };
+            p.filters[k] = { conditions: layeredRows(v.conditions.filter((c) => typeof c?.axis === 'string' && c.value)), on: v.on.filter((x) => typeof x === 'string') };
       // The tabs' names before decision 0065: Statistics is Collection, Related is Map.
       const tab = saved.insightsTab === 'statistics' ? 'collection' : saved.insightsTab === 'related' ? 'map' : saved.insightsTab;
       if (tab === 'collection' || tab === 'listening' || tab === 'map') p.insightsTab = tab;

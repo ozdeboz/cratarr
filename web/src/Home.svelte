@@ -32,6 +32,7 @@
   import { addedOn, library, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl, crateRows, getCrate } from './lib/api';
   import Cover from './lib/Cover.svelte';
+  import CoverCard from './lib/CoverCard.svelte';
   import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeStatus from './lib/HomeStatus.svelte';
@@ -40,8 +41,9 @@
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
+  import { homeKept, momentFresh, partOfDay, type CrateShelf } from './lib/homeKept.svelte';
   import { shownPlaylists } from './lib/output.svelte';
-  import { albumSubject, viewOver, viewPlaylist } from './lib/panel.svelte';
+  import { albumSubject, viewFor, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
   import { CRATE_PART, FLOW_PARTS, prefs, type HomePart } from './lib/prefs.svelte';
   import { backdropUrl } from './lib/backdrop.svelte';
@@ -49,6 +51,7 @@
   import greet from 'greet-by-time';
   import { queuesPlayer, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
+  import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
@@ -60,24 +63,36 @@
   /** Local mode (lib/localHome): the device's own Home, nothing asked of Cratarr. */
   const local = localMode();
   if (local) askDevicePlays();
+  // What Home showed last (lib/homeKept): shown at once on its return, each answer asked again quietly behind it.
+  const kept = homeKept(prefs.source, hiddenLibraries());
+  // The moment and its sky only while they still hold (half an hour, the same part of the day): else the fresh one.
+  const momentKept = momentFresh(kept);
 
   onMount(() => {
     if (!library.view) void readLibrary(false);
   });
   const sources = $derived((library.view?.sources ?? []).filter((s) => s.id !== DEVICE));
 
+  /** A section whose answer failed with nothing kept to show, and why, by what was asked (`dug` for Blast from the past
+   *  and Grave digging, `crate:<id>` for a crate): said in its place with Try again, never left out as if empty (the
+   *  owner, 2026-11-02: errors are never shown as nothing). What was kept stays shown instead (Home as last seen). */
+  let failed = $state<Record<string, string>>({});
+  const fail = (key: string, e: unknown) => (failed[key] = e instanceof Error ? e.message : 'Unexpected error');
+
   // New for you (the owner, 2026-10-23 and 2026-10-30): the server's (one rule with its crate): Cratarr's own library's
   // newest albums, those heard 5% or more of and those without a cover left out, at most 3 of an album artist's.
-  let serverNewest = $state<{ source: string; a: ListedAlbum }[]>([]);
-  let serverNewestIn = $state(false);
+  let serverNewest = $state<{ source: string; a: ListedAlbum }[]>(kept.newest ?? []);
+  let serverNewestIn = $state(kept.newest !== null);
   const newest = $derived(local ? newestHere().map((a) => ({ source: DEVICE, a })) : serverNewest);
   const newestIn = $derived(local ? device.tracks !== null : serverNewestIn);
+  const readNewest = () =>
+    getHomeNew().then(
+      (r) => ((serverNewest = kept.newest = r.albums.map(({ source, ...a }) => ({ source, a }))), delete failed.newest, (serverNewestIn = true)),
+      (e) => (kept.newest === null && fail('newest', e), (serverNewestIn = true)),
+    );
   onMount(() => {
     if (local) return;
-    getHomeNew().then(
-      (r) => ((serverNewest = r.albums.map(({ source, ...a }) => ({ source, a }))), (serverNewestIn = true)),
-      () => (serverNewestIn = true),
-    );
+    readNewest();
   });
   /** The section on top's Play (the owner, 2026-10-24): all of it, from the album in front (those before it stay before
    *  it in the queue). Blast from the past: its tracks from the front album's; the others: their albums one after the
@@ -108,14 +123,16 @@
 
   // Sounds like your week: the server's (app::home): its size, its genres, how many tracks were played, and its first
   // albums with a cover for the mosaic.
-  let week = $state<HomeWeek | null>(null);
-  let weekIn = $state(false);
+  let week = $state<HomeWeek | null>(kept.week ?? null);
+  let weekIn = $state(kept.week !== undefined);
+  const readWeek = () =>
+    getHomeWeek(prefs.source || undefined, hiddenLibraries()).then(
+      (r) => ((week = kept.week = r.week), delete failed.week, (weekIn = true)),
+      (e) => (kept.week === undefined && fail('week', e), (weekIn = true)),
+    );
   onMount(() => {
     if (local) return void (weekIn = true);
-    getHomeWeek(prefs.source || undefined, hiddenLibraries()).then(
-      (r) => ((week = r.week), (weekIn = true)),
-      () => ((week = null), (weekIn = true)),
-    );
+    readWeek();
   });
   /** Its first four albums, as a seeded crate's mosaic (lib/PlaylistView). */
   const weekCovers = $derived((week?.covers ?? []).map((c) => coverUrl({ source: week!.source, id: c.track, album_id: c.album_id })));
@@ -135,14 +152,16 @@
   // The moment (the owner, 2026-10-23: its own style, not a shelf like those below): its albums as a Flow on a canvas
   // painted for the sky, the front one named; its radio plays only what is near it, the moment read again on each
   // refill (it follows the weather).
-  let moment = $state<Moment | null>(null);
-  let momentIn = $state(false);
+  let moment = $state<Moment | null>(momentKept ? (kept.moment ?? null) : null);
+  let momentIn = $state(momentKept);
+  const readMoment = () =>
+    getMoment(prefs.source || undefined, hiddenLibraries()).then(
+      (m) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), delete failed.moment, (momentIn = true)),
+      (e) => (!moment && fail('moment', e), (momentIn = true)),
+    );
   onMount(() => {
     if (local) return void (momentIn = true);
-    getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      (m) => ((moment = m), (momentIn = true)),
-      () => ((moment = null), (momentIn = true)),
-    );
+    readMoment();
   });
   const momentAlbums = $derived(
     (moment?.albums ?? []).flatMap((id) => sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === id) ?? []),
@@ -177,35 +196,40 @@
 
   // Jump back in: the server's (app::home): the albums and playlists played last and this player's queues left, a queue
   // that is an album's tracks shown as that album; asked again when the queues change.
-  let serverBack = $state<HomeBack[]>([]);
-  let serverBackIn = $state(false);
+  let serverBack = $state<HomeBack[]>(kept.back ?? []);
+  let serverBackIn = $state(kept.back !== null);
   const back = $derived(local ? backHere() : serverBack);
   const backIn = $derived(local ? device.tracks !== null && devicePlays.known : serverBackIn);
   // Asked again only when the queues change (0.12.3; the owner: Home flickered): read inside the effect, the version's
   // lookup in Play On's players made it run, and ask the server, at every report of any player.
   const backKey = $derived(local ? null : JSON.stringify([queuesPlayer(), queuesVersion()]));
+  /** Asked again after a failure (its Try again). */
+  let backAgain = $state(0);
   $effect(() => {
     const key = backKey;
     if (key === null) return;
+    void backAgain;
     const [player] = JSON.parse(key) as [string | null, string];
     let current = true;
     getHomeBack(player).then(
-      (r) => current && ((serverBack = r.items), (serverBackIn = true)),
-      () => current && (serverBackIn = true),
+      (r) => current && ((serverBack = kept.back = r.items), delete failed.back, (serverBackIn = true)),
+      (e) => current && (kept.back === null && fail('back', e), (serverBackIn = true)),
     );
     return () => (current = false);
   });
   /** A queue's icon by where it came from, as the queue switcher has it (lib/QueuesSheet). */
   const FROM: Record<string, IconName> = { playlist: 'playlists', album: 'albums', favourites: 'heart', library: 'library', tracks: 'music', player: 'speaker' };
   // Blast from the past and Grave digging (the server's), of the libraries switched on.
-  let dug = $state<Digging | null>(null);
-  let dugIn = $state(false);
+  let dug = $state<Digging | null>(kept.dug ?? null);
+  let dugIn = $state(kept.dug !== undefined);
+  const readDug = () =>
+    getDigging(prefs.source || undefined, hiddenLibraries()).then(
+      (d) => ((dug = kept.dug = d), delete failed.dug, (dugIn = true)),
+      (e) => (!dug && fail('dug', e), (dugIn = true)),
+    );
   onMount(() => {
     if (local) return void (dugIn = true);
-    getDigging(prefs.source || undefined, hiddenLibraries()).then(
-      (d) => ((dug = d), (dugIn = true)),
-      () => ((dug = null), (dugIn = true)),
-    );
+    readDug();
   });
   // Blast from the past: each album once (the owner, 2026-10-23), by its track unplayed longest; Play plays them all.
   const pastAlbums = $derived(dug ? dug.past.filter((t, i, all) => all.findIndex((x) => x.album_id === t.album_id) === i) : []);
@@ -240,21 +264,30 @@
 
   // Favourite albums and Favourite tracks (the owner, 2026-10-24: the standard ones, off until switched on): Cratarr's
   // own, asked for only when switched on.
-  let favAlbumIds = $state<string[] | null>(null);
-  let favRows = $state<PlaylistRow[] | null>(null);
-  $effect(() => {
-    if (local || !order.includes('favAlbums') || favAlbumIds) return;
+  let favAlbumIds = $state<string[] | null>(kept.favAlbumIds);
+  let favRows = $state<PlaylistRow[] | null>(kept.favRows);
+  // Asked once a visit, what was kept showing meanwhile.
+  let favAlbumsAsked = false;
+  let favTracksAsked = false;
+  const readFavAlbums = () =>
     getFavoriteAlbums('cratarr').then(
-      (ids) => (favAlbumIds = ids),
-      () => (favAlbumIds = []),
+      (ids) => ((favAlbumIds = kept.favAlbumIds = ids), delete failed.favAlbums),
+      (e) => (favAlbumIds === null && fail('favAlbums', e), (favAlbumIds ??= [])),
     );
+  const readFavTracks = () =>
+    getFavoriteTracks().then(
+      (r) => ((favRows = kept.favRows = r.rows.filter((x) => x.id && !x.missing)), delete failed.favTracks),
+      (e) => (favRows === null && fail('favTracks', e), (favRows ??= [])),
+    );
+  $effect(() => {
+    if (local || !order.includes('favAlbums') || favAlbumsAsked) return;
+    favAlbumsAsked = true;
+    readFavAlbums();
   });
   $effect(() => {
-    if (local || !order.includes('favTracks') || favRows) return;
-    getFavoriteTracks().then(
-      (r) => (favRows = r.rows.filter((x) => x.id && !x.missing)),
-      () => (favRows = []),
-    );
+    if (local || !order.includes('favTracks') || favTracksAsked) return;
+    favTracksAsked = true;
+    readFavTracks();
   });
   const favAlbums = $derived.by(() => {
     const own = sources.find((s) => s.id === 'cratarr')?.albums ?? [];
@@ -284,7 +317,7 @@
   let exploreIn = $state(false);
   let statusIn = $state(false);
   const PATIENCE = 4000;
-  let patient = $state(true);
+  let patient = $state(!kept.seen);
   onMount(() => {
     const t = setTimeout(() => (patient = false), PATIENCE);
     return () => clearTimeout(t);
@@ -296,27 +329,51 @@
   // One's own crates on Home (0.9.3; the owner, 2026-10-25): each a shelf of its albums, as New for you's, its › the
   // crate; read once a visit, its first albums in the crate's order (`null`: nothing to show).
   const CRATE_ALBUMS = 20;
-  type CrateShelf = { name: string; source: string; albums: { id: string; title: string; artist: string | null; year: number | null }[] };
-  let crateShelves = $state<Record<string, CrateShelf | null>>({});
+  let crateShelves = $state<Record<string, CrateShelf | null>>({ ...kept.crates });
+  // Each asked once a visit, its kept shelf showing meanwhile.
   const asking = new Set<string>();
+  const readCrate = (id: string) =>
+    Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
+      ([page, def]) => {
+        const albums: CrateShelf['albums'] = [];
+        for (const r of page.rows) {
+          if (!r.album_id || albums.some((a) => a.id === r.album_id)) continue;
+          albums.push({ id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null, year: r.year ?? null });
+          if (albums.length === CRATE_ALBUMS) break;
+        }
+        crateShelves[id] = kept.crates[id] = { name: def.name, source: page.source, albums };
+        delete failed[CRATE_PART + id];
+      },
+      (e) => {
+        if (crateShelves[id]) return;
+        fail(CRATE_PART + id, e);
+        crateShelves[id] = null;
+      },
+    );
   $effect(() => {
     const ids = order.filter((p) => p.startsWith(CRATE_PART)).map((p) => p.slice(CRATE_PART.length));
-    for (const id of untrack(() => ids.filter((x) => !(x in crateShelves) && !asking.has(x)))) {
+    for (const id of untrack(() => ids.filter((x) => !asking.has(x)))) {
       asking.add(id);
-      Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
-        ([page, def]) => {
-          const albums: CrateShelf['albums'] = [];
-          for (const r of page.rows) {
-            if (!r.album_id || albums.some((a) => a.id === r.album_id)) continue;
-            albums.push({ id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null, year: r.year ?? null });
-            if (albums.length === CRATE_ALBUMS) break;
-          }
-          crateShelves[id] = { name: def.name, source: page.source, albums };
-        },
-        () => (crateShelves[id] = null),
-      );
+      readCrate(id);
     }
   });
+  /** A section's failure (what it asked failed, nothing kept), its name and its Try again. */
+  const failedOf = (part: Part) => failed[part === 'past' || part === 'graves' ? 'dug' : part] ?? null;
+  const FAILED_NAMES: Partial<Record<Part, string>> = { moment: 'The moment', back: 'Jump back in', week: 'Sounds like your week', favTracks: 'Favourite tracks' };
+  const failedName = (part: Part) =>
+    part.startsWith(CRATE_PART) ? (kept.crates[part.slice(CRATE_PART.length)]?.name ?? 'A crate') : (FAILED_NAMES[part] ?? TITLES[part] ?? part);
+  function readAgain(part: Part) {
+    // Its line stays till the answer: gone with what it brings, or said again.
+    const key = part === 'past' || part === 'graves' ? 'dug' : part;
+    if (part.startsWith(CRATE_PART)) void readCrate(part.slice(CRATE_PART.length));
+    else if (key === 'newest') void readNewest();
+    else if (key === 'week') void readWeek();
+    else if (key === 'moment') void readMoment();
+    else if (key === 'back') backAgain++;
+    else if (key === 'dug') void readDug();
+    else if (key === 'favAlbums') void readFavAlbums();
+    else if (key === 'favTracks') void readFavTracks();
+  }
   /** Whether a section has what it needs to show (a crate's: its shelf read). */
   const settledOf = (part: Part) => (part.startsWith(CRATE_PART) ? part.slice(CRATE_PART.length) in crateShelves : settled[part]);
   const settled = $derived<Record<Part, boolean>>({
@@ -335,7 +392,10 @@
   // the rest can start to enter"): with a flow leading Home, its sky shows as soon as it is known which (the moment's
   // weather, or one's own picture) and that picture is in, then its words and albums, then the sections after it; two
   // and a half seconds at most, then whatever there is.
-  let skyIn = $state(false);
+  let skyIn = $state(kept.sky && momentKept);
+  $effect(() => {
+    if (skyIn) kept.sky = true;
+  });
   /** The sections a first screen shows: the lead and the one after it. */
   const FIRST_SCREEN = 2;
   $effect(() => {
@@ -356,6 +416,9 @@
     settledOf(part) && (part === lead || !heroLead || skyIn) && (!patient || order.slice(0, order.indexOf(part)).every((x) => settledOf(x)));
   /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
   const loading = $derived(!order.some(turn) && !order.every((x) => settledOf(x)));
+  $effect(() => {
+    if (!loading) kept.seen = true;
+  });
   // One commit (lib/Hold; the owner, 2026-10-26: "Hold until its first screen is ready"): the page before stays until
   // the header's picture and the first sections are in; those further down may follow.
   holdUntil(
@@ -483,9 +546,14 @@
   {#if loading}<PageLoading />{/if}
   <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
   {#each order as part, i (part)}
-    {#if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
+    {#if failedOf(part) && turn(part)}{@render failedPart(part)}{:else if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
   {/each}
 </div>
+
+{#snippet failedPart(part: Part)}
+  <!-- Its answer failed, nothing kept: one line in its place, so a failed Home is never blank (the owner, 2026-11-02). -->
+  <section class="failed" aria-label={failedName(part)}><Notice text={`${failedName(part)}: ${failedOf(part)}`} onretry={() => readAgain(part)} /></section>
+{/snippet}
 
 {#snippet heroPart()}
   <!-- Its sky at once, its picture as soon as it is in; its words and albums after it (heroReady). Not under the page's
@@ -586,16 +654,11 @@
     <section aria-label="Sounds like your week">
       <SectionHead title="Sounds like your week" onplay={() => playWeek('play')} busy={starting} />
       <div class="week">
-        {#if weekCovers.length >= 4}
-          <button class="mosaic" onclick={() => viewLike('week')} aria-label="Open {week.name}">
-            {#each weekCovers as src (src)}<span><Cover {src} /></span>{/each}
-          </button>
-        {/if}
-        <div class="about">
+        <CoverCard covers={weekCovers} label={week.name} onopen={() => viewLike('week')}>
           <h3>{week.total.toLocaleString()} tracks you didn't play this week</h3>
           {#if week.played}<p>like the {week.played.toLocaleString()} tracks you played in the last 7 days</p>{/if}
-          {#if week.genres.length}<p class="genres">{#each week.genres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
-        </div>
+          {#if week.genres.length}<p class="pills">{#each week.genres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
+        </CoverCard>
       </div>
     </section>
   {/if}
@@ -637,7 +700,7 @@
                  seen); the section's Play plays them, the long-press is the track's menu. -->
             <button
               class:gone={away() && !here('cratarr', t.id)}
-              onclick={() => viewOver(albumSubject('cratarr', t.album_id))}
+              onclick={() => viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id })}
             >
               <span class="cover"><Cover src={albumCoverUrl('cratarr', t.album_id)} /></span>
@@ -699,7 +762,7 @@
             <!-- As Blast from the past's: a tap opens its album, the section's Play plays them, a long-press its menu. -->
             <button
               class:gone={away() && !here('cratarr', t.id)}
-              onclick={() => t.album_id && viewOver(albumSubject('cratarr', t.album_id))}
+              onclick={() => t.album_id && t.id && viewFor(albumSubject('cratarr', t.album_id), t.id)}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id!, name: t.name ?? t.file, artist: t.artist, album: t.album, album_id: t.album_id ?? null })}
             >
               <span class="cover"><Cover src={coverUrl({ source: 'cratarr', id: t.id!, album_id: t.album_id })} /></span>
@@ -751,8 +814,9 @@
       linear-gradient(to bottom, var(--top), var(--foot));
   }
 
-  /* Under the page's row (back and the rest, floating over the page's top: App's .under-row), the sky goes on up behind
-     it to the page's top, its heading where it was (the owner, 2026-10-23); only when it is Home's first section. */
+  /* Under the page's row (the glasses floating over the page's top: App's .under-row), the sky goes on up behind them to
+     the page's top (the owner, 2026-10-23), its words under them, never in their band (2026-11-02); only when it is
+     Home's first section. */
   /* Without the row's room (Home opened first, beside the sidebar): its first content under the top-right glass, not
      behind it (the owner, 2026-10-28); the sky still from the page's top. */
   :global(.page:not(.under-row)) .home {
@@ -765,8 +829,8 @@
   }
 
   :global(.page.under-row) .moment.top {
-    margin-top: -76px;
-    padding-top: 80px;
+    margin-top: calc(-1 * (var(--glass-top) + 16px));
+    padding-top: calc(var(--glass-top) + 20px);
   }
 
   .moment[data-sky='sunny'] { --sky-top: #9a6424; --sky-foot: #3d2a16; }
@@ -892,6 +956,10 @@
     opacity: 0.6;
   }
 
+  .failed {
+    margin: 0 16px;
+  }
+
   .shelf {
     display: flex;
     gap: 12px;
@@ -924,62 +992,9 @@
     white-space: nowrap;
   }
 
+  /* Its card is Home's and the crate card's one piece (lib/CoverCard). */
   .week {
     margin: 4px 16px 0;
-    overflow: hidden;
-    border-radius: 16px;
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-  }
-
-  .mosaic {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    width: 100%;
-    padding: 0;
-    border: 0;
-    background: none;
-    cursor: pointer;
-  }
-
-  .mosaic span {
-    display: block;
-    aspect-ratio: 1;
-    /* Square whatever the image's shape: without it a portrait cover stretched its box, and its card (the owner,
-       2026-10-24). */
-    overflow: hidden;
-  }
-
-  .about {
-    padding: 14px 16px 16px;
-  }
-
-  h3 {
-    margin: 0;
-    font-size: 1.1rem;
-  }
-
-  .about p {
-    margin: 4px 0 0;
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
-
-  .about p.genres {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 10px;
-  }
-
-  .genres button {
-    padding: 2px 10px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
   }
 
   .back {

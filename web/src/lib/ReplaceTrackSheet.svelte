@@ -5,6 +5,9 @@
   // naming that recording), and once it passes, Add to album puts it in the album's folder, tagged from MusicBrainz, with
   // Undo. Or a file already on the server (0.10, its download folder: one found on an old drive, put there), checked the
   // same way and added the same way. `replace`: a track already there, swapped for a better copy (its old file to the trash).
+  // `start`: a missing track to go straight to (its row in Health's panel). `through` (0.13, Health's Work through; the
+  // owner, 2026-10-31): its stops one after another, each album's missing tracks (or each damaged file) in turn, the
+  // sheet moving on by itself after Add to album or Skip; each one still its own choice (decision 0080).
   import { untrack } from 'svelte';
   import { undo } from './api';
   import { on } from './events.svelte';
@@ -16,6 +19,7 @@
   import PageLoading from './PageLoading.svelte';
   import {
     addFetched,
+    copyLine,
     dropFetch,
     fetchCandidate,
     fetchFile,
@@ -23,6 +27,8 @@
     getRelease,
     getSearch,
     getTrackFiles,
+    forgetRelease,
+    releaseOf,
     searchTrack,
     type Candidate,
     type Fetch,
@@ -33,13 +39,32 @@
   } from './replaceTrack';
   import { toast } from './toast.svelte';
   import { offers } from './capabilities.svelte';
+  import { handledOne, nextStop, nextWanted, skipStop, startThrough, throughLine, type Stop, type Through } from './healthThrough';
 
   let {
     source,
     album,
     replace = null,
+    start = null,
+    through = null,
     onclose,
-  }: { source: string; album: { id: string; title: string }; replace?: { source: string; id: string } | null; onclose: () => void } = $props();
+  }: {
+    source: string;
+    album: { id: string; title: string };
+    replace?: { source: string; id: string } | null;
+    start?: string | null;
+    through?: { stops: Stop[]; total: number } | null;
+    onclose: () => void;
+  } = $props();
+
+  /** Where a Work through stands; the album the sheet is on: its stop's, or the one it was opened on. */
+  let walk = $state<Through>(startThrough());
+  const stop = $derived(through ? (through.stops[walk.at] ?? null) : null);
+  const here = $derived(
+    stop
+      ? { source: stop.source, album: { id: stop.album, title: stop.title }, replace: stop.replace ? { source: stop.source, id: stop.replace } : null }
+      : { source, album, replace },
+  );
 
   let release = $state<Release | null>(null);
   let error = $state<string | null>(null);
@@ -54,16 +79,61 @@
   let fetching = $state<Fetch | null>(null);
   let adding = $state(false);
 
-  // Read once, as the sheet opens (on the album it was opened for).
-  untrack(() => getRelease(source, album.id)).then(
-    (r) => {
-      release = r;
-      // Opened on a track (Replace): straight to its search.
-      const t = replace ? r.tracks.find((x) => x.have?.source === replace!.source && x.have?.id === replace!.id) : null;
-      if (t) void find(t);
-    },
-    (e) => (error = e instanceof Error ? e.message : String(e)),
-  );
+  // Read as the sheet opens (on the album it was opened for), and on each album a Work through comes to: kept and read
+  // ahead there (lib/replaceTrack releaseOf), the next album's while this one is worked, so moving on waits for nothing.
+  function read() {
+    const at = here;
+    release = null;
+    error = null;
+    if (through) step = 'search';
+    (through ? releaseOf(at.source, at.album.id) : getRelease(at.source, at.album.id)).then(
+      (r) => {
+        if (here.album.id !== at.album.id) return;
+        release = r;
+        if (through) return void onward();
+        // Opened on a track (Replace, or a missing one's row): straight to its search.
+        const t = at.replace
+          ? r.tracks.find((x) => x.have?.source === at.replace!.source && x.have?.id === at.replace!.id)
+          : start
+            ? r.tracks.find((x) => x.recording === start)
+            : null;
+        if (t) void find(t);
+      },
+      (e) => {
+        if (here.album.id === at.album.id) error = e instanceof Error ? e.message : String(e);
+      },
+    );
+    const after = through?.stops[walk.at + 1];
+    if (after) void releaseOf(after.source, after.album).catch(() => {});
+  }
+  untrack(read);
+
+  /** The Work through on: this album's next track, else the next album's, else done (the sheet closes). */
+  function onward() {
+    if (!through || !stop) return onclose();
+    const t = release ? nextWanted(release.tracks, stop, walk.handled) : null;
+    if (t) return void find(t);
+    walk = nextStop(walk);
+    if (walk.at >= through.stops.length) return onclose();
+    read();
+  }
+  /** This track left as it is (or, its album not readable, the album); on to the next. */
+  function skip() {
+    if (!through || !stop) return;
+    const id = fetchId;
+    fetchId = null;
+    fetching = null;
+    searchId = null;
+    search = null;
+    if (id) void dropFetch(id).catch(() => {});
+    if (!release || !wanted) {
+      walk = skipStop(walk, stop);
+      if (walk.at >= through.stops.length) return onclose();
+      return read();
+    }
+    walk = handledOne(walk, wanted.recording);
+    onward();
+  }
   const missing = $derived(release?.tracks.filter((t) => !t.have) ?? []);
   const there = $derived(release?.tracks.filter((t) => t.have) ?? []);
   const clock = (ms: number | null) => (ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms / 1000) % 60)).padStart(2, '0')}` : '');
@@ -97,7 +167,7 @@
     search = null;
     error = null;
     try {
-      const { id } = await searchTrack({ source, id: album.id }, t.recording, replace ?? (t.have ? t.have : undefined));
+      const { id } = await searchTrack({ source: here.source, id: here.album.id }, t.recording, here.replace ?? (t.have ? t.have : undefined));
       searchId = id;
       void poll(
         () => getSearch(id),
@@ -143,7 +213,7 @@
     fetching = { state: fromFile ? 'checking' : 'queued', percent: null };
     error = null;
     try {
-      const { id } = fromFile ? await fetchFile(c.path, { source, id: album.id }, wanted!.recording, replace ?? (wanted!.have ?? undefined)) : await fetchCandidate(searchId!, c.id);
+      const { id } = fromFile ? await fetchFile(c.path, { source: here.source, id: here.album.id }, wanted!.recording, here.replace ?? (wanted!.have ?? undefined)) : await fetchCandidate(searchId!, c.id);
       fetchId = id;
       void poll(
         () => getFetch(id),
@@ -168,8 +238,12 @@
     try {
       const { undo: tokens } = await addFetched(fetchId);
       fetchId = null;
-      onclose();
+      forgetRelease(here.source, here.album.id);
       toast.show({ text: `${wanted?.title ?? 'The track'} added.`, tone: 'done', act: { label: 'Undo', run: () => void undo(tokens) } });
+      if (!through || !wanted) return onclose();
+      fetching = null;
+      walk = handledOne(walk, wanted.recording);
+      onward();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -202,11 +276,25 @@
 <MenuSheet
   label="Missing tracks"
   icon="search"
-  title={step === 'tracks' ? album.title : (wanted?.title ?? album.title)}
-  chips={step === 'tracks' && release ? [release.artist ?? '', release.year ? String(release.year) : '', missing.length ? `${plural(missing.length, 'track')} missing` : 'Complete'].filter(Boolean) : []}
+  title={step === 'tracks' ? here.album.title : (wanted?.title ?? here.album.title)}
+  chips={through
+    ? [here.album.title, throughLine(walk, through.total)]
+    : step === 'tracks' && release
+      ? [release.artist ?? '', release.year ? String(release.year) : '', missing.length ? `${plural(missing.length, 'track')} missing` : 'Complete'].filter(Boolean)
+      : []}
   {onclose}
   step={step === 'tracks' ? 'menu' : step}
-  onback={step === 'tracks' || (replace && step === 'search') ? null : step === 'fetch' ? () => void drop() : step === 'files' ? (searches ? backToSearch : () => (step = 'tracks')) : () => ((step = 'tracks'), (searchId = null))}
+  onback={step === 'tracks' || ((here.replace || through) && step === 'search')
+    ? null
+    : step === 'fetch'
+      ? () => void drop()
+      : step === 'files'
+        ? searches
+          ? backToSearch
+          : through
+            ? null
+            : () => (step = 'tracks')
+        : () => ((step = 'tracks'), (searchId = null))}
 >
   {#if error}
     <p class="why">{error}</p>
@@ -231,8 +319,9 @@
       </MenuCards>
     {/if}
   {:else if step === 'search'}
-    {#if !search || search.state === 'searching'}
+    {#if (!search || search.state === 'searching') && !error}
       <PageLoading />
+    {:else if !search}<!-- its error, said above -->
     {:else if search.state === 'failed'}
       <p class="why">{search.why ?? 'The search did not finish.'}</p>
     {:else}
@@ -242,14 +331,7 @@
             <MenuEntry
               icon="arrowDownToLine"
               label={c.file.split(/[\\/]/).pop() ?? c.file}
-              sub={[
-                c.lossless ? [c.format, c.bitDepth && c.sampleRate ? `${c.bitDepth}/${Math.round(c.sampleRate / 100) / 10}` : null].filter(Boolean).join(' ') : `${c.format} ${c.bitrate ?? ''} kbps`,
-                mb(c.size),
-                c.freeSlot ? 'free slot' : c.queue !== null ? `${c.queue} waiting` : null,
-                c.user,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
+              sub={copyLine(c)}
               onclick={() => void take(c)}
             />
           {:else}
@@ -308,6 +390,12 @@
           <MenuEntry icon="back" label="Another copy" onclick={() => void drop()} />
         {/if}
       </MenuGroup>
+    </MenuCards>
+  {/if}
+  {#if through && step !== 'tracks'}
+    <!-- Work through: this one left as it is, on to the next. -->
+    <MenuCards>
+      <MenuGroup><MenuEntry icon="next" label="Skip" onclick={skip} /></MenuGroup>
     </MenuCards>
   {/if}
 </MenuSheet>

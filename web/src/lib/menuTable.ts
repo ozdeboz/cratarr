@@ -44,7 +44,6 @@ export type EntryId =
   | 'edit'
   | 'changeCover'
   | 'missingTracks'
-  | 'classical'
   | 'deviceCover'
   | 'serverCover'
   | 'devicePicture'
@@ -99,7 +98,7 @@ export const MENUS: Record<MenuKind, Kind> = {
       // Remove from this device beside what put it there (the owner, 2026-10-26: last in the menu it was out of sight).
       { group: 'take', entries: ['download', 'keep', 'removeFromDevice', 'share'] },
       { group: 'know', entries: ['webSearch', 'geniusSearch'] },
-      { group: 'change', entries: ['changeCover', 'missingTracks', 'classical', 'deviceCover', 'serverCover'] },
+      { group: 'change', entries: ['edit', 'changeCover', 'missingTracks', 'deviceCover', 'serverCover'] },
       { group: 'library', label: 'Library', entries: ['cancelConversion', 'moveTo', 'replaceIn'] },
       { group: 'remove', entries: ['removeResume', 'deleteAlbum'] },
     ],
@@ -164,7 +163,10 @@ export const MENUS: Record<MenuKind, Kind> = {
   selection: {
     actions: ['Play', 'Shuffle', 'Play next', 'Add to queue', 'Start radio'],
     cards: [
-      { group: 'feel', entries: ['excludeEverywhere'] },
+      // A record's tracks in a list: its album (the owner, 2026-11-02: Go to album and the crate's Excludes came last,
+      // apart from Exclude everywhere; every exclusion is one card).
+      { group: 'go', entries: ['goAlbum'] },
+      { group: 'feel', entries: ['excludeEverywhere', 'notInCrate'] },
       { group: 'collect', entries: ['addToPlaylist'] },
       { group: 'take', entries: ['download'] },
       { group: 'change', entries: ['adjustBpm'] },
@@ -189,14 +191,14 @@ export const GROUP_ORDER: readonly MenuGroupId[] = ['go', 'discover', 'feel', 'c
 export const OWN_CARD: readonly EntryId[] = ['discover', 'extra'];
 
 /** The names that are the same everywhere (0058: Info not Details, View for the object, Go to for another); the
- *  entries named by what they are about ("Go to Bonobo", "Delete 3 playlists") are left out. */
+ *  entries named by what they are about ("Go to Bonobo", "Delete 3 playlists", "Delete EP": a record by its type,
+ *  lib/recordTypeRules) are left out. */
 export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   view: 'View',
   goAlbum: 'Go to album',
   soundsLike: 'Sounds like this',
   otherVersions: 'Other versions',
   favourite: 'Favourite',
-  excludeEverywhere: 'Exclude everywhere',
   addToPlaylist: 'Add to playlist',
   copyToMine: 'Copy to my playlists',
   saveAsPlaylist: 'Save as playlist',
@@ -216,7 +218,6 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   edit: 'Edit',
   changeCover: 'Change cover',
   missingTracks: 'Missing tracks…',
-  classical: 'Classical…',
   deviceCover: 'Change cover on this device',
   serverCover: "Use the server's cover",
   devicePicture: 'Change picture on this device',
@@ -230,12 +231,11 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   removeFromQueue: 'Remove from queue',
   removeResume: 'Remove resume point',
   clearQueue: 'Clear the queue',
-  deleteAlbum: 'Delete album',
   deleteCrate: 'Delete crate',
 };
 
-/** Names no menu uses any more: what 0058 and its amendment renamed. */
-export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…'];
+/** Names no menu uses any more: what 0058 and its amendment renamed, and Delete album (a record by its type, 2026-11-01). */
+export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…', 'Delete album'];
 
 /** What a menu offers out of reach (decision 0085: don't offer what can't be upheld; the owner, 2026-10-30): the entries
  *  that work with Cratarr away. A navigation reads the service worker's last copy (lib/away), a heart, a rating, a

@@ -42,6 +42,12 @@ pub struct Finding {
     /// A short name for it, a noun phrase in title case (0.9.6, the owner: the panel's breadcrumb): "Missing covers".
     pub name: String,
     pub title: String,
+    /// Health's row, in two parts (0.13, the owner): what it is about and how it is, read "{thing} · {count} {state}"
+    /// ("Covers · 3 missing"). `None` where no such pair fits; the page falls back on the name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thing: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub count: u64,
@@ -145,7 +151,50 @@ static FIRST_SEEN: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
 /// A finding as a check makes it; its time is set by the report.
 fn finding(domain: &'static str, key: impl Into<String>, level: Level, count: u64, title: impl Into<String>) -> Finding {
     let key = key.into();
-    Finding { domain, name: name_of(&key).into(), key, title: title.into(), detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
+    let (thing, state) = label_of(&key).map_or((None, None), |(t, s)| (Some(t.to_string()), Some(s.to_string())));
+    Finding { domain, name: name_of(&key).into(), key, title: title.into(), thing, state, detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
+}
+
+/// A finding's row, by its key: what it is about (a plural noun, Records where it counts records) and how it is (the
+/// owner's table, 2026-11-01). An unreachable server's thing is its own name, set where it is found.
+fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
+    Some(match key {
+        "library:cover" => ("Covers", "missing"),
+        "library:year" => ("Years", "missing"),
+        "library:genre" => ("Genres", "missing"),
+        "library:album-artist" => ("Album artists", "missing"),
+        "library:musicbrainz" => ("MusicBrainz ids", "missing"),
+        "library:track-numbers" => ("Track numbers", "off"),
+        "library:discs" => ("Disc numbers", "off"),
+        "library:incomplete" => ("Records", "missing tracks"),
+        "library:rules" => ("Names", "set by a rule"),
+        "files:broken" => ("Files", "unreadable"),
+        "files:cut-short" => ("Files", "cut off"),
+        "files:damaged_tag" => ("Tags", "damaged"),
+        "files:no_tags" => ("Tags", "missing"),
+        "files:no_length" => ("Lengths", "missing"),
+        "files:length-misread" => ("Lengths", "read wrong"),
+        "files:length-guessed" => ("Lengths", "guessed"),
+        "files:sound-breaks" => ("Sound", "breaking off"),
+        "incoming:upgrades" => ("Replacements", "better"),
+        "incoming:duplicates" => ("Duplicates", "found"),
+        "incoming:failed" => ("Conversions", "failed"),
+        "playlists:missing" => ("Playlist tracks", "missing"),
+        "analysis:audiomuse" => ("Analysis", "to do"),
+        "sign-in:refused" => ("Sign-ins", "refused"),
+        "sign-in:throttled" => ("Sign-ins", "throttled"),
+        "server:runaway" => ("Clients", "running away"),
+        "server:slow" => ("Responses", "slow"),
+        "server:settings-file" => ("Settings file", "unreadable"),
+        "servers:lidarr" => ("Lidarr", "unreachable"),
+        "requests:waiting" => ("Requests", "waiting"),
+        k if k.starts_with("servers:") => ("Server", "unreachable"),
+        // A player's own (the owner, 2026-11-01: "The player as the thing"): named where it is found.
+        k if k.starts_with("players:held:") => ("Player", "play held"),
+        k if k.starts_with("players:away:") => ("Player", "silent"),
+        k if k.ends_with(":check") => ("Checks", "failed"),
+        _ => return None,
+    })
 }
 
 /// A finding's short name, by its key (the breadcrumb's; its title stays the sentence).
@@ -164,6 +213,7 @@ fn name_of(key: &str) -> &'static str {
         "library:genre" => "Missing genres",
         "library:album-artist" => "Missing album artists",
         "library:track-numbers" => "Track numbers",
+        "library:discs" => "Disc numbers",
         "library:musicbrainz" => "Missing MusicBrainz ids",
         "library:incomplete" => "Albums missing tracks",
         "library:rules" => "Named otherwise by a rule",
@@ -255,7 +305,9 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 /// 2026-10-25). No share of all the albums (0.9.7, the owner: a bar is for something good, not for what is wrong).
 /// Track numbers (0.9.6): `numbering`'s
 /// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
-pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)]) -> Vec<Finding> {
+/// Disc numbers (0.13): `discs`' albums that lost theirs (numbers starting again, or fewer discs than the release that
+/// holds them), each with what is off; Renumber fixes them too.
+pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], discs: &[(String, String, String, String)]) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
     let kinds: [(&str, Level, &str, &str, Pick); 5] = [
         ("cover", Level::Critical, "album without a cover", "albums without a cover", |r| r.cover),
@@ -279,11 +331,18 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
             .collect();
         out.push(f);
     }
-    if !numbering.is_empty() {
-        let mut hit: Vec<&(String, String, String, String)> = numbering.iter().collect();
+    let found: [(&[(String, String, String, String)], &str, &str, &str); 2] = [
+        (numbering, "library:track-numbers", "album with track numbers off", "albums with track numbers off"),
+        (discs, "library:discs", "album that lost its disc numbers", "albums that lost their disc numbers"),
+    ];
+    for (albums, key, one, many) in found {
+        if albums.is_empty() {
+            continue;
+        }
+        let mut hit: Vec<&(String, String, String, String)> = albums.iter().collect();
         hit.sort_by(|a, b| a.2.to_lowercase().cmp(&b.2.to_lowercase()).then_with(|| a.1.cmp(&b.1)));
         let count = hit.len() as u64;
-        let mut f = finding("library", "library:track-numbers", Level::Warning, count, n(count, "album with track numbers off", "albums with track numbers off"));
+        let mut f = finding("library", key, Level::Warning, count, n(count, one, many));
         f.items = hit
             .iter()
             .take(ITEMS)
@@ -299,9 +358,10 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
     out
 }
 
-/// Incoming's albums as they stand to Music (decision 0034), and the conversions that failed. Dealt with on their items'
-/// own pages (the comparison, the album's menu), not the Library, whose own filter could hide them (the owner,
-/// 2026-10-24): no `open`.
+/// Incoming's albums as they stand to the other libraries (decision 0034): better copies of Music's (Replace), the rest
+/// in two libraries at once (an upgrade of another Incoming library's copy among them: Replace is Music's alone); and
+/// the conversions that failed. Dealt with on their items' own pages (the comparison, the album's menu), not the
+/// Library, whose own filter could hide them (the owner, 2026-10-24): no `open`.
 pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     let mut out = Vec::new();
     if upgrades > 0 {
@@ -310,12 +370,26 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
         out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
     }
     if duplicates > 0 {
-        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "album is in Music and Incoming at once", "albums are in Music and Incoming at once")));
+        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "album is in two libraries at once", "albums are in two libraries at once")));
     }
     if failed > 0 {
         out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
     }
     out
+}
+
+/// A better copy Replace can take: an upgrade of Music's album (`incoming`'s upgrades; any other verdict is an album in
+/// two libraries at once).
+fn replaces(v: &super::incoming::VerdictView) -> bool {
+    v.kind == "upgrade" && v.replaceable
+}
+
+/// Where a verdict's other copy is, for an item's line: Music, else its library as named.
+fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums::LibraryView]) -> &'a str {
+    if v.replaceable {
+        return "Music";
+    }
+    v.library_id.as_ref().and_then(|id| libraries.iter().find(|l| &l.id == id)).map_or("another library", |l| l.name.as_str())
 }
 
 /// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
@@ -340,6 +414,7 @@ fn check_connections(at: i64) -> Vec<Finding> {
             let level = if name == "musicbrainz" { Level::Critical } else { Level::Warning };
             let mut f = finding("connections", format!("connections:{name}"), level, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
             f.name = super::reach::label(name).to_string();
+            (f.thing, f.state) = (Some(f.name.clone()), Some("failing".into()));
             f.detail = s.last_error.map(|(_, why)| why);
             f.open = matches!(name, "musicbrainz" | "discogs" | "lastfm").then_some(Open { page: "settings", switch: None, thing: Some(name_static(name)) });
             f
@@ -458,21 +533,27 @@ impl App {
         Ok(out)
     }
 
-    /// Music's albums lacking what the library requires (the owner, 2026-10-24): Incoming's are marked there instead.
+    /// The albums of every library in use lacking what the library requires (the owner, 2026-11-02: Music's and
+    /// Incoming's alike; Incoming's are marked there too).
     async fn check_library(&self) -> anyhow::Result<Vec<Finding>> {
         let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
-        let music = self.library.folders().music;
-        let folders = self.library.catalogue().folders();
-        let music = music.and_then(|m| folders.iter().position(|f| f == std::path::Path::new(&m))).map(|i| i as i64);
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
-        let (rows, numbering, matched) =
-            tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((lib.lacking()?, lib.numbering(music)?, ud.renumber_matched()?)) }).await??;
-        let off: Vec<(String, String, String, String)> = numbering
-            .into_iter()
-            .filter_map(|(id, name, artist, numbers)| super::renumber::off(&numbers, !matched.contains(&id)).map(|line| (id, name, artist, line)))
-            .collect();
-        let mut out = library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off);
-        out.extend(self.check_incomplete(&served, music).await?);
+        let (rows, numbering, matched, released) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            Ok((lib.lacking()?, lib.numbering(None)?, ud.renumber_matched()?, ud.album_discs()?))
+        })
+        .await??;
+        // Disc numbers lost (0.13) first: such an album's numbers twice are that, not Track numbers.
+        let mut discs: Vec<(String, String, String, String)> = Vec::new();
+        let mut off: Vec<(String, String, String, String)> = Vec::new();
+        for (id, name, artist, numbers) in numbering {
+            if let Some(line) = super::renumber::discs_off(&numbers, released.get(&id).copied()) {
+                discs.push((id, name, artist, line));
+            } else if let Some(line) = super::renumber::off(&numbers, !matched.contains(&id)) {
+                off.push((id, name, artist, line));
+            }
+        }
+        let mut out = library(&rows, &off, &discs);
+        out.extend(self.check_incomplete(&served).await?);
         // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
         let s = served.clone();
         let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
@@ -497,23 +578,22 @@ impl App {
     }
 
     /// Albums missing tracks (0.9.7, `app::incomplete`): each with what its release has beyond it and whether it is
-    /// asked for already; and the albums whose numbers have gaps that no release could be held against yet.
-    async fn check_incomplete(&self, served: &std::sync::Arc<crate::serve::Serve>, music: Option<i64>) -> anyhow::Result<Vec<Finding>> {
+    /// asked for already; and the albums whose numbers have gaps that no release could be held against yet. Every
+    /// library in use's (the owner, 2026-11-02).
+    async fn check_incomplete(&self, served: &std::sync::Arc<crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
         let s = served.clone();
         let (found, gaps) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
             for (album, json) in s.userdata.albums_incomplete()? {
                 let Ok(i) = serde_json::from_str::<super::incomplete::Incomplete>(&json) else { continue };
-                let Some((folder, _, _, artist, name)) = s.library.album_place(&album)? else { continue };
-                if music.is_some_and(|m| folder != m) {
-                    continue;
-                }
+                // One the library no longer has is left out.
+                let Some((_, _, _, artist, name)) = s.library.album_place(&album)? else { continue };
                 found.push((album, name, artist, i));
             }
             // Gaps in the numbers where no release was held against the album (no MusicBrainz id, no match yet).
             let checked = s.userdata.album_complete_at()?;
             let mut gaps = Vec::new();
-            for (id, name, artist, numbers) in s.library.numbering(music)? {
+            for (id, name, artist, numbers) in s.library.numbering(None)? {
                 if checked.contains_key(&id) {
                     continue;
                 }
@@ -588,19 +668,19 @@ impl App {
         let verdicts = view.sources.iter().flat_map(|s| s.verdicts.values());
         let (mut upgrades, mut duplicates) = (0, 0);
         for v in verdicts {
-            match v.kind {
-                "upgrade" => upgrades += 1,
-                "duplicate" => duplicates += 1,
-                _ => {}
+            if replaces(v) {
+                upgrades += 1;
+            } else {
+                duplicates += 1;
             }
         }
         let jobs: Vec<_> = self.incoming.jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
         let mut out = incoming(upgrades, duplicates, jobs.len() as u64);
-        // Each album waiting, with the Music album it upgrades or duplicates; each conversion failed, with why.
+        // Each album waiting, with the album it upgrades or duplicates; each conversion failed, with why.
         for f in &mut out {
-            let kind = match f.key.as_str() {
-                "incoming:upgrades" => "upgrade",
-                "incoming:duplicates" => "duplicate",
+            let better = match f.key.as_str() {
+                "incoming:upgrades" => true,
+                "incoming:duplicates" => false,
                 "incoming:failed" => {
                     f.items = jobs
                         .iter()
@@ -612,12 +692,12 @@ impl App {
                 _ => continue,
             };
             for s in &view.sources {
-                for (id, v) in s.verdicts.iter().filter(|(_, v)| v.kind == kind) {
+                for (id, v) in s.verdicts.iter().filter(|(_, v)| replaces(v) == better) {
                     let a = s.albums.iter().find(|a| &a.id == id);
                     let title = a.map_or_else(|| id.clone(), |a| a.title.clone());
                     let by = a.and_then(|a| a.artist.clone());
-                    // Both places: the copy in Music, as Incoming's verdict names it (this one opens Incoming's).
-                    let line = [by, Some(format!("in Music as {}", v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
+                    // Both places: the other copy, in its library as the verdict names it (this one opens Incoming's).
+                    let line = [by, Some(format!("in {} as {}", paired_in(v, &s.library_info), v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
                         .into_iter()
                         .flatten()
                         .collect::<Vec<_>>()
@@ -685,6 +765,7 @@ impl App {
         }
         for s in view.sources.iter().filter(|s| s.enabled && !s.status.connected) {
             let mut f = finding("servers", format!("servers:{}", s.id), Level::Critical, 1, format!("{} can't be reached", s.label));
+            f.thing = Some(s.label.to_string());
             f.detail = s.status.error.clone().or_else(|| s.error.clone());
             f.open = settings();
             out.push(f);
@@ -706,13 +787,17 @@ impl App {
         for p in self.play_on.list() {
             if let Some(why) = &p.held {
                 let mut f = finding("players", format!("players:held:{}", p.name), Level::Warning, 1, format!("{} held back a play", p.name));
+                f.thing = Some(p.name.clone());
                 f.detail = Some(why.clone());
                 out.push(f);
             }
             let away = at - p.seen as i64;
             if !p.online && p.kind == "app" && (24 * 3600..30 * 24 * 3600).contains(&away) {
                 let days = away / (24 * 3600);
-                out.push(finding("players", format!("players:away:{}", p.name), Level::Info, 1, format!("{} not heard from for {}", p.name, n(days as u64, "day", "days"))));
+                // No count: a player is silent or not ("Salon · silent"; the page leaves a 0 out).
+                let mut f = finding("players", format!("players:away:{}", p.name), Level::Info, 0, format!("{} not heard from for {}", p.name, n(days as u64, "day", "days")));
+                f.thing = Some(p.name.clone());
+                out.push(f);
             }
         }
         out
@@ -805,10 +890,20 @@ mod tests {
 
     #[test]
     fn every_finding_has_a_short_name() {
-        for key in ["files:broken", "library:cover", "library:track-numbers", "incoming:upgrades", "server:slow", "servers:jellyfin", "players:away:Tablet", "library:check"] {
+        for key in ["files:broken", "library:cover", "library:track-numbers", "library:discs", "incoming:upgrades", "server:slow", "servers:jellyfin", "players:away:Tablet", "library:check"] {
             assert_ne!(name_of(key), "Finding", "{key}");
         }
         assert_eq!(finding("library", "library:genre", Level::Warning, 12, "12 albums without a genre").name, "Missing genres");
+    }
+
+    #[test]
+    fn every_finding_has_a_row_of_thing_and_state() {
+        for key in ["files:broken", "files:no_tags", "library:incomplete", "incoming:failed", "server:slow", "servers:jellyfin", "players:held:Tablet", "players:away:Tablet", "library:check"] {
+            assert!(label_of(key).is_some(), "{key}");
+        }
+        let f = finding("library", "library:cover", Level::Warning, 3, "3 albums without a cover");
+        assert_eq!((f.thing.as_deref(), f.state.as_deref()), (Some("Covers"), Some("missing")));
+        assert_eq!(label_of("files:something-new"), None, "the page falls back on the name");
     }
 
     #[test]
@@ -834,8 +929,50 @@ mod tests {
         assert_eq!(waiting[0].title, "13 better copies wait to replace Music's");
         assert_eq!(waiting[0].open, None);
         assert_eq!(waiting[1].title, "1 conversion failed");
-        assert_eq!(incoming(0, 17, 0)[0].title, "17 albums are in Music and Incoming at once");
-        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 album is in Music and Incoming at once"]);
+        assert_eq!(incoming(0, 17, 0)[0].title, "17 albums are in two libraries at once");
+        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 album is in two libraries at once"]);
         assert!(incoming(0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn every_librarys_albums_are_found_each_opening_its_own_record() {
+        // An Incoming album (folder 1, its id its own: `serve::ids::album`) beside Music's of the same name.
+        let lacks = |id: &str, folder: i64| crate::serve::library::Lacks {
+            id: id.into(),
+            name: "Zebra".into(),
+            artist: "Arp".into(),
+            folder,
+            cover: true,
+            year: false,
+            genre: false,
+            album_artist: false,
+            track_no: false,
+            musicbrainz: false,
+        };
+        let numbers = [("al-in".to_string(), "Heads".to_string(), "Ott".to_string(), "01 twice".to_string())];
+        let found = library(&[lacks("al-music", 0), lacks("al-in", 1)], &numbers, &[]);
+        assert_eq!(found.iter().map(|f| (f.key.as_str(), f.title.as_str())).collect::<Vec<_>>(), [("library:cover", "2 albums without a cover"), ("library:track-numbers", "1 album with track numbers off")]);
+        let opens = |f: &Finding| f.items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
+        assert_eq!(opens(&found[0]), ["al-music", "al-in"]);
+        assert_eq!(opens(&found[1]), ["al-in"]);
+    }
+
+    #[test]
+    fn an_incoming_album_says_which_library_its_other_copy_is_in() {
+        use crate::app::incoming::VerdictView;
+        let v = |kind: &'static str, library_id: Option<&str>, replaceable: bool| VerdictView {
+            kind,
+            library: "Arp/Zebra".into(),
+            why: String::new(),
+            library_id: library_id.map(Into::into),
+            replaceable,
+        };
+        let libraries = [crate::app::albums::LibraryView { id: "new".into(), name: "New music".into(), use_: "incoming", colour: None, format: crate::settings::Format::AsIs }];
+        assert!(replaces(&v("upgrade", Some("music"), true)));
+        assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
+        assert!(!replaces(&v("duplicate", Some("music"), true)));
+        assert_eq!(paired_in(&v("duplicate", Some("music"), true), &libraries), "Music");
+        assert_eq!(paired_in(&v("upgrade", Some("new"), false), &libraries), "New music");
+        assert_eq!(paired_in(&v("upgrade", None, false), &libraries), "another library");
     }
 }

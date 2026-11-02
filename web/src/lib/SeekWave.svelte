@@ -10,7 +10,7 @@
   import { accentFor, keepAccent } from './accents.svelte';
   import { appInfo, inApp } from './app.svelte';
   import { startStopNow } from './device.svelte';
-  import { deckNow, local, throughOf } from './localPlayer.svelte';
+  import { deckNow, local, throughOf, windFrame } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
@@ -160,7 +160,7 @@
    *  track's length off). */
   // The playhead too (`pos`), from the same frame: read as the page draws, it was a frame on from the window at times
   // and jittered against the bars.
-  let holdShown = $state<{ from: number; to: number; pos: number } | null>(null);
+  let holdShown = $state<{ from: number; to: number; pos: number; aim: number | null } | null>(null);
   $effect(() => {
     const on = zoomOn && holdNow.held;
     return untrack(() => {
@@ -177,24 +177,30 @@
         idx = local.index;
         const li = holdNow.landingIndex ?? local.index;
         const l = holdNow.landing;
+        // The tape and its crosshair at this frame's moment, as the music has them (lib/localPlayer's windFrame), not
+        // as the wind's last step left them: the window centres on the crosshair exactly, so both must be of the
+        // same moment, or the window strides against the bars (0.13, the owner: "it lags behind and it also glitches").
+        const f = windFrame(t);
+        const at = (f && along(f.place.index, f.place.pos)) ?? herePos;
+        const aim = f?.landing ? along(f.landing.index, f.landing.pos) : l === null ? null : along(li, l);
         win = stepWindow(
           win,
           {
             len: hereLen ?? 0,
-            pos: herePos,
+            pos: at,
             moved,
             holding: zoomOn && holdNow.held,
             through: throughQueue,
             dir: holdNow.dir,
             speed: holdNow.speed,
             top: holdNow.top,
-            aim: l === null ? null : along(li, l),
+            aim,
             ends: queueEnds,
           },
           dt,
         );
         const fa = win && holdBase !== null && holdBase !== local.index ? (along(holdBase, 0) ?? 0) : 0;
-        holdShown = win ? { from: win.shown.from - fa, to: win.shown.to - fa, pos: herePos - fa } : null;
+        holdShown = win ? { from: win.shown.from - fa, to: win.shown.to - fa, pos: at - fa, aim: aim === null ? null : aim - fa } : null;
         if (win) raf = requestAnimationFrame(step);
       };
       raf = requestAnimationFrame(step);
@@ -312,6 +318,15 @@
   const aimMark = $derived.by(() => {
     const l = holdNow.landing;
     if (l === null || !dur || !port().holdsQueue) return null;
+    // A hold's window shown: the crosshair from the window's own frame, the same moment as it and the playhead (the
+    // window is centred on it, lib/waveView), ahead of the playhead the way the tape goes.
+    if (holdShown && holdShown.aim !== null && hereLen) {
+      const a = holdShown.aim + frameAt;
+      const p = holdShown.pos + frameAt;
+      if (!(holdNow.dir > 0 ? p < a : p > a)) return null;
+      if (wideStrip || (a >= 0 && a <= hereLen)) return a / hereLen;
+      return holdNow.dir > 0 ? 1 : 0;
+    }
     const at = holdNow.landingIndex;
     if (at !== null && at !== local.index) {
       // Where it is in the wide view; else at this track's edge that way.

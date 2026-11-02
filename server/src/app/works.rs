@@ -143,13 +143,40 @@ fn add_performer(into: &mut Vec<Performer>, name: &str, mbid: Option<&str>, role
     }
 }
 
+/// Whether a name is written in Latin letters: it has letters, and every one is Latin.
+fn latin_letters(name: &str) -> bool {
+    let latin = |c: char| c.is_ascii_alphabetic() || matches!(c, '\u{c0}'..='\u{24f}' | '\u{1e00}'..='\u{1eff}');
+    let mut letters = name.chars().filter(|c| c.is_alphabetic()).peekable();
+    letters.peek().is_some() && letters.all(latin)
+}
+
+/// A name as Cratarr shows it (0.13: MusicBrainz names an artist in their own script, Mulatu Astatke in Ethiopic): the
+/// name where it is in Latin letters; else the name credited (as printed on the release) where that is; else the sort
+/// name turned round ("Astatke, Mulatu": "Mulatu Astatke") where that is; else the name as it is.
+pub fn latin(name: &str, credited: Option<&str>, sort: Option<&str>) -> String {
+    if latin_letters(name) {
+        return name.to_string();
+    }
+    if let Some(c) = credited.filter(|c| latin_letters(c)) {
+        return c.to_string();
+    }
+    if let Some(s) = sort.filter(|s| latin_letters(s)) {
+        return match s.split_once(", ") {
+            Some((last, first)) => format!("{first} {last}"),
+            None => s.to_string(),
+        };
+    }
+    name.to_string()
+}
+
 /// The performers among relations (`relations` of a release or a recording); whether there was one.
 fn performer_rels(relations: &Value, into: &mut Vec<Performer>) -> bool {
     let mut any = false;
     for r in relations.as_array().into_iter().flatten() {
         let (Some(role), Some(name)) = (role_of(r["type"].as_str().unwrap_or_default()), r["artist"]["name"].as_str()) else { continue };
         any = true;
-        add_performer(into, name, r["artist"]["id"].as_str(), role);
+        let name = latin(name, r["target-credit"].as_str().filter(|c| !c.is_empty()), r["artist"]["sort-name"].as_str());
+        add_performer(into, &name, r["artist"]["id"].as_str(), role);
     }
     any
 }
@@ -162,6 +189,7 @@ fn credits(credit: &Value, into: &mut Vec<(Option<String>, String)>) {
         if name.is_empty() || id.as_deref() == Some(VARIOUS) || crate::crates::various(name) {
             continue;
         }
+        let name = &latin(name, c["name"].as_str(), c["artist"]["sort-name"].as_str());
         if !into.iter().any(|(i, n)| (id.is_some() && *i == id) || n == name) {
             into.push((id, name.to_string()));
         }
@@ -175,7 +203,9 @@ fn composers_of(relations: &Value) -> Vec<Person> {
         let a = &r["artist"];
         let (Some(id), Some(name)) = (a["id"].as_str(), a["name"].as_str()) else { continue };
         if !out.iter().any(|p| p.mbid == id) {
-            out.push(Person { mbid: id.to_string(), name: name.to_string(), sort_name: a["sort-name"].as_str().map(str::to_string) });
+            let sort = a["sort-name"].as_str();
+            let name = latin(name, r["target-credit"].as_str().filter(|c| !c.is_empty()), sort);
+            out.push(Person { mbid: id.to_string(), name, sort_name: sort.map(str::to_string) });
         }
     }
     out
@@ -626,5 +656,14 @@ mod tests {
         let found = persons_of("rdj", &rdj);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0], ("aphex".to_string(), "rdj".to_string(), "Richard D. James".to_string()));
+    }
+
+    #[test]
+    fn a_name_is_shown_in_latin_letters() {
+        assert_eq!(latin("Johannes Brahms", None, Some("Brahms, Johannes")), "Johannes Brahms");
+        assert_eq!(latin("Béla Bartók", None, None), "Béla Bartók", "accents are Latin");
+        assert_eq!(latin("ሙላቱ አስታጥቄ", None, Some("Astatke, Mulatu")), "Mulatu Astatke", "the sort name turned round");
+        assert_eq!(latin("ሙላቱ አስታጥቄ", Some("Mulatu Astatke"), Some("ሙላቱ አስታጥቄ")), "Mulatu Astatke", "as credited");
+        assert_eq!(latin("Пётр Ильич Чайковский", None, Some("Чайковский, Пётр Ильич")), "Пётр Ильич Чайковский", "nothing in Latin letters: as it is");
     }
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
-  // A quick crate's term, tapped in its sentence (lib/QuickCrate): the other ways its word reads, an artist's Sounds
+  // A quick crate's term, tapped in its sentence (lib/CrateSentence): the other ways its word reads, an artist's Sounds
   // like or By and their own tracks, another word for it, Remove. As the 0.11 sheet's chip step was.
-  import { chipOf, readAs, readingsFor, type Chip, type Found, type Reading } from './quickCrate';
+  import { canLeaveOut, chipOf, leftOut, readAs, readingsFor, type Chip, type Found, type Reading } from './quickCrate';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Seg from './Seg.svelte';
@@ -35,7 +35,9 @@
     const term = again.trim().replace(/\s+/g, ' ');
     if (!term) return;
     const found = await ask(term).catch(() => [] as Found);
-    const c = chipOf(term, readingsFor(term, found));
+    const read = chipOf(term, readingsFor(term, found));
+    // A word left out stays left out, read again.
+    const c = read && chip.not ? leftOut(read, true) : read;
     if (!c) return void (missed = term);
     onchange(c);
     onclose();
@@ -43,7 +45,7 @@
 </script>
 
 <MenuSheet label="A word of the quick crate" icon="crates" title={chip.reading.label} {onclose}>
-  {#if chip.reading.kind === 'artist' && chip.reading.id}
+  {#if chip.reading.kind === 'artist' && chip.reading.id && !chip.not}
     <div class="how">
       <Seg
         label="Like or by"
@@ -57,6 +59,10 @@
     {#if chip.how === 'like'}
       <MenuEntry icon="user" label="Their own tracks" switched={!!chip.own} onclick={() => onchange({ ...chip, own: !chip.own })} />
     {/if}
+  {/if}
+  <!-- Leave out (0.13; the owner, 2026-10-31): the term as "but not …", as an artist's Not in this crate. -->
+  {#if canLeaveOut(chip)}
+    <MenuEntry icon="crateOut" label="Leave out" switched={!!chip.not} onclick={() => onchange(leftOut(chip, !chip.not))} />
   {/if}
   {#each chip.others.slice(0, OTHERS) as r (r.kind + r.value)}
     <MenuEntry label={shown(r)} onclick={() => (onchange(readAs(chip, r)), onclose())} />

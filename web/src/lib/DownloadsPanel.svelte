@@ -12,7 +12,7 @@
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
-  import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
+  import { albumSubject, artistSubject, backOne, closePlaylist, DOWNLOADS, SETTINGS, upToPage, viewOver, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { appInfo, download, downloads, removeDownloads } from './app.svelte';
   import type { Collection } from './api';
@@ -28,7 +28,7 @@
   import ReleaseRow from './ReleaseRow.svelte';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
-  import TopPill from './TopPill.svelte';
+  import ContentControls from './ContentControls.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -207,8 +207,12 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
-  <Crumbs trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]} here={L.label} />
+  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
+  <Crumbs
+    trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]}
+    here={L.label}
+    siblings={beside ? null : { menuLabel: 'Downloads shows', options: DOWNLOADS_LISTS.map((l) => ({ id: l.id, label: l.label })), chosen: L.id, onchoose: (id) => viewSibling(DOWNLOADS + id) }}
+  />
 {/snippet}
 
 {#snippet glassExtra()}
@@ -230,7 +234,7 @@
   {#if !handed}
     <div class="bar" class:beside>
       {@render glassLeft()}
-      {#if pill()}<TopPill {...pill()!} />{/if}
+      {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}
     </div>
   {/if}
@@ -246,7 +250,7 @@
         />
         <!-- Where its room and quality are set: a row of its own, saying so (the owner, 2026-10-26: the bar's row did not
              make clear it went there). -->
-        <Item name="Sync settings" onclick={() => viewPlaylist(`${SETTINGS}sync`)} />
+        <Item name="Sync settings" onclick={() => viewOver(`${SETTINGS}sync`)} />
         {#if waiting}<Item lead="warn" name={kept.waiting ? WAITS[kept.waiting] : `${waiting} waiting`} />{/if}
         {#if failed.length}
           <!-- Retry asks Cratarr: not offered out of its reach (decision 0085: never offer what cannot be upheld). -->

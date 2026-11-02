@@ -21,6 +21,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::userdata::overrides::Overrides;
+
 use super::ids;
 use crate::catalogue::{Rules, ServedRow};
 
@@ -48,7 +50,8 @@ CREATE TABLE IF NOT EXISTS albums (
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
   folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
-  format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '');
+  format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', type_why TEXT,
+  set_fields TEXT NOT NULL DEFAULT '', whole_tracks INTEGER);
 CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
@@ -115,13 +118,15 @@ fn add_trigrams(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The secondary types kept (MusicBrainz's names, lower case; 0.13: the ones a record can be set to).
+pub const SECONDARY: [&str; 12] =
+    ["compilation", "soundtrack", "spokenword", "interview", "audiobook", "audio drama", "live", "remix", "dj-mix", "mixtape/street", "demo", "field recording"];
+
 /// A release's types as kept (0.9.6): its primary type ("album", "ep", "single", "other") and its secondary ones
 /// ("compilation", "live", "remix", "soundtrack"…), lower case, from MusicBrainz's names ("Album", "EP",
 /// "Broadcast" as other) or Discogs' format descriptions ("LP", "EP", "Single", "Compilation"). Words of neither kind
 /// are left out.
 pub fn release_words<'a>(words: impl IntoIterator<Item = &'a str>) -> (Option<String>, Vec<String>) {
-    const SECONDARY: [&str; 12] =
-        ["compilation", "soundtrack", "spokenword", "interview", "audiobook", "audio drama", "live", "remix", "dj-mix", "mixtape/street", "demo", "field recording"];
     let (mut primary, mut secondary): (Option<String>, Vec<String>) = (None, Vec::new());
     for w in words {
         let w = w.trim().to_lowercase();
@@ -129,7 +134,8 @@ pub fn release_words<'a>(words: impl IntoIterator<Item = &'a str>) -> (Option<St
             "album" | "lp" => Some("album"),
             "ep" => Some("ep"),
             "single" => Some("single"),
-            "other" | "broadcast" => Some("other"),
+            "broadcast" => Some("broadcast"),
+            "other" => Some("other"),
             _ => None,
         };
         match main {
@@ -155,50 +161,255 @@ pub fn type_label(word: &str) -> String {
     }
 }
 
-/// An album's release type (0.9.6, the owner): its release group's on MusicBrainz, else Discogs' format, else a guess
-/// for a short one (three tracks or fewer, under 15 minutes: a single); else none, never an EP by its length.
-/// (primary, where from, secondary).
-fn release_type_of(
-    musicbrainz: Option<&(Option<String>, Vec<String>)>,
-    discogs: Option<&(Option<String>, Vec<String>)>,
+/// A release's types as kept (user data `release_types`): its primary type and its secondary ones.
+pub type Kept = (Option<String>, Vec<String>);
+
+/// An album as the type rule reads it: its tracks, their length and its longest (ms), its name, whether its album
+/// artist is Various Artists. Its tracks are the library's, or the whole release's where tracks were found missing
+/// (`Whole`).
+struct Shape<'a> {
     tracks: usize,
     duration_ms: u64,
-) -> (Option<String>, Option<&'static str>, Vec<String>) {
-    let secondary = || musicbrainz.or(discogs).map(|t| t.1.clone()).unwrap_or_default();
-    if let Some((Some(p), s)) = musicbrainz {
-        return (Some(p.clone()), Some("musicbrainz"), s.clone());
+    longest_ms: u64,
+    name: &'a str,
+    various: bool,
+}
+
+/// The whole release of an album found missing tracks (`app::incomplete`, user data `album_complete`): how many tracks
+/// it has, and their length and the longest (ms) where every one's is known. The type rule reads an incomplete album
+/// as this (0.13, the owner, 2026-10-31: incomplete is a fact, not a type).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Whole {
+    pub tracks: usize,
+    pub duration_ms: Option<u64>,
+    pub longest_ms: Option<u64>,
+}
+
+impl Shape<'_> {
+    /// The album as its whole release has it, where tracks were found missing: never fewer tracks or shorter than the
+    /// library's.
+    fn whole(self, whole: Option<&Whole>) -> Self {
+        let Some(w) = whole else { return self };
+        Shape {
+            tracks: self.tracks.max(w.tracks),
+            duration_ms: self.duration_ms.max(w.duration_ms.unwrap_or(0)),
+            longest_ms: self.longest_ms.max(w.longest_ms.unwrap_or(0)),
+            ..self
+        }
     }
-    if let Some((Some(p), s)) = discogs {
-        return (Some(p.clone()), Some("discogs"), s.clone());
+}
+
+const MINUTE_MS: u64 = 60_000;
+
+/// An album's release type (0.13, the owner's rule, 2026-10-31; decision 0081's second amendment), on top of what
+/// MusicBrainz's release group, else Discogs' format, says: MusicBrainz's Single is one song in versions, not a short
+/// release, and an EP of either may be an album of twelve tracks. In order:
+/// 1. The name wins: "… EP" an EP, "… LP" an album.
+/// 2. Seven tracks or more, or over 45 minutes: an album (the owner's EPs reach 44 minutes, their albums start at 47).
+/// 3. Four to six tracks: an EP.
+/// 4. One to three: an EP where over 15 minutes or a track is 10 minutes or longer, else a single.
+/// 5. A Single said (one song in versions) is an EP at most, however long.
+///
+/// An album found missing tracks is read as its whole release (`Whole`; 0.13, the owner: incomplete is no type). The
+/// same for an album neither says anything of. A Broadcast or Other stays as said. A Various Artists album is a
+/// compilation besides. (primary, where from, which rule where the rule decided, secondary): where from is the source
+/// that said a type, none where none did; the rule ("name", "tracks", "length", "one song") only where the type is not
+/// the one said.
+fn release_type_of(
+    musicbrainz: Option<&Kept>,
+    discogs: Option<&Kept>,
+    album: &Shape,
+) -> (Option<String>, Option<&'static str>, Option<&'static str>, Vec<String>) {
+    let (said, from, mut secondary) = match (musicbrainz, discogs) {
+        (Some((Some(p), s)), _) => (Some(p.as_str()), Some("musicbrainz"), s.clone()),
+        (_, Some((Some(p), s))) => (Some(p.as_str()), Some("discogs"), s.clone()),
+        _ => (None, None, musicbrainz.or(discogs).map(|t| t.1.clone()).unwrap_or_default()),
+    };
+    if album.various && !secondary.iter().any(|s| s == "compilation") {
+        secondary.push("compilation".into());
     }
-    if (1..=3).contains(&tracks) && duration_ms > 0 && duration_ms < 15 * 60 * 1000 {
-        return (Some("single".into()), Some("guess"), secondary());
+    if matches!(said, Some("other" | "broadcast")) || album.tracks == 0 {
+        return (said.map(str::to_string), from, None, secondary);
     }
-    (None, None, secondary())
+    let (kind, why) = if let Some(kind) = named(album.name) {
+        (kind, "name")
+    } else {
+        let (kind, why) = if album.tracks >= 7 {
+            ("album", "tracks")
+        } else if album.duration_ms > 45 * MINUTE_MS {
+            ("album", "length")
+        } else if album.tracks >= 4 {
+            ("ep", "tracks")
+        } else if album.duration_ms > 15 * MINUTE_MS || album.longest_ms >= 10 * MINUTE_MS {
+            ("ep", "length")
+        } else {
+            ("single", "tracks")
+        };
+        if kind == "album" && said == Some("single") { ("ep", "one song") } else { (kind, why) }
+    };
+    (Some(kind.into()), from, (said != Some(kind)).then_some(why), secondary)
+}
+
+/// Another server's album typed by the owner's rule (0.13, the owner: a record's type is always known): its track
+/// count, length and name as its shape (its longest track not known there), nothing said of it.
+pub fn type_by_rule(album: &mut crate::source::Album) {
+    if album.release.kind.is_some() {
+        return;
+    }
+    let shape = Shape {
+        tracks: album.tracks as usize,
+        duration_ms: album.duration_secs.map_or(0, |s| (s.max(0.0) * 1000.0) as u64),
+        longest_ms: 0,
+        name: &album.title,
+        various: album.artist.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("Various Artists")),
+    };
+    let (kind, _, why, secondary) = release_type_of(None, None, &shape);
+    album.release.kind = kind;
+    album.release.type_why = why.map(str::to_string);
+    album.release.secondary = secondary;
+}
+
+/// The type an album's name gives: its last word "EP" an EP, "LP" an album (any case).
+fn named(name: &str) -> Option<&'static str> {
+    name.split(|c: char| !c.is_alphanumeric()).rev().find_map(|w| match w.to_ascii_lowercase().as_str() {
+        "ep" => Some("ep"),
+        "lp" => Some("album"),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
 mod release_type_tests {
     use super::*;
 
+    fn shape(name: &str, tracks: usize, minutes: f64, longest: f64) -> Shape<'_> {
+        let ms = |m: f64| (m * MINUTE_MS as f64) as u64;
+        Shape { tracks, duration_ms: ms(minutes), longest_ms: ms(longest), name, various: false }
+    }
+
+    fn said(kind: &str) -> Kept {
+        (Some(kind.into()), Vec::new())
+    }
+
+    /// (type, rule) for an album as `kept` says.
+    fn typed(kept: Option<&Kept>, album: Shape) -> (String, Option<&'static str>) {
+        let (kind, _, why, _) = release_type_of(kept, None, &album);
+        (kind.unwrap_or_default(), why)
+    }
+
     #[test]
-    fn release_types_come_from_musicbrainz_then_discogs_then_a_guess_for_a_single() {
+    fn release_words_read_musicbrainz_s_and_discogs_names() {
         assert_eq!(release_words(["EP", "Live", "Remastered"]), (Some("ep".into()), vec!["live".into()]));
         assert_eq!(release_words(["LP", "Album", "Compilation"]), (Some("album".into()), vec!["compilation".into()]));
-        assert_eq!(release_words(["Broadcast"]).0.as_deref(), Some("other"));
-        let mb = (Some("album".to_string()), vec!["live".to_string()]);
-        let dc = (Some("ep".to_string()), Vec::new());
-        assert_eq!(release_type_of(Some(&mb), Some(&dc), 12, 3_000_000), (Some("album".into()), Some("musicbrainz"), vec!["live".into()]));
-        assert_eq!(release_type_of(None, Some(&dc), 4, 1_200_000), (Some("ep".into()), Some("discogs"), Vec::new()));
-        assert_eq!(release_type_of(None, None, 2, 7 * 60_000), (Some("single".into()), Some("guess"), Vec::new()));
-        assert_eq!(release_type_of(None, None, 5, 22 * 60_000), (None, None, Vec::new()), "never an EP by its length");
+        assert_eq!(release_words(["Broadcast"]).0.as_deref(), Some("broadcast"));
+        assert_eq!(release_words(["Other"]).0.as_deref(), Some("other"));
         assert_eq!(type_label("ep"), "EP");
         assert_eq!(type_label("compilation"), "Compilation");
+    }
+
+    /// The owner's verdicts on the Library's Singles and EPs (2026-10-31).
+    #[test]
+    fn the_owner_s_rule_types_by_tracks_and_length_on_top_of_what_is_said() {
+        let (single, ep) = (said("single"), said("ep"));
+        // MusicBrainz's Singles that are EPs: long, four tracks, or named so.
+        assert_eq!(typed(Some(&single), shape("Passiflora", 1, 21.7, 21.7)), ("ep".into(), Some("length")));
+        assert_eq!(typed(Some(&single), shape("Take California", 4, 18.0, 6.0)), ("ep".into(), Some("tracks")));
+        assert_eq!(typed(Some(&single), shape("Let's Get Down EP", 2, 9.0, 5.0)), ("ep".into(), Some("name")));
+        assert_eq!(typed(Some(&single), shape("Melbourne Bolero", 2, 14.0, 10.0)), ("ep".into(), Some("length")), "a track of 10 minutes");
+        // One song in versions stays an EP, however long.
+        assert_eq!(typed(Some(&single), shape("Kime Ne", 6, 56.6, 12.0)), ("ep".into(), Some("one song")));
+        assert_eq!(typed(Some(&single), shape("Kime Ne", 8, 56.6, 12.0)), ("ep".into(), Some("one song")));
+        // Short ones stay singles, as said.
+        assert_eq!(typed(Some(&single), shape("Nautiluss", 2, 11.0, 6.0)), ("single".into(), None));
+        // EPs that are albums: seven tracks or more, however short, or over 45 minutes.
+        assert_eq!(typed(Some(&ep), shape("Plantation", 10, 63.0, 8.0)), ("album".into(), Some("tracks")));
+        assert_eq!(typed(Some(&ep), shape("Just Piano", 8, 20.0, 3.0)), ("album".into(), Some("tracks")));
+        assert_eq!(typed(Some(&ep), shape("Flowery Rave Tales", 6, 47.1, 9.0)), ("album".into(), Some("length")));
+        // The owner's longest EPs stay EPs.
+        assert_eq!(typed(Some(&ep), shape("Afro Damba", 6, 43.6, 9.0)), ("ep".into(), None));
+        assert_eq!(typed(Some(&ep), shape("Awake Into Life", 4, 42.4, 12.0)), ("ep".into(), None));
+        // An EP of a few short tracks is a single.
+        assert_eq!(typed(Some(&ep), shape("Islets In Pink Polypropylene", 2, 8.0, 4.5)), ("single".into(), Some("tracks")));
+        // The name wins over the length both ways.
+        assert_eq!(typed(Some(&ep), shape("Long Player LP", 3, 12.0, 4.0)), ("album".into(), Some("name")));
+        assert_eq!(named("Epoch"), None);
+        assert_eq!(named("Night Walks (EP)"), Some("ep"));
+    }
+
+    #[test]
+    fn an_album_found_missing_tracks_is_typed_as_its_whole_release() {
+        let whole = |tracks, minutes: f64, longest: f64| Whole { tracks, duration_ms: Some((minutes * MINUTE_MS as f64) as u64), longest_ms: Some((longest * MINUTE_MS as f64) as u64) };
+        // Two of an eleven-track album: an album, not a single.
+        assert_eq!(typed(Some(&said("album")), shape("Västertorp", 2, 9.0, 5.0).whole(Some(&whole(11, 50.0, 6.0)))), ("album".into(), None));
+        assert_eq!(typed(None, shape("Escape Reality", 2, 9.0, 5.0).whole(Some(&whole(5, 24.0, 6.0)))), ("ep".into(), Some("tracks")));
+        // The name still wins.
+        assert_eq!(typed(Some(&said("ep")), shape("Outsider Music EP", 1, 7.0, 7.0).whole(Some(&whole(9, 40.0, 7.0)))), ("ep".into(), None));
+        // Lengths not known: its tracks count, the library's length at least.
+        let counted = Whole { tracks: 8, duration_ms: None, longest_ms: None };
+        assert_eq!(typed(None, shape("Odd", 3, 12.0, 4.0).whole(Some(&counted))), ("album".into(), Some("tracks")));
+        assert_eq!(typed(Some(&said("ep")), shape("Speed Dembow Vol.II", 1, 4.0, 4.0)).0, "single", "not found missing: as it is");
+    }
+
+    #[test]
+    fn another_server_s_album_is_typed_by_the_rule() {
+        let album = |title: &str, tracks: u32, secs: f64, artist: &str| crate::source::Album {
+            id: "x".into(),
+            title: title.into(),
+            artist: Some(artist.into()),
+            year: None,
+            added: None,
+            path: None,
+            tracks,
+            format: None,
+            bitrate_kbps: None,
+            duration_secs: Some(secs),
+            tags: Vec::new(),
+            library: None,
+            artists: Vec::new(),
+            release: Default::default(),
+        };
+        let typed = |mut a: crate::source::Album| {
+            type_by_rule(&mut a);
+            (a.release.kind, a.release.secondary)
+        };
+        assert_eq!(typed(album("Odd", 10, 2700.0, "Ott")), (Some("album".into()), Vec::<String>::new()));
+        assert_eq!(typed(album("Odd", 5, 1300.0, "Ott")), (Some("ep".into()), Vec::new()));
+        assert_eq!(typed(album("Odd", 2, 420.0, "Ott")), (Some("single".into()), Vec::new()));
+        assert_eq!(typed(album("Hits", 14, 3600.0, "Various Artists")), (Some("album".into()), vec!["compilation".to_string()]));
+        let mut said = album("Odd", 2, 420.0, "Ott");
+        said.release.kind = Some("album".into());
+        assert_eq!(typed(said).0.as_deref(), Some("album"), "what is known stays");
+    }
+
+    #[test]
+    fn broadcast_and_other_stay_as_said() {
+        assert_eq!(typed(Some(&said("broadcast")), shape("Essential Mix", 1, 120.0, 120.0)), ("broadcast".into(), None));
+        assert_eq!(typed(Some(&said("other")), shape("Odd", 12, 60.0, 6.0)), ("other".into(), None));
+    }
+
+    #[test]
+    fn where_nothing_is_said_the_same_rule_and_other_stays() {
+        assert_eq!(release_type_of(None, None, &shape("Odd", 5, 22.0, 6.0)), (Some("ep".into()), None, Some("tracks"), Vec::new()));
+        assert_eq!(release_type_of(None, None, &shape("Odd", 2, 7.0, 4.0)), (Some("single".into()), None, Some("tracks"), Vec::new()));
+        let dc = said("ep");
+        assert_eq!(release_type_of(None, Some(&dc), &shape("Odd", 4, 20.0, 6.0)), (Some("ep".into()), Some("discogs"), None, Vec::new()));
+        let mb = (Some("album".to_string()), vec!["live".to_string()]);
+        assert_eq!(release_type_of(Some(&mb), Some(&dc), &shape("Odd", 12, 50.0, 6.0)), (Some("album".into()), Some("musicbrainz"), None, vec!["live".into()]));
+        let broadcast = said("other");
+        assert_eq!(release_type_of(Some(&broadcast), None, &shape("Radio Show", 1, 120.0, 120.0)).0.as_deref(), Some("other"));
+    }
+
+    #[test]
+    fn a_various_artists_album_is_a_compilation_besides() {
+        let album = Shape { various: true, ..shape("COD3 QR 015", 9, 59.0, 8.0) };
+        assert_eq!(release_type_of(None, None, &album), (Some("album".into()), None, Some("tracks"), vec!["compilation".into()]));
+        let soundtrack = (Some("album".to_string()), vec!["soundtrack".to_string(), "compilation".to_string()]);
+        assert_eq!(release_type_of(Some(&soundtrack), None, &album).3, vec!["soundtrack".to_string(), "compilation".to_string()], "once");
     }
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 10;
+const LAYOUT: i64 = 12;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -241,7 +452,12 @@ pub struct Library {
     /// original date.
     originals: Mutex<HashMap<String, u32>>,
     /// The release types found (0.9.6), by `mb:<release>` and `dc:<album id>` (user data `release_types`).
-    release_types: Mutex<HashMap<String, (Option<String>, Vec<String>)>>,
+    release_types: Mutex<HashMap<String, Kept>>,
+    /// The albums found missing tracks, by album id, with their whole release (user data `album_complete`; 0.13: typed
+    /// as it).
+    incomplete: Mutex<HashMap<String, Whole>>,
+    /// A record's facts set by hand (0.13), by its Music-form id (user data `record_overrides`).
+    overrides: Mutex<HashMap<String, Overrides>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
     extra_genres: Mutex<HashMap<String, Vec<String>>>,
     /// One build at a time (0.9.8): a check's build reads every row first, and must not write over the albums Cratarr's
@@ -416,6 +632,8 @@ impl Library {
             originals: Mutex::default(),
             extra_genres: Mutex::default(),
             release_types: Mutex::default(),
+            incomplete: Mutex::default(),
+            overrides: Mutex::default(),
             building: Mutex::new(()),
         })
     }
@@ -431,8 +649,18 @@ impl Library {
     }
 
     /// The release types found on MusicBrainz and Discogs (0.9.6); a change builds the library again.
-    pub fn set_release_types(&self, types: HashMap<String, (Option<String>, Vec<String>)>) {
+    pub fn set_release_types(&self, types: HashMap<String, Kept>) {
         *self.release_types.lock().unwrap_or_else(|p| p.into_inner()) = types;
+    }
+
+    /// The records' facts set by hand (by Music-form id, 0.13); a change builds the library again.
+    pub fn set_overrides(&self, overrides: HashMap<String, Overrides>) {
+        *self.overrides.lock().unwrap_or_else(|p| p.into_inner()) = overrides;
+    }
+
+    /// The albums found missing tracks, with their whole release (by album id, 0.13); a change builds the library again.
+    pub fn set_incomplete(&self, albums: HashMap<String, Whole>) {
+        *self.incomplete.lock().unwrap_or_else(|p| p.into_inner()) = albums;
     }
 
     /// Discogs' genres for albums whose files carry none (by album id); a change builds the library again.
@@ -447,14 +675,23 @@ impl Library {
         // The release types too (0.9.6): without them here, types that came after a build never built the library
         // again (seen on the sim, 2026-10-26: 21 kept, none shown).
         let t = self.release_types.lock().unwrap_or_else(|p| p.into_inner());
+        // The albums found missing tracks too (0.13): they are typed as their whole release.
+        use md5::Digest;
+        let mut i: Vec<String> = self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(a, w)| format!("{a} {w:?}")).collect();
+        i.sort_unstable();
+        // And the facts set by hand (0.13).
+        let set: BTreeMap<String, Overrides> =
+            self.overrides.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         format!(
-            "{}/{} genres {}/{} types {}/{}",
+            "{}/{} genres {}/{} types {}/{} incomplete {:x} set {:x}",
             o.len(),
             o.values().fold(0u64, |a, v| a.wrapping_add(u64::from(*v))),
             g.len(),
             g.values().map(Vec::len).sum::<usize>(),
             t.len(),
-            t.values().map(|v| usize::from(v.0.is_some()) + v.1.len()).sum::<usize>()
+            t.values().map(|v| usize::from(v.0.is_some()) + v.1.len()).sum::<usize>(),
+            md5::Md5::digest(i.join("\n").as_bytes()),
+            md5::Md5::digest(serde_json::to_string(&set).unwrap_or_default().as_bytes())
         )
     }
 
@@ -575,6 +812,8 @@ impl Library {
             originals: self.originals.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             extra_genres: self.extra_genres.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             release_types: self.release_types.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            incomplete: self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            overrides: self.overrides.lock().unwrap_or_else(|p| p.into_inner()).clone(),
         }
     }
 
@@ -628,9 +867,9 @@ impl Library {
             }
         }
         // Albums whose kept facts or cover files changed.
-        for (album, (folder, dir, src, first)) in self.built_albums()? {
+        for (album, (folder, dir, src, first, base)) in self.built_albums()? {
             let Some(r) = now.get(&(folder, first.as_str())) else { continue };
-            if album_src(&album, folder, &dir, r, &facts, covers) != src {
+            if album_src(&album, &base, folder, &dir, r, &facts, covers) != src {
                 dirs.extend(built.values().filter(|b| b.album == album).map(|b| (b.folder, b.dir.clone())));
             }
         }
@@ -746,13 +985,18 @@ impl Library {
     }
 
     /// Each album as built: its folder and folder there, its print, and the file of its first song.
-    fn built_albums(&self) -> Result<Vec<(String, (i64, String, String, String))>> {
+    fn built_albums(&self) -> Result<Vec<(String, (i64, String, String, String, String))>> {
         let db = self.db();
         let mut st = db.prepare(
-            "SELECT a.id, a.folder, a.dir, a.src, (SELECT s.rel FROM songs s WHERE s.album_id = a.id ORDER BY s.n LIMIT 1) FROM albums a",
+            "SELECT a.id, a.folder, a.dir, a.src, (SELECT s.rel FROM songs s WHERE s.album_id = a.id ORDER BY s.n LIMIT 1), a.base_id
+             FROM albums a",
         )?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?))))?;
-        Ok(rows.filter_map(|r| r.map(|(a, (f, d, s, first))| first.map(|first| (a, (f, d, s, first)))).transpose()).collect::<rusqlite::Result<_>>()?)
+        let rows = st.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?)))
+        })?;
+        Ok(rows
+            .filter_map(|r| r.map(|(a, (f, d, s, first, base))| first.map(|first| (a, (f, d, s, first, base)))).transpose())
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     /// The albums whose songs are in these folders, as built.
@@ -891,6 +1135,31 @@ impl Library {
         Ok(st.query_row([id], |r| r.get(0)).optional()?)
     }
 
+    /// The names of library ids (0.13, decision 0088: what a crate's conditions name), by id: an artist's (`ar-`) name,
+    /// an album's (`al-`) or a track's (`tr-`) title. Ids it does not have, or of no such kind, are left out.
+    pub fn names_of(&self, wanted: &[String]) -> Result<HashMap<String, String>> {
+        let db = self.db();
+        let mut artist = db.prepare_cached("SELECT name FROM artists WHERE id = ?1 LIMIT 1")?;
+        let mut album = db.prepare_cached("SELECT name FROM albums WHERE id = ?1 LIMIT 1")?;
+        let mut song = db.prepare_cached("SELECT title FROM songs WHERE id = ?1 LIMIT 1")?;
+        let mut out = HashMap::new();
+        for id in wanted {
+            let st = if id.starts_with(ids::ARTIST) {
+                &mut artist
+            } else if id.starts_with(ids::ALBUM) {
+                &mut album
+            } else if id.starts_with(ids::SONG) {
+                &mut song
+            } else {
+                continue;
+            };
+            if let Some(name) = st.query_row([id], |r| r.get::<_, String>(0)).optional()? {
+                out.insert(id.clone(), name);
+            }
+        }
+        Ok(out)
+    }
+
     /// An artist by name, as the library writes it (any case): their id and MusicBrainz id.
     pub fn artist_by_name(&self, name: &str) -> Result<Option<(String, Option<String>)>> {
         let db = self.db();
@@ -999,7 +1268,9 @@ struct Facts {
     added: HashMap<String, i64>,
     originals: HashMap<String, u32>,
     extra_genres: HashMap<String, Vec<String>>,
-    release_types: HashMap<String, (Option<String>, Vec<String>)>,
+    release_types: HashMap<String, Kept>,
+    incomplete: HashMap<String, Whole>,
+    overrides: HashMap<String, Overrides>,
 }
 
 /// A song as built: its folder there, its album and its row's print.
@@ -1018,18 +1289,21 @@ fn row_src(r: &ServedRow) -> String {
 }
 
 /// The print of what an album is built from besides its songs' rows: its kept facts (added date, original year,
-/// Discogs' genres, release types) and its folder's cover files.
-fn album_src(album: &str, folder: i64, dir: &str, first: &ServedRow, facts: &Facts, covers: &Covers) -> String {
+/// Discogs' genres, release types, missing tracks, what is set by hand by its Music-form id `base`) and its folder's
+/// cover files.
+fn album_src(album: &str, base: &str, folder: i64, dir: &str, first: &ServedRow, facts: &Facts, covers: &Covers) -> String {
     use md5::Digest;
     let release = first.first("musicbrainz_albumid");
     let said = format!(
-        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         facts.added.get(album),
         release.and_then(|m| facts.originals.get(m)),
         facts.extra_genres.get(album),
         release.and_then(|m| facts.release_types.get(&format!("mb:{m}"))),
         facts.release_types.get(&format!("dc:{album}")),
         covers.get(&(folder, dir.to_string())),
+        facts.incomplete.get(album),
+        facts.overrides.get(base),
     );
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
 }
@@ -1062,7 +1336,13 @@ fn write_albums(
     facts: &Facts,
     covers: &Covers,
 ) -> Result<(Vec<String>, BTreeSet<String>)> {
-    let songs = songs_of(rows, rules);
+    let mut songs = songs_of(rows, rules);
+    // Genres set by hand (0.13) are its tracks' too: the axes and crates read the tracks'.
+    for s in songs.iter_mut() {
+        if let Some(g) = facts.overrides.get(&s.album_base).and_then(|o| o.genres.clone()) {
+            s.genres = g;
+        }
+    }
     let mut credited: BTreeSet<String> = BTreeSet::new();
     let mut albums: BTreeMap<String, Vec<&Song>> = BTreeMap::new();
     {
@@ -1126,9 +1406,9 @@ fn write_albums(
     let mut ins_album = tx.prepare_cached(
         "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
            size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps, cover,
-           release_type, type_from, secondary, src)
+           release_type, type_from, secondary, src, type_why, set_fields, whole_tracks)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23, ?24, ?25, ?26)",
+           ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
     )?;
     let mut ins_fts = tx.prepare_cached("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
     let mut ins_tri = tx.prepare_cached("INSERT INTO albums_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
@@ -1143,9 +1423,18 @@ fn write_albums(
             .filter_map(|s| s.row.first("originaldate").and_then(year_of))
             .min()
             .or_else(|| first.row.first("musicbrainz_albumid").and_then(|m| facts.originals.get(m)).copied());
-        let album_year = match (original, years.iter().max().copied()) {
+        let mut album_year = match (original, years.iter().max().copied()) {
             (Some(o), Some(d)) => Some(o.min(d)),
             (o, d) => o.or(d),
+        };
+        // What is set by hand wins (0.13): a year set is its original year and the one shown.
+        let set = facts.overrides.get(&first.album_base);
+        let original = match set.and_then(|o| o.year) {
+            Some(y) => {
+                album_year = Some(y);
+                Some(y)
+            }
+            None => original,
         };
         let mut genres: Vec<String> = Vec::new();
         for s in songs.iter() {
@@ -1175,12 +1464,25 @@ fn write_albums(
         let formats: BTreeSet<&str> = songs.iter().filter_map(|s| s.row.format.as_deref()).collect();
         let format = (formats.len() == 1).then(|| formats.iter().next().map(|f| f.to_string())).flatten();
         let duration_ms = songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>();
-        let (kind, type_from, secondary) = release_type_of(
+        let shape = Shape {
+            tracks: songs.len(),
+            duration_ms,
+            longest_ms: songs.iter().filter_map(|s| s.row.duration_ms).max().unwrap_or(0),
+            name: &first.album,
+            various: first.album_artist.eq_ignore_ascii_case("Various Artists"),
+        }
+        .whole(facts.incomplete.get(album_id));
+        let (mut kind, mut type_from, mut type_why, mut secondary) = release_type_of(
             first.row.first("musicbrainz_albumid").and_then(|m| facts.release_types.get(&format!("mb:{m}"))),
             facts.release_types.get(&format!("dc:{album_id}")),
-            songs.len(),
-            duration_ms,
+            &shape,
         );
+        if let Some(k) = set.and_then(|o| o.kind.clone()) {
+            (kind, type_from, type_why) = (Some(k), Some("set"), None);
+        }
+        if let Some(s) = set.and_then(|o| o.secondary.clone()) {
+            secondary = s;
+        }
         ins_album.execute(params![
             album_id,
             first.album,
@@ -1207,7 +1509,10 @@ fn write_albums(
             kind,
             type_from,
             secondary.join("\u{1f}"),
-            album_src(album_id, first.folder, &dir, first.row, facts, covers),
+            album_src(album_id, &first.album_base, first.folder, &dir, first.row, facts, covers),
+            type_why,
+            set.map(|o| o.fields().join("\u{1f}")).unwrap_or_default(),
+            facts.incomplete.get(album_id).map(|w| w.tracks).filter(|t| *t > songs.len()).map(|t| t as i64),
         ])?;
         let n = tx.last_insert_rowid();
         ins_fts.execute(params![n, first.album, first.album_artist])?;
@@ -1654,6 +1959,19 @@ mod tests {
     }
 
     #[test]
+    fn a_crates_ids_are_named_as_the_library_has_them_and_one_it_lacks_left_out() {
+        // 0.13, decision 0088: an artist's name, an album's and a track's title.
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        let homogenic: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
+        let (bjork, hunter) = (ids::artist("Björk"), ids::song(1));
+        let asked = [bjork.clone(), homogenic.clone(), hunter.clone(), "tr-999".to_string(), "ar-nobody".to_string(), "al-none".to_string(), "Björk".to_string()];
+        let names = lib.names_of(&asked).unwrap();
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert_eq!((names[&bjork].as_str(), names[&homogenic].as_str(), names[&hunter].as_str()), ("Björk", "Homogenic", "Hunter"));
+    }
+
+    #[test]
     fn a_songs_album_is_found_by_the_songs_id() {
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();
@@ -1778,12 +2096,55 @@ mod tests {
         let before = lib.originals_print();
         lib.set_release_types([("mb:rel-odd".into(), (Some("ep".into()), vec!["live".into()]))].into());
         assert_ne!(lib.originals_print(), before, "new types change what the library was built from (`change`)");
+        let odd: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Odd'", [], |r| r.get(0)).unwrap();
+        let before = lib.originals_print();
+        lib.set_incomplete([(odd, Whole { tracks: 12, duration_ms: None, longest_ms: None })].into());
+        assert_ne!(lib.originals_print(), before, "an album found missing tracks too");
         lib.build(&folders(), &Rules::default()).unwrap();
-        let t: (Option<String>, Option<String>, String) = lib
+        let t: (Option<String>, Option<String>, String, Option<String>) = lib
             .db()
-            .query_row("SELECT release_type, type_from, secondary FROM albums WHERE name = 'Odd'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT release_type, type_from, secondary, type_why FROM albums WHERE name = 'Odd'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
             .unwrap();
-        assert_eq!(t, (Some("ep".into()), Some("musicbrainz".into()), "live".into()));
+        assert_eq!(t, (Some("album".into()), Some("musicbrainz".into()), "live".into(), Some("tracks".into())), "found missing tracks: typed as its twelve-track release");
+    }
+
+    #[test]
+    fn facts_set_by_hand_win_over_the_files_and_the_rule() {
+        let track = |t: i64| {
+            let tags = [("title", "A"), ("artist", "Ott"), ("albumartist", "Ott"), ("album", "Skylon"), ("date", "2012"), ("genre", "Dub")];
+            row(t, &format!("Ott/Skylon/0{t} A.flac"), &tags)
+        };
+        let folders = || vec![FolderRows { folder: 0, root: "/music".into(), rows: vec![track(1), track(2)] }];
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&folders(), &Rules::default()).unwrap();
+        let base: String = lib.db().query_row("SELECT base_id FROM albums", [], |r| r.get(0)).unwrap();
+        let set = Overrides {
+            kind: Some("album".into()),
+            secondary: Some(vec!["live".into()]),
+            year: Some(2008),
+            genres: Some(vec!["Psybient".into()]),
+            classical: None,
+        };
+        let before = lib.originals_print();
+        lib.set_overrides([(base, set)].into());
+        assert_ne!(lib.originals_print(), before, "what is set builds the library again");
+        lib.build(&folders(), &Rules::default()).unwrap();
+        let album: (String, Option<String>, Option<String>, String, i64, i64, String, String) = lib
+            .db()
+            .query_row("SELECT release_type, type_from, type_why, secondary, year, original_year, genres, set_fields FROM albums", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            })
+            .unwrap();
+        let f = '\u{1f}';
+        assert_eq!(album, ("album".into(), Some("set".into()), None, "live".into(), 2008, 2008, "Psybient".into(), format!("type{f}secondary{f}year{f}genres")));
+        let songs: Vec<String> = lib.db().prepare("SELECT genres FROM songs").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(songs, ["Psybient", "Psybient"], "its tracks' genres too");
+        lib.set_overrides(HashMap::new());
+        lib.build(&folders(), &Rules::default()).unwrap();
+        let kind: (String, Option<String>) = lib.db().query_row("SELECT release_type, type_why FROM albums", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(kind, ("single".into(), Some("tracks".into())), "reset: as the rule finds it");
     }
 
     #[test]

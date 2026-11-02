@@ -44,6 +44,6 @@
         }}
       />
     {/each}
-    <MenuEntry icon="ban" label="Exclude everywhere" danger onclick={everywhere} />
+    <MenuEntry icon="ban" label="Exclude this track everywhere" danger onclick={everywhere} />
   </div>
 </MenuSheet>

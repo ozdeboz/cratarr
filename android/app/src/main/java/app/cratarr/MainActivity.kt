@@ -788,7 +788,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** A page just loaded, perhaps right after the sign-in page (decision 0039): the session it holds now is noted, and
-     *  when it is another one, the app's own link to Cratarr connects again with it. The cookies go to disk as well. */
+     *  when it is another one, the app's own link to Cratarr connects again with it, and the plays learn whose it is
+     *  ([Plays.signedIn]). The cookies go to disk as well. */
     private fun followSession() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -797,7 +798,10 @@ class MainActivity : AppCompatActivity() {
                 // no WebView: no session either
             }
             val mark = Net.sessionMark(this@MainActivity)
-            if (mark != prefs.sessionMark) prefs.sessionMark = mark
+            if (mark != prefs.sessionMark) {
+                prefs.sessionMark = mark
+                Plays.signedIn(this@MainActivity)
+            }
         }
     }
 

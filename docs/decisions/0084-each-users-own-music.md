@@ -1,6 +1,6 @@
 # 0084: Each user's own music
 
-- Status: accepted as a plan (the owner, 2026-10-30), for 0.13 (after 0.11 quick crates and 0.12 modes per server); not built
+- Status: accepted as a plan (the owner, 2026-10-30), for 0.13 (after 0.11 quick crates and 0.12 modes per server); not built. Moved to 0.16 (the owner, 2026-11-01: 0.13 frozen at what preview.3 holds; docs/plans.md)
 - Date: 2026-10-30
 - Builds on: 0044 (folders), 0051 (several users), 0070 (requests), 0080 (single-track intake and its gate),
   0058 (Download…)

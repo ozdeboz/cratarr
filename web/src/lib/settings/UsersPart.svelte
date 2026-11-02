@@ -25,6 +25,7 @@
     type UserSession,
   } from '../api';
   import { me } from '../me.svelte';
+  import Notice from '../Notice.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import PageLoading from '../PageLoading.svelte';
   import Switch from '../Switch.svelte';
@@ -50,13 +51,12 @@
     { key: 'manage_requests', label: 'Answer requests' },
   ];
   let users = $state<User[] | null>(null);
+  /** The users not read: said in place with Try again, never an empty list (the owner, 2026-11-02). */
+  let loadError = $state<string | null>(null);
   const load = () =>
     getUsers().then(
-      (u) => (users = u),
-      (e) => {
-        users = [];
-        toast.fail(e, 'Could not read the users');
-      },
+      (u) => ((users = u), (loadError = null)),
+      (e) => (loadError = e instanceof Error ? e.message : "The users couldn't be read."),
     );
   load();
 
@@ -165,8 +165,9 @@
   }
 </script>
 
+{#if loadError}<Notice text={loadError} onretry={load} />{/if}
 {#if users === null}
-  <PageLoading />
+  {#if !loadError}<PageLoading />{/if}
 {:else if open}
   {@const u = open}
   {#if u.directory}

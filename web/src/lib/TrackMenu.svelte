@@ -42,17 +42,17 @@
   import { withHeard } from './trackFacts.svelte';
   import type { IconName } from './Icon.svelte';
   import MarkLoader from './MarkLoader.svelte';
+  import Notice from './Notice.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
-  import { excludeGlobally } from './exclusions.svelte';
+  import { excludedGloballyOf, loadExcludedIds, setExcludedGlobally } from './exclusions.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
   import { inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, fromLabel, playFromHere, snippetable, startOf, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, fromLabel, snippetable, snippetOn, startOf, toggleSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import { prefs } from './prefs.svelte';
-  import { untrack } from 'svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
@@ -61,7 +61,7 @@
   import { setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
-  import { albumSubject, artistOf, panel, viewOver } from './panel.svelte';
+  import { albumSubject, artistOf, panel, viewFor } from './panel.svelte';
   import { linkTo, share } from './share';
   import { crateOf, genreOf, viewGenre } from './crates.svelte';
   import { likeChip } from './quickCrate';
@@ -102,6 +102,11 @@
   loadExcludedArtists();
   $effect(() => {
     if (crate) loadCrateArtists(crate);
+  });
+  // The track's own, from its source's list of tracks excluded everywhere (its switch, the owner 2026-10-31).
+  $effect(() => {
+    const source = t?.source;
+    if (source && source !== 'device') loadExcludedIds(source);
   });
   /** Following someone (0.10): Play next and Add to queue ask them instead. */
   const followed = $derived(followingNow());
@@ -154,7 +159,7 @@
     onclose();
     // From the full-screen player: it closes once the album shows (lib/navStep), or it would cover it.
     leavePlayer();
-    viewOver(subject);
+    viewFor(subject, t.id);
   }
   const heartOn = $derived(forPlaying ? favorite() : !!other?.favorite);
   const heartKnown = $derived(forPlaying ? np?.favorite !== null : other !== null && other.favorite !== null);
@@ -169,14 +174,19 @@
   // Other versions (0.10): the library's other recordings of its work (MusicBrainz's work links), asked as the menu
   // opens where the list says there are some, or does not say (a server without them answers 404: none shown).
   let versions = $state<TrackVersions | null>(null);
-  // Answered (with none, or failed): what a sheet opened at its versions says then.
+  // Answered (with none, or failed): what a sheet opened at its versions says then; failed, why, never "No other
+  // versions found." (the owner, 2026-11-02: errors are never shown as nothing).
   let versionsAnswered = $state(false);
+  let versionsError = $state<string | null>(null);
+  let versionsAgain = $state(0);
   // Asked again only for another track, as `details` below (the playing track's view is new at every report).
   const versionsOf = $derived(t && t.source === 'cratarr' && t.has_versions !== false && can('other_versions') !== false ? `${t.source}\n${t.id}` : null);
   $effect(() => {
     const key = versionsOf;
+    void versionsAgain;
     versions = null;
     versionsAnswered = false;
+    versionsError = null;
     if (!key) return void (versionsAnswered = true);
     const [source, id] = key.split('\n');
     let gone = false;
@@ -186,7 +196,7 @@
         if (v?.versions?.length) versions = v;
         versionsAnswered = true;
       },
-      () => !gone && (versionsAnswered = true),
+      (e) => !gone && ((versionsError = e instanceof Error ? e.message : "Other versions couldn't be read."), (versionsAnswered = true)),
     );
     return () => (gone = true);
   });
@@ -236,12 +246,6 @@
     const words = [t.artist, t.name].filter(Boolean).join(' ');
     window.open(`https://duckduckgo.com/?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
     onclose();
-  }  // Feel (decision 0058): Exclude everywhere, as the heart's long-press has it (decision 0024, amended).
-  function excludeEverywhere() {
-    const one = t;
-    if (!one) return;
-    onclose();
-    excludeGlobally(one.source, [one.id]).catch((e) => toast.fail(e, "It wasn't excluded"));
   }
   function geniusSearch() {
     if (!t) return;
@@ -271,8 +275,9 @@
       },
     );
   });
-  // Its snippet as the menu opens (0.12, lib/snippetPlayer; Settings › This device › Snippets in menus): not the playing
-  // track's, nor the device's own music; its length as listed, else as its file says.
+  // Its snippet (0.12, lib/snippetPlayer; Settings › This device › Snippets in menus): not the playing track's, nor the
+  // device's own music; its length as listed, else as its file says. Heard only from Play snippet (the owner,
+  // 2026-10-31: the menu plays nothing by itself), ended as the menu closes or shows another track.
   const snip = $derived.by((): SnippetTrack | null => {
     if (!t || forPlaying || !prefs.snippetsInMenus || !snippetable(t)) return null;
     const duration_secs = t.duration_secs ?? (details?.duration_ms ? details.duration_ms / 1000 : null);
@@ -281,16 +286,8 @@
   const snipKey = $derived(snip ? `${snip.source}/${snip.id}/${snip.duration_secs ?? ''}` : null);
   $effect(() => {
     if (!snipKey) return;
-    untrack(() => snip && startSnippet(snip));
     return () => endSnippet();
   });
-  function fromHere() {
-    const s = snip;
-    if (!s) return;
-    const at = startOf(s);
-    onclose();
-    playFromHere(s, at).catch((e) => toast.fail(e, "It didn't play"));
-  }
   function showDetails() {
     step = 'details';
   }
@@ -302,7 +299,7 @@
     leavePlayer();
     viewGenre(name);
   }
-  /** Sounds like it: the crate search's sentence with the track as its "like" term (0.12; the owner: one way to make a
+  /** Sounds like it: the panel's builder, its sentence with the track as its "like" term (0.12; the owner: one way to make a
    *  crate), to refine or save; Cratarr's own, which AudioMuse hears. */
   function goToLike() {
     // Read before closing: closing lets go of the track.
@@ -455,7 +452,12 @@
   {:else if e === 'favourite'}
     {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
   {:else if e === 'excludeEverywhere'}
-    {#if !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
+    <!-- Feel (decision 0058): this track out everywhere, a switch beside its artists' (the owner, 2026-10-31), shown once
+         its source's list says which way it stands. -->
+    {#if !onDevice && excludedGloballyOf(t.source, t.id) !== null}
+      {@const out = !!excludedGloballyOf(t.source, t.id)}
+      <MenuEntry icon="ban" label="Exclude this track everywhere" switched={out} onclick={() => setExcludedGlobally(t.source, t.id, !out)} />
+    {/if}
   {:else if e === 'excludeArtist'}
     {#if !onDevice && t.source !== BANDCAMP && excludedArtists.everywhere !== null}
       {#each credited as a (a)}
@@ -555,9 +557,10 @@
   >
     {#if step === 'menu'}
       {#if snip}
-        <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and the track from there. -->
+        <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and Play snippet from there (again, it
+             stops). -->
         <SnippetStrip track={snip} />
-        <MenuEntry icon="play" label={fromLabel(startOf(snip))} onclick={fromHere} />
+        <MenuEntry icon={snippetOn(snip) ? 'pause' : 'play'} label={fromLabel(startOf(snip))} onclick={() => toggleSnippet(snip)} />
       {/if}
       <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
       <MenuTable kind="track" {entry} />
@@ -570,7 +573,7 @@
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}
       </PlaylistToggles>
     {:else if step === 'versions' && !versions}
-      {#if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
+      {#if versionsError}<Notice text={versionsError} onretry={() => versionsAgain++} />{:else if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
     {:else if step === 'versions' && versions}
       {@const v = versions}
       <p class="work">{v.work.title}{#if v.composers.length} · {v.composers.map((c) => c.name).join(', ')}{/if}</p>

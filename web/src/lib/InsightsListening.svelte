@@ -171,7 +171,7 @@
     {/if}
 
     {@render top('Artists', data.artists, 'artist')}
-    {@render top('Albums', data.albums, 'album')}
+    {@render top('Records', data.albums, 'album')}
     {@render top('Tracks', data.tracks, 'track')}
   {/if}
 </div>

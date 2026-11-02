@@ -160,7 +160,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
 - **New playlist, New crate** are the panel's edit mode with nothing made yet (decided 2026-10-16: "creating a playlist
   should look like editing one, with regard to everything"), from the + at the end of the page's pill
-  (`lib/TopPill.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
+  (`lib/ContentControls.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
   typed), the caret in it at once, Cancel and Save (once it has a name) in the action bar's place. A new playlist is
   made by its Save (`?view=playlist-new`); a new crate is the builder, saved with its Save.
 - **What a menu holds and how it opens** (decision 0058): in the music lists a long-press, a right-click or ⋮ opens
@@ -284,7 +284,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
-- **A page's floating row** (2026-10-15, `App.svelte`, `lib/TopPill.svelte`): back on the left (a round as tall as the
+- **A page's floating row** (2026-10-15, `App.svelte`, `lib/ContentControls.svelte`): back on the left (a round as tall as the
   pill; nothing there while there is nowhere to go back to: no mark in its place, 2026-10-16), and on a page with something to
   play the pill on the right: **search** (a magnifier that opens into a field over the row, the whole row on a phone, at
   most 520 px on a wide page; ✕ empties and folds it, Esc folds it, the magnifier stays in the accent while a search
@@ -413,6 +413,22 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Phone check** (`npm run check:phone`, decided 2026-10-16): every page, every part of the settings and an album in
   the panel at 390 px must not scroll sideways (the page, or any box that scrolls up and down); run it after a layout
   change.
+- **Scrolling to a thing** (0.13; the owner, 2026-10-30): every scroll the app makes to a thing goes through
+  `lib/reveal` (scrollIntoView), and every box that scrolls up and down keeps what is drawn over it as its
+  scroll-padding (app.css `html`: the bar, the mini-player and the glass; PlaylistView's `.scroll`: those and a sticky
+  action bar), from the same properties its room is made with. So a thing stops whole in sight, never under the chrome;
+  no place counts its own offset. A link for one of a list's tracks (a track's Go to album, a track found by global
+  search, the player's album) opens the list with `viewFor`: it scrolls to the track, in the middle, and marks it as
+  the viewed one is (a border). Beside the panel, the page's list (records, crates, playlists: `data-subject`) brings
+  what the panel opened into sight; a list that makes only what is near (lib/nearBlocks) says where with `nearFor`.
+- **The glass moves as one** (0.13; the owner, 2026-11-01: "a bottom up guarantee it will always animate smoothly"):
+  the floating controls (`lib/NavigationControls`, `lib/ContentControls`) and the bar of pages are glass parts
+  (`lib/glassMotion`): a box drawing nothing itself, its `.glass` layer (the blur and colour) and `.shade` (ring and
+  shadow) under its children. Whatever changes in one is laid out once, as it ends; then only clip-path, opacity,
+  transform and translate move: its glass from the old outline to the new, its children moved, faded in, or a copy of
+  one that went faded out, each clipped to the outline. A glass part never animates a size or a place (no `slide`, no
+  transition of top, width, padding…); the row follows the bar by `translate`. A blur inside a clipped box sees only
+  that box, so no child is clipped by an ancestor: each gets its own clip. `tests/glass-motion` holds it.
 
 ## Rows
 

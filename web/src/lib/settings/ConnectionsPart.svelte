@@ -1,6 +1,7 @@
 <script lang="ts">
   // Connections: the servers Cratarr works with, Lidarr, Last.fm and Discogs, and Home Assistant (the owner, 2026-10-24:
-  // its own section, its key with it; it acts at once, lib/settings/HomeAssistantPart); the rest saved with the Save bar.
+  // its own section, its key with it; it acts at once, lib/settings/HomeAssistantPart) and MCP after it (0.13,
+  // lib/settings/McpPart, the same way); the rest saved with the Save bar.
   // Each is a row (its state in a line); its settings are on its own page behind it (`thing`: a server's id, `lidarr`,
   // `lastfm`, `discogs`): its fields as rows, a value typed or chosen in a sheet, its connection checked there, and
   // Remove last (the settings' North Star, 2026-10-19; the owner, 2026-10-25: Last.fm and Discogs the same way, no
@@ -40,6 +41,7 @@
   import Group from './Group.svelte';
   import HomeAssistantPart from './HomeAssistantPart.svelte';
   import Item from './Item.svelte';
+  import McpPart from './McpPart.svelte';
   import ValueSheet from './ValueSheet.svelte';
 
   let { thing = null }: { thing?: string | null } = $props();
@@ -48,12 +50,13 @@
   const s = $derived(ed.s!);
   const LIDARR = 'lidarr';
   const HOME_ASSISTANT = 'home-assistant';
+  const MCP = 'mcp';
   const LASTFM = 'lastfm';
   const DISCOGS = 'discogs';
   const MUSICBRAINZ = 'musicbrainz';
   const SLSKD = 'slskd';
   const ACOUSTID = 'acoustid';
-  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID;
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === MCP || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
@@ -222,7 +225,7 @@
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
   nameThing(() =>
-    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'slskd' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
+    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === MCP ? 'MCP' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'slskd' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
   );
   // Last.fm's key and Discogs' app as rows say them.
   const fmOff = $derived(fmKey?.enabled === false);
@@ -285,6 +288,37 @@
   type Choosing = { title: string; options: { value: string; label: string }[]; value: string; save: (v: string) => void };
   let typing = $state<Typing | null>(null);
   let choosing = $state<Choosing | null>(null);
+  // A connection's address, its user and its secrets go together (the owner, 2026-11-02: what Save does at once, no
+  // Unsaved changes bar): one sheet, saved whole, never half of it. A secret left blank keeps the one kept, unless
+  // what it is bound to changed.
+  type ConnForm = { d: Draft; fields: Field[]; values: Record<string, string>; secrets: Record<string, string> };
+  let connForm = $state<ConnForm | null>(null);
+  function openConn(d: Draft, fields: Field[]) {
+    connForm = {
+      d,
+      fields,
+      values: Object.fromEntries(fields.filter((f) => f.kind !== 'secret').map((f) => [f.key, str(d.values[f.key])])),
+      secrets: Object.fromEntries(fields.filter((f) => f.kind === 'secret').map((f) => [f.key, ''])),
+    };
+  }
+  /** Whether the form's secret must be typed: not kept yet (and needed), or kept for what has changed. */
+  function secretWanted(c: ConnForm, f: Field) {
+    const before = ed.saved(c.d);
+    if (!before || !before.secrets_set.includes(f.key)) return f.required;
+    return f.bound_to.some((b) => (c.values[b] ?? str(c.d.values[b])) !== str(before.values[b]));
+  }
+  const connReady = (c: ConnForm) =>
+    c.fields.every((f) => (f.kind === 'secret' ? !secretWanted(c, f) || !!c.secrets[f.key]?.trim() : !f.required || !!c.values[f.key]?.trim()));
+  function saveConn(c: ConnForm) {
+    for (const f of c.fields) {
+      if (f.kind === 'secret') c.d.secrets[f.key] = c.secrets[f.key] ?? '';
+      else c.d.values[f.key] = c.values[f.key] ?? '';
+    }
+    connForm = null;
+  }
+  /** Lidarr's address and key, together. */
+  let lidForm = $state<{ url: string; key: string } | null>(null);
+  const lidKeyWanted = (url: string) => !s.lidarr?.key_set || url.trim().replace(/\/+$/, '') !== (s.lidarr?.url ?? '');
   let removing = $state<'server' | 'lidarr' | 'discogs' | 'lastfm' | 'slskd' | 'acoustid' | null>(null);
   let addingKind = $state(false);
 
@@ -303,6 +337,8 @@
     if (isSaved) return { line: 'Saved', tone: null };
     return { line: f.required ? 'Not set' : 'Optional', tone: f.required ? ('warn' as const) : null };
   }
+  /** A connection's fields typed in: its address, user and secrets. */
+  const plainOf = (d: Draft) => (ed.kindOf(d)?.fields ?? []).filter((f) => f.kind === 'text' || f.kind === 'url' || f.kind === 'secret');
   const choiceLabel = (d: Draft, f: Field) => {
     const v = str(d.values[f.key]);
     return ed.choicesFor(d, f).find((c) => c.value === v)?.label ?? (v || 'Choose…');
@@ -317,7 +353,7 @@
       line={sl.line}
       tone={sl.tone}
       more={f.help}
-      onclick={() => (typing = { title: f.label, type: 'password', value: d.secrets[f.key] ?? '', help: f.help, save: (v) => (d.secrets[f.key] = v) })}
+      onclick={() => openConn(d, plainOf(d))}
     />
   {:else if f.kind === 'choice' && ed.choicesFor(d, f).length}
     <Item
@@ -334,7 +370,7 @@
       tone={!v && f.required ? 'warn' : null}
       wrap={!!v}
       more={f.help}
-      onclick={() => (typing = { title: f.label, type: f.kind === 'url' ? 'url' : 'text', value: v, help: f.help, save: (x) => (d.values[f.key] = x) })}
+      onclick={() => openConn(d, plainOf(d))}
     />
   {/if}
 {/snippet}
@@ -395,6 +431,8 @@
   {/if}
 {:else if thing === HOME_ASSISTANT}
   <HomeAssistantPart page />
+{:else if thing === MCP}
+  <McpPart page />
 {:else if thing === LIDARR}
   {#if s.lidarr}
     <Group>
@@ -406,14 +444,14 @@
       name="Server address"
       line={ed.lid.url || 'Not set'}
       wrap={!!ed.lid.url}
-      onclick={() => (typing = { title: 'Server address', type: 'url', value: ed.lid.url, placeholder: 'http://lidarr:8686', save: (v) => (ed.lid.url = v) })}
+      onclick={() => (lidForm = { url: ed.lid.url, key: '' })}
     />
     <Item
       name="API key"
       line={ed.lidarrKeyNeeded ? 'Enter it again: you changed the server address' : ed.lid.key ? 'Changed' : s.lidarr?.key_set ? 'Saved' : 'Not set'}
       tone={ed.lidarrKeyNeeded ? 'warn' : null}
       more="In Lidarr under Settings, General."
-      onclick={() => (typing = { title: 'API key', type: 'password', value: ed.lid.key, help: 'In Lidarr under Settings, General', save: (v) => (ed.lid.key = v) })}
+      onclick={() => (lidForm = { url: ed.lid.url, key: '' })}
     />
     <Item lead={lidarrState.lead} name={ed.lid.view?.version ? 'Connected' : ed.lid.view ? 'Not connected' : 'Not checked yet'} line={ed.lid.view ? lidarrState.line : null} tone={lidarrState.lead === 'bad' ? 'bad' : null} wrap>
       <button disabled={ed.lid.busy || !ed.lid.url.trim()} aria-busy={ed.lid.busy} onclick={ed.checkLidarr}>Check</button>
@@ -629,6 +667,7 @@
     {/each}
   </Group>
   <HomeAssistantPart />
+  <McpPart />
   {#if addingKind}
     <ChoiceSheet title="Add server" options={s.kinds.map((k) => ({ value: k.id, label: k.label }))} value={''} onchange={add} onclose={() => (addingKind = false)} />
   {/if}
@@ -657,6 +696,34 @@
   <FormSheet title="AcoustID" submitLabel="Save" canSubmit={!!f.key.trim()} busy={f.busy} error={f.error} onsubmit={() => saveAcoustid(f)} onclose={() => (acoustidForm = null)}>
     <!-- svelte-ignore a11y_autofocus -->
     <label>API key<input type="password" bind:value={f.key} autocomplete="off" autofocus /></label>
+  </FormSheet>
+{/if}
+{#if connForm}
+  {@const c = connForm}
+  <FormSheet title={label(c.d)} submitLabel="Save" canSubmit={connReady(c)} onsubmit={() => saveConn(c)} onclose={() => (connForm = null)}>
+    {#each c.fields as f, i (f.key)}
+      {#if f.kind === 'secret'}
+        <!-- svelte-ignore a11y_autofocus -->
+        <label>{f.label}<input type="password" bind:value={c.secrets[f.key]} placeholder={ed.saved(c.d)?.secrets_set.includes(f.key) && !secretWanted(c, f) ? 'Kept' : ''} autocomplete="off" autofocus={i === 0} /></label>
+      {:else}
+        <!-- svelte-ignore a11y_autofocus -->
+        <label>{f.label}<input type={f.kind === 'url' ? 'url' : 'text'} bind:value={c.values[f.key]} autocomplete="off" spellcheck="false" autofocus={i === 0} /></label>
+      {/if}
+    {/each}
+  </FormSheet>
+{/if}
+{#if lidForm}
+  {@const f = lidForm}
+  <FormSheet
+    title="Lidarr"
+    submitLabel="Save"
+    canSubmit={!!f.url.trim() && (!!f.key.trim() || !lidKeyWanted(f.url))}
+    onsubmit={() => ((ed.lid.url = f.url.trim()), (ed.lid.key = f.key.trim()), (lidForm = null))}
+    onclose={() => (lidForm = null)}
+  >
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Server address<input type="url" bind:value={f.url} placeholder="http://lidarr:8686" autocomplete="off" spellcheck="false" autofocus /></label>
+    <label>API key<input type="password" bind:value={f.key} placeholder={lidKeyWanted(f.url) ? '' : 'Kept'} autocomplete="off" /></label>
   </FormSheet>
 {/if}
 {#if typing}

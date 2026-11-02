@@ -29,6 +29,16 @@ export type Candidate = {
   speed: number | null;
 };
 export type Search = { state: 'searching' | 'done' | 'failed'; candidates: Candidate[]; bandcamp: string | null; why?: string };
+/** A copy as its row says it: its format (lossless with its depth and rate), size, slot and who has it. */
+export const copyLine = (c: Candidate) =>
+  [
+    c.lossless ? [c.format, c.bitDepth && c.sampleRate ? `${c.bitDepth}/${Math.round(c.sampleRate / 100) / 10}` : null].filter(Boolean).join(' ') : `${c.format} ${c.bitrate ?? ''} kbps`,
+    `${(c.size / 1048576).toFixed(c.size < 10485760 ? 1 : 0)} MB`,
+    c.freeSlot ? 'free slot' : c.queue !== null ? `${c.queue} waiting` : null,
+    c.user,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 export type Fetch = { state: 'queued' | 'downloading' | 'checking' | 'passed' | 'refused' | 'added'; percent: number | null; why?: string; score?: number };
 
 async function call<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
@@ -47,6 +57,20 @@ async function call<T>(path: string, method = 'GET', body?: unknown): Promise<T>
 const enc = encodeURIComponent;
 
 export const getRelease = (source: string, album: string) => call<Release>(`/api/albums/${enc(source)}/${enc(album)}/release`);
+/** A release read once and kept (Health's Work through reads the next album's ahead, and an album opened in Health's
+ *  panel reads its missing tracks): forgotten when a track is added to the album, or the answer failed. */
+const releases = new Map<string, Promise<Release>>();
+export function releaseOf(source: string, album: string): Promise<Release> {
+  const key = `${source}/${album}`;
+  let p = releases.get(key);
+  if (!p) {
+    p = getRelease(source, album);
+    p.catch(() => releases.delete(key));
+    releases.set(key, p);
+  }
+  return p;
+}
+export const forgetRelease = (source: string, album: string) => void releases.delete(`${source}/${album}`);
 export const searchTrack = (album: { source: string; id: string }, recording: string, replace?: { source: string; id: string }) =>
   call<{ id: string }>('/api/track-search', 'POST', { album, recording, ...(replace ? { replace } : {}) });
 export const getSearch = (id: string) => call<Search>(`/api/track-search/${enc(id)}`);
@@ -61,3 +85,30 @@ export const fetchCandidate = (search: string, candidate: string) => call<{ id: 
 export const getFetch = (id: string) => call<Fetch>(`/api/track-fetch/${enc(id)}`);
 export const dropFetch = (id: string) => call<void>(`/api/track-fetch/${enc(id)}`, 'DELETE');
 export const addFetched = (id: string) => call<{ undo: string[] }>(`/api/track-fetch/${enc(id)}/add`, 'POST', {});
+
+// Many at once, you approve (0.13; the owner, 2026-10-31: "Bulk search, you approve", decision 0080 amended): the ticked
+// albums' missing tracks looked for in turn (one Soulseek search at a time), the best copy of each chosen; nothing goes
+// in until it is ticked and approved, each then fetched, checked and added as one is by hand (lib/trackIntake).
+export type IntakeState = 'queued' | 'searching' | 'found' | 'none' | 'failed' | 'approved' | 'fetching' | 'checking' | 'added' | 'refused';
+export type IntakeItem = {
+  id: string;
+  album: { source: string; id: string; title: string; artist: string | null };
+  disc: number;
+  position: number;
+  title: string;
+  recording: string;
+  state: IntakeState;
+  /** At most five, the best first. */
+  candidates: Candidate[];
+  /** The candidate chosen for it (the best), unless picked otherwise. */
+  chosen: string | null;
+  why?: string;
+  /** Added: the token that takes it out again (POST /api/undo). */
+  undo?: string;
+};
+export type Intake = { running: boolean; items: IntakeItem[] };
+export const startIntake = (albums: string[]) => call<Intake>('/api/track-intake', 'POST', { albums });
+export const getIntake = () => call<Intake>('/api/track-intake');
+export const approveIntake = (items: { id: string; candidate?: string }[]) => call<void>('/api/track-intake/approve', 'POST', { items });
+export const dropIntake = (id: string) => call<void>(`/api/track-intake/${enc(id)}`, 'DELETE');
+export const clearIntake = () => call<void>('/api/track-intake', 'DELETE');

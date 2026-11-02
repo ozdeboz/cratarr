@@ -19,24 +19,25 @@
 </script>
 
 <script lang="ts">
-  // The page's View (lib/TopPill's view button, decided 2026-10-15): how its list shows: for playlists chips or a table
+  // The page's View (lib/ContentControls's view button, decided 2026-10-15): how its list shows: for playlists chips or a table
   // and the size, for albums rows, covers or a table and the size, a track list's columns. Not its order or direction,
   // which only its list's header sets (decision 0060).
   import ColumnOrder from './ColumnOrder.svelte';
-  import { COLUMNS, fit, LIBRARY_TRACK_COLUMNS } from './columns.svelte';
+  import { COLUMNS, fit } from './columns.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { ALBUM_WIDTHS, DATES, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
-  import { libraryLayout, libraryLayouts, playlistLayout, playlistLayouts, type LibraryList } from './layouts';
+  import { composersShown } from './classical.svelte';
+  import { libraryLayout, libraryLayouts, libraryLayoutShown, playlistLayout, playlistLayouts, playlistLayoutShown, type LibraryList } from './layouts';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
   import SizeControl from './SizeControl.svelte';
 
   // `order`: the panel list's own order instead of a page's (`page` null). The Library's columns are its list's: its
-  // records' (`kind`: a list of the device's, lib/layouts).
+  // records' (`kind`: a list of the device's, lib/layouts), or Classical's composers while they show.
   let { page = null, order = null, kind, onclose }: { page?: string | null; order?: ListOrder | null; kind?: LibraryList; onclose: () => void } = $props();
-  const listKind = $derived<LibraryList>(kind ?? 'albums');
-  const offered = $derived(listKind === 'tracks' ? LIBRARY_TRACK_COLUMNS : COLUMNS[listKind].map((c) => c.id));
+  const listKind = $derived<LibraryList>(kind ?? (page === 'library' && composersShown() ? 'composers' : 'albums'));
+  const offered = $derived(COLUMNS[listKind].map((c) => c.id));
 </script>
 
 <MenuSheet label="View" icon="sliders" title="View" {onclose}>
@@ -49,7 +50,8 @@
       {#if order.columns?.shown.length && order.view?.value !== 'records'}<ColumnOrder {...order.columns} />{/if}
     {:else if page === 'playlists'}
       <SettingRow card label="Layout"><Seg label="Layout" options={playlistLayouts()} bind:value={playlistLayout, (v) => (prefs.playlistLayout = v)} /></SettingRow>
-      {#if playlistLayout() === 'table'}
+      <!-- The table's columns wherever the table shows: chosen, or while the page's search has words (lib/layouts). -->
+      {#if playlistLayoutShown() === 'table'}
         <ColumnOrder kind="playlists" shown={fit('playlists', pageView.width).map((c) => c.id)} offered={COLUMNS.playlists.map((c) => c.id)} />
       {:else}
         <SettingRow card label="Size"><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></SettingRow>
@@ -62,13 +64,14 @@
 
 {#snippet albums()}
   <SettingRow card label="Layout"><Seg label="Layout" options={libraryLayouts(listKind)} bind:value={() => libraryLayout(listKind), (v) => (prefs.albumLayout = v)} /></SettingRow>
-  {#if libraryLayout(listKind) === 'table'}
+  {#if libraryLayoutShown(listKind) === 'table'}
     <!-- A table has no sizes; its columns, as many as the page has room for, in the order dragged here (decision 0042). -->
     <ColumnOrder kind={listKind} shown={fit(listKind, pageView.width, (id) => offered.includes(id)).map((c) => c.id)} {offered} />
   {:else}
     <SettingRow card label="Size"><SizeControl widths={ALBUM_WIDTHS[libraryLayout(listKind)]} width={pageView.width} bind:value={prefs.albumZoom} /></SettingRow>
   {/if}
-  <SettingRow card label="Dates"><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></SettingRow>
+  <!-- Composers have no dates. -->
+  {#if listKind !== 'composers'}<SettingRow card label="Dates"><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></SettingRow>{/if}
 {/snippet}
 
 <style>

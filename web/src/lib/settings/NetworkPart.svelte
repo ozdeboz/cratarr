@@ -8,14 +8,12 @@
   import { appInfo, inApp, networkTest, setDevice, testNetwork } from '../app.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
   import ValueSheet from './ValueSheet.svelte';
 
   // Its Reset: Prefer local network off; the addresses stay (lib/settings/reset).
-  offerReset(
-    () => (inApp && appInfo.addresses ? 'Prefer local network back to off. The addresses stay.' : null),
-    () => setDevice({ preferLocal: false }),
-  );
+  // What Reset puts back (lib/settings/reset): Prefer local network; the addresses stay.
+  offerReset('network', () => (inApp && appInfo.addresses ? [{ name: 'Prefer local network', now: () => !!appInfo.preferLocal, def: false, set: (v: boolean) => setDevice({ preferLocal: v }) }] : null));
 
   /** An address as typed (the app tries https:// and then http:// when no scheme is typed). The public address is
    *  never cleared: the app needs it. One the app does not take leaves the one before, and a row names it. */

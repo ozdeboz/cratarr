@@ -6,6 +6,7 @@
   // Their Spotify (decision 0073; the owner, 2026-10-27: each connects here): a row opening its own page
   // (`thing`: `spotify`, lib/settings/SpotifyPart).
   import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
+  import { accountForgotten } from '../account';
   import { loadMe, me } from '../me.svelte';
   import { toast } from '../toast.svelte';
   import FormSheet from './FormSheet.svelte';
@@ -95,10 +96,8 @@
       onclick={() => (setting = true)}
     />
   {/if}
-  {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => signOutForm?.requestSubmit()} />{/if}
+  {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => (accountForgotten(), signOutForm?.requestSubmit())} />{/if}
 </Group>
-<!-- Signing out clears this browser's cookie too. -->
-<form method="post" action="/signout" bind:this={signOutForm} hidden></form>
 
 <Group>
   <Item name="Spotify" line={spotifyLine} onclick={() => openThing('account', 'spotify')} />
@@ -123,6 +122,10 @@
     {/each}
   </Group>
 {/if}
+
+<!-- Signing out clears this browser's cookie too. After the cards, never between two (the owner, 2026-11-02: the
+     cards stuck together, lib/settings/Group's space being one card's after another's). -->
+<form method="post" action="/signout" bind:this={signOutForm} hidden></form>
 
 {/if}
 

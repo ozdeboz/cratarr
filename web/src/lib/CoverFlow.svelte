@@ -1,8 +1,8 @@
 <script lang="ts">
   // Albums to flip through, a coverflow (the owner, 2026-10-23: "more representative of digging through albums in a
   // visual way"): a crate's header, and the Library's Flow layout. Curved sideways, the front one facing, the ends
-  // curving down a little; a drag sideways moves through all of them, a tap goes one on (with `onopen`: a tap on the
-  // front one opens it, one beside it comes to the front), the arrow keys too, and they go round. It lays itself out
+  // curving down a little; a drag sideways moves through all of them, a tap on its right half goes one on, on its left
+  // half one back (with `onopen`: a tap on the front one opens it, one beside it comes to the front), the arrow keys too, and they go round. It lays itself out
   // from the room it has: the front cover as large as the height allows between `top` and `foot`, the covers beside it
   // spread over the width (off its edges where it is narrow), the sides fading out. Only the covers in sight are made,
   // and the next few are fetched ahead.
@@ -238,7 +238,8 @@
       else onopen(at);
       return;
     }
-    pos = Math.round(pos) + 1;
+    // Its left half goes back one, its right half on (the owner, 2026-11-02).
+    pos = Math.round(pos) + (tapX < size / 2 ? -1 : 1);
   }
   function key(e: KeyboardEvent) {
     if (single && e.key !== 'Enter') return;
@@ -259,7 +260,7 @@
   style:bottom={bleed ? `${-bleed}px` : null}
   style:perspective="{620 * front.u}px"
   role="listbox"
-  aria-label="Albums"
+  aria-label="Records"
   tabindex="0"
   onkeydown={key}
   onpointerdown={down}

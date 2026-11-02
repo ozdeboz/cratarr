@@ -53,6 +53,10 @@ pub struct LibraryPolicy {
     /// Its albums' dot, "#rrggbb" (a library other than the primary); none: one from the palette.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colour: Option<String>,
+    /// Its name as Cratarr shows it (the owner, 2026-11-02: a name of one's own, the folder's until then); none: the
+    /// server's (a folder of Cratarr's own: the folder's name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// What a move into a library does to the files (decision 0034).
@@ -87,7 +91,15 @@ impl Roles {
         let i = self.incoming.iter().position(|l| l == library)?;
         Some(self.policies.get(library).and_then(|p| p.colour.clone()).unwrap_or_else(|| PALETTE[i % PALETTE.len()].to_string()))
     }
+
+    /// `library`'s own name, if one was given (`placement::place` names it so wherever it shows).
+    pub fn name_of(&self, library: &str) -> Option<String> {
+        self.policies.get(library).and_then(|p| p.name.clone())
+    }
 }
+
+/// The most a library's name holds.
+const NAME_MOST: usize = 80;
 
 /// "#rrggbb", lower case.
 pub fn valid_colour(c: &str) -> bool {
@@ -331,14 +343,19 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
             return Err(ChangeError::Invalid(format!("{}: unknown kind of source {:?}", d.id, d.kind)));
         };
         let fields = (kind.fields)();
+        // Cratarr's own folders (decision 0044) are its values though no field of its form shows them (they are chosen in
+        // the folder browser): kept, or every save dropped them and the source then had no library (2026-11-02, found
+        // on the development instance: "a Music library is no longer on the server" for any change).
+        let own_folders = d.kind == crate::source::cratarr::KIND.id;
         d.values.retain(|k, v| {
-            fields.iter().any(|f| {
-                f.key == k
-                    && match f.kind {
-                        FieldKind::MultiChoice => v.is_array() || v.is_string(),
-                        _ => v.is_string(),
-                    }
-            })
+            (own_folders && k == "folders" && v.is_array())
+                || fields.iter().any(|f| {
+                    f.key == k
+                        && match f.kind {
+                            FieldKind::MultiChoice => v.is_array() || v.is_string(),
+                            _ => v.is_string(),
+                        }
+                })
         });
         let clean = |ids: &mut Vec<String>| {
             ids.retain(|l| !l.trim().is_empty());
@@ -364,8 +381,15 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
                 }
                 p.colour = Some(c.to_ascii_lowercase());
             }
+            // A name kept trimmed; blank is none (the folder's name again).
+            p.name = p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
+            if let Some(n) = &p.name
+                && (n.chars().count() > NAME_MOST || n.chars().any(char::is_control))
+            {
+                return Err(ChangeError::Invalid(format!("{}: {lib}'s name is longer than {NAME_MOST} characters or holds control characters", d.id)));
+            }
         }
-        d.libraries.policies.retain(|_, p| p.format.is_some() || p.colour.is_some());
+        d.libraries.policies.retain(|_, p| p.format.is_some() || p.colour.is_some() || p.name.is_some());
         for secret in fields.iter().filter(|f| f.kind == FieldKind::Secret) {
             if source::text(&d.values, secret.key).is_some() {
                 continue;
@@ -423,7 +447,7 @@ mod tests {
         assert_eq!(r.colour_of("i1").as_deref(), Some(PALETTE[0]));
         assert_eq!(r.colour_of("i2").as_deref(), Some(PALETTE[1]));
         assert_eq!(r.colour_of("unused"), None);
-        r.policies.insert("i1".into(), LibraryPolicy { format: Some(Format::Cd), colour: Some("#112233".into()) });
+        r.policies.insert("i1".into(), LibraryPolicy { format: Some(Format::Cd), colour: Some("#112233".into()), ..Default::default() });
         assert_eq!(r.format_of("i1"), Format::Cd);
         assert_eq!(r.colour_of("i1").as_deref(), Some("#112233"));
         // As saved: only what was set.
@@ -431,16 +455,42 @@ mod tests {
     }
 
     #[test]
+    fn cratarrs_own_folders_are_kept_through_a_save() {
+        let own = |folders: serde_json::Value| SourceConfig {
+            id: "cratarr".into(),
+            kind: crate::source::cratarr::KIND.id.into(),
+            enabled: true,
+            libraries: Roles { music: vec!["/music".into()], incoming: vec!["/incoming".into()], policies: Default::default() },
+            values: [("folders".to_string(), folders)].into_iter().collect(),
+        };
+        let out = merge(&[], vec![own(serde_json::json!(["/music", "/incoming"]))]).unwrap();
+        assert_eq!(out[0].values.get("folders"), Some(&serde_json::json!(["/music", "/incoming"])));
+        // Only as a list, and only Cratarr's own: another kind's undeclared values still go.
+        let out = merge(&[], vec![own(serde_json::json!("/music"))]).unwrap();
+        assert!(out[0].values.get("folders").is_none());
+    }
+
+    #[test]
     fn library_settings_are_kept_when_the_page_sends_none_and_checked_when_it_does() {
         let mut saved = jf("jf", "http://a", Some("k"));
-        saved.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("#aabbcc".into()) });
+        saved.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("#aabbcc".into()), ..Default::default() });
         let out = merge(std::slice::from_ref(&saved), vec![jf("jf", "http://a", None)]).unwrap();
         assert_eq!(out[0].libraries.policies, saved.libraries.policies);
         let mut bad = jf("jf", "http://a", None);
-        bad.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("red".into()) });
+        bad.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("red".into()), ..Default::default() });
         assert!(merge(std::slice::from_ref(&saved), vec![bad]).is_err());
+        // A name of its own, kept trimmed; blank is none again, and with nothing else set the entry goes.
+        let mut named = jf("jf", "http://a", None);
+        named.libraries.policies.insert("i".into(), LibraryPolicy { name: Some("  Vinyl rips ".into()), ..Default::default() });
+        named.libraries.policies.insert("j".into(), LibraryPolicy { name: Some("   ".into()), ..Default::default() });
+        let out = merge(std::slice::from_ref(&saved), vec![named]).unwrap();
+        assert_eq!(out[0].libraries.name_of("i").as_deref(), Some("Vinyl rips"));
+        assert!(!out[0].libraries.policies.contains_key("j"));
+        let mut long = jf("jf", "http://a", None);
+        long.libraries.policies.insert("i".into(), LibraryPolicy { name: Some("x".repeat(81)), ..Default::default() });
+        assert!(merge(std::slice::from_ref(&saved), vec![long]).is_err());
         let mut upper = jf("jf", "http://a", None);
-        upper.libraries.policies.insert("i".into(), LibraryPolicy { format: Some(Format::AsIs), colour: Some("#AABBCC".into()) });
+        upper.libraries.policies.insert("i".into(), LibraryPolicy { format: Some(Format::AsIs), colour: Some("#AABBCC".into()), ..Default::default() });
         assert_eq!(merge(&[saved], vec![upper]).unwrap()[0].libraries.policies["i"].colour.as_deref(), Some("#aabbcc"));
     }
 

@@ -13,18 +13,10 @@
   import { localMode } from '../deviceMusic.svelte';
   import { LOCAL_PARTS } from '../localHome.svelte';
   import { offerReset } from './reset.svelte';
+  import { contentItems, HOME, PROFILES } from './resetItems.svelte';
 
-  offerReset(
-    () => 'Home’s sections as they came, in their first order; the music profiles with every row.',
-    () => {
-      prefs.profileOpen = true;
-      prefs.profile = true;
-      prefs.profileFoldAt = 0;
-      prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
-      prefs.homeParts = homeDefault();
-      prefs.homeCrates = false;
-    },
-  );
+  // What Reset puts back: the part's declaration (lib/settings/resetItems), each section's Reset its own of it.
+  offerReset('content', contentItems);
 
   /** The first section leads Home as the flow on top, so only one made of albums may be first (the owner, 2026-10-24):
    *  another dragged there lands under the first that can lead; the last that can lead stays switched on. */
@@ -60,15 +52,7 @@
 
 <Group title="Home" more="The first is the flow at the top, so it is one made of albums: Music for the moment, New for you, Blast from the past, Grave digging or Favourite albums.">
   {#snippet tail()}
-    <OrderReset
-      label="Sections"
-      isDefault={prefs.homeParts.join() === homeDefault().join()}
-      reset={() => {
-        const was = prefs.homeParts;
-        prefs.homeParts = homeDefault();
-        return () => (prefs.homeParts = was);
-      }}
-    />
+    <OrderReset items={contentItems} section={HOME} label="Home" />
   {/snippet}
   <Item name="Your crates on Home" toggle={{ checked: prefs.homeCrates, onchange: (on) => void setHomeCrates(on) }} />
   <OrderList
@@ -83,16 +67,7 @@
 
 <Group title="Music profiles">
   {#snippet tail()}
-    {#if prefs.profile}<OrderReset
-        label="Profile rows"
-        isDefault={prefs.profileRows.join() === PROFILE_ROWS.map((r) => r.id).join() && prefs.profileFoldAt === 0}
-        reset={() => {
-          const was = { rows: prefs.profileRows, at: prefs.profileFoldAt };
-          prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
-          prefs.profileFoldAt = 0;
-          return () => ((prefs.profileRows = was.rows), (prefs.profileFoldAt = was.at));
-        }}
-      />{/if}
+    {#if prefs.profile}<OrderReset items={contentItems} section={PROFILES} />{/if}
   {/snippet}
   <Item
     name="Shown"

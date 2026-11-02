@@ -31,6 +31,44 @@ export function resetFilter(kind: string) {
   prefs.filters[kind] = { conditions: [], on: [] };
 }
 
+/** The pages whose filter changes are steps of the history (the owner, 2026-10-31): Back shows the list as it was. */
+const STEPPED = ['library', 'playlists', 'downloads'];
+
+/** A change to a page's filter begins (a pick, the Filter sheet opened): the end it gives makes whatever changed one
+ *  step of the history, not each tick (global search's Show all is one the same way). The step carries the filter it
+ *  shows, and the step left carries the one before, so Back and Forward show each as it was. */
+export function filterChange(kind: string): () => void {
+  if (!STEPPED.includes(kind)) return () => {};
+  const before = $state.snapshot(filterOf(kind));
+  return () => {
+    const after = $state.snapshot(filterOf(kind));
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    const st = history.state ?? {};
+    history.replaceState({ ...st, filters: { ...st.filters, [kind]: before } }, '');
+    history.pushState({ ...st, filters: { ...st.filters, [kind]: after } }, '');
+  };
+}
+/** The kinds of list whose next change is one choice, not typing (a pick beside back, Back to the list as it was): its
+ *  answer asked at once, without the 300 ms a row being typed waits (the owner, 2026-11-02: the Library's picker kept
+ *  the old records until long after the pick). */
+const atOnce = new Set<string>();
+export const askAtOnce = (kind: string) => atOnce.add(kind);
+/** One change, one step (a pick beside back). */
+export function filterStep(kind: string, change: () => void) {
+  const end = filterChange(kind);
+  change();
+  end();
+}
+if (typeof window !== 'undefined')
+  addEventListener('popstate', () => {
+    const kept = history.state?.filters as Record<string, ListFilter> | undefined;
+    for (const [k, f] of Object.entries(kept ?? {}))
+      if (STEPPED.includes(k)) {
+        if (JSON.stringify(f) !== JSON.stringify(prefs.filters[k])) askAtOnce(k);
+        prefs.filters[k] = f;
+      }
+  });
+
 /** A kind of list's conditions that apply: not muted, and saying what they ask (lib/filterRow). */
 export const activeConditions = (kind: string) => filterOf(kind).conditions.filter((c) => c.enabled !== false && complete(c));
 
@@ -39,7 +77,7 @@ export const activeConditions = (kind: string) => filterOf(kind).conditions.filt
 export const switchesOn = (kind: string) => filterOf(kind).on.filter((k) => (SWITCHES[kind] ?? []).some((w) => w.key === k));
 
 /** How many filters a kind of list has on (the funnel's count): its conditions that apply and its switches on. */
-export const filtersOn = (kind: string) => activeConditions(kind).length + switchesOn(kind).filter((k) => !(SWITCHES[kind] ?? []).find((w) => w.key === k)?.quiet).length;
+export const filtersOn = (kind: string) => activeConditions(kind).length + switchesOn(kind).length;
 
 /** The libraries switched off in the filter (`source/library`), for the server's crates (decision 0024, amended
  *  2026-10-23: a crate fills from every library switched on); none: undefined. */
@@ -57,7 +95,8 @@ export const inView = $state<Record<string, { list: FilterList; source?: string 
 
 /** The keys of a list's items (of the kind `kindOf` says) its filter lets through: its conditions and its own switches,
  *  one question to the server, which holds what each switch means (lib/api filterList; the owner, 2026-10-29: one
- *  filter, one engine, so no list filters a switch itself), asked again 300 ms after they change; null while none apply
+ *  filter, one engine, so no list filters a switch itself), asked again 300 ms after they change (at once after a
+ *  choice: askAtOnce); null while none apply
  *  (a failed ask keeps the last answer, and says so). `pending`: they apply and their answer is on its way; the last
  *  answer for the same list stays meanwhile, and before the first a list shows as loading rather than unfiltered (the
  *  owner, 2026-10-23: nothing shown that something else then replaces). */
@@ -73,6 +112,7 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
     const conditions = $state.snapshot(conditionsFor(kind)) ?? [];
     const switches = switchesOn(kind);
     const without = at && (at.list.kind === 'library' || at.list.kind === 'artists') ? hiddenLibraries() : undefined;
+    const wait = atOnce.delete(kind) ? 0 : 300;
     // A crate's rows come filtered (CrateLook.filter): its answer has no keys.
     if (!at || (!conditions.length && !switches.length) || at.list.kind === 'crate') {
       out.keys = null;
@@ -103,7 +143,7 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
           toast.fail(e, "The filter couldn't be applied");
         },
       );
-    }, 300);
+    }, wait);
     return () => {
       gone = true;
       clearTimeout(t);

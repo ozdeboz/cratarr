@@ -9,17 +9,21 @@
   import CoverPlay from './CoverPlay.svelte';
   import CoverWait from './CoverWait.svelte';
   import { NearBlocks } from './nearBlocks.svelte';
+  import { nearFor } from './reveal';
   import { panelBeside } from './glass.svelte';
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
   import { albumCoverUrl, search, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { plural } from './insights.svelte';
+  import { recordsWord } from './recordTypeRules';
   import { listShows, matchLine, type Matched } from './search';
+  import { keepWhile } from './keepWhile.svelte';
   import Asking from './Asking.svelte';
+  import Notice from './Notice.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
-  import { libraryLayout } from './layouts';
+  import { libraryLayoutShown } from './layouts';
   import ViewSheet from './ViewSheet.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
@@ -28,6 +32,7 @@
   import { toast } from './toast.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
   import SeveralAlbums, { type Ask } from './SeveralAlbums.svelte';
+  import RecordEdit from './RecordEdit.svelte';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
@@ -42,7 +47,7 @@
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
-  import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, USE_ORDERS } from './pageView.svelte';
+  import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, searchNone, USE_ORDERS } from './pageView.svelte';
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
@@ -74,7 +79,7 @@
     onplay?: (source: ShelfSource, a: ListedAlbum) => void;
     /** The select bar's buttons, the page's own: the ticked albums, and the end of selecting. */
     actions?: Snippet<[{ s: ShelfSource; a: ListedAlbum }[], () => void]>;
-    /** After the list header's count ("12 albums · 1.2 GB"). */
+    /** After the list header's count ("12 records · 1.2 GB"). */
     countMore?: string;
   } = $props();
   const playOf = (s: ShelfSource, a: ListedAlbum) => (onplay ? onplay(s, a) : playListedAlbum(s.id, a));
@@ -87,8 +92,9 @@
 
   // Only what is near is made (lib/nearBlocks). Each server's albums are cut into blocks of whole grid rows, each its
   // own grid, so the columns line up from block to block.
-  /** As chosen in View, as it can be here (lib/layouts: no table on a phone's screen). */
-  const layout = $derived(libraryLayout('albums'));
+  /** As chosen in View, as it can be here (lib/layouts: no table on a phone's screen); the table while the page's
+   *  search has words, a phone's too. */
+  const layout = $derived(libraryLayoutShown('albums'));
   const table = $derived(layout === 'table');
   // A table's lines touch, as a table's do.
   const GAP = $derived(table ? 0 : 10);
@@ -111,6 +117,14 @@
   };
   const blocks = new NearBlocks();
   $effect(() => () => blocks.dispose());
+  // The blocks themselves are made a few at a time (the owner, 2026-11-02: the Library's picker took long before the
+  // page responded): a whole Library is hundreds of blocks (a phone's 3,300 records, 412), each a box watched for
+  // coming near, and making them all at once held the page for most of a second. The first screens' at once, the rest
+  // in short tasks after (the page answering a tap between them), one box as tall as they will be meanwhile, so the
+  // page has its length from the start.
+  const FIRST_BLOCKS = 12;
+  const MORE_BLOCKS = 40;
+  let reach = $state(FIRST_BLOCKS);
   /** A grid row's height as the blocks made so far measure it, else a row's usual height (a tile: its column's width
    *  and two lines), for the blocks not made yet. */
   const rowHeight = $derived.by(() => {
@@ -136,14 +150,20 @@
   // Deep (decision 0072, 0.9.3): Cratarr's own albums the server finds by one of their tracks, with why; asked a moment
   // after the words stop changing. The rest as every search reads, in the browser.
   let deep = $state<Map<string, Matched>>(new Map());
-  /** The words the server has answered (or failed) for: till then no "none match" (the owner, 2026-10-25: it said so
-   *  before the albums found by a track were in). */
+  /** The words the server has answered for: till then no "none match" (the owner, 2026-10-25: it said so before the
+   *  albums found by a track were in). */
   let deepFor = $state('');
+  /** The words it failed for, and why: said with Try again, never "No records match." (the owner, 2026-11-02: a failure
+   *  is not an answer). */
+  let deepFailed = $state<{ q: string; text: string } | null>(null);
+  let deepAgain = $state(0);
   $effect(() => {
     const q = pageView.query.trim();
+    void deepAgain;
     if (!q) {
       deep = new Map();
       deepFor = '';
+      deepFailed = null;
       return;
     }
     let gone = false;
@@ -158,8 +178,9 @@
           }
           deep = m;
           deepFor = q;
+          deepFailed = null;
         },
-        () => !gone && (deepFor = q),
+        (e) => !gone && (deepFailed = { q, text: e instanceof Error ? e.message : 'Unexpected error' }),
       );
     }, 250);
     return () => {
@@ -180,7 +201,14 @@
   });
   // Artists without a leading "The", numbers in number order, accents and case aside.
   const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
-  const name = (s: string | null) => (s ?? '').replace(/^the\s+/i, '');
+  // Each artist's name as it sorts, made once (a whole Library's sort compares tens of thousands of times).
+  const names = new Map<string, string>();
+  const name = (s: string | null) => {
+    const k = s ?? '';
+    let n = names.get(k);
+    if (n === undefined) names.set(k, (n = k.replace(/^the\s+/i, '')));
+    return n;
+  };
   const byArtist = (x: ListedAlbum, y: ListedAlbum) => collator.compare(name(x.artist), name(y.artist)) || (x.year ?? 0) - (y.year ?? 0);
   const byTitle = (x: ListedAlbum, y: ListedAlbum) => collator.compare(x.title, y.title);
   // An order of one server's albums: how you used them (plays, last played, rating) is per server.
@@ -207,15 +235,36 @@
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );
-  // Searching, the server's finds not in yet and the browser's own none: the last list stays till they are (the owner,
-  // 2026-10-25: the list and its header went and came back with the albums found by a track).
-  let last = $state.raw<typeof found>([]);
-  const pending = $derived(!!pageView.query.trim() && deepFor !== pageView.query.trim());
+  // Searching, the server's finds not in yet and the browser's own none: the last list stays (the owner, 2026-10-25: the
+  // list and its header went and came back with the albums found by a track), then the loader (lib/loader, the one rule).
+  const pending = $derived(!!pageView.query.trim() && deepFor !== pageView.query.trim() && deepFailed?.q !== pageView.query.trim());
   const none = (l: typeof found) => l.every((x) => !x.albums.length);
+  const kept = keepWhile(() => found, () => pending && none(found), () => pageView.query.trim());
+  const shown = $derived(kept.loader ? found : kept.value);
+  // The rest of the blocks, MORE_BLOCKS a task, until each list's are all made.
   $effect(() => {
-    if (!pending || !none(found)) last = found;
+    const most = Math.max(0, ...shown.map(({ albums }) => Math.ceil(albums.length / perBlock)));
+    if (reach >= most) return;
+    const t = setTimeout(() => (reach += MORE_BLOCKS));
+    return () => clearTimeout(t);
   });
-  const shown = $derived(pending && none(found) && !none(last) ? last : found);
+  // An album the panel opened beside the page is brought into sight here (lib/reveal, App): one in a block not made
+  // yet is that block first.
+  $effect(() =>
+    nearFor((subject) => {
+      for (const { s, albums } of shown) {
+        const at = albums.findIndex((a) => albumSubject(s.id, a.id) === subject);
+        if (at >= 0) return document.querySelector(`[data-key="${CSS.escape(`${s.id}:${perBlock}:${layout}:${Math.floor(at / perBlock)}`)}"]`);
+      }
+      return null;
+    }),
+  );
+  // Its words leave no record, every library answered: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() =>
+    shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty'
+      ? 'records'
+      : null,
+  );
   // How you used them, read when such an order is chosen (and each time again: plays change).
   $effect(() => {
     if (!USE_ORDERS.includes(order)) return;
@@ -366,7 +415,7 @@
   function favouriteTicked() {
     const list = [...ticked];
     const on = !tickedFav;
-    const n = plural(list.length, 'album');
+    const n = plural(list.length, recordsWord(list.map((x) => x.a.type)));
     askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
       navigator.vibrate?.(8);
       selecting = null;
@@ -384,6 +433,8 @@
   let several = $state<{ title: string; tracks: LocalTrack[]; list: { s: ShelfSource; a: ListedAlbum }[] } | null>(null);
   /** Delete's or Move's question for several, once their menu has closed. */
   let asking = $state<Ask | null>(null);
+  /** Several records' Edit (lib/RecordEdit), once their menu has closed. */
+  let editing = $state<ListedAlbum[] | null>(null);
   async function menuOfTicked(e: MouseEvent) {
     const x = ticked[0];
     if (!x) return;
@@ -412,22 +463,26 @@
   {#each shown as { s, albums } (s.id)}
     {#if sources.length > 1}<h2>{s.label}</h2>{/if}
     {#if !s.supported}
-      <p class="empty">{s.label} can't list albums.</p>
+      <p class="empty">{s.label} can't list records.</p>
     {:else if s.error && s.albums.length === 0}
       <p class="error" role="alert">{s.error}</p>
-    {:else if listShows(albums.length, pageView.query, deepFor) === 'asking'}
+    {:else if listShows(albums.length, pageView.query, deepFor, deepFailed?.q) === 'asking'}
       <!-- Searching: the server's finds not in yet, so nothing said before the answer (lib/search listShows). -->
-      <Asking />
+      <Asking now={kept.loader} />
+    {:else if listShows(albums.length, pageView.query, deepFor, deepFailed?.q) === 'failed' && deepFailed}
+      <Notice text={deepFailed.text} onretry={() => ((deepFailed = null), deepAgain++)} />
     {:else if albums.length === 0}
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
-           empty column headings, the owner 2026-10-23). -->
-      <p class="empty">{s.albums.length ? 'None in the libraries switched on match.' : empty}</p>
+           empty column headings, the owner 2026-10-23). Words that match no record say so, not the libraries (under a
+           crate card of 229 tracks it read as a contradiction; the owner, 2026-10-31). -->
+      {#if !s.albums.length}<p class="empty">{empty}</p>
+      {:else if !pageView.none}<p class="empty">{pageView.query.trim() ? 'No records match.' : 'None in the libraries switched on match.'}</p>{/if}
     {:else}
       <ListHead
         fields={ALBUM_ORDERS}
         bind:value={order}
         bind:down
-        count={`${howMany(albums.length, 'album')}${countMore ? ` · ${countMore}` : ''}`}
+        count={`${howMany(albums.length, recordsWord(albums.map((a) => a.type)))}${countMore ? ` · ${countMore}` : ''}`}
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
         countOnly={layout === 'flow'}
@@ -459,7 +514,8 @@
           details={front ? detailsOf(s, front) : null}
         />
       {:else}
-      {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${layout}:${bi}`)}
+      {@const all = blocksOf(albums)}
+      {#each all.slice(0, reach) as block, bi (`${s.id}:${perBlock}:${layout}:${bi}`)}
         {@const key = `${s.id}:${perBlock}:${layout}:${bi}`}
         {@const made = blocks.made(key, bi === 0)}
         <div class="block" {@attach blocks.watch(key, Math.ceil(block.length / cols))} style:height={made ? null : `${blocks.heights[key] ?? estimate(block.length)}px`}>
@@ -469,7 +525,7 @@
           {@const here = playing?.album_id === a.id}
           {@const viewed = panelBeside() && panel.viewed === albumSubject(s.id, a.id)}
           {@const on = !!selecting && selecting.has(keyOf(s, a))}
-          <li class:playing={here} class:ticked={on}>
+          <li class:playing={here} class:ticked={on} data-subject={albumSubject(s.id, a.id)}>
             {#if layout === 'grid'}
               <Tile
                 title={a.title}
@@ -555,6 +611,7 @@
           {/if}
         </div>
       {/each}
+      {#if all.length > reach}<div class="block" style:height="{estimate(albums.length - reach * perBlock)}px"></div>{/if}
       {/if}
     {/if}
   {/each}
@@ -610,17 +667,20 @@
 {/snippet}
 
 {#snippet severalExtra(close: () => void)}
-  {#if several}<SeveralAlbums list={several.list} tracks={several.tracks} {close} onask={(q) => (asking = q)} />{/if}
+  {#if several}<SeveralAlbums list={several.list} tracks={several.tracks} {close} onask={(q) => (asking = q)} onedit={(them) => (editing = them)} />{/if}
 {/snippet}
 
 {#if several}
   <SelectionMenu
     title={several.title}
     tracks={several.tracks}
-    chips={[plural(several.list.length, 'album')]}
+    chips={[plural(several.list.length, recordsWord(several.list.map((x) => x.a.type)))]}
     extra={severalExtra}
     onclose={() => ((several = null), (selecting = null))}
   />
+{/if}
+{#if editing}
+  <RecordEdit source="cratarr" albums={editing} onclose={() => (editing = null)} />
 {/if}
 {#if asking}
   {@const q = asking}
@@ -638,7 +698,12 @@
     font-size: 1rem;
   }
 
-  .empty,
+  /* As the other pages' "No playlists match." (Playlists .empty): a plain fact, not an error. */
+  .empty {
+    margin-top: 32px;
+    text-align: center;
+    color: var(--muted);
+  }
 
   .error {
     color: var(--danger-ink);

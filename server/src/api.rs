@@ -260,6 +260,16 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/incoming/jobs", get(incoming_jobs))
             .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
             .route("/api/settings", get(get_settings).put(save_settings))
+            // Types, years and Classical into the files (0.13, decision 0092): the switch and Health's Write; a run's
+            // Undo.
+            .route("/api/settings/file-facts", get(file_facts).put(file_facts_switch))
+            // Every change to the library's files (decision 0092): a kind's review sheet and its apply, the runs, a
+            // run as written, its Undo.
+            .route("/api/file-changes/plans/{kind}", get(file_change_plan))
+            .route("/api/file-changes/plans/{kind}/apply", post(file_change_apply))
+            .route("/api/file-changes/runs", get(file_change_runs))
+            .route("/api/file-changes/runs/{id}", get(file_change_run))
+            .route("/api/file-changes/runs/{id}/undo", post(file_change_undo))
             .route("/api/settings/preview", post(preview))
             .route("/api/settings/lidarr", post(preview_lidarr))
             .route("/api/settings/lidarr/options", get(lidarr_options))
@@ -282,12 +292,18 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
             // A record marked classical or not (0.10), library-wide.
             .route("/api/albums/{source}/{album}/classical", put(mark_classical))
+            // A record's facts set by hand (0.13): one record or a selection.
+            .route("/api/albums/overrides", put(set_overrides))
             .route("/api/artists/discogs", get(artist_discogs))
             .route("/api/track-search", post(start_track_search))
             .route("/api/track-search/{id}", get(track_search))
             .route("/api/track-search/{id}/fetch", post(start_track_fetch))
             .route("/api/track-fetch/{id}", get(track_fetch).delete(drop_track_fetch))
             .route("/api/track-fetch/{id}/add", post(add_fetched_track))
+            // Bulk intake of missing tracks (0.13): searched in turn, approved many at once.
+            .route("/api/track-intake", get(track_intake).post(track_intake_add).delete(track_intake_clear))
+            .route("/api/track-intake/approve", post(track_intake_approve))
+            .route("/api/track-intake/{id}", axum::routing::delete(track_intake_drop))
             .route("/api/track-files", get(track_files))
             .route("/api/track-files/fetch", post(start_file_fetch))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
@@ -1056,6 +1072,49 @@ async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>,
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     ctx.app.collection.tell_changed();
     Ok(Json(json!({ "classical": classical, "classical_mark": kept })))
+}
+
+#[derive(Deserialize)]
+struct SetOverrides {
+    albums: Vec<String>,
+    set: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Records' facts set by hand (0.13, the owner; decision 0089): `{albums: [ids], set: {field: value
+/// or null}}`, Cratarr's own library's albums. A field given is set (null: reset to what Cratarr finds), one left out
+/// is left as it is; the fields are `type`, `secondary`, `year`, `genres` and `classical` (`userdata::overrides`). Kept
+/// by each record's Music-form id, household-wide; the library is built again with them before the answer, and the
+/// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now.
+async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.albums.is_empty() || b.set.is_empty() {
+        return Err(ToggleError::BadSettings("Name the records and what to set.".into()).into());
+    }
+    let mut facts: Vec<(String, Option<serde_json::Value>)> = Vec::with_capacity(b.set.len());
+    for (field, value) in &b.set {
+        let kept = crate::userdata::overrides::check(field, value).map_err(ToggleError::BadSettings)?;
+        facts.push((field.clone(), kept));
+    }
+    let s = ctx.serve()?;
+    let albums = b.albums;
+    let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
+        let mut bases = Vec::with_capacity(albums.len());
+        for album in &albums {
+            bases.push(s.library.album_base(album)?.ok_or_else(|| anyhow::anyhow!("That record is not in the library."))?);
+        }
+        s.userdata.set_overrides(&bases, &facts, crate::app::moment::now_secs())?;
+        s.refresh()?;
+        let mut out = serde_json::Map::new();
+        for (album, base) in albums.iter().zip(&bases) {
+            out.insert(album.clone(), serde_json::to_value(s.userdata.overrides_of(base)?)?);
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    ctx.app.collection.refresh().await;
+    ctx.app.collection.tell_changed();
+    Ok(Json(json!({ "albums": set })))
 }
 
 /// A track's Other versions (0.10): its MusicBrainz work, the work's composers, and the library's other tracks of it,
@@ -2145,6 +2204,8 @@ struct LikeCurveQuery {
     own: Option<bool>,
     /// How much each seed counts, by `of`'s order, comma-separated (Sounds like your week); none, all alike.
     weights: Option<String>,
+    /// How several seeds are read, `blend` or `either` (0.13, decision 0088); none, blended.
+    mode: Option<crate::crates::LikeMode>,
 }
 
 /// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
@@ -2152,7 +2213,7 @@ async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
+    Ok(Json(app.playlists.like_curve(&of, &weights, q.mode.unwrap_or_default(), q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
 }
 
 /// The Sounds like curve within a crate's other conditions (0.11, quick crates; the owner: "Filtered curve in 0.11"):
@@ -2168,12 +2229,15 @@ struct LikeCurveWithin {
     own: Option<bool>,
     #[serde(default)]
     weights: Vec<f32>,
+    /// As the query's (0.13, decision 0088).
+    #[serde(default)]
+    mode: Option<crate::crates::LikeMode>,
     #[serde(default)]
     conditions: Vec<crate::crates::Condition>,
 }
 
 async fn like_curve_within(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(b): Json<LikeCurveWithin>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
-    Ok(Json(app.playlists.like_curve(&b.of, &b.weights, f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
+    Ok(Json(app.playlists.like_curve(&b.of, &b.weights, b.mode.unwrap_or_default(), f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
 }
 
 #[derive(serde::Deserialize)]
@@ -2220,12 +2284,14 @@ async fn crate_update(State(app): State<Arc<App>>, Path(id): Path<String>, Json(
 }
 
 /// A crate as its view shows it, with the artists it leaves out by "Artist is not" (decision 0083: Not in this crate),
-/// each with the key that takes them back.
+/// each with the key that takes them back, and the names of the library ids its conditions hold (0.13, decision 0088:
+/// `{"<id>": {"name", "kind"}}`, kind `artist`, `album` or `track`; an id the library lacks left out).
 #[derive(serde::Serialize)]
 struct CrateGot {
     #[serde(flatten)]
     def: crate::crates::CrateDef,
     not_artists: Vec<crate::app::NotArtist>,
+    names: std::collections::BTreeMap<String, crate::crates::Named>,
 }
 
 async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<CrateGot>, ApiError> {
@@ -2236,7 +2302,8 @@ async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Resul
         def.conditions.retain(|c| !matches!(c.value, crate::crates::Value::Within { .. }));
     }
     let not_artists = app.playlists.crate_not_artists(&id).await?;
-    Ok(Json(CrateGot { def, not_artists }))
+    let names = app.playlists.condition_names(&def.conditions).await?;
+    Ok(Json(CrateGot { def, not_artists, names }))
 }
 
 /// An artist, by their name as the page shows it.
@@ -2325,12 +2392,30 @@ struct Preview {
     conditions: Vec<crate::crates::Condition>,
     #[serde(default)]
     without: Vec<String>,
+    /// Its first records' covers asked too (the search crate card, 0.13): how many, at most `CRATE_COVERS`.
+    #[serde(default)]
+    covers: usize,
+}
+
+/// The preview's answer: the page, and the names of the library ids its conditions hold (0.13, decision 0088), as the
+/// crate view has them (`CrateGot`).
+#[derive(serde::Serialize)]
+struct Previewed {
+    #[serde(flatten)]
+    page: crate::app::CratePage,
+    names: std::collections::BTreeMap<String, crate::crates::Named>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    covers: Vec<crate::app::home::WeekCover>,
 }
 
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, ..Default::default() };
-    Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?).into_response())
+    let page = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?;
+    let names = app.playlists.condition_names(&p.conditions).await?;
+    let n = p.covers.min(crate::app::home::CRATE_COVERS);
+    let covers = if n > 0 { app.crate_covers(&p.conditions, q.source.as_deref(), &look, n).await? } else { Vec::new() };
+    Ok(Json(Previewed { page, names, covers }).into_response())
 }
 
 /// The Filter sheet (decision 0061): which of the list in view's items pass these conditions, how many of how many,
@@ -3624,6 +3709,7 @@ async fn collection(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Jso
     // Classical (0.10), as the Library's albums say it.
     for s in &mut v.sources {
         crate::app::classical::tell(&s.id, &mut s.albums).await;
+        crate::app::file_facts::tell(&s.id, &mut s.albums);
     }
     Json(v)
 }
@@ -6162,6 +6248,56 @@ async fn add_fetched_track(Path(id): Path<String>) -> Result<Json<serde_json::Va
     Ok(Json(json!({ "undo": [token] })))
 }
 
+/// The bulk intake's queue (0.13, decision 0080 amended): each missing track, its state, its candidates (best first) and
+/// the one preselected; `running` while it searches or fetches.
+async fn track_intake() -> Json<crate::app::track_intake::View> {
+    Json(crate::app::track_intake::view())
+}
+
+#[derive(Deserialize)]
+struct IntakeAlbums {
+    albums: Vec<String>,
+}
+
+/// These albums' missing tracks queued, searched in turn (paced); the queue.
+async fn track_intake_add(Json(b): Json<IntakeAlbums>) -> Result<Json<crate::app::track_intake::View>, ApiError> {
+    if b.albums.is_empty() || b.albums.iter().any(|a| a.trim().is_empty()) {
+        return Err(ToggleError::BadSettings("Name the albums.".into()).into());
+    }
+    let view = crate::app::track_intake::add_albums(&b.albums).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+struct IntakePick {
+    id: String,
+    #[serde(default)]
+    candidate: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct IntakeApprove {
+    items: Vec<IntakePick>,
+}
+
+/// Found items approved (a candidate given, else the one preselected): fetched, gated and added in turn; the queue.
+async fn track_intake_approve(Json(b): Json<IntakeApprove>) -> Json<crate::app::track_intake::View> {
+    let picked: Vec<(String, Option<usize>)> = b.items.into_iter().map(|p| (p.id, p.candidate)).collect();
+    Json(crate::app::track_intake::approve(&picked))
+}
+
+/// One item dropped, its staged file with it.
+async fn track_intake_drop(Path(id): Path<String>) -> StatusCode {
+    crate::app::track_intake::drop_item(&id);
+    StatusCode::NO_CONTENT
+}
+
+/// The finished items cleared.
+async fn track_intake_clear() -> StatusCode {
+    crate::app::track_intake::clear_finished();
+    StatusCode::NO_CONTENT
+}
+
 /// slskd as set (never its key) and whether it answers: its version, or why not.
 async fn get_slskd(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = ctx.serve()?;
@@ -6434,6 +6570,83 @@ async fn release_group_cover(Path(rg): Path<String>) -> Response {
     kept_cover(crate::app::cover_cache::Of::ReleaseGroup(rg)).await
 }
 
+/// Writing types, years and Classical into the files: whether it is on, how many records' files differ, its last run.
+async fn file_facts() -> Result<Json<crate::app::file_facts::View>, ApiError> {
+    Ok(Json(crate::app::file_facts::view().await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// Switched on or off: it only decides what Health offers (decision 0092: nothing is written by itself).
+async fn file_facts_switch(Json(b): Json<SwitchedOn>) -> Result<Json<crate::app::file_facts::View>, ApiError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    tokio::task::spawn_blocking(move || crate::app::file_facts::set_on(&served, b.on))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    file_facts().await
+}
+
+#[derive(Deserialize)]
+struct PlanOf {
+    /// Album ids, comma-separated: only these records.
+    albums: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Ticked {
+    #[serde(default)]
+    albums: Option<Vec<String>>,
+    /// Each ticked record's stamp from the sheet: a record no longer as it showed is set aside.
+    #[serde(default)]
+    stamps: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+struct RunsSince {
+    since: Option<i64>,
+}
+
+fn file_change_refused(e: anyhow::Error) -> ApiError {
+    ToggleError::Refused(format!("{e:#}")).into()
+}
+
+/// A kind's review sheet (`types`; Health's fixes and Renumber as they move onto the path): per record its fields old
+/// → new and where the new comes from.
+async fn file_change_plan(Path(kind): Path<String>, Query(q): Query<PlanOf>) -> Result<Json<crate::app::file_runs::PlanView>, ApiError> {
+    let albums = q.albums.map(|a| a.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect());
+    match kind.as_str() {
+        crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::plan(albums).await.map_err(file_change_refused)?)),
+        _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
+    }
+}
+
+/// The ticked records of a kind's sheet written (an administrator's yes): the run's first status.
+async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>, Json(b): Json<Ticked>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    let albums = b.albums.unwrap_or_default();
+    match kind.as_str() {
+        crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums, b.stamps).await.map_err(file_change_refused)?)),
+        _ => Err(ToggleError::Refused(format!("No such change: {kind}")).into()),
+    }
+}
+
+/// Every run since `since` (epoch seconds; default the last 30 days): waiting or writing first, then kept, newest first.
+async fn file_change_runs(State(app): State<Arc<App>>, Query(q): Query<RunsSince>) -> Result<Json<Vec<crate::app::file_runs::Status>>, ApiError> {
+    let since = q.since.unwrap_or_else(|| crate::app::moment::now_secs() - 30 * 86_400);
+    Ok(Json(crate::app::file_runs::runs(&app, since).map_err(file_change_refused)?))
+}
+
+/// A kept run, its records as written.
+async fn file_change_run(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (status, sheet) = crate::app::file_runs::run(&app, &id).map_err(file_change_refused)?;
+    Ok(Json(json!({ "run": status, "kind": sheet.kind, "title": sheet.title, "records": sheet.records })))
+}
+
+/// A run's Undo, or its records `albums`': each file put back where it still holds what the run wrote.
+async fn file_change_undo(State(app): State<Arc<App>>, Path(id): Path<String>, body: axum::body::Bytes) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+    // `{albums}` or nothing: the whole run.
+    let albums = serde_json::from_slice::<Ticked>(&body).ok().and_then(|b| b.albums);
+    Ok(Json(crate::app::file_runs::undo(&app, &id, albums).await.map_err(file_change_refused)?))
+}
+
 /// Lidarr's quality and metadata profiles and root folders (its page's choices for Want), of the saved Lidarr.
 async fn lidarr_options(State(app): State<Arc<App>>) -> Result<Json<crate::lidarr::Options>, ApiError> {
     let l = crate::app::discover::lidarr(&app).ok_or_else(|| ToggleError::Refused("Lidarr is not connected, or is switched off.".into()))?;
@@ -6473,6 +6686,7 @@ impl IntoResponse for ApiError {
             | ToggleError::NothingToUndo
             | ToggleError::Exists => StatusCode::CONFLICT,
             ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
+            ToggleError::Unanswerable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder | ToggleError::NameTaken(_) => {
                 StatusCode::CONFLICT
             }
@@ -6499,6 +6713,14 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, PreviewOf, attachment, form_decode};
+
+    #[test]
+    fn a_condition_that_cannot_be_answered_is_unprocessable() {
+        // 0.13, decision 0088: all of on a year.
+        use axum::response::IntoResponse;
+        let r = super::ApiError(crate::app::ToggleError::Unanswerable("Year takes one value, not all of several.".into())).into_response();
+        assert_eq!(r.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
 
     #[test]
     fn an_answer_says_whether_the_change_was_made_only_where_the_device_sent_its_time() {

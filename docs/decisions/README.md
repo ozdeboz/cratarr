@@ -219,12 +219,14 @@ by a later record that says so in its header. A new decision takes the next numb
   page](0079-follow-and-queue-requests.md): accepted. One may follow another user's player, opted in, from anywhere,
   kept in step by Cratarr; followers and guests at home ask for tracks the leader accepts or declines.
 - [0080: Single-track intake: one track into an album, checked before it goes in](0080-single-track-intake.md):
-  accepted; amended 2026-10-30. One track at a time from a Soulseek search or, since 0.9.19, a file in Cratarr's
-  slskd folder, gated by a whole decode, the recording's length and AcoustID, then added to the album with Undo.
+  accepted; amended 2026-10-30 and 2026-10-31. A track from a Soulseek search or, since 0.9.19, a file in Cratarr's
+  slskd folder, gated by a whole decode, the recording's length and AcoustID, then added to the album with Undo; since
+  0.13 searched in bulk and approved many at once, nothing taken in without a tick.
 - [0081: Release types: MusicBrainz's release group, else the Discogs release that is the album](0081-release-types.md):
-  accepted; amended 2026-10-30. An album's type is its MusicBrainz release group's, else its Discogs release's when
-  that release fits the album's tracks or length; an EP's edition far longer than its group's first release is an
-  Album.
+  accepted; amended 2026-10-30 and 2026-10-31. What MusicBrainz's release group, else the Discogs release that fits
+  the album, says is read by the owner's rule: an album found missing tracks is Incomplete; the name's "EP" or "LP"
+  wins; seven tracks or more, or over 45 minutes, an Album; four to six an EP; one to three an EP when long, else a
+  Single; a Single said is an EP at most. Various Artists is a Compilation besides.
 - [0082: Classical as a kind of record, and a track's Other versions](0082-classical-and-other-versions.md): accepted.
   A record is classical by a genre gate and one confirmation (MusicBrainz works with performers, a composer confirmed
   elsewhere, or a mark); composers by MusicBrainz artist; each record in its primary kind by default; a track's other
@@ -247,3 +249,26 @@ by a later record that says so in its header. A new decision takes the next numb
   in `X-Cratarr-At`, favourites and ratings the last change winning; `Idempotency-Key` and play ids kept 30 days; one
   change log per server (`/api/changes`); playlist edits as operations on entry ids, merged as a set, the last move
   winning.
+- [0088: One crate, two views; and or or](0088-one-crate-two-views.md): accepted, for 0.13. Every crate opens with a
+  Sentence / Conditions switch over the same conditions, names for ids from the server; Sounds like blended or near
+  any one seed, genre, style, mood and tag any or all of their values.
+- [0089: A record's facts set by hand](0089-facts-set-by-hand.md): accepted, for 0.13. A record's type, secondary
+  types, year, genres and classical can be set by hand, household-wide by Music-form id, winning until reset; one call
+  for one record or a selection; the classical marks are its `classical`; a file's own words stay in its tags.
+- [0090: Cratarr as an MCP server](0090-mcp-server.md): accepted, for 0.13. `/mcp` in the server (the MCP Rust SDK's
+  streamable HTTP), for API keys only and read only: search, records with their type and classical and why, one record,
+  classical composers and works, the health findings, the account's crates.
+- [0091: Scrobbling from the device](0091-scrobbling-from-the-device.md): accepted, for 0.13. Each user's choice:
+  from each device (the start: the player that sounds a track tells the services, its sign-ins its own, the server
+  holding no keys) or through one Cratarr server (sign in once, other servers' plays handed to it; amended: a
+  "This server scrobbles for me" switch per other server); Subsonic apps and Kodi
+  follow it; a play told once, by its id.
+- [0092: One way to change files](0092-one-way-to-change-files.md): accepted, for 0.13. Every change to the library's
+  files is a plan (what changes, why), gated by an administrator's yes (a switch never writes by itself), applied one
+  album at a time through the checked copy or all-or-none moves, recorded as one journal entry with one Undo, and told
+  in one shape; Health shows each kind of difference in one line with its action. Amends 0089: types into files
+  follow Cratarr.
+- [0093: Test and development data](0093-test-and-development-data.md): accepted, for 0.13. A fixture library of small
+  generated albums in the repository; one end-to-end suite starting the real server on a throwaway copy of it; a
+  development instance on this PC with its own data and music (the fixtures and a read-only sample from the NAS), which
+  the dev page points at instead of production; previews stay on the NAS, built once the suite passes.

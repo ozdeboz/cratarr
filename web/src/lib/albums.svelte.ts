@@ -33,11 +33,20 @@ import { can } from './capabilities.svelte';
  *  library there (what it may do with it). */
 export const library = $state({ view: null as AlbumsView | null });
 let reading: Promise<void> | null = null;
+/** The list as last read, and its servers' lists as the page then held them (replaced whole when it changes one). */
+let lastRead: { text: string; sources: AlbumsView['sources'] | null } = { text: '', sources: null };
 /** Reads it (`fresh`: past the service worker's copy); one read at a time. */
 export function readLibrary(fresh: boolean): Promise<void> {
   reading ??= getAlbums(prefs.source || undefined, fresh)
     .then((v) => {
+      // The same list read again (the kept copy, then the latest; every 30 s while the live channel is down) leaves the
+      // page as it is: a whole Library replaced was all of it sorted and laid out again, the page held for half a
+      // second each time (the owner, 2026-11-02: the Library took long before it responded). Not where the page has
+      // changed it since (an album gone at once: lib/SeveralAlbums, the Library's own).
+      const text = JSON.stringify(v);
+      if (library.view && text === lastRead.text && library.view.sources === lastRead.sources) return;
       library.view = v;
+      lastRead = { text, sources: library.view.sources };
     })
     .finally(() => (reading = null));
   return reading;

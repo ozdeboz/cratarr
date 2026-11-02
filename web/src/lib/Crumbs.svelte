@@ -4,15 +4,27 @@
   // then where one is. Short (the owner: "2 at most. So the current and one level above"): the last level above and
   // where one is, both cut with … when short of room. Whole: every level, nothing cut, scrolled to its end (the owner,
   // 2026-10-25: "in scroll mode, the entire breadcrumb should be visible. In the other mode, only one level
-  // difference"). A tap on where one is turns from one to the other while there is more to show (a level left out, or
-  // something cut), for every panel on this device ("global on the device": prefs.crumbsWhole). No levels above: only
+  // difference"). A long-press, and only that (the owner, 2026-11-02), turns from one to the other while there is more
+  // to show (a level left out, or something cut), for every panel on this device ("global on the device": prefs.crumbsWhole). No levels above: only
   // where one is, as beside the page whose name its list already shows (Settings › Display beside Settings' list said
   // Settings twice).
+  // One rule for every panel (the owner, 2026-11-01): the levels are those Back walks through, each a tap back there;
+  // only places are levels. Where one is can be a picker of its siblings (Settings' other parts, Health's other
+  // problems: a move sideways instead of up and down again, as the Library's "Records ▾"). A long-press anywhere on it
+  // switches short and whole (the owner, 2026-11-02: a tap is the pickers' now; the … before the trail that did it read
+  // as a level of its own), and is never also their tap.
+  // A level above can be its group (the owner, 2026-11-02: Settings › Device › Appearance, the parts' picker was "way too
+  // tall"): a picker of the groups, landing on the part last seen in one (lib/groupCrumb). Not a place: Back walks past
+  // it, and it is no tap back there.
   import { tick } from 'svelte';
+  import { longpress } from './longpress';
   import { prefs } from './prefs.svelte';
+  import GlassPicker, { type PickerOption } from './GlassPicker.svelte';
 
-  type Level = { label: string; go?: () => void };
-  let { trail = [], here }: { trail?: Level[]; here: string } = $props();
+  export type Siblings = { menuLabel: string; options: readonly PickerOption[]; chosen: string | null; onchoose: (id: string) => void };
+  /** A level above: a tap back there (without `go`, only said), or its group's picker (`pick`). */
+  export type Level = { label: string; go?: () => void; pick?: Siblings };
+  let { trail = [], here, siblings = null }: { trail?: Level[]; here: string; siblings?: Siblings | null } = $props();
   let line = $state<HTMLElement>();
   const whole = $derived(prefs.crumbsWhole);
   const shown = $derived(whole ? trail : trail.slice(-1));
@@ -23,14 +35,13 @@
   });
   function show() {
     if (whole) return void (prefs.crumbsWhole = false);
-    const cut = [...(line?.querySelectorAll<HTMLElement>('.up, .here') ?? [])].some((x) => x.scrollWidth > x.clientWidth);
+    const cut = [...(line?.querySelectorAll<HTMLElement>('.up, .here, .label') ?? [])].some((x) => x.scrollWidth > x.clientWidth);
     if (cut || trail.length > 1) prefs.crumbsWhole = true;
   }
 </script>
 
-<h2 class="crumbs" class:whole bind:this={line}>
-  {#each shown as up, i (i)}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <span class="here" aria-current="page" onclick={show}>{here}</span>
+<h2 class="crumbs" class:whole bind:this={line} use:longpress={show}>
+  {#each shown as up, i (i)}{#if up.pick}<span class="up pick"><GlassPicker shown={up.label} menuLabel={up.pick.menuLabel} options={up.pick.options} chosen={up.pick.chosen} onchoose={up.pick.onchoose} /></span>{:else if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<span class="here" aria-current="page">{here}</span>{/if}
 </h2>
 
 <style>
@@ -69,8 +80,18 @@
     cursor: pointer;
   }
 
+
   button.up:hover {
     color: var(--text);
+  }
+
+  /* A group's picker as a level above: muted as the others, as large as the picker of where one is. */
+  .pick {
+    display: flex;
+  }
+
+  .pick :global(button.shown) {
+    color: var(--muted);
   }
 
   .sep {
@@ -103,7 +124,8 @@
   }
 
   .crumbs.whole .up,
-  .crumbs.whole .here {
+  .crumbs.whole .here,
+  .crumbs.whole > :global(.views) {
     flex: none;
     overflow: visible;
   }

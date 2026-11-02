@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS words_asked (subject TEXT NOT NULL, source TEXT NOT N
 -- An album's match with a MusicBrainz release (0.9.7, app::matching; JSON, none where none was found), and when.
 CREATE TABLE IF NOT EXISTS album_matches (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
 -- An album held against its release group's releases (0.9.7, app::incomplete): what it misses (JSON; none: whole, or
--- no release holds it), and when.
+-- no release holds it), and when. Added later (0.13): the discs its tracks are on in the release that holds it
+-- (`discs`; none: no release holds it), and the rule it was looked at by (`rule`, `COMPLETE_RULE`).
 CREATE TABLE IF NOT EXISTS album_complete (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
 -- What Discogs says of a subject beyond its words (0.9.8, app::discogs_facts): an album's (`album:<its Music-form id>`),
 -- an artist's (`artist:<name key>`), a release group's (`rg:<id>`); JSON, none where Discogs has nothing; and when.
@@ -31,6 +32,19 @@ pub struct RawWord {
     /// genre, style, mood or tag, as the source has it.
     pub kind: String,
     pub weight: f64,
+}
+
+/// The rule an album is held against its releases by (0.13: 1, the discs its tracks are on kept too).
+pub const COMPLETE_RULE: i64 = 1;
+
+/// The albums held against their releases before the discs were kept get the columns (rule 0: looked at again).
+/// Safe to repeat.
+pub(super) fn add_album_complete_discs(conn: &rusqlite::Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('album_complete') WHERE name = 'discs'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE album_complete ADD COLUMN discs INTEGER; ALTER TABLE album_complete ADD COLUMN rule INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    Ok(())
 }
 
 impl UserData {
@@ -128,9 +142,29 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn set_album_complete(&self, album: &str, found: Option<&str>, at: i64) -> Result<()> {
-        self.db().execute("INSERT OR REPLACE INTO album_complete (album, at, found) VALUES (?1, ?2, ?3)", params![album, at, found])?;
+    pub fn set_album_complete(&self, album: &str, found: Option<&str>, discs: Option<u32>, at: i64) -> Result<()> {
+        self.db().execute(
+            "INSERT OR REPLACE INTO album_complete (album, at, found, discs, rule) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![album, at, found, discs, COMPLETE_RULE],
+        )?;
         Ok(())
+    }
+
+    /// When each album was last held against its releases by this rule (`COMPLETE_RULE`); one looked at by an older
+    /// rule is left out, so it is looked at again first.
+    pub fn album_complete_now(&self) -> Result<std::collections::HashMap<String, i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album, at FROM album_complete WHERE rule >= ?1")?;
+        let rows = st.query_map([COMPLETE_RULE], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The discs each album's tracks are on in the release that holds it (0.13), by album.
+    pub fn album_discs(&self) -> Result<std::collections::HashMap<String, u32>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album, discs FROM album_complete WHERE discs IS NOT NULL")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.clamp(0, i64::from(u32::MAX)) as u32)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// A cheap summary of the words and the album tags as kept: it changes when either does.

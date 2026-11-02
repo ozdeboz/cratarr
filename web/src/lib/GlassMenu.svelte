@@ -1,9 +1,10 @@
 <script lang="ts">
   // A few choices grown out of the glass a tap was on (the owner, 2026-10-25): the Library's view beside back, the
-  // Cratarr | Local switch in the bar. The title's thin glass, the shown one ticked; a choice, a tap elsewhere or Esc
+  // Cratarr | Local switch in the bar. The top glasses' own glass, the shown one ticked; a choice, a tap elsewhere or Esc
   // folds it. Drawn at the page's end where the caller says (`at`, from its button): inside another glass its own blur
-  // would see only that glass (a backdrop inside a backdrop), not the page behind. Its options are buttons of class
-  // `option` (`aria-selected` or `aria-checked` lit).
+  // would see only that glass (a backdrop inside a backdrop), not the page behind. Always whole inside the window (the
+  // owner, 2026-11-02: "should be made impossible" to render off screen): moved in from an edge, taller than the room
+  // it scrolls. Its options are buttons of class `option` (`aria-selected` or `aria-checked` lit).
   import type { Snippet } from 'svelte';
   import { portal } from './portal';
 
@@ -25,6 +26,20 @@
     children: Snippet;
   } = $props();
   let list = $state<HTMLElement>();
+
+  /** Its left edge, moved in so its whole width is inside the window (8 px from either edge). */
+  const EDGE = 8;
+  let left = $state(0);
+  $effect(() => {
+    const want = at.left;
+    const fit = () => {
+      const w = list?.offsetWidth ?? 0;
+      left = Math.max(EDGE, Math.min(want, innerWidth - EDGE - w));
+    };
+    fit();
+    addEventListener('resize', fit);
+    return () => removeEventListener('resize', fit);
+  });
 
   $effect(() => {
     const away = (e: PointerEvent) => {
@@ -49,23 +64,28 @@
   bind:this={list}
   style:top={at.top === undefined ? null : `${at.top}px`}
   style:bottom={at.bottom === undefined ? null : `${at.bottom}px`}
-  style:left="{at.left}px"
-  style:min-width="{at.minWidth}px">{@render children()}</span
+  style:left="{left}px"
+  style:min-width="{at.minWidth}px"
+  style:max-height="calc(100dvh - {EDGE}px - {at.top ?? at.bottom ?? 0}px)">{@render children()}</span
 >
 
 <style>
-  /* The title's thin glass (App's .lead), grown from the button. */
+  /* Grown from the button: the top glasses' own fill and blur (the owner, 2026-11-02: one colouring for the glasses and
+     their dropdowns), its shadow, but no ring ("I don't want the dropdown to have a border effect"). */
   .glass-menu {
     position: fixed;
     z-index: 25;
     display: grid;
+    align-content: start;
     max-width: calc(100vw - 16px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 6px;
     border-radius: 18px;
-    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
-    -webkit-backdrop-filter: blur(10px) saturate(1.3);
-    backdrop-filter: blur(10px) saturate(1.3);
-    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
+    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   .glass-menu :global(.option) {

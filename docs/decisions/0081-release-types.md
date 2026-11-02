@@ -1,9 +1,10 @@
 # 0081: Release types: MusicBrainz's release group, else the Discogs release that is the album
 
-- Status: accepted (the owner, for 0.9.6: "hide EPs and singles"; amended for 0.10)
+- Status: accepted (the owner, for 0.9.6: "hide EPs and singles"; amended for 0.10 and 0.13)
 - Date: 0.9.6, written down 2026-10-30
 - Builds on: 0.9.5's original years from MusicBrainz and its Discogs connection, 0024 (crates)
-- Amended by: the amendment of 2026-10-30 below (a Discogs release must fit the album; editions)
+- Amended by: the amendments of 2026-10-30 (a Discogs release must fit the album; editions) and 2026-10-31 (the
+  owner's rule, by tracks and length) below
 
 ## Context
 
@@ -50,3 +51,33 @@ length alone.
   (`release_types.rule`, `RELEASE_TYPES_RULE` = 1). Every one of Discogs' and every EP or single of MusicBrainz's found
   by an older rule is asked again, the old type kept until the new one is found; no wipe by hand. Albums Discogs typed
   are among those its pass looks at again.
+
+## Amendment (2026-10-31): the owner's rule, by tracks and length
+
+Going through the Library's Singles and EPs, the owner found MusicBrainz's and Discogs' types wrong for their purpose:
+MusicBrainz's Single means one main song with versions or B-sides, not a short release (Passiflora, one track of 21.7
+minutes; Kime Ne, 56.6 minutes), and an EP of either may be an album of eight to twelve tracks (Plantation, ten tracks,
+63 minutes). Every verdict below is the owner's, for 0.13. It replaces the first amendment's edition rule and the guess
+for a single.
+
+- **The type said is kept as said** (`release_types`, unchanged), and the rule reads it as the library is built
+  (`serve::library::release_type_of`). In order:
+  1. **Incomplete**: an album found missing tracks of the smallest release that holds it (`app::incomplete`, the
+     check Health shows) is `incomplete`, whatever else is true. Only where that was found, never guessed.
+  2. **The name wins**: "… EP" makes an EP, "… LP" an album.
+  3. **Seven tracks or more, or over 45 minutes**: an album, however short. Not Apple's 30 minutes: the owner's EPs reach
+     44 minutes (Afro Damba, 43.6), their albums start at 47 (Flowery Rave Tales, 47.1).
+  4. **Four to six tracks**: an EP.
+  5. **One to three**: an EP where over 15 minutes or a track is 10 minutes or longer, else a single.
+  6. **A Single said is an EP at most**: one song in versions stays an EP however long (the owner: "56 minutes for
+     Kimene, capped at EP").
+- **The same for albums nothing is said of**: the rule types them too; before, only a short one was guessed a single.
+  A Broadcast (Other) stays as said.
+- **Various Artists is a compilation**: an album whose album artist is Various Artists has the compilation secondary
+  type besides (COD3 QR 015 had none from MusicBrainz).
+- **Where from, and why**: `type_from` names the source that said a type (`musicbrainz`, `discogs`; none where none
+  did), and `type_why` the rule that decided where the type is not the one said (`incomplete`, `name`, `tracks`,
+  `length`, `one song`). Incomplete is a kind of its own beside Album, EP and Single.
+- **The edition rule is gone**: the first amendment's comparison with a group's first release (`edition_kind`) is
+  removed; the album's own tracks and length decide. MusicBrainz's types it changed are asked again
+  (`RELEASE_TYPES_RULE` = 2, every one of MusicBrainz's found by an older rule), the old type kept until then.

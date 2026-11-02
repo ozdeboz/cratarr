@@ -12,23 +12,24 @@
   import Group from './Group.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Item from './Item.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
   import { HOME_HEADER, HOME_HEADER_PX, localCovers, removeLocalPicture, setLocalPicture } from '../localCovers.svelte';
   import { toast } from '../toast.svelte';
 
-  offerReset(
-    () => "The theme following the system again, the animations on; Home's header greeting you, its sky the weather's.",
-    () => {
-      prefs.theme = 'auto';
-      prefs.animations = true;
-      prefs.homeGreeting = true;
-      void removeLocalPicture(HOME_HEADER);
-      prefs.flowBackdrop = DEFAULT_BACKDROP;
-      prefs.flowPictureOnHome = false;
-      prefs.flowShuffle = false;
-      prefs.coverColourGlass = prefs.coverColourMini = prefs.coverColourPlayer = true;
-    },
-  );
+  // What Reset puts back (lib/settings/reset): each as its row names it, its default the prefs'.
+  const THEMES: Record<string, string> = { auto: 'Automatic', light: 'Light', dark: 'Dark' };
+  offerReset('appearance', () => [
+    pref('theme', 'Theme', (v) => THEMES[v] ?? v),
+    pref('animations', 'Animations'),
+    pref('homeGreeting', 'Personal greeting'),
+    pref('coverColourGlass', 'Control glass'),
+    pref('coverColourMini', 'Mini player'),
+    pref('coverColourPlayer', 'Full player background'),
+    pref('flowBackdrop', 'Backdrop', (v) => BACKDROPS.find((b) => b.value === v)?.label ?? (v === 'own' ? 'Yours' : String(v))),
+    pref('flowShuffle', 'Shuffle'),
+    pref('flowPictureOnHome', 'Also on Home'),
+    { name: 'Your picture', now: () => !!localCovers[HOME_HEADER], def: false, set: () => removeLocalPicture(HOME_HEADER), say: (v) => (v ? 'On this device' : 'None') },
+  ]);
 
   const SHUFFLE_WHEN: { value: typeof prefs.flowShuffleWhen; label: string }[] = [
     { value: 'flow', label: 'Each flow that opens' },

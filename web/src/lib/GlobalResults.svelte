@@ -2,11 +2,11 @@
   // Global search's results (decision 0072): a group per kind but the kind the page already shows (`except`), a few
   // of each, why each is there; the server's (the library, what is not in it) and the browser's (pages, Settings'
   // parts; lib/everywhere), as lib/globalSearch holds them. Shown as the page's or the panel's Everywhere (the owner,
-  // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
+  // 2026-10-25: the globe beside the search, lib/ContentControls), or as Home's own. Three tiers (decision 0076): the library,
   // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
   // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music. First, where
-  // the server makes them (0.11), Grab a crate (the owner, 2026-10-30; was Make a crate of this): Crates, the words read into a quick crate's sentence (lib/QuickCrate);
-  // where the words read as a crate of two kinds or more, that crate as a card (lib/SearchCrateCard, mockup 1a). A
+  // the server makes them (0.11) and the words read as a crate of two kinds or more that holds a track, that crate as a
+  // card (lib/SearchCrateCard, mockup 1a; every page's own search leads with it too, App); else no crate at all. A
   // result's long-press, right-click or ⋮ opens its own menu, as the same thing's does in any list (decision 0058).
   import { fromAction } from 'svelte/attachments';
   import { includeArtist, takeBackExcluded } from './api';
@@ -20,18 +20,20 @@
   import CoverBusy from './CoverBusy.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import Icon from './Icon.svelte';
-  import { beyondAlbum, globalAsked, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, showAll } from './globalSearch.svelte';
+  import { beyondAlbum, globalAsked, globalFailed, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, searchAgain, showAll } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { viewOver } from './panel.svelte';
+  import { viewFor, viewOver } from './panel.svelte';
   import { libraryDot } from './albums.svelte';
   import { pageView } from './pageView.svelte';
-  import { openQuickCrate, quickOn } from './quickCrates.svelte';
+  import { quickOn } from './quickCrates.svelte';
   import { leaveOnArrival } from './navStep.svelte';
   import { matchLine, type SearchResult } from './search';
   import Asking from './Asking.svelte';
+  import Notice from './Notice.svelte';
+  import { keepWhile } from './keepWhile.svelte';
   import { toast } from './toast.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import ArtistRowMenu from './ArtistRowMenu.svelte';
@@ -45,6 +47,12 @@
   const q = $derived(pageView.query.trim());
   const groups = $derived(globalGroups(except));
   const asked = $derived(globalAsked());
+  // Failed for these words: said with Try again over what shows, never the wait for ever (the owner, 2026-11-02).
+  const failed = $derived(globalFailed());
+  // The server's answer for the words as they are now not in (lib/loader, the one rule): the groups as they were shown,
+  // then the loader in their place.
+  const kept = keepWhile(() => groups, () => !!q && !asked && !failed, () => q);
+  const shownGroups = $derived(kept.loader ? [] : kept.value);
   // An album's or a track's library, as a dot before its title, as the Library's lists show it (0.9.5): from its
   // album's subject (`album:<source>/<id>`), the Library's list knowing which library each is in.
   function dotOf(it: SearchResult) {
@@ -68,7 +76,7 @@
   let workOpen = $state<{ mbid: string; title: string } | null>(null);
   let workMenu = $state<{ mbid: string; title: string } | null>(null);
   const workOf = (it: SearchResult) => ({ mbid: it.subject.slice('work:'.length), title: it.title });
-  function open(it: SearchResult) {
+  function open(it: SearchResult & { track?: string }) {
     if (it.kind === 'work') return void (workOpen = workOf(it));
     leaveSearch(deep(it));
     if (it.subject.startsWith('#')) location.hash = it.subject;
@@ -84,6 +92,7 @@
       const a = beyondAlbum(it.subject);
       if (a) void elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, bandcamp: a.bandcamp ?? null, discogs_url: a.discogs_url ?? null });
     }
+    else if (it.kind === 'track' && it.track) viewFor(it.subject, it.track);
     else viewOver(it.subject);
   }
   async function takeBack(it: SearchResult) {
@@ -177,23 +186,14 @@
       {#if all && !all.done}<li class="more" {@attach nearEnd(() => loadAll(all.q, all.kind))}></li>{/if}
     </ul>
   </section>
-{:else if q && (groups.length || asked)}
+{:else if q && (shownGroups.length || asked || failed)}
   <section class="global" aria-label="Everywhere">
+    {#if failed}<Notice text={failed} onretry={searchAgain} />{/if}
     {#if quickOn()}
-      <SearchCrateCard {q}>
-        {#snippet plain()}
-          <ul class="rows">
-            <li>
-              <Row size="large" title="Grab a crate" sub={q} label={`Grab a crate of ${q}`} onclick={() => openQuickCrate(q)}>
-                {#snippet front()}<span class="art made"><Icon name="crates" size={24} /></span>{/snippet}
-              </Row>
-            </li>
-          </ul>
-        {/snippet}
-      </SearchCrateCard>
+      <SearchCrateCard {q} />
     {/if}
-    {#if groups.length}
-      {#each groups as g (g.kind)}
+    {#if shownGroups.length}
+      {#each shownGroups as g (g.kind)}
         <!-- Its heading opens it whole (decision 0076: every group's results, shown all); Beyond's, Find more music. -->
         <SectionHead title={`${g.label} (${g.total.toLocaleString()})`} onmore={g.kind === 'beyond' ? findMore : () => showAll(g.kind)} />
         <ul class="rows">
@@ -213,7 +213,7 @@
   </section>
 {:else if q}
   <!-- Nothing yet, the server's answer for these words not in: the wait, not "nothing" (lib/search listShows). -->
-  <Asking />
+  <Asking now={kept.loader} />
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if menu?.kind === 'track'}
@@ -273,14 +273,6 @@
 
   .art.round {
     border-radius: 50%;
-  }
-
-  /* Grab a crate: the crates' icon where a cover would be. */
-  .art.made {
-    display: grid;
-    place-items: center;
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-    color: var(--accent-ink);
   }
 
   /* A result's ⋮ (its menu), as a list row's. */

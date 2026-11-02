@@ -930,6 +930,7 @@ mod tests {
             release: Some(release.into()),
             genres: vec!["Classical".into()],
             artists: vec![WorkArtist { id: format!("ar-{id}"), name: artist.into(), mbid: None }],
+            ..Default::default()
         };
         i.albums = vec![album("al-arrau", "Claudio Arrau", "r-1"), album("al-schiff", "András Schiff", "r-2"), album("al-brahms", "Brahms", "r-3")];
         for (r, player) in [("r-1", "Claudio Arrau"), ("r-2", "András Schiff"), ("r-3", "Someone")] {
@@ -973,6 +974,7 @@ mod tests {
                 release: Some(format!("r-{id}")),
                 genres: vec!["Classical".into()],
                 artists: vec![WorkArtist { id: format!("ar-{id}"), name: "Someone".into(), mbid: None }],
+                ..Default::default()
             });
             let tracks: Vec<TrackWorks> =
                 works.iter().enumerate().map(|(n, w)| TrackWorks { recording: Some(format!("rec-{id}-{n}")), disc: 1, position: n as u32 + 1, works: vec![w.to_string()] }).collect();

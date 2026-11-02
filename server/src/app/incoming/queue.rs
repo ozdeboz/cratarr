@@ -497,6 +497,7 @@ impl IncomingService {
                     c.move_files(folder, from, folder, to)?;
                 }
             }
+            c.changed_outside_pass();
             Ok(())
         })
         .await

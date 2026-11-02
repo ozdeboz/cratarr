@@ -4,7 +4,7 @@
 
 import { prefs } from './prefs.svelte';
 
-export type ColumnKind = 'tracks' | 'albums' | 'playlists' | 'artists';
+export type ColumnKind = 'tracks' | 'albums' | 'playlists' | 'composers';
 export type Column = { id: string; label: string; width: number; end?: boolean; grow?: boolean };
 
 /** A kind's columns in their first order; `width` is the least each needs (px). A number is set to the end (`end`); a
@@ -27,14 +27,13 @@ export const COLUMNS: Record<ColumnKind, readonly Column[]> = {
     { id: 'added', label: 'Added', width: 96 },
     { id: 'plays', label: 'Plays', width: 52, end: true },
     { id: 'lastPlayed', label: 'Last played', width: 96 },
-    { id: 'format', label: 'Format', width: 120 },
+    // Its quality, as its order is named (the owner, 2026-10-31: one name): the format it shows, e.g. FLAC 24/96.
+    { id: 'format', label: 'Quality', width: 120 },
     { id: 'rating', label: 'Rating', width: 76 },
   ],
-  // The Library's Artists (the owner, 2026-10-25: the same table as its albums').
-  artists: [
-    { id: 'albums', label: 'Albums', width: 56, end: true },
-    { id: 'tracks', label: 'Tracks', width: 56, end: true },
-  ],
+  // The Library's Classical composers (lib/ComposerList; the owner, 2026-10-31: View and the order as its albums'): what
+  // the server says of each, how many records.
+  composers: [{ id: 'records', label: 'Records', width: 64, end: true }],
   // The Playlists page's Table; how many tracks stays at a line's end, as a track's length does.
   playlists: [
     { id: 'length', label: 'Length', width: 72, end: true },
@@ -42,13 +41,13 @@ export const COLUMNS: Record<ColumnKind, readonly Column[]> = {
     { id: 'lastPlayed', label: 'Last played', width: 96 },
     { id: 'changed', label: 'Changed', width: 96 },
     { id: 'unplayed', label: 'Unplayed', width: 72, end: true },
+    // Its entries pointing at a missing file, where it has some (the owner, 2026-10-31: the Missing order's column).
+    { id: 'missing', label: 'Missing', width: 64, end: true },
   ],
 };
 
 /** What a row keeps for itself before any column: its cover, its title at a readable width, its time and its menu. */
-/** The Library's Tracks' columns: the ones its server lists give values for (/api/library/tracks). */
-export const LIBRARY_TRACK_COLUMNS: readonly string[] = ['album', 'tempo', 'plays', 'lastPlayed', 'added', 'year', 'albumArtist'];
-const OWN: Record<ColumnKind, number> = { tracks: 60 + 280 + 52 + 40 + 40, albums: 48 + 280 + 40 + 30, playlists: 240 + 52 + 40 + 30, artists: 48 + 240 + 30 };
+const OWN: Record<ColumnKind, number> = { tracks: 60 + 280 + 52 + 40 + 40, albums: 48 + 280 + 40 + 30, playlists: 240 + 52 + 40 + 30, composers: 48 + 240 + 30 };
 /** Between two columns. */
 export const COLUMN_GAP = 16;
 

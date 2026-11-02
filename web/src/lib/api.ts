@@ -397,15 +397,21 @@ export type CrateStats = {
 export type CrateValue =
   | { kind: 'yes' }
   | { kind: 'any_of'; values: string[] }
+  // All of them (0.13, decision 0088): a track carrying every one; genre, style, mood and tag only.
+  | { kind: 'all_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
   // Sounds like its seeds (song ids; 0.11 albums' and artists', `al-…`, `ar-…`): the `count` tracks that sound most
   // like them, at least `min` alike (0–100, the curve's scale), an artist seed's own tracks out unless `own`.
-  | { kind: 'like'; of: string[]; count: number; min?: number; own?: boolean; fresh?: boolean; weights?: number[] };
+  // `mode` (0.13, decision 0088): either, near any one seed (each judged on its own); left out, blended from them all.
+  | { kind: 'like'; of: string[]; count: number; min?: number; own?: boolean; fresh?: boolean; weights?: number[]; mode?: 'blend' | 'either' };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 /** `not_artists`: the artists left out of it by hand (0.10, decision 0083: "Not in this crate", an Artist-is-not row of
  *  its filter); none from a server before it. */
-export type CrateDef = { id: string; name: string; conditions: Condition[]; not_artists?: ExcludedArtist[] };
+export type CrateDef = { id: string; name: string; conditions: Condition[]; not_artists?: ExcludedArtist[]; names?: Record<string, CrateName> };
+/** A name for an id a crate's conditions hold (0.13, decision 0088: Sounds like's seeds, an album axis's values): an id
+ *  the library no longer has is left out. */
+export type CrateName = { name: string; kind: 'artist' | 'album' | 'track' };
 /** An axis the builder draws a control for, with its domain in this library. */
 export type Axis = {
   key: string;
@@ -414,6 +420,8 @@ export type Axis = {
   values: string[];
   /** How many items of the list have each of `values` (the Filter sheet's, filterList); absent in the builder's. */
   counts?: number[];
+  /** The Type axis only (0.13): each of `values`' layer, 1 a release type, 2 an extra type, 3 Classical. */
+  layers?: number[];
   min: number | null;
   max: number | null;
   known: number;
@@ -470,16 +478,19 @@ export const updateCrate = (id: string, name: string, conditions: Condition[]) =
   });
 export const deleteCrate = (id: string) => request<{ deleted: string } & Undo>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The builder's live preview: how many tracks unsaved conditions select, and the first of them. */
-export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> = {}, offset = 0) => {
+/** A crate's card's covers (0.13): a record's, by its first playable track. */
+export type CrateCover = { track: string; album_id?: string | null };
+/** `look.covers`: its first records' covers asked too, as many (at most 6; the search crate card's strip). */
+export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> & { covers?: number } = {}, offset = 0) => {
   const q = new URLSearchParams({ limit: String(limit) });
   if (offset) q.set('offset', String(offset));
   if (source) q.set('source', source);
   if (look.order && look.order !== 'own') q.set('order', look.order);
   if (look.down) q.set('down', 'true');
-  return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/preview?${q}`, {
+  return quietly<{ source: string; total: number; rows: PlaylistRow[]; names?: Record<string, CrateName>; covers?: CrateCover[] }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}) }),
+    body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}), ...(look.covers ? { covers: look.covers } : {}) }),
   });
 };
 /** The list in view a filter is on (decision 0061): the Library's albums (on `source`) or its artists, the playlists,
@@ -935,7 +946,7 @@ export type Values = Record<string, string | string[]>;
 /** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
 /** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
 /** A library's own settings (decision 0034): what a move into it does to the files, and its dot's colour. */
-export type LibraryPolicy = { format?: 'cd' | 'as_is'; colour?: string | null };
+export type LibraryPolicy = { format?: 'cd' | 'as_is'; colour?: string | null; name?: string | null };
 export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
 
 export type LibraryUse = 'music' | 'incoming' | 'unused';
@@ -1036,6 +1047,47 @@ export type CatalogueStatus = {
 export const getSettings = () => request<Settings>('/api/settings');
 
 export const getCatalogue = () => quietly<CatalogueStatus>('/api/catalogue');
+/** Types and years into the files (0.13; the owner, 2026-10-31; administrators'): whether Cratarr offers to write a
+ *  record's release types, its year and Classical into its files' tags, and how many records' files differ now. */
+export type FileFacts = { on: boolean; differ: number };
+export const getFileFacts = () => quietly<FileFacts>('/api/settings/file-facts');
+export const setFileFacts = (on: boolean) =>
+  request<FileFacts>('/api/settings/file-facts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+
+// One way to change files (decision 0092; administrators'): a plan reviewed (what each record's files hold, what
+// Cratarr holds, and from where), applied as a run; every run in one shape, also told live (`file_run`).
+/** A field's change: its values as the files hold them and as Cratarr does ([] none); `track` where it differs by
+ *  track (else the same in every file of the record). */
+export type FileField = { field: string; track?: string; before: string[]; after: string[]; from: string };
+/** A record in a plan, or in a run (`written` of its `files`, `undone`). */
+/** `stamp`: what the sheet shows of it, sent back with Write so a record changed since is set aside (a plan's, not a run's). */
+export type FileRecord = { album: string; title: string; artist: string; files: number; fields: FileField[]; stamp?: string | null; written?: number; undone?: boolean };
+export type FilePlan = { kind: string; title: string; records: FileRecord[] };
+/** A run: `l…` while live, `r…` once kept (its undo token too); `done` of `of` records; `albums` how many. */
+export type FileRun = {
+  id: string;
+  what: string;
+  title: string;
+  state: 'waiting' | 'writing' | 'done';
+  done: number;
+  of: number;
+  /** Each file (or record) set aside and why; the record's name where the server gives it. */
+  failed: { album: string; file?: string; why: string; title?: string; artist?: string | null }[];
+  at?: number;
+  undo?: string;
+  undone: boolean;
+  albums: number;
+};
+/** A record's files against Cratarr (`done` of `of` files while writing; `written` for a day). */
+export type FilesState = { state: 'differs' | 'waiting' | 'writing' | 'written' | 'changed'; done?: number; of?: number; run?: string; at?: number };
+const posting = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+export const getFilePlan = (kind: string, albums?: string[]) =>
+  request<FilePlan>(`/api/file-changes/plans/${encodeURIComponent(kind)}${albums?.length ? `?albums=${albums.map(encodeURIComponent).join(',')}` : ''}`);
+export const applyFilePlan = (kind: string, records: Pick<FileRecord, 'album' | 'stamp'>[]) =>
+  request<FileRun>(`/api/file-changes/plans/${encodeURIComponent(kind)}/apply`, posting({ albums: records.map((r) => r.album), stamps: Object.fromEntries(records.flatMap((r) => (r.stamp ? [[r.album, r.stamp]] : []))) }));
+export const getFileRuns = (since?: number) => request<FileRun[]>(`/api/file-changes/runs${since ? `?since=${since}` : ''}`);
+export const getFileRun = (id: string) => request<{ run: FileRun; kind: string; title: string; records: FileRecord[] }>(`/api/file-changes/runs/${encodeURIComponent(id)}`);
+export const undoFileRun = (id: string, albums?: string[]) => request<FileRun>(`/api/file-changes/runs/${encodeURIComponent(id)}/undo`, posting(albums ? { albums } : {}));
 
 /** Folders, chosen and shown (decision 0044): a folder in the browser, with how much audio is in it (`more`: past the
  *  count) and whether Cratarr can write there. */
@@ -1083,10 +1135,14 @@ export const setSignInRequired = (on: boolean, password: string) =>
  *  decision 0051 it acts for its owner, and only reads (`read`) or also plays and changes (`control`); kept with what
  *  uses it (`purpose`, the owner, 2026-10-24: under Connections, not Authentication). */
 export type KeyScope = 'read' | 'control';
-export type ApiKey = { id: string; name: string; created: number; last_used: number | null; owner?: string; scope?: KeyScope; purpose?: 'home_assistant' | null };
+/** What uses a key: Home Assistant, or an assistant over MCP (0.13, decision 0090: only ever reads). */
+export type KeyPurpose = 'home_assistant' | 'mcp';
+export type ApiKey = { id: string; name: string; created: number; last_used: number | null; owner?: string; scope?: KeyScope; purpose?: KeyPurpose | null };
 /** A new key: `key` is shown in this answer only, never again. */
-export const newApiKey = (name: string, password: string, owner?: string, scope?: KeyScope, purpose?: 'home_assistant') =>
+export const newApiKey = (name: string, password: string, owner?: string, scope?: KeyScope, purpose?: KeyPurpose) =>
   post<{ key: string; id: string; name: string }>('/api/auth/keys', { name, password, owner, scope, purpose });
+/** Every key (an administrator's list); what uses each is its `purpose`. */
+export const getApiKeys = () => quietly<{ keys: ApiKey[] }>('/api/auth/keys');
 /** The weather Home Assistant last told (its weather entity's `condition`, °C, `at` epoch s). */
 export type Weather = { condition?: string | null; cloud?: number | null; temperature?: number | null; at: number };
 /** Connections' Home Assistant: its keys (their last use is when it last called) and the weather it last told. */
@@ -1369,6 +1425,10 @@ export type HealthFinding = {
   key: string;
   /** Its short name, the panel's breadcrumb ("Quality replacements"; 0.9.6); a server before it has none. */
   name?: string;
+  /** What it is about and how it stands, for Health's row (the owner, 2026-11-01: "Covers · 3 missing"): the thing,
+   *  and the word its count is said with. */
+  thing?: string;
+  state?: string;
   /** What it is, in a sentence ("11 better copies wait to replace Music"): its card's, and the panel's top. */
   title: string;
   detail?: string;
@@ -1430,6 +1490,16 @@ export type ListedAlbum = {
   classical_mark?: 'classical' | 'not';
   composers?: { key: string; name: string }[];
   performers?: string[];
+  /** Its release type: "album", "ep", "single", "broadcast", "other"; none where not known. `secondary`: MusicBrainz's
+   *  secondary types ("compilation", "live"…). `whole_tracks`: where tracks were found missing, the whole release's
+   *  count (`tracks` is the library's). */
+  type?: string | null;
+  secondary?: string[];
+  whole_tracks?: number;
+  /** The fields an administrator set by hand (0.13, per-record overrides; lib/recordEdit). */
+  set?: import('./recordEdit').OverrideField[];
+  /** Its files against Cratarr's facts (0.13, decision 0092), while types into files is on; null: they agree. */
+  files_state?: FilesState | null;
 };
 
 /** One server's album list. */
@@ -1452,8 +1522,10 @@ export type ShelfSource = {
  *  into it does to the files. */
 export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; format: 'cd' | 'as_is' };
 
-/** An album of a library other than Music, as it stands to Music: an upgrade of an album there, or a duplicate. */
-export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string };
+/** An album of a library other than Music, as it stands to the other used libraries (decision 0034, Music's first): an
+ *  upgrade of an album there, or a duplicate. `library` is that album's folder, `library_id` the library it is in;
+ *  `replaceable` only when it is in Music (Replace is Music's alone). */
+export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable: boolean };
 
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
@@ -1461,7 +1533,8 @@ export type AlbumsSource = ShelfSource & {
   verdicts: Record<string, Verdict>;
   /** Per album id of an Incoming library: what it lacks of what the library requires (cover, year, genre, …). */
   lacks?: Record<string, string[]>;
-  /** Per Music album: an album of another library that upgrades or duplicates it. */
+  /** Per album a verdict pairs with (Music's or another library's): an album of another library that upgrades or
+   *  duplicates it. */
   waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
   deletable: string[];
 };
@@ -1473,7 +1546,7 @@ export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>
 
 // Classical (0.10): its composers, each one's records, a record's mark, and a track's other versions (the library's
 // recordings of the same work, by MusicBrainz's work links).
-export const getClassicalComposers = () => quietly<import('./recordKindRules').Composer[]>('/api/classical/composers');
+export const getClassicalComposers = () => quietly<import('./composers').Composer[]>('/api/classical/composers');
 export const getClassicalComposer = (key: string) => quietly<{ key: string; name: string; records: string[] }>(`/api/classical/composers/${encodeURIComponent(key)}`);
 // Works and movements (0.12, decision 0086, when the server says `works`): a composer's works, and a work with its
 // movements and the library's recordings of it (Cratarr's own library).
@@ -1495,6 +1568,10 @@ export type WorkView = {
   recordings: WorkRecording[];
 };
 export const getWork = (mbid: string) => quietly<WorkView>(`/api/works/${encodeURIComponent(mbid)}`);
+/** Sets records' own values by hand, household-wide (0.13, administrators'; lib/recordEdit): a field present sets it,
+ *  null puts it back to what Cratarr finds, one absent is left alone. One call for one record or a selection. */
+export const setAlbumOverrides = (albums: string[], set: import('./recordEdit').OverrideSet) =>
+  request<unknown>('/api/albums/overrides', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ albums, set }) });
 /** Marks a record classical or not, library-wide (administrators'); null: as Cratarr finds it. */
 export const markClassical = (source: string, id: string, mark: 'classical' | 'not' | null) =>
   request<{ classical: boolean; classical_mark?: 'classical' | 'not' | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(id)}/classical`, {
@@ -2042,6 +2119,8 @@ export const trackPlayed = (source: string, id: string) => quietly<{ counted: bo
 /** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
 export type AlbumView = {
+  /** As a listed album's (decision 0092). */
+  files_state?: FilesState | null;
   source: string;
   id: string;
   title: string;

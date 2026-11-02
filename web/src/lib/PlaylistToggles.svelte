@@ -26,9 +26,8 @@
 
   let width = $state(0);
   const sorted = $derived.by(() => {
-    const by = playlistBy<T>(prefs.listOrder, ticked);
-    const turn = prefs.listDown ? -1 : 1;
-    return playlists.filter((p) => p.mine !== false).sort((a, b) => turn * by(a, b));
+    const by = playlistBy<T>(prefs.listOrder, prefs.listDown, ticked);
+    return playlists.filter((p) => p.mine !== false).sort(by);
   });
 </script>
 

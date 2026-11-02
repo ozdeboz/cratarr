@@ -1,6 +1,7 @@
 // What this device keeps for Cratarr while it may be out of reach (decision 0085, step 3): the outbox, the plays not yet
-// told, the change log's last rev. In IndexedDB (lasts, and is not capped at a few MB); where a browser refuses it (a
-// private window, storage blocked), in localStorage; where both are refused, for as long as the page is open.
+// told, the change log's last rev, whose they are (lib/account). In IndexedDB (lasts, and is not capped at a few MB);
+// where a browser refuses it (a private window, storage blocked), in localStorage; where both are refused, for as long
+// as the page is open.
 
 const DB = 'cratarr-kept';
 const STORE = 'kept';

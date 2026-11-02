@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DUCK, EDGE, FADE_MS, FIXED_AT, SHORT_S, SNAP_S, SNIPPET_S, duckGain, ease, pickSnippet, snapToBeat, snippetGain, snippetOf } from '../src/lib/snippet.ts';
+import { DUCK, EDGE, FADE_MS, FIXED_AT, NEAR, SHORT_S, SNAP_S, SNIPPET_S, duckGain, ease, pickSnippet, snapToBeat, snippetGain, snippetOf } from '../src/lib/snippet.ts';
 
 /** 512 bins of a quiet track with a loud stretch from `a` to `b` (shares of the track). */
 function bins(a: number, b: number, loud = 240, quiet = 40): Uint8Array {
@@ -28,6 +28,26 @@ test('the earliest of equally lively windows', () => {
   const flat = new Uint8Array(512).fill(100);
   const s = pickSnippet(flat, 200);
   assert.ok(Math.abs(s.from - 200 * EDGE) < 200 / 512 + 1e-9, `${s.from}`);
+});
+
+test('the first stretch NEAR the liveliest, not the liveliest itself (the first chorus, not the last)', () => {
+  // A first chorus at 0.3..0.4 a little quieter than the last at 0.65..0.75: within NEAR, so the first.
+  const b = new Uint8Array(512).fill(40);
+  for (let i = Math.floor(0.3 * 512); i < Math.floor(0.4 * 512); i++) b[i] = 220;
+  for (let i = Math.floor(0.65 * 512); i < Math.floor(0.75 * 512); i++) b[i] = 235;
+  assert.ok(220 >= 235 * NEAR);
+  const s = pickSnippet(b, 240);
+  assert.ok(s.from >= 0.3 * 240 - 1 && s.to <= 0.4 * 240 + 1, `${s.from}..${s.to}`);
+  // Clearly quieter than NEAR: the liveliest still wins.
+  for (let i = Math.floor(0.3 * 512); i < Math.floor(0.4 * 512); i++) b[i] = 150;
+  const t = pickSnippet(b, 240);
+  assert.ok(t.from >= 0.65 * 240 - 1, `${t.from}`);
+});
+
+test('a quiet intro is never the snippet', () => {
+  // Quiet until 0.4, lively after: the snippet starts in the lively part, not at the first EDGE.
+  const s = pickSnippet(bins(0.4, 0.95), 300);
+  assert.ok(s.from >= 0.4 * 300 - 300 / 512, `${s.from}`);
 });
 
 test('a track under SHORT_S is its own snippet', () => {

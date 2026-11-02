@@ -1,24 +1,19 @@
 <script lang="ts">
   // Connections' Home Assistant (the owner, 2026-10-24: its own section, its API key there rather than in
-  // Authentication; no other client needs a key). In the list (`page` off), a row with when it last called; on its page,
-  // that and the weather it last told, and its keys: each acting for its owner, only reading or also in control, to
-  // revoke; a new one asks for the password again and shows once (decisions 0043, 0051). Acts at once, not with the
-  // Save bar.
-  import { getHomeAssistant, getUsers, newApiKey, revokeApiKey, setHomeAssistantOn, type ApiKey, type KeyScope, type Weather } from '../api';
-  import { copyText } from '../clipboard';
-  import { me } from '../me.svelte';
+  // Authentication). In the list (`page` off), a row with when it last called; on its page, that and the weather it last
+  // told, and its keys (lib/settings/KeyGroup): each acting for its owner, only reading or also in control. Acts at once,
+  // not with the Save bar.
+  import { getHomeAssistant, getUsers, setHomeAssistantOn, type ApiKey, type KeyScope, type Weather } from '../api';
   import { openThing } from '../panel.svelte';
-  import Seg from '../Seg.svelte';
-  import FormSheet from './FormSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
+  import KeyGroup from './KeyGroup.svelte';
   import { when } from './when';
 
   let { page = false }: { page?: boolean } = $props();
 
   const MORE =
     "The cratarr-ha integration: Home Assistant plays on Cratarr's players, reads what plays, and tells Cratarr the weather for Home. It signs in with a key made here, given once in the integration's setup.";
-  const KEY_MORE = 'A key shows once, when it is made; revoking one ends it at once.';
   const SCOPES: { value: KeyScope; label: string }[] = [
     { value: 'control', label: 'Control' },
     { value: 'read', label: 'Read only' },
@@ -90,43 +85,6 @@
       failed(e);
     }
   }
-
-  // A new key: whom it acts for (oneself unless chosen), what it may do, and the password; shown here once.
-  let making = $state(false);
-  let busy = $state(false);
-  let keyOwner = $state('');
-  let keyScope = $state<KeyScope>('control');
-  let keyPassword = $state('');
-  let made = $state<{ id: string; key: string } | null>(null);
-  async function makeKey() {
-    error = null;
-    busy = true;
-    try {
-      const k = await newApiKey('Home Assistant', keyPassword, keyOwner || undefined, keyScope, 'home_assistant');
-      made = { id: k.id, key: k.key };
-      making = false;
-      load();
-    } catch (e) {
-      failed(e);
-    } finally {
-      keyPassword = '';
-      busy = false;
-    }
-  }
-
-  async function revoke(k: ApiKey) {
-    error = null;
-    try {
-      await revokeApiKey(k.id);
-      if (made?.id === k.id) made = null;
-      load();
-    } catch (e) {
-      failed(e);
-    }
-  }
-
-  const keyLine = (k: ApiKey) =>
-    [k.owner, k.scope === 'read' ? 'Read only' : null, `Made ${when(k.created)}`, k.last_used ? `used ${when(k.last_used)}` : 'not used yet'].filter(Boolean).join(' · ');
 </script>
 
 {#if !page}
@@ -145,40 +103,6 @@
     {/if}
     <Item name="Weather" line={weather ? weatherLine(weather) : 'Not told yet'} />
   </Group>
-  <Group title="API key" more={KEY_MORE}>
-    {#each keys ?? [] as k (k.id)}
-      {#if made?.id === k.id}
-        {@const m = made}
-        <Item lead="on" name="Shown only now" line={m.key} wrap>
-          <button onclick={() => copyText(m.key)}>Copy</button>
-        </Item>
-      {:else}
-        <Item name={k.name} line={keyLine(k)}>
-          <button onclick={() => revoke(k)}>Revoke</button>
-        </Item>
-      {/if}
-    {/each}
-    <Item name="New key" kind="add" onclick={() => ((error = null), (making = true))} />
-  </Group>
-  {#if error && !making}<Group><Item lead="bad" name={error} /></Group>{/if}
-  {#if making}
-    <FormSheet title="New key" submitLabel="Make key" canSubmit={!!keyPassword} {busy} {error} onsubmit={makeKey} onclose={() => ((making = false), (keyPassword = ''), (error = null))}>
-      {#if owners.length > 1}
-        <label
-          >Acts for<select bind:value={keyOwner}>
-            {#each owners as o (o)}<option value={o === me.name ? '' : o}>{o}</option>{/each}
-          </select></label
-        >
-      {/if}
-      <span class="scope"><Seg label="Scope" options={SCOPES} bind:value={keyScope} /></span>
-      <!-- svelte-ignore a11y_autofocus -->
-      <label>Password<input type="password" bind:value={keyPassword} autocomplete="current-password" autofocus /></label>
-    </FormSheet>
-  {/if}
+  <KeyGroup keys={keys ?? []} name="Home Assistant" purpose="home_assistant" scopes={SCOPES} {owners} onchange={load} />
+  {#if error}<Group><Item lead="bad" name={error} /></Group>{/if}
 {/if}
-
-<style>
-  .scope {
-    display: flex;
-  }
-</style>

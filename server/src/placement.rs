@@ -71,7 +71,8 @@ impl Placement {
 ///
 /// A mount may be a library's own folder (`/music`) or a parent of several (`/media`): the library's own folder
 /// inside it (`/media/Music`) comes from the folders the server reports for the library (`library_roots`).
-pub async fn place(source: &dyn Source, folders: &[String]) -> Result<Placement> {
+/// A library given a name of its own (`roles`, Settings) is named so (the owner, 2026-11-02).
+pub async fn place(source: &dyn Source, folders: &[String], roles: &crate::settings::Roles) -> Result<Placement> {
     let libraries: Vec<Library> = source.libraries().await?;
     // Each mount the server's tracks were found in, with the server's path for it.
     let mut mounts: Vec<FolderRoot> = Vec::new();
@@ -111,7 +112,8 @@ pub async fn place(source: &dyn Source, folders: &[String]) -> Result<Placement>
                 }
             }
         }
-        placed.push(PlacedLibrary { id: lib.id, name: lib.name, folders: found, paths: lib.paths, read_only: false });
+        let name = roles.name_of(&lib.id).unwrap_or(lib.name);
+        placed.push(PlacedLibrary { id: lib.id, name, folders: found, paths: lib.paths, read_only: false });
     }
     Ok(Placement { roots, libraries: placed })
 }
@@ -275,7 +277,7 @@ mod tests {
             ],
             vec![],
         );
-        let p = place(&src, &folders).await.unwrap();
+        let p = place(&src, &folders, &Default::default()).await.unwrap();
         assert_eq!(p.root(&folders[0]), Some("/data/media/Music/"));
         assert_eq!(p.root(&folders[1]), Some("/data/media/lidarr-music/"));
         let found: Vec<_> = p.libraries.iter().map(|l| (l.id.as_str(), l.folders.clone())).collect();
@@ -301,7 +303,7 @@ mod tests {
             ],
             vec![("music".into(), "/data/media/Music".into()), ("incoming".into(), "/data/media/lidarr-music/".into())],
         );
-        let p = place(&src, &[m.clone()]).await.unwrap();
+        let p = place(&src, &[m.clone()], &Default::default()).await.unwrap();
         let (music, incoming) = (format!("{m}/Music"), format!("{m}/lidarr-music"));
         assert_eq!(p.libraries[0].folders, vec![music.clone()]);
         assert_eq!(p.libraries[1].folders, vec![incoming.clone()]);
@@ -310,7 +312,12 @@ mod tests {
         assert_eq!(p.playlist_path(&music, "Chill").as_deref(), Some("/data/media/Music/Chill.m3u"));
         // Without the server's folders, the mount itself is the library's folder, as before.
         let bare = Fake(src.0.clone(), vec![]);
-        assert_eq!(place(&bare, &[m.clone()]).await.unwrap().libraries[0].folders, vec![m.clone()]);
+        assert_eq!(place(&bare, &[m.clone()], &Default::default()).await.unwrap().libraries[0].folders, vec![m.clone()]);
+        // A library given a name of its own is named so; the others keep the server's.
+        let mut roles = crate::settings::Roles::default();
+        roles.policies.insert("incoming".into(), crate::settings::LibraryPolicy { name: Some("Vinyl rips".into()), ..Default::default() });
+        let named = place(&src, &[m.clone()], &roles).await.unwrap();
+        assert_eq!((named.libraries[0].name.as_str(), named.libraries[1].name.as_str()), (src.0[0].0.name.as_str(), "Vinyl rips"));
         std::fs::remove_dir_all(&media).ok();
     }
 }

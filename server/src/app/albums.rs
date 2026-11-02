@@ -27,7 +27,7 @@ pub struct LibraryView {
     pub format: Format,
 }
 
-/// A Music album that has an album of another library matched to it (the inverse of an Incoming album's verdict).
+/// An album that has an album of another library matched to it (the inverse of an Incoming album's verdict).
 #[derive(Debug, Clone, Serialize)]
 pub struct Waiting {
     /// "upgrade" or "duplicate": what the other album is to this one.
@@ -50,12 +50,14 @@ pub struct AlbumsSourceView {
     pub libraries: Vec<String>,
     /// Those libraries, with their names, uses, colours and formats.
     pub library_info: Vec<LibraryView>,
-    /// Per album id of a library other than Music: the Music album it upgrades or duplicates.
+    /// Per album id of a library other than Music: the album of another used library it upgrades or duplicates
+    /// (decision 0034), Music's first.
     pub verdicts: BTreeMap<String, VerdictView>,
     /// Per album id of a library other than Music: what it lacks of what the library requires (the owner,
     /// 2026-10-24: marked before Keep, as Health marks Music's).
     pub lacks: BTreeMap<String, Vec<&'static str>>,
-    /// Per Music album id: an album of another library that upgrades or duplicates it.
+    /// Per album id a verdict pairs with (Music's, or another library's): an album of another library that upgrades
+    /// or duplicates it.
     pub waiting: BTreeMap<String, Waiting>,
     /// The albums Cratarr can delete.
     pub deletable: Vec<String>,
@@ -107,13 +109,14 @@ impl App {
                     .unwrap_or_default();
                 let music_albums: &[source::Album] = c.map_or(&[], |c| c.albums.as_slice());
                 let verdicts = i.map(|i| i.verdicts.clone()).unwrap_or_default();
+                let albums: Vec<source::Album> = music_albums.iter().cloned().chain(i.iter().flat_map(|i| i.albums.iter().cloned())).collect();
                 AlbumsSourceView {
                     label: c.map(|c| c.label.clone()).or_else(|| i.map(|i| i.label.clone())).unwrap_or_else(|| id.clone()),
                     supported: c.is_some_and(|c| c.supported) || i.is_some_and(|i| i.supported),
-                    albums: music_albums.iter().cloned().chain(i.iter().flat_map(|i| i.albums.iter().cloned())).collect(),
+                    waiting: waiting(&verdicts, &albums),
+                    albums,
                     error: c.and_then(|c| c.error.clone()).or_else(|| i.and_then(|i| i.error.clone())),
                     as_of: [c.map(|c| c.as_of), i.map(|i| i.as_of)].into_iter().flatten().min().unwrap_or_else(epoch_now),
-                    waiting: waiting(&verdicts, music_albums),
                     verdicts,
                     lacks: i.map(|i| i.lacks.clone()).unwrap_or_default(),
                     deletable: i
@@ -128,9 +131,14 @@ impl App {
                 }
             })
             .collect();
-        // Classical (0.10): Cratarr's own albums say whether they are, their composers and performers.
+        // Classical (0.10): Cratarr's own albums say whether they are, their composers and performers. Another server's
+        // are typed by the owner's rule (0.13: a type is always known).
         for s in &mut sources {
             super::classical::tell(&s.id, &mut s.albums).await;
+            super::file_facts::tell(&s.id, &mut s.albums);
+            if s.id != crate::source::cratarr::KIND.id {
+                s.albums.iter_mut().for_each(crate::serve::library::type_by_rule);
+            }
         }
         AlbumsView { sources, trash_days: incoming.trash_days, music: incoming.music }
     }
@@ -162,13 +170,14 @@ impl App {
     }
 }
 
-/// The verdicts the other way round: per Music album (found by its folder, the end of its path), the album that
-/// upgrades or duplicates it; an upgrade wins over a duplicate.
-fn waiting(verdicts: &BTreeMap<String, VerdictView>, music: &[source::Album]) -> BTreeMap<String, Waiting> {
+/// The verdicts the other way round: per album paired (found in the verdict's library by its folder, the end of its
+/// path), the album that upgrades or duplicates it; an upgrade wins over a duplicate.
+fn waiting(verdicts: &BTreeMap<String, VerdictView>, albums: &[source::Album]) -> BTreeMap<String, Waiting> {
     let mut out: BTreeMap<String, Waiting> = BTreeMap::new();
     for (other, v) in verdicts {
         let dir = format!("/{}", v.library.trim_matches('/'));
-        let Some(m) = music.iter().filter(|a| a.path.as_deref().is_some_and(|p| p.trim_end_matches('/').ends_with(&dir))).max_by_key(|a| a.path.as_ref().map_or(0, String::len)) else {
+        let paired = |a: &&source::Album| a.library.is_some() && a.library == v.library_id && a.path.as_deref().is_some_and(|p| p.trim_end_matches('/').ends_with(&dir));
+        let Some(m) = albums.iter().filter(paired).max_by_key(|a| a.path.as_ref().map_or(0, String::len)) else {
             continue;
         };
         if out.get(&m.id).is_some_and(|w| w.kind == "upgrade") && v.kind != "upgrade" {
@@ -183,7 +192,7 @@ fn waiting(verdicts: &BTreeMap<String, VerdictView>, music: &[source::Album]) ->
 mod tests {
     use super::*;
 
-    fn album(id: &str, path: &str) -> source::Album {
+    fn album(id: &str, library: &str, path: &str) -> source::Album {
         source::Album {
             id: id.into(),
             title: id.into(),
@@ -196,21 +205,42 @@ mod tests {
             bitrate_kbps: None,
             duration_secs: None,
             tags: Vec::new(),
-            library: None,
+            library: Some(library.into()),
             artists: Vec::new(),
             release: Default::default(),
         }
     }
 
+    fn verdict(kind: &'static str, library: &str, dir: &str) -> VerdictView {
+        VerdictView { kind, library: dir.into(), why: String::new(), library_id: Some(library.into()), replaceable: library == "music" }
+    }
+
     #[test]
     fn a_music_album_knows_what_waits_for_it() {
-        let music = [album("m1", "/data/media/Music/Arp/Zebra"), album("m2", "/data/media/Music/Ott/Heads (2022)")];
+        let music = [album("m1", "music", "/data/media/Music/Arp/Zebra"), album("m2", "music", "/data/media/Music/Ott/Heads (2022)")];
         let mut verdicts = BTreeMap::new();
-        verdicts.insert("i1".to_string(), VerdictView { kind: "duplicate", library: "Arp/Zebra".into(), why: String::new() });
-        verdicts.insert("i2".to_string(), VerdictView { kind: "upgrade", library: "Arp/Zebra".into(), why: String::new() });
-        verdicts.insert("i3".to_string(), VerdictView { kind: "upgrade", library: "Nobody/Here".into(), why: String::new() });
+        verdicts.insert("i1".to_string(), verdict("duplicate", "music", "Arp/Zebra"));
+        verdicts.insert("i2".to_string(), verdict("upgrade", "music", "Arp/Zebra"));
+        verdicts.insert("i3".to_string(), verdict("upgrade", "music", "Nobody/Here"));
         let w = waiting(&verdicts, &music);
         assert_eq!(w.len(), 1);
         assert_eq!((w["m1"].kind, w["m1"].album.as_str()), ("upgrade", "i2"));
+    }
+
+    #[test]
+    fn an_album_of_another_library_knows_what_waits_for_it_in_its_own_library() {
+        // The same folder in Music and in two Incoming libraries: each verdict finds its pair in the library it names.
+        let albums = [
+            album("m1", "music", "/data/media/Music/Arp/Zebra"),
+            album("a1", "lidarr", "/data/media/lidarr/Arp/Zebra"),
+            album("b1", "new", "/data/media/new/Arp/Zebra"),
+        ];
+        let mut verdicts = BTreeMap::new();
+        verdicts.insert("a1".to_string(), verdict("duplicate", "new", "Arp/Zebra"));
+        verdicts.insert("b1".to_string(), verdict("upgrade", "lidarr", "Arp/Zebra"));
+        let w = waiting(&verdicts, &albums);
+        assert_eq!(w.len(), 2, "not Music's, which no verdict names");
+        assert_eq!((w["a1"].kind, w["a1"].album.as_str()), ("upgrade", "b1"));
+        assert_eq!((w["b1"].kind, w["b1"].album.as_str()), ("duplicate", "a1"));
     }
 }

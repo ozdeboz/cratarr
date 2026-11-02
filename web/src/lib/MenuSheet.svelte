@@ -1,8 +1,24 @@
 <script lang="ts" module>
+  import { getContext } from 'svelte';
   import type { IconName } from './Icon.svelte';
   /** `busy`: under way, the app's busy ring in its place (Change cover's look, at the top right). */
   /** `on`: a state it shows (Repeat in the queue's sheet): pressed, in the accent. */
   export type SheetAction = { icon: IconName; label: string; onclick: () => void; disabled?: boolean; busy?: boolean; on?: boolean };
+
+  /** A step's own button at the back row's far end (Download…'s gear: the controls that concern it, in a sheet over
+   *  it; the owner, 2026-11-02): given by the step itself while it shows (`stepEnd`). */
+  const STEP_END = Symbol('step-end');
+  type StepEnd = { action: SheetAction | null };
+  export function stepEnd(get: () => SheetAction | null) {
+    const holder = getContext<StepEnd | undefined>(STEP_END);
+    $effect(() => {
+      if (!holder) return;
+      holder.action = get();
+      return () => {
+        holder.action = null;
+      };
+    });
+  }
 </script>
 
 <script lang="ts">
@@ -11,7 +27,7 @@
   // title, chips; for a track the heart), a row of large actions, then the entries (lib/MenuEntry.svelte) or a step
   // (a form, a list) given as children. It rises from the bottom; a tap on the backdrop, Esc or dragging it down closes
   // it. It takes its look from the item's image: blurred behind it, and its accent.
-  import type { Snippet } from 'svelte';
+  import { setContext, type Snippet } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { decelerate, SHEET_IN, SHEET_OUT } from './motion';
   import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
@@ -77,12 +93,17 @@
     else toast.show({ text: "It couldn't be copied", tone: 'error' });
   }
 
-  // The accent from the first image, fading in once known.
+  const end_ = $state<StepEnd>({ action: null });
+  setContext(STEP_END, end_);
+  // The accent from the first image, fading in once known. Read again only when that image is another, and the one it
+  // has kept until the new one is known (the owner, 2026-11-02: the sheet changed colour twice as Sync to this device
+  // was switched, and later by itself: each report gave the menu its images anew, and the accent went to the default
+  // and back).
+  const first = $derived(images?.[0] ?? null);
   let accent = $state<string | null>(null);
   $effect(() => {
-    const src = images?.[0];
-    accent = null;
-    if (!src) return;
+    const src = first;
+    if (!src) return void (accent = null);
     let gone = false;
     accentOf(src).then((a) => !gone && (accent = a));
     return () => (gone = true);
@@ -175,7 +196,7 @@
   in:fly|global={{ y: 400, duration: SHEET_IN, easing: decelerate }}
   out:fly|global={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
 >
-  {#if images?.[0] && !coverBroken(images[0])}<img class="blur" src={images[0]} alt="" aria-hidden="true" onerror={() => coverBroke(images?.[0])} />{/if}
+  {#if first && !coverBroken(first)}<img class="blur" src={first} alt="" aria-hidden="true" onerror={() => coverBroke(first)} />{/if}
   <div class="veil"></div>
   <div class="handle" aria-hidden="true"></div>
 
@@ -220,6 +241,10 @@
         <div class="back-row">
           <button class="back" aria-label="Back" onclick={onback}><Icon name="back" size={22} /></button>
           {#if beside}<span class="beside">{@render beside()}</span>{/if}
+          {#if end_.action}
+            {@const e = end_.action}
+            <button class="back step-end" aria-label={e.label} title={e.label} disabled={e.disabled} onclick={e.onclick}><Icon name={e.icon} size={22} /></button>
+          {/if}
         </div>
       {:else if actions.length}
         <div class="actions">
@@ -481,6 +506,11 @@
     align-items: center;
     gap: 8px;
     padding-right: 16px;
+  }
+
+  /* At the far end, beside or not. */
+  .back.step-end {
+    margin: 0 0 4px auto;
   }
 
   .beside {

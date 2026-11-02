@@ -27,10 +27,10 @@
   import { kept } from './lib/kept.svelte';
   import { crates, loadCrates } from './lib/crates.svelte';
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
-  import { SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
-  import { pageView, usePageAction } from './lib/pageView.svelte';
+  import { keptFor, partsFor, SETTINGS_GROUPS, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
+  import { pageView, searchNone, usePageAction } from './lib/pageView.svelte';
   import { about } from './lib/AboutSheet.svelte';
-  import { loadSettingsWords, settingsMatches } from './lib/settingsSearch.svelte';
+  import { loadSettingsWords, settingsMatches, settingsWords } from './lib/settingsSearch.svelte';
   import { words as searchWords } from './lib/search';
 
   // The last answer (kept for the panel too), read again here.
@@ -200,7 +200,7 @@
   });
   const found = (id: SettingsSection, title: string) => (words.length ? settingsMatches(id, title, words) : null);
   // Sync in the installed page too (0.9.8: its own downloads, lib/offline).
-  const allowed = $derived(SECTIONS.filter((x) => (!x.app || inApp || (x.id === 'sync' && installed)) && (!x.admin || me.admin || x.everyone)));
+  const allowed = $derived(partsFor(me.admin, inApp, installed));
   const shown = $derived(
     words.length
       ? allowed.filter((x) => {
@@ -211,12 +211,12 @@
   );
   // Personal, Device, Server (lib/settingsSections); a part of the server's that anyone opens (Connections) is Personal
   // for someone not an administrator.
-  const keptOf = (x: (typeof SECTIONS)[number]) => (x.admin && !me.admin ? 'personal' : x.kept);
-  const GROUPS = [
-    { kept: 'personal', title: 'Personal' },
-    { kept: 'device', title: 'Device' },
-    { kept: 'server', title: 'Server' },
-  ] as const;
+  const keptOf = (x: (typeof SECTIONS)[number]) => keptFor(x, me.admin);
+  const GROUPS = SETTINGS_GROUPS;
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone). Only once the parts' words are in:
+  // till then only titles match, and "none" flashed before the rows came (the owner, 2026-11-02).
+  const none = $derived(!!words.length && !shown.length && settingsWords.by !== null);
+  searchNone(() => (none ? 'settings' : null));
   const groups = $derived(GROUPS.map((g) => ({ ...g, parts: shown.filter((x) => keptOf(x) === g.kept) })));
 </script>
 
@@ -224,7 +224,7 @@
   <!-- The mode switch where the bar does not have it (This device › Mode switch in the bar, off by default; the owner,
        2026-10-25): the very top of Settings. -->
   {#if switchable() && !prefs.modeSwitchInBar && !words.length}<div class="mode"><ModeSwitcher connection={serverConnection.value} /></div>{/if}
-  {#if words.length && !shown.length}<p class="none">No settings match.</p>{/if}
+  {#if none && !pageView.none}<p class="none">No settings match.</p>{/if}
   {#each groups as group, g (g)}
     {#if group.parts.length}
       <section class="group" aria-labelledby="settings-g{g}">

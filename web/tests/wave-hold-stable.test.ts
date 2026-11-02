@@ -246,7 +246,8 @@ test('let go, it goes on as it was going: never standing still a frame while the
 });
 
 test("leaving a track's start, the window gathers speed rather than going at once", () => {
-  // From a track's start, at the top speed: the start is the left edge until the crosshair can stand in the middle.
+  // From a track's start, at the top speed: the start is the left edge at the 1× window, then the window widens as
+  // centring by it allows (0.13, lib/waveView wallCap), then as the speed asks: each change of pace over a few frames.
   const f = hold(STARTS[1], 12, 0);
   const leaving = jolts(f).filter((j) => j.t > 1);
   for (const j of leaving) assert.ok(j.d <= 0.03, `${j.t.toFixed(2)} s: ${j.d.toFixed(3)} s a frame at once`);
@@ -266,16 +267,19 @@ test("a hold on into the last track's end never shows past it, and no jump at th
   const f = hold(TOTAL - 150, 16, 4, true, { walls: true });
   const drawn = f.filter((x) => !x.plain);
   for (const x of drawn) assert.ok(x.qto <= TOTAL + EPS, `${x.t.toFixed(2)} s: shows ${(x.qto - TOTAL).toFixed(3)} s past the queue`);
-  // Held at the end, its width changes a little each frame (no zoom jump on reaching it; the zoom in as the hold
-  // begins is the hand-over's, eased, as the tests above hold it).
+  // Held at the end, its width changes no faster than centring needs (0.13, waveView's wallCap: the window narrows as
+  // the crosshair nears the end, twice its own move a frame at the most), no zoom jump on reaching it; the zoom in as
+  // the hold begins is the hand-over's, eased, as the tests above hold it.
   const atEnd = drawn.filter((x) => x.held && x.t > 4.5);
   for (let k = 1; k < atEnd.length; k++) {
     const dw = Math.abs(atEnd[k].to - atEnd[k].from - (atEnd[k - 1].to - atEnd[k - 1].from));
-    assert.ok(dw <= 0.5, `${atEnd[k].t.toFixed(2)} s: its width changed by ${dw.toFixed(3)} s in a frame`);
+    assert.ok(dw <= (2 * 16 * FRAME) / 1000 + 1e-3, `${atEnd[k].t.toFixed(2)} s: its width changed by ${dw.toFixed(3)} s in a frame`);
   }
   // At the top speed, reaching the end and resting on it: no lurch. (Before it, the width runs up with the speed and
   // stops at once at the top, as it is meant to; against a wall that shows in the one edge that moves.)
-  for (const j of jolts(f).filter((x) => x.t > 4.5)) assert.ok(j.d <= 0.25, `${j.t.toFixed(2)} s: its motion changed by ${j.d.toFixed(3)} s in a frame`);
+  // Until it zooms out again (ZOOM_KEEP_MS after the let go: from the 1× window it narrowed to at the end, the zoom out's
+  // spring, as from any narrow window).
+  for (const j of jolts(f).filter((x) => x.t > 4.5 && x.t < 18)) assert.ok(j.d <= 0.25, `${j.t.toFixed(2)} s: its motion changed by ${j.d.toFixed(3)} s in a frame`);
   // And it stands against the end: what shows reaches it.
   assert.ok(drawn.some((x) => Math.abs(x.qto - TOTAL) <= 1e-3), 'it rests on the end');
 });
@@ -283,9 +287,10 @@ test("a hold on into the last track's end never shows past it, and no jump at th
 test('a queue growing under a hold: its end moves on, what shows eases after it, no jump', () => {
   const f = hold(STARTS[6], 20, 0, true, { walls: true, known: STARTS[7], grow: 12 });
   for (const x of f.filter((y) => !y.plain && y.t < 12)) assert.ok(x.qto <= STARTS[7] + EPS, `${x.t.toFixed(2)} s: past the known end`);
-  // The end moving on lets the window come off it toward the middle, sprung from standing: up to half its width in
-  // under a second, so a little more each frame than a hold's own motion (0.3 against 0.25), never a step.
-  for (const j of jolts(f)) assert.ok(j.d <= 0.5, `${j.t.toFixed(2)} s: its motion changed by ${j.d.toFixed(3)} s in a frame`);
+  // The end moving on lets the window come off it toward the middle and widen from the 1× window it narrowed to at the
+  // end (0.13, waveView's wallCap) to the speed's, sprung from standing: most of its width in under a second, so more
+  // each frame than a hold's own motion (0.55 against 0.25), never a step.
+  for (const j of jolts(f)) assert.ok(j.d <= 0.6, `${j.t.toFixed(2)} s: its motion changed by ${j.d.toFixed(3)} s in a frame`);
 });
 
 test('at the walls the same number of bars across the waveform', () => {
@@ -320,7 +325,8 @@ test('a boundary marker: none within a bar of an edge, whole two bars in, no ste
 
 test("a boundary on a wall shows no marker: from a track's start going forward, its start on the left edge", () => {
   const f = hold(STARTS[1], 6, 0).filter((x) => !x.plain);
-  // While the window rests against the start (the start at the left edge), the start's marker does not show.
+  // While the window rests against the start (the start at the left edge: at the 1× window, lib/waveView wallCap), the
+  // start's marker does not show.
   const resting = f.filter((x) => Math.abs(x.qfrom - STARTS[1]) <= 1e-6);
   assert.ok(resting.length > 10);
   for (const x of resting) assert.equal(markShows((STARTS[1] - x.qfrom) / (x.qto - x.qfrom), N), 0);

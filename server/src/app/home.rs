@@ -60,11 +60,36 @@ impl Back {
     }
 }
 
-/// An album of the week's mosaic: its cover is its first track's.
+/// An album of the week's mosaic (and of a crate's card): its cover is its first track's.
 #[derive(Debug, Serialize)]
 pub struct WeekCover {
     pub track: String,
     pub album_id: Option<String>,
+}
+
+/// The covers a crate's card shows at most (the search crate card's strip, 0.13).
+pub const CRATE_COVERS: usize = 6;
+/// Rows read at a time while a crate's covers are gathered, and the most read: a crate in its own order comes a record
+/// at a time, so its first page can hold two records.
+const COVER_ROWS: usize = 50;
+const COVER_ROWS_AT_MOST: usize = 500;
+
+/// These rows' records added to `out` (their first playable track's cover), each once, none without a cover, until it
+/// holds `n`.
+fn pick_covers(rows: &[super::playlists::PlaylistRow], coverless: &HashSet<String>, seen: &mut HashSet<String>, out: &mut Vec<WeekCover>, n: usize) {
+    for r in rows {
+        if out.len() >= n {
+            return;
+        }
+        let Some(track) = r.id.clone().filter(|_| !r.missing) else { continue };
+        if r.album_id.as_ref().is_some_and(|a| coverless.contains(a)) {
+            continue;
+        }
+        let key = r.album_id.clone().unwrap_or_else(|| format!("{}\n{}", r.album.clone().unwrap_or_default(), r.album_artist.clone().or(r.artist.clone()).unwrap_or_default()));
+        if seen.insert(key) {
+            out.push(WeekCover { track, album_id: r.album_id.clone() });
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -330,23 +355,25 @@ impl App {
             return Ok(None);
         }
         let coverless = coverless(self.served.as_deref()).await;
-        let mut seen = HashSet::new();
         let mut covers = Vec::new();
-        for r in &page.rows {
-            let Some(track) = r.id.clone().filter(|_| !r.missing) else { continue };
-            if r.album_id.as_ref().is_some_and(|a| coverless.contains(a)) {
-                continue;
-            }
-            let key = r.album_id.clone().unwrap_or_else(|| format!("{}\n{}", r.album.clone().unwrap_or_default(), r.album_artist.clone().or(r.artist.clone()).unwrap_or_default()));
-            if !seen.insert(key) {
-                continue;
-            }
-            covers.push(WeekCover { track, album_id: r.album_id.clone() });
-            if covers.len() == 4 {
+        pick_covers(&page.rows, &coverless, &mut HashSet::new(), &mut covers, 4);
+        Ok(Some(Week { name: def.name, source: page.source, total: page.total, genres: page.genres.into_iter().take(4).collect(), played, covers }))
+    }
+
+    /// The first `n` records of a crate not saved (the search crate card's, 0.13) in `look`'s order, each by its first
+    /// playable track: read a page at a time until they are found, so the card asks only the tracks it shows.
+    pub async fn crate_covers(&self, conditions: &[crate::crates::Condition], want: Option<&str>, look: &super::CrateLook, n: usize) -> Result<Vec<WeekCover>, ToggleError> {
+        let (source, lines) = self.playlists.crate_lines_in_order(conditions, want, look).await?;
+        let coverless = coverless(self.served.as_deref()).await;
+        let (mut seen, mut covers) = (HashSet::new(), Vec::new());
+        for page in lines.chunks(COVER_ROWS).take(COVER_ROWS_AT_MOST / COVER_ROWS) {
+            let rows = self.playlists.rows_of(page.to_vec(), &source).await?;
+            pick_covers(&rows, &coverless, &mut seen, &mut covers, n);
+            if covers.len() >= n {
                 break;
             }
         }
-        Ok(Some(Week { name: def.name, source: page.source, total: page.total, genres: page.genres.into_iter().take(4).collect(), played, covers }))
+        Ok(covers)
     }
 }
 

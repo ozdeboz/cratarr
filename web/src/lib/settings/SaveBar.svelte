@@ -1,23 +1,27 @@
 <script lang="ts">
-  // Unsaved changes, at the foot of the screen while there are any: Save and Discard. The settings' editor's (the
-  // panel's) and Kodi's own (lib/KodiSettings, saved apart).
+  // What is about to be done, at the foot of the screen while it waits: unsaved changes (Save, Discard: the settings'
+  // editor's and Kodi's own, lib/KodiSettings) or a review's (decision 0092: "Write 11", its count beside).
   let {
+    label = 'Unsaved changes',
+    action = 'Save',
     saving = false,
     canSave = true,
     onsave,
-    ondiscard,
+    ondiscard = null,
   }: {
+    label?: string;
+    action?: string;
     saving?: boolean;
     canSave?: boolean;
     onsave: () => void;
-    ondiscard: () => void;
+    ondiscard?: (() => void) | null;
   } = $props();
 </script>
 
-<div class="savebar" role="region" aria-label="Unsaved changes">
-  <span>Unsaved changes</span>
-  <button class="primary" disabled={saving || !canSave} aria-busy={saving} onclick={onsave}>Save</button>
-  <button disabled={saving} onclick={ondiscard}>Discard</button>
+<div class="savebar" role="region" aria-label={label}>
+  <span>{label}</span>
+  <button class="primary" disabled={saving || !canSave} aria-busy={saving} onclick={onsave}>{action}</button>
+  {#if ondiscard}<button disabled={saving} onclick={ondiscard}>Discard</button>{/if}
 </div>
 
 <style>

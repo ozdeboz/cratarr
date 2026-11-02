@@ -4,6 +4,7 @@
   // (decision 0034); Music's names, how long deleted albums are kept, the catalogue and tag splitting (its own page,
   // `tags`). Saved with the Save bar (the settings' North Star, 2026-10-19).
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
+  import { fileFacts, loadFileFacts, switchFileFacts } from '../fileFacts.svelte';
   import { folderStatus, getCatalogue, type FolderStatus, type ServerLibrary } from '../api';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
@@ -23,6 +24,9 @@
   const USE_OPTIONS = USES.map((x) => ({ value: x.id, label: x.label }));
   const FORMAT_OPTIONS = FORMATS.map((f) => ({ value: f.id, label: f.label }));
   const useLabel = (id: string) => USES.find((u) => u.id === id)?.label ?? id;
+  const FILE_FACTS_MORE =
+    "A record's release types, its year and Classical (as a genre) written into its files' tags, in Music, Incoming, Lidarr's folder and each user's own music, so other apps read them as Cratarr does. Nothing is written without you: Health says which records' files differ, and writes them when you tap Write.";
+  $effect(() => loadFileFacts());
   const USE_MORE = 'Music: the playlists and the tracks that can go in them. Incoming: new music waiting to be heard.';
   const TAGS_MORE =
     'How tags with several artists or genres in one value are read. The files are never changed: this is only how Cratarr reads them.\n\nArtist separators: "&", "," and "feat." are never split on, as they are part of credits.';
@@ -79,7 +83,8 @@
         return {
           d,
           id: path,
-          name: folderName(path),
+          // Its own name where given (the owner, 2026-11-02), else its folder's.
+          name: ed.policyOf(d, path).name?.trim() || folderName(path),
           where: path,
           problem: st && !st.exists ? 'Not found. Mount it into Cratarr and restart it.' : st && !st.writable && u !== 'unused' ? 'Read only' : null,
           status: st && st.exists ? statusLine(st, u) : null,
@@ -161,6 +166,16 @@
   {@const u = ed.useOf(l.d, l.id)}
   {@const pol = ed.policyOf(l.d, l.id)}
   <Group>
+    {#if l.folder}
+      <!-- Cratarr's own library: its name, the folder's until another is given (the owner, 2026-11-02: it could not be
+           changed, "It just picks the path"); emptied, the folder's again. -->
+      <Item
+        name="Name"
+        value={l.name}
+        onclick={() =>
+          (typing = { title: 'Name', value: l.name, placeholder: folderName(l.id), save: (v) => ed.setPolicy(l.d, l.id, { name: v.trim() && v.trim() !== folderName(l.id) ? v.trim() : null }) })}
+      />
+    {/if}
     <!-- The row says it, the choice sheet picks it (the owner, 2026-10-25). -->
     <Item name="Use" more={USE_MORE} value={useLabel(u)} onclick={() => (choosingUse = l)} />
     {#if u !== 'unused'}
@@ -327,6 +342,13 @@
       {#if r.restart?.some((x) => x === 'analysis' || x === 'beat_this')}<Item lead="warn" name="Takes effect when Cratarr restarts" />{/if}
     {/if}
     {#if runtime.error}<Item lead="bad" name={runtime.error} />{/if}
+    {#if fileFacts.value}
+      <Item
+        name="Write types and years into files"
+        more={FILE_FACTS_MORE}
+        toggle={{ checked: fileFacts.value.on, onchange: (on) => void switchFileFacts(on) }}
+      />
+    {/if}
   </Group>
 {/if}
 

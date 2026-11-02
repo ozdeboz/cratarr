@@ -33,6 +33,9 @@ export const FIELD_LABEL: Record<Fix['field'], string> = {
 };
 
 export const healthFixes = $state<Record<string, Fixes>>({});
+/** A finding whose fixes could not be read, and why: said in place, never a loader for ever (the owner, 2026-11-02:
+ *  errors are never shown as nothing). */
+export const fixesErrors = $state<Record<string, string>>({});
 const waits = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** Reads a finding's fixes (and keeps reading while they are being matched). */
@@ -41,9 +44,10 @@ export function readFixes(finding: string) {
   getFixes(finding).then(
     (f) => {
       healthFixes[finding] = f;
+      delete fixesErrors[finding];
       if (f.matching) waits.set(finding, setTimeout(() => readFixes(finding), 2000));
     },
-    () => {},
+    (e) => (fixesErrors[finding] = e instanceof Error ? e.message : 'Unexpected error'),
   );
 }
 

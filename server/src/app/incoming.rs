@@ -138,7 +138,8 @@ pub struct IncomingSourceView {
     /// When this list was read from the source, epoch seconds. Lists are kept and refreshed in the background,
     /// because reading one can take the source many seconds.
     pub as_of: i64,
-    /// Per album id, when the album is already in the library: an upgrade of it or a duplicate (new albums are absent).
+    /// Per album id, when the album is already in another used library: an upgrade of it or a duplicate (new albums
+    /// are absent).
     pub verdicts: BTreeMap<String, VerdictView>,
     /// The albums Cratarr can delete: it sees their folder and can write there.
     pub deletable: Vec<String>,
@@ -148,14 +149,19 @@ pub struct IncomingSourceView {
     pub libraries: Vec<String>,
 }
 
-/// How an incoming album relates to the library.
+/// How an incoming album relates to the other used libraries (decision 0034).
 #[derive(Debug, Clone, Serialize)]
 pub struct VerdictView {
     /// "upgrade" or "duplicate".
     pub kind: &'static str,
-    /// The library album it matches (its folder).
+    /// The album it matches (its folder).
     pub library: String,
     pub why: String,
+    /// The library that album is in (its id, as `library_info` has it); none when no used library of the server lies
+    /// in its folder.
+    pub library_id: Option<String>,
+    /// That album is in Music, so Replace can put this one in its place; one in another library is only told.
+    pub replaceable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,32 +196,53 @@ pub struct LidarrView {
     pub error: Option<String>,
 }
 
-/// Each album already in the library, by album id: an upgrade of it or a duplicate. The album's release group comes
-/// from the catalogue, matched by the end of its folder path (the server's paths and Cratarr's differ in front).
+/// Each album already in another used library, by album id: an upgrade of it or a duplicate. Against every other
+/// library (decision 0034), Music first, never its own; one whose folder Cratarr cannot see, against Music alone (in
+/// its own library it would be found as itself). `libraries`: each library's index by catalogue folder (0: Music);
+/// `library_in`: the library id of a folder. The album's release group comes from the catalogue, matched by the end of
+/// its folder path (the server's paths and Cratarr's differ in front).
 fn verdicts(
     albums: &[source::Album],
-    library: &crate::incoming::LibraryIndex,
+    libraries: &[crate::incoming::LibraryIndex],
     incoming: &[IncomingDir],
+    library_in: impl Fn(i64) -> Option<String>,
 ) -> BTreeMap<String, VerdictView> {
     use crate::incoming::{AlbumFacts, Verdict, quality_of};
     let mut out = BTreeMap::new();
     for a in albums {
-        let release_group = a.path.as_deref().and_then(|p| incoming_dir(incoming, p)).and_then(|d| d.release_group.clone());
+        let own = a.path.as_deref().and_then(|p| incoming_dir(incoming, p));
         let facts = AlbumFacts {
-            release_group,
+            release_group: own.and_then(|d| d.release_group.clone()),
             artist: a.artist.clone().unwrap_or_default(),
             title: a.title.clone(),
             tracks: a.tracks,
             quality: quality_of(a.format.as_deref(), a.bitrate_kbps),
         };
-        let (kind, i, why) = match library.classify(&facts) {
-            Verdict::New => continue,
-            Verdict::Upgrade { library, why } => ("upgrade", library, why),
-            Verdict::Duplicate { library, why } => ("duplicate", library, why),
-        };
-        out.insert(a.id.clone(), VerdictView { kind, library: library.albums[i].0.clone(), why });
+        let mut others = libraries.iter().enumerate().map(|(f, index)| (f as i64, index)).filter(|(f, _)| own.map_or(*f == 0, |d| *f != d.folder));
+        let found = others.find_map(|(f, index)| match index.classify(&facts) {
+            Verdict::New => None,
+            Verdict::Upgrade { library, why } => Some((f, "upgrade", index.albums[library].0.clone(), why)),
+            Verdict::Duplicate { library, why } => Some((f, "duplicate", index.albums[library].0.clone(), why)),
+        });
+        let Some((folder, kind, library, why)) = found else { continue };
+        out.insert(a.id.clone(), VerdictView { kind, library, why, library_id: library_in(folder), replaceable: folder == 0 });
     }
     out
+}
+
+/// The used library of a server whose files lie in a catalogue folder (its id), if any.
+fn library_in(roles: &settings::Roles, placement: &crate::placement::Placement, folder: &std::path::Path) -> Option<String> {
+    placement
+        .libraries
+        .iter()
+        .find(|l| roles.music.iter().chain(&roles.incoming).any(|r| r == &l.id) && l.folders.iter().any(|f| std::path::Path::new(f) == folder))
+        .map(|l| l.id.clone())
+}
+
+/// The format of the used library in a catalogue folder: its own (a Music library set to "as is" keeps hi-res files as
+/// they are); CD format, Music's by its use, while no library is found there.
+fn format_in(roles: &settings::Roles, placement: &crate::placement::Placement, folder: &std::path::Path) -> settings::Format {
+    library_in(roles, placement, folder).map_or(settings::Format::Cd, |l| roles.format_of(&l))
 }
 
 /// The catalogue's album directory behind a server path (the server's paths and Cratarr's differ in front).
@@ -232,10 +259,11 @@ const INDEX_SECS: i64 = 300;
 /// More than any incoming queue should hold; the page shows them all.
 const INCOMING_LIMIT: usize = 1000;
 
-/// The library index plus the incoming albums' release groups by folder, read together from the catalogue.
+/// Each library's index by catalogue folder (0: Music) plus the incoming albums' release groups by folder, read
+/// together from the catalogue.
 struct Owned {
     built: i64,
-    library: Arc<crate::incoming::LibraryIndex>,
+    libraries: Arc<Vec<crate::incoming::LibraryIndex>>,
     incoming: Arc<Vec<IncomingDir>>,
 }
 
@@ -415,10 +443,13 @@ impl IncomingService {
         for view in &mut sources {
             view.lacks = view.albums.iter().filter_map(|a| Some((a.id.clone(), lacking.get(&a.id)?.clone()))).collect();
         }
-        if let Some((library, incoming)) = self.owned_index().await {
-            let folders = self.lib.catalogue().folders();
+        if let Some((libraries, incoming)) = self.owned_index().await {
+            let (folders, live) = (self.lib.catalogue().folders(), self.lib.live());
             for view in &mut sources {
-                view.verdicts = verdicts(&view.albums, &library, &incoming);
+                // Each pair's library by this server's ids (the page names it so).
+                let a = live.iter().find(|a| a.cfg.id == view.id);
+                let library_of = |f: i64| a.and_then(|a| library_in(&a.cfg.libraries, &a.placement, folders.get(f as usize)?));
+                view.verdicts = verdicts(&view.albums, &libraries, &incoming, library_of);
                 let mut deletable = Vec::new();
                 for a in &view.albums {
                     let folder = a.path.as_deref().and_then(|p| incoming_dir(&incoming, p)).and_then(|d| folders.get(d.folder as usize));
@@ -448,40 +479,44 @@ impl IncomingService {
         ok
     }
 
-    /// The library index and the incoming release groups, read from the catalogue at most every `INDEX_SECS`.
-    async fn owned_index(&self) -> Option<(Arc<crate::incoming::LibraryIndex>, Arc<Vec<IncomingDir>>)> {
+    /// Each library's index (by catalogue folder, 0: Music) and the incoming release groups, read from the catalogue at
+    /// most every `INDEX_SECS`.
+    async fn owned_index(&self) -> Option<(Arc<Vec<crate::incoming::LibraryIndex>>, Arc<Vec<IncomingDir>>)> {
         let mut owned = self.owned.lock().await;
         if let Some(o) = owned.as_ref().filter(|o| epoch_now() - o.built < INDEX_SECS) {
-            return Some((o.library.clone(), o.incoming.clone()));
+            return Some((o.libraries.clone(), o.incoming.clone()));
         }
         let c = self.lib.catalogue();
-        let read = tokio::task::spawn_blocking(move || -> Result<(crate::incoming::LibraryIndex, Vec<IncomingDir>)> {
+        let read = tokio::task::spawn_blocking(move || -> Result<(Vec<crate::incoming::LibraryIndex>, Vec<IncomingDir>)> {
             use crate::incoming::{AlbumFacts, LibraryIndex, quality_of};
-            let music = c.album_facts(0)?;
-            let library = music
-                .into_iter()
-                .map(|f| {
-                    let facts = AlbumFacts {
-                        release_group: f.release_group.clone(),
-                        artist: f.album_artist.clone().or(f.artist.clone()).unwrap_or_default(),
-                        title: f.album.clone().unwrap_or_else(|| f.dir.rsplit('/').next().unwrap_or("").to_string()),
-                        tracks: f.tracks,
-                        quality: quality_of(f.formats.iter().map(String::as_str), f.min_kbps),
-                    };
-                    (f.dir, facts)
-                })
-                .collect();
-            let mut incoming = Vec::new();
-            for id in 1..c.folders().len() as i64 {
-                incoming.extend(c.album_facts(id)?.into_iter().map(|f| IncomingDir { folder: id, dir: f.dir, release_group: f.release_group }));
+            let (mut libraries, mut incoming) = (Vec::new(), Vec::new());
+            for id in 0..c.folders().len() as i64 {
+                let found = c.album_facts(id)?;
+                if id > 0 {
+                    incoming.extend(found.iter().map(|f| IncomingDir { folder: id, dir: f.dir.clone(), release_group: f.release_group.clone() }));
+                }
+                let library = found
+                    .into_iter()
+                    .map(|f| {
+                        let facts = AlbumFacts {
+                            release_group: f.release_group.clone(),
+                            artist: f.album_artist.clone().or(f.artist.clone()).unwrap_or_default(),
+                            title: f.album.clone().unwrap_or_else(|| f.dir.rsplit('/').next().unwrap_or("").to_string()),
+                            tracks: f.tracks,
+                            quality: quality_of(f.formats.iter().map(String::as_str), f.min_kbps),
+                        };
+                        (f.dir, facts)
+                    })
+                    .collect();
+                libraries.push(LibraryIndex::new(library));
             }
-            Ok((LibraryIndex::new(library), incoming))
+            Ok((libraries, incoming))
         })
         .await;
         match read {
-            Ok(Ok((library, incoming))) => {
-                let o = Owned { built: epoch_now(), library: Arc::new(library), incoming: Arc::new(incoming) };
-                let out = (o.library.clone(), o.incoming.clone());
+            Ok(Ok((libraries, incoming))) => {
+                let o = Owned { built: epoch_now(), libraries: Arc::new(libraries), incoming: Arc::new(incoming) };
+                let out = (o.libraries.clone(), o.incoming.clone());
                 *owned = Some(o);
                 Some(out)
             }
@@ -711,9 +746,13 @@ impl IncomingService {
     /// Find a listed album on disk, in any of the catalogue's folders (Music's too).
     async fn locate_listed(&self, source_id: &str, album: source::Album) -> Result<Located, ToggleError> {
         let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
-        let (library, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        let music: Vec<IncomingDir> =
-            library.albums.iter().map(|(dir, f)| IncomingDir { folder: 0, dir: dir.clone(), release_group: f.release_group.clone() }).collect();
+        let (libraries, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        let music: Vec<IncomingDir> = libraries
+            .first()
+            .into_iter()
+            .flat_map(|m| &m.albums)
+            .map(|(dir, f)| IncomingDir { folder: 0, dir: dir.clone(), release_group: f.release_group.clone() })
+            .collect();
         let dir = incoming_dir(&incoming, &path)
             .or_else(|| incoming_dir(&music, &path))
             .cloned()
@@ -783,7 +822,7 @@ impl IncomingService {
     pub async fn keep_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate(source_id, album_id).await?;
         let (_, plan) = self.plan_keep(&at, year).await?;
-        let convert = self.to_convert(&at).await.len();
+        let convert = if self.music_format(source_id) == settings::Format::Cd { self.to_convert(&at).await.len() } else { 0 };
         let acquisition = self.acquisition().is_some();
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
@@ -811,11 +850,21 @@ impl IncomingService {
     /// Keep (decision 0013): move a new album from Incoming into Music, named per the library's template. Write-ahead
     /// like Delete; the files and catalogue rows move (track ids kept); Lidarr stops fetching it, and the moved
     /// files' new server items get the old ones' play data (handlers). Undo puts it all back.
-    /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
+    /// Hi-res files are converted first, in the queue, where Music's format is CD format: the plan is checked now, so a
+    /// refusal shows at once.
     pub async fn keep(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
-        self.move_located(source_id, at, 0, settings::Format::Cd, year).await
+        self.move_located(source_id, at, 0, self.music_format(source_id), year).await
+    }
+
+    /// The format of the Music library on a server (Keep's target), as a move into it has it (`target_of`).
+    fn music_format(&self, source_id: &str) -> settings::Format {
+        let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
+        match (live.iter().find(|a| a.cfg.id == source_id), folders.first()) {
+            (Some(a), Some(music)) => format_in(&a.cfg.libraries, &a.placement, music),
+            _ => settings::Format::Cd,
+        }
     }
 
     /// Move (decision 0034): an album of any used library into another of its server; Keep is the move into Music.
@@ -1068,6 +1117,7 @@ impl IncomingService {
             for v in converted.iter().filter(|v| v.converted != v.original && !c.has_row(folder, &v.original)) {
                 c.move_files(folder, &v.converted, folder, &v.original)?;
             }
+            c.changed_outside_pass();
             Ok(())
         })
         .await
@@ -1112,6 +1162,7 @@ impl IncomingService {
             for ((ff, fr), (tf, tr)) in &pairs2 {
                 c2.move_files(*ff, fr, *tf, tr)?;
             }
+            c2.changed_outside_pass();
             Ok(())
         })
         .await
@@ -1373,5 +1424,83 @@ pub(super) async fn tell_moved(lib: &Library, title: &str, moved: &[((i64, Strin
         {
             tracing::warn!("{}: could not tell it about {title}: {e:#}", a.cfg.id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::incoming::{AlbumFacts, LibraryIndex, Quality};
+
+    fn album(id: &str, path: &str, format: &str) -> source::Album {
+        source::Album {
+            id: id.into(),
+            title: "Zebra".into(),
+            artist: Some("Arp".into()),
+            year: None,
+            added: None,
+            path: Some(path.into()),
+            tracks: 9,
+            format: Some(format.into()),
+            bitrate_kbps: Some(320),
+            duration_secs: None,
+            tags: Vec::new(),
+            library: None,
+            artists: Vec::new(),
+            release: Default::default(),
+        }
+    }
+
+    fn owned(dir: &str, quality: Quality) -> (String, AlbumFacts) {
+        (dir.into(), AlbumFacts { artist: "Arp".into(), title: "Zebra".into(), tracks: 9, quality, ..AlbumFacts::default() })
+    }
+
+    fn dir(folder: i64, dir: &str) -> IncomingDir {
+        IncomingDir { folder, dir: dir.into(), release_group: None }
+    }
+
+    #[test]
+    fn an_incoming_album_is_judged_against_every_other_library_but_its_own() {
+        // Music lacks it; one Incoming library has it at 320 kbps, another lossless.
+        let incoming = [dir(1, "Arp/Zebra"), dir(2, "Arp - Zebra")];
+        let albums = [album("i1", "/data/lidarr/Arp/Zebra", "MP3"), album("i2", "/data/new/Arp - Zebra", "FLAC"), album("i3", "/elsewhere/Zebra", "FLAC")];
+        let libraries = [LibraryIndex::new(Vec::new()), LibraryIndex::new(vec![owned("Arp/Zebra", Quality::Lossy { kbps: 320 })]), LibraryIndex::new(vec![owned("Arp - Zebra", Quality::Lossless)])];
+        let v = verdicts(&albums, &libraries, &incoming, |f| Some(format!("lib{f}")));
+        let said = |id: &str| (v[id].kind, v[id].library.as_str(), v[id].library_id.as_deref(), v[id].replaceable);
+        assert_eq!(said("i1"), ("duplicate", "Arp - Zebra", Some("lib2"), false), "the other Incoming library's, not Replace's");
+        assert_eq!(said("i2"), ("upgrade", "Arp/Zebra", Some("lib1"), false));
+        assert!(!v.contains_key("i3"), "one whose folder Cratarr cannot see is held against Music alone (it could be either copy)");
+        // In Music too: Music's copy comes first, and Replace can take it.
+        let libraries = [LibraryIndex::new(vec![owned("Arp/Zebra (1999)", Quality::Lossy { kbps: 128 })]), LibraryIndex::new(vec![owned("Arp/Zebra", Quality::Lossy { kbps: 320 })]), LibraryIndex::new(vec![owned("Arp - Zebra", Quality::Lossless)])];
+        let v = verdicts(&albums, &libraries, &incoming, |f| Some(format!("lib{f}")));
+        let said = |id: &str| (v[id].kind, v[id].library.as_str(), v[id].library_id.as_deref(), v[id].replaceable);
+        assert_eq!(said("i1"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), true));
+        assert_eq!(said("i2"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), true));
+        assert_eq!(said("i3"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), true));
+    }
+
+    #[test]
+    fn a_folder_is_named_by_the_used_library_whose_files_lie_there() {
+        let roles = settings::Roles { music: vec!["m".into()], incoming: vec!["i".into()], ..settings::Roles::default() };
+        let placed = |id: &str, folder: &str| crate::placement::PlacedLibrary { id: id.into(), name: id.into(), folders: vec![folder.into()], paths: Vec::new(), read_only: false };
+        let placement = crate::placement::Placement { roots: Vec::new(), libraries: vec![placed("m", "/music"), placed("unused", "/incoming"), placed("i", "/incoming")] };
+        let at = |folder: &str| library_in(&roles, &placement, std::path::Path::new(folder));
+        assert_eq!(at("/music").as_deref(), Some("m"));
+        assert_eq!(at("/incoming").as_deref(), Some("i"), "a library not used is passed over");
+        assert_eq!(at("/elsewhere"), None);
+    }
+
+    #[test]
+    fn keep_follows_the_music_librarys_own_format() {
+        let mut roles = settings::Roles { music: vec!["m".into()], ..settings::Roles::default() };
+        let placement = crate::placement::Placement {
+            roots: Vec::new(),
+            libraries: vec![crate::placement::PlacedLibrary { id: "m".into(), name: "Music".into(), folders: vec!["/music".into()], paths: Vec::new(), read_only: false }],
+        };
+        let music = std::path::Path::new("/music");
+        assert_eq!(format_in(&roles, &placement, music), settings::Format::Cd, "Music's by its use");
+        roles.policies.insert("m".into(), settings::LibraryPolicy { format: Some(settings::Format::AsIs), ..Default::default() });
+        assert_eq!(format_in(&roles, &placement, music), settings::Format::AsIs, "set to as is: hi-res files stay as they are");
+        assert_eq!(format_in(&roles, &placement, std::path::Path::new("/elsewhere")), settings::Format::Cd);
     }
 }

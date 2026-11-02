@@ -214,16 +214,32 @@ pub struct AlbumTrack {
 }
 
 /// An album's release type (0.9.6, the owner: the Library can hide EPs and singles): its primary type ("album", "ep",
-/// "single", "other"; none: not known), where that came from ("musicbrainz", "discogs", "guess"), and its secondary
-/// types ("compilation", "live"…). Cratarr's own library's; other servers' albums say none.
+/// "single", "broadcast", "other"; none: not known), the source that said one ("musicbrainz", "discogs"; none where
+/// none did), the owner's rule that decided it where it is not the one said (0.13, decision 0081: "name",
+/// "tracks", "length", "one song"), and its secondary types ("compilation", "live"…). Cratarr's own library's; other
+/// servers' albums say none.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
 pub struct ReleaseType {
     #[serde(rename = "type", default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub type_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_why: Option<String>,
+    /// The facts set by hand (0.13: "type", "secondary", "year", "genres", "classical"); `type_from` is "set" where
+    /// the type is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set: Vec<String>,
     #[serde(default)]
     pub secondary: Vec<String>,
+    /// Where tracks were found missing (0.13: incomplete is a fact, not a type): how many tracks its whole release has,
+    /// the record's page saying "7 of 12 tracks" with the album's own count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_tracks: Option<u32>,
+    /// Its files' state where they differ from what Cratarr holds, or a run touched them (decision 0092; Cratarr's own
+    /// records, with writing into files on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_state: Option<crate::app::file_runs::FilesState>,
     /// Classical (0.10, the owner, 2026-10-30), a kind beside the release type: Cratarr's own library's records say
     /// whether they are (`app::classical`), other servers' say nothing; the mark where someone marked it (`classical`,
     /// `not`); a classical record's composers (keyed by MusicBrainz artist, else `name:<loose name>`) and performers,
@@ -232,6 +248,9 @@ pub struct ReleaseType {
     pub classical: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classical_mark: Option<String>,
+    /// Why a record is classical or not (0.13, for administrators and the MCP server; `app::classical::Why`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classical_why: Option<crate::app::classical::Why>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub composers: Vec<ComposerRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

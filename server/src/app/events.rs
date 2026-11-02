@@ -87,6 +87,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut covers = app.served.as_ref().map(|s| s.subscribe_covers());
     // Single-track replacement's downloads as they go (0.9.8).
     let mut fetches = super::track_fetch::subscribe();
+    // Runs changing the library's files (decision 0092), as they go.
+    let mut runs = super::file_runs::subscribe();
     let app = app.clone();
     tokio::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
@@ -171,6 +173,14 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 },
                 r = fetches.recv() => match r {
                     Ok(t) if crate::serve::access::administering() => match Message::of("fetch", &t) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(broadcast::error::RecvError::Closed) => false,
+                },
+                r = runs.recv() => match r {
+                    Ok(s) if crate::serve::access::administering() => match Message::of("file_run", &s) {
                         Some(m) => out.send(m).await.is_ok(),
                         None => true,
                     },

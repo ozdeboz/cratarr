@@ -47,9 +47,13 @@ pub mod around;
 pub mod words;
 pub mod harvest;
 pub mod fixes;
+pub mod file_facts;
+pub mod file_runs;
 pub mod matching;
 pub mod incomplete;
 pub mod track_fetch;
+// Bulk intake of missing tracks (0.13, decision 0080 amended).
+pub mod track_intake;
 pub mod runtime;
 pub mod discogs_facts;
 pub mod resume;
@@ -99,7 +103,7 @@ pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobVi
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
-pub use playlists::{ByName, CrateLook, CrateOrder, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};
+pub use playlists::{ByName, CrateLook, CrateOrder, CratePage, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, NotArtist, OpsAnswer, PlayResult, PlaylistOps, PlaylistRow, PlaylistService, PlaylistStats};
 pub use playon::{Command as PlayOnCommand, FollowTarget, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, Report as PlayerReport, whose as whose_players};
 pub use plays::{PlayEvent, Plays};
 pub use sync::TargetChoice;

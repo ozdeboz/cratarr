@@ -222,6 +222,17 @@ fn choose<'a>(tracks: &[Track], releases: &'a [Release]) -> Option<(&'a Release,
         .min_by_key(|(r, _)| (r.kind(), r.media.iter().map(|m| m.tracks.len()).sum::<usize>().abs_diff(tracks.len())))
 }
 
+/// The discs Renumber would number the album's tracks on from these releases (0.13, Health's Disc numbers): its own
+/// choice of release, and the discs only where it keeps them (a double LP stays one disc); none where no release holds
+/// every track.
+pub(super) fn discs_from(tracks: &[Track], releases: &[Release]) -> Option<u32> {
+    let (r, places) = choose(tracks, releases)?;
+    if !keeps_discs(r, releases).0 {
+        return Some(1);
+    }
+    Some(places.iter().map(|(m, _)| *m).collect::<std::collections::HashSet<_>>().len() as u32)
+}
+
 // ---- MusicBrainz
 
 fn mb_release(v: &Value) -> Release {
@@ -536,6 +547,29 @@ pub async fn undo(token: &str) -> Result<()> {
     Ok(())
 }
 
+/// What is off in an album's discs (0.13, for the owner's review with an assistant: albums that lost their disc
+/// numbers), none when nothing is: its track numbers start again at 1 on one disc (1–10, then 1–9: two discs' tracks
+/// without their disc numbers), or the release that holds it has its tracks on more discs (`released`, `incomplete`)
+/// than its files say. `numbers`: each track's (disc, track).
+pub fn discs_off(numbers: &[(Option<u32>, Option<u32>)], released: Option<u32>) -> Option<String> {
+    let on: std::collections::BTreeSet<u32> = numbers.iter().map(|(d, _)| d.unwrap_or(1).max(1)).collect();
+    let local = on.len().max(1) as u32;
+    let mut seen = std::collections::BTreeMap::<u32, u32>::new();
+    for n in numbers.iter().filter_map(|(_, t)| *t).filter(|n| *n > 0) {
+        *seen.entry(n).or_default() += 1;
+    }
+    // Every number from 1 up to at least 2 there twice or more: the numbers start again.
+    let again = (1..).take_while(|n| seen.get(n).is_some_and(|c| *c > 1)).count() >= 2;
+    let restarts = local == 1 && again;
+    let more = released.filter(|r| *r > local);
+    match (restarts, more) {
+        (true, Some(r)) => Some(format!("Numbers start again at 1; MusicBrainz has it on {r} discs")),
+        (true, None) => Some("Numbers start again at 1 without disc numbers".into()),
+        (false, Some(r)) => Some(format!("On {r} discs at MusicBrainz; the files say {local}")),
+        (false, None) => None,
+    }
+}
+
 /// What is off in an album's numbering, per disc (none when nothing is): numbers twice, numbers missing below the
 /// highest (`gaps`: not for an album a renumber look matched to a release, whose gaps are tracks not held; the owner,
 /// 2026-10-26), tracks without one. `numbers`: each track's (disc, track).
@@ -579,6 +613,21 @@ pub fn off(numbers: &[(Option<u32>, Option<u32>)], gaps: bool) -> Option<String>
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_album_that_lost_its_disc_numbers_is_told() {
+        let one = |n: u32| (None, Some(n));
+        let restarted: Vec<_> = (1..=10).chain(1..=9).map(one).collect();
+        assert_eq!(discs_off(&restarted, None).as_deref(), Some("Numbers start again at 1 without disc numbers"));
+        assert_eq!(discs_off(&restarted, Some(2)).as_deref(), Some("Numbers start again at 1; MusicBrainz has it on 2 discs"));
+        let whole: Vec<_> = (1..=12).map(one).collect();
+        assert_eq!(discs_off(&whole, Some(2)).as_deref(), Some("On 2 discs at MusicBrainz; the files say 1"));
+        assert_eq!(discs_off(&whole, Some(1)), None);
+        let numbered: Vec<_> = (1..=10).map(|n| (Some(1), Some(n))).chain((1..=9).map(|n| (Some(2), Some(n)))).collect();
+        assert_eq!(discs_off(&numbered, Some(2)), None, "its disc numbers kept");
+        let twice = [one(1), one(2), one(3), one(3)];
+        assert_eq!(discs_off(&twice, None), None, "one number twice: Track numbers, not discs");
+    }
+
     fn track(id: &str, title: &str, secs: u32) -> Track {
         Track { id: id.into(), path: PathBuf::from(format!("{id}.flac")), file: format!("{id}.flac"), title: title.into(), secs, disc: None, track: None }
     }
@@ -598,6 +647,16 @@ mod tests {
         assert_eq!(off(&[(Some(1), Some(1)), (Some(2), Some(1)), (Some(2), Some(1))], true).as_deref(), Some("Disc 2: track 1 twice"));
         assert_eq!(off(&[(None, Some(1)), (None, Some(4))], false), None, "matched to a release: its gaps are tracks not held");
         assert_eq!(off(&[(None, Some(1)), (None, Some(4)), (None, None)], false).as_deref(), Some("1 unnumbered"));
+    }
+
+    #[test]
+    fn health_s_discs_are_the_ones_renumber_would_number_on() {
+        let tracks = [track("a", "One", 200), track("b", "Two", 181), track("c", "Three", 240), track("d", "Four", 100)];
+        let sides: &[&[(&str, u32)]] = &[&[("One", 201), ("Two", 180)], &[("Three", 240), ("Four", 99)]];
+        assert_eq!(discs_from(&tracks, &[release("CD", sides)]), Some(2), "a CD keeps its discs");
+        assert_eq!(discs_from(&tracks, &[release("12\" Vinyl", sides)]), Some(1), "a double LP stays one disc");
+        assert_eq!(discs_from(&tracks[..2], &[release("CD", sides)]), Some(1), "its tracks on one of them");
+        assert_eq!(discs_from(&tracks, &[]), None, "no release holds it");
     }
 
     #[test]

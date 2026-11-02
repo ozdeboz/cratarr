@@ -281,7 +281,7 @@ impl SettingsService {
         };
         let Some(s) = source else { return view };
         let places = self.lib.place_folders();
-        let (status, choices, placed) = tokio::join!(s.status(), s.options(), placement::place(s, &places));
+        let (status, choices, placed) = tokio::join!(s.status(), s.options(), placement::place(s, &places, &cfg.libraries));
         view.status = status.unwrap_or_default();
         match choices {
             Ok(c) => view.choices = c,
@@ -431,7 +431,10 @@ impl SettingsService {
                 if !st.connected {
                     return Err(bad(st.error.unwrap_or_else(|| "not connected".into())));
                 }
-                for id in &a.cfg.libraries.music {
+                // Its Music libraries checked when they or the source changed, not on every save: a Music folder out of
+                // reach for a while (unmounted) must not stop the trash days or the naming from being saved (2026-11-02).
+                let as_saved = saved.iter().any(|s| s.id == a.cfg.id && s.kind == a.cfg.kind && s.libraries == a.cfg.libraries && s.values == a.cfg.values);
+                for id in a.cfg.libraries.music.iter().filter(|_| !as_saved) {
                     match a.placement.libraries.iter().find(|l| &l.id == id) {
                         None => return Err(bad("a Music library is no longer on the server".into())),
                         Some(l) if l.folders.is_empty() => {

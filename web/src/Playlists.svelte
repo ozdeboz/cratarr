@@ -1,17 +1,19 @@
 <script lang="ts">
-  import { playlistLayout } from './lib/layouts';
+  import { playlistLayoutShown } from './lib/layouts';
   import { port } from './lib/player/port.svelte';
   import { askIfMany } from './lib/many.svelte';
   import { plural } from './lib/insights.svelte';
   import ListHead from './lib/ListHead.svelte';
-  import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction, usePageMode } from './lib/pageView.svelte';
+  import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, searchNone, usePageAction, usePageMode } from './lib/pageView.svelte';
   import { passing } from './lib/listFilter.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { deepMatches } from './lib/deepSearch.svelte';
   import { prefs } from './lib/prefs.svelte';
-  import { live, queueTap } from './lib/live.svelte';
+  import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
   import Asking from './lib/Asking.svelte';
+  import { keepWhile } from './lib/keepWhile.svelte';
+  import { BY_FACTS, PLAYLIST_ORDER_OF } from './lib/playlistOrder';
   import { listShows } from './lib/search';
   import { toast } from './lib/toast.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
@@ -67,6 +69,11 @@
   // The playlists the server finds by their tracks, with why (the owner, 2026-10-25: "Gardner" found none of those
   // holding his tracks).
   const deepOf = deepMatches('playlist', 'playlist:');
+  // Their facts (length, genres, last played…; GET /api/playlists/stats): asked for while the table shows or the order goes
+  // by one (Length, Last played), again when the playlists change; `statsIn` once answered (or failed: none, by name).
+  let stats = $state<Record<string, PlaylistStats>>({});
+  let statsIn = $state(false);
+  const byFacts = $derived(BY_FACTS.includes(prefs.playlistOrder));
   const items = $derived.by(() => {
     let list = shownPlaylists().map((p) => {
       const member = optimistic[p.id] ?? p.member;
@@ -81,15 +88,26 @@
       const i = prefs.pinned.indexOf(id);
       return i < 0 ? Infinity : i;
     };
-    const by = playlistBy<Playlist>(prefs.playlistOrder, (p) => p.member);
-    const turn = prefs.playlistDown ? -1 : 1;
+    const by = playlistBy<Playlist>(prefs.playlistOrder, prefs.playlistDown, (p) => p.member, (p) => stats[p.id]);
     return [...list].sort((a, b) => {
       const [pa, pb] = [pin(a.id), pin(b.id)];
       if ((pa === Infinity) !== (pb === Infinity)) return pa === Infinity ? 1 : -1;
-      return pa === Infinity ? turn * by(a, b) : pa - pb;
+      return pa === Infinity ? by(a, b) : pa - pb;
     });
   });
-  const shows = $derived(listShows(items.length, pageView.query, deepOf.answeredFor()));
+  const shows = $derived(listShows(items.length, pageView.query, deepOf.answeredFor(), deepOf.failedFor()));
+  // None by name and the server's finds not in, or an order by facts not in yet (lib/loader, the one rule): the list as it
+  // was, then the loader; opened by such an order, nothing to keep: the loader's wait, then it.
+  const factsWait = $derived(byFacts && !statsIn);
+  const kept = keepWhile(
+    () => (factsWait ? { shows: 'asking' as const, list: [] } : { shows, list: items }),
+    () => shows === 'asking' || factsWait,
+    () => `${pageView.query.trim()}
+${prefs.playlistOrder}`,
+  );
+  const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone); never before the playlists are read.
+  searchNone(() => (view && listed.shows === 'empty' ? 'playlists' : null));
 
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
@@ -99,7 +117,9 @@
   });
 
   const memberCount = $derived(shownPlaylists().filter((p) => optimistic[p.id] ?? p.member).length);
-  const NOT_MUSIC = "Not in your Music, so it can't go in playlists.";
+  // Every library's tracks can go in playlists (2026-10-15); not where none is set up as Music or its library is not in
+  // use (the owner, 2026-11-02: it said "Not in your Music", untrue of Incoming).
+  const NOT_MUSIC = "Can't go in playlists: its library isn't in use, or no Music library is set up.";
 
   async function tap(p: Playlist) {
     if (busy[p.id]) return;
@@ -133,23 +153,29 @@
 
   // The table (decision 0042): a playlist a line, its facts in columns, as many as the page's width allows in the
   // owner's order (View). The facts are asked for while the table shows, again when the playlists change.
-  /** As chosen in View, as it can be here (lib/layouts: chips on a phone's screen). */
-  const table = $derived(playlistLayout() === 'table');
+  /** As chosen in View, as it can be here (lib/layouts: chips on a phone's screen); the table while the page's search
+   *  has words, a phone's too. */
+  const table = $derived(playlistLayoutShown() === 'table');
   const cols = $derived(table ? fit('playlists', gridWidth) : []);
-  // Its head orders by Name and Tracks on a tap, as every table's (lib/columnHead); its other columns are not orders.
+  // Its head orders by Name and Tracks on a tap, and by Length, Last played and Missing (lib/playlistOrder), as every
+  // table's (lib/columnHead); Genres, Changed and Unplayed are not orders.
   const now = $derived<Order<PlaylistOrder>>({ key: prefs.playlistOrder, down: prefs.playlistDown });
   const setOrder = (o: Order<PlaylistOrder>) => ((prefs.playlistOrder = o.key), (prefs.playlistDown = o.down));
   const heads = $derived({ title: headSort<PlaylistOrder>('name', now, PLAYLIST_ORDERS, setOrder), count: headSort<PlaylistOrder>('tracks', now, PLAYLIST_ORDERS, setOrder) });
-  let stats = $state<Record<string, PlaylistStats>>({});
   const listsKey = $derived(shownPlaylists().map((p) => `${p.id}:${p.count}`).join('|'));
   $effect(() => {
-    if (!table || !cols.length) return;
+    if (!(table && cols.length) && !byFacts) return;
     void listsKey;
-    playlistStats()
-      .then((s) => (stats = s))
-      .catch(() => {});
+    let current = true;
+    playlistStats().then(
+      (s) => current && ((stats = s), (statsIn = true)),
+      () => current && (statsIn = true),
+    );
+    return () => (current = false);
   });
-  function cellText(id: string, st: PlaylistStats | undefined): string {
+  function cellText(id: string, p: Playlist, st: PlaylistStats | undefined): string {
+    // Its missing entries: on a line only where it has some.
+    if (id === 'missing') return p.dead ? p.dead.toLocaleString() : '';
     if (!st) return '';
     if (id === 'length') return st.seconds ? clockText(st.seconds) : '';
     if (id === 'genres') return st.genres.join(', ');
@@ -158,9 +184,9 @@
     if (id === 'unplayed') return st.unplayed ? st.unplayed.toLocaleString() : '';
     return '';
   }
-  const cellsOf = (id: string): Cell[] | undefined => (cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, stats[id]) })) : undefined);
+  const cellsOf = (p: Playlist): Cell[] | undefined => (cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, p, stats[p.id]) })) : undefined);
 
-  // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
+  // The pill's last button (lib/ContentControls): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
   // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change; one line says so.
   usePageAction(() => (reach.away ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
@@ -200,21 +226,26 @@
 </script>
 
 <main>
-  <!-- The search, size, favourites-only and New playlist are the pill's (lib/TopPill), the order the list's header,
+  <!-- The search, size, favourites-only and New playlist are the pill's (lib/ContentControls), the order the list's header,
        what is ticked the select bar's (decided 2026-10-15/16). -->
   {#if error}
-    <Notice text={error} />
+    <Notice text={error} onretry={refresh} />
   {/if}
   {#if reach.away}<p class="away">New playlists need Cratarr.</p>{/if}
 
-  {#if (!view || waiting) && !error}
+  {#if error && !view}
+    <!-- Not read: the Notice alone, never "No playlists match." under it (the owner, 2026-11-02). -->
+  {:else if !view || waiting}
     <PageLoading />
-  {:else if shows === 'asking'}
+  {:else if listed.shows === 'asking'}
     <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
-    <Asking />
-  {:else if shows === 'empty'}
+    <Asking now={kept.loader} />
+  {:else if listed.shows === 'failed'}
+    <!-- None by name, the server's search failed: said so, never "No playlists match." (lib/search listShows). -->
+    <Notice text={deepOf.error() ?? "The playlists couldn't be searched."} onretry={deepOf.again} />
+  {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
-    <p class="empty">No playlists match.</p>
+    {#if !pageView.none}<p class="empty">No playlists match.</p>{/if}
   {:else}
     <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the
          ticked ones are the select bar's: played, favoured, viewed in the panel, their menu). -->
@@ -222,7 +253,7 @@
       fields={PLAYLIST_ORDERS}
       bind:value={prefs.playlistOrder}
       bind:down={prefs.playlistDown}
-      count={howMany(items.length, 'playlist')}
+      count={howMany(listed.list.length, 'playlist')}
       selecting={select.on}
       onselect={() => (select.on ? endSelect() : startSelect())}
     />
@@ -230,12 +261,12 @@
       <!-- The table's column names, a row of the same shape so they line up. -->
       <div class="table-head">
         {#snippet room()}<span></span>{/snippet}
-        <Row size="large" as="div" head title="Name" count="Tracks" cells={headCells(cols, () => undefined, now, PLAYLIST_ORDERS, setOrder)} sorts={heads} action={quick ? room : undefined} />
+        <Row size="large" as="div" head title="Name" count="Tracks" cells={headCells(cols, (id) => PLAYLIST_ORDER_OF[id], now, PLAYLIST_ORDERS, setOrder)} sorts={heads} action={quick ? room : undefined} />
       </div>
     {/if}
     <ul class="grid" class:table class:pending={quick && pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
-      {#each items as p (p.id)}
-        <li>
+      {#each listed.list as p (p.id)}
+        <li data-subject={p.id}>
           <!-- Quick add's circle: adds or takes out the playing track. -->
           {#snippet addTo()}
             <button
@@ -252,7 +283,7 @@
             {p}
             sub={deepOf(p.id)}
             size={table ? 'large' : 'medium'}
-            cells={table ? cellsOf(p.id) : undefined}
+            cells={table ? cellsOf(p) : undefined}
             class={quick ? ['chip', busy[p.id] && 'busy', live.queued.includes(p.id) && 'queued', !np && 'idle', !!np && !np.addable && !p.member && 'blocked'].filter(Boolean).join(' ') : 'chip'}
             strong={quick && p.member}
             action={quick ? addTo : undefined}

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST } = await import(
+const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -268,7 +268,7 @@ test("Grab a crate from a word's crate: that word as its term", () => {
   assert.equal(said(sentenceOf([wordChip('genre', 'Soul')])), '[Soul]');
 });
 
-test("global search's crate card: two terms or more of two kinds or more; one thing stays the plain row", () => {
+test("a search's crate card: two terms or more of two kinds or more; one thing makes no crate", () => {
   const r = (term: string, ...readings: Record<string, unknown>[]) => ({ term, readings });
   const genre = (v: string) => ({ kind: 'genre', value: v, label: v });
   const artist = (v: string, id: string) => ({ kind: 'artist', value: v, label: v, id });
@@ -278,17 +278,52 @@ test("global search's crate card: two terms or more of two kinds or more; one th
   assert.equal(said(sentenceOf(chips!)), '[Hip Hop] from the [1990s] that sounds like [Miles Davis]');
   assert.equal(crateOfLine([r('miles davis', artist('Miles Davis', 'ar-1'))]), null, 'one name');
   assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('soul', genre('Soul'))]), null, 'one kind');
+  // The owner, 2026-10-31: "jazz or blues… should also result in a crate": one kind joined by a typed "or" or "and".
+  assert.ok(crateOfLine([r('jazz', genre('Jazz')), { ...r('blues', genre('Blues')), join: 'or' }]), 'jazz or blues');
+  assert.ok(crateOfLine([r('jazz', genre('Jazz')), { ...r('blues', genre('Blues')), join: 'and' }]), 'jazz and blues');
   assert.equal(crateOfLine([r('jazz', genre('Jazz')), r('qwzx')]), null, 'a word read as nothing leaves one term');
   assert.ok(crateOfLine([r('jazz', genre('Jazz')), r('qwzx'), r('1975', { kind: 'year', value: '1975-1975', label: '1975' })]), 'what reads still makes it');
+  // The owner, 2026-10-31: "jazz and blues, but not techno" should also work: a term left out makes it a crate.
+  const left = crateOfLine([r('jazz', genre('Jazz')), r('blues', genre('Blues')), { ...r('techno', genre('Techno')), not: true }]);
+  assert.deepEqual(left?.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Jazz', 'Blues', 'Techno!']);
+  assert.ok(crateOfLine([r('hip hop', genre('Hip Hop')), { ...r('trap', genre('Trap')), not: true }]), 'one kind, one left out');
+  assert.equal(crateOfLine([{ ...r('trap', genre('Trap')), not: true }]), null, 'only what is left out: no crate');
+});
+
+test('said otherwise: "without", "except", "no" leave out; "before", "after", "since", "until" open a span; decades in words and decade to decade', async () => {
+  const say = async (line: string) => plain(sentenceOf(await chipsOfLine(line)));
+  for (const w of ['without', 'except', 'excluding', 'no']) assert.equal(await say(`hip hop ${w} trap`), 'Hip Hop, but not Trap', w);
+  assert.equal(await say('jazz before 1970'), 'Jazz before 1970');
+  assert.equal(await say('jazz after the 90s'), 'Jazz after the 1990s');
+  assert.equal(await say('jazz since 2010'), 'Jazz since 2010');
+  assert.equal(await say('jazz until 1980'), 'Jazz until 1980');
+  assert.deepEqual(conditionsOf(await chipsOfLine('jazz before 1970'))[1], { axis: 'year', not: false, value: { kind: 'range', min: null, max: 1969 } });
+  assert.deepEqual(conditionsOf(await chipsOfLine('jazz after the 90s'))[1], { axis: 'year', not: false, value: { kind: 'range', min: 2000, max: null } });
+  assert.deepEqual(conditionsOf(await chipsOfLine('soul not before 1970'))[1], { axis: 'year', not: true, value: { kind: 'range', min: null, max: 1969 } });
+  assert.equal(await say('jazz seventies'), 'Jazz from the 1970s');
+  assert.equal(await say('jazz 70s-80s'), 'Jazz from 1970 to 1989');
+  assert.equal(await say('jazz 1970s-80s'), 'Jazz from 1970 to 1989');
+  // Read back from the conditions, an open span says itself (Filter's open range: no longer one the sentence can't say).
+  for (const line of ['jazz before 1970', 'jazz since 2010', 'soul not before 1970']) {
+    const conditions = conditionsOf(await chipsOfLine(line));
+    const back = chipsOf(conditions);
+    assert.deepEqual(back.rest, [], line);
+    assert.deepEqual(conditionsOf(back.chips, back.min, back.modes), conditions, line);
+  }
+  assert.equal(plain(sentenceOf(chipsOf(conditionsOf(await chipsOfLine('jazz before 1970'))).chips)), 'Jazz before 1970');
 });
 
 // The sentence's own words typed back (0.12.x; the owner, 2026-10-31: "and" did not work): joins dropped where no name
 // holds them, kind words making what follows that kind, and whatever sentenceOf writes reading back to its terms.
 const WORDS_LIBRARY = [
   hit('genre', 'Hip Hop'),
+  hit('genre', 'Trap'),
+  hit('label', 'Def Jam'),
   hit('genre', 'Jazz'),
   hit('genre', 'Soul'),
   hit('genre', 'Funk'),
+  hit('genre', 'Blues'),
+  hit('genre', 'Techno'),
   hit('style', 'Boom Bap'),
   hit('tag', 'Sampled'),
   hit('mood', 'Calm'),
@@ -303,7 +338,7 @@ const WORDS_LIBRARY = [
 const typedBack = async (line: string) => {
   const asked: string[] = [];
   const reads = await readLine(line, async (p) => (asked.push(p), WORDS_LIBRARY.filter((h) => match(words(p), h.title))), 2026);
-  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how) ?? []);
+  const chips = reads.flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []);
   return { chips, terms: chips.map((ch) => `${ch.reading.kind}:${ch.reading.label}${ch.how ? `/${ch.how}` : ''}`), asked };
 };
 
@@ -363,4 +398,193 @@ test('the crates made here and not saved show only once typing starts, those the
   assert.deepEqual(recentFor(recent, 'like ann'), [like], "a like's own word counts");
   assert.deepEqual(recentFor(recent, 'zz'), [], 'a later word inside a name only when not the last');
   assert.deepEqual(recentFor(recent, 'jazz, an'), [like], 'commas as typed in the field');
+});
+
+// One crate, two views (0.13, decision 0088): how a kind's terms join, and a crate's conditions read back as its terms.
+const reads = (line: string) => readLine(line, async (p) => WORDS_LIBRARY.filter((h) => match(words(p), h.title)), 2026);
+const chipsOfLine = async (line: string) => (await reads(line)).flatMap((r) => chipOf(r.term, r.readings, r.how, r.not) ?? []);
+
+test('and or or between two terms of one kind sets how they join; the defaults: Sounds like and, the others or', async () => {
+  assert.deepEqual(modesFrom(await reads('jazz and soul')), { genre: 'and' });
+  assert.deepEqual(modesFrom(await reads('jazz or soul')), { genre: 'or' });
+  assert.deepEqual(modesFrom(await reads('sounds like Miles Davis or Al Green')), { like: 'or' });
+  assert.deepEqual(modesFrom(await reads('jazz and the 90s')), {}, 'a year has no choice');
+  assert.deepEqual(modesFrom(await reads('and soul'), ['genre']), { genre: 'and' }, 'more typed after a genre already there');
+  assert.equal(joinOf({}, 'like'), 'and');
+  assert.equal(joinOf({}, 'genre'), 'or');
+});
+
+test('the joins in the conditions: all of a kind a track carries several of, Sounds like either; one term stays any of', async () => {
+  const genres = await chipsOfLine('jazz and soul');
+  assert.deepEqual(conditionsOf(genres, CLOSE, { genre: 'and' })[0].value, { kind: 'all_of', values: ['Jazz', 'Soul'] });
+  assert.deepEqual(conditionsOf(genres, CLOSE, {})[0].value, { kind: 'any_of', values: ['Jazz', 'Soul'] });
+  assert.deepEqual(conditionsOf(genres.slice(0, 1), CLOSE, { genre: 'and' })[0].value, { kind: 'any_of', values: ['Jazz'] });
+  const like = await chipsOfLine('sounds like Miles Davis and Al Green');
+  const blend = conditionsOf(like, 40, {}).at(-1)!.value;
+  assert.equal(blend.kind === 'like' && blend.mode, undefined, 'blended: no mode');
+  const either = conditionsOf(like, 40, { like: 'or' }).at(-1)!.value;
+  assert.equal(either.kind === 'like' && either.mode, 'either');
+});
+
+test("the sentence says each kind's join, and that word is the one a tap flips", async () => {
+  const chips = await chipsOfLine('jazz and soul that sounds like Miles Davis and Al Green');
+  const parts = sentenceOf(chips, { genre: 'and', like: 'or' });
+  assert.deepEqual(
+    parts.filter((p) => p.flip).map((p) => `${p.flip}:${p.text}`),
+    ['genre:and', 'like:or'],
+  );
+  assert.equal(sentenceOf(chips, {}).find((p) => p.flip === 'genre')?.text, 'or');
+});
+
+test("a crate's conditions read back as its terms, named from the server's names, and back to the same conditions", async () => {
+  for (const [line, modes, min] of [
+    ['jazz and soul that sounds like Miles Davis and Al Green', { genre: 'and' as const }, 55],
+    ['hip hop from the 90s that sounds like Miles Davis or Al Green', { like: 'or' as const }, 25],
+    ['soul by Al Green on Blue Note from 1970 to 1985', {}, CLOSE],
+    ['jazz tagged sampled that feels calm', {}, CLOSE],
+  ] as const) {
+    const chips = await chipsOfLine(line);
+    const conditions = conditionsOf(chips, min, modes);
+    const names = Object.fromEntries(chips.filter((c) => c.reading.id).map((c) => [c.reading.id!, { name: c.reading.label, kind: c.reading.kind as 'artist' }]));
+    const back = chipsOf(conditions, names);
+    assert.deepEqual(back.rest, [], line);
+    assert.deepEqual(conditionsOf(back.chips, back.min, back.modes), conditions, line);
+    assert.deepEqual(new Set(back.chips.map((c) => c.reading.label)), new Set(chips.map((c) => c.reading.label)), line);
+  }
+});
+
+test('what a sentence cannot say stays as it is (a second row of a kind), an open range said as itself, and an id the library no longer has reads as gone', () => {
+  const not = { axis: 'genre', not: true, value: { kind: 'any_of' as const, values: ['Jazz'] } };
+  const open = { axis: 'year', not: false, value: { kind: 'range' as const, min: 1990, max: null } };
+  const counted = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['ar-x'], count: 50 } };
+  const second = { axis: 'genre', not: false, value: { kind: 'any_of' as const, values: ['Soul'] } };
+  const first = { axis: 'genre', not: false, value: { kind: 'any_of' as const, values: ['Funk'] } };
+  const r = chipsOf([first, not, open, counted, second]);
+  // A negated row is "but not"; one by how many is said briefly (both said since the sentence's "but not").
+  assert.deepEqual(r.chips.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Funk', 'Jazz!', 'since 1990']);
+  assert.deepEqual(r.rest, [second]);
+  assert.equal(r.brief?.condition, counted);
+  const gone = chipsOf([{ axis: 'like', not: false, value: { kind: 'like', of: ['ar-gone', 'al-x'], count: LIKE_MOST, min: 30, own: true } }]);
+  assert.deepEqual(gone.chips.map((c) => c.reading.label), ['an artist no longer in the library', 'an album no longer in the library']);
+  assert.equal(gone.chips[0].own, true);
+  assert.equal(gone.min, 30);
+  assert.equal(gone.modes.like, 'and');
+});
+
+// "But not" (0.13): what a crate leaves out, said, typed and read back.
+const plain = (parts: { text: string; tight?: boolean }[]) => parts.map((p, k) => (k && !p.tight ? ' ' : '') + p.text).join('');
+
+test('"but not" typed leaves out what follows, through a kind word after it; a "like" ends it', async () => {
+  const trap = await chipsOfLine('hip hop but not trap');
+  assert.deepEqual(trap.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Hip Hop', 'Trap!']);
+  assert.equal(plain(sentenceOf(trap)), 'Hip Hop, but not Trap');
+  assert.deepEqual(conditionsOf(trap), [
+    { axis: 'genre', not: false, value: { kind: 'any_of', values: ['Hip Hop'] } },
+    { axis: 'genre', not: true, value: { kind: 'any_of', values: ['Trap'] } },
+  ]);
+  const label = await chipsOfLine('jazz but not on def jam');
+  assert.equal(plain(sentenceOf(label)), 'Jazz, but not on Def Jam');
+  const by = await chipsOfLine('soul but not by al green');
+  assert.deepEqual(by.map((c) => `${c.reading.kind}:${c.reading.label}/${c.how ?? ''}${c.not ? '!' : ''}`), ['genre:Soul/', 'artist:Al Green/by!']);
+  assert.equal(plain(sentenceOf(by)), 'Soul, but not by Al Green');
+  const like = await chipsOfLine('jazz but not trap that sounds like miles davis');
+  assert.equal(like.at(-1)!.how, 'like');
+  assert.equal(like.at(-1)!.not, undefined, 'a like after "but not" is liked, not left out');
+});
+
+test('a plain "not" leaves out what follows, a year too; a name never swallows it unless it holds it', async () => {
+  // "hip hop not" fit Hip Hop (the matcher forgives a word too many): the "not" was lost, the 2000s went in.
+  const decade = await chipsOfLine('hip hop not 00s');
+  assert.deepEqual(decade.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Hip Hop', '2000s!']);
+  assert.equal(plain(sentenceOf(decade)), 'Hip Hop, but not from the 2000s');
+  assert.deepEqual(conditionsOf(decade), [
+    { axis: 'genre', not: false, value: { kind: 'any_of', values: ['Hip Hop'] } },
+    { axis: 'year', not: true, value: { kind: 'range', min: 2000, max: 2009 } },
+  ]);
+  const butNot = await chipsOfLine('hip hop but not 2000s');
+  assert.deepEqual(butNot.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Hip Hop', '2000s!']);
+  const two = await chipsOfLine('soul not 1975 or 80s');
+  assert.equal(plain(sentenceOf(two)), 'Soul, but not from 1975 or the 1980s');
+  const artist = await chipsOfLine('jazz not miles davis');
+  assert.deepEqual(artist.map((c) => `${c.reading.kind}:${c.reading.label}/${c.how ?? ''}${c.not ? '!' : ''}`), ['genre:Jazz/', 'artist:Miles Davis/by!']);
+  const kept = await chipsOfLine('soul from the 70s but not trap');
+  assert.deepEqual(kept.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Soul', '1970s', 'Trap!'], 'a year before "not" stays in');
+  // The owner, 2026-10-31: "jazz and blues, but not techno".
+  const owner = await chipsOfLine('jazz and blues, but not techno');
+  assert.deepEqual(owner.map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Jazz', 'Blues', 'Techno!']);
+  assert.equal(plain(sentenceOf(owner, modesFrom(await reads('jazz and blues, but not techno')))), 'Jazz and Blues, but not Techno');
+  assert.deepEqual(conditionsOf(owner, CLOSE, { genre: 'and' }), [
+    { axis: 'genre', not: false, value: { kind: 'all_of', values: ['Jazz', 'Blues'] } },
+    { axis: 'genre', not: true, value: { kind: 'any_of', values: ['Techno'] } },
+  ]);
+  assert.equal(plain(sentenceOf(await chipsOfLine('jazz and blues not techno'))), 'Jazz or Blues, but not Techno', 'without the comma too');
+});
+
+test('"but not" reads back from the conditions and round-trips; "not all of" stays the conditions\' to say', async () => {
+  for (const line of ['hip hop but not trap', 'jazz but not on def jam', 'soul but not by al green', 'hip hop from the 90s but not trap or jazz', 'hip hop not 00s', 'soul from the 70s but not 1975 or 80s']) {
+    const chips = await chipsOfLine(line);
+    const conditions = conditionsOf(chips);
+    const back = chipsOf(conditions);
+    assert.deepEqual(back.rest, [], line);
+    assert.deepEqual(conditionsOf(back.chips, back.min, back.modes), conditions, line);
+  }
+  const notAll = { axis: 'genre', not: true, value: { kind: 'all_of' as const, values: ['Jazz', 'Soul'] } };
+  assert.deepEqual(chipsOf([notAll]).rest, [notAll]);
+});
+
+test("a built-in crate's Sounds like said briefly, kept as it is: its own name, else its one seed, else how many", () => {
+  const week = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['tr-1', 'tr-2'], count: 50, fresh: true, weights: [1, 0.5] } };
+  const r = chipsOf([week], {}, 'Sounds like your week');
+  assert.deepEqual(r.chips, []);
+  assert.deepEqual(r.rest, []);
+  assert.deepEqual(r.brief, { text: 'your week', condition: week });
+  assert.equal(plain(sentenceOf([], {}, r.brief!.text)), 'Tracks that sound like your week');
+  const air = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['al-1'], count: 40 } };
+  assert.equal(chipsOf([air], {}, 'Sounds like Air').brief?.text, 'Air');
+  assert.equal(briefOf(['ar-1'], { 'ar-1': { name: 'Ann Quartet', kind: 'artist' } }), 'Ann Quartet');
+  const many = { axis: 'like', not: false, value: { kind: 'like' as const, of: ['tr-1', 'tr-2', 'tr-3', 'tr-4', 'tr-5', 'tr-6', 'tr-7'], count: 1000, min: 40 } };
+  assert.equal(chipsOf([many]).brief?.text, '7 tracks');
+  const jazz = chipsOf([{ axis: 'genre', not: false, value: { kind: 'any_of', values: ['Jazz'] } }, week], {}, 'Sounds like your week');
+  assert.equal(plain(sentenceOf(jazz.chips, jazz.modes, jazz.brief!.text)), 'Jazz that sounds like your week');
+});
+
+test("the conditions' edits come back to the sentence as typed: a term's words and other readings kept, a new one read plainly", async () => {
+  const typed = await chipsOfLine('hip hop from the 90s like miles davis');
+  const conditions = conditionsOf(typed);
+  const names = namesOf(typed);
+  const edited = [...conditions, { axis: 'genre', not: true, value: { kind: 'any_of' as const, values: ['Trap'] } }];
+  const back = keptChips(chipsOf(edited, names).chips, typed);
+  assert.deepEqual(back.slice(0, typed.length), typed);
+  assert.deepEqual(back.slice(typed.length).map((c) => `${c.reading.label}${c.not ? '!' : ''}`), ['Trap!']);
+  assert.deepEqual(conditionsOf(back), conditionsOf(chipsOf(edited, names).chips));
+});
+
+// One crate card (0.13; the owner, 2026-10-31): global search's and every page's own search, only for words that read as
+// a crate of two kinds or more that holds a track, and nothing while its count is not in.
+test('the crate card shows only for a crate of two kinds that holds a track, once its count is in', () => {
+  const r = (term: string, ...readings: Record<string, unknown>[]) => ({ term, readings });
+  const genre = (v: string) => ({ kind: 'genre', value: v, label: v });
+  const nineties = { kind: 'year', value: '1990-1999', label: '1990s' };
+  const crate = crateOfLine([r('hip hop', genre('Hip Hop')), r('90s', nineties)]);
+  assert.equal(crateShows(crate, 12), true);
+  assert.equal(crateShows(crate, 0), false, 'an empty crate');
+  assert.equal(crateShows(crate, null), false, 'its count not in yet');
+  assert.equal(crateShows(crate, undefined), false);
+  assert.equal(crateShows(crateOfLine([r('hip hop', genre('Hip Hop'))]), 40), false, 'one kind: no crate');
+  assert.equal(crateShows([], 40), false);
+});
+
+test("the crate card leads the search of the pages that list music or crates, not Home's or the finders'", () => {
+  for (const p of ['library', 'playlists', 'downloads', 'discover', 'requests', 'crates']) assert.equal(crateCardOn(p), true, p);
+  for (const p of ['home', 'find', 'settings', 'insights', 'health', 'local-albums']) assert.equal(crateCardOn(p), false, p);
+});
+
+test('a line read onto a crate: new terms as chips, a term already in it once, the joins and what read as nothing', () => {
+  const r = (term: string, ...readings: Record<string, unknown>[]) => ({ term, readings });
+  const genre = (v: string) => ({ kind: 'genre', value: v, label: v });
+  const had = crateOfLine([r('jazz', genre('Jazz')), r('1975', { kind: 'year', value: '1975-1975', label: '1975' })])!;
+  const out = readOnto(had, [r('Jazz', genre('Jazz')), { ...r('soul', genre('Soul')), join: 'and' }, r('qwzx')]);
+  assert.deepEqual(out.add.map((c) => c.reading.label), ['Soul']);
+  assert.deepEqual(out.modes, { genre: 'and' }, "an 'and' between two genres joins them");
+  assert.deepEqual(out.missed, ['qwzx']);
 });

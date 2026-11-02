@@ -23,6 +23,9 @@ ARG CARGO_BUILD_JOBS
 WORKDIR /app
 COPY server/ server/
 WORKDIR /app/server
+# The same build settings in every stage that compiles the server's own crates (tests, e2e): a stage that differs
+# compiles them again (0.13: the e2e stage rebuilt them for 15 minutes beside the tests'). Release is not incremental.
+ENV CARGO_INCREMENTAL=0
 
 FROM source AS build
 # The crates and what was compiled before are kept between builds (BuildKit caches): only what changed is built again.
@@ -35,6 +38,15 @@ COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
 # Unoptimised (the owner, 2026-10-26): the tests are their own compile whatever is done, and this one is the quicker.
 RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace
+
+# The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library, driven through
+# its API. Its own stage, after the tests: `docker build --target e2e .` (one heavy job at a time).
+FROM source AS e2e
+COPY web/tests/fixtures /app/web/tests/fixtures
+COPY shared /app/shared
+# Unoptimised and on the test stage's cache, as the tests are: what they compiled (the server and this suite) is reused,
+# so after them this stage only runs.
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
 
 # The binary alone, to take out (the test server runs on it, with CRATARR_WEB_DIR at a built web/dist).
 FROM scratch AS binary

@@ -3,7 +3,7 @@
 //! value as stored: nothing is split or merged here (see `normalise`). Cover art is not read.
 
 /// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`).
-pub const READER_VERSION: u32 = 6;
+pub const READER_VERSION: u32 = 7;
 
 /// What is wrong with a file that could still be read (a file that cannot be read at all is an error instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +81,8 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
         ItemKey::MusicBrainzReleaseGroupId => "musicbrainz_releasegroupid",
         ItemKey::MusicBrainzArtistId => "musicbrainz_artistid",
         ItemKey::MusicBrainzReleaseArtistId => "musicbrainz_albumartistid",
+        // The release type (0.13, decision 0092: written into files): Vorbis RELEASETYPE, ID3v2 TXXX:MusicBrainz Album Type.
+        ItemKey::MusicBrainzReleaseType => "releasetype",
         _ => return None,
     })
 }
@@ -208,12 +210,107 @@ fn read_with(path: &Path, mode: ParsingMode) -> Result<FileTags> {
             }
         }
     }
+    // The fields lofty has no key for, which its generic tags leave out (0.13: STYLE was never read since lofty 0.25):
+    // from the format's own tag, those Cratarr names. A failure here leaves the file read as above.
+    for (raw, v) in unmapped(path, file.file_type(), mode) {
+        if let Some(name) = by_raw_key(&raw) {
+            for v in v.split('\0').map(str::trim).filter(|v| !v.is_empty()) {
+                out.items.push((raw.clone(), Some(name), v.to_string()));
+            }
+        }
+    }
     Ok(out)
+}
+
+/// A file's fields lofty has no key for, as (raw key, value): Vorbis comments' (FLAC, Ogg Vorbis, Opus) by their own
+/// names; ID3v2's user text frames by their description and other text frames by their id; MP4's freeform atoms as
+/// `----:mean:name`. Nothing where the file's own tag cannot be read.
+fn unmapped(path: &Path, file_type: lofty::file::FileType, mode: ParsingMode) -> Vec<(String, String)> {
+    use lofty::file::FileType;
+    use lofty::tag::{SplitTag, TagType};
+    let options = ParseOptions::new().read_cover_art(false).read_properties(false).parsing_mode(mode);
+    let Ok(mut f) = std::fs::File::open(path) else { return Vec::new() };
+    let vorbis = |vc: &lofty::ogg::tag::VorbisComments| -> Vec<(String, String)> {
+        vc.items()
+            .filter(|(k, _)| ItemKey::from_key(TagType::VorbisComments, k).is_none() && !k.starts_with("RATING:"))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let mut read = || -> Option<Vec<(String, String)>> {
+        Some(match file_type {
+            FileType::Flac => vorbis(lofty::flac::FlacFile::read_from(&mut f, options).ok()?.vorbis_comments()?),
+            FileType::Vorbis => vorbis(lofty::ogg::VorbisFile::read_from(&mut f, options).ok()?.vorbis_comments()),
+            FileType::Opus => vorbis(lofty::ogg::OpusFile::read_from(&mut f, options).ok()?.vorbis_comments()),
+            FileType::Mpeg => {
+                use lofty::id3::v2::Frame;
+                let tag = lofty::mpeg::MpegFile::read_from(&mut f, options).ok()?.id3v2()?.clone();
+                let (rest, _) = tag.split_tag();
+                (&*rest)
+                    .into_iter()
+                    .filter_map(|frame| match frame {
+                        Frame::UserText(t) => Some((t.description.to_string(), t.content.to_string())),
+                        Frame::Text(t) => Some((frame.id().as_str().to_string(), t.value.to_string())),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            FileType::Mp4 => {
+                use lofty::mp4::{AtomData, AtomIdent};
+                let ilst = lofty::mp4::Mp4File::read_from(&mut f, options).ok()?.ilst()?.clone();
+                let (rest, _) = ilst.split_tag();
+                (&*rest)
+                    .into_iter()
+                    .filter_map(|atom| match atom.ident() {
+                        AtomIdent::Freeform { mean, name } => Some((format!("----:{mean}:{name}"), atom)),
+                        _ => None,
+                    })
+                    .flat_map(|(raw, atom)| {
+                        atom.data().filter_map(|d| if let AtomData::UTF8(v) = d { Some(v.clone()) } else { None }).map(move |v| (raw.clone(), v)).collect::<Vec<_>>()
+                    })
+                    .collect()
+            }
+            _ => return None,
+        })
+    };
+    read().unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_style_is_read_from_the_format_s_own_tag() {
+        use crate::retag::fixtures::*;
+        use lofty::config::WriteOptions;
+        let d = dir("tags-style");
+        let f = flac(&d, "one");
+        let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&f).unwrap(), ParseOptions::new()).unwrap();
+        let mut vc = file.remove_vorbis_comments().unwrap_or_default();
+        vc.push("STYLE".into(), "Dub Techno".into());
+        vc.push("STYLE".into(), "Minimal".into());
+        vc.push("SOMETHING_ELSE".into(), "x".into());
+        vc.push("ARTIST".into(), "Ott".into());
+        file.set_vorbis_comments(vc);
+        file.save_to_path(&f, WriteOptions::default()).unwrap();
+        let m = d.join("two.mp3");
+        mp3(&m);
+        let mut file = lofty::mpeg::MpegFile::read_from(&mut std::fs::File::open(&m).unwrap(), ParseOptions::new()).unwrap();
+        let mut tag = file.remove_id3v2().unwrap_or_default();
+        tag.insert_user_text("STYLE".into(), "Dub Techno".into());
+        tag.set_artist("Ott".into());
+        file.set_id3v2(tag);
+        file.save_to_path(&m, WriteOptions::default()).unwrap();
+        for (t, styles) in [(&f, vec!["Dub Techno", "Minimal"]), (&m, vec!["Dub Techno"])] {
+            let (tags, issue) = read(t).unwrap();
+            assert_eq!(issue, None, "{}", t.display());
+            let got: Vec<&str> = tags.items.iter().filter(|(_, n, _)| *n == Some("style")).map(|(_, _, v)| v.as_str()).collect();
+            assert_eq!(got, styles, "{}", t.display());
+            assert!(tags.items.iter().any(|(_, n, v)| *n == Some("artist") && v == "Ott"), "the mapped fields as before: {}", t.display());
+            assert!(!tags.items.iter().any(|(r, _, _)| r == "SOMETHING_ELSE"), "unnamed unknown fields stay out");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn gain_tags_get_their_names_however_the_format_keys_them() {

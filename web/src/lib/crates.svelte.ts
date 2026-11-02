@@ -7,7 +7,7 @@ import { shownPlaylists } from './output.svelte';
 import { pickOf, playCollection } from './play.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
-import { viewPlaylist } from './panel.svelte';
+import { viewOver } from './panel.svelte';
 import { toast } from './toast.svelte';
 import { withUndo } from './undo.svelte';
 
@@ -137,7 +137,15 @@ export const builderOf = (viewed: string | null): { id: string | null } | null =
 
 /** A crate being made or changed, kept in this browser under its own address until Save or Cancel (it survives the
  *  player over it, a page change and a reload). */
-export type CrateDraft = { name: string; conditions: Condition[] };
+/** `names`: the server's for the ids its conditions hold (0.13, decision 0088). A crate grabbed (0.13, lib/quickCrates):
+ *  `sentence` its terms as they were read, `words` words still to read into it. */
+export type CrateDraft = {
+  name: string;
+  conditions: Condition[];
+  names?: Record<string, import('./quickCrate').Named>;
+  sentence?: { chips: import('./quickCrate').Chip[]; min: number; modes: import('./quickCrate').Modes };
+  words?: string;
+};
 const draftKey = (id: string | null) => `cratarr-crate-draft:${id ?? 'new'}`;
 export function keptDraft(id: string | null): CrateDraft | null {
   try {
@@ -195,7 +203,7 @@ export async function setCrateArt(id: string, file: Blob | null) {
  *  saved; reached from a track's menu and from the genres shown on top of a list. */
 export const GENRE = 'genre:';
 export const genreOf = (crate: string | null) => (crate?.startsWith(GENRE) ? crate.slice(GENRE.length) : null);
-export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
+export const viewGenre = (name: string) => viewOver(CRATE + GENRE + name);
 /** A word's crate (0.9.7, the harvest: the owner, 2026-10-26): as a genre's, for each kind of word (`crate:style:<w>`,
  *  `crate:mood:<w>`, `crate:tag:<w>`, and 0.11's `crate:label:<w>`), the server's crates::genre_crate making them all;
  *  found by the global search. */
@@ -228,7 +236,7 @@ const likeNames = $state<Record<string, string>>({});
 export const nameLike = (crate: string, name: string) => (likeNames[crate] = name);
 export function viewLike(id: string, count = LIKE_COUNT) {
   const crate = LIKE + id + (count === LIKE_COUNT ? '' : `@${count}`);
-  viewPlaylist(CRATE + crate);
+  viewOver(CRATE + crate);
   if (!likeNames[crate]) getCrate(crate).then((d) => (likeNames[crate] = d.name)).catch(() => {});
 }
 /** A crate the server makes from a seed (a genre, a track, an album): the library's, never one's own. */
@@ -237,13 +245,13 @@ export const seeded = (crate: string | null) => wordOf(crate) !== null || likeOf
 /** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
  *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a
  *  genre's own, from the genre's view). */
-export function startCrate(name: string, conditions: Condition[] = []) {
+export function startCrate(name: string, conditions: Condition[] = [], more: Omit<CrateDraft, 'name' | 'conditions'> = {}) {
   try {
-    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions }));
+    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions, ...more }));
   } catch {
     /* the builder starts empty */
   }
-  viewPlaylist(NEW_CRATE);
+  viewOver(NEW_CRATE);
 }
 
 // A crate's Play and Shuffle, Play next and Add to queue (its card's picture, its panel, its menu: decision 0058's

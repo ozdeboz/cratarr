@@ -9,7 +9,7 @@
   // not scroll (Finamp's default).
   // Where it plays sits on the bar, as Spotify's device button beside the heart (the owner, 2026-10-17): it opens the
   // output's sheet, and is in the accent while the music plays on another player. The pills at the top give it up
-  // while the bar is there (lib/TopPill). Left of it, where the bar has room, the queue (the owner, 2026-10-24): it opens
+  // while the bar is there (lib/ContentControls). Left of it, where the bar has room, the queue (the owner, 2026-10-24): it opens
   // the queue's sheet, and answers tracks put in from elsewhere (lib/queueCue): list-start a moment for Play next,
   // list-end for Add to queue.
   import { tick } from 'svelte';

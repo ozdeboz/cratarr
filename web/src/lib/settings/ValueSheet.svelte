@@ -44,13 +44,16 @@
   // svelte-ignore state_referenced_locally
   let typed = $state(value);
   let busy = $state(false);
-  const ok = $derived(allowEmpty || typed.trim() !== '');
+  // A number field hands its value back as a number (Svelte's bind:value on type="number"): read as text, as typed
+  // (the owner, 2026-11-02: Keep deleted albums' Done did nothing, `.trim()` failing on a number, silently).
+  const text = $derived(typed == null ? '' : String(typed));
+  const ok = $derived(allowEmpty || text.trim() !== '');
 
   async function done() {
     if (!ok) return;
     busy = true;
     try {
-      await onsave(type === 'password' ? typed : typed.trim());
+      await onsave(type === 'password' ? text : text.trim());
       onclose();
     } catch {
       // Not taken: the sheet stays, and the row's own message says why.
@@ -65,7 +68,7 @@
     <div class="field">
       {#if lines}
         <!-- svelte-ignore a11y_autofocus -->
-        <textarea rows="5" aria-label={title} {placeholder} spellcheck="false" autofocus bind:value={typed} oninput={() => oninput?.(typed)}></textarea>
+        <textarea rows="5" aria-label={title} {placeholder} spellcheck="false" autofocus bind:value={typed} oninput={() => oninput?.(text)}></textarea>
       {:else}
         <!-- svelte-ignore a11y_autofocus -->
         <input
@@ -79,7 +82,7 @@
           autocomplete={type === 'password' ? 'new-password' : 'off'}
           autofocus
           bind:value={typed}
-          oninput={() => oninput?.(typed)}
+          oninput={() => oninput?.(text)}
         />
       {/if}
       {#if suffix}<span class="suffix">{suffix}</span>{/if}

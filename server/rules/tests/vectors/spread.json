@@ -1,0 +1,8 @@
+[
+  { "about": "three records together: each record's tracks at least two others apart", "records": ["a", "a", "a", "b", "b", "c", "c"], "gap": 4, "order": [0, 3, 5, 1, 4, 6, 2] },
+  { "about": "one record: as given", "records": ["a", "a", "a"], "gap": 4, "order": [0, 1, 2] },
+  { "about": "two tracks: as given", "records": ["a", "b"], "gap": 4, "order": [0, 1] },
+  { "about": "many records: none again within four", "records": ["a", "a", "b", "c", "d", "e", "f"], "gap": 4, "order": [0, 2, 3, 4, 5, 1, 6] },
+  { "about": "nothing", "records": [], "gap": 4, "order": [] },
+  { "about": "two records, one long: the record heard longest ago when none may come", "records": ["a", "a", "a", "a", "b"], "gap": 4, "order": [0, 4, 1, 2, 3] }
+]

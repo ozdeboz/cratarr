@@ -14,6 +14,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import MenuSheet from './MenuSheet.svelte';
+  import Notice from './Notice.svelte';
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import { deleteQueue, loadQueues, queues, queuesPlayer, queuesVersion, renameQueue, switchQueue } from './queueHistory.svelte';
   import Row from './Row.svelte';
@@ -113,7 +114,8 @@
         </MenuGroup>
       </MenuCards>
     {:else}
-      {#if queues.error}<p class="error" role="alert">{queues.error}</p>{/if}
+      <!-- Not read: the error alone, never "No queues yet" under it (the owner, 2026-11-02). -->
+      {#if queues.error}<Notice text={queues.error} onretry={loadQueues} />{/if}
       <ol class="queues" aria-busy={busy}>
         {#each queues.list as q (q.id)}
           <li>
@@ -124,7 +126,7 @@
             </Row>
           </li>
         {:else}
-          {#if queues.known}<li class="none">No queues yet</li>{/if}
+          {#if queues.known && !queues.error}<li class="none">No queues yet</li>{/if}
         {/each}
       </ol>
     {/if}

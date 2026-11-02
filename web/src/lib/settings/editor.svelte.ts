@@ -154,6 +154,17 @@ class SettingsEditor {
           JSON.stringify(this.s.sources.map((v) => this.payload({ ...v, secrets: {}, view: v, busy: false })))),
   );
 
+  /** Whether what is changed can be saved: every server with its required fields and the secrets they need, Lidarr's
+   *  key where its address changed. A server just added waits for its connection sheet (lib/settings/ConnectionsPart). */
+  complete = $derived(
+    this.drafts.every((d) =>
+      (this.kindOf(d)?.fields ?? []).every((f) =>
+        f.kind === 'secret' ? !this.secretNeeded(d, f) || !!d.secrets[f.key]?.trim() : f.kind === 'multi_choice' || !f.required || !!str(d.values[f.key]).trim(),
+      ),
+    ) &&
+      (!this.lidarrKeyNeeded || !!this.lid.key.trim()),
+  );
+
   /** Reads everything: the last answer at once (the cards' read), then the server's latest, unless something was
    *  edited meanwhile; the accounts and the imports. */
   load = () => {
@@ -348,10 +359,12 @@ class SettingsEditor {
   policyOf = (d: Draft, id: string) => ({
     format: 'as_is' as 'cd' | 'as_is',
     colour: null as string | null,
+    /** Cratarr's own library's name (the owner, 2026-11-02); none: its folder's. */
+    name: null as string | null,
     ...d.view?.policies?.[id],
     ...d.libraries.policies?.[id],
   });
-  setPolicy = (d: Draft, id: string, change: { format?: 'cd' | 'as_is'; colour?: string }) => {
+  setPolicy = (d: Draft, id: string, change: { format?: 'cd' | 'as_is'; colour?: string; name?: string | null }) => {
     d.libraries.policies = { ...(d.libraries.policies ?? {}), [id]: { ...this.policyOf(d, id), ...change } };
   };
 
@@ -432,9 +445,11 @@ class SettingsEditor {
       );
       settingsRead.s = this.s;
       settingsSaved.n++;
-      toast.show({ text: 'Saved and in use.' });
     } catch (e) {
+      // Saved as it is changed (the owner, 2026-11-02: no Unsaved changes bar): refused, the server's settings stand
+      // again, and why is said.
       toast.fail(e, 'Could not save');
+      if (this.s) this.fill(this.s);
     } finally {
       this.saving = false;
     }

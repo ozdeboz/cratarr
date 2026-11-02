@@ -303,7 +303,7 @@
       <span class="handle"></span>
       <div class="bar">
         {#if searching}
-          <!-- The search in place, the row grown into a field, as the pages' search (lib/TopPill): Esc or leaving it
+          <!-- The search in place, the row grown into a field, as the pages' search (lib/ContentControls): Esc or leaving it
                empty folds it, ✕ empties it. -->
           <div class="find" role="search">
             <span class="lead" aria-hidden="true"><Icon name="search" size={20} /></span>

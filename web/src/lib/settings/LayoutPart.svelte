@@ -7,7 +7,7 @@
   import Seg from '../Seg.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
 
   const EDGES: { value: 'top' | 'bottom'; label: string }[] = [
     { value: 'top', label: 'Top' },
@@ -21,12 +21,17 @@
   const WHY = 'With a window this wide the pages are in the sidebar on the left, so this applies only to a narrower window (under 1024 px), where the bar of pages runs along the top or the bottom.';
   const why = $derived(side ? WHY : null);
 
-  offerReset(
-    () => 'The bar of pages and the controls along the top, the mini-player along the bottom, the action bar sticking.',
-    () => {
-      Object.assign(prefs, { navAt: 'top', navHides: false, navHidesOnItem: true, stickyActions: true, miniAt: 'bottom', navControlsAt: 'top', contentControlsAt: 'top' });
-    },
-  );
+  // What Reset puts back (lib/settings/reset): each as its row names it, its default the prefs'.
+  const EDGE = (v: string) => (v === 'bottom' ? 'Bottom' : 'Top');
+  offerReset('layout', () => [
+    pref('navAt', 'Navigation bar', EDGE),
+    pref('navHidesOnItem', 'Hide when opening a library item'),
+    pref('navHides', 'Hide when scrolling'),
+    pref('stickyActions', 'Sticky action bar'),
+    pref('miniAt', 'Mini player', EDGE),
+    pref('navControlsAt', 'Navigation controls', EDGE),
+    pref('contentControlsAt', 'Content controls', EDGE),
+  ]);
 </script>
 
 <!-- Where the bar of pages runs along an edge (below 1024 px; the owner, 2026-10-25): which edge, whether it slides

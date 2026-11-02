@@ -10,6 +10,7 @@
   import { pageAsked } from './artistAbout.svelte';
   import { albumSubject, artistSubject, viewOver } from './panel.svelte';
   import { prefs } from './prefs.svelte';
+  import Notice from './Notice.svelte';
   import SectionHead from './SectionHead.svelte';
 
   /** `onsettled`: once its artists are in (or refused), so Home can show it in its turn. */
@@ -17,12 +18,14 @@
 
   let artists = $state<ExploredArtist[]>([]);
   let open = $state(0);
-  onMount(() => {
+  /** Not read: one line in its place with Try again, never left out as if none (the owner, 2026-11-02). */
+  let error = $state<string | null>(null);
+  const read = () =>
     getHomeArtists(prefs.source || undefined, hiddenLibraries()).then(
-      (d) => ((artists = d.artists), onsettled?.()),
-      () => ((artists = []), onsettled?.()),
+      (d) => ((artists = d.artists), (error = null), onsettled?.()),
+      (e) => ((artists = []), (error = e instanceof Error ? e.message : 'Unexpected error'), onsettled?.()),
     );
-  });
+  onMount(() => void read());
   const a = $derived(artists[open]);
   /** The artist's page, at its About (unfolded) or its Albums. */
   function openAt(name: string, section: 'about' | 'albums') {
@@ -62,7 +65,9 @@
   const picture = (x: ExploredArtist) => (x.photo ? artistPhotoUrl(x.id) : albumCoverUrl('cratarr', x.albums[0]));
 </script>
 
-{#if a}
+{#if error}
+  <section class="failed" aria-label="Artists to explore"><Notice text={`Artists to explore: ${error}`} onretry={read} /></section>
+{:else if a}
   <section aria-label="Artists to explore">
     <SectionHead title="Artists to explore" />
     <div class="wrap">
@@ -109,6 +114,11 @@
 {/if}
 
 <style>
+  /* As Home's own failed sections. */
+  .failed {
+    margin: 0 16px;
+  }
+
   .wrap {
     --bleed: 16px;
     padding: 0 16px;

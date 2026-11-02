@@ -226,8 +226,8 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
     };
     let Ok(decided) = decided else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
     match decided {
-        // A key that only reads changes nothing.
-        Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
+        // A key that only reads changes nothing. The MCP server (0.13) is asked by POST, and only reads.
+        Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") && !mcp(uri.path()) => {
             return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This key only reads." }))).into_response();
         }
         Some(Some(who)) => return acting_as(who, next.run(request)).await,
@@ -238,6 +238,11 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
     let r = refuse(&method, request.headers(), &shown);
     note_refused(&r, request.headers(), peer, uri.path(), uri.query(), "cratarr");
     r
+}
+
+/// The MCP server's path (`crate::mcp`): every tool there reads, so a reading key may POST to it.
+fn mcp(path: &str) -> bool {
+    path == "/mcp" || path.starts_with("/mcp/")
 }
 
 /// Whether the running request is an administrator's (decision 0051): signed in as one, not through a key (a key acts
@@ -353,6 +358,8 @@ async fn home_assistant_on(State(serve): State<Arc<Serve>>, axum::Json(b): axum:
 
 /// The purpose of Home Assistant's keys.
 const HOME_ASSISTANT: &str = "home_assistant";
+/// The purpose of the MCP server's keys (0.13, decision 0090: Connections → MCP): they only read.
+const MCP: &str = "mcp";
 
 #[derive(serde::Deserialize)]
 struct NewKey {
@@ -364,7 +371,7 @@ struct NewKey {
     /// `read` or `control` (the default).
     #[serde(default)]
     scope: Option<String>,
-    /// What uses it: `home_assistant`; none for any other.
+    /// What uses it: `home_assistant`, `mcp` (always a reading key); none for any other.
     #[serde(default)]
     purpose: Option<String>,
 }
@@ -384,8 +391,10 @@ async fn new_key(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json
             return (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": "No such user." }))).into_response();
         }
     }
-    let purpose = k.purpose.as_deref().filter(|p| *p == HOME_ASSISTANT);
-    match serve.sessions.new_key(name, owner.as_deref(), k.scope.as_deref().unwrap_or("control"), purpose, now()) {
+    let purpose = k.purpose.as_deref().filter(|p| [HOME_ASSISTANT, MCP].contains(p));
+    // The MCP server's keys only read, whatever is asked (decision 0090).
+    let scope = if purpose == Some(MCP) { "read" } else { k.scope.as_deref().unwrap_or("control") };
+    match serve.sessions.new_key(name, owner.as_deref(), scope, purpose, now()) {
         Ok((key, made)) => {
             tracing::info!(target: "signin", name = %made.name, "API key made");
             let mut r = axum::Json(json!({ "key": key, "id": made.id, "name": made.name })).into_response();
@@ -589,6 +598,9 @@ mod tests {
         let (reads, _) = s.sessions.new_key("Dashboard", Some("me"), "read", None, now()).unwrap();
         assert_eq!(status(&s, keyed(&reads, "GET", "/api/library")).await.0, StatusCode::OK);
         assert_eq!(status(&s, keyed(&reads, "POST", "/api/library")).await.0, StatusCode::FORBIDDEN, "it only reads");
+        // The MCP server (0.13) is asked by POST and only reads: past the check (no route here, so 404).
+        assert_eq!(status(&s, keyed(&reads, "POST", "/mcp")).await.0, StatusCode::NOT_FOUND, "a reading key may ask the MCP server");
+        assert_eq!(status(&s, keyed(&reads, "POST", "/mcpx")).await.0, StatusCode::FORBIDDEN, "nothing else");
         let (controls, _) = s.sessions.new_key("Home Assistant", Some("me"), "control", Some(HOME_ASSISTANT), now()).unwrap();
         assert_eq!(status(&s, keyed(&controls, "GET", "/api/auth/keys")).await.0, StatusCode::FORBIDDEN, "an administrator's key is no administrator");
         // One who left the directory's group is no one.
@@ -716,6 +728,15 @@ mod tests {
             .unwrap();
         let ha: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(ha.into_body(), 1 << 16).await.unwrap()).unwrap();
         assert_eq!(ha["keys"][0]["purpose"], "home_assistant", "shown with its connection");
+        // A key for the MCP server (0.13): read only, whatever is asked.
+        let mcp = HttpRequest::post("/api/auth/keys")
+            .header("content-type", "application/json")
+            .header("cookie", format!("{COOKIE}={token}"))
+            .body(Body::from(r#"{"name":"Claude Code","password":"pw","purpose":"mcp","scope":"control"}"#))
+            .unwrap();
+        assert_eq!(status(&s, mcp).await.0, StatusCode::OK);
+        let made = s.sessions.keys().unwrap().into_iter().find(|k| k.name == "Claude Code").unwrap();
+        assert_eq!((made.purpose.as_deref(), made.scope.as_str()), (Some("mcp"), "read"));
     }
 
     #[test]

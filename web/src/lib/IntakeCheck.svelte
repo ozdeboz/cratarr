@@ -9,12 +9,15 @@
   import GenrePick from './GenrePick.svelte';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
+  import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
 
   let { source, album, title }: { source: string; album: string; title: string } = $props();
 
   let found = $state<Fixes | null>(null);
   let gone = $state(false);
+  /** Any other failure, said in place, never a loader for ever (the owner, 2026-11-02: errors are never shown as nothing). */
+  let error = $state<string | null>(null);
   let ticked = $state<Set<string>>(new Set());
   let wait: ReturnType<typeof setTimeout> | undefined;
   function read() {
@@ -22,15 +25,20 @@
     getIntake(source, album).then(
       (f) => {
         found = f;
+        error = null;
         ticked = new Set(f.fixes.filter((x) => x.certainty === 'certain').map((x) => x.id));
         if (f.matching) wait = setTimeout(read, 2000);
       },
-      (e) => (gone = missingCall(e)),
+      (e) => {
+        gone = missingCall(e);
+        error = gone ? null : e instanceof Error ? e.message : 'Unexpected error';
+      },
     );
   }
   $effect(() => {
     void album;
     found = null;
+    error = null;
     read();
     return () => clearTimeout(wait);
   });
@@ -58,7 +66,9 @@
 {#if me.admin && !gone}
   <section class="intake" aria-label="Before it comes in">
     <h3>Before it comes in</h3>
-    {#if !found || (found.matching && !found.fixes.length)}
+    {#if error}
+      <Notice text={error} onretry={read} />
+    {:else if !found || (found.matching && !found.fixes.length)}
       <PageLoading size={40} />
     {:else if !found.fixes.length}
       <p class="muted">Nothing to set: its tags are complete.</p>

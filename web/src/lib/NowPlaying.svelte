@@ -39,6 +39,7 @@
   import { holdWind, holdsHere, type Hold } from './holdWind';
   import { local, rewindNow, windDrag, windUpMs } from './localPlayer.svelte';
   import TapeDeck from './TapeDeck.svelte';
+  import { deckMost } from './tapeDeck';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
@@ -51,7 +52,7 @@
   import { longpress } from './longpress';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { visuals } from './visuals/shown.svelte';
-  import { albumSubject, keepViewed, panel, SETTINGS, viewOver } from './panel.svelte';
+  import { albumSubject, keepViewed, panel, viewFor } from './panel.svelte';
   import { goToArtist, mainArtist } from './albums.svelte';
   import { artistFavorite } from './api';
   import { toast } from './toast.svelte';
@@ -267,17 +268,17 @@
     // A Bandcamp preview's row says where it plays from (the owner, 2026-10-25).
     return now.source === BANDCAMP ? [{ id: 'bandcamp', short: 'Bandcamp' }, ...facts] : facts;
   });
-  /** The row's Add: Settings → Player, where the row's facts are chosen; the player over the page gives way. */
+  /** The row's Add: its facts chosen over the player (lib/DetailsSheet), the player staying (the owner, 2026-11-01:
+   *  it closed the player for Settings › Player, a U-turn). */
   function toRowSettings() {
-    leavePlayer();
-    location.hash = `#/settings?view=${encodeURIComponent(SETTINGS + 'player')}`;
+    detailsOpen = true;
   }
   /** The album's name: the album in the panel, as the artist's chip opens the artist. */
   function toAlbum() {
     const t = np;
     if (!t?.album_id) return;
     leavePlayer();
-    viewOver(albumSubject(t.source, t.album_id));
+    viewFor(albumSubject(t.source, t.album_id), t.id);
   }
   // A new track shows its cover (its id: the player's state is a new object on every report).
   const trackId = $derived(np ? `${np.source}/${np.id}` : null);
@@ -446,6 +447,16 @@
     void shown;
     untrack(() => requestAnimationFrame(relayout));
   });
+  /** How far the tape deck may grow (lib/tapeDeck deckMost): a screen at least 1080p tall, and the layout's orientation. */
+  const BIG = '(orientation: landscape) and (min-height: 900px)';
+  let big = $state(typeof window !== 'undefined' && matchMedia(BIG).matches);
+  $effect(() => {
+    const m = matchMedia(BIG);
+    const on = () => (big = m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  });
+  const deckGrows = $derived(deckMost(big, !!layout?.landscape));
   /** A long press on the play button: Start and stop's controls (lib/StartStopSheet; the owner, 2026-10-26). */
   let startStopOpen = $state(false);
   /** A long press on Level: its sheet (lib/LevelSheet). */
@@ -561,7 +572,7 @@
           <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
                cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
-          <div class="under" class:deckroom={prefs.tapeDeck !== 'off'}>
+          <div class="under" class:deckroom={prefs.tapeDeck !== 'off'} style:--deck-tall={deckMost(big, false)} style:--deck-wide={deckMost(big, true)}>
           {#if prefs.playerRow && np.source !== 'device'}
             <div class="facts" class:decked={deckShown}>
               <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
@@ -571,7 +582,7 @@
               {#if !prefs.playerFacts.length}<button class="fact add" onclick={toRowSettings}><Icon name="plus" size={14} /><span>Add</span></button>{/if}
             </div>
           {/if}
-          {#if deckShown}<div class="deck-row" class:over={prefs.playerRow && np.source !== 'device'} in:fade={{ duration: 150 }} out:fade={{ duration: 1000 }}><TapeDeck /></div>{/if}
+          {#if deckShown}<div class="deck-row" class:over={prefs.playerRow && np.source !== 'device'} in:fade={{ duration: 150 }} out:fade={{ duration: 1000 }}><TapeDeck most={deckGrows} /></div>{/if}
           </div>
           {#if np.progress}
             <div
@@ -970,6 +981,14 @@
     position: relative;
     display: grid;
     align-items: center;
+    /* Its width for the deck's room (cqi): the controls' box sets it, never what is in it. */
+    container-type: inline-size;
+    /* How far the deck grows here, by the orientation (set in CSS, so the layout's measuring of either sees its own). */
+    --deck-most: var(--deck-tall, 1);
+  }
+
+  header.landscape .under {
+    --deck-most: var(--deck-wide, 1);
   }
 
   /* Over the row it takes the row's place without its height (the owner, 2026-10-27: no layout shift): centred on it,
@@ -989,9 +1008,13 @@
   /* Where the deck can show, the row keeps its height always (the owner's tablet, 2026-10-28: a one-line row of 26 px,
      the deck 43 over it, lay on the artist's line and the waveform): never a shift as it comes, and the layout measures
      it, the cover giving way. */
-  .under.deckroom {
-    /* The deck's 43 px, and a little air above and below it (the small gaps give way first on a short screen). */
-    min-height: 49px;
+  /* As tall as the deck at its scale in this row (lib/tapeDeck deckScale: the row's width, up to --deck-most) and a
+     little air (the owner, 2026-10-31: in a wide panel the deck grew to 120 px over a 49 px row and lay on the title and
+     the waveform). The layout measures it, so the cover gives way to a larger deck. */
+  .under.deckroom::before {
+    content: '';
+    grid-area: 1 / 1;
+    height: calc(min(var(--deck-most, 1) * 43px, 100cqi * 43 / 320) + 6px);
   }
 
   /* Kept in its place, unseen (not `.away`: app.css hides the children of that, and the row would collapse). */

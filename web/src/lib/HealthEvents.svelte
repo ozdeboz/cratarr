@@ -3,18 +3,25 @@
   // 2026-10-24): read from the diagnostics log (decision 0045), the ones of this kind that match the item, newest first:
   // when, how often, how slow, and who asked or what.
   import { getLog, type LogRow } from './api';
+  import Notice from './Notice.svelte';
 
   /** The log's area and event, the field the item is grouped by (`by`) and its value (the item). */
   let { area, what, by, value }: { area: string; what: string; by: string; value: string } = $props();
 
   let rows = $state<LogRow[] | null>(null);
+  /** The log could not be read: said in place, not "None kept any more." (the owner, 2026-11-02: errors are never shown
+   *  as nothing). */
+  let error = $state<string | null>(null);
+  let readAgain = $state(0);
   $effect(() => {
     const [ar, wh, b, v] = [area, what, by, value];
+    void readAgain;
     let gone = false;
     rows = null;
+    error = null;
     getLog({ area: ar, limit: 500 }).then(
       (r) => !gone && (rows = r.rows.filter((x) => x.what === wh && String(x.fields[b] ?? '') === v).slice(0, 50)),
-      () => !gone && (rows = []),
+      (e) => !gone && (error = e instanceof Error ? e.message : "The log couldn't be read."),
     );
     return () => (gone = true);
   });
@@ -30,7 +37,9 @@
       .join(' · ');
 </script>
 
-{#if rows === null}
+{#if error}
+  <Notice text={error} onretry={() => readAgain++} />
+{:else if rows === null}
   <p class="muted">…</p>
 {:else if !rows.length}
   <p class="muted">None kept any more.</p>

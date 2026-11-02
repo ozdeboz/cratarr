@@ -4,6 +4,7 @@ mod albums;
 #[allow(dead_code)]
 mod analysis;
 mod bandcamp;
+mod fixtures;
 mod api;
 mod app;
 mod catalogue;
@@ -26,6 +27,8 @@ mod trash;
 mod userdata;
 mod jellyfin;
 mod m3u;
+// Cratarr as an MCP server (0.13).
+mod mcp;
 mod memwatch;
 mod mounts;
 mod moves;
@@ -86,8 +89,10 @@ fn healthcheck() -> i32 {
 fn routes(app: std::sync::Arc<app::App>, served: std::sync::Arc<serve::Serve>) -> axum::Router {
     let on = app.play_on.clone();
     let kept = Some(served.userdata.clone());
-    api::router(app)
+    api::router(app.clone())
         .merge(serve::routes::router(served.clone()))
+        // Cratarr as an MCP server (0.13): for API keys only, read only.
+        .merge(mcp::router(app))
         // Listening along and the guest portal (decision 0079).
         .merge(serve::along::router(on.clone(), served.clone()))
         .merge(serve::guest::router(on, served.clone()))
@@ -110,6 +115,23 @@ async fn main() -> Result<()> {
         let args: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(match serve::access::mint(&args) {
             Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e:#}");
+                1
+            }
+        });
+    }
+    // The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there.
+    if std::env::args().nth(1).as_deref() == Some("--make-fixtures") {
+        let Some(dir) = std::env::args().nth(2) else {
+            eprintln!("--make-fixtures <folder>");
+            std::process::exit(2);
+        };
+        std::process::exit(match fixtures::make(std::path::Path::new(&dir)) {
+            Ok(albums) => {
+                println!("{} albums in {dir}", albums.len());
+                0
+            }
             Err(e) => {
                 eprintln!("{e:#}");
                 1

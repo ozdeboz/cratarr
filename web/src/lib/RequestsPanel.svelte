@@ -21,8 +21,8 @@
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
-  import TopPill from './TopPill.svelte';
-  import { closePlaylist, upToPage } from './panel.svelte';
+  import ContentControls from './ContentControls.svelte';
+  import { backOne, REQUESTS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -142,8 +142,12 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
-  <Crumbs trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]} here={L.name} />
+  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
+  <Crumbs
+    trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]}
+    here={L.name}
+    siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
+  />
 {/snippet}
 {#snippet glassExtra()}
   {#if selectable.length}
@@ -169,13 +173,13 @@
   {#if !handed}
     <div class="bar" class:beside>
       {@render glassLeft()}
-      {#if pill()}<TopPill {...pill()!} />{/if}
+      {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}
     </div>
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>
     {#if requests.error && !view}
-      <Notice text={requests.error} />
+      <Notice text={requests.error} onretry={loadRequests} />
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
@@ -190,7 +194,7 @@
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}

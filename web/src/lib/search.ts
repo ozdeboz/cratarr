@@ -130,14 +130,14 @@ export function matchLine(matched: readonly Matched[], kind = ''): string | null
   return `${on}: ${m.text} · ${m.count.toLocaleString()} ${unit}${m.count === 1 ? '' : 's'}`;
 }
 
-/** How long a list still asking the server shows nothing before its loader (lib/Asking), so a quick answer shows none. */
-export const ASK_DELAY = 300;
 /** What a searched list shows (the owner, 2026-10-31: never "no X found" before the answer is in): its rows if it has
  *  any; else, while the server's answer for the words as they are now (`words`) is not in (`answeredFor`: the words
- *  last answered, or failed), the wait (lib/Asking); its empty line only after. */
-export function listShows(rows: number, words: string, answeredFor: string | null | undefined): 'rows' | 'asking' | 'empty' {
+ *  last answered), the wait (lib/Asking); its empty line only after. The server failed for them (`failedFor`): that it
+ *  failed, never none (the owner, 2026-11-02: a failure is not an answer). */
+export function listShows(rows: number, words: string, answeredFor: string | null | undefined, failedFor?: string | null): 'rows' | 'asking' | 'empty' | 'failed' {
   if (rows > 0) return 'rows';
   const q = words.trim();
+  if (q && failedFor === q) return 'failed';
   return q && answeredFor !== q ? 'asking' : 'empty';
 }
 

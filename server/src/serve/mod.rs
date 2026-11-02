@@ -332,17 +332,24 @@ impl Serve {
         let originals = self.userdata.original_years()?;
         let extra_genres = self.userdata.discogs_genres()?;
         let release_types = self.userdata.release_types()?;
+        // A record's facts set by hand, and the albums found missing tracks (0.13: typed as their whole release).
+        let overrides = self.userdata.overrides()?;
+        let set = self.userdata.overrides_stamp(None)?;
+        let mut incomplete: Vec<(String, String)> = self.userdata.albums_incomplete()?;
+        incomplete.sort_unstable();
         // The catalogue is only looked at after it finished a pass (or the rules, added dates or original years changed):
         // reading its files' summary every minute kept its 200 MB file in memory for nothing.
         let inputs = (
             self.catalogue().last_pass(),
             format!(
-                "{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}",
                 serde_json::to_string(&rules)?,
                 added.len() as i64 + added.values().sum::<i64>(),
                 originals.len() as u64 + originals.values().map(|y| u64::from(*y)).sum::<u64>(),
                 extra_genres.len() + extra_genres.values().map(Vec::len).sum::<usize>(),
-                release_types.len() + release_types.values().map(|t| usize::from(t.0.is_some()) + t.1.len()).sum::<usize>()
+                release_types.len() + release_types.values().map(|t| usize::from(t.0.is_some()) + t.1.len()).sum::<usize>(),
+                incomplete.iter().map(|(a, f)| format!("{a}={f}")).collect::<Vec<_>>().join(","),
+                set
             ),
         );
         if self.checked.lock().unwrap_or_else(|p| p.into_inner()).as_ref() == Some(&inputs) {
@@ -352,6 +359,8 @@ impl Serve {
         self.library.set_originals(originals);
         self.library.set_extra_genres(extra_genres);
         self.library.set_release_types(release_types);
+        self.library.set_incomplete(incomplete.iter().filter_map(|(a, f)| Some((a.clone(), whole_of(f)?))).collect());
+        self.library.set_overrides(overrides);
         let (change, print) = self.library.change(self.catalogue(), &rules)?;
         // New analyses alone wait for their gap: not noted as checked, so the next check looks again, and builds once
         // the gap has passed (with every analysis that came meanwhile).
@@ -601,4 +610,19 @@ mod tests {
         assert_eq!(told, vec![one("al-2", Some("dddd")), one("al-3", None), one("al-4", Some("eeee"))]);
         assert!(cover_changes(&now, &now).is_empty());
     }
+}
+
+/// An album's whole release as the missing-tracks check kept it (`app::incomplete::Incomplete`, JSON): its track count,
+/// and its length and longest track where known.
+fn whole_of(found: &str) -> Option<library::Whole> {
+    #[derive(serde::Deserialize)]
+    struct Found {
+        of: usize,
+        #[serde(default)]
+        length_ms: Option<u64>,
+        #[serde(default)]
+        longest_ms: Option<u64>,
+    }
+    let f: Found = serde_json::from_str(found).ok()?;
+    Some(library::Whole { tracks: f.of, duration_ms: f.length_ms, longest_ms: f.longest_ms })
 }

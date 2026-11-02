@@ -109,7 +109,7 @@
 
   /** Bandcamp's previews (an artist found there): never downloaded or kept (decision 0071). */
   const previews = $derived(tracks.some((t) => t.source === BANDCAMP));
-  /** Sounds like them (0.12; one way to make a crate): the crate search's sentence with the artist as its "like" term,
+  /** Sounds like them (0.12; one way to make a crate): the panel's builder, its sentence with the artist as its "like" term,
    *  by the library's id search gives them; where search does not name them, their name read as a line. */
   function soundsLike() {
     const n = name;

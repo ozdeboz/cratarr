@@ -1,15 +1,14 @@
 // The panel's subject (decisions 0023, 0025): the player, or what is viewed lying under it: a selection of one or more
-// playlists in tabs (Tracks, Info, Export, Repair, Sync), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
+// playlists in tabs (Tracks, Export, Repair, Sync; Info is a step of their menu since 2026-11-02), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
 // or an album (`album:<server>/<id>`).
 // It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (Back closes
 // it, a reload brings it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
 
 import { leaveOnArrival } from './navStep.svelte';
 
-export type Tab = 'tracks' | 'info' | 'export' | 'repair' | 'sync';
+export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
   { tab: 'tracks', label: 'Tracks' },
-  { tab: 'info', label: 'Info' },
   { tab: 'export', label: 'Export' },
   { tab: 'repair', label: 'Repair' },
   { tab: 'sync', label: 'Sync' },
@@ -88,13 +87,12 @@ export function backFromStep(subject: string) {
 /** A problem of Health (`health:<its key>`), opened from the Health page's cards (lib/HealthPanel), as Settings' parts. */
 export const HEALTH = 'health:';
 export const healthOf = (viewed: string | null) => (viewed?.startsWith(HEALTH) ? viewed.slice(HEALTH.length).split('/')[0] : null);
-/** The item of the problem whose own page shows (`health:<problem>/<item>`, the third level), if one does. */
-export function healthItemOf(viewed: string | null): number | null {
+/** What a Health part shows a step deeper (Changes to files' plan or run, decision 0092), if anything. */
+export function healthThing(viewed: string | null): string | null {
   if (!viewed?.startsWith(HEALTH)) return null;
   const at = viewed.indexOf('/', HEALTH.length);
-  return at < 0 ? null : Number(viewed.slice(at + 1));
+  return at < 0 ? null : decodeURIComponent(viewed.slice(at + 1));
 }
-
 /** A view of Insights (`insights:history`, lib/InsightsPanel), opened from its page's list, as a part of the settings
  *  is (the owner, 2026-10-24). */
 export const INSIGHTS = 'insights:';
@@ -132,6 +130,9 @@ export const panel = $state({
   arrived: null as string | null,
   /** Bumped when the viewed playlist is viewed again: its view scrolls back to the top. */
   again: 0,
+  /** The track a link to `subject` came for (a track's Go to album, a track found by global search): its list scrolls
+   *  to it and marks it (lib/reveal). `n` counts the links, so the same one again scrolls to it again. */
+  mark: null as { subject: string; track: string; n: number } | null,
 });
 
 const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
@@ -202,6 +203,7 @@ addEventListener('popstate', read);
 /** Views playlists (one, or a selection), a crate or an album in the panel, on `tab`. What is already viewed is replaced,
  *  without a step in the history (no stack: ✕ and Back then close it rather than going to the one before). */
 export function viewSelection(names: string[], tab: Tab = 'tracks') {
+  panel.mark = null;
   if (!names.length) return closePlaylist();
   const t = isSingleSubject(names[0]) ? 'tracks' : tab;
   panel.playerTop = false;
@@ -228,6 +230,7 @@ export function viewInPlace(name: string) {
 /** Views a subject over the one viewed, going deeper (an album's artist, an artist's album, as Symfonium's): a step of
  *  its own, which back returns from. With nothing viewed, as viewPlaylist. */
 export function viewOver(name: string) {
+  panel.mark = null;
   if (!panel.viewed) return viewPlaylist(name);
   panel.playerTop = false;
   if (name === panel.viewed && !panel.selection.length) {
@@ -236,6 +239,14 @@ export function viewOver(name: string) {
   }
   push(address([name], 'tracks'));
   read();
+}
+
+/** Views `subject` (an album, a playlist, a crate) over the one viewed, for one of its tracks: its list scrolls to the
+ *  track and marks it. */
+export function viewFor(subject: string, track: string) {
+  const n = (panel.mark?.n ?? 0) + 1;
+  viewOver(subject);
+  panel.mark = { subject, track, n };
 }
 
 /** One of the playlists' other views (Info, Export, Repair, Sync: from their menu, decided 2026-10-16). Over their
@@ -274,6 +285,21 @@ export function goHome() {
   window.scrollTo(0, 0);
 }
 
+/** A sibling picked (a section's name as the picker of its siblings; the owner, 2026-11-01: "Changing siblings should
+ *  be history with back", as the Library's types are): the same level, a step of its own that Back returns from. */
+export function viewSibling(name: string) {
+  viewOver(name);
+}
+/** Back one level (the panel's back button, a breadcrumb's level above; the owner, 2026-11-01: one rule for every
+ *  panel's breadcrumbs, the levels Back walks through): the step before, or the panel closed where it is the first. */
+export function backOne() {
+  if (depth() > 0) return history.back();
+  closePlaylist();
+}
+/** What shows was opened a step deeper (openStep): the level above it is the step before. Read again as the address
+ *  changes. */
+export const isStep = () => (void panel.viewed, void panel.selection, !!history.state?.thing);
+
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
   const d = depth();
@@ -306,7 +332,7 @@ export function playlistRenamed(from: string, to: string) {
 export function playlistDeleted(id: string) {
   if (!panel.selection.includes(id)) return;
   const rest = panel.selection.filter((x) => x !== id);
-  if (!rest.length) return closePlaylist();
+  if (!rest.length) return backOne();
   replace(address(rest, panel.tab));
   read();
 }
@@ -319,8 +345,9 @@ export function albumMoved(source: string, from: string, to: string) {
 }
 
 /** An album that left Incoming (kept, replaced or deleted) closes. */
+/** A record deleted: back one level from it (not every level: what it was opened over stays). */
 export function albumGone(source: string, id: string) {
-  if (panel.viewed === albumSubject(source, id)) closePlaylist();
+  if (panel.viewed === albumSubject(source, id)) backOne();
 }
 
 /** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own, Insights' panel

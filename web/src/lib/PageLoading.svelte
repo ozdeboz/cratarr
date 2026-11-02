@@ -2,6 +2,7 @@
   // A page's or a panel's whole content loading: the mark in motion (lib/MarkLoader.svelte), in the middle of what can
   // be seen of the page or the component it is in (the window between the bar of pages and the mini-player, or the
   // panel or sheet that scrolls it); lower only where what comes before it reaches that far.
+  import { untrack } from 'svelte';
   import MarkLoader from './MarkLoader.svelte';
   import { holdUntil } from './holdPlace.svelte';
 
@@ -19,35 +20,52 @@
   /** Its height (to the bottom of what can be seen) and the mark's offset from its top; null until measured. */
   let fit = $state<{ height: number; top: number } | null>(null);
 
-  /** What can be seen of `el`'s container: the scrolling box it is in, else the window, less the bar of pages along
-   *  the top (--top-h) and the mini-player's room (--bottom-h). */
-  function seen(): { top: number; bottom: number } {
+  /** What can be seen of `el`'s container as it opens, scrolled to its top: the scrolling box it is in, else the window
+   *  less the bar of pages along the top (--top-h) and the mini-player's room (--bottom-h); and where `el` is in it then. */
+  function seen(): { top: number; bottom: number; at: number; box: Element | null } {
     const view = window.visualViewport?.height ?? window.innerHeight;
+    const r = el.getBoundingClientRect();
     for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
       const y = getComputedStyle(a).overflowY;
       if (y === 'auto' || y === 'scroll') {
-        const r = a.getBoundingClientRect();
-        return { top: Math.max(r.top, 0), bottom: Math.min(r.bottom, view) };
+        const b = a.getBoundingClientRect();
+        return { top: Math.max(b.top, 0), bottom: Math.min(b.bottom, view), at: r.top + a.scrollTop, box: a };
       }
     }
     const css = getComputedStyle(el);
     const px = (name: string) => parseFloat(css.getPropertyValue(name)) || 0;
-    return { top: px('--top-h'), bottom: view - px('--bottom-h') };
+    return { top: px('--top-h'), bottom: view - px('--bottom-h'), at: r.top + window.scrollY, box: null };
   }
 
-  // Measured every frame while it shows (it only shows while loading): what is above it settles meanwhile.
+  // Measured as it comes, and again only when what is above it or the room changes (the owner, 2026-11-01: scrolling
+  // the loading page stuttered "as if continuously recalculating instead of sitting perfectly still"; it was measured
+  // every frame against the window as scrolled, so it grew as it was scrolled and its mark chased the scroll a frame
+  // late). As if scrolled to the top, so scrolling changes nothing: it fills the room left and the mark sits still.
   $effect(() => {
     let raf = 0;
     const measure = () => {
-      const { top, bottom } = seen();
-      const at = el.getBoundingClientRect().top;
+      raf = 0;
+      const { top, bottom, at } = seen();
       const middle = Math.max((top + bottom) / 2, at + size / 2);
       const next = { height: Math.round(Math.max(bottom - at, size * 2)), top: Math.round(middle - at - size / 2) };
-      if (next.height !== fit?.height || next.top !== fit?.top) fit = next;
-      raf = requestAnimationFrame(measure);
+      const was = untrack(() => fit);
+      if (next.height !== was?.height || next.top !== was?.top) fit = next;
     };
+    const ask = () => (raf ||= requestAnimationFrame(measure));
     measure();
-    return () => cancelAnimationFrame(raf);
+    // What is above it settling (its own height changes the parent too, measured to the same and left so).
+    const sized = new ResizeObserver(ask);
+    if (el.parentElement) sized.observe(el.parentElement);
+    const box = seen().box;
+    if (box) sized.observe(box);
+    addEventListener('resize', ask);
+    window.visualViewport?.addEventListener('resize', ask);
+    return () => {
+      cancelAnimationFrame(raf);
+      sized.disconnect();
+      removeEventListener('resize', ask);
+      window.visualViewport?.removeEventListener('resize', ask);
+    };
   });
 </script>
 

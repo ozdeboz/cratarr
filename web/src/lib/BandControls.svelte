@@ -3,16 +3,19 @@
   // Display › Player visualisation: the look, its reset, and its settings, each its name above it and as wide as where
   // it is. Each look has its own (lib/bandTune). Switching to a look whose settings differ from the one left asks once
   // which to go on with (a takeover, the choice sheet as everywhere: lib/MenuSheet): its own, shown at once, or a copy of these,
-  // carried over. Its reset asks first; a long
-  // press resets every look to its own defaults (asking too).
+  // carried over. Its reset asks first, in the Reset sheet as every section's (lib/settings/ResetSheet), from Settings →
+  // Player's declaration (lib/settings/resetItems: the owner, 2026-11-02, the part's Reset did not know the looks); a
+  // long press resets every look to its own defaults (asking too).
   import BandSlider, { bandValueText } from './BandSlider.svelte';
   import Item from './settings/Item.svelte';
   import { BAND_DIRECTIONS, BAND_ENGINES, BAND_LOOKS, BANDS_MORE, COUNT_MORE, ENGINE_MORE, WINDOW_MORE } from './bandWaves.svelte';
-  import { resetTune, setTune, tuneIsDefault, tuneOf } from './bandTune.svelte';
+  import { setTune, tuneOf } from './bandTune.svelte';
+  import ResetSheet from './settings/ResetSheet.svelte';
+  import { resetOf, rowsOf } from './settings/reset.svelte';
+  import { bandItems } from './settings/resetItems.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import ChoiceSheet from './settings/ChoiceSheet.svelte';
-  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import MoreInfo from './MoreInfo.svelte';
@@ -67,7 +70,10 @@
   let asking = $state<'look' | 'all' | null>(null);
   /** Five looks: the row says the one, the choice sheet picks it (the owner, 2026-10-25). */
   let picking = $state(false);
-  const anyChanged = $derived(Object.values(prefs.playerBandsTunes).some((t) => t && Object.keys(t).length));
+  /** Each look's Reset (one look's, or every look's) as the declaration says. */
+  const lookItems = (l: BandLookName) => bandItems().filter((i) => i.name === named(l));
+  const anyChanged = $derived(rowsOf(bandItems()).length > 0);
+  const lookChanged = (l: BandLookName) => rowsOf(lookItems(l)).length > 0;
 </script>
 
 {#snippet slider(x: Slider)}
@@ -95,7 +101,7 @@
       <Item name={x.label} more={x.more ?? null} value={valueOf(x)} onclick={() => (sliding = x)} />
     {/each}
     <Item name="Engine" more={ENGINE_MORE}><Seg label="Engine" options={BAND_ENGINES} bind:value={prefs.playerBandsEngine} /></Item>
-    <Item name="Reset {named(look)}" disabled={tuneIsDefault(look)} onclick={() => (asking = 'look')} />
+    <Item name="Reset {named(look)}" disabled={!lookChanged(look)} onclick={() => (asking = 'look')} />
     {#if anyChanged}<Item name="Reset every look" onclick={() => (asking = 'all')} />{/if}
   {/if}
   {#if sliding && look && tune}
@@ -115,7 +121,7 @@
           disabled={!anyChanged}
           aria-label="Reset {named(look)} (hold: every look)"
           title="Reset (hold: every look)"
-          onclick={() => !tuneIsDefault(look) && (asking = 'look')}
+          onclick={() => lookChanged(look) && (asking = 'look')}
           use:longpress={() => (asking = 'all')}><Icon name="reset" size={18} /></button
         >{/if}
       <button class="pick" aria-haspopup="dialog" aria-label="Look: {BAND_LOOKS.find((o) => o.value === prefs.playerBands)?.label}" onclick={() => (picking = true)}
@@ -152,16 +158,10 @@
     </div>
   </MenuSheet>
 {:else if asking === 'look' && look}
-  <ConfirmSheet title="Reset {named(look)}?" label="Reset {named(look)}" icon="reset" onconfirm={() => resetTune(look)} onclose={() => (asking = null)} />
+  {@const l = look}
+  <ResetSheet title="Reset {named(l)}" rows={rowsOf(lookItems(l))} onconfirm={() => resetOf(lookItems(l))} onclose={() => (asking = null)} />
 {:else if asking === 'all'}
-  <ConfirmSheet
-    title="Reset every look?"
-    text="Aurora, Sirius, Hairlines and Meter each back to its own defaults."
-    label="Reset every look"
-    icon="reset"
-    onconfirm={() => (prefs.playerBandsTunes = {})}
-    onclose={() => (asking = null)}
-  />
+  <ResetSheet title="Reset every look" rows={rowsOf(bandItems())} onconfirm={() => resetOf(bandItems())} onclose={() => (asking = null)} />
 {/if}
 
 <style>

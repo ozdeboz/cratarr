@@ -1,9 +1,9 @@
 <script lang="ts">
   // Download… as files (decision 0058, amended 0.10; lib/DownloadStep): one step for every object and selection,
-  // inside its menu sheet (lib/MenuSheet), and the panel's Export tab under its playlists. What it will hold (how many
-  // tracks, about how large, how many missing are left out); for playlists with their tracks or only the playlist
-  // files, several as they are or combined into one; for a list of tracks with a playlist file or not; the format and
-  // the layout; in the app, one zip or the files one by one; then Download, which readies it on the server and starts
+  // inside its menu sheet (lib/MenuSheet), and the panel's Export tab under its playlists. For playlists their files
+  // only or with their tracks, several as they are or combined into one; for a list of tracks with a playlist file or not; the format and
+  // the layout; in the app, one zip or the files one by one; then Download, saying what it will hold (how many tracks, about how large; how many missing are left out under
+  // it), which readies it on the server and starts
   // the download (a link: the browser shows its progress, and closing it cancels; the files one by one, the app writes
   // into a folder picked there). The choices are kept in this browser (lib/export.svelte).
   import { exportDownloadUrl, exportPreview, prepareExport, type ExportPreview, type ExportWhat } from './api';
@@ -11,8 +11,10 @@
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import { exporting } from './export.svelte';
-  import { BITRATES, exportLine, exportReady, exportRequest, FORMATS, several, suggestedName, withTracks } from './exportChoices';
-  import Icon from './Icon.svelte';
+  import { BITRATES, exportLabel, exportLeftOut, exportReady, exportRequest, FORMATS, playlistFileOffered, several, suggestedName, withTracks } from './exportChoices';
+  import MenuCards from './MenuCards.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
   import { shownPlaylists } from './output.svelte';
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
@@ -93,12 +95,13 @@
   }
 </script>
 
+<!-- Playlist only first (the owner, 2026-11-02: off as it comes; on, what concerns the tracks folds away), then the format
+     (the first and most important of the tracks'), the other switches, the layout last; then Download, as offline
+     listening's: a row of the menu's, its words saying how much (no line above it). -->
 <div class="parts">
-  <p class="sum" aria-live="polite">
-    {#if failed}<span class="error">{failed}</span>{:else if preview}{exportLine(preview)}{/if}
-  </p>
-
-  <!-- The format first (the owner: the first and most important), then the switches side by side. -->
+  {#if what.kind === 'playlists'}
+    <Switch card label="Playlist only" checked={exporting.playlistOnly} onchange={(on) => (exporting.playlistOnly = on)} />
+  {/if}
   {#if tracks}
     <Card title="Format" label="Format">
       <ChoiceList label="Format" options={FORMATS} value={exporting.format} onchange={(v) => (exporting.format = v)} />
@@ -115,7 +118,6 @@
   {/if}
 
   {#if what.kind === 'playlists'}
-    <Switch card label="Include tracks" checked={exporting.tracks} onchange={(on) => (exporting.tracks = on)} />
     {#if several(what)}
       <Switch card label="Combine into one playlist" checked={exporting.combine} onchange={(on) => (exporting.combine = on)} />
       {#if exporting.combine}
@@ -128,36 +130,40 @@
         />
       {/if}
     {/if}
-  {:else}
+  {:else if playlistFileOffered(what)}
     <Switch card label="Include a playlist file" checked={exporting.m3u} onchange={(on) => (exporting.m3u = on)} />
   {/if}
   {#if tracks}
     <!-- The layout as a switch (the owner): on, Artist and album folders; off, one folder. -->
     <Switch card label="Preserve directory layout" checked={exporting.layout === 'folders'} onchange={(on) => (exporting.layout = on ? 'folders' : 'flat')} />
   {/if}
-
-  <button class="go" disabled={!ready || starting} aria-busy={starting} onclick={start}><Icon name="arrowDownToLine" size={20} /><span>Download</span></button>
+  {#if failed}<p class="error" role="alert">{failed}</p>{/if}
 </div>
+<MenuCards>
+  <MenuGroup>
+    <MenuEntry
+      icon="arrowDownToLine"
+      label={exportLabel(preview, req)}
+      sub={exportLeftOut(preview)}
+      disabled={!ready || starting}
+      busy={starting}
+      onclick={start}
+    />
+  </MenuGroup>
+</MenuCards>
 
 <style>
   /* Each choice a row on a card of its own (lib/SettingRow, lib/Card, lib/Switch), as View's. */
   .parts {
     display: grid;
     gap: 4px;
-    padding: 4px 16px 16px;
-  }
-
-  .sum {
-    min-height: 1.4em;
-    margin: 0 0 8px;
-    font-size: 0.9rem;
-    font-variant-numeric: tabular-nums;
-    color: var(--muted);
-    text-align: center;
+    padding: 4px 16px 8px;
   }
 
   .error {
+    margin: 8px 0 0;
     color: var(--danger-ink);
+    font-size: 0.9rem;
   }
 
   input[type='text'] {
@@ -168,26 +174,5 @@
     border-radius: 10px;
     font: inherit;
     color: inherit;
-  }
-
-  .go {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-height: 44px;
-    margin-top: 12px;
-    border: 0;
-    border-radius: 10px;
-    background: var(--accent);
-    color: var(--accent-text);
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .go:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
 </style>

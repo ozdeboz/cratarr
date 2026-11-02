@@ -1,7 +1,6 @@
 <script lang="ts" module>
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
-  import ChoiceSheet from './settings/ChoiceSheet.svelte';
-  import { markClassical } from './api';
+  import RecordEdit from './RecordEdit.svelte';
   import { leavePlayer } from './navStep.svelte';
   import { port } from './player/port.svelte';
   import { untrack } from 'svelte';
@@ -22,14 +21,16 @@
   };
 
   /** For an album of the Library's list. One already in Music (an upgrade or a duplicate) does not move there again:
-   *  an upgrade replaces. */
+   *  an upgrade replaces. Verdicts compare against every library now (2026-11-02, decision 0096's 0.13 fixes): only a
+   *  pair in Music replaces (`replaceable`), and only then is Music no target for a move. */
   export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
     const deletable = s.deletable.includes(a.id);
     const verdict = s.verdicts[a.id];
+    const inMusic = !!verdict?.replaceable;
     return {
       from: s.library_info.find((l) => l.id === a.library) ?? null,
-      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(verdict && l.use === 'music')) : [],
-      replaceable: deletable && verdict?.kind === 'upgrade',
+      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(inMusic && l.use === 'music')) : [],
+      replaceable: deletable && verdict?.kind === 'upgrade' && inMusic,
       deletable,
       job: jobs.of(s.id, a.id)?.id ?? null,
     };
@@ -90,9 +91,10 @@
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
+  import { recordWord } from './recordTypeRules';
   import { playPlaylistFrom } from './output.svelte';
   import { shuffled } from './shuffle';
-  import { albumGone, albumSubject, panel, viewPlaylist } from './panel.svelte';
+  import { albumGone, albumSubject, panel, viewOver } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
@@ -163,6 +165,8 @@
       return keptAlbum;
     }
   });
+  // Named by its release type: Delete EP, this single (lib/recordTypeRules).
+  const word = $derived(recordWord(a.type));
   const source = $derived.by(() => {
     try {
       return (keptSource = givenSource ?? keptSource);
@@ -242,24 +246,9 @@
   const listed = () => [{ source, a: a as ListedAlbum }];
   /** Missing tracks open (lib/ReplaceTrackSheet), in the menu's place. */
   let missingOpen = $state(false);
-  // Classical… (0.10; administrators'): the record marked classical or not, library-wide, or left to Cratarr's finding;
-  // a server that says nothing of it (no `classical`) offers none.
-  let classicalOpen = $state(false);
-  const CLASSICAL_MARKS: { value: 'auto' | 'classical' | 'not'; label: string }[] = [
-    { value: 'auto', label: 'As Cratarr finds it' },
-    { value: 'classical', label: 'Classical' },
-    { value: 'not', label: 'Not classical' },
-  ];
-  async function markIt(v: 'auto' | 'classical' | 'not') {
-    const album = a as ListedAlbum;
-    try {
-      const r = await markClassical(source, album.id, v === 'auto' ? null : v);
-      album.classical = r.classical;
-      album.classical_mark = r.classical_mark ?? undefined;
-    } catch (e) {
-      toast.fail(e, 'Could not mark it');
-    }
-  }
+  // Edit (0.13, administrators'; the owner, 2026-10-31: per-record overrides): its type, year, secondary types, genres
+  // and classical set by hand (lib/RecordEdit), in the menu's place; the 0.10 Classical… sheet is its Classical row now.
+  let editOpen = $state(false);
   const actions = $derived.by<SheetAction[]>(() => {
     if (ask || exporting || step !== 'menu') return [];
     const t = tracks;
@@ -376,7 +365,8 @@
   const toList = new TracksToPlaylist(
     () => source,
     () => ids,
-    'this album',
+    // svelte-ignore state_referenced_locally
+    `this ${word}`,
   );
   $effect(() => {
     if (ids[0]) toList.ask([ids[0]]);
@@ -390,10 +380,12 @@
   });
   /** Download… (decision 0058, amended 0.10): its tracks, in lib/DownloadStep. */
   let exporting = $state(false);
-  // Opened at the playlists for an album outside Music: there is nothing to add it to.
+  // Opened at the playlists for one that cannot go in them: there is nothing to add it to. Since 2026-10-15 every
+  // library's tracks can; not only where no Music library is set up (playlists are kept there) or its library is not
+  // in use (the owner, 2026-11-02: it said "isn't in Music", untrue of Incoming).
   $effect(() => {
     if (step === 'lists' && toList.first && !toList.first.addable) {
-      toast.fail(null, "This album isn't in Music, so it can't go in a playlist");
+      toast.fail(null, `This ${word} can't go in a playlist: its library isn't in use, or no Music library is set up`);
       onclose();
     }
   });
@@ -404,7 +396,7 @@
   // svelte-ignore state_referenced_locally
   const primary = offer?.from?.use === 'music';
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
-  const NO_LIDARR = "Lidarr isn't set up in Settings, so it may fetch this album again.";
+  const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   let ask = $state<false | Ask | 'really'>(false);
   /** The move's library. */
   let to = $state<LibraryInfo | null>(null);
@@ -543,7 +535,8 @@
       jobs.poke();
       return;
     }
-    gone();
+    // It stays open where it is (the owner, 2026-11-01: no U-turns): its panel follows it to its new place.
+    ongone?.();
     withUndo(words, [r.undo], { undone: `${r.title} is back in ${fromName}.`, after: onundone });
   }
   function gone() {
@@ -555,13 +548,13 @@
       if (!to) return;
       const name = to.name;
       moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `Moved ${a.title} to ${name}.`);
-    }, 'Could not move the album');
+    }, `Could not move the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
       const r = await replaceIncoming(source, a.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
       moved(r, `Replaced ${r.title} in ${music}.`);
-    }, 'Could not replace the album');
+    }, `Could not replace the ${word}`);
   /** The tag differences shown at first (the rest behind "And N more"). */
   const DIFF_SHOWN = 12;
   let diffAll = $state(false);
@@ -570,7 +563,7 @@
       const { undo, title } = await deleteAlbum(source, a.id);
       gone();
       withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in ${fromName}.`, after: onundone });
-    }, 'Could not delete the album');
+    }, `Could not delete the ${word}`);
   async function cancel(id: number) {
     onclose();
     try {
@@ -595,7 +588,7 @@
         label="View"
         onclick={() => {
           onclose();
-          viewPlaylist(albumSubject(source, a.id));
+          viewOver(albumSubject(source, a.id));
         }}
       />
     {/if}
@@ -662,10 +655,8 @@
   {:else if e === 'missingTracks'}
     <!-- Its release's tracks, the missing ones found one at a time (0.9.8, single-track replacement). -->
     {#if me.admin && source === 'cratarr' && missingOffered}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
-  {:else if e === 'classical'}
-    {#if me.admin && offers('classical') && (a as ListedAlbum).classical !== undefined}
-      <MenuEntry icon="music" label="Classical…" onclick={() => (classicalOpen = true)} />
-    {/if}
+  {:else if e === 'edit'}
+    {#if me.admin && source === 'cratarr'}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
   {:else if e === 'deviceCover'}
     {#if !(me.admin && source === 'cratarr') && deviceCovers}<MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />{/if}
   {:else if e === 'serverCover'}
@@ -686,20 +677,14 @@
   {:else if e === 'removeResume'}
     {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
   {:else if e === 'deleteAlbum'}
-    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
+    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label={`Delete ${word}`} danger onclick={() => (ask = 'delete')} />{/if}
   {/if}
 {/snippet}
 
 {#if missingOpen}
   <ReplaceTrackSheet {source} album={{ id: a.id, title: a.title }} {onclose} />
-{:else if classicalOpen}
-  <ChoiceSheet
-    title="Classical"
-    options={CLASSICAL_MARKS}
-    value={(a as ListedAlbum).classical_mark ?? 'auto'}
-    onchange={(v) => void markIt(v)}
-    onclose={() => ((classicalOpen = false), onclose())}
-  />
+{:else if editOpen}
+  <RecordEdit {source} albums={[a as ListedAlbum]} {onclose} />
 {:else}
 <MenuSheet
   label={a.title}
@@ -834,7 +819,7 @@
     <div class="form">
       <p class="ask">Delete {a.title}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
       <div class="actions">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>Delete album</button>
+        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>Delete {word}</button>
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>

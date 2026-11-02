@@ -37,6 +37,11 @@ class Tasks {
     this.apply(t);
   }
 
+  /** Asked now: one the server began on its own may have come after the last asking (Discover's first look). */
+  ask() {
+    return this.#ask();
+  }
+
   async #ask() {
     try {
       for (const t of (await getTasks()).tasks) this.apply(t);

@@ -18,6 +18,7 @@
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import { plural } from './insights.svelte';
+  import { recordsWord } from './recordTypeRules';
   import { jobs } from './jobs.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { startRadio, type LocalTrack } from './localPlayer.svelte';
@@ -31,11 +32,19 @@
   import { withUndo } from './undo.svelte';
 
   type Ticked = { s: ShelfSource; a: ListedAlbum };
-  let { list, tracks, close, onask }: { list: Ticked[]; tracks: LocalTrack[]; close: () => void; onask: (ask: Ask) => void } = $props();
+  let {
+    list,
+    tracks,
+    close,
+    onask,
+    onedit,
+  }: { list: Ticked[]; tracks: LocalTrack[]; close: () => void; onask: (ask: Ask) => void; onedit: (albums: ListedAlbum[]) => void } = $props();
 
   // The device's own albums have none of these (local mode's menu is its own).
   const items = $derived(list.filter((x) => x.s.id !== DEVICE));
-  const n = $derived(plural(items.length, 'album'));
+  // Named by their one type where they share it (3 EPs), else records (lib/recordTypeRules).
+  const word = $derived(recordsWord(items.map((x) => x.a.type)));
+  const n = $derived(plural(items.length, word));
   /** What its library allows: the Library's list says (its sources carry it), else nothing. */
   const offers = $derived(items.map((x) => ({ ...x, o: 'deletable' in x.s ? offerIn(x.s as AlbumsSource, x.a) : null })));
 
@@ -63,7 +72,7 @@
     const to = shared === stars ? 0 : stars;
     // An album already at `to` is left alone (rateAlbum takes the rating it has off).
     const them = rateable.filter((x) => !to || albumRatings[`${x.s.id}/${x.a.id}`] !== to);
-    const m = plural(them.length, 'album');
+    const m = plural(them.length, word);
     askIfMany(them.length, { title: to ? `Give ${m} ${plural(to, 'star')}?` : `Take the rating off ${m}?`, label: to ? `Give ${plural(to, 'star')}` : 'Take it off', icon: 'star' }, () =>
       void fewAtATime(them, (x) => rateAlbum(x.s.id, x.a.id, to)),
     );
@@ -79,6 +88,15 @@
   const keys = $derived(new Set(items.map((x) => `${x.s.id}/${x.a.id}`)));
   const keptIds = $derived(inApp ? downloads.tracks.filter((t) => keys.has(`${t.source}/${albumOfDownload(t)}`)).map((t) => t.download.id) : []);
 
+  // Edit (0.13, administrators'): the ticked records of Cratarr's own library, their values set by hand at once
+  // (lib/RecordEdit), once the menu has closed.
+  const editable = $derived(me.admin ? items.filter((x) => x.s.id === 'cratarr').map((x) => x.a) : []);
+  function edit() {
+    const them = editable;
+    close();
+    onedit(them);
+  }
+
   // What their libraries allow (administrators): a job in the conversion queue only Cancel, else Move and Delete.
   const converting = $derived(me.admin ? offers.filter((x) => x.o?.job != null) : []);
   const deletable = $derived(me.admin ? offers.filter((x) => x.o && x.o.job === null && x.o.deletable) : []);
@@ -91,16 +109,17 @@
     return [...by].map(([name, them]) => ({ name, them }));
   });
 
-  /** Gone from the Library's list at once (as its page's `gone`), before it is read again. */
-  function leave(gone: { source: string; id: string }[]) {
+  /** Gone from the Library's list at once (as its page's `gone`), before it is read again; `deleted`: from the panel
+   *  too (a moved one stays open, its panel following it). */
+  function leave(gone: { source: string; id: string }[], deleted = false) {
     const out = new Set(gone.map((x) => `${x.source}/${x.id}`));
-    for (const x of gone) albumGone(x.source, x.id);
+    if (deleted) for (const x of gone) albumGone(x.source, x.id);
     const v = library.view;
     if (v) v.sources = v.sources.map((s) => ({ ...s, albums: s.albums.filter((a) => !out.has(`${s.id}/${a.id}`)) }));
   }
   const reread = () => readLibrary(true);
-  /** "Moved 5 albums", or "Moved 4 of 5 albums" when some were refused. */
-  const doneOf = (done: number, of: number) => (done === of ? plural(of, 'album') : `${done} of ${plural(of, 'album')}`);
+  /** "Moved 5 records", or "Moved 4 of 5 records" when some were refused. */
+  const doneOf = (done: number, of: number) => (done === of ? plural(of, word) : `${done} of ${plural(of, word)}`);
   /** Names, the first few, then how many more. */
   const named = (titles: string[]) => (titles.length > 8 ? `${titles.slice(0, 8).join(', ')} and ${titles.length - 8} more` : titles.join(', '));
 
@@ -118,7 +137,7 @@
     const days = library.view?.trash_days ?? 14;
     const music = library.view?.music ?? 'Music';
     const inMusic = them.filter((x) => x.primary).length;
-    const m = plural(them.length, 'album');
+    const m = plural(them.length, word);
     close();
     // Asked once for them all; the primary library's extra step said in it (decision 0034).
     onask({
@@ -138,15 +157,15 @@
           },
           1,
         );
-        leave(gone);
-        if (!gone.length) return toast.fail(null, 'Could not delete the albums');
+        leave(gone, true);
+        if (!gone.length) return toast.fail(null, `Could not delete the ${word}s`);
         withUndo(gone.length === 1 && them.length === 1 ? `Deleted ${gone[0].title}.` : `Deleted ${doneOf(gone.length, them.length)}.`, tokens, { after: reread });
       },
     });
   }
 
   // Move: what each would become asked first, then one question for them all (those refused named, left out).
-  const NO_LIDARR = "Lidarr isn't set up in Settings, so it may fetch these albums again.";
+  const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch these ${word}s again.`);
   async function askMove(name: string, them: (Ticked & { to: LibraryInfo; primary: boolean })[]) {
     // Read before closing: the menu (and this) is gone by the time the previews are in.
     const ask = onask;
@@ -161,13 +180,13 @@
     const text = [
       `${named(go.map((y) => y.x.a.title))}.`,
       refused.length ? `Not moved: ${refused.slice(0, 8).map((y) => `${y.x.a.title} (${why(y.p)})`).join(', ')}${refused.length > 8 ? ` and ${refused.length - 8} more` : ''}.` : '',
-      unread.length ? `${plural(unread.length, 'album')} couldn't be looked at.` : '',
+      unread.length ? `${plural(unread.length, word)} couldn't be looked at.` : '',
       convert ? `${plural(convert, 'hi-res file')} ${convert === 1 ? 'is' : 'are'} converted to 16-bit/44.1 kHz first.` : '',
       go.some((y) => !y.p.acquisition && !y.x.primary) ? NO_LIDARR : '',
     ]
       .filter(Boolean)
       .join(' ');
-    const m = plural(go.length, 'album');
+    const m = plural(go.length, word);
     ask({
       title: `Move ${m} to ${name}?`,
       text,
@@ -190,7 +209,7 @@
         if (queued) jobs.poke();
         leave(gone);
         if (gone.length) withUndo(`Moved ${doneOf(gone.length, go.length)} to ${name}.`, tokens, { after: reread });
-        else if (!queued) toast.fail(null, 'Could not move the albums');
+        else if (!queued) toast.fail(null, `Could not move the ${word}s`);
       },
     });
   }
@@ -226,13 +245,16 @@
     />
   {/if}
 </MenuGroup>
+<MenuGroup>
+  {#if editable.length}<MenuEntry icon="pencil" label="Edit" onclick={edit} />{/if}
+</MenuGroup>
 <MenuGroup label="Library">
   {#if converting.length}<MenuEntry icon="close" label="Cancel conversion" onclick={cancelAll} />{/if}
   {#each moves as mv (mv.name)}<MenuEntry icon="intoBox" label={`Move to ${mv.name}`} onclick={() => askMove(mv.name, mv.them)} />{/each}
 </MenuGroup>
 <!-- Remove, last. -->
 <MenuGroup>
-  {#if deletable.length}<MenuEntry icon="trash" label="Delete albums" danger onclick={askDelete} />{/if}
+  {#if deletable.length}<MenuEntry icon="trash" label={`Delete ${word}s`} danger onclick={askDelete} />{/if}
 </MenuGroup>
 
 <style>

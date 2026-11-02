@@ -14,7 +14,7 @@ const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.art
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
   s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak, s.genres";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
-  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary";
+  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary, a.type_why, a.set_fields, a.whole_tracks";
 
 /// An album's length in milliseconds, for a query over `albums a`: its songs' lengths summed, NULL when any song's is
 /// unknown or nothing (`albums.duration_ms` counts those as nothing), as `source::total_secs`. Over the songs' album
@@ -22,7 +22,8 @@ const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.ge
 const ALBUM_LENGTH: &str = "(SELECT CASE WHEN count(*) = count(nullif(s.duration_ms, 0)) THEN sum(s.duration_ms) END FROM songs s WHERE s.album_id = a.id)";
 
 /// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id and Music-form id (what its
-/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists.
+/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists; and
+/// (0.13) its tracks, and whether it is a mix of others' (a compilation or a soundtrack).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkAlbum {
     pub id: String,
@@ -33,6 +34,8 @@ pub struct WorkAlbum {
     pub release: Option<String>,
     pub genres: Vec<String>,
     pub artists: Vec<WorkArtist>,
+    pub tracks: u32,
+    pub mixed: bool,
 }
 
 /// One of an album's album artists: their library id, name, and MusicBrainz id where the files carry one.
@@ -128,7 +131,9 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     let genres: String = r.get(7)?;
     let artist: String = r.get(3)?;
     let id: String = r.get(1)?;
-    let release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref());
+    let mut release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref(), r.get(17)?);
+    release.set = r.get::<_, String>(18)?.split('\u{1f}').filter(|f| !f.is_empty()).map(str::to_string).collect();
+    release.whole_tracks = r.get::<_, Option<i64>>(19)?.map(|t| t.max(0) as u32);
     Ok(Album {
         cover_art: r.get::<_, Option<String>>(13)?.unwrap_or_else(|| id.clone()),
         id,
@@ -150,11 +155,12 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     })
 }
 
-/// An album's release type as kept (0.9.6).
-fn release_of(kind: Option<String>, from: Option<String>, secondary: Option<&str>) -> crate::source::ReleaseType {
+/// An album's release type as kept (0.9.6; the rule that decided it, 0.13).
+fn release_of(kind: Option<String>, from: Option<String>, secondary: Option<&str>, why: Option<String>) -> crate::source::ReleaseType {
     crate::source::ReleaseType {
         kind,
         type_from: from,
+        type_why: why,
         secondary: secondary.unwrap_or_default().split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect(),
         ..Default::default()
     }
@@ -907,10 +913,12 @@ impl Library {
     /// MusicBrainz release, its files' genres and its album artists, in the library's order.
     pub fn work_albums(&self) -> Result<Vec<WorkAlbum>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres FROM albums ORDER BY n")?;
+        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres, song_count, secondary, compilation FROM albums ORDER BY n")?;
         let mut out: Vec<WorkAlbum> = st
             .query_map([], |r| {
                 let genres: String = r.get(6)?;
+                let secondary: String = r.get(8)?;
+                let mixed = r.get::<_, bool>(9)? || secondary.split('\u{1f}').any(|s| s == "compilation" || s == "soundtrack");
                 Ok(WorkAlbum {
                     id: r.get(0)?,
                     base: r.get(1)?,
@@ -920,6 +928,8 @@ impl Library {
                     release: r.get::<_, Option<String>>(5)?.filter(|m| !m.is_empty()),
                     genres: genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect(),
                     artists: Vec::new(),
+                    tracks: r.get::<_, i64>(7)?.clamp(0, i64::from(u32::MAX)) as u32,
+                    mixed,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -965,33 +975,16 @@ impl Library {
         Ok(rows.filter_map(|r| r.ok()).filter(|m| crate::app::discogs::is_mbid(m)).collect())
     }
 
-    /// The albums whose type is not known, only guessed, or Discogs' (0.9.6: asked of Discogs; 0.10: Discogs' own asked
+    /// The albums MusicBrainz said no type of: none said, or Discogs' (0.9.6: asked of Discogs; 0.10: Discogs' own asked
     /// again where an older rule found them): (id, MusicBrainz release, artist, name, tracks, length in ms).
     pub fn albums_to_type(&self) -> Result<Vec<(String, String, String, String, usize, u64)>> {
         let db = self.db();
         let mut st = db.prepare(
             "SELECT id, coalesce(mbid, ''), artist, name, song_count, duration_ms FROM albums
-             WHERE release_type IS NULL OR type_from IN ('guess', 'discogs') ORDER BY n",
+             WHERE type_from IS NULL OR type_from = 'discogs' ORDER BY n",
         )?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)?.max(0) as usize, r.get::<_, i64>(5)?.max(0) as u64)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// Each album's tracks and length (ms) by its MusicBrainz release (0.10: an edition compared with its release
-    /// group's first release); of albums sharing a release, the one of more tracks.
-    pub fn release_sizes(&self) -> Result<HashMap<String, (usize, u64)>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT mbid, song_count, duration_ms FROM albums WHERE mbid IS NOT NULL AND mbid <> ''")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as usize, r.get::<_, i64>(2)?.max(0) as u64)))?;
-        let mut out: HashMap<String, (usize, u64)> = HashMap::new();
-        for row in rows {
-            let (release, tracks, ms) = row?;
-            let e = out.entry(release).or_insert((tracks, ms));
-            if tracks > e.0 {
-                *e = (tracks, ms);
-            }
-        }
-        Ok(out)
     }
 
     /// Each song's album's release types as the axes show them ("EP", "Live"), primary first (0.9.6); songs of albums of

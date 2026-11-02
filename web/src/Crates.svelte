@@ -6,7 +6,7 @@
   import { prefs, type CrateOrder } from './lib/prefs.svelte';
   import type { Crate } from './lib/api';
   import ListHead from './lib/ListHead.svelte';
-  import { CRATE_ORDERS, howMany, matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
+  import { CRATE_ORDERS, howMany, matchesSearch, pageView, searchNone, usePageAction } from './lib/pageView.svelte';
   import { listShows } from './lib/search';
   import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
   import CrateCard from './lib/CrateCard.svelte';
@@ -17,10 +17,8 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import Asking from './lib/Asking.svelte';
+  import { keepWhile } from './lib/keepWhile.svelte';
   import { deepMatches } from './lib/deepSearch.svelte';
-  import { quickCrates, quickOn } from './lib/quickCrates.svelte';
-  import { reach } from './lib/reach.svelte';
-  import QuickCrate from './lib/QuickCrate.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
   // And when a library is switched on or off: a crate fills from every library switched on.
@@ -30,8 +28,8 @@
     loadCrates();
   });
 
-  // New crate: named in the same sheet as a new playlist, then built in the panel.
-  // New crate: the panel's crate edit mode, empty, the caret in its name (as New playlist).
+  // New crate: the panel's builder, empty (0.13; the owner, 2026-10-31: "one place where to show contents or building of
+  // a crate, and that is in the panel"): its sentence first, an example in its field, the caret there.
   usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => startCrate('') }));
   // The list's order (its header): as made, by name, or by what its cards show (decision 0060); either way round. A
   // crate whose card is not known yet (favourites not read) comes first, as made.
@@ -43,6 +41,7 @@
     newWeek: (c) => c.stats?.new_week,
   };
   // The pill's search (the owner, 2026-10-25): a crate whose name holds every word, or one the server finds by its tracks.
+  // Words that make a crate lead with its card, as on every page (App, lib/SearchCrateCard).
   const deepOf = deepMatches('crate', 'crate:');
   const sorted = $derived.by(() => {
     // The filter's Hide built-in crates (0.9.3): only one's own.
@@ -53,36 +52,35 @@
     else if (of) list.sort((a, b) => (of(a) ?? -1) - (of(b) ?? -1) || byName(a, b));
     return prefs.crateDown ? list.reverse() : list;
   });
-  // A crate being grabbed (0.12.1, the owner: "Results replace the list"): the page is that crate alone, its tracks or
-  // records; the crates come back once its words are cleared or it is saved.
-  const grabbing = $derived(quickOn() && !reach.away && quickCrates.chips.length > 0);
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
-  const shows = $derived(listShows(sorted.length, pageView.query, deepOf.answeredFor()));
+  const shows = $derived(listShows(sorted.length, pageView.query, deepOf.answeredFor(), deepOf.failedFor()));
+  // None by name and the server's finds not in (lib/loader, the one rule): the list as it was, then the loader.
+  const kept = keepWhile(() => ({ shows, list: sorted }), () => shows === 'asking', () => pageView.query.trim());
+  const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
+  // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
+  searchNone(() => (listed.shows === 'empty' ? 'crates' : null));
 </script>
 
 <main>
-  {#if quickOn()}
-    <!-- A quick crate (0.11; 0.12 the owner's mockup B): words typed at the top read as a crate's sentence (lib/QuickCrate). -->
-    <QuickCrate />
-  {/if}
-  {#if grabbing}
-    <!-- The grabbed crate's results are QuickCrate's own. -->
-  {:else if crates.error && !crates.list}
-    <Notice text={crates.error} />
+  {#if crates.error && !crates.list}
+    <Notice text={crates.error} onretry={loadCrates} />
   {:else if !crates.list}
     <PageLoading />
-  {:else if shows === 'asking'}
+  {:else if listed.shows === 'asking'}
     <!-- None by name yet, the server's finds by their tracks not in: nothing said before the answer (lib/search listShows). -->
-    <Asking />
-  {:else if shows === 'empty'}
+    <Asking now={kept.loader} />
+  {:else if listed.shows === 'failed'}
+    <!-- None by name, the server's search failed: said so, never "No crates match." (lib/search listShows). -->
+    <Notice text={deepOf.error() ?? "The crates couldn't be searched."} onretry={deepOf.again} />
+  {:else if listed.shows === 'empty'}
     <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
-    <p class="empty">No crates match.</p>
+    {#if !pageView.none}<p class="empty">No crates match.</p>{/if}
   {:else}
-    <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(sorted.length, 'crate')} />
+    <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(listed.list.length, 'crate')} />
     <ul class="grid">
-      {#each sorted as c (c.id)}
-        <li>
+      {#each listed.list as c (c.id)}
+        <li data-subject={CRATE + c.id}>
           <CrateCard crate={c} active={panelBeside() && (panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id)} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
         </li>
       {/each}

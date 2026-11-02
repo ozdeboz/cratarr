@@ -24,6 +24,9 @@ pub enum ToggleError {
     /// An action that cannot be done as asked (the album moved, the trash is gone…); shown as is.
     #[error("{0}")]
     Refused(String),
+    /// Asks what cannot be answered (0.13, decision 0088: all of on an axis a track has one value on); shown as is.
+    #[error("{0}")]
+    Unanswerable(String),
     /// Not this account's to do (decision 0051): an administrator's, or another user's.
     #[error("{0}")]
     Forbidden(String),

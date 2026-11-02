@@ -8,15 +8,11 @@
   import Item from './Item.svelte';
   import DetailsGroup from './DetailsGroup.svelte';
   import { offerReset } from './reset.svelte';
+  import { playerItems } from './resetItems.svelte';
 
-  offerReset(
-    () => "The player's extra details shown, none of them chosen; swiping up the queue, down closing.",
-    () => {
-      prefs.playerRow = true;
-      prefs.playerFacts = [];
-      prefs.playerSwipes = { ...SWIPES_DEFAULT };
-    },
-  );
+  // What Reset puts back: the part's declaration (lib/settings/resetItems), its bands' looks with it (they disagreed:
+  // the owner, 2026-11-02).
+  offerReset('player', playerItems);
   const SWIPE_ROWS: { key: keyof PlayerSwipes; name: string; options: { value: string; label: string }[] }[] = [
     { key: 'upLeft', name: 'Swipe up, left', options: SWIPES_UP },
     { key: 'upRight', name: 'Swipe up, right', options: SWIPES_UP },

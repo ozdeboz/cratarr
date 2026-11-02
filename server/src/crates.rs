@@ -43,6 +43,7 @@ impl Condition {
     pub fn complete(&self) -> bool {
         match &self.value {
             Value::AnyOf { values } => !values.is_empty() || self.axis == "playlist",
+            Value::AllOf { values } => !values.is_empty(),
             Value::Range { min, max } => min.is_some() || max.is_some(),
             Value::Like { of, .. } => !of.is_empty(),
             _ => true,
@@ -75,13 +76,20 @@ impl Quantifier {
     }
 }
 
-/// What an axis is tested against: holds (a yes/no axis), any of these values (values, membership: none = any), or a
-/// range (either end open).
+/// What an axis is tested against: holds (a yes/no axis), any of these values (values, membership: none = any), all of
+/// them (0.13, decision 0088: the axes a track has several values on, `ALL_OF_AXES`), or a range (either end open).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Value {
     Yes,
     AnyOf {
+        #[serde(default)]
+        values: Vec<String>,
+    },
+    /// Every one of these values, any case (0.13, decision 0088: "and" within an axis, Jazz and Funk). Only on the axes
+    /// a track has several values on (`ALL_OF_AXES`); anywhere else it is refused (`not_taken`). None asks nothing.
+    /// Negated: not all of them.
+    AllOf {
         #[serde(default)]
         values: Vec<String>,
     },
@@ -107,6 +115,9 @@ pub enum Value {
         /// filter counts them (a crate like Air is not Air's).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         own: Option<bool>,
+        /// How several seeds are read (0.13, decision 0088): none, blended into one sound (`LikeMode::Blend`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<LikeMode>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         fresh: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -130,6 +141,17 @@ pub enum Value {
     /// (`closest_first`). Never kept.
     #[serde(skip)]
     Within { lines: Arc<HashSet<String>>, ranked: Arc<Vec<String>> },
+}
+
+/// How a Sounds like reads several seeds (0.13, decision 0088): blended into one sound, what is like all of them
+/// together (as it always did); or either, each seed on its own, a track as alike as it is to the seed it is most like
+/// (like this one or like that one: `closest_fit`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LikeMode {
+    #[default]
+    Blend,
+    Either,
 }
 
 /// A crate: its id never changes; its name is unique among crates.
@@ -189,7 +211,7 @@ pub const WEEK_SECS: i64 = 7 * 24 * 3600;
 /// leaves out.
 pub fn week_crate(id: &str, played: Vec<(String, f32)>, count: usize) -> CrateDef {
     let (of, weights) = played.into_iter().unzip();
-    let like = Condition::new("like", false, Value::Like { of, count, min: None, own: None, fresh: true, weights, unlisted: false, avoid: Avoid::default() });
+    let like = Condition::new("like", false, Value::Like { of, count, min: None, own: None, mode: None, fresh: true, weights, unlisted: false, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: "Sounds like your week".into(), conditions: vec![like] }
 }
 /// Home's moment (`like:now[@<count>]`, `app::moment`): the tracks nearest what the weather and the time of day ask,
@@ -217,7 +239,7 @@ pub fn like_of(id: &str) -> Option<(&str, usize)> {
 }
 
 pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() });
+    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
 }
 
@@ -227,7 +249,7 @@ pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> Cra
 pub const LIST: &str = "list:";
 
 pub fn playlist_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, fresh: true, weights: Vec::new(), unlisted: true, avoid: Avoid::default() });
+    let like = Condition::new("like", false, Value::Like { of: songs, count, min: None, own: None, mode: None, fresh: true, weights: Vec::new(), unlisted: true, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: format!("Sounds like {name}"), conditions: vec![like] }
 }
 
@@ -491,6 +513,36 @@ pub struct AxisView {
     /// Whether the tracks within one item differ on it, so "any" or "all of its tracks" can mean different things (an
     /// album's tracks share its year and its heart: they cannot; a playlist's can). False where items are tracks.
     pub varies: bool,
+    /// The Type axis' values' layers (`type_layer`), as `values`: what joins with "or" and what with "and"; empty for
+    /// other axes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<u8>,
+}
+
+/// The release types, a record's first layer of types (MusicBrainz's primary types; 0.13, the owner: Broadcast its own).
+pub const RELEASE_TYPES: [&str; 5] = ["Album", "EP", "Single", "Broadcast", "Other"];
+
+/// A Type value's layer (0.13, the owner, 2026-10-31): 1 a release type, 2 an extra type (Compilation, Live,
+/// Soundtrack…), 3 Classical. A Type row's values of one layer join with "or", layers with "and".
+pub fn type_layer(value: &str) -> u8 {
+    if RELEASE_TYPES.iter().any(|t| t.eq_ignore_ascii_case(value)) {
+        1
+    } else if value.eq_ignore_ascii_case(crate::app::classical::CLASSICAL) {
+        3
+    } else {
+        2
+    }
+}
+
+/// Whether a record's types hold a Type row's values: one of each layer's the row names ("Album, EP" either; "Album,
+/// Live" a live album). A row negated holds where this does not.
+pub fn types_hold(values: &[String], types: &[String]) -> bool {
+    let has = |v: &String| types.iter().any(|t| t.eq_ignore_ascii_case(v));
+    !values.is_empty()
+        && [1, 2, 3].into_iter().all(|layer| {
+            let mut of = values.iter().filter(|v| type_layer(v) == layer).peekable();
+            of.peek().is_none() || of.any(has)
+        })
 }
 
 /// How many steps a range's density has.
@@ -939,6 +991,68 @@ pub fn is_axis(key: &str) -> bool {
     AXES.iter().any(|(k, _, _)| *k == key)
 }
 
+/// The axes a track has several values on (0.13, decision 0088): the only ones "all of" asks on (`Value::AllOf`).
+pub const ALL_OF_AXES: [&str; 4] = ["genre", "style", "mood", "tag"];
+
+/// Why these conditions cannot be worked out, where one asks what its axis cannot answer (0.13, decision 0088: all of
+/// on an axis a track has one value on, a year, a key): one short line naming the axis. None: all can.
+pub fn not_taken(conditions: &[Condition]) -> Option<String> {
+    let c = conditions.iter().find(|c| matches!(c.value, Value::AllOf { .. }) && !ALL_OF_AXES.contains(&c.axis.as_str()))?;
+    let label = AXES.iter().find(|(k, _, _)| *k == c.axis).map_or(c.axis.as_str(), |(_, l, _)| *l);
+    Some(format!("{label} takes one value, not all of several."))
+}
+
+/// What an id in a crate's conditions names (0.13, decision 0088): the page shows the name, not the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NameKind {
+    Artist,
+    Album,
+    Track,
+}
+
+impl NameKind {
+    /// By the id's prefix (`ar-`, `al-`, `tr-`); none for anything else.
+    pub fn of(id: &str) -> Option<Self> {
+        use crate::serve::ids::{ALBUM, ARTIST, SONG};
+        if id.starts_with(ARTIST) {
+            Some(NameKind::Artist)
+        } else if id.starts_with(ALBUM) {
+            Some(NameKind::Album)
+        } else if id.starts_with(SONG) {
+            Some(NameKind::Track)
+        } else {
+            None
+        }
+    }
+}
+
+/// An id's name as the library has it (an artist's name, an album's or a track's title), and what it names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Named {
+    pub name: String,
+    pub kind: NameKind,
+}
+
+/// The library ids in conditions (0.13, decision 0088), each once, in order: a Sounds like's seeds, the Album axis'
+/// values. A seed that is no library id (a Bandcamp preview) is not one.
+pub fn named_ids(conditions: &[Condition]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for c in conditions {
+        let these: &[String] = match (&c.value, c.axis.as_str()) {
+            (Value::Like { of, .. }, _) => of,
+            (Value::AnyOf { values } | Value::AllOf { values }, "album") => values,
+            _ => &[],
+        };
+        for id in these {
+            if NameKind::of(id).is_some() && !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+    }
+    ids
+}
+
 /// The axes with their domains in this library: genres, moods and styles most common first, the years', BPMs',
 /// energies' and danceabilities' span.
 // The tests' own: nothing else uses it (no warning in the server's build).
@@ -1017,6 +1131,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 known: items.len(),
                 bins: Vec::new(),
                 varies: varies(key),
+                layers: Vec::new(),
             };
             match key {
                 "playlist" => {
@@ -1045,6 +1160,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "type" => {
                     (a.values, a.counts) = counted(|f| &f.release_types);
                     a.known = known(|f| !f.release_types.is_empty());
+                    a.layers = a.values.iter().map(|v| type_layer(v)).collect();
                 }
                 "mood" => {
                     (a.values, a.counts) = counted(|f| &f.moods);
@@ -1117,6 +1233,8 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         v.is_some_and(|v| min.is_none_or(|m| v >= m) && max.is_none_or(|m| v <= m))
     };
     let used = || w.uses.map(|u| u.get(&f.rel).copied().unwrap_or_default());
+    // All of them, any case (0.13, decision 0088); all of none matches nothing, as any of none.
+    let all_of = |values: &[String], has: &[String]| !values.is_empty() && values.iter().all(|v| has.iter().any(|h| h.eq_ignore_ascii_case(v)));
     match (c.axis.as_str(), &c.value) {
         ("plays", Value::Range { min, max }) => within(used().map(|u| f64::from(u.plays)), min, max),
         // Never played: longer ago than any (in "not in the last year", out of "this month").
@@ -1128,7 +1246,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("artist", Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(&crate::app::excluded_artists::key(v))),
         ("album", Value::AnyOf { values }) => f.album.as_deref().is_some_and(|a| values.iter().any(|v| v == a)),
         ("label", Value::AnyOf { values }) => values.iter().any(|v| f.labels.iter().any(|l| l.eq_ignore_ascii_case(v))),
-        ("type", Value::AnyOf { values }) => values.iter().any(|v| f.release_types.iter().any(|t| t.eq_ignore_ascii_case(v))),
+        ("type", Value::AnyOf { values }) => types_hold(values, &f.release_types),
         ("length", Value::Range { min, max }) => within(f.length.map(minutes), min, max),
         ("quality", Value::AnyOf { values }) => f.quality.as_ref().is_some_and(|q| values.contains(q)),
         ("key", Value::AnyOf { values }) => f.key.as_ref().is_some_and(|k| values.iter().any(|v| v.eq_ignore_ascii_case(k))),
@@ -1147,6 +1265,10 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("mood", Value::AnyOf { values }) => values.iter().any(|v| f.moods.iter().any(|m| m.eq_ignore_ascii_case(v))),
         ("style", Value::AnyOf { values }) => values.iter().any(|v| f.styles.iter().any(|s| s.eq_ignore_ascii_case(v))),
         ("tag", Value::AnyOf { values }) => values.iter().any(|v| f.tags.iter().any(|t| t.eq_ignore_ascii_case(v))),
+        ("genre", Value::AllOf { values }) => all_of(values, f.genres.as_slice()),
+        ("style", Value::AllOf { values }) => all_of(values, f.styles.as_slice()),
+        ("mood", Value::AllOf { values }) => all_of(values, f.moods.as_slice()),
+        ("tag", Value::AllOf { values }) => all_of(values, f.tags.as_slice()),
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
         ("like", Value::Within { lines, .. }) => lines.contains(&f.rel),
@@ -1233,11 +1355,11 @@ pub fn resolved_in(conditions: &[Condition], alike: &Alike, among: &[&Facts], by
     conditions
         .iter()
         .map(|c| match &c.value {
-            Value::Like { of, count, min, own, fresh, weights, unlisted, avoid } => {
+            Value::Like { of, count, min, own, mode, fresh, weights, unlisted, avoid } => {
                 // Its own left out before the closest are picked, so they take no place among them (`SeedsOut`).
                 let out = SeedsOut::of(of, *fresh, *own, alike);
                 let among: Vec<&Facts> = among.iter().copied().filter(|f| !out.holds(f)).collect();
-                let mut ranked: Vec<String> = closest_fit(of, weights, avoid, alike, &among, by)
+                let mut ranked: Vec<String> = closest_fit(of, weights, mode.unwrap_or_default(), avoid, alike, &among, by)
                     .into_iter()
                     // How alike falls down the list (`closest_fit`): the cut is where it goes below `min`.
                     .take_while(|(_, x)| min.is_none_or(|m| *x >= f64::from(m)))
@@ -1440,14 +1562,42 @@ impl Alike {
 /// The files among `among` most like the seeds (found in `alike`, `Alike::seed_places`), by the one similarity weighed
 /// `by` (the listener's Similar by), closest first, at most `LIKE_MOST`, each with how alike (0 to 100). Each seed counts
 /// by its weight (`weights`, by `of`'s order; missing ones 1; none: left out of the seed). Files nothing is known of in
-/// common with the seeds are left out; none when no seed is known.
-pub fn closest_weighted<'a>(of: &[String], weights: &[f32], alike: &Alike, among: &[&'a Facts], by: &Weights) -> Vec<(&'a Facts, f64)> {
-    closest_fit(of, weights, &Avoid::default(), alike, among, by)
+/// common with the seeds are left out; none when no seed is known. Several seeds are read by `mode` (0.13, decision
+/// 0088: `closest_fit`).
+pub fn closest_weighted<'a>(of: &[String], weights: &[f32], mode: LikeMode, alike: &Alike, among: &[&'a Facts], by: &Weights) -> Vec<(&'a Facts, f64)> {
+    closest_fit(of, weights, mode, &Avoid::default(), alike, among, by)
 }
 
 /// `closest_weighted` as a fit model (the owner, 2026-10-23: "playlist fit models"): each candidate's closeness to the
 /// seeds less the share of what it should not be like that it is (`avoid`), as much as there was turned down.
-pub fn closest_fit<'a>(of: &[String], weights: &[f32], avoid: &Avoid, alike: &Alike, among: &[&'a Facts], by: &Weights) -> Vec<(&'a Facts, f64)> {
+/// Blended (`LikeMode::Blend`): closeness to the seeds together (`blended`). Either (0.13, decision 0088): each seed on
+/// its own, as a Sounds like of that seed alone ranks the files (the same 0 to 100); a file as alike as it is to the
+/// seed it is most like, closest first, at most `LIKE_MOST`. A seed weighing nothing is left out, as in a blend; the
+/// other weights count for nothing here (each seed is its own sound).
+pub fn closest_fit<'a>(of: &[String], weights: &[f32], mode: LikeMode, avoid: &Avoid, alike: &Alike, among: &[&'a Facts], by: &Weights) -> Vec<(&'a Facts, f64)> {
+    if mode == LikeMode::Blend {
+        return blended(of, weights, avoid, alike, among, by);
+    }
+    let mut best: HashMap<&'a str, (&'a Facts, f64)> = HashMap::new();
+    for (k, id) in of.iter().enumerate() {
+        if weights.get(k).is_some_and(|w| *w <= 0.0) {
+            continue;
+        }
+        for (f, x) in blended(std::slice::from_ref(id), &[], avoid, alike, among, by) {
+            let b = best.entry(f.rel.as_str()).or_insert((f, x));
+            if x > b.1 {
+                b.1 = x;
+            }
+        }
+    }
+    let mut picked: Vec<(&'a Facts, f64)> = best.into_values().collect();
+    picked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
+    picked.truncate(LIKE_MOST);
+    picked
+}
+
+/// The files among `among` most like the seeds together, by one profile of them all (`closest_fit`'s blend).
+fn blended<'a>(of: &[String], weights: &[f32], avoid: &Avoid, alike: &Alike, among: &[&'a Facts], by: &Weights) -> Vec<(&'a Facts, f64)> {
     let mut seed: Vec<usize> = Vec::new();
     for (k, id) in of.iter().enumerate() {
         // A weight as how often the track counts: half a listen or more, once; at most ten times. An album's or an
@@ -2167,7 +2317,7 @@ mod tests {
         assert!(alike.seed_places("ar-nobody").is_empty());
         let every: Vec<&Facts> = files.iter().collect();
         let like = |count: usize, min: Option<u8>, own: Option<bool>| {
-            vec![Condition::new("like", false, Value::Like { of: vec![ana.clone()], count, min, own, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() })]
+            vec![Condition::new("like", false, Value::Like { of: vec![ana.clone()], count, min, own, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() })]
         };
         let picked = |conditions: Vec<Condition>| -> Vec<String> {
             match &resolved(&conditions, &alike, &every, &Weights::EQUAL)[0].value {
@@ -2181,7 +2331,7 @@ mod tests {
         assert_eq!(kept.len(), 5, "kept: {kept:?}");
         assert!(kept.contains(&"bo-feat-ana.flac".to_string()));
         // The floor, on the curve's scale (0 to 100): what is less alike is left out.
-        let curve = closest_weighted(std::slice::from_ref(&ana), &[], &alike, &every[3..], &Weights::EQUAL);
+        let curve = closest_weighted(std::slice::from_ref(&ana), &[], LikeMode::Blend, &alike, &every[3..], &Weights::EQUAL);
         let (near, far) = (curve[0].1, curve[1].1);
         assert!(near - far > 2.0 && (0.0..=100.0).contains(&near), "{near} {far}");
         let floor = ((near + far) / 2.0).round() as u8;
@@ -2264,11 +2414,11 @@ mod tests {
         let alike = Alike::of(&files, &HashMap::new());
         let among: Vec<&Facts> = files.iter().filter(|f| f.track.is_some_and(|t| t >= 20)).collect();
         let of: Vec<String> = (1..=14).map(|t| format!("tr-{t}")).collect();
-        let found: Vec<&str> = closest_weighted(&of, &[], &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
+        let found: Vec<&str> = closest_weighted(&of, &[], LikeMode::Blend, &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
         assert_eq!(found, ["near-a.flac", "near-b.flac", "between.flac"], "each sound's closest first, the larger's first; the middle last");
         // One sound (an album's tracks): one group, closest first as before.
         let one: Vec<String> = (1..=8).map(|t| format!("tr-{t}")).collect();
-        let found: Vec<&str> = closest_weighted(&one, &[], &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
+        let found: Vec<&str> = closest_weighted(&one, &[], LikeMode::Blend, &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
         assert_eq!(found, ["near-a.flac", "between.flac", "near-b.flac"]);
     }
 
@@ -2313,7 +2463,7 @@ mod tests {
         assert!(learned(&down[..1], &every).is_empty(), "one turned down teaches nothing");
         let alike = Alike::of(&files, &HashMap::new());
         let among: Vec<&Facts> = files[1..3].iter().collect();
-        let order = |avoid: &Avoid| closest_fit(&["tr-1".into()], &[], avoid, &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.clone()).collect::<Vec<_>>();
+        let order = |avoid: &Avoid| closest_fit(&["tr-1".into()], &[], LikeMode::Blend, avoid, &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.clone()).collect::<Vec<_>>();
         assert_eq!(order(&Avoid::default()), ["a-by-the-turned-down.flac", "b-other.flac"], "alike, by name");
         assert_eq!(order(&Avoid::of(traits.clone(), 3)), ["b-other.flac", "a-by-the-turned-down.flac"], "what has their traits sinks");
         let kept: Vec<Trait> = traits.into_iter().filter(|t| t.key() != "artist:bo" && t.key() != "tempo").collect();
@@ -2901,5 +3051,134 @@ mod tests {
         assert_eq!((t.bands[11], t.bands[12]), (1, 1), "119.5; 120");
         assert_eq!(t.bands[23], 2, "179.9 and the 181 above the scale");
         assert_eq!(tempo_bands([]), TempoBands { bands: vec![0; TEMPO_BANDS], with_tempo: 0, total: 0 });
+    }
+
+    #[test]
+    fn either_keeps_what_is_near_one_seed_where_a_blend_keeps_what_lies_between() {
+        // 0.13, decision 0088: two seeds of two sounds; a track near each, one between them.
+        let heard = |rel: &str, track: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
+        let files = vec![
+            heard("a.flac", 1, [1.0, 0.0]),
+            heard("b.flac", 2, [0.0, 1.0]),
+            heard("near-a.flac", 3, [0.99, 0.141]),
+            heard("near-b.flac", 4, [0.141, 0.99]),
+            heard("between.flac", 5, [0.707, 0.707]),
+        ];
+        let alike = Alike::of(&files, &HashMap::new());
+        let of = vec!["tr-1".to_string(), "tr-2".to_string()];
+        let among: Vec<&Facts> = files[2..].iter().collect();
+        let curve = |mode: LikeMode| closest_weighted(&of, &[], mode, &alike, &among, &Weights::EQUAL);
+        let (blend, either) = (curve(LikeMode::Blend), curve(LikeMode::Either));
+        let rels = |c: &[(&Facts, f64)]| c.iter().map(|(f, _)| f.rel.clone()).collect::<Vec<_>>();
+        assert_eq!(rels(&blend)[0], "between.flac", "blended: like both together");
+        assert_eq!(rels(&either), ["near-a.flac", "near-b.flac", "between.flac"], "either: like one or the other");
+        // The curve under either: closest first, each as alike as to the seed it is most like (one seed's own scale).
+        assert!(either.windows(2).all(|w| w[0].1 >= w[1].1), "{either:?}");
+        let alone = closest_weighted(&of[..1], &[], LikeMode::Blend, &alike, &among, &Weights::EQUAL);
+        assert_eq!((alone[0].0.rel.as_str(), alone[0].1), ("near-a.flac", either[0].1));
+        let at = |c: &[(&Facts, f64)], rel: &str| c.iter().find(|(f, _)| f.rel == rel).unwrap().1;
+        let (near_either, near_blend) = (at(&either, "near-a.flac"), at(&blend, "near-a.flac"));
+        assert!(near_either - near_blend > 2.0 && (0.0..=100.0).contains(&near_either), "{near_either} {near_blend}");
+        assert!(at(&blend, "between.flac") > at(&either, "between.flac"));
+        // A high floor: what is near one seed only passes either, not a blend; the seeds themselves left out (fresh).
+        let min = ((near_either + near_blend) / 2.0).round() as u8;
+        let every: Vec<&Facts> = files.iter().collect();
+        let picked = |mode: Option<LikeMode>, count: usize| -> Vec<String> {
+            let like = Value::Like { of: of.clone(), count, min: Some(min), own: None, mode, fresh: true, weights: Vec::new(), unlisted: false, avoid: Avoid::default() };
+            match &resolved(&[Condition::new("like", false, like)], &alike, &every, &Weights::EQUAL)[0].value {
+                Value::Within { ranked, .. } => ranked.to_vec(),
+                _ => Vec::new(),
+            }
+        };
+        assert_eq!(picked(Some(LikeMode::Either), 10), ["near-a.flac", "near-b.flac"]);
+        assert_eq!(picked(Some(LikeMode::Either), 1), ["near-a.flac"], "the count caps");
+        assert!(!picked(None, 10).contains(&"near-a.flac".to_string()), "a blend leaves it out");
+        assert_eq!(picked(None, 10), picked(Some(LikeMode::Blend), 10), "no mode: blended");
+        // The curve counts what the crate keeps.
+        assert_eq!(either.iter().filter(|(_, x)| *x >= f64::from(min)).count(), picked(Some(LikeMode::Either), 10).len());
+        // A seed weighing nothing is left out.
+        let one = closest_weighted(&of, &[1.0, 0.0], LikeMode::Either, &alike, &among, &Weights::EQUAL);
+        assert_eq!(rels(&one)[0], "near-a.flac");
+        assert!(at(&one, "near-b.flac") < near_either);
+        // Kept as written; none written when blended by default.
+        let written: Value = serde_json::from_str(r#"{"kind":"like","of":["tr-1","tr-2"],"count":50,"mode":"either"}"#).unwrap();
+        assert!(matches!(written, Value::Like { mode: Some(LikeMode::Either), .. }));
+        assert!(serde_json::to_string(&written).unwrap().contains(r#""mode":"either""#));
+        let old: Value = serde_json::from_str(r#"{"kind":"like","of":["tr-1"],"count":50}"#).unwrap();
+        assert!(matches!(old, Value::Like { mode: None, .. }));
+        assert!(!serde_json::to_string(&old).unwrap().contains("mode"));
+    }
+
+    #[test]
+    fn all_of_holds_where_a_track_has_every_value_and_only_on_the_axes_of_several() {
+        // 0.13, decision 0088: "and" within an axis.
+        let (files, membership, favourites) = library();
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let rock_and_indie = Condition::new("genre", false, Value::AllOf { values: vec!["ROCK".into(), "indie".into()] });
+        assert_eq!(select(&files, std::slice::from_ref(&rock_and_indie), &w), vec!["c"], "every one of them, case ignored");
+        assert_eq!(select(&files, &[Condition { not: true, ..rock_and_indie.clone() }], &w), vec!["a", "b", "d"], "negated: not all of them");
+        let rock_or_indie = Condition::new("genre", false, Value::AnyOf { values: vec!["ROCK".into(), "indie".into()] });
+        assert_eq!(select(&files, &[rock_or_indie], &w), vec!["a", "c"]);
+        let none = Condition::new("genre", false, Value::AllOf { values: vec![] });
+        assert!(!none.complete() && rock_and_indie.complete());
+        assert!(select(&files, &[none], &w).is_empty(), "all of none matches nothing, as any of none");
+        let t = Facts {
+            rel: "t".into(),
+            styles: vec!["Dub".into(), "Techno".into()],
+            moods: vec!["dark".into(), "calm".into()],
+            tags: vec!["night".into()],
+            ..Facts::default()
+        };
+        let all = |axis: &str, values: [&str; 2]| vec![Condition::new(axis, false, Value::AllOf { values: values.iter().map(|v| v.to_string()).collect() })];
+        for (axis, yes, no) in [("style", ["dub", "TECHNO"], ["dub", "house"]), ("mood", ["Dark", "calm"], ["dark", "happy"]), ("tag", ["night", "NIGHT"], ["night", "day"])] {
+            assert_eq!(select(std::slice::from_ref(&t), &all(axis, yes), &w), ["t"], "{axis}");
+            assert!(select(std::slice::from_ref(&t), &all(axis, no), &w).is_empty(), "{axis}: one missing");
+        }
+        // An item's tracks, All: every one with a genre has both.
+        let album = [f("1", &["Rock", "Indie"], None, None), f("2", &["indie", "rock", "Pop"], None, None), f("3", &[], None, None)];
+        let tracks: Vec<&Facts> = album.iter().collect();
+        assert!(passes(&tracks, &[Condition { quantifier: Quantifier::All, ..rock_and_indie.clone() }], &w));
+        // Kept as written, tagged as any of is.
+        assert_eq!(serde_json::to_string(&rock_and_indie.value).unwrap(), r#"{"kind":"all_of","values":["ROCK","indie"]}"#);
+        let back: Value = serde_json::from_str(r#"{"kind":"all_of","values":["Jazz","Funk"]}"#).unwrap();
+        assert_eq!(back, Value::AllOf { values: vec!["Jazz".into(), "Funk".into()] });
+        // Only where a track has several values: elsewhere refused, naming the axis, and never holds.
+        let years = Condition::new("year", false, Value::AllOf { values: vec!["1994".into(), "2005".into()] });
+        let said = not_taken(&[rock_and_indie.clone(), years.clone()]).unwrap();
+        assert!(said.contains("Year"), "{said}");
+        assert_eq!(not_taken(&[rock_and_indie]), None);
+        for axis in ALL_OF_AXES {
+            assert_eq!(not_taken(&all(axis, ["x", "y"])), None, "{axis}");
+        }
+        assert!(not_taken(&all("album", ["al-1", "al-2"])).unwrap().contains("Album"));
+        assert!(select(&files, &[years], &w).is_empty());
+    }
+
+    #[test]
+    fn the_ids_a_crate_names_are_its_seeds_and_albums_each_once() {
+        // 0.13, decision 0088: what the page shows names for.
+        let like = Value::Like {
+            of: vec!["ar-1".into(), "tr-2".into(), "bc-x".into(), "al-3".into()],
+            count: 50,
+            min: None,
+            own: None,
+            mode: None,
+            fresh: false,
+            weights: Vec::new(),
+            unlisted: false,
+            avoid: Avoid::default(),
+        };
+        let conditions = [
+            Condition::new("like", false, like),
+            Condition::new("album", true, Value::AnyOf { values: vec!["al-3".into(), "al-4".into()] }),
+            Condition::new("genre", false, Value::AnyOf { values: vec!["al-rock".into()] }),
+        ];
+        assert_eq!(named_ids(&conditions), ["ar-1", "tr-2", "al-3", "al-4"], "no preview, no genre, each once");
+        assert_eq!(
+            (NameKind::of("ar-1"), NameKind::of("al-3"), NameKind::of("tr-2"), NameKind::of("bc-x")),
+            (Some(NameKind::Artist), Some(NameKind::Album), Some(NameKind::Track), None)
+        );
+        let named = Named { name: "Air".into(), kind: NameKind::Artist };
+        assert_eq!(serde_json::to_string(&named).unwrap(), r#"{"name":"Air","kind":"artist"}"#);
     }
 }

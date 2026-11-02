@@ -429,7 +429,9 @@ impl Catalogue {
             cat.db().execute("UPDATE tags SET name = 'bpm' WHERE raw IN ('TBPM', 'tmpo') AND name IS NULL", [])?;
             // Reader 6 names a file's mood, style and grouping (0.9.7, the library's words), which no reader before kept:
             // every file read before is read again, and served as it was read until then.
-            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 6) {
+            // Reader 7 names the release type (0.13, written into files by decision 0092) and reads the fields lofty has
+            // no key for (STYLE, unread since lofty 0.25): every file read again too.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 7) {
                 cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, READ])?;
             }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
@@ -753,13 +755,21 @@ impl Catalogue {
         }
         let read = self.read_tags(todo)?;
         if read > 0 {
-            self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass = Some(now());
-            self.reread.notify_one();
+            self.changed_outside_pass();
         }
         Ok(read)
     }
 
-    /// Files were read again outside a pass (`reread`).
+    /// Rows Cratarr changed itself, outside a pass (files read again, a record's files moved, other track ids given):
+    /// the library is told to build at once, not at its next check (a record moved and moved back by Undo was listed
+    /// where it no longer was for up to a minute, 2026-11-01). Told once a whole change is done (a record's files moved
+    /// one by one: after the last), so the library never shows half of one.
+    pub fn changed_outside_pass(&self) {
+        self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass = Some(now());
+        self.reread.notify_one();
+    }
+
+    /// The catalogue's rows changed outside a pass (`changed_outside_pass`).
     pub async fn reread_done(&self) {
         self.reread.notified().await;
     }
@@ -1352,6 +1362,23 @@ impl Catalogue {
         Ok(out)
     }
 
+    /// Every present file's values of the tags named in `names`, by (folder, path): what the files hold of what Cratarr
+    /// writes into them (decision 0092, `app::file_facts`). Read-only; blocking.
+    pub fn named_values(&self, names: &[&str]) -> Result<HashMap<(i64, String), HashMap<String, Vec<String>>>> {
+        let db = self.db();
+        let list = names.iter().map(|n| format!("'{}'", n.replace('\'', "''"))).collect::<Vec<_>>().join(", ");
+        let mut st = db.prepare(&format!(
+            "SELECT t.folder, t.rel, t.name, t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel
+             WHERE {PRESENT_F} AND t.name IN ({list}) ORDER BY t.folder, t.rel, t.n"
+        ))?;
+        let mut out: HashMap<(i64, String), HashMap<String, Vec<String>>> = HashMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+            let (folder, rel, name, value) = row?;
+            out.entry((folder, rel)).or_default().entry(name).or_default().push(value);
+        }
+        Ok(out)
+    }
+
     /// Every audio file of `folder` with its tags named in `names`, in path order: what a library's naming template is
     /// judged from (decision 0013). Read-only; blocking.
     pub fn folder_tags(&self, folder: i64, names: &[&str]) -> Result<Vec<(String, Vec<(String, String)>)>> {
@@ -1580,7 +1607,8 @@ impl Catalogue {
     }
 
     /// Files Cratarr moved itself (adopting an album, say): their rows follow, track ids and tags kept, so nothing is
-    /// read again and no playlist entry is lost. Blocking.
+    /// read again and no playlist entry is lost. The caller tells the library once all of a record's moved
+    /// (`changed_outside_pass`). Blocking.
     #[allow(dead_code)] // used by Keep (adopt) in Incoming, decision 0011
     pub fn move_files(&self, from_folder: i64, from: &str, to_folder: i64, to: &str) -> Result<usize> {
         self.rekey(from_folder, from, to_folder, to, None)
@@ -1634,6 +1662,10 @@ impl Catalogue {
             tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, track])?;
         }
         tx.commit()?;
+        drop(db);
+        if !files.is_empty() {
+            self.changed_outside_pass();
+        }
         Ok(())
     }
 
@@ -3236,7 +3268,9 @@ mod tests {
         read_as_audio(&cat);
         let (old, new) = ((0, "A - B (2020) adopted/01 One.mp3".to_string()), (0, "A - B (2020) adopted/01 One.flac".to_string()));
         let own = cat.track_of(0, &new.1);
+        assert_eq!(cat.last_pass(), None, "no background pass in a test");
         cat.set_tracks(&[(old.clone(), None), (new.clone(), Some(one))]).unwrap();
+        assert!(cat.last_pass().is_some(), "the library is told at once, not at its next check");
         assert_eq!(cat.file_of(one), Some(new.clone()));
         // Undo: each its own again.
         cat.set_tracks(&[(new.clone(), own), (old.clone(), Some(one))]).unwrap();

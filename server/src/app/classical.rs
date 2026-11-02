@@ -9,7 +9,12 @@
 //!   release's recordings perform works with composers, and someone is credited as performing; (b) a composer of its
 //!   works, or its album artist, is a composer confirmed classical on another record; (c) a mark by hand. The tag
 //!   alone is never enough (Moby's Reprise, ELO's Time, Yann Tiersen, Pantha du Prince, Aphex Twin's Syro).
-//! - **Marks** (classical, not classical) are library-wide, outlast every pass, and win over the rule both ways.
+//! - **A mix of others' records** (a compilation, a soundtrack; 0.13, the owner: "The Broken Flowers is a compilation
+//!   because it's a soundtrack") is classical only where most of its tracks perform works of composers confirmed on
+//!   other records: one classical track among pop songs does not make it one.
+//! - **Why** (0.13): each record says what opened its gate and what confirmed it, or why not (`Why`).
+//! - **Marks** (classical, not classical) are library-wide, outlast every pass, and win over the rule both ways (0.13:
+//!   kept as the record's `classical` set by hand, decision 0089).
 //! - **Composers** by MusicBrainz artist, so every spelling is one; a record under each of its composers. With no
 //!   MusicBrainz works, its album artist is its composer, under (b) or (c) only, keyed `name:<loose name>`. Keys stay:
 //!   a `name:` key later found to be a MusicBrainz artist leads there (`composer_keys`).
@@ -68,6 +73,23 @@ pub fn gate<'a>(genres: impl IntoIterator<Item = &'a str>) -> bool {
     genres.into_iter().any(classical_genre)
 }
 
+/// Why a record is classical or not (0.13): the genre that opened the gate and where it was found (`genres`: the
+/// record's own, `musicbrainz`, `discogs`), and what confirmed it: `mark` (set by hand), `works` (its works with
+/// composers, someone performing), `composer` (a composer of its works confirmed on another record, named), `artist`
+/// (its album artist confirmed so, named), `most tracks` (a mix of others' records, most of its tracks of confirmed
+/// composers); none where nothing did.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
+pub struct Why {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer: Option<String>,
+}
+
 /// A record's mark by hand (the owner: library-wide, outlasting every pass).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
@@ -92,30 +114,8 @@ impl Mark {
     }
 }
 
-/// The kinds named on their own, by the owner's precedence: Classical, then Compilation (a Best Of is one, above
-/// Album), then Album, EP and Single; Other is every other.
-fn rank(kind: &str) -> Option<u8> {
-    if kind.eq_ignore_ascii_case(CLASSICAL) {
-        Some(0)
-    } else if kind.eq_ignore_ascii_case("Compilation") {
-        Some(1)
-    } else if ["Album", "EP", "Single"].iter().any(|k| kind.eq_ignore_ascii_case(k)) {
-        Some(2)
-    } else {
-        None
-    }
-}
-
-/// A record's kinds in its primary view only (the owner: each record in one kind, on by default): the named kinds
-/// below its first left out, the rest (Live, Soundtrack…) kept. So each record is in one named kind or in none (Other),
-/// and the kinds' counts add up to the records.
-pub fn primary_kinds(kinds: &[String]) -> Vec<String> {
-    let best = kinds.iter().filter_map(|k| rank(k)).min();
-    kinds.iter().filter(|k| rank(k).is_none_or(|r| Some(r) == best)).cloned().collect()
-}
-
-/// A record's kinds as the filter's Type axis names them: its release type's ("Album", "Live"), and Classical where it
-/// is one.
+/// A record's types as the filter's Type axis names them: its release type's ("Album", "Live"), and Classical where it
+/// is one (the layers, `crates::type_layer`).
 pub fn kinds_of(release: &crate::source::ReleaseType) -> Vec<String> {
     let mut out: Vec<String> = release.kind.iter().chain(&release.secondary).map(|w| crate::serve::library::type_label(w)).collect();
     if release.classical == Some(true) {
@@ -176,6 +176,7 @@ impl Inputs {
 pub struct Record {
     pub classical: bool,
     pub mark: Option<Mark>,
+    pub why: Why,
     pub composers: Vec<ComposerRef>,
     pub performers: Vec<String>,
     pub title: String,
@@ -312,7 +313,8 @@ pub struct WorkView {
 }
 
 /// The work an album's track performs (0.12, decision 0086; an album's rows' `work`): the work that holds it and its
-/// number there, where MusicBrainz says.
+/// number there, where MusicBrainz says. A classical record's tracks only (0.13: MusicBrainz has works for almost every
+/// song, so a soundtrack listed its songs as works).
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export)]
 pub struct RowWork {
@@ -645,6 +647,9 @@ impl Index {
     /// The work a track performs, with the work that holds it and its number there (0.12; an album's rows' `work`);
     /// none where it has no work linked.
     pub fn row_work(&self, song: &str) -> Option<RowWork> {
+        if !self.lines.get(song).is_some_and(|l| self.is_classical(&l.album_id)) {
+            return None;
+        }
         let w = self.song_work.get(song)?;
         let (title, _) = self.works.get(w)?;
         let parent = self.parent.get(w).and_then(|(p, n)| Some((WorkRef { mbid: p.clone(), title: self.works.get(p)?.0.clone() }, *n)));
@@ -674,6 +679,8 @@ struct Weighed<'a> {
     album: &'a WorkAlbum,
     stored: Option<&'a Stored>,
     gate: bool,
+    /// The genre that opened it, and where it was found.
+    opened: Option<(String, &'static str)>,
     /// Its works' composers, most of its tracks first.
     works: Vec<ComposerRef>,
     performed: bool,
@@ -694,6 +701,8 @@ pub fn build(i: &Inputs) -> Index {
             let key = person(&c.mbid);
             let aliased = key != c.mbid;
             let name = if aliased { i.persons.get(&c.mbid).map(|p| p.1.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| c.name.clone()) } else { c.name.clone() };
+            // Kept before 0.13 in their own script, maybe: in Latin letters where the sort name has them.
+            let name = super::works::latin(&name, None, c.sort_name.as_deref());
             let e = known.entry(key).or_insert_with(|| (name, None));
             if e.1.is_none() && !aliased {
                 e.1 = c.sort_name.clone();
@@ -717,7 +726,10 @@ pub fn build(i: &Inputs) -> Index {
         .map(|a| {
             let stored = a.release.as_ref().and_then(|r| i.releases.get(r));
             let linked = stored.into_iter().flat_map(|s| s.discogs.iter()).filter_map(|l| i.discogs_genres.get(l)).flatten();
-            let gate = gate(a.genres.iter().chain(stored.into_iter().flat_map(|s| s.genres.iter())).chain(linked).map(String::as_str));
+            let own = a.genres.iter().map(|g| (g, "genres"));
+            let mb = stored.into_iter().flat_map(|s| s.genres.iter()).map(|g| (g, "musicbrainz"));
+            let opened = own.chain(mb).chain(linked.map(|g| (g, "discogs"))).find(|(g, _)| classical_genre(g)).map(|(g, f)| (g.clone(), f));
+            let gate = opened.is_some();
             // The works' composers, those of most tracks first.
             let mut counted: Vec<(String, usize)> = Vec::new();
             for w in stored.into_iter().flat_map(|s| s.tracks.iter()).flat_map(|t| t.works.iter()) {
@@ -757,6 +769,7 @@ pub fn build(i: &Inputs) -> Index {
                 album: a,
                 stored,
                 gate,
+                opened,
                 works,
                 performed: stored.is_some_and(|s| s.performed),
                 mark: i.marks.get(&a.base).copied(),
@@ -765,15 +778,26 @@ pub fn build(i: &Inputs) -> Index {
         })
         .collect();
 
-    // (c) a mark, and (a) works with composers and someone performing: their composers are confirmed.
+    // (c) a mark, and (a) works with composers and someone performing: their composers are confirmed. A mix of others'
+    // records is weighed last, by its tracks (0.13).
+    let mut why: Vec<Why> = weighed
+        .iter()
+        .map(|w| Why { genre: w.opened.as_ref().map(|o| o.0.clone()), from: w.opened.as_ref().map(|o| o.1.to_string()), ..Default::default() })
+        .collect();
     let mut chosen: Vec<Option<Vec<ComposerRef>>> = weighed
         .iter()
-        .map(|w| {
+        .zip(why.iter_mut())
+        .map(|(w, why)| {
             let yes = match w.mark {
                 Some(Mark::Classical) => true,
                 Some(Mark::Not) => false,
-                None => w.gate && !w.works.is_empty() && w.performed,
+                None => !w.album.mixed && w.gate && !w.works.is_empty() && w.performed,
             };
+            if w.mark.is_some() {
+                why.by = Some("mark".into());
+            } else if yes {
+                why.by = Some("works".into());
+            }
             yes.then(|| if w.works.is_empty() { w.artists.clone() } else { w.works.clone() })
         })
         .collect();
@@ -783,13 +807,15 @@ pub fn build(i: &Inputs) -> Index {
     loop {
         let mut more = false;
         for (n, w) in weighed.iter().enumerate() {
-            if chosen[n].is_some() || w.mark.is_some() || !w.gate {
+            if chosen[n].is_some() || w.mark.is_some() || !w.gate || w.album.mixed {
                 continue;
             }
-            let by_works = w.works.iter().any(|c| confirmed.contains(&c.key));
+            let by_works = w.works.iter().find(|c| confirmed.contains(&c.key));
             let by_artist: Vec<ComposerRef> = w.artists.iter().filter(|c| confirmed.contains(&c.key)).cloned().collect();
-            if !by_works && by_artist.is_empty() {
-                continue;
+            match (by_works, by_artist.first()) {
+                (Some(c), _) => (why[n].by, why[n].composer) = (Some("composer".into()), Some(c.name.clone())),
+                (None, Some(c)) => (why[n].by, why[n].composer) = (Some("artist".into()), Some(c.name.clone())),
+                (None, None) => continue,
             }
             let composers = if w.works.is_empty() { by_artist } else { w.works.clone() };
             for c in &composers {
@@ -802,6 +828,22 @@ pub fn build(i: &Inputs) -> Index {
             break;
         }
     }
+    // A mix of others' records (a compilation, a soundtrack): classical where most of its tracks perform works of
+    // composers confirmed on the other records; not by one classical track among others (0.13, the owner).
+    for (n, w) in weighed.iter().enumerate() {
+        if chosen[n].is_some() || w.mark.is_some() || !w.gate || !w.album.mixed {
+            continue;
+        }
+        let tracks = w.stored.map(|s| s.tracks.as_slice()).unwrap_or_default();
+        let of_confirmed = |t: &&crate::app::works::TrackWorks| {
+            t.works.iter().any(|wk| i.works.get(wk).is_some_and(|(_, cs)| cs.iter().any(|c| confirmed.contains(&person(&c.mbid)))))
+        };
+        let classical = tracks.iter().filter(of_confirmed).count();
+        if classical * 2 > w.album.tracks.max(tracks.len() as u32) as usize {
+            why[n].by = Some("most tracks".into());
+            chosen[n] = Some(w.works.iter().filter(|c| confirmed.contains(&c.key)).cloned().collect());
+        }
+    }
 
     let mut index = Index::default();
     // The album artists' ids by their key and their loose name: a composer who is one has their photo.
@@ -812,7 +854,7 @@ pub fn build(i: &Inputs) -> Index {
             artist_ids.entry(format!("name:{}", loose(&x.name))).or_insert_with(|| x.id.clone());
         }
     }
-    for (w, composers) in weighed.iter().zip(chosen) {
+    for ((w, composers), why) in weighed.iter().zip(chosen).zip(why) {
         let a = w.album;
         let performers: Vec<String> = w.stored.map(|s| s.performers.iter().map(|p| p.name.clone()).collect()).unwrap_or_default();
         if !performers.is_empty() {
@@ -838,6 +880,7 @@ pub fn build(i: &Inputs) -> Index {
             Record {
                 classical,
                 mark: w.mark,
+                why,
                 performers: if classical { performers } else { Vec::new() },
                 composers,
                 title: a.name.clone(),
@@ -1035,6 +1078,7 @@ pub fn decorate(index: &Index, album: &mut crate::source::Album) {
     let r = index.records.get(&album.id);
     album.release.classical = Some(r.is_some_and(|r| r.classical));
     album.release.classical_mark = r.and_then(|r| r.mark).map(|m| m.as_str().to_string());
+    album.release.classical_why = r.map(|r| r.why.clone()).filter(|w| *w != Why::default());
     if let Some(r) = r.filter(|r| r.classical) {
         album.release.composers = r.composers.clone();
         album.release.performers = r.performers.clone();
@@ -1091,6 +1135,8 @@ mod tests {
             release: release.map(str::to_string),
             genres: genres.iter().map(|g| g.to_string()).collect(),
             artists: vec![WorkArtist { id: format!("ar-{artist}"), name: artist.into(), mbid: mbid.map(str::to_string) }],
+            tracks: 10,
+            mixed: false,
         }
     }
 
@@ -1157,6 +1203,35 @@ mod tests {
         let mut out: Vec<&str> = ix.records.iter().filter(|(_, r)| r.classical).map(|(k, _)| k.as_str()).collect();
         out.sort();
         out
+    }
+
+    #[test]
+    fn a_soundtrack_is_not_classical_by_one_track_but_by_most_and_each_record_says_why() {
+        let mut i = library();
+        // Music From Broken Flowers: twelve tracks, one Fauré (Brahms here), the rest songs with works of their own.
+        let mixed = |id: &str, release: &str| WorkAlbum { mixed: true, tracks: 12, ..album(id, "Various Artists", None, &[], Some(release)) };
+        i.albums.push(mixed("al-flowers", "r-flowers"));
+        i.albums.push(mixed("al-best-of", "r-best-of"));
+        let mut flowers = release(&["w-sonata", "w-i-want-you", "w-yegelle"], &["Oxford Camerata"]);
+        flowers.genres = vec!["Classical".into(), "Soul".into()];
+        let mut best_of = release(&["w-sonata", "w-concerto", "w-sonata", "w-concerto", "w-sonata", "w-concerto", "w-sonata"], &["Claudio Arrau"]);
+        best_of.genres = vec!["Classical".into()];
+        i.releases.insert("r-flowers".into(), flowers);
+        i.releases.insert("r-best-of".into(), best_of);
+        i.works.insert("w-i-want-you".into(), ("I Want You".into(), vec![person("a-gaye", "Marvin Gaye", "Gaye, Marvin")]));
+        i.works.insert("w-yegelle".into(), ("Yegelle Tezeta".into(), vec![person("a-mulatu", "Mulatu Astatke", "Astatke, Mulatu")]));
+        let ix = build(&i);
+        let flowers = &ix.records["al-flowers"];
+        assert!(!flowers.classical, "one classical track among songs");
+        assert_eq!(flowers.why, Why { genre: Some("Classical".into()), from: Some("musicbrainz".into()), by: None, composer: None });
+        assert!(ix.records["al-best-of"].classical, "seven of twelve tracks of a confirmed composer");
+        assert_eq!(ix.records["al-best-of"].why.by.as_deref(), Some("most tracks"));
+        // The others say what confirmed them.
+        assert_eq!(ix.records["al-arrau"].why.by.as_deref(), Some("works"));
+        assert_eq!(ix.records["al-arrau"].why.from.as_deref(), Some("genres"));
+        let brahms = &ix.records["al-brahms"].why;
+        assert_eq!((brahms.by.as_deref(), brahms.composer.as_deref()), (Some("artist"), Some("Johannes Brahms")));
+        assert_eq!(ix.records["al-raga"].why, Why::default(), "no gate: nothing to say");
     }
 
     #[test]
@@ -1241,24 +1316,6 @@ mod tests {
         i.marks.insert("al-syro".into(), Mark::Classical);
         let ix = build(&i);
         assert_eq!(ix.records["al-syro"].composers, [ComposerRef { key: "a-rdj".into(), name: "Richard D. James".into() }]);
-    }
-
-    #[test]
-    fn each_record_is_in_one_kind_in_its_primary_view_and_the_kinds_add_up() {
-        let k = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(primary_kinds(&k(&["Album", "Compilation", "Classical"])), ["Classical"]);
-        assert_eq!(primary_kinds(&k(&["Album", "Compilation", "Live"])), ["Compilation", "Live"], "a Best Of is a Compilation; Live kept");
-        assert_eq!(primary_kinds(&k(&["EP", "Live"])), ["EP", "Live"]);
-        assert_eq!(primary_kinds(&k(&["Live"])), ["Live"]);
-        let records = [k(&["Album"]), k(&["Album", "Compilation"]), k(&["Album", "Classical"]), k(&["EP"]), k(&["Single", "Compilation", "Classical"]), k(&["Live"]), k(&[])];
-        let named = ["Classical", "Compilation", "Album", "EP", "Single"];
-        let primary: Vec<Vec<String>> = records.iter().map(|r| primary_kinds(r)).collect();
-        let count = |kind: &str| primary.iter().filter(|p| p.iter().any(|x| x == kind)).count();
-        let other = primary.iter().filter(|p| !p.iter().any(|x| named.contains(&x.as_str()))).count();
-        assert_eq!(named.iter().map(|n| count(n)).sum::<usize>() + other, records.len());
-        assert_eq!((count("Classical"), count("Compilation"), count("Album"), other), (2, 1, 1, 2));
-        // Without it, a record is under each kind it has.
-        assert_eq!(records.iter().filter(|r| r.iter().any(|x| x == "Album")).count(), 3);
     }
 
     #[test]
@@ -1390,7 +1447,13 @@ mod tests {
 
     #[test]
     fn an_album_s_rows_name_their_work_and_the_work_that_holds_it() {
-        let ix = build(&works_library());
+        let mut i = works_library();
+        let mut porcelain = i.songs[0].clone();
+        (porcelain.id, porcelain.album, porcelain.recording) = ("so-porcelain".into(), "al-reprise".into(), Some("rec-w-porcelain-0".into()));
+        i.songs.push(porcelain);
+        let ix = build(&i);
+        assert!(ix.song_work.contains_key("so-porcelain"), "its work is known");
+        assert_eq!(ix.row_work("so-porcelain"), None, "a song of a record that is not classical names no work");
         let row = ix.row_work("so-a2").unwrap();
         assert_eq!((row.mbid.as_str(), row.part_number), ("w-pc1-2", Some(2)));
         assert_eq!(row.parent.as_ref().map(|p| p.mbid.as_str()), Some("w-pc1"));

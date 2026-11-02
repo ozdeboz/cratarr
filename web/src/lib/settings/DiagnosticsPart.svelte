@@ -13,10 +13,11 @@
   import ChoiceList from '../ChoiceList.svelte';
   import Icon from '../Icon.svelte';
   import MenuSheet from '../MenuSheet.svelte';
+  import Notice from '../Notice.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
 
   const AREA_NAMES: Record<string, string> = {
     playon: 'Play On',
@@ -69,6 +70,8 @@
   let more = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
+  /** The log not read: said with Try again, never "Nothing logged" with it (the owner, 2026-11-02). */
+  let logError = $state<string | null>(null);
   /** More detail lasts this long, then goes back by itself. */
   const HOURS = 24;
 
@@ -79,7 +82,7 @@
   async function load(next = false) {
     const mine = ++asked;
     busy = true;
-    error = null;
+    logError = null;
     try {
       const before = next ? rows.at(-1)?.id : undefined;
       const r = await getLog({ place, area, level, before, limit: PAGE });
@@ -87,7 +90,7 @@
       rows = next ? [...rows, ...r.rows] : r.rows;
       more = r.rows.length === PAGE;
     } catch (e) {
-      if (mine === asked) failed(e);
+      if (mine === asked) logError = e instanceof Error ? e.message : String(e);
     } finally {
       if (mine === asked) busy = false;
     }
@@ -128,10 +131,8 @@
   const detailed = $derived(!!levels && Object.keys(levels.now).length > 0);
   /** More detail: every area, or back to normal. */
   const detail = (on: boolean) => levels && setLevels(on ? Object.fromEntries(levels.areas.map((a) => [a, 'debug'])) : {});
-  offerReset(
-    () => (detailed ? 'More detail back to off, every area to normal.' : null),
-    () => setLevels({}),
-  );
+  // What Reset puts back (lib/settings/reset): every area's logging to normal.
+  offerReset('diagnostics', () => (levels ? [{ name: 'More detail', now: () => detailed, def: false, set: () => setLevels({}) }] : null));
 
   const today = new Date().toDateString();
   /** The time, with the day when it is not today. */
@@ -222,6 +223,7 @@
     <button class="filter" class:on={filtered} aria-label="Filter" title="Filter" onclick={() => (filtering = true)}><Icon name="filter" size={18} /></button>
   {/snippet}
   {#if error}<Item lead="bad" name={error} />{/if}
+  {#if logError}<Notice text={logError} onretry={() => load()} />{/if}
   {#each rows as r (r.id)}
     <div class="entry {r.level}">
       <span class="msg">{r.what}{#if r.count > 1}<span class="count"> ×{r.count}, last {time(r.last)}</span>{/if}</span>
@@ -229,7 +231,7 @@
       {#if Object.keys(r.fields).length}<span class="fields">{details(r.fields).join(' · ')}</span>{/if}
     </div>
   {:else}
-    {#if !busy}<Item name="Nothing logged" />{/if}
+    {#if !busy && !logError}<Item name="Nothing logged" />{/if}
   {/each}
   {#if more}<Item name="More" kind="add" disabled={busy} busy={busy} onclick={() => load(true)} />{/if}
 </Group>

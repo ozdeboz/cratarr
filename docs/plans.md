@@ -26,24 +26,104 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   sentence, snippets, one search matcher, the steady waveform, one table head, menus on search results and works,
   and menus that offer only what works away ([whats-new-0.12](whats-new-0.12.md)); works in global search wait for
   the server's search kind.
-- **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and modes per server** (the External
-  library below, taken up). Cratarr's mode is Cratarr's own library, its libraries (Music, Incoming, each user's own)
-  still switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
-  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests.
-  With it (the owner, 2026-10-30): **scrolling to what a link leads to, and every automatic scroll clear of the
-  chrome.** Arriving through a link or a search result (an album in a list, a track in a playlist or crate, an
-  artist's place) scrolls to that item and marks it; and every scroll the page makes by itself (that one, the
-  sidebar's section, the queue's playing track, a list's own place kept) stops with its item fully in sight: not under
-  the top bar, a sticky list head or column head, nor the floating glass top and bottom (`--glass-top`,
-  `--glass-bottom`). One rule for it (scroll-padding from the chrome's real heights, kept as they change), not each
-  place's own offset. Today: 4 scrollIntoView and 9 scrollTo calls, no vertical scroll-padding anywhere.
+- **0.13: what preview.3 holds, frozen** (the owner, 2026-11-01: what remains moves on rather than holding the release;
+  out once the owner has tried preview.3 enough). One crate in two views and only in the panel, more words in the
+  sentence, the crate card atop every search; a page's search as the table, its empty answer from the magnifier, one
+  loading rule; scrolling to what a link leads to, clear of the chrome; the glass moving as one (lib/glassMotion:
+  ContentControls, NavigationControls and the bar laid out once and moved by clip-path, opacity and transform only;
+  the owner, 2026-11-01), the keyboard pushing up only the glass typed in; the Library's types in three layers, records
+  named by their type; the record Edit sheet and Classical's why; Health as Settings, Disc numbers, missing tracks many
+  at once; one way to change files ([0092](decisions/0092-one-way-to-change-files.md)) with types into files its first
+  writer, and the tag writer that keeps every field; STYLE read from the files again; Cratarr as an MCP server
+  ([0090](decisions/0090-mcp-server.md)); test and development data ([0093](decisions/0093-test-and-development-data.md)).
+  ([whats-new-0.13](whats-new-0.13.md).)
+- **0.14: references and the intake** (the owner, 2026-11-01: "this comes next"): MusicBrainz, Discogs and Bandcamp as
+  references, the checks without one, the hand check's intake card, one Health item for references (Soulseek in
+  Cratarr, below). With it, the other writers onto 0092's path (Health's fixes, Renumber, the tempo, the covers, the
+  length fixes, single-track intake), each losing its own Undo.
+- **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**
+  ([0091](decisions/0091-scrobbling-from-the-device.md)). Cratarr's mode is Cratarr's own library, its libraries still
+  switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
+  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. Wants the
+  owner's design choices first.
+- **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and the whole library's index on the
+  device** (offline first's fourth step).
+- **0.17: crates and the queue on the device** (offline first's fifth step); then all servers in one library, on the
+  device (below), as a view over the modes' indexes.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
-- **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
-  apps carry their own pages (beside 0.11); Downloads an offline shelf, and nothing done offline lost,
-  playlist edits included (beside 0.12); the whole library's index on the device (beside 0.13, after modes); crates and
-  the queue on the device (0.14).
+- **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
+  own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
+  done); the whole library's index on the device (0.16); crates and the queue on the device (0.17).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
+
+## Soulseek in Cratarr, not through Lidarr (explored 2026-10-31)
+
+The owner: "I want to explore whether it's time we left SoulSeek in the hands of Cratarr altogether instead of using
+Lidarr. But I'm not sure about this." Not decided; written down to read first. Only the bulk intake of missing
+tracks below is being built (the owner, 2026-10-31: "Bulk search, you approve").
+
+**What happens now.** Lidarr keeps the wanted list (its monitored artists and albums, Cratarr's Requests among them)
+and grabs through qBittorrent and, via soularr, through slskd. soularr picks a whole folder from one Soulseek user by
+its name and hands it to Lidarr, which imports what lands, unchecked. Its 72 hours to 2026-10-31: about 40 albums
+imported; 34 albums failed outright after retries (half of them Brahms: "Ein deutsches Requiem op. 45" and "A German
+Requiem" are one work under many names), 6,869 enqueues and 945 folder looks refused by users gone or unwilling, 109
+downloads broken off. Cratarr's own Requests did fine: all 82 approved arrived, within six days.
+
+**What Cratarr would do instead.** Search by MusicBrainz release, recording by recording, as single-track intake
+(0080) does now: a folder chosen because its files are the release's tracks (title and length), not because its name
+looks right; every file gated (decoded whole, the recording's length, AcoustID at 0.9); into Incoming (0034), where
+the owner keeps it, never straight into Music. The administrator approves what is fetched, many at once (the bulk
+intake below), so March 2026's unattended batches cannot happen again.
+
+**Two ways.**
+
+- *Cratarr does Soulseek, Lidarr stays.* soularr goes. Cratarr takes Lidarr's wanted albums (Lidarr's API) and its own
+  Requests, and fetches them from Soulseek its way. Lidarr keeps watching artists for new releases and grabbing
+  torrents. The smaller step, and the same engine as the bulk intake of missing tracks.
+- *Cratarr replaces Lidarr.* Cratarr also watches artists (MusicBrainz's new releases) and grabs torrents. Lidarr and
+  soularr go. Several versions of work; Lidarr does those two things well.
+
+**Catches.**
+
+- Soulseek manners: one search at a time, paced; never a chat room (the owner's rule); slskd's own limits (its 409s
+  when searches pile up).
+- AcoustID's rate (three lookups a second) paces the gate on a big batch.
+- Lidarr's own folder (`lidarr-music`, 813 albums) is not in Health's checks or the missing-tracks pass, which look
+  at Music only; if Cratarr fetches, where its albums land decides what Health sees.
+- Found while looking: Cratarr's analysis says "no sound" for Roll the Dice (2010), whose MP3s play fine (−15 dB);
+  the decoder gets no frames from them (a large cover in the tag, perhaps). To be fixed on its own.
+
+**Next after 0.13 (the owner, 2026-11-01: "Yes this comes next, first we move to release").** Searching Soulseek
+needs no MusicBrainz; judging what was found does: a reference says which tracks and lengths the release has.
+
+- *Three references, in turn:* MusicBrainz, then Discogs (its track lists, not only its genres), then Bandcamp (an
+  album page's own track list and lengths, as Cratarr already reads it for playing, 0071; strong for independent,
+  electronic and digital-only releases). One that agrees on the track count and each length is the target. Bandcamp
+  is found through its search box's answers only, so a match counts only where the tracks agree; Cratarr keeps its
+  own link to the page.
+- *Checked without a reference:* each file decoded whole, lossless where it says so, no clicks or clipping; track
+  numbers without gaps or doubles; one album, album artist and year in every file; the folder's name as the tags
+  say; every track from one Soulseek user's folder (a mix was March 2026's mark); AcoustID per track (the right
+  recording under its title); already in the library or not.
+- *The hand check, where no reference agrees:* one intake card per arrival on the review sheet's pattern (0092):
+  cover, where it came from, format, the tracks with their lengths, each check green, amber or red with its one
+  sentence, and per track a small waveform and play buttons for its start, middle and end (seconds per album, not
+  a whole listen). Keep, Replace or Delete; nothing moves or is written before that yes. All green with AcoustID
+  agreeing: offered with Keep ticked; amber or red: left open with its reason. A record checked by hand is its own
+  reference for its type and year after.
+- *One Health item for the references of every indexer* (the owner, 2026-11-01): "References", across MusicBrainz,
+  Discogs, Bandcamp and AcoustID, never one item a source. Its entries: a record no reference agrees with (its
+  type, year and completeness rest on its files alone; paste a link, or "checked by hand", the record then its own
+  reference); references that disagree (track count, lengths, year side by side; the owner picks the one that
+  counts); a reference found by guessing (Bandcamp's search box, MusicBrainz without an id in the files), shown
+  once to confirm. Open, a record shows a row a source, agreeing, missing or differing, and what each says. What
+  would change the files goes through the review sheet (0092).
+- *CLAP, maybe, never with certainty* (the owner, 2026-11-01: "possibly but not with any certainty"): not a reference
+  (it knows a sound, not a track list), at most an amber hint where AcoustID knows nothing: a track that sounds
+  unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
+  miss too much. AudioMuse runs after import, so in Health, not on the intake card.
+- Mockups of the intake card first (632), then the server's checks and references (a5).
 
 ## External library
 
@@ -104,6 +184,49 @@ kind of adapters Cratarr's own sources use (0005).
   - Playlists are `.m3u` files of paths: an external track needs an entry form of its own.
   - Tags: only what the other server's API gives (genres, year, sometimes BPM).
 
+### All servers in one library, on the device (explored 2026-10-31)
+
+The owner, 2026-10-31, on the settled "modes only": the point of a merged library is one person with several unrelated
+servers (a friend's Navidrome, one's own Jellyfin elsewhere, a Cratarr), merged on their own device, where no one
+server can reach the others. Not decided; written down as the step after modes.
+
+- How: the app signs in to each server and keeps each library's index on the device (a Cratarr server's by its change
+  log, 0085's third step; a Jellyfin's or a Subsonic server's by their APIs). "All servers" is one more mode, the union
+  of the modes' indexes, each record marked with its server's dot. Search, the filter and crates run on the device
+  over it (the shared Rust core, the matcher); the queue is the device's (0085's fourth step); each track streams from
+  its own server, and what is done to it (a favourite, a rating, a play, a playlist edit) goes back to its server.
+- Graceful degradation (the owner's rule: nothing shown that cannot be consumed, nothing offered that cannot be
+  upheld): each track carries what its server can do; its menu offers that, and a selection across servers what all
+  of them can.
+- What a track from another server goes without:
+  - handing over: Play On, groups, Home Assistant, a server's queue for Android Auto hold only a Cratarr server's own
+    tracks; a queue that mixes servers plays on this device, and offers no Play On;
+  - the sound: Sounds like, Radio, Autoplay, the similar lists, AudioMuse's facts and the tempo; crates on those match
+    only analysed tracks. Within its own server, that server's mix can stand in (Subsonic's similar songs, Jellyfin's
+    Instant Mix), never across servers;
+  - waveforms, snippets and the tape's own view until it has played here (the device can draw them as it plays);
+  - one history: each play goes to its own server, so Cratarr's Insights, its week and its graves see Cratarr's tracks;
+  - playlists across servers: no server holds one, so those are the device's alone;
+  - one copy: an album on two servers shows twice, folded into one where both give its MusicBrainz release;
+  - the library's care: Health, Discover, Requests, release types, Classical and its works, the Edit sheet.
+- Only in the apps (Android, desktop): a browser page holds one origin's sign-in.
+- It ends the thin client in that mode: the app answers the page's library itself, from its indexes.
+- Order: modes per server first (each needs its adapter, its sign-in and its index on the device); then All servers
+  as a view over them, after the device index and beside the queue moving to the device.
+
+**Scrobbling from the device** (the owner, 2026-10-31: "scrobbling should indeed move to the device! This also makes
+more sense privacy wise"): the device that plays a track tells ListenBrainz and Last.fm itself, its own queue of them
+kept while offline (Last.fm takes them up to 14 days late, ListenBrainz any time). So it works the same for every
+server's tracks, and the server never sends anyone's listening out nor holds the services' keys. Today the server
+does it (0068's outbox, Connections). Settled the same day (the owner, question set), for 0.13 with modes:
+- Each user's choice: **from each device** (the start) or **through the server**, to sign in to a service once and
+  have it everywhere. Through the server, the devices hand it their plays of every server's tracks (the track's
+  artist, title, album and when), which it scrobbles as now.
+- Subsonic apps and Kodi, which play from Cratarr without Cratarr's app, follow the user's choice: through the server,
+  it scrobbles them as now; from each device, the server holds no keys, and those apps scrobble themselves.
+- Catches: from each device, a sign-in to each service on each one; a play told once, by the player that sounded it (a
+  group's leader, not its followers); the switch between the two neither losing a play nor telling one twice.
+
 ## Local library
 
 The phone's own music files, played in Cratarr's app beside the server's.
@@ -158,8 +281,9 @@ AudioMuse analysis is done."
 - Done in 74.x (2026-10-23): one path, `similarity` (signals, rarity, middle and spread, the listener's Similar by),
   for the radio, Sounds like (a track's, an album's, your week's), and the similar albums, playlists and crates at a
   list's foot; the radio and the crates read a track from the same facts (`crates::Facts::like`).
-- Left, and it waits for AudioMuse's analysis of the whole library (with CLAP): weighing the signals (all equal now,
-  or the listener's order), CLAP text search, steering the radio by mood and energy, the closeness graph last.
+- Left, and no longer waiting: AudioMuse's analysis of the whole library (with CLAP) finished on 2026-10-29 and is in
+  Cratarr (31,687 tracks): weighing the signals (all equal now, or the listener's order), CLAP text search (the owner:
+  "Yes, later", a design talk first), steering the radio by mood and energy, the closeness graph last.
 - Seen so far: a crate's Start radio seeds from 300 of its tracks (drawn by the server since 73.2) and leaves the seed
   out; a broad crate (Unlisted, 16,000 tracks) makes a blurry profile. Play as radio (only the crate's tracks) is a
   different path again.

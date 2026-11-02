@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first the
+  // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/ContentControls): first the
   // list's own filter, remembered per kind of list (decisions 0060 and 0061): how many it lets through, its conditions
   // as cards (lib/ConditionList: a crate's, unsaved; any or all of each item's tracks where the items hold them), and
   // the kind's own switches; at the title's end, Save as crate (the owner, 2026-10-23) and Reset, back to no filter of
@@ -10,11 +10,11 @@
   // chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
+  import { untrack } from 'svelte';
   import Switch from './Switch.svelte';
   import ConditionList from './ConditionList.svelte';
   import type { ListAxis } from './ConditionCard.svelte';
-  import { activeConditions, filterOf, filtersOn, hiddenLibraries, inView, resetFilter, setConditions, setSwitch, switchOn } from './listFilter.svelte';
-  import { classicalListed } from './recordKinds';
+  import { activeConditions, filterChange, filterOf, filtersOn, hiddenLibraries, inView, resetFilter, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
   import { startCrate } from './crates.svelte';
   import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
@@ -50,8 +50,14 @@
   // hold tracks (decision 0061). Crates have none (decision 0060).
   const CONDITIONED = ['library', 'playlists', 'playlist'];
   const conditioned = $derived(CONDITIONED.includes(list));
-  const items = $derived(list === 'library' ? 'album' : list === 'playlists' ? 'playlist' : null);
-  const switches = $derived((SWITCHES[list] ?? []).filter((w) => (!w.incoming || hasIncoming) && (!w.classical || classicalListed())));
+  // What changes while it is open is one step of the history, made as it closes, not one a tick (the owner,
+  // 2026-10-31; lib/listFilter filterChange).
+  $effect(() => {
+    const of = list;
+    return untrack(() => filterChange(of));
+  });
+  const items = $derived(list === 'library' ? 'record' : list === 'playlists' ? 'playlist' : null);
+  const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
   /** The switches by section, in the order the sections first come; switches without one in a section of no title. */
   const sections = $derived.by(() => {
     const out: { title: string | null; switches: typeof switches }[] = [];

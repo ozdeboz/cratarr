@@ -8,7 +8,7 @@
   import { downloadedSize } from './editor.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import { offerReset } from './reset.svelte';
+  import { offerReset, pref } from './reset.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import { installed, keptBytes, offline } from '../offline.svelte';
   import { prefs } from '../prefs.svelte';
@@ -24,9 +24,16 @@
     { value: 'smaller', label: 'Smaller copies' },
   ];
 
-  offerReset(
-    () => (inApp ? 'Storage, quality, mobile data and charging back to their defaults. What is kept stays.' : null),
-    () => setDevice({ syncBudgetGb: 20, downloadQuality: 'original', downloadOverMobile: false, syncOnlyCharging: false }),
+  // What Reset puts back (lib/settings/reset): the four choices, each its default once here; what is kept stays.
+  offerReset('sync', () =>
+    inApp
+      ? [
+          { name: 'Storage', now: () => appInfo.syncBudgetGb, def: 20, set: (v: number) => setDevice({ syncBudgetGb: v }), say: (v: number) => BUDGETS.find((b) => b.value === String(v))?.label ?? `${v} GB` },
+          { name: 'Quality', now: () => appInfo.downloadQuality, def: 'original', set: (v: string) => setDevice({ downloadQuality: v }), say: (v: string) => (v === 'original' ? 'Original' : v) },
+          { name: 'Download over mobile data', now: () => !!appInfo.downloadOverMobile, def: false, set: (v: boolean) => setDevice({ downloadOverMobile: v }) },
+          { name: 'Only while charging', now: () => !!appInfo.syncOnlyCharging, def: false, set: (v: boolean) => setDevice({ syncOnlyCharging: v }) },
+        ]
+      : null,
   );
   let choosingStorage = $state(false);
 </script>

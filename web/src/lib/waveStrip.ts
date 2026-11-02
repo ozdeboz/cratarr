@@ -214,7 +214,8 @@ export function planStrip<S extends GridStrip & { src: string }>(
       return make(own, lined);
     }
   }
-  const near = Math.abs(had.span / span - 1) <= slack;
+  // Counted in bars across (n wide), as the slack is: its span's ratio would let one more than a quarter bar through.
+  const near = Math.abs(span / had.span - 1) * Math.max(1, n) <= SPAN_SLACK;
   if (near) {
     if (covers(had, from, to) && had.src === stripSource(tracks, had)) return had;
     return make(had.span, had.o);

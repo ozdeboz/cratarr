@@ -19,16 +19,16 @@ Since 0.11.0; 0.11.1's fixes are in it too. The notes for each part are in [deci
 
 ## Snippets
 
-- **A track's menu plays its liveliest 20 seconds** a moment after it opens, its waveform under the menu's head with
-  that stretch lit and a playhead running; **Play from 1:52** plays the track from there. Closing the menu stops it;
-  a quick ⋮ and away plays nothing.
+- **A track's menu shows its snippet**: its waveform under the menu's head with 20 seconds lit, the first lively
+  stretch (usually the first chorus). **Play snippet from 1:52** plays it there, with a playhead running; again, it
+  stops, and closing the menu stops it too. The menu plays nothing by itself, and the track itself plays from Play.
 - **Your music ducks** to a fifth of its volume meanwhile and comes back after, when it plays on this device; a
   snippet never touches the queue or a Play On player. In the Android app the app plays it.
 - **In the crate search** each track has a round button: it opens the row on the same waveform and plays its
-  snippet; again, it stops. One at a time.
+  snippet; again, it stops and folds. One at a time.
 - **Settings → This device → Snippets in menus** turns the menus' snippets off.
 - A snippet reads only what the server has already worked out (a track's waveform and beats): without them it starts
-  at a fixed point, and nothing is analysed for a menu.
+  a third of the way in, and nothing is analysed for a menu.
 
 ## Search
 

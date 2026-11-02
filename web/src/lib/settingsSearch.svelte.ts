@@ -71,6 +71,8 @@ export function loadSettingsWords(): Promise<void> {
     }
     settingsWords.by = by;
   })();
+  // Not read (a part's chunk not fetched): read again at the next search, not never.
+  loading.catch(() => (loading = null));
   return loading;
 }
 

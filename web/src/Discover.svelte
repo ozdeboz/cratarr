@@ -36,7 +36,7 @@
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
-  import { matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
+  import { matchesSearch, pageView, searchNone, usePageAction } from './lib/pageView.svelte';
   import { switchOn } from './lib/listFilter.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
   import { me } from './lib/me.svelte';
@@ -51,7 +51,13 @@
   let error = $state<string | null>(null);
   const load = () =>
     getDiscover().then(
-      (v) => ((view = v), (error = null)),
+      (v) => {
+        view = v;
+        error = null;
+        // None found yet: the server began its look while answering; asked for, so the loader follows it and ends
+        // (with the live channel down it waited for ever, the owner 2026-11-02).
+        if (!v.found && !tasks.running(KIND)) void tasks.ask();
+      },
       (e) => (error = e instanceof Error ? e.message : String(e)),
     );
   load();
@@ -142,6 +148,8 @@
   const mode = $derived<ReasonMode>(inSpotify() ? 'fresh' : (prefs.discoverMode as ReasonMode));
   const inMode = (a: DiscoverAlbum) => modeOf(a) === mode;
   const cards = $derived(mode === 'artists' ? [] : inModeOrder(mode, albums.filter(inMode)));
+  // Its words leave none of what it has: the pill says so, from its magnifier (pageView searchNone, A2); its own line
+  // stays for the filter alone.
   /** New artists: the server's, each with their records (those that pass); from a server before it, the new artists'
    *  records by artist, the best fit first. */
   const artists = $derived.by(() => {
@@ -156,6 +164,8 @@
     for (const a of inModeOrder('artists', [...shown.values()])) (by.get(a.artist) ?? by.set(a.artist, []).get(a.artist)!).push(a);
     return [...by].map(([name, records]) => ({ name, why: [] as string[], records }));
   });
+  // Not while a Spotify list is the one on screen (lib/SpotifyLibrary): the callout would tell of the hidden one.
+  searchNone(() => (!spotifyView && kept.length && !looking && (mode === 'artists' ? !artists.length : !cards.length) ? (mode === 'artists' ? 'artists' : 'albums') : null));
   // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): Fresh.
   loadSpotify().then(() => {
     if (inSpotify() && spotify.state && !spotify.state.shown) prefs.discoverMode = 'fresh';
@@ -321,7 +331,7 @@
   {#if spotifyView}
     <SpotifyLibrary view={spotifyView} />
   {:else if error && !view}
-    <Notice text={error} />
+    <Notice text={error} onretry={load} />
   {:else if !view}
     <!-- Waiting for the list: a look running says how far it is under the loader too, never only in the pill (the
          owner, 2026-10-25). -->
@@ -338,12 +348,14 @@
     {/if}
     {#if !albums.length}
       <!-- Nothing found yet: the shared loading sign, not words of its own (the owner, 2026-10-26). -->
-      {#if !looking}{#if kept.length || view.found}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{:else}<PageLoading />{/if}{/if}
+      <!-- None found yet and no look running: the list could not be read again, or the look failed (its Look again);
+           else the look's end is still being read (the owner, 2026-11-02: errors are never shown as nothing). -->
+      {#if !looking}{#if kept.length || view.found}{#if !(kept.length && pageView.none)}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{/if}{:else if error}<Notice text={error} onretry={load} />{:else if task?.error}<Notice text={task.error} onretry={refresh} />{:else}<PageLoading />{/if}{/if}
     {:else}
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      {#if mode === 'artists' ? !artists.length : !cards.length}<p class="note">None of them match.</p>{/if}
+      {#if (mode === 'artists' ? !artists.length : !cards.length) && !pageView.none}<p class="note">None of them match.</p>{/if}
       {#each artists as x (x.name)}
         <SectionHead title={x.name} />
         {#each x.why as w (w)}<p class="why-artist">{w}</p>{/each}

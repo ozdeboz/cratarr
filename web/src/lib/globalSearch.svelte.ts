@@ -1,6 +1,6 @@
 // The global search's state (decision 0072; the owner, 2026-10-25, mockup 3): what the words find everywhere, asked
 // while any search is on, so its count shows beside the page's before it is looked at; and which the page or panel
-// shows, its own results or everywhere's (the globe beside the search, lib/TopPill). The library's kinds and what is not in it from the
+// shows, its own results or everywhere's (the globe beside the search, lib/ContentControls). The library's kinds and what is not in it from the
 // server, the pages and Settings' parts from the browser (lib/everywhere).
 import { search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
@@ -9,6 +9,8 @@ import { prefs } from './prefs.svelte';
 import { byRelevance, provided, relevance, words, type SearchResult } from './search';
 import { leaveOnArrival, onArrival } from './navStep.svelte';
 import { keep } from './searchKept';
+import { untrack } from 'svelte';
+import { TERM_KINDS, answerOfTerms, crateOfLine, modesFrom, readLine, type Chip, type Found as Finds, type Modes } from './quickCrate';
 
 export type Found = SearchResult & { track?: string };
 export type FoundGroup = { kind: string; label: string; items: Found[]; total: number };
@@ -16,7 +18,7 @@ export type FoundGroup = { kind: string; label: string; items: Found[]; total: n
 /** The server's kinds, the library's first, then what is not in it (decision 0072, 7). */
 const LIBRARY: { kind: SearchKind; label: string }[] = [
   { kind: 'artist', label: 'Artists' },
-  { kind: 'album', label: 'Albums' },
+  { kind: 'album', label: 'Records' },
   { kind: 'track', label: 'Tracks' },
   // Classical's works (0.12, decision 0086; the owner, 2026-10-30: works reachable), each opening its sheet (lib/WorkSheet).
   { kind: 'work', label: 'Works' },
@@ -52,6 +54,8 @@ const PAGE_KINDS: Record<string, string[]> = {
 };
 /** A few of each kind. */
 const EACH = 5;
+/** All the server's kinds, as everywhere asks them. */
+const KINDS = [...LIBRARY, ...ELSEWHERE].map((k) => k.kind);
 
 export const globalSearch = $state({
   /** What the page or the panel shows while searching: its own results, or everywhere's. */
@@ -59,6 +63,9 @@ export const globalSearch = $state({
   /** The server's last answer: kept while new words are asked, so the results stay until the new ones are in (the
    *  owner, 2026-10-25); none without words. */
   found: null as { q: string; r: ServerSearch } | null,
+  /** The words the server failed for, and why: said with Try again, never the wait for ever (the owner, 2026-11-02:
+   *  errors are never shown as nothing). */
+  failed: null as { q: string; error: string } | null,
   /** Asked again after something changed what it finds (an exclusion taken back). */
   again: 0,
   /** Beyond (decision 0076): what MusicBrainz (and Discogs, 0.9.13's server) find for the settled words. */
@@ -66,7 +73,21 @@ export const globalSearch = $state({
   /** Show all (decision 0076): the one kind shown whole, as far as it has come. */
   all: null as string | null,
   allFound: null as { q: string; kind: string; items: Found[]; total: number; done: boolean } | null,
+  /** The words read as a crate (0.13; the owner, 2026-10-31), once for the crate card (lib/SearchCrateCard), the
+   *  field's dimmed joining words (lib/ContentControls) and the results: its terms, their joins, and what its terms find
+   *  (`r`), which the results show instead of what the whole line finds. Null where the words are no crate; the last
+   *  one kept while new words are read (its `q` says whose). */
+  crate: null as { q: string; chips: Chip[]; modes: Modes; r: ServerSearch } | null,
+  /** The words whose reading as a crate has landed, a crate or none, or failed (a page's list holds what it showed
+   *  until then: lib/quickCrate listQueries). */
+  readFor: null as string | null,
 });
+
+/** Whether the words' reading as a crate is still on its way: two words or more, not read yet. */
+export const readingPending = (q: string) => words(q).length >= 2 && globalSearch.readFor !== q;
+
+/** How many of each kind a phrase's readings offer (lib/quickCrate's crate search asks as many). */
+const READINGS = 3;
 
 /** Beyond is asked once the words settle (decision 0076: about half a second, three letters at least), each query's
  *  answer kept, so typing back and forth asks nothing again. */
@@ -91,18 +112,54 @@ $effect.root(() => {
     if (kept) globalSearch.found = { q, r: kept };
     let gone = false;
     const t = setTimeout(() => {
-      search(q, [...LIBRARY, ...ELSEWHERE].map((k) => k.kind), EACH).then(
+      search(q, KINDS, EACH).then(
         (r) => {
           keep(foundKept, q, r);
-          if (!gone) globalSearch.found = { q, r };
+          if (gone) return;
+          globalSearch.found = { q, r };
+          globalSearch.failed = null;
         },
-        () => {},
+        // Unanswered: nothing to read the words by, so they are read as no crate.
+        (e) => {
+          if (gone) return;
+          globalSearch.readFor = q;
+          globalSearch.failed = { q, error: e instanceof Error ? e.message : 'Unexpected error' };
+        },
       );
     }, 300);
     return () => {
       gone = true;
       clearTimeout(t);
     };
+  });
+  // The words read as a crate, once the server's answer for them is in: the whole line from that answer, its phrases
+  // asked as the results ask (each answer kept, so the terms' finds need no second asking).
+  $effect(() => {
+    const f = globalSearch.found;
+    const q = pageView.query.trim();
+    if (words(q).length < 2) return void ((globalSearch.crate = null), (globalSearch.readFor = q));
+    if (!f || f.q !== q) return;
+    let gone = false;
+    const whole = words(q).join(' ');
+    const answers = new Map<string, ServerSearch>();
+    const finds = (r: ServerSearch): Finds => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, READINGS) ?? []);
+    const ask = (phrase: string): Promise<Finds> => {
+      const key = words(phrase).join(' ');
+      const got = key === whole ? Promise.resolve(f.r) : search(phrase, KINDS, EACH);
+      return got.then((r) => (answers.set(key, r), finds(r)));
+    };
+    untrack(() =>
+      readLine(q, ask).then(
+        (reads) => {
+          if (gone) return;
+          const chips = crateOfLine(reads);
+          globalSearch.crate = chips ? { q, chips, modes: modesFrom(reads), r: answerOfTerms(q, chips.map((c) => c.term), answers) as ServerSearch } : null;
+          globalSearch.readFor = q;
+        },
+        () => !gone && (globalSearch.readFor = q),
+      ),
+    );
+    return () => (gone = true);
   });
   $effect(() => {
     const q = pageView.query.trim();
@@ -181,8 +238,11 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
   const q = pageView.query.trim();
   const query = words(q);
   if (!query.length) return [];
-  // The last answer, the words' own once it is in.
-  const f = globalSearch.found?.r ?? null;
+  // The last answer, the words' own once it is in; where they read as a crate, what its terms find (the owner,
+  // 2026-10-31: a typed sentence still lists its artists, genres and their tracks). Failed for these words: not the last
+  // answer, which was for others (2026-11-02).
+  const failed = globalSearch.failed?.q === q;
+  const f = (globalSearch.crate?.q === q ? globalSearch.crate.r : null) ?? (failed ? null : globalSearch.found?.r) ?? null;
   const server = (kinds: typeof LIBRARY): FoundGroup[] =>
     f
       ? kinds
@@ -236,6 +296,10 @@ export const beyondAlbum = (subject: string) =>
 
 /** Whether the server has answered these words (else everywhere's count and its "nothing" wait). */
 export const globalAsked = () => globalSearch.found?.q === pageView.query.trim();
+/** Why the server failed for these words, if it did. */
+export const globalFailed = () => (globalSearch.failed?.q === pageView.query.trim() ? globalSearch.failed.error : null);
+/** The words asked again after a failure: the wait till the answer, not the failure. */
+export const searchAgain = () => ((globalSearch.failed = null), globalSearch.again++);
 
 /** Everywhere chosen while searching: a page's or a panel's own content set aside for everywhere's. */
 export const everywhere = () => globalSearch.scope === 'everywhere' && pageView.query.trim() !== '';

@@ -782,6 +782,8 @@ impl PlayingService {
         let (mut albums, mut appears_on) = (w.albums, w.appears_on);
         super::classical::tell(source_id, &mut albums).await;
         super::classical::tell(source_id, &mut appears_on).await;
+        super::file_facts::tell(source_id, &mut albums);
+        super::file_facts::tell(source_id, &mut appears_on);
         Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums, appears_on, rows, favorite: w.favorite, mbid })
     }
 

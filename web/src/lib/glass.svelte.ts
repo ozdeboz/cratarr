@@ -2,13 +2,13 @@
 // where the bar of pages runs along the top, the page's and the panel's floating glass are never shown together, so
 // App draws one: back (or ✕) and the title on the left, one pill on the right. The panel on top hands its parts here
 // (its left part, its pill's settings, a button of its own); else the page's show. One pill whose settings change, so
-// its buttons slide in and out as they do (lib/TopPill), instead of one glass fading over another. With room (the
+// its buttons slide in and out as they do (lib/ContentControls), instead of one glass fading over another. With room (the
 // sidebar), each keeps its own glass, as before.
 import type { Snippet } from 'svelte';
-import type TopPill from './TopPill.svelte';
+import type ContentControls from './ContentControls.svelte';
 import type { ComponentProps } from 'svelte';
 
-export type PillSettings = ComponentProps<typeof TopPill>;
+export type PillSettings = ComponentProps<typeof ContentControls>;
 /** What a panel hands: its left part (back or ✕, its breadcrumbs or name), its pill's settings (none: no pill), and a
  *  button of its own beside the pill. */
 export type GlassParts = {

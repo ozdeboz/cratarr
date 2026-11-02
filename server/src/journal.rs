@@ -134,6 +134,60 @@ pub enum Change {
     Tempo { tracks: Vec<crate::app::tempo::TempoChange> },
 }
 
+/// A run of changes to the library's files (decision 0092): what wrote it, and each file it wrote with its fields before
+/// and after, by the tag reader's names ("releasetype", "date", "genre"). Undone only where a file still holds what the
+/// run wrote.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileRun {
+    /// The writer ("types", "fix:<finding>", "renumber") and how the page names it.
+    pub what: String,
+    pub title: String,
+    /// Its records, as the review sheet named them.
+    pub records: Vec<RunRecord>,
+    pub files: Vec<FileWrite>,
+    /// The files not written, and why.
+    #[serde(default)]
+    pub failed: Vec<RunFailed>,
+}
+
+/// A record of a run: its album id, title and artist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunRecord {
+    pub album: String,
+    pub title: String,
+    pub artist: String,
+}
+
+/// A file a run did not write, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunFailed {
+    pub album: String,
+    /// Its record's title and artist, where known (a record set aside whole has no files in the run to name it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    pub why: String,
+}
+
+/// One file of a run: its album, where it is, its track's title, its fields before and after (each field's values as
+/// items) with where each new value comes from, and whether it was undone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileWrite {
+    pub album: String,
+    pub path: std::path::PathBuf,
+    #[serde(default)]
+    pub track: Option<String>,
+    pub before: Vec<(String, Vec<String>)>,
+    pub after: Vec<(String, Vec<String>)>,
+    #[serde(default)]
+    pub from: Vec<(String, String)>,
+    #[serde(default)]
+    pub undone: bool,
+}
+
 /// One playlist's file before a change, and the fingerprint of the file the change left.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextChange {
@@ -172,6 +226,8 @@ CREATE TABLE IF NOT EXISTS handled (
   PRIMARY KEY (event, handler)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS changes (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, change TEXT NOT NULL, undone_at INTEGER);
+CREATE TABLE IF NOT EXISTS file_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, run TEXT NOT NULL, account TEXT, undone_at INTEGER);
 ";
 
 /// Columns added after the first schema; added to an existing journal when missing.
@@ -399,6 +455,45 @@ impl Journal {
         Ok(())
     }
 
+    /// Keep a run of changes to the library's files (decision 0092) of `account`'s; runs older than `keep` seconds (the
+    /// trash's days) are forgotten on the way.
+    pub fn record_run(&self, at: i64, run: &FileRun, account: Option<&str>, keep: i64) -> Result<EventId> {
+        let db = self.db();
+        db.execute("DELETE FROM file_runs WHERE at < ?1", [at - keep])?;
+        db.execute("INSERT INTO file_runs (at, run, account) VALUES (?1, ?2, ?3)", params![at, serde_json::to_string(run)?, account])?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// A run, when it ran, and whether it was undone; `None` when it is not (or no longer) kept.
+    pub fn file_run(&self, id: EventId) -> Result<Option<(FileRun, i64, bool)>> {
+        let row = self
+            .db()
+            .query_row("SELECT run, at, undone_at FROM file_runs WHERE id = ?1", [id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?))
+            })
+            .optional()?;
+        row.map(|(run, at, undone)| Ok((serde_json::from_str(&run)?, at, undone.is_some()))).transpose()
+    }
+
+    /// A run kept again after some of it was undone; `undone` once all of it is.
+    pub fn update_run(&self, id: EventId, run: &FileRun, undone: Option<i64>) -> Result<()> {
+        self.db().execute("UPDATE file_runs SET run = ?2, undone_at = ?3 WHERE id = ?1", params![id, serde_json::to_string(run)?, undone])?;
+        Ok(())
+    }
+
+    /// The runs kept since `since` (epoch seconds), newest first: id, when, the run, whether all of it was undone.
+    pub fn file_runs_since(&self, since: i64) -> Result<Vec<(EventId, i64, FileRun, bool)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, at, run, undone_at FROM file_runs WHERE at >= ?1 ORDER BY id DESC")?;
+        let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, at, run, undone) = row?;
+            out.push((id, at, serde_json::from_str(&run)?, undone.is_some()));
+        }
+        Ok(out)
+    }
+
     /// Forget events older than `before` (epoch seconds): nothing can undo or handle them any more.
     pub fn prune(&self, before: i64) -> Result<usize> {
         let db = self.db();
@@ -410,6 +505,30 @@ impl Journal {
 #[cfg(test)]
 mod change_tests {
     use super::*;
+
+    #[test]
+    fn a_file_run_is_kept_while_the_trash_keeps_and_undone_once() {
+        let j = Journal::open(None).unwrap();
+        let file = FileWrite {
+            album: "al-1".into(),
+            path: "/m/a.flac".into(),
+            track: Some("A".into()),
+            before: vec![("date".into(), vec![])],
+            after: vec![("date".into(), vec!["2010".into()])],
+            from: vec![("date".into(), "the album's year".into())],
+            undone: false,
+        };
+        let record = RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() };
+        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new() };
+        let old = j.record_run(1_000, &run, None, 100).unwrap();
+        let id = j.record_run(2_000, &run, Some("ann"), 100).unwrap();
+        assert_eq!(j.file_run(old).unwrap(), None, "older than the trash keeps: forgotten");
+        assert_eq!(j.file_run(id).unwrap(), Some((run.clone(), 2_000, false)));
+        assert_eq!(j.file_runs_since(1_500).unwrap().len(), 1);
+        run.files[0].undone = true;
+        j.update_run(id, &run, Some(2_010)).unwrap();
+        assert_eq!(j.file_run(id).unwrap(), Some((run, 2_000, true)));
+    }
 
     #[test]
     fn a_change_is_kept_for_a_day_and_claimed_once() {

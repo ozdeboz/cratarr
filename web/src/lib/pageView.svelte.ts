@@ -1,11 +1,13 @@
-// What the page shown now hands the pill's sheets (lib/TopPill, decided 2026-10-15): a page's view settings (order,
+// What the page shown now hands the pill's sheets (lib/ContentControls, decided 2026-10-15): a page's view settings (order,
 // layout, size) live in the View sheet (lib/ViewSheet) and its own filters in the Filter sheet (lib/FilterSheet), not
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
-import { matches, words } from './search';
+import { pageQueries, type Chip } from './quickCrate';
+import { keepWhile, type Kept } from './keepWhile.svelte';
+import { matches } from './search';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
-import type { AlbumLayout, CollectionOrder, CrateOrder, PanelKind, PlaylistOrder } from './prefs.svelte';
+import type { AlbumLayout, CollectionOrder, ComposerOrder, CrateOrder, PanelKind } from './prefs.svelte';
 
 /** A list's order field (decision 0060: one name per fact). `most`: it starts most (or newest, or best) first when
  *  chosen, a count or a date of how it was used; the list's arrow still turns it round. */
@@ -14,8 +16,9 @@ export type OrderField<K extends string = string> = { value: K; label: string; m
 /** The page's own button at the pill's end: a + where it makes something, or with things ticked their menu (⋮). */
 /** `progress`: a ring around the icon, 0 to 1, while work goes on (the Downloads page's sync, decision 0038). */
 /** The page's own button in its pill. `progress` (0 to 1; null while nothing runs): work it starts and shows, ringed on
- *  the button and unfolded in the pill after a tap (lib/TopPill); `line`: what that work is at, said there. */
-export type PageAction = { icon: IconName; label: string; run: () => void; progress?: number | null; line?: string | null };
+ *  the button and unfolded in the pill after a tap (lib/ContentControls); `line`: what that work is at, said there,
+ *  also once it ended; `level`: its bar then (0 to 1; full where none). */
+export type PageAction = { icon: IconName; label: string; run: () => void; progress?: number | null; line?: string | null; level?: number | null };
 /** A page's mode, a button that stays lit while on, left of its own button (Playlists' Quick add, 0.9.18). */
 export type PageMode = { icon: IconName; label: string; on: boolean; toggle: () => void };
 
@@ -58,23 +61,10 @@ export const ALBUM_ORDERS: OrderField<CollectionOrder>[] = [
   // Its length (0.10; the owner, 2026-10-30): the longest first.
   { value: 'length', label: 'Length', most: true },
 ];
-/** The Library's Artists and Tracks (the owner, 2026-10-25): their orders, as the albums' header has them. */
-export const ARTIST_ORDERS: OrderField<'name' | 'albums' | 'tracks'>[] = [
+/** Classical's composers (lib/ComposerList): what the server says of them, their name and how many records. */
+export const COMPOSER_ORDERS: OrderField<ComposerOrder>[] = [
   { value: 'name', label: 'Name' },
-  { value: 'albums', label: 'Albums', most: true },
-  { value: 'tracks', label: 'Tracks', most: true },
-];
-export const TRACK_ORDERS: OrderField<'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed'>[] = [
-  { value: 'album', label: 'Album' },
-  { value: 'title', label: 'Title' },
-  { value: 'artist', label: 'Artist' },
-  { value: 'year', label: 'Year' },
-  { value: 'added', label: 'Added' },
-  { value: 'plays', label: 'Plays', most: true },
-  { value: 'duration', label: 'Length' },
-  { value: 'tempo', label: 'Tempo' },
-  { value: 'albumArtist', label: 'Album artist' },
-  { value: 'lastPlayed', label: 'Last played', most: true },
+  { value: 'records', label: 'Records', most: true },
 ];
 /** The orders by how you used the albums (lib/albums albumUses): read when chosen. */
 export const USE_ORDERS: readonly CollectionOrder[] = ['plays', 'played', 'rating'];
@@ -90,27 +80,8 @@ export const PLAYLIST_LAYOUTS = [
   { value: 'table' as const, label: 'Table', icon: 'table' as const },
 ];
 
-export const PLAYLIST_ORDERS: OrderField<PlaylistOrder>[] = [
-  { value: 'name', label: 'Name' },
-  { value: 'tracks', label: 'Tracks' },
-  { value: 'playing', label: 'Playing first' },
-  { value: 'missing', label: 'Missing', most: true },
-];
-
-/** A menu's Add to playlist (lib/PlaylistToggles): the same orders, those the item is in ticked first. */
-export const LIST_ORDERS: OrderField<PlaylistOrder>[] = PLAYLIST_ORDERS.filter((o) => o.value !== 'missing').map((o) =>
-  o.value === 'playing' ? { ...o, label: 'Ticked first' } : o,
-);
-
-/** The playlists' order (the Playlists page's, a menu's Add to playlist): by name, by size, or those holding the item
- *  first (the playing track, or the menu's: `holds`); equals by name. */
-export function playlistBy<T extends { name: string; count: number; dead?: number }>(order: PlaylistOrder, holds: (p: T) => boolean) {
-  const byName = (a: T, b: T) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
-  return (a: T, b: T) =>
-    order === 'tracks' ? a.count - b.count || byName(a, b)
-    : order === 'missing' ? (a.dead ?? 0) - (b.dead ?? 0) || byName(a, b)
-    : order === 'playing' ? Number(holds(b)) - Number(holds(a)) || byName(a, b) : byName(a, b);
-}
+// The playlists' orders and their order (lib/playlistOrder, pure for the tests).
+export { LIST_ORDERS, PLAYLIST_ORDERS, playlistBy } from './playlistOrder';
 
 export const CRATE_ORDERS: OrderField<CrateOrder>[] = [
   { value: 'own', label: 'As made' },
@@ -146,9 +117,7 @@ export function trackOrders(kind: PanelKind): OrderField<TrackOrder>[] {
  *  is a page's id or a panel kind. `incoming`: only where a library is used as Incoming. */
 /** A list's switch in its filter. `invert`: shown on while the key is not kept (a source to include, the key keeping it
  *  left out), so what is left out counts as the filter on. */
-/** `classical`: offered only where the server knows the Classical kind (0.10, lib/recordKinds); `quiet`: not counted on
- *  the funnel (it shows more, not less). */
-export type ListSwitch = { key: string; label: string; incoming?: true; invert?: true; section?: string; classical?: true; quiet?: true };
+export type ListSwitch = { key: string; label: string; incoming?: true; invert?: true; section?: string };
 const TRACK_SWITCHES: ListSwitch[] = [
   { key: 'favourites', label: 'Favourites only' },
   { key: 'unplayed', label: 'Unplayed only' },
@@ -160,9 +129,6 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
     { key: 'unplayed', label: 'Unplayed only' },
     { key: 'topRated', label: '4 stars and up' },
     // Not Lossless only, Upgrades waiting or Duplicates waiting (the owner, 2026-10-24: not filter options).
-    // A record in its own kind only (0.10; the owner, 2026-10-30, on by default): Classical > Compilation >
-    // Album/EP/Single > Other, as the server holds it; off, a record shows under each kind it has (`all-kinds` kept).
-    { key: 'all-kinds', label: 'Each record in its own kind only', invert: true, classical: true, quiet: true },
   ],
   playlists: [
     { key: 'favourites', label: 'Favourites only' },
@@ -212,13 +178,32 @@ export const pageView = $state({
   /** How many of the page's list its filter lets through, of how many (the Filter sheet's count); null: not counted.
    *  `pending`: the server's answer to a changed filter is on its way (the count is the last one's). */
   counted: null as { shown: number; total: number; pending?: boolean } | null,
-  /** The pill's search field is open (App's title gives way when it leaves no room, lib/TopPill). */
+  /** The pill's search field is open (App's title gives way when it leaves no room, lib/ContentControls). */
   searchOpen: false,
+  /** The title beside back gave way to the open search (lib/NavigationControls): the field takes its room. */
+  leadAway: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
   /** The page's mode button (usePageMode), while it shows. */
   mode: null as PageMode | null,
+  /** What the page lists ("records"), while its own search finds none of it (searchNone). */
+  none: null as string | null,
 });
+
+/** The calling page's own search finding none (0.13; the owner, 2026-10-31: A2, "an overlay pointing at the search
+ *  glass with a button to clear"): `what` it lists ("records") while its words leave none of it, else null. The page's
+ *  pill says it, from its lit magnifier, the words a chip whose ✕ clears (lib/ContentControls); the page itself says nothing
+ *  then. An effect: it follows what `what` reads. */
+export function searchNone(what: () => string | null) {
+  $effect(() => {
+    const mine = pageView.query.trim() ? what() : null;
+    pageView.none = mine;
+    // Gone with the page, unless the next page has said its own already.
+    return () => {
+      if (untrack(() => pageView.none) === mine) pageView.none = null;
+    };
+  });
+}
 
 /** Gives the pill's last button to the calling page while it shows (an effect: it follows what `get` reads). */
 export function usePageAction(get: () => PageAction | null) {
@@ -247,19 +232,33 @@ export function usePageMode(get: () => PageMode | null) {
 const matching = $state({ ready: false });
 export const matcherLoaded = () => (matching.ready = true);
 
-/** The pill's search field's words on a page that has one. */
 /** Whether the pill's search lets these texts through, as every search matches (lib/search; 0.12: the server's
  *  matcher, separators aside, an alias as good as the name, a few typos forgiven). */
 export function matchesSearch(...texts: (string | null | undefined)[]): boolean {
   void matching.ready;
-  return matches(words(pageView.query), ...texts);
+  return (listQueries?.value ?? pageQueries(pageView.query, null)).some((q) => matches(q, ...texts));
+}
+/** Whether the page's list gives its place to the loader: its words read as a crate for longer than the one rule keeps
+ *  what it showed (lib/loader). */
+export const listReading = () => !!listQueries?.loader;
+
+/** The crate the search's words read as, on a page whose list matches by its terms (App registers it in its setup: the
+ *  pages with the crate card, lib/quickCrate crateCardOn), and whether its reading is still on its way; none elsewhere.
+ *  While it is (lib/loader, the one rule), the list goes by the words it went by before, then gives way to the loader. */
+let listQueries: Kept<string[][]> | null = null;
+export function matchCrateBy(crateOfWords: () => { chips: readonly Chip[] | null; pending: boolean } | null) {
+  listQueries = keepWhile(
+    () => pageQueries(pageView.query, crateOfWords()?.chips ?? null),
+    () => !!crateOfWords()?.pending,
+    () => pageView.query.trim(),
+  );
 }
 
 export const searchFor = (page: string) =>
   page === 'playlists'
     ? 'Filter playlists'
     : page === 'library' || page === 'local-albums'
-      ? 'Filter albums'
+      ? 'Filter records'
       : page === 'downloads'
         ? 'Filter downloads'
         : page === 'discover'

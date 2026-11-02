@@ -7,7 +7,8 @@
   //   - children: a control of its own (a choice of a few, a button), which goes under the name where both do not fit.
   // `lead`: a dot in front (on, off, warn, bad) or a colour's swatch. `more`: a longer text behind an (i), beside the
   // row's control and never inside it (lib/MoreInfo). `progress` (0 to 1): work under way with a count, its line shown
-  // as the one Meter (ui-conventions, Progress).
+  // as the one Meter (ui-conventions, Progress). `expanded` (0.13, Health's panel): a row that opens what it holds under
+  // itself, in place, its › turned down while it does; `open`: the one shown beside (Health's page), tinted.
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
   import Meter from '../Meter.svelte';
@@ -32,6 +33,8 @@
     disabled = false,
     busy = false,
     progress = null,
+    expanded = null,
+    open = false,
     children,
   }: {
     name: string;
@@ -54,6 +57,8 @@
     disabled?: boolean;
     busy?: boolean;
     progress?: number | null;
+    expanded?: boolean | null;
+    open?: boolean;
     children?: Snippet;
   } = $props();
 
@@ -87,7 +92,7 @@
   </span>
 {/snippet}
 
-<div class="item" bind:this={el} class:left class:act={!!act} class:add={kind === 'add'} class:danger={kind === 'danger'} class:off={disabled}>
+<div class="item" bind:this={el} class:left class:open class:act={!!act} class:add={kind === 'add'} class:danger={kind === 'danger'} class:off={disabled}>
   {#if act}
     <button
       class="main"
@@ -96,6 +101,8 @@
       aria-checked={toggle ? toggle.checked : undefined}
       {disabled}
       aria-busy={busy || undefined}
+      aria-expanded={expanded ?? undefined}
+      aria-pressed={open || undefined}
       onclick={act}>{@render body()}</button
     >
   {:else}
@@ -110,7 +117,7 @@
       {:else}
         {#if swatch}<span class="colour" style:background={swatch}></span>{/if}
         {#if value}<span class="value">{value}</span>{/if}
-        <Icon name="chevronRight" size={20} />
+        <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={20} />
       {/if}
     </button>
   {:else if children || value || swatch}
@@ -146,6 +153,11 @@
 
   .item.act:hover:not(.off) {
     background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+
+  /* The one shown beside (Health's page, as Settings' own list). */
+  .item.open {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
   .item.off > :not(.more) {
