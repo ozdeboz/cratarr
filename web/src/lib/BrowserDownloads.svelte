@@ -11,7 +11,7 @@
   import { forgetOffline, offline, type KeptTrack } from './offline.svelte';
   import Row from './Row.svelte';
   import { downloadedSize } from './settings/editor.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import { shelf, shelfCover } from './shelfStore.svelte';
 
   type Group = { key: string; title: string; artist: string | null; source: string; album: string | null; tracks: KeptTrack[]; bytes: number; at: number };
@@ -36,6 +36,8 @@
       return matchesSearch(g.title, g.artist, year ? String(year) : null, [...new Set(s.flatMap((r) => r.genres))].join(' '), g.tracks.map((t) => t.name).join(' '));
     }),
   );
+  // The page's words leaving none of it (decision 0095): the pill says so from the magnifier.
+  searchNone(() => !shown.length && { n: groups.length, one: 'download' });
   const play = (g: Group) => playQueue(g.tracks.map(({ source, id, name, artist, album, album_id, duration_secs }) => ({ source, id, name, artist, album, album_id, duration_secs })), 0, g.title);
 </script>
 

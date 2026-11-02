@@ -24,7 +24,7 @@
   $effect(() => loadComposers());
   const shown = $derived(composersInOrder((classical.composers ?? []).filter((c) => matchesSearch(c.name, c.sort_name)), prefs.composerOrder, prefs.composerDown));
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
-  searchNone(() => (classical.composers?.length && !shown.length ? 'composers' : null));
+  searchNone(() => !shown.length && { n: classical.composers?.length ?? 0, one: 'composer' });
 
   let width = $state(0);
   // View's size steps depend on the width the list has.

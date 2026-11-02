@@ -25,7 +25,7 @@
   // The pill's search (the owner, 2026-10-25): a problem whose words, or one of its items', hold every word.
   const list = $derived(problems().filter((p) => matchesSearch(p.domain, p.title, p.line, ...p.items.map((x) => `${x.title} ${x.line ?? ''}`))));
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
-  searchNone(() => (health.loaded && problems().length && !list.length ? 'problems' : null));
+  searchNone(() => health.loaded && !list.length && { n: problems().length, one: 'problem' });
   const groups = $derived(byArea(list, AREAS));
   // Changes to files (decision 0092; administrators'): the records whose files differ from their types and years (while
   // types into files is on) a line under Library, opening its review; every run one line under Files, naming what

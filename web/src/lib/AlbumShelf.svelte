@@ -45,7 +45,7 @@
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import SelectSheet from './SelectSheet.svelte';
-  import { albumSubject, panel, viewPlaylist } from './panel.svelte';
+  import { albumSubject, pageCovered, panel, viewPlaylist } from './panel.svelte';
   import { leaveSearch } from './globalSearch.svelte';
   import { prefs, type AlbumLayout, type CollectionOrder } from './prefs.svelte';
   import { clockText } from './remote.svelte';
@@ -327,10 +327,12 @@
       more: found.filter((x) => x !== first).slice(0, 2).map((x) => ({ said: `or ${said(x)}`, chips: x.causes.map(chipOf) })),
     };
   });
-  searchNone(() =>
-    !attributed && shown.length && shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) && listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty'
-      ? 'records'
-      : null,
+  searchNone(
+    () =>
+      !attributed &&
+      shown.length > 0 &&
+      shown.every(({ s, albums }) => s.supported && s.albums.length > 0 && !albums.length) &&
+      listShows(0, pageView.query, deepFor, deepFailed?.q) === 'empty' && { n: shown.reduce((k, { s }) => k + s.albums.length, 0), one: 'record' },
   );
   // How you used them, read when such an order is chosen (and each time again: plays change).
   $effect(() => {
@@ -542,7 +544,7 @@
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). Words that match no record say so, not the libraries (under a
            crate card of 229 tracks it read as a contradiction; the owner, 2026-10-31). -->
-      {#if attributed && s === shown[0].s}<NothingPopover anchor={attributed.anchor} said={attributed.said} chips={attributed.chips} onclearall={attributed.clearAll} more={attributed.more} />
+      {#if attributed && s === shown[0].s}{#if !pageCovered()}<NothingPopover anchor={attributed.anchor} said={attributed.said} chips={attributed.chips} onclearall={attributed.clearAll} more={attributed.more} />{/if}
       {:else if attributed}<!-- said once, above -->
       {:else if !s.albums.length}<p class="empty">{empty}</p>
       {:else if !pageView.none}<p class="empty">{pageView.query.trim() ? 'No records match.' : 'None in the libraries switched on match.'}</p>{/if}

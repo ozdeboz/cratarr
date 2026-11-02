@@ -17,7 +17,7 @@
   import { bandcampOf, bandcampPlay, playOnBandcamp, bandcampFailed } from './bandcampFound.svelte';
   import SectionHead from './SectionHead.svelte';
   import { recordsTitle } from './recordTypeRules';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
 
   let {
     source,
@@ -52,6 +52,9 @@
   const hit = (...texts: (string | null | undefined)[]) => !searching || matchesSearch(...texts);
   const albumsShown = $derived(albums.filter((a) => hit(a.title, a.artist)));
   const appearsShown = $derived(appearsOn.filter((a) => hit(a.title, a.artist)));
+  // The page's words leave none of what they have (the owner, 2026-11-02: the panel said its own "Nothing of …
+  // matches." and nothing pointed at the words): said from the magnifier, the words a chip whose ✕ clears.
+  searchNone(() => searching && !albumsShown.length && !appearsShown.length && !top && !(bio && hit(bio)) && { n: albums.length + appearsOn.length, one: 'record' }, 'panel');
 
   // About: Cratarr's own library only (the store knows its artists).
   let about = $state<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null } | null>(null);
@@ -245,8 +248,7 @@
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
-{#if searching && !albumsShown.length && !appearsShown.length && !top && !(bio && hit(bio))}
-  <p class="empty">Nothing of {name}'s matches.</p>
+{#if searching}<!-- what the words leave none of: the pill says it (searchNone) -->
 {:else if !albums.length && !appearsOn.length && !top}
   <p class="empty">Nothing by {name} on this server.</p>
 {/if}

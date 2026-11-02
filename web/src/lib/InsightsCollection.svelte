@@ -4,7 +4,7 @@
   // one series each in the accent, labelled directly; the playlists' figures as tiles and the tracks in the most
   // playlists as a list. Five views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
   // Artists (all of them), Tracks (those in playlists), Discovery (what Discover found, the owner 2026-10-25).
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import { hrefOf, viewOn } from './addresses';
   import { getDiscover, getDiscoverExcluded, getDiscoverMissing, type Count, type DiscoverView, type Insights, type Layered } from './api';
   import Icon from './Icon.svelte';
@@ -22,6 +22,11 @@
   const widest = (rows: Count[]) => Math.max(1, ...rows.map((r) => r.n));
 
   const l = $derived(data.library);
+  // Genres or Artists, a list only: the page's words leaving none of it (decision 0095), said from the magnifier.
+  searchNone(() => {
+    const list = prefs.insightsCollection === 'genres' ? l.genres : prefs.insightsCollection === 'artists' ? l.top_artists : null;
+    return !!list && !list.some((r) => matchesSearch(r.name)) && { n: list.length, one: prefs.insightsCollection === 'genres' ? 'genre' : 'artist' };
+  }, 'panel');
   const p = $derived(data.playlists);
   // The overview beyond the files (the owner's exploration, 2026-10-23): Incoming, growth, what was heard.
   const o = $derived(data.overview);

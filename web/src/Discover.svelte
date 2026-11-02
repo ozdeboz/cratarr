@@ -166,7 +166,14 @@
     return [...by].map(([name, records]) => ({ name, why: [] as string[], records }));
   });
   // Not while a Spotify list is the one on screen (lib/SpotifyLibrary): the callout would tell of the hidden one.
-  searchNone(() => (!spotifyView && kept.length && !looking && (mode === 'artists' ? !artists.length : !cards.length) ? (mode === 'artists' ? 'artists' : 'albums') : null));
+  searchNone(
+    () =>
+      !spotifyView &&
+      kept.length > 0 &&
+      !looking &&
+      (mode === 'artists' ? !artists.length : !cards.length) &&
+      (mode === 'artists' ? { n: new Set(kept.map((a) => a.artist)).size, one: 'artist' } : { n: kept.filter(inMode).length, one: 'record' }),
+  );
   // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): Fresh.
   loadSpotify().then(() => {
     if (inSpotify() && spotify.state && !spotify.state.shown) prefs.discoverMode = 'fresh';

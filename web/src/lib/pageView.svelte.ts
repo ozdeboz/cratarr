@@ -187,21 +187,30 @@ export const pageView = $state({
   action: null as PageAction | null,
   /** The page's mode button (usePageMode), while it shows. */
   mode: null as PageMode | null,
-  /** What the page lists ("records"), while its own search finds none of it (searchNone). */
+  /** The page's words leaving none of its list: what comes back without them ("101 records without", searchNone). */
   none: null as string | null,
+  /** The panel's, the same ("12 tracks without"), while the page's search leaves none of what it holds. */
+  panelNone: null as string | null,
 });
 
+/** What a list's words leave none of: how many come back without them, one and many of its kind. */
+export type Without = { n: number; one: string; many?: string };
 /** The calling page's own search finding none (0.13; the owner, 2026-10-31: A2, "an overlay pointing at the search
- *  glass with a button to clear"): `what` it lists ("records") while its words leave none of it, else null. The page's
- *  pill says it, from its lit magnifier, the words a chip whose ✕ clears (lib/ContentControls); the page itself says nothing
- *  then. An effect: it follows what `what` reads. */
-export function searchNone(what: () => string | null) {
+ *  glass with a button to clear"): how many of what it lists come back `without` the words, while they leave none of
+ *  it, else null. Said as every cause is (decision 0095, the owner 2026-11-02: "Count without cause", "101 records
+ *  without [Search ✕]"), from the lit magnifier (lib/ContentControls); the list itself says nothing then. A panel the
+ *  same (`where` 'panel', the owner 2026-11-02: an artist's panel said "Nothing of Lawrence Guy's matches." with nothing
+ *  pointing at the words that did it), by whichever pill holds the search (the page's beside it, its own over the
+ *  page). An effect: it follows what `without` reads. */
+export function searchNone(without: () => Without | null | false | 0 | undefined, where: 'page' | 'panel' = 'page') {
+  const key = where === 'page' ? 'none' : 'panelNone';
   $effect(() => {
-    const mine = pageView.query.trim() ? what() : null;
-    pageView.none = mine;
-    // Gone with the page, unless the next page has said its own already.
+    const w = pageView.query.trim() ? without() : null;
+    const mine = w && w.n > 0 ? `${howMany(w.n, w.one, w.many)} without` : null;
+    pageView[key] = mine;
+    // Gone with the page (or the panel's view), unless the next has said its own already.
     return () => {
-      if (untrack(() => pageView.none) === mine) pageView.none = null;
+      if (untrack(() => pageView[key]) === mine) pageView[key] = null;
     };
   });
 }

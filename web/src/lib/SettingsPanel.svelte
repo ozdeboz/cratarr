@@ -17,7 +17,7 @@
   import { everywhere } from './globalSearch.svelte';
   import { untrack } from 'svelte';
   import { narrowSettings } from './settings/narrow';
-  import { matchesSearch, pageView } from './pageView.svelte';
+  import { matchesSearch, pageView, searchNone } from './pageView.svelte';
   import { words } from './search';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
@@ -132,6 +132,12 @@
   // Its own search there, as every panel's (the owner, 2026-10-25): the part's rows narrowed to it (lib/settings/narrow),
   // all of them when the part's name has the words; a thing's page has none.
   const narrowing = $derived(handed && !thing && words(pageView.query).length > 0 && !matchesSearch(partTitle));
+  // None here or in another part (decision 0095): the pill says so from the magnifier, not the panel's own words.
+  // Its own rows read as the other parts' are (lib/settingsSearch), once the words are known.
+  searchNone(
+    () => narrowing && !!settingsWords.by && !elsewhere.length && !settingsMatches(section, partTitle, words(pageView.query)).rows.length && { n: settingsWords.by[section]?.length ?? 0, one: 'setting' },
+    'panel',
+  );
   narrowSettings(() => narrowing);
   // The page's search through every part (the owner, 2026-11-02: "the search input field should be page-wide across all
   // child panels. Obviously, the current panel should surface at the top, but directly after, all siblings on the page
@@ -247,7 +253,7 @@
           </Group>
         {/each}
       </div>
-    {:else if narrowing && !pageView.none}<p class="none">No settings match.</p>{/if}
+    {/if}
     {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
@@ -326,13 +332,4 @@
     padding-bottom: calc(var(--mini-h, 0px) + var(--glass-bottom) + 16px);
   }
 
-  .none {
-    margin: 8px 4px;
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
-
-  .scroll:has(:global(.item:not(.left))) .none {
-    display: none;
-  }
 </style>

@@ -59,7 +59,7 @@
   const kept = keepWhile(() => ({ shows, list: sorted }), () => shows === 'asking', () => pageView.query.trim());
   const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
-  searchNone(() => (listed.shows === 'empty' ? 'crates' : null));
+  searchNone(() => listed.shows === 'empty' && { n: (crates.list ?? []).filter((c) => !(switchOn('crates', 'no-built-in') && c.permanent)).length, one: 'crate' });
 </script>
 
 <main>

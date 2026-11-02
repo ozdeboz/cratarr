@@ -43,7 +43,7 @@
   import { releaseOf, type ReleaseTrack } from './replaceTrack';
   import { me } from './me.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
@@ -84,6 +84,8 @@
   const RENUMBERS = new Set(['library:track-numbers', 'library:discs']);
 
   /** An item's own key, the row open in place by it (the report read again keeps it open where it still is). */
+  // The page's words leaving none of the problem's items (decision 0095): said from the magnifier.
+  searchNone(() => !!p && !p.items.some((x) => matchesSearch(x.title, x.line)) && { n: p.items.length, one: 'item' }, 'panel');
   const keyOf = (x: HealthItem) => (x.track ? `t/${x.track}` : x.album ? `a/${x.album.join('/')}` : x.playlist ? `p/${x.playlist}` : `n/${x.title}`);
   let openKey = $state<string | null>(null);
   // Another problem: none open.
