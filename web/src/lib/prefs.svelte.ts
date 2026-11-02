@@ -236,8 +236,6 @@ export type Prefs = {
   insightsPeriod: 'week' | 'month' | 'year' | 'all';
   /** Listening's own sections (its second row): what was heard, or the taste it makes. */
   listeningView: 'history' | 'profile';
-  /** What Profile is built from (its panel): each source on or off. */
-  profileSources: { favourites: boolean; playlists: boolean; plays: boolean; skipped: boolean; excluded: boolean };
   signals: { tracks: boolean; genre: boolean; artists: boolean };
   /** Genre territories on Insights' Map (the owner, 2026-10-24: a switch, off until turned on). */
   mapTerritories: boolean;
@@ -480,7 +478,6 @@ export const DEFAULTS: Prefs = {
   tracksCount: 'listed',
   insightsPeriod: 'all',
   listeningView: 'history',
-  profileSources: { favourites: true, playlists: true, plays: true, skipped: true, excluded: true },
   signals: { tracks: true, genre: true, artists: true },
   mapTerritories: false,
   mapGenres: null,
@@ -656,8 +653,6 @@ function read(): Prefs {
       if (saved.tracksCount === 'listed' || saved.tracksCount === 'plays') p.tracksCount = saved.tracksCount;
       if (['week', 'month', 'year', 'all'].includes(saved.insightsPeriod)) p.insightsPeriod = saved.insightsPeriod;
       if (saved.listeningView === 'history' || saved.listeningView === 'profile') p.listeningView = saved.listeningView;
-      if (saved.profileSources && typeof saved.profileSources === 'object')
-        for (const k of Object.keys(p.profileSources) as (keyof typeof p.profileSources)[]) if (typeof saved.profileSources[k] === 'boolean') p.profileSources[k] = saved.profileSources[k];
       if (typeof saved.mapTerritories === 'boolean') p.mapTerritories = saved.mapTerritories;
       if (Array.isArray(saved.mapGenres) && saved.mapGenres.every((g: unknown) => typeof g === 'string')) p.mapGenres = saved.mapGenres;
       if (saved.signals && typeof saved.signals === 'object') {

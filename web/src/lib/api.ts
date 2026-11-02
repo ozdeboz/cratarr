@@ -2426,9 +2426,9 @@ export type ProfileSide = {
 };
 export type TasteProfile = { taste: ProfileSide; avoid: ProfileSide };
 /** `without` comma-separated, as like-curve takes it; the period narrows plays and skips; `off`: the sources left out. */
-export const getTasteProfile = (source?: string, without?: string[], period: Listening['period'] = 'all', off: string[] = []) => {
+/** The taste, from the sources the account has on (its settings' `taste_off`, lib/mySettings). */
+export const getTasteProfile = (source?: string, without?: string[], period: Listening['period'] = 'all') => {
   const q = new URLSearchParams({ period });
-  if (off.length) q.set('off', off.join(','));
   if (source) q.set('source', source);
   if (without?.length) q.set('without', without.join(','));
   return request<TasteProfile>(`/api/history/profile?${q}`);
