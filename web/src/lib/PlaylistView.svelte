@@ -510,7 +510,7 @@
     if (untrack(() => blocked?.for) === asked) return;
     let gone = false;
     crateRows(c, 0, 1, prefs.source || undefined, fav, alb, look, { q }).then(
-      (r) => !gone && (blocked = r.blocked ? { for: asked, of: r.blocked } : null),
+      (r) => (((window as unknown as { __blk?: unknown }).__blk = { gone, b: r.blocked ?? null }), !gone && (blocked = r.blocked ? { for: asked, of: r.blocked } : null)), // DEBUG
       () => !gone && (blocked = null),
     );
     return () => (gone = true);
