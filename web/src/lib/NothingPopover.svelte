@@ -76,7 +76,15 @@
     stacks.set(a, [...(stacks.get(a) ?? []), box]);
     let raf = 0;
     let was = '';
+    // Under a sheet that covers its control (the Filter sheet over the page; the owner, 2026-11-02: it lay over the
+    // sheet): gone until the sheet is, the top layer being above every sheet.
+    const covered = () => [...document.querySelectorAll('[aria-modal="true"]')].some((d) => d !== box && !d.contains(a) && d.getClientRects().length > 0);
     const follow = () => {
+      if (covered()) {
+        if (was !== 'covered') (was = 'covered'), (at = null);
+        raf = requestAnimationFrame(follow);
+        return;
+      }
       const r = a.getBoundingClientRect();
       const now = `${r.left},${r.bottom},${r.width},${box.offsetWidth},${innerWidth},${above(a, box).map((b) => b.offsetHeight).join()}`;
       if (now !== was) {
