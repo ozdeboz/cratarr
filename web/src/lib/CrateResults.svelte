@@ -6,7 +6,7 @@
   // lib/CrateEditor) shows this one list.
   import { onDestroy, untrack, type Snippet } from 'svelte';
   import { coverUrl, previewCrate, type Condition, type CrateName, type PlaylistRow } from './api';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_ORDERS, recordKey, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, recordKey, recordOrderOf, recordOrders, recordsOf, type CrateView, type RecordOrder } from './crateRecords';
   import Asking from './Asking.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
@@ -125,8 +125,9 @@
   ];
   const view = $derived(crateViewOf(views, prefs.crateViews));
   const setView = (v: CrateView) => (prefs.crateViews = { ...prefs.crateViews, [views]: v });
+  const recordSort = $derived(recordOrderOf(null, prefs.crateRecordSort));
   const records = $derived(
-    view === 'records' && preview ? orderRecords(recordsOf(preview.rows.map((r, i) => ({ r, i }))), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : [],
+    view === 'records' && preview ? orderRecords(recordsOf(preview.rows.map((r, i) => ({ r, i }))), recordSort.key, recordSort.down) : [],
   );
   /** A record opened: the crate's tracks of it, in a sheet over the list (lib/RecordSheet; the owner, 2026-11-02). */
   let recordOpen = $state<string | null>(null);
@@ -178,9 +179,9 @@
   <div class="views"><Seg label="Show the crate as" options={VIEWS} bind:value={() => view, setView} /></div>
   {#if view === 'records'}
     <ListHead
-      fields={RECORD_ORDERS}
-      bind:value={() => prefs.crateRecordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: prefs.crateRecordSort.down })}
-      bind:down={() => prefs.crateRecordSort.down, (d) => (prefs.crateRecordSort = { key: prefs.crateRecordSort.key, down: d })}
+      fields={recordOrders(null)}
+      bind:value={() => recordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: recordSort.down })}
+      bind:down={() => recordSort.down, (d) => (prefs.crateRecordSort = { key: recordSort.key, down: d })}
       count={plural(records.length, 'record')}
     />
     <ol class="preview" aria-label="The crate's records">

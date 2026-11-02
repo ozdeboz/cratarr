@@ -144,7 +144,7 @@
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, RECORD_ORDERS, recordCell, recordKey, recordsOf, type CrateRecord, type RecordOrder } from './crateRecords';
+  import { crateViewOf, holdsLine, orderRecords, RECORD_COLUMNS, recordCell, recordKey, recordOrderOf, recordOrders, recordsOf, tracksForRecords, type CrateRecord, type RecordOrder } from './crateRecords';
   import { insights, plural } from './insights.svelte';
   import { stateLine } from './fileChangeRules';
   import { openReview, undoRun } from './fileRuns.svelte';
@@ -763,10 +763,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const kind = $derived<PanelKind>(album ? 'album' : crate || crateEditing || creating ? 'crate' : artist ? 'artist' : 'playlist');
   const topTracks = $derived(!!artist?.tracks);
   let topSort = $state<ListSort>({ key: 'plays', down: true });
-  const sortFields = $derived(trackOrders(kind));
+  const sortFields = $derived(trackOrders(kind, crate));
   const sort = $derived.by(() => {
     const s = topTracks ? topSort : prefs.panelSorts[kind];
-    return s && sortFields.some((f) => f.value === s.key) ? s : { key: 'own', down: false };
+    // Where none was chosen, or this crate has not the one chosen: its own order; a crate's Best match ("Every crate").
+    return s && sortFields.some((f) => f.value === s.key) ? s : { key: sortFields[0].value, down: false };
   });
   const sortKey = $derived(sort.key as TrackOrder);
   const sortDown = $derived(sort.down);
@@ -826,7 +827,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return () => clearTimeout(t);
   });
   // A Home shelf's crate shows what Home showed, of every library, whatever is switched off (the owner, 2026-10-24).
-  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: crateFilter, order: sortKey, down: sortDown });
+  // A crate as records or as tracks (lib/crateRecords), and its records' order.
+  const recordsView = $derived(!!crate && !crateEditing && crateViewOf(crate, prefs.crateViews) === 'records');
+  const recordFields = $derived(recordOrders(crate));
+  const recordSort = $derived(recordOrderOf(crate, prefs.crateRecordSort));
+  // As records: its tracks in Best match or its own order, the records ordered from them (lib/crateRecords).
+  const crateLook = $derived<CrateLook>({
+    without: homeCrate(crate) ? undefined : hiddenLibraries(),
+    filter: crateFilter,
+    ...(recordsView ? { order: tracksForRecords(recordSort.key) } : { order: sortKey, down: sortDown }),
+  });
   const lookKey = $derived(JSON.stringify(crateLook));
   const pass = passing(() => kind, () =>
     fixedCrate && crate && !multi
@@ -872,15 +882,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // A crate as records or tracks (0.10; the owner, 2026-10-30: lib/crateRecords): its tracks grouped by album, in the
   // crate's order or an album order, each saying how much of its album the crate holds; a record opened shows its crate
   // tracks in a sheet (lib/RecordSheet). Playing the crate is as ever: its tracks in its order, whichever way it shows.
-  const recordsView = $derived(!!crate && !crateEditing && crateViewOf(crate, prefs.crateViews) === 'records');
-  const records = $derived(recordsView && shown ? orderRecords(recordsOf(shown), prefs.crateRecordSort.key, prefs.crateRecordSort.down) : []);
+  const records = $derived(recordsView && shown ? orderRecords(recordsOf(shown), recordSort.key, recordSort.down) : []);
   // As a table (the owner, 2026-10-30: one table head): the Library's records' columns as far as a record has them,
   // where the list has room (a crate's row is wider in front: its cover's 60 px and the rows' sides), and its head.
   const recordCols = $derived(recordsView ? fit('albums', listWidth - 28, (id) => id in RECORD_COLUMNS) : []);
-  const recordNow = $derived<Order<RecordOrder>>(prefs.crateRecordSort);
+  const recordNow = $derived<Order<RecordOrder>>(recordSort);
   const setRecordOrder = (o: Order<RecordOrder>) => (prefs.crateRecordSort = o);
-  const recordHeadCells = $derived<Cell[]>(headCellsOf(recordCols, (id) => RECORD_COLUMNS[id], recordNow, RECORD_ORDERS, setRecordOrder));
-  const recordHeads = $derived({ title: headSort<RecordOrder>('title', recordNow, RECORD_ORDERS, setRecordOrder) });
+  const recordHeadCells = $derived<Cell[]>(headCellsOf(recordCols, (id) => RECORD_COLUMNS[id], recordNow, recordFields, setRecordOrder));
+  const recordHeads = $derived({ title: headSort<RecordOrder>('title', recordNow, recordFields, setRecordOrder) });
   const recordCells = (rec: CrateRecord): Cell[] => recordCols.map((c) => ({ ...c, text: recordCell(rec, c.id, albumTotal(rec), clockText, addedOn) }));
   // An album's own count, from the Library's list (Cratarr's own albums: a row of another source has no album id).
   $effect(() => {
@@ -2372,9 +2381,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {:else if rows && shown}
       {#if recordsView}
         <ListHead
-          fields={RECORD_ORDERS}
-          bind:value={() => prefs.crateRecordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: prefs.crateRecordSort.down })}
-          bind:down={() => prefs.crateRecordSort.down, (d) => (prefs.crateRecordSort = { key: prefs.crateRecordSort.key, down: d })}
+          fields={recordFields}
+          bind:value={() => recordSort.key, (v) => (prefs.crateRecordSort = { key: v as RecordOrder, down: recordSort.down })}
+          bind:down={() => recordSort.down, (d) => (prefs.crateRecordSort = { key: recordSort.key, down: d })}
           count={plural(records.length, 'record')}
           oncount={() => crate && setCrateView(crate, 'tracks')}
           countLabel="Show as tracks"

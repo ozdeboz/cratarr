@@ -3,6 +3,7 @@
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
 import { pageQueries, type Chip } from './quickCrate';
+import { ownOrderOf } from './crateRecords';
 import { keepWhile, type Kept } from './keepWhile.svelte';
 import { matches } from './search';
 import { untrack } from 'svelte';
@@ -93,12 +94,14 @@ export const CRATE_ORDERS: OrderField<CrateOrder>[] = [
 ];
 
 /** A list of tracks' fields (decision 0060): every list of tracks offers all its rows know. Its own order is named by
- *  what it is: Playlist order, Track number (an album), Newest first (a crate), Newest album first (an artist). */
-export type TrackOrder = 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
-export function trackOrders(kind: PanelKind): OrderField<TrackOrder>[] {
-  const own = { playlist: 'Playlist order', album: 'Track number', crate: 'Newest first', artist: 'Newest album first' }[kind];
+ *  what it is: Playlist order, Track number (an album), Newest album first (an artist); a crate's where it has one
+ *  (lib/crateRecords ownOrderOf), after Best match, which a crate opens on (decision 0094, amended). */
+export type TrackOrder = 'bestMatch' | 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
+export function trackOrders(kind: PanelKind, crate?: string | null): OrderField<TrackOrder>[] {
+  const own = kind === 'crate' ? ownOrderOf(crate) : { playlist: 'Playlist order', album: 'Track number', artist: 'Newest album first' }[kind];
   return [
-    { value: 'own', label: own },
+    ...(kind === 'crate' ? [{ value: 'bestMatch' as const, label: 'Best match' }] : []),
+    ...(own ? [{ value: 'own' as const, label: own }] : []),
     { value: 'title', label: 'Title' },
     { value: 'artist', label: 'Artist' },
     { value: 'albumArtist', label: 'Album artist' },
