@@ -43,7 +43,7 @@
   import { releaseOf, type ReleaseTrack } from './replaceTrack';
   import { me } from './me.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
-  import { matchesSearch, searchNone } from './pageView.svelte';
+  import { matchesSearch, pageView, searchElsewhere, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
@@ -117,6 +117,19 @@
 
   /** An item's own key, the row open in place by it (the report read again keeps it open where it still is). */
   // The page's words leaving none of the problem's items (decision 0095): said from the magnifier.
+  // The page's search through every problem (the owner, 2026-11-02: "when in any control page, the search input field
+  // should be page-wide across all child panels ... the current panel should surface at the top, but directly after,
+  // all siblings on the page should surface too"): under this one's items, each other problem the words find, with the
+  // items they find (a few, then how many more); a tap opens it, the words still searched. Not narrowed to a record.
+  const SOME = 5;
+  const elsewhere = $derived.by(() => {
+    if (!pageView.query.trim() || record) return [];
+    return problems()
+      .filter((x) => x.key !== problem)
+      .map((x) => ({ x, hits: x.items.filter((i) => matchesSearch(i.title, i.line)) }))
+      .filter((e) => e.hits.length || matchesSearch(e.x.name, e.x.title));
+  });
+  searchElsewhere(() => elsewhere.length > 0);
   searchNone(() => !!p && !p.items.some((x) => matchesSearch(x.title, x.line)) && { n: p.items.length, one: 'item' }, 'panel');
   const keyOf = (x: HealthItem) => (x.track ? `t/${x.track}` : x.album ? `a/${x.album.join('/')}` : x.playlist ? `p/${x.playlist}` : `n/${x.title}`);
   let openKey = $state<string | null>(null);
@@ -542,6 +555,18 @@
       {#if f?.open}
         <Group><Item name={WHERE[f.open.page] ?? 'Open'} onclick={() => f && openFinding(f)} /></Group>
       {/if}
+    {/if}
+    {#if elsewhere.length}
+      <!-- The other problems the search finds, each a group of what it finds (lib/settings/Group, Item). -->
+      <div class="elsewhere" aria-label="In other problems">
+        {#each elsewhere as e (e.x.key)}
+          <Group title={e.x.name}>
+            {#each e.hits.slice(0, SOME) as h, i (i)}<Item name={h.title} line={h.line ?? null} onclick={() => viewSibling(HEALTH + e.x.key)} />{/each}
+            {#if e.hits.length > SOME}<Item name={`${(e.hits.length - SOME).toLocaleString()} more`} onclick={() => viewSibling(HEALTH + e.x.key)} />{/if}
+            {#if !e.hits.length}<Item name={e.x.title} onclick={() => viewSibling(HEALTH + e.x.key)} />{/if}
+          </Group>
+        {/each}
+      </div>
     {/if}
     <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     {#if handed && everywhere()}<GlobalResults />{/if}

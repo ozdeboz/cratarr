@@ -828,7 +828,8 @@
   // The conversion queue, followed on every page (an administrator's): its count on the Incoming tab, a toast when an
   // album is done.
   $effect(() => (me.admin ? jobs.start() : undefined));
-  const waiting = $derived(jobs.open.length);
+  // Of the libraries switched on only (the owner, 2026-11-02: "Only what's switched on"); a job from before says none.
+  const waiting = $derived(jobs.open.filter((j) => !j.library || prefs.hiddenLibraries.indexOf(j.library) < 0).length);
 
   // Connection line in the sidebar header.
   let status = $state<Status | null>(null);

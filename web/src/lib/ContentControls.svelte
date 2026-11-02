@@ -255,7 +255,8 @@
   // Not while the words make a crate whose card shows (the owner, 2026-11-02: the crate card wins, the page found that).
   // A panel's none (searchNone 'panel') by the pill that holds the search: the page's while the panel is beside it, the
   // panel's own while it covers the page; the page's own none first.
-  const noneSaid = $derived(page ? (pageCovered() ? null : pageView.none && crateCards.shown === 0 ? pageView.none : panelBeside() ? pageView.panelNone : null) : search ? pageView.panelNone : null);
+  const panelNone = $derived(pageView.elsewhere ? null : pageView.panelNone);
+  const noneSaid = $derived(page ? (pageCovered() ? null : pageView.none && crateCards.shown === 0 ? pageView.none : panelBeside() ? panelNone : null) : search ? panelNone : null);
   const noneShown = $derived(!!noneSaid && pageView.query.trim() !== '' && !globeOn);
   let row = $state<HTMLElement>();
   // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the

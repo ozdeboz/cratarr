@@ -17,7 +17,7 @@
   import { everywhere } from './globalSearch.svelte';
   import { untrack } from 'svelte';
   import { narrowSettings } from './settings/narrow';
-  import { matchesSearch, pageView, searchNone } from './pageView.svelte';
+  import { matchesSearch, pageView, searchElsewhere, searchNone } from './pageView.svelte';
   import { words } from './search';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
@@ -135,7 +135,7 @@
   // None here or in another part (decision 0095): the pill says so from the magnifier, not the panel's own words.
   // Its own rows read as the other parts' are (lib/settingsSearch), once the words are known.
   searchNone(
-    () => narrowing && !!settingsWords.by && !elsewhere.length && !settingsMatches(section, partTitle, words(pageView.query)).rows.length && { n: settingsWords.by[section]?.length ?? 0, one: 'setting' },
+    () => narrowing && !!settingsWords.by && !settingsMatches(section, partTitle, words(pageView.query)).rows.length && { n: settingsWords.by[section]?.length ?? 0, one: 'setting' },
     'panel',
   );
   narrowSettings(() => narrowing);
@@ -154,6 +154,8 @@
       .map((x) => ({ id: x.id, title: x.title, found: settingsMatches(x.id, x.title, w) }))
       .filter((x) => x.found.title || x.found.rows.length);
   });
+  searchElsewhere(() => elsewhere.length > 0);
+
   // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
   // its own beside it).
   const resetAction = () => (resetRows(section).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
