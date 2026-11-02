@@ -286,6 +286,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
             .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
+            .route("/api/intake/cards", get(intake_cards))
+            .route("/api/albums/{source}/{album}/card", get(intake_card))
             .route("/api/health/fixes", get(health_fixes))
             .route("/api/health/fixes/apply", post(apply_fixes))
             .route("/api/albums/{source}/{album}/intake", get(album_intake))
@@ -6557,6 +6559,23 @@ async fn album_intake(State(app): State<Arc<App>>, Path((source, album)): Path<(
     fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.field.cmp(b.field)));
     let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
     Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
+}
+
+/// Every record waiting in an Incoming library as its intake card (0.14, the owner: Health's "Records waiting for you").
+async fn intake_cards(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::app::intake_card::Card>>, ApiError> {
+    Ok(Json(crate::app::intake_card::cards(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// One record's intake card.
+async fn intake_card(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::intake_card::Card>, ApiError> {
+    own_album(&source)?;
+    let view = app.incoming.list(Some(&source)).await;
+    let (library, verdict) = view
+        .sources
+        .iter()
+        .find_map(|s| s.albums.iter().find(|a| a.id == album).map(|a| (a.library.clone(), s.verdicts.get(&album).cloned())))
+        .unwrap_or((None, None));
+    Ok(Json(crate::app::intake_card::card(&app, &album, library, verdict.as_ref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// The findings Health has of one record, each with only its items, and its tracks' file problems (0.14).

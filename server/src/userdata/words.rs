@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS album_complete (album TEXT PRIMARY KEY, at INTEGER NO
 -- What Discogs says of a subject beyond its words (0.9.8, app::discogs_facts): an album's (`album:<its Music-form id>`),
 -- an artist's (`artist:<name key>`), a release group's (`rg:<id>`); JSON, none where Discogs has nothing; and when.
 CREATE TABLE IF NOT EXISTS discogs_facts (subject TEXT PRIMARY KEY, at INTEGER NOT NULL, facts TEXT) WITHOUT ROWID;
+-- What hearing a record waiting in Incoming found (0.14, app::intake_card): each track decoded whole and its recordings
+-- as AcoustID knows them (JSON), and when.
+CREATE TABLE IF NOT EXISTS intake_heard (album TEXT PRIMARY KEY, at INTEGER NOT NULL, heard TEXT NOT NULL) WITHOUT ROWID;
 ";
 
 /// A word as a source said it.
@@ -119,6 +122,18 @@ impl UserData {
             }
         }
         Ok(out)
+    }
+
+    /// What hearing a record found (`app::intake_card`), and when.
+    pub fn intake_heard(&self, album: &str) -> Result<Option<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT at, heard FROM intake_heard WHERE album = ?1")?;
+        Ok(st.query_map([album], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
+    }
+
+    pub fn set_intake_heard(&self, album: &str, at: i64, heard: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO intake_heard (album, at, heard) VALUES (?1, ?2, ?3)", params![album, at, heard])?;
+        Ok(())
     }
 
     pub fn set_album_match(&self, album: &str, found: Option<&str>, at: i64) -> Result<()> {
