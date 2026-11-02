@@ -13,8 +13,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use super::reach::Sent as _;
 
-/// What an undo token starts with.
-pub const UNDO: char = 'v';
 /// The most of an image's bytes taken: a FLAC's picture holds at most 16 MiB, and every track carries it.
 const MOST_BYTES: usize = 12 * 1024 * 1024;
 /// Discogs releases of the master looked at for their own images.
@@ -262,6 +260,9 @@ struct Kept {
     old_inside: Option<String>,
     /// The new cover file's name.
     new_file: String,
+    /// The new picture's type (its bytes beside, as `new`).
+    #[serde(default)]
+    new_mime: Option<String>,
 }
 
 fn kept_dir(id: &str) -> Result<PathBuf> {
@@ -270,9 +271,8 @@ fn kept_dir(id: &str) -> Result<PathBuf> {
     Ok(Path::new(&data).join("cover-undo").join(id))
 }
 
-/// Sets an album's cover to the image at `url` (one of its candidates' hosts): written as `cover.<ext>` beside its
-/// tracks (the old cover file taken away) and inside each FLAC and MP3 track. Returns the undo token.
-pub async fn set(album: &str, url: &str) -> Result<String> {
+/// The image at `url` (one of its candidates' hosts), fetched.
+async fn fetch(url: &str) -> Result<Vec<u8>> {
     if !allowed(url) {
         bail!("That image is not one of the album's covers to choose from");
     }
@@ -284,28 +284,74 @@ pub async fn set(album: &str, url: &str) -> Result<String> {
     if data.is_empty() || data.len() > MOST_BYTES {
         bail!("That image could not be read");
     }
-    write(album, data).await
+    Ok(data)
 }
 
-/// Sets an album's cover to a picture of the administrator's own (0.9.6, the owner: Upload cover, for everyone), as a
-/// chosen one is set; kept as it was sent (JPEG, PNG or WebP). Returns the undo token.
-pub async fn upload(album: &str, data: Vec<u8>) -> Result<String> {
+/// An administrator's own picture (0.9.6, the owner: Upload cover, for everyone), kept as it was sent (JPEG, PNG or
+/// WebP).
+fn uploaded(data: &[u8]) -> Result<()> {
     if data.len() > MOST_BYTES {
         bail!("That picture is too large (at most {} MB)", MOST_BYTES / (1024 * 1024));
     }
-    if !matches!(crate::serve::art::sniff(&data), "image/png" | "image/webp") && !data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+    if !matches!(crate::serve::art::sniff(data), "image/png" | "image/webp") && !data.starts_with(&[0xFF, 0xD8, 0xFF]) {
         bail!("Upload a JPEG, PNG or WebP picture");
     }
-    write(album, data).await
+    Ok(())
 }
 
-/// The picture written as the album's cover, beside its tracks and inside each, the old one kept for Undo first.
-async fn write(album: &str, data: Vec<u8>) -> Result<String> {
-    // A picture whose size can be read (its header only: nothing is decoded).
-    if image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format()?.into_dimensions().is_err() {
+/// The cover the administrator chose (`url`) or uploaded (`data`) as a run on the one path (decision 0092's writers'
+/// map, 0.14: the choice is the yes; Undo is the run's).
+pub async fn run(app: &std::sync::Arc<super::App>, album: &str, url: Option<&str>, data: Option<Vec<u8>>) -> Result<super::file_runs::Status> {
+    let (data, from) = match (url, data) {
+        (Some(u), _) => (fetch(u).await?, "chosen"),
+        (None, Some(d)) => {
+            uploaded(&d)?;
+            (d, "uploaded")
+        }
+        (None, None) => bail!("Which picture?"),
+    };
+    let a = album.to_string();
+    let p = tokio::task::spawn_blocking(move || -> Result<super::file_runs::Proposal> {
+        let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+        let (_, _, _, artist, title) = served.library.album_place(&a)?.context("No such album in Cratarr's own library")?;
+        let (keep, said) = prepare(&a, &data)?;
+        let had = crate::serve::art::cover_file(&place(&a)?.dir).map_or("none".to_string(), |_| "its cover".to_string());
+        Ok(super::file_runs::Proposal {
+            kind: "cover".into(),
+            title: format!("Cover · {title}"),
+            records: vec![crate::journal::RunRecord { album: a.clone(), title, artist }],
+            files: vec![crate::journal::FileWrite {
+                album: a.clone(),
+                path: place(&a)?.dir,
+                track: None,
+                before: vec![("cover".into(), vec![had])],
+                after: vec![("cover".into(), vec![said])],
+                from: vec![("cover".into(), from.into())],
+                undone: false,
+                whole: Some(crate::journal::Whole { op: "cover".into(), ms: None, kept: Some(keep), planned: String::new(), wrote: None }),
+            }],
+            failed: Vec::new(),
+        })
+    })
+    .await??;
+    Ok(super::file_runs::start(app, p))
+}
+
+/// A candidate's picture fetched and kept, ready for a run to write (a cover fix on Health's sheet or before Keep): its
+/// folder, and the picture as the sheet says it.
+pub async fn prepared(album: &str, url: &str) -> Result<(PathBuf, String)> {
+    let data = fetch(url).await?;
+    let a = album.to_string();
+    tokio::task::spawn_blocking(move || prepare(&a, &data)).await?
+}
+
+/// A picture's type and its cover file's extension; refused where it is no image Cratarr can use (its header read
+/// only: nothing is decoded).
+fn kind_of(data: &[u8]) -> Result<(&'static str, &'static str)> {
+    if image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format()?.into_dimensions().is_err() {
         bail!("That is not an image Cratarr can use");
     }
-    let mime = crate::serve::art::sniff(&data);
+    let mime = crate::serve::art::sniff(data);
     let ext = match mime {
         "image/jpeg" => "jpg",
         "image/png" => "png",
@@ -313,80 +359,81 @@ async fn write(album: &str, data: Vec<u8>) -> Result<String> {
         "image/gif" => "gif",
         _ => bail!("That is not an image Cratarr can use"),
     };
-    let a = album.to_string();
-    let token = tokio::task::spawn_blocking(move || -> Result<String> {
-        let p = place(&a)?;
-        let id = format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis());
-        let keep = kept_dir(&id)?;
-        std::fs::create_dir_all(&keep)?;
-        // Written ahead: the old pictures and what Undo needs, before anything changes.
-        let old_file = crate::serve::art::cover_file(&p.dir);
-        if let Some(f) = &old_file {
-            std::fs::copy(f, keep.join("old-file"))?;
-        }
-        let tracks = crate::covers_inside::tracks_of(&p.dir);
-        let old_inside = tracks.iter().find_map(|t| crate::serve::art::embedded(t));
-        if let Some((_, bytes)) = &old_inside {
-            std::fs::write(keep.join("old-inside"), bytes)?;
-        }
-        let new_file = format!("cover.{ext}");
-        let kept = Kept {
-            dir: p.dir.clone(),
-            old_file: old_file.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned()),
-            old_inside: old_inside.map(|(m, _)| m),
-            new_file: new_file.clone(),
-        };
-        std::fs::write(keep.join("kept.json"), serde_json::to_vec(&kept)?)?;
-        // Then the change: the old file out, the new one beside the tracks and inside each.
-        if let Some(f) = &old_file {
-            std::fs::remove_file(f)?;
-        }
-        crate::covers_inside::write_file(&p.dir.join(&new_file), &data)?;
-        let done = crate::covers_inside::replace(&tracks, Some((&data, mime)));
-        for (t, why) in &done {
-            tracing::warn!("covers: {} kept its old picture: {why}", t.display());
-        }
-        if let Some(served) = crate::serve::instance() {
-            served.reread(&tracks);
-        }
-        Ok(format!("{UNDO}{id}"))
-    })
-    .await??;
-    Ok(token)
+    Ok((mime, ext))
 }
 
-/// Undoes a cover change (`v…`): the new cover file taken away, the old one back, the old picture inside the tracks
-/// again (none where there was none). Safe to repeat.
-pub async fn undo(token: &str) -> Result<()> {
-    let id = token.strip_prefix(UNDO).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())).context("Not a cover's undo")?.to_string();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let keep = kept_dir(&id)?;
-        let kept: Kept = serde_json::from_slice(&std::fs::read(keep.join("kept.json")).context("That cover change can no longer be undone")?)?;
-        let new = kept.dir.join(&kept.new_file);
-        if new.exists() {
-            std::fs::remove_file(&new)?;
+/// The new picture kept, ready to be written (nothing changed yet): its folder, and the picture as the sheet says it
+/// ("1200×1200 JPEG"). Blocking.
+fn prepare(album: &str, data: &[u8]) -> Result<(PathBuf, String)> {
+    let (mime, ext) = kind_of(data)?;
+    let p = place(album)?;
+    let id = format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis());
+    let keep = kept_dir(&id)?;
+    std::fs::create_dir_all(&keep)?;
+    std::fs::write(keep.join("new"), data)?;
+    let kept = Kept { dir: p.dir, old_file: None, old_inside: None, new_file: format!("cover.{ext}"), new_mime: Some(mime.to_string()) };
+    std::fs::write(keep.join("kept.json"), serde_json::to_vec(&kept)?)?;
+    let size = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok());
+    let kind = ext.to_uppercase().replace("JPG", "JPEG");
+    Ok((keep, size.map_or(kind.clone(), |(w, h)| format!("{w}×{h} {kind}"))))
+}
+
+/// The picture kept in `keep` (`prepare`) written: the old pictures kept first (written ahead), then the old cover file
+/// out, the new one beside the tracks and inside each; the tracks read again. Blocking.
+pub fn write_kept(keep: &Path) -> Result<()> {
+    let mut kept: Kept = serde_json::from_slice(&std::fs::read(keep.join("kept.json")).context("The picture is no longer kept")?)?;
+    let data = std::fs::read(keep.join("new"))?;
+    let mime = kept.new_mime.clone().unwrap_or_else(|| crate::serve::art::sniff(&data).to_string());
+    let old_file = crate::serve::art::cover_file(&kept.dir);
+    if let Some(f) = &old_file {
+        std::fs::copy(f, keep.join("old-file"))?;
+    }
+    let tracks = crate::covers_inside::tracks_of(&kept.dir);
+    let old_inside = tracks.iter().find_map(|t| crate::serve::art::embedded(t));
+    if let Some((_, bytes)) = &old_inside {
+        std::fs::write(keep.join("old-inside"), bytes)?;
+    }
+    kept.old_file = old_file.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned());
+    kept.old_inside = old_inside.map(|(m, _)| m);
+    std::fs::write(keep.join("kept.json"), serde_json::to_vec(&kept)?)?;
+    if let Some(f) = &old_file {
+        std::fs::remove_file(f)?;
+    }
+    crate::covers_inside::write_file(&kept.dir.join(&kept.new_file), &data)?;
+    for (t, why) in &crate::covers_inside::replace(&tracks, Some((&data, mime.as_str()))) {
+        tracing::warn!("covers: {} kept its old picture: {why}", t.display());
+    }
+    if let Some(served) = crate::serve::instance() {
+        served.reread(&tracks);
+    }
+    Ok(())
+}
+
+/// A cover change put back from what `write_kept` kept. Blocking.
+pub fn undo_kept(keep: &Path) -> Result<()> {
+    let kept: Kept = serde_json::from_slice(&std::fs::read(keep.join("kept.json")).context("That cover change can no longer be undone")?)?;
+    let new = kept.dir.join(&kept.new_file);
+    if new.exists() {
+        std::fs::remove_file(&new)?;
+    }
+    if let Some(name) = &kept.old_file {
+        let back = kept.dir.join(name);
+        if !back.exists() {
+            std::fs::copy(keep.join("old-file"), &back)?;
         }
-        if let Some(name) = &kept.old_file {
-            let back = kept.dir.join(name);
-            if !back.exists() {
-                std::fs::copy(keep.join("old-file"), &back)?;
-            }
-        }
-        let tracks = crate::covers_inside::tracks_of(&kept.dir);
-        let old = match &kept.old_inside {
-            Some(mime) => Some((std::fs::read(keep.join("old-inside"))?, mime.clone())),
-            None => None,
-        };
-        for (t, why) in crate::covers_inside::replace(&tracks, old.as_ref().map(|(b, m)| (b.as_slice(), m.as_str()))) {
-            tracing::warn!("covers: {} not given its old picture back: {why}", t.display());
-        }
-        std::fs::remove_dir_all(&keep).ok();
-        if let Some(served) = crate::serve::instance() {
-            served.reread(&tracks);
-        }
-        Ok(())
-    })
-    .await??;
+    }
+    let tracks = crate::covers_inside::tracks_of(&kept.dir);
+    let old = match &kept.old_inside {
+        Some(mime) => Some((std::fs::read(keep.join("old-inside"))?, mime.clone())),
+        None => None,
+    };
+    for (t, why) in crate::covers_inside::replace(&tracks, old.as_ref().map(|(b, m)| (b.as_slice(), m.as_str()))) {
+        tracing::warn!("covers: {} not given its old picture back: {why}", t.display());
+    }
+    std::fs::remove_dir_all(keep).ok();
+    if let Some(served) = crate::serve::instance() {
+        served.reread(&tracks);
+    }
     Ok(())
 }
 
@@ -405,11 +452,10 @@ mod tests {
         assert!(!allowed("https://localhost/x.jpg"));
     }
 
-    #[tokio::test]
-    async fn an_upload_is_a_picture_of_a_size_a_flac_can_carry() {
-        let refused = |r: Result<String>| r.unwrap_err().to_string();
-        assert!(refused(upload("al-x", b"not a picture".to_vec()).await).contains("JPEG, PNG or WebP"));
-        assert!(refused(upload("al-x", vec![0xFF; MOST_BYTES + 1]).await).contains("too large"));
-        assert!(refused(upload("al-x", vec![0xFF, 0xD8, 0xFF, 0x00, 0x01]).await).contains("not an image"), "a JPEG's mark, no picture");
+    #[test]
+    fn an_upload_is_a_picture_of_a_size_a_flac_can_carry() {
+        assert!(uploaded(b"not a picture").unwrap_err().to_string().contains("JPEG, PNG or WebP"));
+        assert!(uploaded(&vec![0xFF; MOST_BYTES + 1]).unwrap_err().to_string().contains("too large"));
+        assert!(kind_of(&[0xFF, 0xD8, 0xFF, 0x00, 0x01]).unwrap_err().to_string().contains("not an image"), "a JPEG's mark, no picture");
     }
 }

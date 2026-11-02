@@ -169,7 +169,7 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
             let (before, after, from) = track_plan(&h, values.get(&(folder, rel.clone())).unwrap_or(&none));
             if !after.is_empty() {
                 any = true;
-                p.files.push(FileWrite { album: h.id.clone(), path: root.join(&rel), track: Some(track), before, after, from, undone: false });
+                p.files.push(FileWrite { album: h.id.clone(), path: root.join(&rel), track: Some(track), before, after, from, undone: false, whole: None });
             }
         }
         if any {

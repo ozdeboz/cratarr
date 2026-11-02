@@ -69,7 +69,7 @@ pub struct Item {
     pub chosen: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
-    /// Added: its undo token.
+    /// Added: its run's Undo (Changes to files, decision 0092's writers' map: a run per approval).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undo: Option<String>,
     #[serde(skip)]
@@ -124,7 +124,8 @@ fn next_of(items: &[Item]) -> Option<Next> {
 }
 
 /// The albums' missing tracks (those of their release no file holds) queued, each once; the queue as it is now.
-pub async fn add_albums(albums: &[String]) -> Result<View> {
+pub async fn add_albums(app: &std::sync::Arc<super::App>, albums: &[String]) -> Result<View> {
+    let _ = APP.set(app.clone());
     let own = crate::source::cratarr::KIND.id;
     for album in albums {
         let release = super::track_fetch::release(album).await?;
@@ -158,7 +159,8 @@ pub async fn add_albums(albums: &[String]) -> Result<View> {
 }
 
 /// These found items approved (with the candidate given, else the one preselected); the queue as it is now.
-pub fn approve(picked: &[(String, Option<usize>)]) -> View {
+pub fn approve(app: &std::sync::Arc<super::App>, picked: &[(String, Option<usize>)]) -> View {
+    let _ = APP.set(app.clone());
     queue(|q| {
         for (id, candidate) in picked {
             if let Some(i) = q.items.iter_mut().find(|i| i.id == *id && i.state == State::Found) {
@@ -188,6 +190,9 @@ pub fn drop_item(id: &str) {
 pub fn clear_finished() {
     queue(|q| q.items.retain(|i| !i.state.finished()));
 }
+
+/// The app its adds are runs of (Changes to files), as the routes that start the worker give it.
+static APP: std::sync::OnceLock<std::sync::Arc<super::App>> = std::sync::OnceLock::new();
 
 /// The worker started, unless it runs.
 fn run() {
@@ -271,8 +276,8 @@ async fn fetch(id: &str) {
         }
     };
     match done {
-        Some(v) if v.state == Fetching::Passed => match super::track_fetch::add(&fid).await {
-            Ok(undo) => with_item(id, |i| (i.state, i.undo, i.fetch) = (State::Added, Some(undo), None)),
+        Some(v) if v.state == Fetching::Passed => match async { super::track_fetch::add(APP.get().ok_or_else(|| anyhow::anyhow!("Cratarr is starting"))?, &fid).await }.await {
+            Ok(run) => with_item(id, |i| (i.state, i.undo, i.fetch) = (State::Added, run.undo, None)),
             Err(e) => with_item(id, |i| (i.state, i.why) = (State::Refused, Some(format!("{e:#}")))),
         },
         Some(v) => with_item(id, |i| (i.state, i.why) = (State::Refused, v.why)),

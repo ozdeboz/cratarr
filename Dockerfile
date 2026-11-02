@@ -43,10 +43,12 @@ FROM source AS test
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
 # Unoptimised (the owner, 2026-10-26): the tests are their own compile whatever is done, and this one is the quicker.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace
+# The end-to-end suite runs after them on the same compile (0.14, faster previews: as a stage of its own after the
+# tests it compiled the server's own crates a second time).
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace && cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
 
 # The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library, driven through
-# its API. Its own stage, after the tests: `docker build --target e2e .`.
+# its API. The test stage runs it too; this stage runs it alone: `docker build --target e2e .`.
 FROM source AS e2e
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared

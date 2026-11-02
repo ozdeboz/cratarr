@@ -40,6 +40,9 @@ pub struct Match {
     pub why: String,
     /// Each of the album's files (by name) with its recording and its first artist's id.
     pub tracks: Vec<(String, String, Option<String>)>,
+    /// Each one's length on the release (s), as `tracks` (the intake card's reference lengths, 0.14).
+    #[serde(default)]
+    pub lengths: Vec<Option<i64>>,
 }
 
 /// A release as matching reads it.
@@ -97,6 +100,7 @@ fn score(files: &[(String, String, i64)], r: &Release) -> Option<Match> {
     }
     let mut used = HashSet::new();
     let mut tracks = Vec::with_capacity(files.len());
+    let mut lengths = Vec::with_capacity(files.len());
     let (mut close, mut near) = (0, 0);
     for (file, title, secs) in files {
         let best = r
@@ -110,6 +114,7 @@ fn score(files: &[(String, String, i64)], r: &Release) -> Option<Match> {
         close += usize::from(off <= CERTAIN_SECS);
         near += usize::from(off <= LIKELY_SECS);
         tracks.push((file.clone(), best.1.2.clone(), best.1.3.clone()));
+        lengths.push(best.1.1);
     }
     let n = files.len();
     // Every track found by its title: certain with every length close, likely with most near.
@@ -132,6 +137,7 @@ fn score(files: &[(String, String, i64)], r: &Release) -> Option<Match> {
         certain,
         why,
         tracks,
+        lengths,
     })
 }
 
