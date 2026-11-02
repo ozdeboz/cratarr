@@ -13,7 +13,7 @@
   import Meter from './Meter.svelte';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { fade } from 'svelte/transition';
-  import { glassPart, GLASS_MS } from './glassMotion';
+  import { glassPart } from './glassMotion';
   import { untrack } from 'svelte';
   import { innerWidth } from 'svelte/reactivity/window';
   import OutputSheet from './OutputSheet.svelte';
@@ -180,7 +180,7 @@
   });
   $effect(() => () => clearTimeout(fold));
 
-  // The globe (the owner, 2026-10-25): while a search is on, left of the magnifier on thinner glass (as the title's),
+  // The globe (the owner, 2026-10-25): while a search is on, left of the magnifier on the pill's glass (2026-11-02),
   // how many everywhere finds on its badge; a tap shows everywhere's results in the page's or the panel's place, lit,
   // another its own again. Home searches everywhere as it is, Find more music is MusicBrainz's: no globe there.
   // Not on a panel that is a search's result, carrying the page's words (the owner, 2026-10-25); a search typed in
@@ -284,10 +284,13 @@
 </script>
 
 <span class="pill-row" class:fill={searching && pageView.leadAway} bind:this={row}>
-  {#if globeShown}
-    <span class="globe" transition:fade|global={{ duration: GLASS_MS }}>
+  <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
+    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
+    <!-- Everywhere, while a search finds something there (the owner, 2026-11-02): on the pill's one glass, which grows
+         for it, as back's grows for a title (lib/NavigationControls), not a glass of its own under it. -->
+    {#if globeShown}
       <button
-        class="funnel"
+        class="funnel globe"
         class:on={globeOn}
         aria-pressed={globeOn}
         aria-label={globeOn ? "Back to this page's results" : `Everywhere, ${badge} found`}
@@ -296,11 +299,7 @@
         onclick={() => (globalSearch.scope = globeOn ? 'page' : 'everywhere')}
         ><Icon name="globe" size={22} />{#if badge !== null}<span class="badge">{badge > 99 ? '99+' : badge}</span>{/if}</button
       >
-    </span>
-  {/if}
-
-  <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
-    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
+    {/if}
     {#if showing && page && pageAction && !searching}
       {@const a = pageAction}
       <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
@@ -387,7 +386,7 @@
 {/if}
 
 <style>
-  /* The pill and the globe left of it, the pill's round end over the globe's glass. */
+  /* The pill, and the search's callout under it. */
   .pill-row {
     position: relative;
     display: flex;
@@ -454,22 +453,8 @@
     color: var(--accent-text);
   }
 
-  /* Thinner glass than the pill's (as the title's, App's .lead): more light through. */
-  .globe {
-    display: flex;
-    align-items: center;
-    margin-right: -24px;
-    /* As tall as the pill with its band (app.css --island-ring). */
-    padding: 4px 26px 4px 4px;
-    border-radius: 26px 0 0 26px;
-    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
-    -webkit-backdrop-filter: blur(10px) saturate(1.3);
-    backdrop-filter: blur(10px) saturate(1.3);
-    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
-  }
-
   /* Everywhere's shown: lit. */
-  .globe button.on {
+  button.globe.on {
     background: color-mix(in srgb, var(--accent) 22%, transparent);
     color: var(--accent-ink);
   }
