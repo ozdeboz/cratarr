@@ -302,6 +302,67 @@ fn apply_one(path: &Path, from: &[(String, Vec<String>)], to: &[(String, Vec<Str
     write(path, to)
 }
 
+/// A file's print: its size and its first and last MiB (a whole file's change touches its header or its end), to tell
+/// whether it is still as planned or as written.
+pub fn print(path: &Path) -> Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const PART: u64 = 1 << 20;
+    let mut f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    let mut buf = Vec::new();
+    (&mut f).take(PART).read_to_end(&mut buf)?;
+    if len > PART {
+        f.seek(SeekFrom::Start(len.saturating_sub(PART).max(PART)))?;
+        f.read_to_end(&mut buf)?;
+    }
+    let text: String = buf.iter().map(|b| char::from(*b)).collect();
+    Ok(format!("{len}:{:016x}", crate::journal::fingerprint(&text)))
+}
+
+/// A file written whole (a length's fix): set aside where it is no longer as planned; else its original copied into
+/// `keep` first, the change made, the original back where it fails. Its copy and its print as written kept.
+fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize) -> Result<()> {
+    let Some(w) = f.whole.as_mut() else { bail!("not a whole file's change") };
+    if print(&f.path)? != w.planned {
+        bail!("changed since it was planned");
+    }
+    if w.op != "reread" {
+        std::fs::create_dir_all(keep)?;
+        let kept = keep.join(format!("{n}-{}", f.path.file_name().and_then(|x| x.to_str()).unwrap_or("track")));
+        std::fs::copy(&f.path, &kept).with_context(|| format!("keeping {} first", f.path.display()))?;
+        if let Err(e) = super::length_fixes::write(&w.op, &f.path, w.ms) {
+            let _ = std::fs::copy(&kept, &f.path);
+            let _ = std::fs::remove_file(&kept);
+            return Err(e);
+        }
+        w.kept = Some(kept);
+    }
+    w.wrote = Some(print(&f.path)?);
+    Ok(())
+}
+
+/// A file written whole put back: as planned already, nothing (false); as written, its copy back (true); else set aside.
+fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bool> {
+    let now = print(path)?;
+    if now == w.planned || w.kept.is_none() {
+        return Ok(false);
+    }
+    if w.wrote.as_deref() != Some(now.as_str()) {
+        bail!("changed since it was written");
+    }
+    let kept = w.kept.as_ref().context("its original is no longer kept")?;
+    std::fs::copy(kept, path).with_context(|| format!("{} not given back", path.display()))?;
+    Ok(true)
+}
+
+/// Where a run keeps the originals of files it writes whole: beside the journal, under Cratarr's data folder.
+fn kept_dir(run: &str) -> Result<PathBuf> {
+    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let data = served.data_dir.clone().context("Cratarr's data folder is needed")?;
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis();
+    Ok(Path::new(&data).join("run-files").join(format!("{at}-{run}")))
+}
+
 /// One file put back: already as it was before (an Undo cut short, a person's own undo): nothing to write, undone all
 /// the same (false); holding what the run wrote: `before` written (true); else set aside ("changed since it was
 /// written").
@@ -400,12 +461,18 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         for (album, files) in albums {
             let of = files.len();
             set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(id.clone()), at: None });
+            let keep = kept_dir(&id);
             let done = tokio::task::spawn_blocking(move || {
                 let mut ok = Vec::new();
                 let mut failed = Vec::new();
                 let mut seen = Vec::new();
-                for f in files {
-                    match apply_one(&f.path, &f.before, &f.after, "changed since it was planned") {
+                for (n, mut f) in files.into_iter().enumerate() {
+                    let wrote = match (&f.whole, &keep) {
+                        (None, _) => apply_one(&f.path, &f.before, &f.after, "changed since it was planned"),
+                        (Some(_), Ok(keep)) => apply_whole(&mut f, keep, n),
+                        (Some(_), Err(e)) => Err(anyhow::anyhow!("{e:#}")),
+                    };
+                    match wrote {
                         Ok(()) => ok.push(f),
                         Err(e) => {
                             failed.push((f.path.file_name().and_then(|n| n.to_str()).map(str::to_string), super::plain(format!("{e:#}"))));
@@ -663,7 +730,16 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
             let of = files.len();
             set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(token.clone()), at: None });
             let results = tokio::task::spawn_blocking(move || {
-                files.into_iter().map(|(i, f)| (i, f.path.clone(), restore_one(&f.path, &f.after, &f.before))).collect::<Vec<_>>()
+                files
+                    .into_iter()
+                    .map(|(i, f)| {
+                        let back = match &f.whole {
+                            Some(w) => restore_whole(&f.path, w),
+                            None => restore_one(&f.path, &f.after, &f.before),
+                        };
+                        (i, f.path.clone(), back)
+                    })
+                    .collect::<Vec<_>>()
             })
             .await
             .unwrap_or_default();
@@ -796,6 +872,7 @@ mod tests {
             after: vec![("releasetype".into(), s(&["ep"]))],
             from: Vec::new(),
             undone: false,
+            whole: None,
         };
         let shown = vec![file("a", &["album"]), file("b", &["album"])];
         let stamps: HashMap<String, String> = ["a", "b"].iter().map(|x| (x.to_string(), stamp(&shown, x))).collect();
@@ -816,6 +893,7 @@ mod tests {
             after: vec![("date".into(), s(after)), ("releasetype".into(), s(&["album", "compilation"]))],
             from: vec![("date".into(), "the album's year".into()), ("releasetype".into(), "the type rule".into())],
             undone: false,
+            whole: None,
         };
         let records = [RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() }];
         let v = view("types", "Types and years", &records, &[file("A", &[], &["2010"]), file("B", &["2011"], &["2010"])], false);

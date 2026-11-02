@@ -118,6 +118,37 @@ pub fn fix(served: &Serve, field: &str, song: &str) -> Result<Option<Fix>> {
     }))
 }
 
+/// Writes a length's change into a file in place (`op`: length, trim, seektable; `ms` a FLAC's length to set): the run on
+/// the one path keeps its original first (`file_runs`). Blocking.
+pub fn write(op: &str, path: &Path, ms: Option<i64>) -> Result<()> {
+    match op {
+        "seektable" => crate::catalogue::tags::flac_drop_seektable(path),
+        "length" | "trim" if is_flac(path) => set_flac_total(path, ms.context("its sound's length is not known")?),
+        "length" | "trim" => set_mp3_length(path),
+        "reread" => Ok(()),
+        _ => bail!("no such change: {op}"),
+    }
+}
+
+/// A length's fix as a file of a run: its track, the length now → after (a seek table's broken → by its frames), and
+/// what is done to it, its print as it stands. None where it no longer applies. Blocking.
+pub fn file_write(served: &Serve, fix: &Fix) -> Result<Option<crate::journal::FileWrite>> {
+    let song = fix.id.split_once(':').map(|(_, s)| s).context("not a fix")?;
+    let Some((folder, rel, path, album, title)) = file_of(served, song)? else { return Ok(None) };
+    let ms = (fix.field == "trim" && is_flac(&path)).then(|| served.catalogue().heard_ms(folder, &rel)).flatten();
+    let field = if fix.field == "seektable" { "seek table" } else { "length" };
+    Ok(Some(crate::journal::FileWrite {
+        album,
+        track: Some(title),
+        before: vec![(field.to_string(), fix.from.clone().into_iter().collect())],
+        after: vec![(field.to_string(), vec![fix.to.clone()])],
+        from: vec![(field.to_string(), fix.source.clone())],
+        undone: false,
+        whole: Some(crate::journal::Whole { op: fix.field.to_string(), ms, kept: None, planned: super::file_runs::print(&path)?, wrote: None }),
+        path,
+    }))
+}
+
 /// Applies one fix: the file to read again, and its original's copy where it was written (`backups`, a folder of the
 /// undo's). Blocking.
 pub fn apply(fix: &Fix, backups: &Path, n: usize) -> Result<(PathBuf, Option<PathBuf>)> {

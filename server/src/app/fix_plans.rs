@@ -5,8 +5,8 @@
 //! - `intake:<album>`: every fix one record would get before it is kept.
 //!
 //! Each field says how sure it is (certain ones come ticked, likely ones not: the owner's choice 2, 2026-11-01); a genre
-//! offers what was found to choose from. A cover and a file's length are not tags: they keep their own way until they
-//! come onto the path.
+//! offers what was found to choose from. A file's length is written whole, its original kept beside the journal; a
+//! cover keeps its own way until the chosen writers come onto the path.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,9 +38,9 @@ pub fn owns(kind: &str) -> bool {
     kind.split_once(':').is_some_and(|(k, rest)| (k == FIX || k == INTAKE) && !rest.is_empty())
 }
 
-/// The fix's tags, by the tag reader's names, and the field each belongs to on the sheet.
+/// Every fix but a cover's.
 fn on_path(f: &Fix) -> bool {
-    f.field != "cover" && !super::length_fixes::FIELDS.contains(&f.field)
+    f.field != "cover"
 }
 
 /// The sheet's title: the finding's ("Missing years"), or the record's intake.
@@ -81,6 +81,19 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
     let mut notes = Notes::default();
     let mut by_album: Vec<(String, Vec<&Fix>)> = Vec::new();
     for f in fixes {
+        // A length's: its file written whole.
+        if super::length_fixes::FIELDS.contains(&f.field) {
+            if let Some(w) = super::length_fixes::file_write(&served, f)? {
+                if !p.records.iter().any(|r| r.album == w.album)
+                    && let Some((_, _, _, artist, title)) = served.library.album_place(&w.album)?
+                {
+                    p.records.push(RunRecord { album: w.album.clone(), title, artist });
+                }
+                notes.certainty.insert((w.album.clone(), w.after[0].0.clone()), f.certainty);
+                p.files.push(w);
+            }
+            continue;
+        }
         match by_album.iter_mut().find(|(a, _)| *a == f.album) {
             Some((_, v)) => v.push(f),
             None => by_album.push((f.album.clone(), vec![f])),
@@ -130,7 +143,7 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
             let pick = |v: &[(String, Vec<String>)]| differs.iter().map(|&i| v[i].clone()).collect::<Vec<_>>();
             let from = from.into_iter().filter(|(n, _)| differs.iter().any(|&i| after[i].0 == *n)).collect();
             let track = names.get(&path).cloned();
-            p.files.push(FileWrite { album: album.clone(), path, track, before: pick(&before), after: pick(&after), from, undone: false });
+            p.files.push(FileWrite { album: album.clone(), path, track, before: pick(&before), after: pick(&after), from, undone: false, whole: None });
         }
         if any {
             p.records.push(RunRecord { album, title, artist });
@@ -230,6 +243,7 @@ mod tests {
             from: after.iter().map(|(n, _)| (n.clone(), "MusicBrainz".to_string())).collect(),
             after,
             undone: false,
+            whole: None,
         };
         let mut p = Proposal {
             kind: "intake:al-1".into(),
