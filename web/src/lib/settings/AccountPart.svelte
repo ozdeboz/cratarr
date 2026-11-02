@@ -97,8 +97,6 @@
   {/if}
   {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => signOutForm?.requestSubmit()} />{/if}
 </Group>
-<!-- Signing out clears this browser's cookie too. -->
-<form method="post" action="/signout" bind:this={signOutForm} hidden></form>
 
 <Group>
   <Item name="Spotify" line={spotifyLine} onclick={() => openThing('account', 'spotify')} />
@@ -123,6 +121,10 @@
     {/each}
   </Group>
 {/if}
+
+<!-- Signing out clears this browser's cookie too. After the cards, never between two (the owner, 2026-11-02: the
+     cards stuck together, lib/settings/Group's space being one card's after another's). -->
+<form method="post" action="/signout" bind:this={signOutForm} hidden></form>
 
 {/if}
 
