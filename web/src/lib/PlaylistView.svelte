@@ -64,6 +64,7 @@
     type ListBlocked,
     type ListReason,
     type PlaylistRow,
+    tasteFits,
   } from './api';
   import {
     builderOf,
@@ -764,7 +765,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const kind = $derived<PanelKind>(album ? 'album' : crate || crateEditing || creating ? 'crate' : artist ? 'artist' : 'playlist');
   const topTracks = $derived(!!artist?.tracks);
   let topSort = $state<ListSort>({ key: 'plays', down: true });
-  const sortFields = $derived(trackOrders(kind, crate));
+  const sortFields = $derived(trackOrders(kind, crate, !offServer));
   const sort = $derived.by(() => {
     const s = topTracks ? topSort : prefs.panelSorts[kind];
     // Where none was chosen, or this crate has not the one chosen: its own order; a crate's Best match ("Every crate").
@@ -848,10 +849,26 @@ ${r.album_artist ?? r.artist ?? ''}`;
   );
   const keeps = (r: PlaylistRow) => !pass.keys || pass.keys.has(r.entry);
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+  // Best match on a list the page orders itself (a playlist's, a record's, an artist's; decision 0094 #3): the
+  // account's fit for each of its tracks, asked of the server (POST /api/me/taste/fits); a track whose fit is not known
+  // after the rest, either way round. Until they are in, the list waits (the one loading rule).
+  const fitsKey = $derived(!crate && sortKey === 'bestMatch' && rows ? rows.flatMap((r) => (r.id && !r.missing ? [r.id] : [])).join(',') : null);
+  let fits = $state.raw<{ for: string; of: Record<string, number> } | null>(null);
+  $effect(() => {
+    const key = fitsKey;
+    if (key === null || untrack(() => fits?.for) === key) return;
+    let gone = false;
+    tasteFits(key ? key.split(',') : []).then(
+      (f) => !gone && (fits = { for: key, of: f }),
+      () => !gone && (fits = { for: key, of: {} }),
+    );
+    return () => (gone = true);
+  });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
     // What a filter goes by not in yet: loading, not the rows unfiltered or none (the owner, 2026-10-23).
     if (!rows || (pass.pending && !pass.keys)) return null;
+    if (fitsKey !== null && fits?.for !== fitsKey) return null;
     // The page's search narrows what its panel shows too (the owner, 2026-10-25: the page finds, the panel shows the
     // item narrowed to the same words): a track whose title, artist or album holds every word.
     const list = rows.map((r, i) => ({ r, i })).filter((x) => keeps(x.r) && matchesSearch(x.r.name ?? x.r.file, x.r.artist, x.r.album));
@@ -873,6 +890,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
       // As the server ordered them.
     } else if (sortKey === 'own') {
       if (sortDown) list.reverse();
+    } else if (sortKey === 'bestMatch') {
+      const f = fits?.of ?? {};
+      const fit = (r: PlaylistRow) => (r.id ? f[r.id] : undefined);
+      list.sort((a, b) => {
+        const [x, y] = [fit(a.r), fit(b.r)];
+        return x === undefined || y === undefined ? (x === undefined ? 1 : 0) - (y === undefined ? 1 : 0) : way * (y - x);
+      });
     } else if (['length', 'tempo', 'year', 'track', 'plays', 'lastPlayed', 'added'].includes(sortKey)) list.sort((a, b) => way * byNumber(num(a.r), num(b.r)));
     else list.sort((a, b) => way * ordered(text(a.r), text(b.r)));
     return list;

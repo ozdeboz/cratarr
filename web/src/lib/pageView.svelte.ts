@@ -95,13 +95,15 @@ export const CRATE_ORDERS: OrderField<CrateOrder>[] = [
 
 /** A list of tracks' fields (decision 0060): every list of tracks offers all its rows know. Its own order is named by
  *  what it is: Playlist order, Track number (an album), Newest album first (an artist); a crate's where it has one
- *  (lib/crateRecords ownOrderOf), after Best match, which a crate opens on (decision 0094, amended). */
+ *  (lib/crateRecords ownOrderOf), after Best match, which a crate opens on (decision 0094, amended). Best match on every
+ *  list of Cratarr's own (`taste`; decision 0094 #3): a crate's first, the others' after their own order. */
 export type TrackOrder = 'bestMatch' | 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
-export function trackOrders(kind: PanelKind, crate?: string | null): OrderField<TrackOrder>[] {
+export function trackOrders(kind: PanelKind, crate?: string | null, taste = true): OrderField<TrackOrder>[] {
   const own = kind === 'crate' ? ownOrderOf(crate) : { playlist: 'Playlist order', album: 'Track number', artist: 'Newest album first' }[kind];
   return [
     ...(kind === 'crate' ? [{ value: 'bestMatch' as const, label: 'Best match' }] : []),
     ...(own ? [{ value: 'own' as const, label: own }] : []),
+    ...(kind !== 'crate' && taste ? [{ value: 'bestMatch' as const, label: 'Best match' }] : []),
     { value: 'title', label: 'Title' },
     { value: 'artist', label: 'Artist' },
     { value: 'albumArtist', label: 'Album artist' },
