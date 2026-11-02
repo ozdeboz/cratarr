@@ -185,7 +185,7 @@ pub enum Within {
     Crate {
         id: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(optional))]
+        #[cfg_attr(test, ts(as = "Option<_>", optional))]
         without: Vec<String>,
     },
     Playlist { id: String },
@@ -195,7 +195,7 @@ pub enum Within {
         source: String,
         name: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[cfg_attr(test, ts(optional))]
+        #[cfg_attr(test, ts(as = "Option<_>", optional))]
         without: Vec<String>,
     },
     Tracks { source: String, ids: Vec<String> },
