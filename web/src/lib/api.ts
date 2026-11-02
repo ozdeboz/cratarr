@@ -1522,8 +1522,10 @@ export type ShelfSource = {
  *  into it does to the files. */
 export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; format: 'cd' | 'as_is' };
 
-/** An album of a library other than Music, as it stands to Music: an upgrade of an album there, or a duplicate. */
-export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string };
+/** An album of a library other than Music, as it stands to the other used libraries (decision 0034, Music's first): an
+ *  upgrade of an album there, or a duplicate. `library` is that album's folder, `library_id` the library it is in;
+ *  `replaceable` only when it is in Music (Replace is Music's alone). */
+export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable: boolean };
 
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
@@ -1531,7 +1533,8 @@ export type AlbumsSource = ShelfSource & {
   verdicts: Record<string, Verdict>;
   /** Per album id of an Incoming library: what it lacks of what the library requires (cover, year, genre, …). */
   lacks?: Record<string, string[]>;
-  /** Per Music album: an album of another library that upgrades or duplicates it. */
+  /** Per album a verdict pairs with (Music's or another library's): an album of another library that upgrades or
+   *  duplicates it. */
   waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
   deletable: string[];
 };

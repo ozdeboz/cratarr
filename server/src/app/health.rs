@@ -358,9 +358,10 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
     out
 }
 
-/// Incoming's albums as they stand to Music (decision 0034), and the conversions that failed. Dealt with on their items'
-/// own pages (the comparison, the album's menu), not the Library, whose own filter could hide them (the owner,
-/// 2026-10-24): no `open`.
+/// Incoming's albums as they stand to the other libraries (decision 0034): better copies of Music's (Replace), the rest
+/// in two libraries at once (an upgrade of another Incoming library's copy among them: Replace is Music's alone); and
+/// the conversions that failed. Dealt with on their items' own pages (the comparison, the album's menu), not the
+/// Library, whose own filter could hide them (the owner, 2026-10-24): no `open`.
 pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     let mut out = Vec::new();
     if upgrades > 0 {
@@ -369,12 +370,26 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
         out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
     }
     if duplicates > 0 {
-        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "album is in Music and Incoming at once", "albums are in Music and Incoming at once")));
+        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "album is in two libraries at once", "albums are in two libraries at once")));
     }
     if failed > 0 {
         out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
     }
     out
+}
+
+/// A better copy Replace can take: an upgrade of Music's album (`incoming`'s upgrades; any other verdict is an album in
+/// two libraries at once).
+fn replaces(v: &super::incoming::VerdictView) -> bool {
+    v.kind == "upgrade" && v.replaceable
+}
+
+/// Where a verdict's other copy is, for an item's line: Music, else its library as named.
+fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums::LibraryView]) -> &'a str {
+    if v.replaceable {
+        return "Music";
+    }
+    v.library_id.as_ref().and_then(|id| libraries.iter().find(|l| &l.id == id)).map_or("another library", |l| l.name.as_str())
 }
 
 /// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
@@ -656,19 +671,19 @@ impl App {
         let verdicts = view.sources.iter().flat_map(|s| s.verdicts.values());
         let (mut upgrades, mut duplicates) = (0, 0);
         for v in verdicts {
-            match v.kind {
-                "upgrade" => upgrades += 1,
-                "duplicate" => duplicates += 1,
-                _ => {}
+            if replaces(v) {
+                upgrades += 1;
+            } else {
+                duplicates += 1;
             }
         }
         let jobs: Vec<_> = self.incoming.jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
         let mut out = incoming(upgrades, duplicates, jobs.len() as u64);
-        // Each album waiting, with the Music album it upgrades or duplicates; each conversion failed, with why.
+        // Each album waiting, with the album it upgrades or duplicates; each conversion failed, with why.
         for f in &mut out {
-            let kind = match f.key.as_str() {
-                "incoming:upgrades" => "upgrade",
-                "incoming:duplicates" => "duplicate",
+            let better = match f.key.as_str() {
+                "incoming:upgrades" => true,
+                "incoming:duplicates" => false,
                 "incoming:failed" => {
                     f.items = jobs
                         .iter()
@@ -680,12 +695,12 @@ impl App {
                 _ => continue,
             };
             for s in &view.sources {
-                for (id, v) in s.verdicts.iter().filter(|(_, v)| v.kind == kind) {
+                for (id, v) in s.verdicts.iter().filter(|(_, v)| replaces(v) == better) {
                     let a = s.albums.iter().find(|a| &a.id == id);
                     let title = a.map_or_else(|| id.clone(), |a| a.title.clone());
                     let by = a.and_then(|a| a.artist.clone());
-                    // Both places: the copy in Music, as Incoming's verdict names it (this one opens Incoming's).
-                    let line = [by, Some(format!("in Music as {}", v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
+                    // Both places: the other copy, in its library as the verdict names it (this one opens Incoming's).
+                    let line = [by, Some(format!("in {} as {}", paired_in(v, &s.library_info), v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
                         .into_iter()
                         .flatten()
                         .collect::<Vec<_>>()
@@ -917,8 +932,27 @@ mod tests {
         assert_eq!(waiting[0].title, "13 better copies wait to replace Music's");
         assert_eq!(waiting[0].open, None);
         assert_eq!(waiting[1].title, "1 conversion failed");
-        assert_eq!(incoming(0, 17, 0)[0].title, "17 albums are in Music and Incoming at once");
-        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 album is in Music and Incoming at once"]);
+        assert_eq!(incoming(0, 17, 0)[0].title, "17 albums are in two libraries at once");
+        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 album is in two libraries at once"]);
         assert!(incoming(0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn an_incoming_album_says_which_library_its_other_copy_is_in() {
+        use crate::app::incoming::VerdictView;
+        let v = |kind: &'static str, library_id: Option<&str>, replaceable: bool| VerdictView {
+            kind,
+            library: "Arp/Zebra".into(),
+            why: String::new(),
+            library_id: library_id.map(Into::into),
+            replaceable,
+        };
+        let libraries = [crate::app::albums::LibraryView { id: "new".into(), name: "New music".into(), use_: "incoming", colour: None, format: crate::settings::Format::AsIs }];
+        assert!(replaces(&v("upgrade", Some("music"), true)));
+        assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
+        assert!(!replaces(&v("duplicate", Some("music"), true)));
+        assert_eq!(paired_in(&v("duplicate", Some("music"), true), &libraries), "Music");
+        assert_eq!(paired_in(&v("upgrade", Some("new"), false), &libraries), "New music");
+        assert_eq!(paired_in(&v("upgrade", None, false), &libraries), "another library");
     }
 }
