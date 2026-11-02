@@ -347,6 +347,14 @@ pub async fn run(app: &std::sync::Arc<super::App>, album: &str, url: Option<&str
     Ok(super::file_runs::start(app, p))
 }
 
+/// A candidate's picture fetched and kept, ready for a run to write (a cover fix on Health's sheet or before Keep): its
+/// folder, and the picture as the sheet says it.
+pub async fn prepared(album: &str, url: &str) -> Result<(PathBuf, String)> {
+    let data = fetch(url).await?;
+    let a = album.to_string();
+    tokio::task::spawn_blocking(move || prepare(&a, &data)).await?
+}
+
 /// Sets an album's cover to a picture of the administrator's own, as a chosen one is set. Returns the undo token.
 pub async fn upload(album: &str, data: Vec<u8>) -> Result<String> {
     uploaded(&data)?;

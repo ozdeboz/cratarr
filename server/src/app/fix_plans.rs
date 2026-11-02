@@ -6,7 +6,7 @@
 //!
 //! Each field says how sure it is (certain ones come ticked, likely ones not: the owner's choice 2, 2026-11-01); a genre
 //! offers what was found to choose from. A file's length is written whole, its original kept beside the journal; a
-//! cover keeps its own way until the chosen writers come onto the path.
+//! cover is fetched once ticked, and written as a chosen one is.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,9 +38,9 @@ pub fn owns(kind: &str) -> bool {
     kind.split_once(':').is_some_and(|(k, rest)| (k == FIX || k == INTAKE) && !rest.is_empty())
 }
 
-/// Every fix but a cover's.
-fn on_path(f: &Fix) -> bool {
-    f.field != "cover"
+/// Every fix is on the path.
+fn on_path(_: &Fix) -> bool {
+    true
 }
 
 /// The sheet's title: the finding's ("Missing years"), or the record's intake.
@@ -81,6 +81,25 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
     let mut notes = Notes::default();
     let mut by_album: Vec<(String, Vec<&Fix>)> = Vec::new();
     for f in fixes {
+        // A cover's: its folder's picture and its tracks', fetched once ticked (`apply`).
+        if f.field == "cover" {
+            let Some((_, _, _, artist, title)) = served.library.album_place(&f.album)? else { continue };
+            if !p.records.iter().any(|r| r.album == f.album) {
+                p.records.push(RunRecord { album: f.album.clone(), title, artist });
+            }
+            notes.certainty.insert((f.album.clone(), "cover".into()), f.certainty);
+            p.files.push(FileWrite {
+                album: f.album.clone(),
+                path: super::renumber::tracks_of(&f.album)?.0.first().and_then(|t| t.path.parent().map(std::path::Path::to_path_buf)).unwrap_or_default(),
+                track: None,
+                before: vec![("cover".into(), f.from.clone().into_iter().collect())],
+                after: vec![("cover".into(), vec![f.to.clone()])],
+                from: vec![("cover".into(), f.source.clone())],
+                undone: false,
+                whole: Some(crate::journal::Whole { op: "cover".into(), ms: None, kept: None, planned: String::new(), wrote: None }),
+            });
+            continue;
+        }
         // A length's: its file written whole.
         if super::length_fixes::FIELDS.contains(&f.field) {
             if let Some(w) = super::length_fixes::file_write(&served, f)? {
@@ -193,6 +212,23 @@ pub async fn apply(app: &Arc<super::App>, kind: &str, albums: Vec<String>, stamp
         Ok(p)
     })
     .await??;
+    let mut p = p;
+    // A cover ticked: its picture fetched and kept now, for the run to write (one that cannot be is set aside).
+    let mut set_aside = Vec::new();
+    for f in p.files.iter_mut().filter(|f| f.whole.as_ref().is_some_and(|w| w.op == "cover")) {
+        let url = f.after.first().and_then(|(_, v)| v.first()).cloned().unwrap_or_default();
+        match super::covers::prepared(&f.album, &url).await {
+            Ok((keep, said)) => {
+                f.after = vec![("cover".into(), vec![said])];
+                if let Some(w) = f.whole.as_mut() {
+                    w.kept = Some(keep);
+                }
+            }
+            Err(e) => set_aside.push(crate::journal::RunFailed { album: f.album.clone(), title: None, artist: None, file: None, why: super::plain(format!("{e:#}")) }),
+        }
+    }
+    p.files.retain(|f| !set_aside.iter().any(|x| x.album == f.album && f.whole.as_ref().is_some_and(|w| w.op == "cover")));
+    p.failed.extend(set_aside);
     anyhow::ensure!(!p.files.is_empty() || !p.failed.is_empty(), "Nothing to fix: look again");
     Ok(file_runs::start(app, p))
 }
