@@ -74,6 +74,10 @@ struct Job {
     /// Who queued it (decision 0051): the journal says who changed the library.
     #[serde(default)]
     by: Option<String>,
+    /// The library it moves into, as the pages key libraries (`source/library`): a job of a library switched off is
+    /// not counted where those switched on are (the owner, 2026-11-02).
+    #[serde(default)]
+    library: Option<String>,
 }
 
 /// A job as the page sees it.
@@ -91,6 +95,9 @@ pub struct JobView {
     pub total: usize,
     /// The album's folder in Music.
     pub folder: String,
+    /// The library it moves into (`source/library`), where known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
     /// Once done: pass to undo.
     pub undo: Option<String>,
     /// Once failed: why.
@@ -268,6 +275,7 @@ fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
             part: j.part,
             total: j.files.len(),
             folder: j.to.clone(),
+            library: j.library.clone(),
             undo: j.undo.clone(),
             why: j.why.clone(),
         })
@@ -287,6 +295,12 @@ impl IncomingService {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, limit: crate::convert::Limit, to: String, target: i64) -> KeepResult {
         let title = at.album.title.clone();
+        // The library its target folder is, as the pages key it.
+        let into = self.lib.catalogue().folders().get(target as usize).cloned();
+        let library = self.lib.live().iter().find(|a| a.cfg.id == source_id).and_then(|a| {
+            let l = a.placement.libraries.iter().find(|l| into.as_ref().is_some_and(|p| l.folders.iter().any(|f| PathBuf::from(f) == *p)))?;
+            Some(format!("{source_id}/{}", l.id))
+        });
         self.queue.change(|jobs| {
             jobs.next += 1;
             jobs.list.push(Job {
@@ -311,6 +325,7 @@ impl IncomingService {
                 why: None,
                 finished: None,
                 by: crate::serve::who::current().map(|w| w.user),
+                library,
             });
         });
         self.queue.wake.notify_one();
@@ -596,6 +611,7 @@ mod tests {
             why: None,
             finished,
             by: None,
+            library: None,
         };
         {
             let q = Queue::open(Some(file.clone()));

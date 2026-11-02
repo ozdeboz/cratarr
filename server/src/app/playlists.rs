@@ -3821,6 +3821,9 @@ impl PlaylistService {
         tokio::task::spawn_blocking(move || -> Result<Digging, ToggleError> {
             let alike = lib.alike();
             let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
+            // Grave digging is of every library, whatever is switched off: its crate is Home's (the owner's one exception,
+            // 2026-11-02); Blast from the past of those switched on.
+            let place_any = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t));
             let ud = &serve.userdata;
             let plays = ud.own_song_plays(&user)?;
             let starred = ud.starred(&user, crate::userdata::Kind::Song)?;
@@ -3847,12 +3850,12 @@ impl PlaylistService {
             // Grave digging: the taste as Insights' Profile has it, the sources switched on; the albums played before,
             // each as one profile against it; of the closest, the ones unplayed longest.
             let taste = taste_in(&lib, ud, &user, &excluded)?;
-            // Every album of the libraries switched on, its tracks' places; its last play, and how much its artist is
-            // played (of the most played artist's plays).
+            // Every album of every library, its tracks' places; its last play, and how much its artist is played (of the
+            // most played artist's plays).
             let songs = serve.library.all_song_ids()?;
             let mut by_album: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
             for (song, album) in serve.library.albums_of(&songs)? {
-                if let Some(i) = place(&song) {
+                if let Some(i) = place_any(&song) {
                     by_album.entry(album).or_default().push((i, 1.0));
                 }
             }
