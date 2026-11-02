@@ -277,26 +277,53 @@ async fn from_of(app: &super::App, files: &[String], folder: &str, tags: &[crate
     if let Some(user) = soulseek_user(files).await {
         return From { kind: "soulseek", said: format!("Soulseek · {user}"), user: Some(user) };
     }
-    if let Some(l) = super::discover::lidarr(app)
-        && l.imported_folders().await.is_ok_and(|f| f.iter().any(|x| x.eq_ignore_ascii_case(folder)))
-    {
+    if lidarr_folders(app).await.is_some_and(|f| f.iter().any(|x| x.eq_ignore_ascii_case(folder))) {
         return From { kind: "lidarr", user: None, said: "Lidarr".into() };
     }
     From { kind: "folder", user: None, said: "A folder".into() }
 }
 
-/// The Soulseek user most of these files came from, by slskd's downloads (none where slskd is not set up or does not
-/// remember them).
-async fn soulseek_user(files: &[String]) -> Option<String> {
+/// How long slskd's downloads and Lidarr's imports are kept for the cards before they are asked again.
+const ASKED_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// slskd's downloads by user, asked at most once a minute (none where slskd is not set up or not reached).
+async fn slskd_downloads() -> Option<Arc<Vec<(String, Vec<String>)>>> {
+    static KEPT: std::sync::Mutex<Option<(std::time::Instant, Arc<Vec<(String, Vec<String>)>>)>> = std::sync::Mutex::new(None);
+    if let Some((at, d)) = KEPT.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        && at.elapsed() < ASKED_FOR
+    {
+        return Some(d.clone());
+    }
     let served = crate::serve::instance()?;
     let ud = served.userdata.clone();
     let set = tokio::task::spawn_blocking(move || super::track_fetch::slskd_set(&ud)).await.ok()?.ok()??;
-    let downloads = crate::slskd::Slskd::new(&set.url, &set.key).ok()?.downloads().await.ok()?;
+    let d = Arc::new(crate::slskd::Slskd::new(&set.url, &set.key).ok()?.downloads().await.ok()?);
+    *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), d.clone()));
+    Some(d)
+}
+
+/// The folders Lidarr imported lately, asked at most once a minute.
+async fn lidarr_folders(app: &super::App) -> Option<Arc<Vec<String>>> {
+    static KEPT: std::sync::Mutex<Option<(std::time::Instant, Arc<Vec<String>>)>> = std::sync::Mutex::new(None);
+    if let Some((at, f)) = KEPT.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        && at.elapsed() < ASKED_FOR
+    {
+        return Some(f.clone());
+    }
+    let f = Arc::new(super::discover::lidarr(app)?.imported_folders().await.ok()?);
+    *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), f.clone()));
+    Some(f)
+}
+
+/// The Soulseek user most of these files came from, by slskd's downloads (none where slskd is not set up or does not
+/// remember them).
+async fn soulseek_user(files: &[String]) -> Option<String> {
+    let downloads = slskd_downloads().await?;
     let mut best: Option<(usize, String)> = None;
-    for (user, names) in downloads {
+    for (user, names) in downloads.iter() {
         let n = files.iter().filter(|f| names.iter().any(|x| crate::slskd::base_name(x).eq_ignore_ascii_case(f))).count();
         if n * 2 > files.len() && best.as_ref().is_none_or(|(b, _)| n > *b) {
-            best = Some((n, user));
+            best = Some((n, user.clone()));
         }
     }
     best.map(|(_, u)| u)
@@ -377,19 +404,40 @@ pub async fn card(app: &Arc<super::App>, album: &str, library: Option<String>, v
     })
 }
 
-/// Every record waiting in an Incoming library of Cratarr's own, as cards, oldest first as Incoming lists them.
-pub async fn cards(app: &Arc<super::App>) -> Result<Vec<Card>> {
-    let view = app.incoming.list(Some(crate::source::cratarr::KIND.id)).await;
+/// A record waiting, as the list of them says it (its card opens on its own: `card`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Waiting {
+    pub source: String,
+    pub album: String,
+    pub title: String,
+    pub artist: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    /// upgrade or duplicate, where it is in the library already.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<&'static str>,
+}
+
+/// Every record waiting in an Incoming library of Cratarr's own, as Incoming lists them: no card worked out (a card is
+/// asked for one record; 0.14's preview.2: working out the cards of every Incoming library's records, 800 in one,
+/// took minutes).
+pub async fn waiting(app: &Arc<super::App>) -> Vec<Waiting> {
+    let view = app.incoming.list(None).await;
     let mut out = Vec::new();
-    for s in view.sources {
-        for a in &s.albums {
-            match card(app, &a.id, a.library.clone(), s.verdicts.get(&a.id)).await {
-                Ok(c) => out.push(c),
-                Err(e) => tracing::debug!(target: "library", album = %a.id, reason = %format!("{e:#}"), "no intake card"),
-            }
+    for s in view.sources.iter().filter(|s| s.id == crate::source::cratarr::KIND.id) {
+        if let Some(e) = &s.error {
+            tracing::warn!(target: "library", reason = %e, "records waiting not listed");
         }
+        out.extend(s.albums.iter().map(|a| Waiting {
+            source: s.id.clone(),
+            album: a.id.clone(),
+            title: a.title.clone(),
+            artist: a.artist.clone().unwrap_or_default(),
+            library: a.library.clone(),
+            verdict: s.verdicts.get(&a.id).map(|v| v.kind),
+        }));
     }
-    Ok(out)
+    out
 }
 
 /// Hears a record in the background, once (one task at a time for the account; another asked meanwhile waits for its
