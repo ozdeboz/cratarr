@@ -1192,7 +1192,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (artist && fromDiscover(artist.source)) return [];
     const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
     const list = [play('play', 'play', 'Play')];
-    if (album && !offServer) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
+    // Resume only where there is somewhere to resume from (the owner, 2026-11-02), not a dead button.
+    if (album && !offServer && resumeAt) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: false });
     list.push(play('shuffle', 'shuffle', 'Shuffle'));
     // Play next and Add to queue: an album's and an artist's, not a playlist's or a crate's (the owner, 2026-10-23).
     if (album || artist) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
