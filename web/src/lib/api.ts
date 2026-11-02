@@ -558,11 +558,11 @@ export type ListProfileData = {
 /** A filter on the list in view: its conditions and its own switches that are on (lib/pageView SWITCHES: the server
  *  holds what each means, the owner, 2026-10-29: one filter, one engine); `without`, the libraries switched off (the
  *  Library's albums and artists, and a crate's tracks). */
-export const filterList = (list: FilterList, conditions: Condition[], source?: string, without?: string[], switches?: string[]) =>
+export const filterList = (list: FilterList, conditions: Condition[], source?: string, without?: string[], switches?: string[], explain = false) =>
   quietly<Filtered>(`/api/filter${follow(source)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ list, conditions, ...(switches?.length ? { switches } : {}), ...(without?.length ? { without } : {}) }),
+    body: JSON.stringify({ list, conditions, ...(switches?.length ? { switches } : {}), ...(without?.length ? { without } : {}), ...(explain ? { explain: true } : {}) }),
   });
 export const getCrates = (source?: string, without?: string[]) => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`);
 /** A page of a crate's rows (newest first) and the crate's size. */

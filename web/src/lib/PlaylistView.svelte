@@ -181,7 +181,7 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { conditionsFor, filterOf, filtersOn, hiddenLibraries, passing, setConditions } from './listFilter.svelte';
+  import { causeChip, conditionsFor, filtersOn, hiddenLibraries, passing } from './listFilter.svelte';
   import NothingPopover, { type NothingChip } from './NothingPopover.svelte';
   import { answers, pointAt, type Answer } from './attribution';
   import { lastOf } from './lastChange.svelte';
@@ -526,13 +526,10 @@
       const r = b.causes[i];
       if (r.kind === 'favourites') return { label: r.label, onclear: () => setFavourites(c, () => 'all') };
       if (r.kind === 'favourite_albums') return { label: r.label, onclear: () => setFavouriteAlbums(c, () => 'all') };
-      if (r.kind === 'search') return { label: r.label, onclear: () => (pageView.query = '') };
-      if (r.kind === 'libraries_off') return { label: r.label, onclear: () => (prefs.hiddenLibraries = []) };
-      if (r.kind === 'excluded') return { label: r.label, onopen: () => (excludedOpen = true) };
-      return { label: r.label, onclear: () => setConditions('crate', filterOf('crate').conditions.filter((x) => x.axis !== r.key)) };
+      return causeChip('crate', r, () => (excludedOpen = true));
     };
     const said = (a: Answer) => `${plural(a.frees, 'track')} without`;
-    const funnel = () => (handed ? document.querySelector<HTMLElement>('.page-row .funnel') : pillsEl?.querySelector<HTMLElement>('.funnel')) ?? null;
+    const funnel = () => (handed ? document.querySelector<HTMLElement>('.page-row .funnel:not(.globe)') : pillsEl?.querySelector<HTMLElement>('.funnel:not(.globe)')) ?? null;
     // Its tip on the one control that holds the cause; a combination's on the Filter button.
     const controlOf = (i: number) => {
       const k = b.causes[i].kind;
