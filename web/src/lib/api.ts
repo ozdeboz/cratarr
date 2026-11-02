@@ -1107,7 +1107,8 @@ export type FileRun = {
   id: string;
   what: string;
   title: string;
-  state: 'waiting' | 'writing' | 'done';
+  /** `adding`: an album action's files moved, its library reading it (Keep, a move: decision 0092's one list). */
+  state: 'waiting' | 'writing' | 'adding' | 'done';
   done: number;
   of: number;
   /** Each file (or record) set aside and why; the record's name where the server gives it. */

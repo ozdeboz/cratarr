@@ -424,7 +424,32 @@ impl IncomingService {
 
     /// Replace, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
     /// the event's id as soon as it is intended.
+    /// Replace, told on Health's list of changes to files as it goes, as Keep is (`keep_now`): moving, then adding until
+    /// the server has read the album, then done.
     pub(super) async fn replace_now(
+        &self,
+        at: &Located,
+        year: Option<&str>,
+        converted: Vec<crate::journal::Converted>,
+        job: Option<u64>,
+    ) -> Result<KeepResult, ToggleError> {
+        let run = crate::app::file_runs::track("replace", format!("Replaced: {}", at.album.title));
+        let done = self.replacing(at, year, converted, job).await;
+        match &done {
+            Ok(k) => {
+                let (lib, journal, source, album) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone());
+                run.moved(k.undo.clone(), move || {
+                    let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
+                    async move { matches!(super::fate_of(&lib, &journal, &source, &album).await, Some(super::AlbumFate::Moved(_))) }
+                });
+            }
+            Err(e) => run.failed(&at.album.id, e.to_string()),
+        }
+        done
+    }
+
+    /// Replace's moving.
+    async fn replacing(
         &self,
         at: &Located,
         year: Option<&str>,

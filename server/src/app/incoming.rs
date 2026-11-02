@@ -949,9 +949,35 @@ impl IncomingService {
         Ok((root, plan))
     }
 
-    /// Keep, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
-    /// the event's id as soon as it is intended.
+    /// Keep, its files ready, told on Health's list of changes to files as it goes (decision 0092's one list; the owner,
+    /// 2026-11-02: a move "was hard to see"): moving, then adding until the server has read the album, then done.
     async fn keep_now(
+        &self,
+        at: &Located,
+        target: i64,
+        year: Option<&str>,
+        converted: Vec<crate::journal::Converted>,
+        job: Option<u64>,
+    ) -> Result<KeepResult, ToggleError> {
+        let (what, title) = if target == 0 { ("keep", format!("Kept into Music: {}", at.album.title)) } else { ("move", format!("Moved: {}", at.album.title)) };
+        let run = super::file_runs::track(what, title);
+        let done = self.keep_moving(at, target, year, converted, job).await;
+        match &done {
+            Ok(k) => {
+                let (lib, journal, source, album) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone());
+                run.moved(k.undo.clone(), move || {
+                    let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
+                    async move { matches!(fate_of(&lib, &journal, &source, &album).await, Some(AlbumFate::Moved(_))) }
+                });
+            }
+            Err(e) => run.failed(&at.album.id, e.to_string()),
+        }
+        done
+    }
+
+    /// Keep's moving (`converted`: what conversion did just before). `job`: the queued job doing it, told the event's
+    /// id as soon as it is intended.
+    async fn keep_moving(
         &self,
         at: &Located,
         target: i64,
@@ -1061,24 +1087,7 @@ impl IncomingService {
 
     /// What became of a server's album after Keep, Replace or Delete; `None` when none of them happened to it.
     pub async fn album_fate(&self, source_id: &str, album_id: &str) -> Option<AlbumFate> {
-        let event = self.journal.album_fate(source_id, album_id).ok()??;
-        let (moves, title) = match &event {
-            Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
-            Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
-        };
-        let s = self.lib.connected_sources().into_iter().find(|(id, _)| id == source_id).map(|(_, s)| s)?;
-        // Its tracks' new items (once a sync pass linked them), and the album the server put them in.
-        let Some(folder) = moves.first().map(|m| m.to.0) else { return Some(AlbumFate::NotYet(title.clone())) };
-        let rels: Vec<String> = moves.iter().filter(|m| m.track.is_some()).map(|m| m.to.1.clone()).collect();
-        let items = self.lib.catalogue().track_ids(source_id, folder, &rels).unwrap_or_default();
-        for item in items.into_iter().flatten().take(3) {
-            if let Ok(t) = s.track(&item).await
-                && let Some(album) = t.album_id
-            {
-                return Some(AlbumFate::Moved(album));
-            }
-        }
-        Some(AlbumFate::NotYet(title.clone()))
+        fate_of(&self.lib, &self.journal, source_id, album_id).await
     }
 
     /// Refused while the album waits in the conversion queue (Cancel it first).
@@ -1528,4 +1537,26 @@ mod tests {
         assert_eq!(count(settings::Quality::None), 0);
         std::fs::remove_dir_all(&root).ok();
     }
+}
+
+/// What became of an album that left a library (`IncomingService::album_fate`).
+async fn fate_of(lib: &Library, journal: &Journal, source_id: &str, album_id: &str) -> Option<AlbumFate> {
+    let event = journal.album_fate(source_id, album_id).ok()??;
+    let (moves, title) = match &event {
+        Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
+        Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
+    };
+    let s = lib.connected_sources().into_iter().find(|(id, _)| id == source_id).map(|(_, s)| s)?;
+    // Its tracks' new items (once a sync pass linked them), and the album the server put them in.
+    let Some(folder) = moves.first().map(|m| m.to.0) else { return Some(AlbumFate::NotYet(title.clone())) };
+    let rels: Vec<String> = moves.iter().filter(|m| m.track.is_some()).map(|m| m.to.1.clone()).collect();
+    let items = lib.catalogue().track_ids(source_id, folder, &rels).unwrap_or_default();
+    for item in items.into_iter().flatten().take(3) {
+        if let Ok(t) = s.track(&item).await
+            && let Some(album) = t.album_id
+        {
+            return Some(AlbumFate::Moved(album));
+        }
+    }
+    Some(AlbumFate::NotYet(title.clone()))
 }
