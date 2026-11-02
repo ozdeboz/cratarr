@@ -18,7 +18,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use super::ToggleError;
 use super::playon::QueueTrack;
@@ -31,9 +30,10 @@ pub const LANE_AUTOPLAY: &str = "autoplay";
 
 /// How Cratarr chooses, as a player asks: Radio's inserts, or one of Autoplay's modes. Continuous, AlbumMix and
 /// Reshuffle are the modes from before the amendment, still taken from apps not yet updated.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
-#[ts(rename = "RadioMode")]
+#[cfg_attr(test, ts(rename = "RadioMode"))]
 pub enum Mode {
     /// Close to the seed on playlists, artist, genre, era and tags, weighed equally; drifts as the closest are played.
     #[default]
@@ -70,7 +70,8 @@ impl Mode {
 }
 
 /// Autoplay's modes; off is its absence (`stop` in commands).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AutoMode {
     #[default]
@@ -82,7 +83,8 @@ pub enum AutoMode {
 }
 
 /// Autoplay's mode in a command: `stop` switches it off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AutoplayMode {
     Stop,
@@ -130,7 +132,8 @@ pub fn from_old(mode: Option<Mode>) -> (AutoMode, bool, bool) {
 
 /// What Radio's inserts are like (decision 0036, amended): the track (its artist weighed double), its artist (as
 /// Autoplay's Artist, seeded by the track) or its era (as Autoplay's Era).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RadioBy {
     #[default]
@@ -150,7 +153,8 @@ pub const RADIO_COUNT: u8 = 5;
 pub const RADIO_MAX: u8 = 10;
 
 /// Autoplay as the queue keeps it (`Queue::autoplay`): on while there is one.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Autoplay {
     #[serde(default)]
     pub mode: AutoMode,
@@ -167,19 +171,33 @@ pub struct Autoplay {
     /// What it plays inside, only its tracks, endlessly ("Play as radio"; decision 0094: a crate, a playlist, a record,
     /// an artist or tracks).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub within: Option<Within>,
 }
 
 /// What Radio and Autoplay stay inside (decision 0094: the page's collection), as Cratarr's own library has it: a
 /// crate as saved (a genre too, `genre:<name>`), a playlist, a record, an artist, or tracks.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Within {
-    Crate { id: String },
+    /// `without`: the libraries switched off, as the crate showed (Home's crates are of every library).
+    Crate {
+        id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(test, ts(optional))]
+        without: Vec<String>,
+    },
     Playlist { id: String },
     Album { source: String, id: String },
-    Artist { source: String, name: String },
+    /// `without`: the libraries switched off, as the artist showed.
+    Artist {
+        source: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(test, ts(optional))]
+        without: Vec<String>,
+    },
     Tracks { source: String, ids: Vec<String> },
 }
 
@@ -188,12 +206,12 @@ impl Within {
     fn collection(&self) -> super::play::Collection {
         use super::play::Collection;
         match self.clone() {
-            Within::Crate { id } => {
-                Collection::Crate { id, favourites: None, favourite_albums: None, without: Vec::new(), filter: Vec::new(), order: super::CrateOrder::Own, down: false }
+            Within::Crate { id, without } => {
+                Collection::Crate { id, favourites: None, favourite_albums: None, without, filter: Vec::new(), order: super::CrateOrder::Own, down: false }
             }
             Within::Playlist { id } => Collection::Playlist { id },
             Within::Album { source, id } => Collection::Album { source, id },
-            Within::Artist { source, name } => Collection::Artist { source, name },
+            Within::Artist { source, name, without } => Collection::Artist { source, name, without },
             Within::Tracks { source, ids } => Collection::Tracks { source, ids },
         }
     }
@@ -1454,7 +1472,7 @@ mod tests {
         assert_eq!(within(serde_json::json!({ "kind": "crate", "id": "genre:Jazz" })), Some(crate_), "a crate as saved");
         assert_eq!(within(serde_json::json!({ "kind": "playlist", "id": "Road" })), Some(Collection::Playlist { id: "Road".into() }));
         assert_eq!(within(serde_json::json!({ "kind": "album", "source": "cratarr", "id": "al-1" })), Some(Collection::Album { source: "cratarr".into(), id: "al-1".into() }));
-        assert_eq!(within(serde_json::json!({ "kind": "artist", "source": "cratarr", "name": "Ana" })), Some(Collection::Artist { source: "cratarr".into(), name: "Ana".into() }));
+        assert_eq!(within(serde_json::json!({ "kind": "artist", "source": "cratarr", "name": "Ana" })), Some(Collection::Artist { source: "cratarr".into(), name: "Ana".into(), without: Vec::new() }));
         let tracks = within(serde_json::json!({ "kind": "tracks", "source": "cratarr", "ids": ["tr-1", "tr-2"] }));
         assert_eq!(tracks, Some(Collection::Tracks { source: "cratarr".into(), ids: vec!["tr-1".into(), "tr-2".into()] }));
         assert_eq!(within(serde_json::Value::Null), None, "null: beyond it");

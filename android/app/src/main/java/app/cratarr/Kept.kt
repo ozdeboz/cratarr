@@ -288,11 +288,22 @@ object Kept {
         onChange?.invoke()
     }
 
+    /** The libraries switched off in this device's page settings (`hiddenLibraries`, `source/library` keys). */
+    private fun librariesOff(app: Context): JSONArray =
+        try {
+            JSONObject(Prefs(app).pagePrefs ?: "{}").optJSONArray("hiddenLibraries") ?: JSONArray()
+        } catch (e: org.json.JSONException) {
+            JSONArray()
+        }
+
     /** Asks Cratarr what each item holds now; an unchanged one keeps its tracks. Offline: all stay as they were. */
     private fun ask(app: Context, server: String, items: List<Item>) {
         val body = JSONObject()
             .put("items", JSONArray(items.map { JSONObject().put("kind", it.kind).put("source", it.source).put("id", it.id) }))
             .put("versions", JSONObject().apply { for (i in items) i.version?.let { put(i.key, it) } })
+            // The libraries switched off on this device, as its page keeps them: a crate's and an artist's tracks are those
+            // of the libraries switched on, as they show (the owner, 2026-11-02).
+            .put("without", librariesOff(app))
         val answer = try {
             val c = Net.open(app, "$server/api/kept")
             c.connectTimeout = 10_000

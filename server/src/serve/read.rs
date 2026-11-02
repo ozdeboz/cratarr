@@ -905,6 +905,14 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Each album's catalogue folder, by its id (the libraries switched on, the owner 2026-11-02).
+    pub fn album_folders(&self) -> Result<HashMap<String, i64>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, folder FROM albums")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Each song's album (0.9.7: a file's words are its album's).
     pub fn song_album_map(&self) -> Result<HashMap<String, String>> {
         let db = self.db();

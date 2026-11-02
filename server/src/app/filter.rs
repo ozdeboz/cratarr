@@ -239,7 +239,12 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         _ => Vec::new(),
     };
     let all: Vec<Condition> = shown.iter().chain(&asked).chain(hearts.iter()).cloned().collect();
-    let drawn = matches!(r.list, List::Library | List::Artists | List::Crate { .. });
+    // Home's crates are of every library, whatever is switched off (the owner's one exception, 2026-11-02).
+    let drawn = match &r.list {
+        List::Crate { id, .. } => !crates::home_crate(id),
+        List::Library | List::Artists | List::Artist { .. } => true,
+        _ => false,
+    };
     let lib = app.playlists.crate_library_for(&all, want, if drawn { &r.without } else { &[] }).await?;
     let by_line: HashMap<&str, &Facts> = lib.files().map(|f| (f.rel.as_str(), f)).collect();
     let none = Facts::default();
@@ -288,7 +293,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
         List::Artist { source, name } => {
-            let rows = app.playing.artist_view(source, name).await?.rows;
+            let rows = app.playing.artist_view(source, name, &r.without).await?.rows;
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
         List::Library | List::Artists => {

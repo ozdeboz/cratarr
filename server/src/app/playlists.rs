@@ -470,6 +470,7 @@ impl CrateLibrary {
     }
 
     fn resolved_of(&self, conditions: &[crates::Condition], every: bool) -> Vec<crates::Condition> {
+        let conditions = &one_spelling(conditions);
         if !conditions.iter().any(|c| c.value.ranks()) {
             return conditions.to_vec();
         }
@@ -571,6 +572,27 @@ fn words_find(queries: &[&str], texts: &[&str]) -> bool {
     let aliases = if kept.len() > 1 { kept.clone() } else { Vec::new() };
     let index = Index::new(vec![Name { text: kept.join(" "), aliases }]);
     queries.iter().any(|q| !index.query(q, 1).is_empty())
+}
+
+/// Conditions on words as the store spells them (decision 0097, rule 4: one spelling everywhere): "Hip-Hop" or "hip
+/// hop" asked finds the Hip Hop the tracks carry. A word the store does not know is asked as written.
+fn one_spelling(conditions: &[crates::Condition]) -> Vec<crates::Condition> {
+    let Some(stored) = super::words::stored_now() else { return conditions.to_vec() };
+    conditions
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            let axis = c.axis.clone();
+            if let crates::Value::AnyOf { values } | crates::Value::AllOf { values } = &mut c.value {
+                for v in values.iter_mut() {
+                    if let Some(w) = stored.word(&axis, v) {
+                        *v = w.word;
+                    }
+                }
+            }
+            c
+        })
+        .collect()
 }
 
 /// A cause among a crate's conditions as it is looked at (decision 0095): its chip's kind, key and word, and the
@@ -2596,7 +2618,7 @@ impl PlaylistService {
 
     /// Every crate the account sees with the lines it shows now, as the Crates page shows them from every library
     /// (built-in and its own; one that cannot be made now left out): search finds a crate by its tracks (decision 0072).
-    pub async fn crate_members(&self) -> Result<Vec<(String, String, Vec<String>)>, ToggleError> {
+    pub async fn crate_members(&self, without: &[String]) -> Result<Vec<(String, String, Vec<String>)>, ToggleError> {
         let mut all = self.permanent_crates().await?;
         for id in [crates::HOME_NEW, crates::HOME_WEEK, crates::HOME_GRAVES] {
             match self.crate_def(id).await {
@@ -2616,10 +2638,13 @@ impl PlaylistService {
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
         let needed = all.iter().any(|c| crates::needs_favourites(&c.conditions) || favourites_of(&c.id) != crates::Favourites::All);
         let needed_albums = all.iter().any(|c| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
-        let lib = self.crate_library(None, needed, needed_albums, &[]).await?;
+        // Of the libraries switched on, as the crate opens (the owner, 2026-11-02); Home's of every library, as theirs.
+        let lib = self.crate_library(None, needed, needed_albums, without).await?;
+        let every = if without.is_empty() { None } else { Some(self.crate_library(None, needed, needed_albums, &[]).await?) };
         Ok(all
             .into_iter()
             .filter_map(|c| {
+                let lib = if crates::home_crate(&c.id) { every.as_ref().unwrap_or(&lib) } else { &lib };
                 let gone = left_lines(left_set.get(&c.id).unwrap_or(&none), &album_tracks, &excluded);
                 let shown = crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites_of(&c.id), albums_of(&c.id))));
                 lib.knows(&shown).then(|| (c.id, c.name, lib.select(&shown)))
@@ -3429,12 +3454,7 @@ impl PlaylistService {
         let favourites = if favourites { self.favourite_lines(&sid, &source).await } else { None };
         let favourite_albums = if albums { favourite_album_lines(self.served.clone(), self.lib.catalogue()).await } else { None };
         let c = self.lib.catalogue();
-        let folders = c.folders();
-        let off: Vec<std::path::PathBuf> = match self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == sid) {
-            Some((a, _)) if !without.is_empty() => super::library::folders_switched_off(&a, without).into_iter().map(std::path::PathBuf::from).collect(),
-            _ => Vec::new(),
-        };
-        let switched_off = folders.iter().enumerate().filter(|(_, f)| off.contains(f)).map(|(i, _)| i as i64).collect();
+        let switched_off = self.lib.folders_off(without).into_iter().collect();
         let files = tokio::task::spawn_blocking(move || c.crate_facts()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
         for (name, lines, _) in self.own_store()?.snapshot().await? {
@@ -3820,6 +3840,9 @@ impl PlaylistService {
         tokio::task::spawn_blocking(move || -> Result<Digging, ToggleError> {
             let alike = lib.alike();
             let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
+            // Grave digging is of every library, whatever is switched off: its crate is Home's (the owner's one exception,
+            // 2026-11-02); Blast from the past of those switched on.
+            let place_any = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t));
             let ud = &serve.userdata;
             let plays = ud.own_song_plays(&user)?;
             let starred = ud.starred(&user, crate::userdata::Kind::Song)?;
@@ -3846,12 +3869,12 @@ impl PlaylistService {
             // Grave digging: the taste as Insights' Profile has it, the sources switched on; the albums played before,
             // each as one profile against it; of the closest, the ones unplayed longest.
             let taste = taste_in(&lib, ud, &user, &excluded)?;
-            // Every album of the libraries switched on, its tracks' places; its last play, and how much its artist is
-            // played (of the most played artist's plays).
+            // Every album of every library, its tracks' places; its last play, and how much its artist is played (of the
+            // most played artist's plays).
             let songs = serve.library.all_song_ids()?;
             let mut by_album: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
             for (song, album) in serve.library.albums_of(&songs)? {
-                if let Some(i) = place(&song) {
+                if let Some(i) = place_any(&song) {
                     by_album.entry(album).or_default().push((i, 1.0));
                 }
             }

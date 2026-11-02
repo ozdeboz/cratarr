@@ -39,6 +39,10 @@ impl Item {
 #[derive(Debug, Deserialize)]
 pub struct Ask {
     pub items: Vec<Item>,
+    /// The libraries switched off on the device (`source/library` keys): a crate's and an artist's tracks are those of
+    /// the libraries switched on, as they show (the owner, 2026-11-02); Home's crates every library's.
+    #[serde(default)]
+    pub without: Vec<String>,
     /// The version the app last saw, by key: an item still at it answers without its tracks.
     #[serde(default)]
     pub versions: HashMap<String, String>,
@@ -86,7 +90,7 @@ pub async fn ask(app: &App, ask: Ask) -> Vec<Answer> {
             out.push(Answer { key, version: None, tracks: None, error: Some(crate::bandcamp::NOT_KEPT.into()) });
             continue;
         }
-        match rows_of(app, &item).await {
+        match rows_of(app, &item, &ask.without).await {
             Ok((source, rows)) => {
                 let ids: Vec<(&str, Option<&str>)> = rows.iter().filter(|r| !r.missing).filter_map(|r| Some((r.id.as_deref()?, r.album_id.as_deref()))).collect();
                 let version = version_of(&source, &ids);
@@ -100,13 +104,17 @@ pub async fn ask(app: &App, ask: Ask) -> Vec<Answer> {
 }
 
 /// An item's rows in its own order, and the source they are of.
-async fn rows_of(app: &App, item: &Item) -> Result<(String, Vec<PlaylistRow>), String> {
+async fn rows_of(app: &App, item: &Item, without: &[String]) -> Result<(String, Vec<PlaylistRow>), String> {
     let source = Some(item.source.as_str());
     match item.kind {
         Kind::Album => app.playing.album_view(&item.source, &item.id).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
         Kind::Playlist => app.playlists.rows(&item.id, source).await.map_err(|e| e.to_string()),
-        Kind::Crate => app.playlists.crate_rows(&item.id, source, 0, usize::MAX, &super::CrateLook::default()).await.map(|p| (p.source, p.rows)).map_err(|e| e.to_string()),
-        Kind::Artist => app.playing.artist_view(&item.source, &item.id).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
+        Kind::Crate => {
+            let without = if crate::crates::home_crate(&item.id) { Vec::new() } else { without.to_vec() };
+            let look = super::CrateLook { without, ..Default::default() };
+            app.playlists.crate_rows(&item.id, source, 0, usize::MAX, &look).await.map(|p| (p.source, p.rows)).map_err(|e| e.to_string())
+        }
+        Kind::Artist => app.playing.artist_view(&item.source, &item.id, without).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
     }
 }
 

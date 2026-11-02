@@ -991,9 +991,26 @@ async fn classical_index(served: Arc<crate::serve::Serve>) -> Result<Arc<crate::
 
 /// The composers of the library's classical records (0.10): `[{key, name, sort_name, records, photo?}]`, every
 /// spelling of one composer one.
-async fn classical_composers(ctx: Ctx) -> Result<Json<Vec<crate::app::classical::Composer>>, ApiError> {
-    let ix = classical_index(ctx.serve()?).await?;
-    Ok(Json(ix.composers.clone()))
+/// The libraries switched off come as `without`: each composer's records of those switched on, those with none left
+/// out (the owner, 2026-11-02: every number of the libraries switched on).
+async fn classical_composers(ctx: Ctx, RawQuery(raw): RawQuery) -> Result<Json<Vec<crate::app::classical::Composer>>, ApiError> {
+    let served = ctx.serve()?;
+    let ix = classical_index(served.clone()).await?;
+    let off: std::collections::HashSet<i64> = ctx.app.library.folders_off(&without_of(raw.as_deref())).into_iter().collect();
+    if off.is_empty() {
+        return Ok(Json(ix.composers.clone()));
+    }
+    let folders = tokio::task::spawn_blocking(move || served.library.album_folders()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
+    let on = |album: &String| folders.get(album).is_none_or(|f| !off.contains(f));
+    let composers = ix
+        .composers
+        .iter()
+        .filter_map(|c| {
+            let records = c.albums.iter().filter(|a| on(a)).count();
+            (records > 0).then(|| crate::app::classical::Composer { records, ..c.clone() })
+        })
+        .collect();
+    Ok(Json(composers))
 }
 
 /// A composer's classical records (0.10): `{key, name, records: [album id]}`, by their key or one given out before
@@ -1643,12 +1660,14 @@ struct ArtistName {
 }
 
 /// An artist for the panel (decided 2026-10-16): by name, as the albums credit them (`?name=`).
+/// The libraries switched off come as `without` (`without_of`): their albums and tracks left out.
 async fn artist_view(
     State(app): State<Arc<App>>,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
+    RawQuery(raw): RawQuery,
 ) -> Result<Json<crate::app::ArtistView>, ApiError> {
-    Ok(Json(app.playing.artist_view(&source, &q.name).await?))
+    Ok(Json(app.playing.artist_view(&source, &q.name, &without_of(raw.as_deref())).await?))
 }
 
 /// Whether an artist is a favourite (`?name=`): the heart on an album's artist chip; null where the server keeps none.
@@ -5719,9 +5738,10 @@ struct SearchQuery {
 }
 
 /// One search, answered by kind and merged (decision 0072): `{ q, groups: { kind: { total, items } }, top }`.
-async fn search_all(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>) -> Result<Json<crate::app::search::Answer>, ApiError> {
+/// The libraries switched off come as `without` (`without_of`): counts and crates of those switched on.
+async fn search_all(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>, RawQuery(raw): RawQuery) -> Result<Json<crate::app::search::Answer>, ApiError> {
     let kinds: Vec<String> = s.kinds.unwrap_or_default().split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect();
-    let answer = crate::app::search::search(&app, &s.q, &kinds, s.limit.unwrap_or(crate::app::search::LIMIT), s.offset.unwrap_or(0))
+    let answer = crate::app::search::search(&app, &s.q, &kinds, s.limit.unwrap_or(crate::app::search::LIMIT), s.offset.unwrap_or(0), &without_of(raw.as_deref()))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(answer))

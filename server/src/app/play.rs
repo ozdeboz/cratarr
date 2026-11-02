@@ -56,6 +56,9 @@ pub enum Collection {
     Artist {
         source: String,
         name: String,
+        /// The libraries switched off: their albums and tracks left out, as the artist showed (the owner, 2026-11-02).
+        #[serde(default)]
+        without: Vec<String>,
     },
     Tracks {
         source: String,
@@ -294,7 +297,8 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             let look = super::CrateLook {
                 favourites: *favourites,
                 favourite_albums: *favourite_albums,
-                without: without.clone(),
+                // Home's crates of every library, as they show (the owner's one exception, 2026-11-02).
+                without: if crate::crates::home_crate(id) { Vec::new() } else { without.clone() },
                 filter: filter.clone(),
                 order: *order,
                 down: *down,
@@ -353,8 +357,8 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             let ids = named.iter().map(|t| t.id.clone()).collect();
             Ok(Candidates { named: Some(named), ..Candidates::of(v.source, ids, Some(v.title)) })
         }
-        Collection::Artist { source, name } => {
-            let v = app.playing.artist_view(source, name).await?;
+        Collection::Artist { source, name, without } => {
+            let v = app.playing.artist_view(source, name, without).await?;
             let named: Vec<QueueTrack> = v
                 .rows
                 .into_iter()
