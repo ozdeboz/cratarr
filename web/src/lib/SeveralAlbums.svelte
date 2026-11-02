@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { openRadio } from './radioAsk.svelte';
   import type { IconName } from './Icon.svelte';
   import { port } from './player/port.svelte';
 
@@ -21,7 +22,7 @@
   import { recordsWord } from './recordTypeRules';
   import { jobs } from './jobs.svelte';
   import { isKept, setKept } from './kept.svelte';
-  import { startRadio, type LocalTrack } from './localPlayer.svelte';
+  import { type LocalTrack } from './localPlayer.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { me } from './me.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -53,7 +54,7 @@
     const [seed, name] = [tracks.map((t) => t.id), n];
     close();
     navigator.vibrate?.(8);
-    startRadio(seed, name).catch((e) => toast.fail(e, 'Could not start playing'));
+    openRadio({ name, kind: 'selection', within: { kind: 'tracks', source: 'cratarr', ids: seed }, seed: async () => seed });
   }
 
   // The rating: the stars they share (none when they differ), a tap giving them all those, a tap on the shared one

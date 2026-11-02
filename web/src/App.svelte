@@ -80,6 +80,8 @@
   import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
   import { longpress } from './lib/longpress';
   import { followAddress, setBeside } from './lib/panel.svelte';
+  import RadioSheet from './lib/RadioSheet.svelte';
+  import { radioSheet } from './lib/radioAsk.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
   import DownloadsPanel from './lib/DownloadsPanel.svelte';
@@ -1311,6 +1313,9 @@
     {#if switchInBar && navBottom}<div class="slim"><ModeSwitcher slim up {connection} /></div>{/if}
   </nav>
 </div>
+
+<!-- One radio sheet, wherever radio starts (decision 0094 #5, lib/radioAsk). -->
+{#if radioSheet.ask}<RadioSheet ask={radioSheet.ask} />{/if}
 
 <style>
   /* Phone first: content full width, navigation in a bar at the bottom. From 1024 px (as seerr does) a fixed

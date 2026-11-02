@@ -7,6 +7,7 @@
   // to playlist; Download…; Adjust BPM (administrators: lib/TempoStep). `extra`: what the list's own items have
   // besides their tracks (several albums' Keep, Delete…; the owner, 2026-10-27: what one has, several have), its
   // groups last, given the menu's close; `chips`: what is ticked, said as the list says it ("5 albums").
+  import { openRadio } from './radioAsk.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { port } from './player/port.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -17,7 +18,7 @@
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { me } from './me.svelte';
   import TempoStep from './TempoStep.svelte';
-  import { startRadio, type LocalTrack } from './localPlayer.svelte';
+  import { type LocalTrack } from './localPlayer.svelte';
   import { playCollection } from './play.svelte';
   import { excludeGlobally } from './exclusions.svelte';
   import { askIfMany } from './many.svelte';
@@ -79,17 +80,10 @@
 
   // What one track's menu has, several have (the owner, 2026-10-27): Start radio and Exclude everywhere, each one call.
   const radioFrom = $derived(port().radio && source === 'cratarr');
-  async function radio() {
+  function radio() {
     const [list, name] = [[...ids], title];
-    working = true;
     onclose();
-    try {
-      await startRadio(list, name);
-    } catch (e) {
-      toast.fail(e, "The radio didn't start");
-    } finally {
-      working = false;
-    }
+    openRadio({ name, kind: 'selection', within: { kind: 'tracks', source: 'cratarr', ids: list }, seed: async () => list });
   }
   /** Many ask first (lib/many). */
   function excludeEverywhere() {
