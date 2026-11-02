@@ -9,6 +9,7 @@
   import FilterSheet from './FilterSheet.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import NothingPopover from './NothingPopover.svelte';
+  import { rowPiece } from './glassRow.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import Meter from './Meter.svelte';
@@ -248,10 +249,9 @@
   const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn && crateCards.shown === 0);
   let row = $state<HTMLElement>();
   // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the
-  // buttons it replaces took, besides its own wish (as wide as its row allows, 320 px at most). Its row's, not the
-  // window's: beside a panel or the player the row is narrower, and a field sized by the window pushed back aside or
-  // sent the title away to fill the row (the owner, 2026-11-02). Said on the field (`data-wants`) for the title beside
-  // it to give way where it would squeeze it (lib/NavigationControls).
+  // buttons it replaces took, and grows from what its row has left, 320 px at most. A piece of its row (lib/glassRow): the
+  // row decides it with everything else in it, the title beside back giving way before the field is squeezed (the
+  // owner, 2026-11-02: one decision for the row, nothing measuring another).
   let pill = $state<HTMLElement>();
   let folded = $state(0);
   $effect(() => {
@@ -263,20 +263,10 @@
     seen.observe(p);
     return () => seen.disconnect();
   });
-  /** The width of the row the pill is in: App's page row, or a panel's own bar. */
-  let rowRoom = $state<number | null>(null);
-  $effect(() => {
-    const line = row?.closest<HTMLElement>('.page-row, .bar, .pills');
-    if (!line) return void (rowRoom = null);
-    const seen = new ResizeObserver(() => (rowRoom = line.clientWidth));
-    seen.observe(line);
-    return () => seen.disconnect();
-  });
   /** The lens and the pill's own room, beside the field. */
   const LENS = 52;
-  /** Back, the gap after it, the lens and a short title's room: what the row keeps beside the field it wants. */
-  const BESIDE = 204;
-  const fieldWants = $derived(Math.max(Math.min(320, (rowRoom ?? (innerWidth.current ?? 400) - 16) - BESIDE), folded - LENS, 140));
+  /** The field's least: the room the buttons it replaces took. */
+  const fieldLeast = $derived(Math.max(folded - LENS, 140));
   /** The magnifier: where the popover's tip points (lib/NothingPopover). */
   let lens = $state<HTMLElement>();
   $effect(() => {
@@ -284,7 +274,7 @@
   });
 </script>
 
-<span class="pill-row" class:fill={searching && pageView.leadAway} bind:this={row}>
+<span class="pill-row" bind:this={row}>
   <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
     <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
     <!-- Everywhere, while a search finds something there (the owner, 2026-11-02): on the pill's one glass, which grows
@@ -325,7 +315,7 @@
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" style:width="{fieldWants}px" data-wants={fieldWants}>
+        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: fieldLeast, max: 320 }))}>
           <span class="typed" class:layered={!!layered}>
             {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
             <input
@@ -492,11 +482,12 @@
   }
 
   /* The search open: its field and ✕ inside the pill, right of the magnifier, as wide as a phone's row allows. */
+  /* Its width is its row's decision (lib/glassRow); outside a row, as wide as fits, 320 px at most. */
   .field {
     display: flex;
     align-items: center;
     width: min(320px, calc(100vw - 220px));
-    min-width: 140px;
+    min-width: 0;
     flex-shrink: 1;
     overflow: hidden;
   }
@@ -547,13 +538,6 @@
   /* Its joining words, as the sentence's (lib/CrateSentence .w). */
   .mirror .dim {
     opacity: 0.55;
-  }
-
-  /* The open search where the title gave way: it grows to meet back (the owner, 2026-11-01), its own width the least. */
-  .pill-row.fill,
-  .pill-row.fill .pill,
-  .pill-row.fill .field {
-    flex: 1 1 auto;
   }
 
   /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour, the pill
