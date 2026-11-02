@@ -337,6 +337,7 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
             "damaged_tag" => (Level::Warning, n(count, "file has a damaged tag", "files have a damaged tag")),
             "no_tags" => (Level::Warning, n(count, "file has no tags", "files have no tags")),
             "no_length" => (Level::Info, n(count, "file has no length", "files have no length")),
+            "bad_seektable" => (Level::Warning, n(count, "file has a broken seek table", "files have a broken seek table")),
             other => (Level::Info, format!("{count} files: {other}")),
         };
         let mut f = finding("files", format!("files:{kind}"), level, count, title);

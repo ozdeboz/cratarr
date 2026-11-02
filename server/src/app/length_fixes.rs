@@ -19,14 +19,15 @@ use super::fixes::Fix;
 use super::health::{SHORT_SLACK_MS, clock, short_cause};
 use crate::serve::Serve;
 
-/// The fields these fixes have (`<field>:<song id>`).
-pub const FIELDS: [&str; 3] = ["reread", "length", "trim"];
+/// The fields these fixes have (`<field>:<song id>`); `seektable` a FLAC's broken seek table made padding (0.14).
+pub const FIELDS: [&str; 4] = ["reread", "length", "trim", "seektable"];
 
 fn field_of(key: &str) -> Option<&'static str> {
     match key {
         "files:length-misread" => Some("reread"),
         "files:length-guessed" => Some("length"),
         "files:cut-short" | "files:sound-breaks" => Some("trim"),
+        "files:bad_seektable" => Some("seektable"),
         _ => None,
     }
 }
@@ -36,6 +37,15 @@ pub fn of_finding(key: &str) -> Result<Vec<Fix>> {
     let Some(field) = field_of(key) else { return Ok(Vec::new()) };
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let mut out = Vec::new();
+    if field == "seektable" {
+        for (folder, rel) in served.catalogue().with_issue("bad_seektable")? {
+            let Some((song, ..)) = served.library.song_at(folder, &rel)? else { continue };
+            if let Some(f) = fix(&served, field, &song)? {
+                out.push(f);
+            }
+        }
+        return Ok(out);
+    }
     for (folder, rel, path, _, heard) in served.catalogue().shorter_than_heard(SHORT_SLACK_MS)? {
         if short_cause(&path, heard) != key {
             continue;
@@ -69,6 +79,21 @@ fn walked_ms(path: &Path) -> Option<i64> {
 /// One fix (`field` for `song`), as it stands now; none where it does not apply. Blocking.
 pub fn fix(served: &Serve, field: &str, song: &str) -> Result<Option<Fix>> {
     let Some((folder, rel, path, album, title)) = file_of(served, song)? else { return Ok(None) };
+    if field == "seektable" {
+        let Some(_) = crate::catalogue::tags::flac_seektable(&path).and_then(|t| t.wrong()) else { return Ok(None) };
+        return Ok(Some(Fix {
+            id: format!("seektable:{song}"),
+            album,
+            field: "seektable",
+            from: Some("A broken seek table".into()),
+            to: "Seeks by its frames".into(),
+            source: "its file".into(),
+            certainty: "certain",
+            why: format!("{title}: its seek table sends a far seek to the wrong place, so the track ends early: the table taken out (its audio untouched)."),
+            writes: Vec::new(),
+            candidates: Vec::new(),
+        }));
+    }
     let given = served.catalogue().duration_of(folder, &rel).map(|d| d as i64);
     let flac = is_flac(&path);
     let (field, to, source, why): (&'static str, Option<i64>, &str, &str) = match field {
@@ -105,7 +130,9 @@ pub fn apply(fix: &Fix, backups: &Path, n: usize) -> Result<(PathBuf, Option<Pat
     std::fs::create_dir_all(backups)?;
     let backup = backups.join(format!("{n}-{}", path.file_name().and_then(|f| f.to_str()).unwrap_or("track")));
     std::fs::copy(&path, &backup).with_context(|| format!("keeping {} first", path.display()))?;
-    let written = if is_flac(&path) {
+    let written = if fix.field == "seektable" {
+        crate::catalogue::tags::flac_drop_seektable(&path)
+    } else if is_flac(&path) {
         let ms = served.catalogue().heard_ms(folder, &rel).context("its sound's length is not known")?;
         set_flac_total(&path, ms)
     } else {

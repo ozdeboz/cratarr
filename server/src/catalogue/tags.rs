@@ -3,7 +3,7 @@
 //! value as stored: nothing is split or merged here (see `normalise`). Cover art is not read.
 
 /// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`).
-pub const READER_VERSION: u32 = 7;
+pub const READER_VERSION: u32 = 8;
 
 /// What is wrong with a file that could still be read (a file that cannot be read at all is an error instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +14,9 @@ pub enum Issue {
     NoTags,
     /// No audio length could be read.
     NoLength,
+    /// A FLAC's seek table sends a seek to the wrong place (2026-11-02, the owner's DARKSIDE "Nothing": every point at
+    /// its first byte, so a far seek played from the start and the track ended early, the next playing).
+    BadSeektable,
 }
 
 impl Issue {
@@ -22,6 +25,7 @@ impl Issue {
             Issue::DamagedTag => "damaged_tag",
             Issue::NoTags => "no_tags",
             Issue::NoLength => "no_length",
+            Issue::BadSeektable => "bad_seektable",
         }
     }
 }
@@ -110,7 +114,7 @@ fn by_raw_key(raw: &str) -> Option<&'static str> {
 /// mode tells a damaged field (seen: a TIPL frame with a broken UTF-16 byte-order mark, which the normal mode gives
 /// up the whole file for) from a file that cannot be read at all.
 pub fn read(path: &Path) -> Result<(FileTags, Option<(Issue, String)>)> {
-    read_tags(path).map(|(mut t, issue)| {
+    read_tags(path).map(|(mut t, mut issue)| {
         // An MP3's length from its own info frame where it has one (0.9.14): lofty missed some, reading them as a
         // constant bitrate of their info frame's (32 kb/s: ten times their length).
         if t.format.as_deref() == Some("MP3")
@@ -118,8 +122,104 @@ pub fn read(path: &Path) -> Result<(FileTags, Option<(Issue, String)>)> {
         {
             t.duration_ms = Some(ms);
         }
+        // A FLAC's seek table, where it has one, as the players follow it (0.14).
+        if issue.is_none()
+            && t.format.as_deref() == Some("FLAC")
+            && let Some(why) = flac_seektable(path).and_then(|s| s.wrong())
+        {
+            issue = Some((Issue::BadSeektable, why));
+        }
         (t, issue)
     })
+}
+
+/// A FLAC's seek table as written: where its block's header is and its body's length, its points (the sample, and its
+/// frame's offset from the first frame; placeholders left out), the stream's total samples (0: not known) and its
+/// audio's bytes. None where it has none, or is no FLAC.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeekTable {
+    pub at: u64,
+    pub len: u32,
+    pub points: Vec<(u64, u64)>,
+    pub total: u64,
+    pub audio: u64,
+}
+
+impl SeekTable {
+    /// What is wrong with it, where something is: a point after another at its byte or before it, or past the audio or
+    /// the stream's end. A player trusts it, so a far seek lands wrong and the track ends early.
+    pub fn wrong(&self) -> Option<String> {
+        let said = "its seek table sends a far seek to the wrong place: the track ends early";
+        let mut last: Option<(u64, u64)> = None;
+        for &(sample, offset) in &self.points {
+            let past = offset >= self.audio || (self.total > 0 && sample >= self.total);
+            let behind = last.is_some_and(|(s, o)| sample <= s || offset <= o);
+            if past || behind {
+                return Some(said.to_string());
+            }
+            last = Some((sample, offset));
+        }
+        None
+    }
+}
+
+/// The seek table of a FLAC file (`SeekTable`).
+pub fn flac_seektable(path: &Path) -> Option<SeekTable> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let size = f.metadata().ok()?.len();
+    let mut magic = [0u8; 4];
+    f.read_exact(&mut magic).ok()?;
+    if &magic != b"fLaC" {
+        return None;
+    }
+    let (mut table, mut total) = (None, 0u64);
+    loop {
+        let at = f.stream_position().ok()?;
+        let mut h = [0u8; 4];
+        f.read_exact(&mut h).ok()?;
+        let (last, kind, len) = (h[0] & 0x80 != 0, h[0] & 0x7f, u32::from_be_bytes([0, h[1], h[2], h[3]]));
+        match kind {
+            0 | 3 => {
+                let mut body = vec![0u8; len as usize];
+                f.read_exact(&mut body).ok()?;
+                if kind == 0 && body.len() >= 18 {
+                    total = u64::from_be_bytes(body[10..18].try_into().ok()?) & ((1 << 36) - 1);
+                } else if kind == 3 {
+                    let word = |b: &[u8]| u64::from_be_bytes(b.try_into().unwrap_or([0; 8]));
+                    let points = body.chunks_exact(18).map(|p| (word(&p[0..8]), word(&p[8..16]))).filter(|(s, _)| *s != u64::MAX).collect();
+                    table = Some((at, len, points));
+                }
+            }
+            127 => return None,
+            _ => {
+                f.seek(SeekFrom::Current(i64::from(len))).ok()?;
+            }
+        }
+        if last {
+            break;
+        }
+    }
+    let audio = size.saturating_sub(f.stream_position().ok()?);
+    let (at, len, points) = table?;
+    Some(SeekTable { at, len, points, total, audio })
+}
+
+/// A FLAC's seek table made padding, in place: its block keeps its place and length, so no byte of the file moves and
+/// its audio is untouched; players then find a time by the frames (as in a FLAC with no table).
+pub fn flac_drop_seektable(path: &Path) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let t = flac_seektable(path).context("it has no seek table")?;
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    f.seek(SeekFrom::Start(t.at))?;
+    let mut h = [0u8; 1];
+    f.read_exact(&mut h)?;
+    f.seek(SeekFrom::Start(t.at))?;
+    f.write_all(&[(h[0] & 0x80) | 1])?;
+    f.seek(SeekFrom::Start(t.at + 4))?;
+    f.write_all(&vec![0u8; t.len as usize])?;
+    f.sync_all()?;
+    Ok(())
 }
 
 fn read_tags(path: &Path) -> Result<(FileTags, Option<(Issue, String)>)> {
@@ -334,5 +434,41 @@ mod tests {
         std::fs::write(&p, b"this is not an mp3").unwrap();
         assert!(read(&p).is_err());
         std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn a_seek_table_at_the_first_byte_is_told_and_made_padding() {
+        // The owner's DARKSIDE "Nothing": every point at byte 0, so a far seek ended the track.
+        let dir = std::env::temp_dir().join(format!("cratarr-seektable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, offsets: &[u64]| {
+            let mut b = b"fLaC".to_vec();
+            let mut info = vec![0u8; 34];
+            // 44.1 kHz, 2 channels, 16 bits, 441000 samples.
+            let x: u64 = (44100u64 << 44) | (1 << 41) | (15 << 36) | 441_000;
+            info[10..18].copy_from_slice(&x.to_be_bytes());
+            b.extend([0u8, 0, 0, 34]);
+            b.extend(&info);
+            b.extend([0x83u8, 0, 0, (offsets.len() * 18) as u8]);
+            for (i, o) in offsets.iter().enumerate() {
+                b.extend((i as u64 * 44_100).to_be_bytes());
+                b.extend(o.to_be_bytes());
+                b.extend(4096u16.to_be_bytes());
+            }
+            b.extend(vec![0xffu8; 10_000]);
+            let path = dir.join(name);
+            std::fs::write(&path, &b).unwrap();
+            path
+        };
+        let good = file("good.flac", &[0, 1000, 2000]);
+        assert_eq!(flac_seektable(&good).unwrap().wrong(), None);
+        let bad = file("bad.flac", &[0, 0, 0]);
+        assert!(flac_seektable(&bad).unwrap().wrong().is_some());
+        assert!(flac_seektable(&file("past.flac", &[0, 1000, 20_000])).unwrap().wrong().is_some(), "past its audio");
+        let size = std::fs::metadata(&bad).unwrap().len();
+        flac_drop_seektable(&bad).unwrap();
+        assert_eq!(flac_seektable(&bad), None, "padding now");
+        assert_eq!(std::fs::metadata(&bad).unwrap().len(), size, "no byte moved");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
