@@ -159,6 +159,7 @@
   import { shuffled } from './shuffle';
   import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
+  import { wordRows } from './wordRows';
   import { reveal } from './reveal';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
@@ -249,7 +250,7 @@
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The album's library, as a dot before its details (0.9.3): which copy this is, beside its year.
   const albumDot = $derived(album ? libraryDot(album.source, { id: album.id }) : null);
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners' | 'words'> & { kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
@@ -464,7 +465,7 @@
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners };
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners, words: r.words };
             return { ...r, total: r.rows.length };
           })
         : ar
@@ -1302,6 +1303,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
   // Not while a crate is changed: its genres are the editor's to choose.
   const shownArtists = $derived(!album && !artist && !multi ? ((previewProfile ?? profile)?.artists ?? []) : []);
+  // A record of Cratarr's own: its words a row per kind (decision 0097, lib/wordRows) in place of the genres' line.
+  const recordWords = $derived(album && albumHead?.words ? wordRows(albumHead.words) : null);
   const shownGenres = $derived(multi || crateEditing ? [] : plain ? (listGenres ?? []) : (point?.genres ?? []));
 
   // As Symfonium's album screen: two floating pills over the cover (back and ✕; the filter and where it plays), and the
@@ -2295,7 +2298,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
             >
           {/if}
           <!-- A genre opens in the panel (its own crate). -->
-          {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)} use:longpress={() => (badgeMenu = CRATE + GENRE + g)}>{g}</button>{/each}</p>{/if}
+          {#if recordWords}
+            {#each recordWords as row (row.kind)}<p class="genres"><span class="row-head">{row.label}</span>{#each row.words as w (w)}<button onclick={() => viewOver(`${CRATE}${row.kind}:${w}`)} use:longpress={() => (badgeMenu = `${CRATE}${row.kind}:${w}`)}>{w}</button>{/each}</p>{/each}
+          {:else if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)} use:longpress={() => (badgeMenu = CRATE + GENRE + g)}>{g}</button>{/each}</p>{/if}
           <!-- A playlist's or a crate's telling artists (its profile's), each opening the artist, headed "Typical artists";
                not an album's or an artist's own, whose header names them. -->
           {#if shownArtists.length}<p class="genres"><span class="row-head">Typical artists</span>{#each shownArtists as a (a)}<button onclick={() => goToArtist(source || 'cratarr', a)}>{a}</button>{/each}</p>{/if}
