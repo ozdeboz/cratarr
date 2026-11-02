@@ -332,14 +332,12 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
-  {/if}
   {#if changes}
-    <Crumbs trail={changesTrail} here={changesHere} siblings={changes.view === 'list' ? siblings : null} />
+    <Crumbs back={beside ? null : backOne} trail={changesTrail} here={changesHere} siblings={changes.view === 'list' ? siblings : null} />
   {:else if p}
-    <Crumbs trail={top} here={p.name} {siblings} />
+    <Crumbs back={beside ? null : backOne} trail={top} here={p.name} {siblings} />
   {:else}
+    {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
     <h2 class="title">Health</h2>
   {/if}
 {/snippet}

@@ -108,9 +108,6 @@ export type Prefs = {
   discoverMode: DiscoverMode;
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
-  /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
-   *  owner 2026-10-25: "global on the device"); whole by default (the owner, the same day). */
-  crumbsWhole: boolean;
   /** The part last seen in each group of a panel (`settings/device` → `appearance`; lib/groupCrumb): a group's pick in
    *  the breadcrumb lands there (the owner, 2026-11-02: "automatically remembered"). */
   groupLast: Record<string, string>;
@@ -425,7 +422,6 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
-  crumbsWhole: true,
   groupLast: {},
   modeSwitchInBar: false,
   discoverMode: 'fresh',
@@ -529,7 +525,6 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
-      if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
       if (saved.groupLast && typeof saved.groupLast === 'object')
         for (const [k, v] of Object.entries(saved.groupLast)) if (typeof v === 'string') p.groupLast[k] = v;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;

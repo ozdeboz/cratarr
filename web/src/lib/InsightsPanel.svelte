@@ -4,7 +4,6 @@
   // pill the pages have (lib/ContentControls: the same glass, the same motion; the owner, 2026-10-25): its funnel opening what is
   // counted, its sliders how it is shown (lib/InsightsSheet), each where the view has any. The views are the tabs' as they
   // were (Collection's sections, Listening's History and Profile, the Map).
-  import Icon from './Icon.svelte';
   import InsightsCollection from './InsightsCollection.svelte';
   import DiscoveryList from './DiscoveryList.svelte';
   import InsightsListening from './InsightsListening.svelte';
@@ -81,12 +80,12 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   {@const parent = v.under ? INSIGHTS_VIEWS.find((x) => x.id === v.under) : null}
   <!-- The levels Back walks through (lib/Crumbs): Insights, the view a deeper one was opened from; between them its
        group, a heading of the page's list and not a place: a picker of the groups (the owner, 2026-11-02). On a phone
        the view's name picks another view of its group. -->
   <Crumbs
+    back={beside ? null : backOne}
     trail={[
       ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('insights') }, groupLevel]),
       ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: () => history.back() }] : []),
@@ -158,29 +157,6 @@
 
   .error {
     color: var(--danger-ink);
-  }
-
-  .navpill {
-    display: flex;
-    padding: 2px;
-    border-radius: 26px;
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
-  }
-
-  .navpill button {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: none;
-    color: var(--text);
-    cursor: pointer;
   }
 
   /* Its glass handed to App's row on a phone (lib/glass): the view starts under it, its first heading where the page's

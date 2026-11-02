@@ -1,51 +1,141 @@
 <script lang="ts">
-  // A panel's title as a breadcrumb (0.9.3; the owner, 2026-10-25: Requests, Downloads, Insights, Health and Settings
-  // get "pure breadcrumbs"): `trail` the levels above, the top first, each a tap back there (without `go`, only said),
-  // then where one is. Short (the owner: "2 at most. So the current and one level above"): the last level above and
-  // where one is, both cut with … when short of room. Whole: every level, nothing cut, scrolled to its end (the owner,
-  // 2026-10-25: "in scroll mode, the entire breadcrumb should be visible. In the other mode, only one level
-  // difference"). A long-press, and only that (the owner, 2026-11-02), turns from one to the other while there is more
-  // to show (a level left out, or something cut), for every panel on this device ("global on the device": prefs.crumbsWhole). No levels above: only
-  // where one is, as beside the page whose name its list already shows (Settings › Display beside Settings' list said
-  // Settings twice).
+  // A panel's left part (0.9.3; the owner, 2026-10-25: Requests, Downloads, Insights, Health and Settings get "pure
+  // breadcrumbs"): back, up one level, and its title as a breadcrumb. `trail` the levels above, the top first, each a
+  // tap back there (without `go`, only said), then where one is.
+  // One way on every device and every width (the owner, 2026-11-02: "there should never be a toggle between modes on any
+  // device size. It should simply collapse the highest level that's no space for"): every level while they fit; short
+  // of room, the highest goes first, then the next, where one is last; only where one is, alone, is cut with …. Up (↑,
+  // right of back) goes one level up the tree, so a level that went is one tap away all the same.
   // One rule for every panel (the owner, 2026-11-01): the levels are those Back walks through, each a tap back there;
   // only places are levels. Where one is can be a picker of its siblings (Settings' other parts, Health's other
-  // problems: a move sideways instead of up and down again, as the Library's "Records ▾"). A long-press anywhere on it
-  // switches short and whole (the owner, 2026-11-02: a tap is the pickers' now; the … before the trail that did it read
-  // as a level of its own), and is never also their tap.
+  // problems: a move sideways instead of up and down again, as the Library's "Records ▾"). No levels above: only where
+  // one is, as beside the page whose name its list already shows, and no Up.
   // A level above can be its group (the owner, 2026-11-02: Settings › Device › Appearance, the parts' picker was "way too
   // tall"): a picker of the groups, landing on the part last seen in one (lib/groupCrumb). Not a place: Back walks past
-  // it, and it is no tap back there.
+  // it, and so does Up.
   import { tick } from 'svelte';
-  import { longpress } from './longpress';
-  import { prefs } from './prefs.svelte';
   import GlassPicker, { type PickerOption } from './GlassPicker.svelte';
+  import Icon from './Icon.svelte';
 
   export type Siblings = { menuLabel: string; options: readonly PickerOption[]; chosen: string | null; onchoose: (id: string) => void };
   /** A level above: a tap back there (without `go`, only said), or its group's picker (`pick`). */
   export type Level = { label: string; go?: () => void; pick?: Siblings };
-  let { trail = [], here, siblings = null }: { trail?: Level[]; here: string; siblings?: Siblings | null } = $props();
+  let {
+    trail = [],
+    here,
+    siblings = null,
+    back = null,
+  }: {
+    trail?: Level[];
+    here: string;
+    siblings?: Siblings | null;
+    /** Back's tap; none (beside the page's own list), no back. */
+    back?: (() => void) | null;
+  } = $props();
+
+  /** Up: the nearest level above that is a place. */
+  const up = $derived([...trail].reverse().find((l) => l.go) ?? null);
+
   let line = $state<HTMLElement>();
-  const whole = $derived(prefs.crumbsWhole);
-  const shown = $derived(whole ? trail : trail.slice(-1));
-  // Whole: its end in view, whatever the panel or its title.
-  $effect(() => {
-    void here;
-    if (whole && line) tick().then(() => line?.scrollTo({ left: line.scrollWidth }));
-  });
-  function show() {
-    if (whole) return void (prefs.crumbsWhole = false);
-    const cut = [...(line?.querySelectorAll<HTMLElement>('.up, .here, .label') ?? [])].some((x) => x.scrollWidth > x.clientWidth);
-    if (cut || trail.length > 1) prefs.crumbsWhole = true;
+  /** How many of the levels above have gone for want of room, the highest first. */
+  let gone = $state(0);
+  /** Each level's own width (with its ›) and where one is's, as laid out whole; measured again as they change. */
+  let widths: number[] = [];
+  let measuredFor = '';
+
+  /** The room the line has: its own, and what the row it is in leaves free (the glass beside back is only as wide as
+   *  what it holds; a bar's line takes the rest itself). */
+  function room(el: HTMLElement): number {
+    const row = el.closest<HTMLElement>('.page-row, .bar');
+    if (!row) return el.clientWidth;
+    const s = getComputedStyle(row);
+    const kids = [...row.children].filter((c): c is HTMLElement => c instanceof HTMLElement && c.offsetParent !== null && getComputedStyle(c).position !== 'absolute');
+    const used = kids.reduce((n, c) => n + c.offsetWidth, 0) + Math.max(0, kids.length - 1) * (parseFloat(s.columnGap) || 0);
+    const free = row.clientWidth - (parseFloat(s.paddingLeft) || 0) - (parseFloat(s.paddingRight) || 0) - used;
+    return el.clientWidth + Math.max(0, free);
   }
+
+  function fit() {
+    const el = line;
+    if (!el) return;
+    const key = `${trail.map((l) => l.label).join('\n')}\n${here}`;
+    if (key !== measuredFor) {
+      // Laid out whole for a moment (the same frame, nothing painted): every part at its own width.
+      el.classList.add('measuring');
+      widths = [...el.children].map((c) => {
+        const m = getComputedStyle(c);
+        return (c as HTMLElement).offsetWidth + (parseFloat(m.marginLeft) || 0) + (parseFloat(m.marginRight) || 0);
+      });
+      el.classList.remove('measuring');
+      measuredFor = key;
+    }
+    const have = room(el);
+    let need = widths.reduce((n, w) => n + w, 0);
+    let k = 0;
+    while (k < trail.length && need > have + 0.5) need -= widths[k++];
+    gone = k;
+  }
+
+  $effect(() => {
+    void trail;
+    void here;
+    tick().then(fit);
+  });
+  $effect(() => {
+    const el = line;
+    if (!el) return;
+    const row = el.closest('.page-row, .bar');
+    const seen = new ResizeObserver(() => fit());
+    if (row) seen.observe(row);
+    addEventListener('resize', fit);
+    return () => {
+      seen.disconnect();
+      removeEventListener('resize', fit);
+    };
+  });
 </script>
 
-<h2 class="crumbs" class:whole bind:this={line} use:longpress={show}>
-  {#each shown as up, i (i)}{#if up.pick}<span class="up pick"><GlassPicker shown={up.label} menuLabel={up.pick.menuLabel} options={up.pick.options} chosen={up.pick.chosen} onchoose={up.pick.onchoose} /></span>{:else if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<span class="here" aria-current="page">{here}</span>{/if}
+{#if back || up}<span class="navpill crumbs-nav"
+    >{#if back}<button aria-label="Back" title="Back" onclick={back}><Icon name="back" size={22} /></button>{/if}{#if up}{@const u = up}<button
+        aria-label={`Up to ${u.label}`}
+        title={`Up to ${u.label}`}
+        onclick={() => u.go?.()}><Icon name="arrowUp" size={22} /></button
+      >{/if}</span
+  >{/if}<h2 class="crumbs" bind:this={line}>
+  {#each trail as level, i (i)}<span class="level" class:gone={i < gone}
+      >{#if level.pick}<span class="up pick"><GlassPicker shown={level.label} menuLabel={level.pick.menuLabel} options={level.pick.options} chosen={level.pick.chosen} onchoose={level.pick.onchoose} /></span>{:else if level.go}<button class="up" onclick={level.go}>{level.label}</button>{:else}<span class="up">{level.label}</span>{/if}<span class="sep" aria-hidden="true">›</span></span
+    >{/each}{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<span class="here" aria-current="page">{here}</span>{/if}
 </h2>
 
 <style>
-  /* As the panels' titles were: one line, the level above muted; each part shortened with … rather than the line wrap. */
+  /* Back and Up on their glass (a panel's own bar); in App's row on a phone, its glass's own (lib/NavigationControls,
+     which wins: these weigh nothing). */
+  :where(.crumbs-nav) {
+    display: flex;
+    flex: none;
+    padding: 2px;
+    border-radius: 26px;
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
+    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
+  }
+
+  :where(.crumbs-nav) button {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  /* One line, the levels above muted; never wrapped. */
   .crumbs {
     flex: 1;
     display: flex;
@@ -57,18 +147,18 @@
     white-space: nowrap;
   }
 
-  .up,
-  .here {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .level {
+    display: flex;
+    flex: none;
+    align-items: baseline;
   }
 
-  /* Whole while there is room (the owner, 2026-10-25: "you have been limiting it too much"; a 45% cap of its own
-     width cut it with room to spare); short of room, both cut with …, each by its length (the owner, 2026-10-25: the
-     level above giving way first left nothing of it beside a long name). */
+  /* A level there is no room for: gone, the highest first (Up still reaches it). */
+  .level.gone {
+    display: none;
+  }
+
   .up {
-    flex: 0 1 auto;
     color: var(--muted);
   }
 
@@ -79,7 +169,6 @@
     font: inherit;
     cursor: pointer;
   }
-
 
   button.up:hover {
     color: var(--text);
@@ -100,33 +189,21 @@
     color: var(--muted);
   }
 
+  /* Where one is: the last to go, and alone the only part cut with …. */
   .here {
     flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  /* The whole line: nothing cut, scrolled sideways (no bar), its end in view. */
-  .crumbs.whole {
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  /* Scrolled, it runs on into the gap before the back button (App's .lead: 10 px), fading out across it there (the
-     owner, 2026-10-25): from where it stopped hard to the button's edge. Not scrolled, nothing is in the gap. */
-  .crumbs.whole {
-    margin-left: -10px;
-    padding-left: 10px;
-    mask-image: linear-gradient(to right, transparent, #000 10px);
-    -webkit-mask-image: linear-gradient(to right, transparent, #000 10px);
-  }
-
-  .crumbs.whole::-webkit-scrollbar {
-    display: none;
-  }
-
-  .crumbs.whole .up,
-  .crumbs.whole .here,
-  .crumbs.whole > :global(.views) {
+  /* Measured whole for a moment (fit): every part at its own width. */
+  .crumbs:global(.measuring) > * {
+    display: flex;
     flex: none;
+  }
+
+  .crumbs:global(.measuring) .here {
     overflow: visible;
   }
 </style>

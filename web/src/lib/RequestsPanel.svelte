@@ -143,8 +143,8 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   <Crumbs
+    back={beside ? null : backOne}
     trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('requests') }]}
     here={L.name}
     siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
