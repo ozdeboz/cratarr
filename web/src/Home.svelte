@@ -51,6 +51,7 @@
   import greet from 'greet-by-time';
   import { queuesPlayer, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
+  import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
@@ -72,18 +73,26 @@
   });
   const sources = $derived((library.view?.sources ?? []).filter((s) => s.id !== DEVICE));
 
+  /** A section whose answer failed with nothing kept to show, and why, by what was asked (`dug` for Blast from the past
+   *  and Grave digging, `crate:<id>` for a crate): said in its place with Try again, never left out as if empty (the
+   *  owner, 2026-11-02: errors are never shown as nothing). What was kept stays shown instead (Home as last seen). */
+  let failed = $state<Record<string, string>>({});
+  const fail = (key: string, e: unknown) => (failed[key] = e instanceof Error ? e.message : 'Unexpected error');
+
   // New for you (the owner, 2026-10-23 and 2026-10-30): the server's (one rule with its crate): Cratarr's own library's
   // newest albums, those heard 5% or more of and those without a cover left out, at most 3 of an album artist's.
   let serverNewest = $state<{ source: string; a: ListedAlbum }[]>(kept.newest ?? []);
   let serverNewestIn = $state(kept.newest !== null);
   const newest = $derived(local ? newestHere().map((a) => ({ source: DEVICE, a })) : serverNewest);
   const newestIn = $derived(local ? device.tracks !== null : serverNewestIn);
+  const readNewest = () =>
+    getHomeNew().then(
+      (r) => ((serverNewest = kept.newest = r.albums.map(({ source, ...a }) => ({ source, a }))), delete failed.newest, (serverNewestIn = true)),
+      (e) => (kept.newest === null && fail('newest', e), (serverNewestIn = true)),
+    );
   onMount(() => {
     if (local) return;
-    getHomeNew().then(
-      (r) => ((serverNewest = kept.newest = r.albums.map(({ source, ...a }) => ({ source, a }))), (serverNewestIn = true)),
-      () => (serverNewestIn = true),
-    );
+    readNewest();
   });
   /** The section on top's Play (the owner, 2026-10-24): all of it, from the album in front (those before it stay before
    *  it in the queue). Blast from the past: its tracks from the front album's; the others: their albums one after the
@@ -116,12 +125,14 @@
   // albums with a cover for the mosaic.
   let week = $state<HomeWeek | null>(kept.week ?? null);
   let weekIn = $state(kept.week !== undefined);
+  const readWeek = () =>
+    getHomeWeek(prefs.source || undefined, hiddenLibraries()).then(
+      (r) => ((week = kept.week = r.week), delete failed.week, (weekIn = true)),
+      (e) => (kept.week === undefined && fail('week', e), (weekIn = true)),
+    );
   onMount(() => {
     if (local) return void (weekIn = true);
-    getHomeWeek(prefs.source || undefined, hiddenLibraries()).then(
-      (r) => ((week = kept.week = r.week), (weekIn = true)),
-      () => (weekIn = true),
-    );
+    readWeek();
   });
   /** Its first four albums, as a seeded crate's mosaic (lib/PlaylistView). */
   const weekCovers = $derived((week?.covers ?? []).map((c) => coverUrl({ source: week!.source, id: c.track, album_id: c.album_id })));
@@ -143,12 +154,14 @@
   // refill (it follows the weather).
   let moment = $state<Moment | null>(momentKept ? (kept.moment ?? null) : null);
   let momentIn = $state(momentKept);
+  const readMoment = () =>
+    getMoment(prefs.source || undefined, hiddenLibraries()).then(
+      (m) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), delete failed.moment, (momentIn = true)),
+      (e) => (!moment && fail('moment', e), (momentIn = true)),
+    );
   onMount(() => {
     if (local) return void (momentIn = true);
-    getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      (m) => ((moment = kept.moment = m), (kept.momentAt = Date.now()), (kept.momentPart = partOfDay()), (momentIn = true)),
-      () => (momentIn = true),
-    );
+    readMoment();
   });
   const momentAlbums = $derived(
     (moment?.albums ?? []).flatMap((id) => sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === id) ?? []),
@@ -190,14 +203,17 @@
   // Asked again only when the queues change (0.12.3; the owner: Home flickered): read inside the effect, the version's
   // lookup in Play On's players made it run, and ask the server, at every report of any player.
   const backKey = $derived(local ? null : JSON.stringify([queuesPlayer(), queuesVersion()]));
+  /** Asked again after a failure (its Try again). */
+  let backAgain = $state(0);
   $effect(() => {
     const key = backKey;
     if (key === null) return;
+    void backAgain;
     const [player] = JSON.parse(key) as [string | null, string];
     let current = true;
     getHomeBack(player).then(
-      (r) => current && ((serverBack = kept.back = r.items), (serverBackIn = true)),
-      () => current && (serverBackIn = true),
+      (r) => current && ((serverBack = kept.back = r.items), delete failed.back, (serverBackIn = true)),
+      (e) => current && (kept.back === null && fail('back', e), (serverBackIn = true)),
     );
     return () => (current = false);
   });
@@ -206,12 +222,14 @@
   // Blast from the past and Grave digging (the server's), of the libraries switched on.
   let dug = $state<Digging | null>(kept.dug ?? null);
   let dugIn = $state(kept.dug !== undefined);
+  const readDug = () =>
+    getDigging(prefs.source || undefined, hiddenLibraries()).then(
+      (d) => ((dug = kept.dug = d), delete failed.dug, (dugIn = true)),
+      (e) => (!dug && fail('dug', e), (dugIn = true)),
+    );
   onMount(() => {
     if (local) return void (dugIn = true);
-    getDigging(prefs.source || undefined, hiddenLibraries()).then(
-      (d) => ((dug = kept.dug = d), (dugIn = true)),
-      () => (dugIn = true),
-    );
+    readDug();
   });
   // Blast from the past: each album once (the owner, 2026-10-23), by its track unplayed longest; Play plays them all.
   const pastAlbums = $derived(dug ? dug.past.filter((t, i, all) => all.findIndex((x) => x.album_id === t.album_id) === i) : []);
@@ -251,21 +269,25 @@
   // Asked once a visit, what was kept showing meanwhile.
   let favAlbumsAsked = false;
   let favTracksAsked = false;
+  const readFavAlbums = () =>
+    getFavoriteAlbums('cratarr').then(
+      (ids) => ((favAlbumIds = kept.favAlbumIds = ids), delete failed.favAlbums),
+      (e) => (favAlbumIds === null && fail('favAlbums', e), (favAlbumIds ??= [])),
+    );
+  const readFavTracks = () =>
+    getFavoriteTracks().then(
+      (r) => ((favRows = kept.favRows = r.rows.filter((x) => x.id && !x.missing)), delete failed.favTracks),
+      (e) => (favRows === null && fail('favTracks', e), (favRows ??= [])),
+    );
   $effect(() => {
     if (local || !order.includes('favAlbums') || favAlbumsAsked) return;
     favAlbumsAsked = true;
-    getFavoriteAlbums('cratarr').then(
-      (ids) => (favAlbumIds = kept.favAlbumIds = ids),
-      () => (favAlbumIds ??= []),
-    );
+    readFavAlbums();
   });
   $effect(() => {
     if (local || !order.includes('favTracks') || favTracksAsked) return;
     favTracksAsked = true;
-    getFavoriteTracks().then(
-      (r) => (favRows = kept.favRows = r.rows.filter((x) => x.id && !x.missing)),
-      () => (favRows ??= []),
-    );
+    readFavTracks();
   });
   const favAlbums = $derived.by(() => {
     const own = sources.find((s) => s.id === 'cratarr')?.albums ?? [];
@@ -310,24 +332,48 @@
   let crateShelves = $state<Record<string, CrateShelf | null>>({ ...kept.crates });
   // Each asked once a visit, its kept shelf showing meanwhile.
   const asking = new Set<string>();
+  const readCrate = (id: string) =>
+    Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
+      ([page, def]) => {
+        const albums: CrateShelf['albums'] = [];
+        for (const r of page.rows) {
+          if (!r.album_id || albums.some((a) => a.id === r.album_id)) continue;
+          albums.push({ id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null, year: r.year ?? null });
+          if (albums.length === CRATE_ALBUMS) break;
+        }
+        crateShelves[id] = kept.crates[id] = { name: def.name, source: page.source, albums };
+        delete failed[CRATE_PART + id];
+      },
+      (e) => {
+        if (crateShelves[id]) return;
+        fail(CRATE_PART + id, e);
+        crateShelves[id] = null;
+      },
+    );
   $effect(() => {
     const ids = order.filter((p) => p.startsWith(CRATE_PART)).map((p) => p.slice(CRATE_PART.length));
     for (const id of untrack(() => ids.filter((x) => !asking.has(x)))) {
       asking.add(id);
-      Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
-        ([page, def]) => {
-          const albums: CrateShelf['albums'] = [];
-          for (const r of page.rows) {
-            if (!r.album_id || albums.some((a) => a.id === r.album_id)) continue;
-            albums.push({ id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null, year: r.year ?? null });
-            if (albums.length === CRATE_ALBUMS) break;
-          }
-          crateShelves[id] = kept.crates[id] = { name: def.name, source: page.source, albums };
-        },
-        () => !(id in crateShelves) && (crateShelves[id] = null),
-      );
+      readCrate(id);
     }
   });
+  /** A section's failure (what it asked failed, nothing kept), its name and its Try again. */
+  const failedOf = (part: Part) => failed[part === 'past' || part === 'graves' ? 'dug' : part] ?? null;
+  const FAILED_NAMES: Partial<Record<Part, string>> = { moment: 'The moment', back: 'Jump back in', week: 'Sounds like your week', favTracks: 'Favourite tracks' };
+  const failedName = (part: Part) =>
+    part.startsWith(CRATE_PART) ? (kept.crates[part.slice(CRATE_PART.length)]?.name ?? 'A crate') : (FAILED_NAMES[part] ?? TITLES[part] ?? part);
+  function readAgain(part: Part) {
+    // Its line stays till the answer: gone with what it brings, or said again.
+    const key = part === 'past' || part === 'graves' ? 'dug' : part;
+    if (part.startsWith(CRATE_PART)) void readCrate(part.slice(CRATE_PART.length));
+    else if (key === 'newest') void readNewest();
+    else if (key === 'week') void readWeek();
+    else if (key === 'moment') void readMoment();
+    else if (key === 'back') backAgain++;
+    else if (key === 'dug') void readDug();
+    else if (key === 'favAlbums') void readFavAlbums();
+    else if (key === 'favTracks') void readFavTracks();
+  }
   /** Whether a section has what it needs to show (a crate's: its shelf read). */
   const settledOf = (part: Part) => (part.startsWith(CRATE_PART) ? part.slice(CRATE_PART.length) in crateShelves : settled[part]);
   const settled = $derived<Record<Part, boolean>>({
@@ -500,9 +546,14 @@
   {#if loading}<PageLoading />{/if}
   <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
   {#each order as part, i (part)}
-    {#if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
+    {#if failedOf(part) && turn(part)}{@render failedPart(part)}{:else if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
   {/each}
 </div>
+
+{#snippet failedPart(part: Part)}
+  <!-- Its answer failed, nothing kept: one line in its place, so a failed Home is never blank (the owner, 2026-11-02). -->
+  <section class="failed" aria-label={failedName(part)}><Notice text={`${failedName(part)}: ${failedOf(part)}`} onretry={() => readAgain(part)} /></section>
+{/snippet}
 
 {#snippet heroPart()}
   <!-- Its sky at once, its picture as soon as it is in; its words and albums after it (heroReady). Not under the page's
@@ -902,6 +953,10 @@
 
   .radio:disabled {
     opacity: 0.6;
+  }
+
+  .failed {
+    margin: 0 16px;
   }
 
   .shelf {
