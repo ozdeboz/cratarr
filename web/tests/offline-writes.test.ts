@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS } = await import('../src/lib/outbox.ts');
+const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS, ours, outlived, stamped, OTHERS_MS } = await import('../src/lib/outbox.ts');
 const { readChanges, favouriteOf } = await import('../src/lib/changeLog.ts');
 const { opsFor, applyOps } = await import('../src/lib/playlistOps.ts');
 
@@ -48,6 +48,48 @@ test('a list read back: only well-formed changes', () => {
 test('a week waiting is let go', () => {
   assert.equal(stale(op('a', 0), STALE_MS), false);
   assert.equal(stale(op('a', 0), STALE_MS + 1), true);
+});
+
+test("whose (0.13): only the account signed in's are sent; another's are kept, a month at most", () => {
+  const ann = { ...op('a', 0), account: 'ann' };
+  const bob = { ...op('b', 0), account: 'bob' };
+  const one = { ...op('c', 0), account: '' };
+  assert.equal(ours(ann, 'ann'), true);
+  assert.equal(ours(bob, 'ann'), false, 'not sent as ann');
+  assert.equal(outlived(bob, 'ann', OTHERS_MS), false, 'kept for bob');
+  assert.equal(outlived(bob, 'ann', OTHERS_MS + 1), true);
+  assert.equal(outlived(ann, 'ann', OTHERS_MS + 1), false, "one's own go by their own rule");
+  // Sign-in off is one user, apart from any account.
+  assert.equal(ours(one, ''), true);
+  assert.equal(ours(one, 'ann'), false);
+  // Not known yet: nothing is ours, none sent.
+  assert.equal(ours(ann, null), false);
+  assert.equal(ours(op('d', 0), null), false);
+  // A change carrying no account is no one's until stamped.
+  assert.equal(ours(op('d', 0), 'ann'), false);
+});
+
+test('whose (0.13): those carrying no account take the one known, the others keep theirs', () => {
+  const list = [op('a', 1), { ...op('b', 2), account: 'bob' }, { ...op('c', 3), account: '' }];
+  const s = stamped(list, 'ann');
+  assert.deepEqual(
+    s.map((x) => x.account),
+    ['ann', 'bob', ''],
+  );
+  assert.deepEqual(
+    s.map((x) => x.key),
+    ['a', 'b', 'c'],
+    'in the order made',
+  );
+  assert.equal(list[0].account, undefined, 'a copy');
+  // A play stamps alike.
+  assert.deepEqual(stamped([{ id: 'p', at: 5 }], '')[0], { id: 'p', at: 5, account: '' });
+});
+
+test('whose (0.13): a list read back keeps the account, and turns down one that is not a name', () => {
+  assert.deepEqual(opsFrom([{ ...op('a', 1), account: 'ann' }])[0].account, 'ann');
+  assert.deepEqual(opsFrom([{ ...op('a', 1), account: 7 }]), []);
+  assert.deepEqual(headersOf({ ...op('k', 5), account: 'ann' }), { 'Idempotency-Key': 'k', 'X-Cratarr-At': '5' }, 'the account is not sent');
 });
 
 test('the change log: ids per kind, kinds not asked passed over, pages added up', () => {
