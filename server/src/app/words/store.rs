@@ -596,7 +596,8 @@ mod tests {
         said_.push(said(Source::Lastfm, "jazzy", "tag", 0.2));
         let r = RecordIn { id: "r".into(), tracks: vec![track("a")], said: said_, ..RecordIn::default() };
         let lib = Library::of(std::slice::from_ref(&r), &HashMap::new());
-        let tags: Vec<&str> = kind(&record(&lib, &r), Kind::Tag).into_iter().map(|(w, _)| w).collect();
+        let words = record(&lib, &r);
+        let tags: Vec<&str> = kind(&words, Kind::Tag).into_iter().map(|(w, _)| w).collect();
         assert_eq!(tags, ["tag 0", "tag 1", "tag 2", "tag 3", "tag 4"]);
     }
 }

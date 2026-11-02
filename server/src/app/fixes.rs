@@ -365,7 +365,7 @@ fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'
     let mut out = Vec::new();
     for album in albums {
         let Some(found) = stored.records.get(album) else { continue };
-        let of = |kind: Kind| found.kinds.iter().filter(move |k| k.kind == kind).flat_map(|k| k.words.iter().map(move |w| (kind, w)));
+        let of = move |kind: Kind| found.kinds.iter().filter(move |k| k.kind == kind).flat_map(move |k| k.words.iter().map(move |w| (kind, w)));
         let Some((_, best)) = of(Kind::Genre).next() else { continue };
         let paths = track_paths(album)?;
         let said = |w: &super::words::store::Word| names(&w.sources.iter().map(|s| s.name().to_string()).collect::<Vec<_>>());

@@ -1563,6 +1563,7 @@ async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::Album
         tags,
         links,
         listeners: known.as_ref().and_then(|k| k.listeners),
+        words: None,
     };
     let rows = a
         .tracks
