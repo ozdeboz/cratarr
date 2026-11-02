@@ -1,14 +1,14 @@
 // One motion for the glass (the owner, 2026-11-01: the top glass stuttered, "a bottom up guarantee it will always
 // animate smoothly"). A glass part is a box that paints nothing itself: a `glass` layer in it (the blur and the colour),
 // a `shade` (the ring and the shadow) and its own children. Whatever changes in it (a child comes or goes, words, its
-// size), it is laid out once, at once, as it ends; then only transform, opacity and clip-path move, from the shape it
-// had to the one it has:
+// size), it is laid out once, at once, as it ends; then only opacity, translate and clip-path move (and the shade's
+// edges), from the shape it had to the one it has, each move's first frame its element's own style at once (`begin`):
 // - the glass: its clip-path from the old outline to the new (the layer drawn as large as both meanwhile);
-// - the shade: moved and stretched from the old to the new (transform);
+// - the shade: its edges from the old outline to the new (its own layout only, an empty layer: never stretched, so its
+//   round ends stay round);
 // - a child that stays: moved from where it was (translate); one that comes: faded in; one that goes: a copy of it
 //   where it was, faded out. Each is clipped to the glass's outline as it moves, so nothing shows past the glass.
-// Nothing animates a size or a place, so no step of it lays the page out again, and the browser's compositor runs what it
-// can while a page change keeps the page busy. A blur inside a clipped element sees only that element (a backdrop
+// Nothing in the page's flow animates a size or a place, so no step of it lays the page out again. A blur inside a clipped element sees only that element (a backdrop
 // root), so a child that is a glass of its own (the round back button) is never clipped by an ancestor here: each child
 // gets its own clip. A child hidden (display: none) goes as one removed: its copy shows as it was.
 import { decelerate, DECELERATE_CSS, reducedMotion } from './motion';
@@ -92,6 +92,34 @@ function offsetNow(el: Element): [number, number] {
   return [x, y ?? 0];
 }
 
+/** Each element's move under way, so a move that ends does not clear the start of the next; and each move's own
+ *  clearing, done at once when a move is taken over (before the next measures, which its start style would shift). */
+const moving = new WeakMap<Element, Animation>();
+const clearing = new WeakMap<Animation, () => void>();
+const stop = (a: Animation) => {
+  a.cancel();
+  clearing.get(a)?.();
+};
+const kebab = (k: string) => k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+/** A move from its first frame, that frame also set as the element's own style at once (the owner, 2026-11-02, on the
+ *  tablet: a busy page drew the frame the layout changed before the move's first frame, so the glass showed as large
+ *  as both outlines, a rectangle, and what it holds already at its new place, outside it). Taken off as the move ends. */
+function begin(el: HTMLElement, frames: Keyframe[], timing: KeyframeAnimationOptions): Animation {
+  const first = frames[0];
+  const props = Object.keys(first).filter((k) => k !== 'offset' && k !== 'easing' && k !== 'composite');
+  for (const k of props) el.style.setProperty(kebab(k), String(first[k as keyof Keyframe]));
+  const a = el.animate(frames, timing);
+  moving.set(el, a);
+  const clear = () => {
+    if (moving.get(el) !== a) return;
+    moving.delete(el);
+    for (const k of props) el.style.removeProperty(kebab(k));
+  };
+  clearing.set(a, clear);
+  a.finished.then(clear, clear);
+  return a;
+}
+
 function play(p: Part) {
   const from = shownNow(p);
   // Where each child that was there is seen now: its rest, moved by what it is still moving.
@@ -103,7 +131,7 @@ function play(p: Part) {
   }
   const glassWas = p.seen;
   const showed = p.shows;
-  for (const a of p.anims) a.cancel();
+  for (const a of p.anims) stop(a);
   p.anims = [];
   p.glass.style.inset = '';
   const after = measure(p);
@@ -138,7 +166,8 @@ function play(p: Part) {
   // grows out of it (the owner, 2026-11-01: the navigation glass faded instead of gliding to collapse).
   const seen = Math.max(glassWas, after.glass);
   p.glass.style.inset = grownTo(all, to);
-  const clock = p.glass.animate(
+  const clock = begin(
+    p.glass,
     [
       { clipPath: insetOf(from, all, r), opacity: seen },
       { clipPath: insetOf(to, all, r), opacity: seen },
@@ -146,19 +175,20 @@ function play(p: Part) {
     timing,
   );
   p.anims.push(clock);
-  if (p.shade) {
-    const sx = from.w / Math.max(1, to.w);
-    const sy = from.h / Math.max(1, to.h);
+  // Its ring and shadow: its edges moved from the old outline to the new, never stretched (the owner, 2026-11-02: a
+  // scale squashed its round ends into an oval, and its ring showed as a second, misplaced outline). An empty layer
+  // laid out alone, so a cheap move; and on the same clock as the glass's outline, never ahead of it.
+  if (p.shade)
     p.anims.push(
-      p.shade.animate(
+      begin(
+        p.shade,
         [
-          { transformOrigin: '0 0', transform: `translate(${from.x - to.x}px, ${from.y - to.y}px) scale(${sx}, ${sy})`, opacity: seen },
-          { transformOrigin: '0 0', transform: 'none', opacity: seen },
+          { inset: grownTo(from, to), opacity: seen },
+          { inset: '0px', opacity: seen },
         ],
         timing,
       ),
     );
-  }
   // A child that comes or goes where its neighbour that stays passes over it (the one before it, else after it) moves
   // with that neighbour: the field comes in with the magnifier it opens from, and goes with it, rather than lying still
   // as the magnifier slides over it (the owner, 2026-11-02: the lens came apart from its glass). One the neighbour does
@@ -191,7 +221,7 @@ function play(p: Part) {
         { opacity: 1, translate: '0px 0px', clipPath: insetOf(to, k1, r) },
       ];
     }
-    p.anims.push(el.animate(frames, timing));
+    p.anims.push(begin(el as HTMLElement, frames, timing));
   }
   // What went: a copy where it was, fading as the glass leaves it, moving with its neighbour.
   for (const [el, k0] of was) {
@@ -214,7 +244,8 @@ function play(p: Part) {
       pointerEvents: 'none',
     });
     p.box.append(ghost);
-    const a = ghost.animate(
+    const a = begin(
+      ghost,
       [
         { opacity: 1, translate: '0px 0px', clipPath: insetOf(from, k0, r) },
         { opacity: 0, translate: `${move[0]}px ${move[1]}px`, clipPath: insetOf(to, shifted(k0, move), r) },
@@ -287,7 +318,7 @@ export function glassPart({ radius, still = () => false }: { radius: number; sti
       changes.disconnect();
       sized.disconnect();
       cancelAnimationFrame(asked);
-      for (const a of p.anims) a.cancel();
+      for (const a of p.anims) stop(a);
     };
   };
 }

@@ -2295,7 +2295,11 @@ impl PlaylistService {
         });
         let needed_albums = all.iter().any(|(_, c)| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
         let lib = self.crate_library(want, needed, needed_albums, without).await?;
-        let count = |conditions: Vec<crates::Condition>| lib.knows(&conditions).then(|| lib.select(&conditions).len());
+        // Home's crates show what Home showed, of every library whatever is switched off (the owner, 2026-10-24), as their
+        // panel does: counted so too (2026-11-02: New for you's card said 0 tracks with Incoming switched off).
+        let every = if without.is_empty() { None } else { Some(self.crate_library(want, needed, needed_albums, &[]).await?) };
+        let lib_of = |id: &str| if crates::home_crate(id) { every.as_ref().unwrap_or(&lib) } else { &lib };
+        let count = |lib: &CrateLibrary, conditions: Vec<crates::Condition>| lib.knows(&conditions).then(|| lib.select(&conditions).len());
         // The cards' facts: the songs of every folder by their lines, and what the account asking has played.
         let songs_played = match self.served.clone() {
             Some(serve) => {
@@ -2311,7 +2315,7 @@ impl PlaylistService {
             None => (HashMap::new(), None),
         };
         let (songs, played) = songs_played;
-        let facts: HashMap<&str, &crates::Facts> = lib.files.iter().map(|f| (f.rel.as_str(), f)).collect();
+        let facts: HashMap<&str, &crates::Facts> = lib.files.iter().chain(every.iter().flat_map(|e| e.files.iter())).map(|f| (f.rel.as_str(), f)).collect();
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         let images = self.crate_images();
         Ok(all
@@ -2322,10 +2326,11 @@ impl PlaylistService {
                 let left = left_of(&c.id);
                 let gone = left_lines(left, &album_tracks, &excluded);
                 let shown = crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites, favourite_albums)));
+                let lib = lib_of(&c.id);
                 let stats = lib.knows(&shown).then(|| crate_stats(&lib.select(&shown), &facts, &songs, played.as_ref(), now));
                 // Per setting of the favourites toggle, the albums toggle as it is set and the left-out list.
                 let counted = |tracks: crates::Favourites| {
-                    count(crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, tracks, favourite_albums))))
+                    count(lib, crates::leaving_out_artists(&artists, &crates::leaving_out(&gone, &crates::shown(&c.conditions, tracks, favourite_albums))))
                 };
                 CrateView {
                     counts: CrateCounts {

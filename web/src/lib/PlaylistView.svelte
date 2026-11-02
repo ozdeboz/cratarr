@@ -383,6 +383,18 @@
     void undos.n;
     void listsKey;
     void incomingChanged;
+    // A new playlist: nothing yet, not the list shown before (the owner, 2026-11-02: its header said the last one's
+    // tracks, length and genres).
+    if (want === NEW_PLAYLIST && shownFor !== want) {
+      shownFor = want;
+      rows = [];
+      total = 0;
+      error = null;
+      albumHead = null;
+      filesState = null;
+      artistHead = null;
+      listGenres = null;
+    }
     if (!want || multi || builderOf(want) || want === NEW_PLAYLIST) return;
     const c = crateOf(want);
     const a = albumOf(want);
@@ -1101,6 +1113,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // Under the cover, as Symfonium's: the name large, then one line of what it is (an album: its length, year, format
   // and bitrate; a playlist or a crate: how many tracks, and the length), and the genres.
   const details = $derived.by(() => {
+    if (creating) return '';
     if (crateEditing) return crateTotal === null ? '' : plural(crateTotal, 'track');
     if (crate && preview !== null) return plural(preview, 'track');
     if (crate) return rows ? plural(total, 'track') : '';
@@ -1737,7 +1750,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     sel?.addRange(range);
   }
   // A new playlist: the caret in its name at once, as a tap on the name puts it there. A new crate's goes to its sentence
-  // (0.13, lib/CrateEditor: "Grab a crate" and an example), which names it.
+  // (0.13, lib/CrateEditor: an example in its field), which names it.
   let named = '';
   $effect(() => {
     const key = creating ? 'playlist' : '';

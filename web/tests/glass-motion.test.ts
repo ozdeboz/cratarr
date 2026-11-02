@@ -67,13 +67,18 @@ test('the glass parts take no Svelte transition that sizes them, and their motio
   const app = read('App.svelte');
   assert.match(app, /class="bar"[^>]*glassPart\(/, 'the bar is a glass part');
   assert.ok(!/class="more-tabs"[\s\S]{0,200}transition:slide/.test(app), "More's tabs slide a size");
-  // lib/glassMotion's keyframes: clip-path, opacity, transform and translate only.
+  // lib/glassMotion's keyframes: clip-path, opacity and translate, and the shade's own edges (`inset`, an empty layer
+  // laid out alone: stretched by a scale its round ends went oval, the owner 2026-11-02).
   const motion = read('lib/glassMotion.ts');
-  const animated = [...motion.matchAll(/\.animate\(\s*\[([\s\S]*?)\],/g), ...motion.matchAll(/\bframes = ([\s\S]*?\]);\r?\n/g)];
+  const animated = [
+    ...motion.matchAll(/\.animate\(\s*\[([\s\S]*?)\],/g),
+    ...motion.matchAll(/\bbegin\(\s*[\w.]+,\s*\[([\s\S]*?)\],/g),
+    ...motion.matchAll(/\bframes = ([\s\S]*?\]);\r?\n/g),
+  ];
   assert.ok(animated.length >= 4, 'its moves found');
   for (const frames of animated) {
     for (const k of frames[1].matchAll(/([a-zA-Z]+):/g)) {
-      assert.ok(['clipPath', 'opacity', 'translate', 'transform', 'transformOrigin'].includes(k[1]), `glassMotion animates ${k[1]}`);
+      assert.ok(['clipPath', 'opacity', 'translate', 'inset'].includes(k[1]), `glassMotion animates ${k[1]}`);
     }
   }
 });

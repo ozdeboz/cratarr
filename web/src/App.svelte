@@ -624,7 +624,6 @@
   let rightEl = $state<HTMLElement>();
   const leadHas = $derived(!!handed || navAt > 0 || backHome || (!!panelPage && phone) || page === 'library');
   /** The same for the page shown (its room at the top, above). */
-  const shownLeadHas = $derived(!!handed || navAt > 0 || shownPage !== 'home' || (!!panelPage && phone));
   const rightHas = $derived(!!(pillNow || handed?.extra));
   let had = { lead: false, right: false };
   // Before the page changes, while the glass still shows what it held.
@@ -716,9 +715,10 @@
     root.setProperty('--bar-room-b', navBottom ? `${topBar}px` : '0px');
     root.setProperty('--bottom-h', `${down + (navBottom ? topBar : 0)}px`);
     root.setProperty('--bottom-now', `${down + (navBottom ? shown : 0)}px`);
-    // No room kept above the page where the left glass is empty (the owner, 2026-10-27): the page starts at the top, the
-    // pill floating over its right.
-    root.setProperty('--glass-top', (phone && leadBottom && rightBottom) || !shownLeadHas ? '0px' : 'var(--glass-room)');
+    // The room above the page wherever a glass floats over its top, the left one empty (Home) too: no words in the band
+    // the glasses float in (the owner, 2026-11-02: a long name ran into the pill; this reverses 2026-10-27's "no room
+    // where the left glass is empty"). What is a backdrop (Home's sky) still goes up behind them.
+    root.setProperty('--glass-top', phone && leadBottom && rightBottom ? '0px' : 'var(--glass-room)');
     root.setProperty('--glass-bottom', leadBottom || rightBottom ? 'var(--glass-room)' : '0px');
   });
   // The playing cover's colour, for the floating controls' surface (app.css --float-bg): the mini-player's. Unless the
@@ -1043,8 +1043,11 @@
           <span class="logo"><Mark /></span>
           <span class="name">Cratarr</span>
         </div>
+        <!-- Its line's room kept until the server answers, so the pages under it do not move (the owner, 2026-11-02). -->
         {#if connection}
           <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
+        {:else}
+          <span class="conn" aria-hidden="true"><span class="label">&nbsp;</span></span>
         {/if}
       {/if}
 
@@ -1081,7 +1084,7 @@
         {#each APART as p (p.id)}
           <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
         {/each}
-        {#if status}<div class="version">Cratarr {status.version}</div>{/if}
+        {#if status}<div class="version">Cratarr {status.version}</div>{:else}<div class="version" aria-hidden="true">&nbsp;</div>{/if}
       </div>
     </aside>
     <button
@@ -1457,6 +1460,12 @@
     justify-content: flex-end;
     gap: 8px;
     min-width: 0;
+  }
+
+  /* The open search gives before back does (the owner, 2026-11-02: the growing field pushed back aside): its field
+     shrinks to keep back's place, its buttons never. */
+  .page-row .right:has(:global(.field)) {
+    flex-shrink: 1;
   }
 
   /* The open search grown to meet back (lib/ContentControls): the right side takes the row's room. */
