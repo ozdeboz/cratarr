@@ -336,10 +336,6 @@
   $effect(() => {
     document.documentElement.style.overflow = overlay || playlistLayer ? 'hidden' : '';
   });
-  // Whose last copies the service worker keeps (public/sw.js): another account signing in, the last one's go.
-  $effect(() => {
-    if (me.name) navigator.serviceWorker?.controller?.postMessage({ type: 'account', name: me.name });
-  });
   // One's own header picture (Settings › Appearance) behind every flow (the owner, 2026-10-26): one variable for the
   // page, each flow's canvas drawing it under a veil (--flow-photo; none without one). Only once it is in: until then
   // (and should it not come) the flows stand on the page's own ground, never a grey veil (the owner, 2026-10-27).

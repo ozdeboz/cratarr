@@ -2,7 +2,10 @@
 // store in 0.12, moved into the Rust core's with step 4 in 0.13). It follows what the app (its Downloads, over the
 // bridge) and an installed page (lib/offline) hold, and fills each album's details and a small cover in whenever Cratarr
 // answers, one album at a time, quietly; Downloads reads it first, so it works with no network. The rules are lib/shelf.
+// Each account's apart (decision 0101: `cratarr-shelf@name`), as its downloads are: another one signing in, its own
+// shelf is read, and a place's list is followed only while it is the same account's.
 import { untrack } from 'svelte';
+import { accountKey, whenAccount, whoOf } from './account';
 import { albumCoverUrl, albumView, ApiError } from './api';
 import { downloads, inApp } from './app.svelte';
 import { installed, offline } from './offline.svelte';
@@ -13,8 +16,9 @@ const DB = 'cratarr-shelf';
 const TRACKS = 'tracks';
 const COVERS = 'covers';
 
-/** What the shelf holds: its records by key, and its covers as addresses to show (`source/album` → object URL). */
-export const shelf = $state({ tracks: {} as Record<string, ShelfTrack>, covers: {} as Record<string, string>, ready: false });
+/** What the shelf holds: its records by key, and its covers as addresses to show (`source/album` → object URL);
+ *  `who`: whose shelf it is (lib/account's whoOf). */
+export const shelf = $state({ tracks: {} as Record<string, ShelfTrack>, covers: {} as Record<string, string>, ready: false, who: whoOf(accountKey()) });
 
 /** The shelf's cover for an album where it has one (works with no network), else null. */
 export const shelfCover = (source: string, album: string | null | undefined) => (album ? (shelf.covers[coverKey(source, album)] ?? null) : null);
@@ -24,7 +28,7 @@ function open(): Promise<IDBDatabase | null> {
   db ??= new Promise((resolve) => {
     if (typeof indexedDB === 'undefined') return resolve(null);
     try {
-      const req = indexedDB.open(DB, 1);
+      const req = indexedDB.open(DB + shelf.who, 1);
       req.onupgradeneeded = () => {
         const d = req.result;
         if (!d.objectStoreNames.contains(TRACKS)) d.createObjectStore(TRACKS, { keyPath: 'key' });
@@ -176,27 +180,47 @@ const heldOfApp = (): Held[] => downloads.tracks.map(({ source, id, name, artist
 const heldOfBrowser = (): Held[] =>
   Object.values(offline.kept).map(({ source, id, name, artist, album, album_id, duration_secs }) => ({ source, id, name, artist, album, album_id, duration_secs }));
 
+/** The account signed in's shelf read in, the one before's let go (kept in its own store). */
+async function load() {
+  const who = whoOf(accountKey());
+  shelf.ready = false;
+  if (db && who !== shelf.who) {
+    (await db)?.close();
+    db = null;
+  }
+  shelf.who = who;
+  for (const url of Object.values(shelf.covers)) URL.revokeObjectURL(url);
+  shelf.tracks = {};
+  shelf.covers = {};
+  const [tracks, covers] = await Promise.all([all<ShelfTrack>(TRACKS), all<CoverRow>(COVERS)]);
+  if (shelf.who !== who) return;
+  for (const r of tracks) shelf.tracks[r.key] = r;
+  for (const c of covers) shelf.covers[c.key] = URL.createObjectURL(c.blob);
+  shelf.ready = true;
+  void fill();
+}
+
 if (typeof window !== 'undefined' && (inApp || installed)) {
   void (async () => {
-    const [tracks, covers] = await Promise.all([all<ShelfTrack>(TRACKS), all<CoverRow>(COVERS)]);
-    for (const r of tracks) shelf.tracks[r.key] = r;
-    for (const c of covers) shelf.covers[c.key] = URL.createObjectURL(c.blob);
-    shelf.ready = true;
-    // What each place holds, followed as it changes (the app tells its downloads again at every change).
+    await load();
+    // What each place holds, followed as it changes (the app tells its downloads again at every change), while it is
+    // the same account's as the shelf.
     $effect.root(() => {
       // Only what the place holds is followed; the shelf's own records are read untracked (writing them is no change).
       $effect(() => {
-        if (!inApp || !downloads.known) return;
+        if (!inApp || !downloads.known || !shelf.ready || downloads.who !== shelf.who) return;
         const held = heldOfApp();
         untrack(() => void follow('app', held));
       });
       $effect(() => {
-        if (!installed || inApp) return;
+        if (!installed || inApp || !shelf.ready || offline.who !== shelf.who) return;
         const held = heldOfBrowser();
         untrack(() => void follow('browser', held));
       });
     });
     whenReached.add(() => void fill());
-    void fill();
+    whenAccount.add(() => {
+      if (whoOf(accountKey()) !== shelf.who) void load();
+    });
   })();
 }

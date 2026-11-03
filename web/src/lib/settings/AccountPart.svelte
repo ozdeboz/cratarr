@@ -6,8 +6,11 @@
   // Their Spotify (decision 0073; the owner, 2026-10-27: each connects here): a row opening its own page
   // (`thing`: `spotify`, lib/settings/SpotifyPart).
   import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
-  import { accountForgotten } from '../account';
+  import { downloads, inApp } from '../app.svelte';
+  import MenuEntry from '../MenuEntry.svelte';
+  import MenuSheet from '../MenuSheet.svelte';
   import { loadMe, me } from '../me.svelte';
+  import { signOut } from '../signOut.svelte';
   import { toast } from '../toast.svelte';
   import FormSheet from './FormSheet.svelte';
   import Group from './Group.svelte';
@@ -26,9 +29,12 @@
   );
 
   // This device's own Sign out, with who is signed in (the owner, 2026-10-29: where one looks for it): only where the
-  // page came with a sign-in of its own (an API key's or the app's address alone has none to end).
+  // page came with a sign-in of its own (an API key's or the app's address alone has none to end). With downloads of
+  // the account here, a sheet first: they stay hidden for its next sign-in, or go (decision 0101; lib/signOut).
   let signOutForm = $state<HTMLFormElement | null>(null);
   const signedInHere = $derived(!!me.sessions?.some((s) => s.current));
+  let signingOut = $state(false);
+  const out = (remove: boolean) => signOutForm && void signOut(signOutForm, remove);
 
   let setting = $state(false);
   async function savePassword(password: string) {
@@ -96,7 +102,7 @@
       onclick={() => (setting = true)}
     />
   {/if}
-  {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => (accountForgotten(), signOutForm?.requestSubmit())} />{/if}
+  {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => (inApp && downloads.any ? (signingOut = true) : out(false))} />{/if}
 </Group>
 
 <Group>
@@ -126,6 +132,14 @@
 <!-- Signing out clears this browser's cookie too. After the cards, never between two (the owner, 2026-11-02: the
      cards stuck together, lib/settings/Group's space being one card's after another's). -->
 <form method="post" action="/signout" bind:this={signOutForm} hidden></form>
+
+{#if signingOut}
+  <MenuSheet label="Sign out" icon="user" title="Sign out?" onclose={() => (signingOut = false)}>
+    <MenuEntry icon="user" label="Sign out" onclick={() => ((signingOut = false), out(false))} />
+    <MenuEntry icon="trash" label="Remove this account's downloads" danger onclick={() => ((signingOut = false), out(true))} />
+    <MenuEntry icon="close" label="Cancel" onclick={() => (signingOut = false)} />
+  </MenuSheet>
+{/if}
 
 {/if}
 

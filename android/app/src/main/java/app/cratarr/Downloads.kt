@@ -175,7 +175,7 @@ object Downloads {
             }
         }
         val tracks = JSONArray(found.sortedBy { it.optLong("added") })
-        return JSONObject().put("type", "downloads").put("tracks", tracks).put("bytes", bytes)
+        return JSONObject().put("type", "downloads").put("tracks", tracks).put("bytes", bytes).put("who", Who.current(context))
     }
 
     /** A track's item, its file from the store when it was downloaded whole, else from Cratarr (`server`): kept ahead

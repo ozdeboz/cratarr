@@ -1,5 +1,6 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
+import { perAccount } from './account';
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
 import { noteChange } from './lastChange.svelte';
 import { port } from './player/port.svelte';
@@ -168,7 +169,8 @@ export type CrateDraft = {
   sentence?: { chips: import('./quickCrate').Chip[]; min: number; modes: import('./quickCrate').Modes };
   words?: string;
 };
-const draftKey = (id: string | null) => `cratarr-crate-draft:${id ?? 'new'}`;
+/** Each account's own (decision 0101), hidden while another is signed in. */
+const draftKey = (id: string | null) => `${perAccount('cratarr-crate-draft')}:${id ?? 'new'}`;
 export function keptDraft(id: string | null): CrateDraft | null {
   try {
     const kept = JSON.parse(localStorage.getItem(draftKey(id)) ?? 'null');
@@ -273,7 +275,7 @@ export const seeded = (crate: string | null) => wordOf(crate) !== null || likeOf
  *  genre's own, from the genre's view). */
 export function startCrate(name: string, conditions: Condition[] = [], more: Omit<CrateDraft, 'name' | 'conditions'> = {}) {
   try {
-    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions, ...more }));
+    localStorage.setItem(draftKey(null), JSON.stringify({ name, conditions, ...more }));
   } catch {
     /* the builder starts empty */
   }

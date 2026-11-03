@@ -338,10 +338,11 @@ object Kept {
         onChange?.invoke()
     }
 
-    /** The libraries switched off in this device's page settings (`hiddenLibraries`, `source/library` keys). */
+    /** The libraries the account signed in switched off, in its page settings here (`hiddenLibraries`, `source/library`
+     *  keys; the person's own, decision 0101). */
     private fun librariesOff(app: Context): JSONArray =
         try {
-            JSONObject(Prefs(app).pagePrefs ?: "{}").optJSONArray("hiddenLibraries") ?: JSONArray()
+            JSONObject(Prefs(app).pagePrefsOf(Who.current(app)) ?: "{}").optJSONArray("hiddenLibraries") ?: JSONArray()
         } catch (e: org.json.JSONException) {
             JSONArray()
         }

@@ -89,12 +89,20 @@ class Prefs(context: Context) {
             p.edit().putString(SESSION_MARK, value).apply()
         }
 
-    /** The page's own settings (its `cratarr-prefs`), kept here so both addresses' pages share them. */
+    /** The page's own settings (its `cratarr-prefs`), kept here so both addresses' pages share them: the device's. */
     var pagePrefs: String?
         get() = p.getString(PAGE_PREFS, null)
         set(value) {
             p.edit().putString(PAGE_PREFS, value).apply()
         }
+
+    /** The person's own of them (decision 0101: pinned items, libraries switched off, filters…), each account's
+     *  ([Who]'s key) apart, as its `cratarr-prefs<who>`. */
+    fun pagePrefsOf(who: String): String? = p.getString(PAGE_PREFS + who, null)
+
+    fun keepPagePrefsOf(who: String, value: String) {
+        p.edit().putString(PAGE_PREFS + who, value).apply()
+    }
 
     /** The origins of the two addresses: the pages that stay in the app and may talk to it. */
     fun origins(): Set<String> = listOfNotNull(localAddress, publicAddress).mapNotNull(::originOf).toSet()

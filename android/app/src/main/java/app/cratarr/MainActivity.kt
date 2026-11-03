@@ -336,6 +336,7 @@ class MainActivity : AppCompatActivity() {
             tellDownloads(now = true)
             tellKept(now = true)
             Kept.sync(this)
+            webView?.let(::keepPagePrefs)
         }
     }
 
@@ -592,9 +593,14 @@ class MainActivity : AppCompatActivity() {
                 )
                 Reach.checkSoon(this@MainActivity)
             }
-            "page-prefs" -> message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }?.let {
-                prefs.pagePrefs = it
-                webView?.let(::keepPagePrefs)
+            // The device's settings, and the person's own under whose they are (decision 0101).
+            "page-prefs" -> {
+                val device = message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }
+                val who = message.optString("who")
+                val mine = message.optString("mine").takeIf { it.isNotEmpty() && who.isNotEmpty() && it != prefs.pagePrefsOf(who) }
+                device?.let { prefs.pagePrefs = it }
+                mine?.let { prefs.keepPagePrefsOf(who, it) }
+                if (device != null || mine != null) webView?.let(::keepPagePrefs)
             }
             "device-set" -> {
                 message.optString("player").trim().takeIf { it.isNotEmpty() }?.let { prefs.playerName = it }
@@ -891,14 +897,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address. */
+    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address:
+     *  the device's, and the person's own of the one signed in now (decision 0101). */
     private fun keepPagePrefs(view: WebView) {
         pageScript?.remove()
         pageScript = null
         val saved = prefs.pagePrefs ?: return
+        val who = Who.current(this)
+        val mine = prefs.pagePrefsOf(who)?.let { "localStorage.setItem(${JSONObject.quote("cratarr-prefs$who")}, ${JSONObject.quote(it)});" }.orEmpty()
         val origins = prefs.origins()
         if (origins.isEmpty() || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-        pageScript = WebViewCompat.addDocumentStartJavaScript(view, "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}", origins)
+        pageScript = WebViewCompat.addDocumentStartJavaScript(view, "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}); $mine } catch (e) {}", origins)
     }
 
     /** Cratarr's address, asked for: kept where Cratarr answers ([Reach.find]); else asked again, [refused] named. */
