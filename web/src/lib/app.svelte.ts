@@ -213,7 +213,8 @@ if (port) {
       appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;
       appInfo.ordered = m.ordered === true;
       appInfo.known = Array.isArray(m.known) ? (m.known as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
-      appInfo.mode = m.mode === 'device' ? 'device' : 'cratarr';
+      // Cratarr's, Local or a server's (`server:<id>`, decision 0098); anything else is Cratarr's.
+      appInfo.mode = m.mode === 'device' || (typeof m.mode === 'string' && m.mode.startsWith('server:')) ? m.mode : 'cratarr';
       // A Start and stop ramp turned round at a press mid-way (0.9.15): its play button live through it.
       appInfo.turnsRound = m.turnsRound === true;
       if (typeof m.target === 'string') appInfo.target = m.target;
