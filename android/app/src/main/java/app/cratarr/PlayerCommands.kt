@@ -29,7 +29,7 @@ class PlayerCommands(
     fun run(m: JSONObject, from: From): Boolean {
         val command = m.optString("command")
         val p = player
-        val local = prefs.mode == Prefs.MODE_DEVICE
+        val local = prefs.ownQueue
         // Local mode (decision 0052), from Cratarr: steered from outside, its queue not edited (Cratarr refuses such
         // commands; one from a moment before is let go). A play is Cratarr's music again; a stop pauses, so that queue
         // stays. The page's own player edits local mode's queue as ever: its tracks of the other mode are left out, and
@@ -271,7 +271,7 @@ class PlayerCommands(
         val mode = prefs.mode
         Repeat.newPlay(service, p)
         prefs.shuffled = m.optBoolean("shuffle")
-        if (mode != Prefs.MODE_DEVICE) {
+        if (mode == Prefs.MODE_CRATARR) {
             Autoplay.newPlay(service, m.optJSONArray("tracks"))
             prefs.newQueue(m.optString("name"))
         }
@@ -304,7 +304,7 @@ class PlayerCommands(
             val out = JSONArray()
             for (i in 0 until (tracks?.length() ?: 0)) {
                 val t = tracks?.optJSONObject(i) ?: continue
-                if ((t.optString("source") == DeviceMusic.SOURCE) == (mode == Prefs.MODE_DEVICE)) out.put(t)
+                if (Prefs.modeOfSource(t.optString("source")) == mode) out.put(t)
             }
             return out
         }

@@ -362,6 +362,7 @@ class MainActivity : AppCompatActivity() {
             onError = { cannotReach(url, it) },
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
+            serverCover = { server, cover, size -> Servers.cover(app, server, cover, size) },
             // One sign-in for both addresses (0.12, the owner 2026-10-30): the session a page loaded with goes to the
             // other address too; a sign-in page with the other's session at hand takes it and loads again.
             onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },

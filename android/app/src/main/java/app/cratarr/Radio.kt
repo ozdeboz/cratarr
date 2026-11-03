@@ -147,7 +147,7 @@ object Radio {
      *  they are there already (a seek, a replay, a report). Called on the main thread. */
     fun insert(context: Context, player: Player, server: String?, locate: (MediaItem) -> MediaItem) {
         // Not for the device's own music (decision 0052).
-        if (!on(context) || Prefs(context).mode == Prefs.MODE_DEVICE) return
+        if (!on(context) || Prefs(context).ownQueue) return
         val c = player.currentMediaItemIndex
         val count = player.mediaItemCount
         if (c < 0 || c >= count) return
@@ -257,7 +257,7 @@ object Autoplay {
      *  thread. */
     fun fill(context: Context, player: Player, server: String?, locate: (MediaItem) -> MediaItem) {
         val a = get(context) ?: return
-        if (Prefs(context).mode == Prefs.MODE_DEVICE) return
+        if (Prefs(context).ownQueue) return
         val count = player.mediaItemCount
         val c = player.currentMediaItemIndex
         if (filling || count == 0 || count - c - 1 >= LOW) return

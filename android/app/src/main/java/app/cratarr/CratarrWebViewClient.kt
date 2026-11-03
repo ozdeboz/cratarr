@@ -7,6 +7,7 @@ package app.cratarr
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
 import android.net.http.SslError
 import android.util.Log
 import android.webkit.RenderProcessGoneDetail
@@ -28,11 +29,14 @@ class CratarrWebViewClient(
     private val onGone: () -> Unit,
     /** An album's cover of the device's own music, as JPEG (null: none); asked for off the main thread. */
     private val deviceCover: (String) -> ByteArray?,
+    /** A server's cover (decision 0098): its server's id, its cover's, the size; its type and bytes, null for none. */
+    private val serverCover: (String, String, Int) -> Pair<String, ByteArray>? = { _, _, _ -> null },
     /** A page of Cratarr's finished loading (its URL): the session follows it ([Sessions.loaded]). */
     private val onLoaded: (WebView, String) -> Unit = { _, _ -> },
 ) : WebViewClientCompat() {
 
-    /** Local mode's covers (decision 0052): `/__device/cover/{album_id}` on Cratarr's pages, from Android; the page's
+    /** Local mode's covers (decision 0052): `/__device/cover/{album_id}` on Cratarr's pages, from Android; a server's
+     *  (decision 0098) `/__server/cover/{server}/{cover}?size=`, fetched by the app with the sign-in it keeps; the page's
      *  own files from the app's copy of it ([BundledPage]). */
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         val url = request.url
@@ -41,6 +45,12 @@ class CratarrWebViewClient(
         // ends once it has loaded (0.12: one sign-in for both addresses, the owner 2026-10-30). Not cleared here: the
         // request still carries the session, so Cratarr ends it.
         if (request.isForMainFrame && url.path == Sessions.SIGN_OUT) Sessions.signOutAsked()
+        url.path?.takeIf { it.startsWith(SERVER_COVER) }?.removePrefix(SERVER_COVER)?.let { rest ->
+            val parts = rest.split('/', limit = 2)
+            val got = if (parts.size == 2) serverCover(Uri.decode(parts[0]), Uri.decode(parts[1]), url.getQueryParameter("size")?.toIntOrNull() ?: 600) else null
+            return got?.let { (type, bytes) -> WebResourceResponse(type, null, 200, "OK", mapOf("Cache-Control" to "max-age=86400"), ByteArrayInputStream(bytes)) }
+                ?: WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
+        }
         val album = url.path?.takeIf { it.startsWith(DEVICE_COVER) }?.removePrefix(DEVICE_COVER)
             ?: return BundledPage.answer(view.context, request.method, url)
         val jpeg = deviceCover(album) ?: return WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
@@ -101,5 +111,6 @@ class CratarrWebViewClient(
     private companion object {
         const val TAG = "CratarrWeb"
         const val DEVICE_COVER = "/__device/cover/"
+        const val SERVER_COVER = "/__server/cover/"
     }
 }

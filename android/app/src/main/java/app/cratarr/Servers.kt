@@ -8,16 +8,20 @@
 package app.cratarr
 
 import android.content.Context
+import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
+import androidx.media3.common.MediaItem
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.KeyStore
+import java.security.MessageDigest
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -52,19 +56,25 @@ object Servers {
      *  the order they were added. None where they cannot be read (the keystore's key gone with a reset of the device's
      *  lock): they are signed in to again. */
     fun all(context: Context): JSONArray {
+        cached?.let { return JSONArray(it.toString()) }
         val kept = Prefs.shared(context).getString(STORE, null) ?: return JSONArray()
         return try {
             val raw = Base64.decode(kept, Base64.NO_WRAP)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, raw, 0, 12))
-            JSONArray(String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8))
+            JSONArray(String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)).also { cached = JSONArray(it.toString()) }
         } catch (e: Exception) {
             Log.w(TAG, "the kept servers cannot be read: ${e.javaClass.simpleName}")
             JSONArray()
         }
     }
 
+    /** The list as last read or written, so the player's every track does not decrypt it again. */
+    @Volatile
+    private var cached: JSONArray? = null
+
     private fun write(context: Context, list: JSONArray) {
+        cached = JSONArray(list.toString())
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
         val out = cipher.iv + cipher.doFinal(list.toString().toByteArray(Charsets.UTF_8))
@@ -143,6 +153,63 @@ object Servers {
             out.put("status", status).put("headers", headers).put("body", String(bytes, Charsets.UTF_8))
         } catch (e: Exception) {
             out.put("error", e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    /** The server a source names (`server:<id>`), as kept. */
+    private fun ofSource(context: Context, source: String): JSONObject? =
+        if (source.startsWith(MODE_PREFIX)) find(context, source.removePrefix(MODE_PREFIX)) else null
+
+    /** Subsonic's sign-in for one request: the API key, or the user with a salted token of the password. */
+    private fun subsonicAuth(s: JSONObject): String {
+        if (s.optBoolean("apiKey")) return "apiKey=${Uri.encode(s.optString("secret"))}"
+        val salt = ByteArray(8).also(SecureRandom()::nextBytes).joinToString("") { "%02x".format(it) }
+        val token = MessageDigest.getInstance("MD5").digest((s.optString("secret") + salt).toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        return "u=${Uri.encode(s.optString("user"))}&t=$token&s=$salt"
+    }
+
+    private fun base(s: JSONObject) = s.optString("url").trimEnd('/')
+
+    /** Where the player streams a track from: the file as it is, with the sign-in in it (never shown, never logged). */
+    fun streamUrl(s: JSONObject, track: String): String = when (s.optString("kind")) {
+        "jellyfin" -> "${base(s)}/Audio/${Uri.encode(track)}/stream?static=true&api_key=${Uri.encode(s.optString("secret"))}&DeviceId=cratarr-${Uri.encode(s.optString("id"))}"
+        else -> "${base(s)}/rest/stream.view?id=${Uri.encode(track)}&v=1.16.1&c=Cratarr&${subsonicAuth(s)}"
+    }
+
+    /** A cover, square at `size`. */
+    fun coverUrl(s: JSONObject, cover: String, size: Int): String = when (s.optString("kind")) {
+        "jellyfin" -> "${base(s)}/Items/${Uri.encode(cover)}/Images/Primary?fillWidth=$size&fillHeight=$size&quality=90&api_key=${Uri.encode(s.optString("secret"))}"
+        else -> "${base(s)}/rest/getCoverArt.view?id=${Uri.encode(cover)}&size=$size&v=1.16.1&c=Cratarr&${subsonicAuth(s)}"
+    }
+
+    /** A server's track with its stream and its album's cover; null for any other. */
+    fun located(context: Context, item: MediaItem): MediaItem? {
+        val slash = item.mediaId.indexOf('/')
+        if (slash < 0) return null
+        val source = Uri.decode(item.mediaId.substring(0, slash))
+        val s = ofSource(context, source) ?: return null
+        val id = Uri.decode(item.mediaId.substring(slash + 1))
+        val album = trackOf(item)?.optString("album_id")?.takeIf { it.isNotEmpty() && it != "null" }
+        val b = item.buildUpon().setUri(streamUrl(s, id))
+        album?.let { b.setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(Uri.parse(coverUrl(s, it, 600))).build()) }
+        return b.build()
+    }
+
+    /** `/__server/cover/{server}/{cover}?size=`: the picture and its type, fetched here with the kept sign-in; null
+     *  where the server is not signed in to or has none. Off the main thread. */
+    fun cover(context: Context, server: String, cover: String, size: Int): Pair<String, ByteArray>? {
+        val s = find(context, server) ?: return null
+        return try {
+            val c = URL(coverUrl(s, cover, size.coerceIn(32, 1200))).openConnection() as HttpURLConnection
+            c.connectTimeout = 10_000
+            c.readTimeout = 20_000
+            if (c.responseCode !in 200..299) return null.also { c.disconnect() }
+            val type = c.contentType?.substringBefore(';')?.takeIf { it.startsWith("image/") } ?: "image/jpeg"
+            val bytes = c.inputStream.use { it.readBytes() }
+            c.disconnect()
+            type to bytes
+        } catch (e: IOException) {
+            null
         }
     }
 }
