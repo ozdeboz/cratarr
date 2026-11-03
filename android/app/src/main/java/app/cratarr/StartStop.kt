@@ -698,6 +698,10 @@ class StartStop(
     private fun heardTrack(now: Long = SystemClock.elapsedRealtime()): Pair<Int, Long> {
         val index = player.currentMediaItemIndex.coerceAtLeast(0)
         val own = player.currentPosition
+        // Heard only while it sounds: a track standing (paused, put somewhere, waiting for a seek to be made) is where it
+        // stands; its sink's last word is where it was last heard, not where it is (2026-11-03, the tablet: a turn from
+        // backwards play read the place before it as the track's).
+        if (!player.isPlaying || player.playbackState != Player.STATE_READY) return index to own
         val (on, periodMs) = sync.trackHeard(now) ?: return index to own
         val at = when (on) {
             0 -> index
