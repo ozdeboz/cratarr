@@ -33,8 +33,8 @@
   } = $props();
 
   // The title beside back (the page's name, the Library's or Discover's picker) is a piece of its row (lib/glassRow), as a
-  // breadcrumb's current level: cut with … for want of room, and gone where it would be cut to a few letters, giving
-  // way to the open search (the owner, 2026-10-25). One decision for the row: nothing here measures the pill.
+  // breadcrumb's current level: cut with … for want of room, gone where it would be cut to a few letters, and gone
+  // whole while the search is open (the owner, 2026-11-03). One decision for the row: nothing here measures the pill.
 </script>
 
 <span class="lead" bind:this={el} {@attach glassPart({ radius: 26 })}>
@@ -43,8 +43,8 @@
     {@render left()}
   {:else}
     {#if back}<span class="navpill"><button aria-label="Back" title="Back" onclick={back}><Icon name="back" size={22} /></button></span>{/if}
-    {#if name}<h1 class="page-name" {@attach rowPiece(() => ({ id: `title:${name}`, rank: 10, min: 48 }))}>{name}</h1>{/if}
-    {#if picker}<span class="title-box" {@attach rowPiece(() => ({ id: `title:${picker}`, rank: 10, min: 48 }))}
+    {#if name}<h1 class="page-name" {@attach rowPiece(() => ({ id: `title:${name}`, rank: 10, min: 48, yields: true }))}>{name}</h1>{/if}
+    {#if picker}<span class="title-box" {@attach rowPiece(() => ({ id: `title:${picker}`, rank: 10, min: 48, yields: true }))}
         >{#if picker === 'library'}<RecordsPicker />{:else}<DiscoverPicker />{/if}</span
       >{/if}
   {/if}
@@ -84,10 +84,12 @@
     pointer-events: none;
   }
 
+  /* The part's back layer is the thin glass, which an extension is (the owner, 2026-11-03: "thin glass, one part");
+     the main buttons have the glass over it (below). */
   .lead > .glass {
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
+    background: var(--float-thin-bg);
+    -webkit-backdrop-filter: var(--float-thin-blur);
+    backdrop-filter: var(--float-thin-blur);
   }
 
   .lead > .shade {
@@ -105,12 +107,15 @@
     padding-right: 18px;
   }
 
-  /* The buttons on the lead's glass: none of their own (a panel's left part brings its back as a `navpill`). */
+  /* The main buttons (Back, Home, ✕; a panel's left part brings them as a `navpill`): the main glass, over the back
+     layer; whatever beside them is the extension, on the thin glass alone. Never changing as the extension comes and
+     goes ("I don't want this button to change the color when the extension removes"). */
   .lead :global(.navpill) {
     flex: none;
-    background: none;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
+    border-radius: 26px;
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
     box-shadow: none;
   }
 

@@ -117,6 +117,7 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
+  import NavigationControls from './NavigationControls.svelte';
   import { can, offers } from './capabilities.svelte';
   import { later, laterKey } from './later.svelte';
   import { applyOps, opsFor, type PlaylistOp } from './playlistOps';
@@ -1299,8 +1300,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // Beside it, its favourite albums toggle (decision 0024, amended 2026-10-19).
   const albState = $derived(crate && !seeded(crate) ? FAVOURITE_ALBUMS[favouriteAlbumsOf(crate)] : null);
   // The row's end, one list for the row and the glass: the list's heart (not a crate's: its toggles are what it shows)
-  // and its menu. Once the row has scrolled away they are on the right glass (the owner, 2026-11-02: "Menu and heart go
-  // in top right"); a crate's own Edit and toggles stay in the row.
+  // and its menu. Once the row has scrolled away the menu is on the right glass; the heart stays in the row, as a
+  // crate's own Edit and toggles do (the owner, 2026-11-03: "the heart button, just like the edit button, should not be
+  // adopted in the top right glass").
   type EndAction = { key: 'heart' | 'menu'; label: string; run: () => void; on?: boolean };
   const barEnds = $derived.by((): EndAction[] => {
     const menu = (label: string, open: () => void): EndAction => ({ key: 'menu', label, run: open });
@@ -1353,9 +1355,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let actbar = $state<HTMLElement>();
   let pillsEl = $state<HTMLElement>();
   let rowAway = $state(false);
-  /** What the glass takes once the row is under it, and in which order they go for want of room: Play first, Radio
-   *  last (the owner, 2026-11-02: "the priority is radio shuffle play"); then Resume, Play next and Add to queue, which
-   *  go before them (the owner, the same day); the row decides (lib/glassRow). */
+  /** What the glass takes once the row is under it: the row's Radio, Shuffle, Play, Resume, Play next and Add to
+   *  queue, on the left glass's extension beside Back and Home (the owner, 2026-11-03), as a page's title is. As many as
+   *  there is room for, in this order of going (the owner, 2026-11-02: Play first, Radio last; Resume, Play next and Add
+   *  to queue before them); all of them while the search is open, as the title (the owner, 2026-11-03; lib/glassRow). */
   const GAINED: Record<string, number> = { radio: 40, shuffle: 41, play: 42, resume: 43, next: 44, last: 45 };
   function onScroll() {
     const a = actbar;
@@ -2081,23 +2084,23 @@ ${r.album_artist ?? r.artist ?? ''}`;
           kind,
           counted: rows && shown ? { shown: shown.length, total: rows.length, pending: pass.pending } : null,
           search: full ? pageUnder : null,
-          extra: rowAway && barEnds.length ? endsGained : null,
+          extra: rowAway && barEnds.some((e) => e.key === 'menu') ? endsGained : null,
         };
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, item: true });
 </script>
 
 <!-- This panel's glass: its floating pills, or App's row on a phone (lib/glass). -->
-{#snippet glassLeft()}<span class="navpill"
-    >{@render leave()}{#each gained() as r (r.key)}<button
-        {@attach rowPiece(() => ({ id: `gained:${r.key}`, rank: GAINED[r.key] }))}
-        class="gained"
-        aria-label={r.label}
-        title={r.label}
-        disabled={r.disabled || (!!starting && starting !== r.key)}
-        aria-busy={starting === r.key}
-        onclick={r.run}><Icon name={r.icon} size={22} /></button
-      >{/each}</span
-  >{/snippet}
+{#snippet glassLeft()}<span class="navpill">{@render leave()}</span
+  >{#if gained().length}<span class="gained" role="group" aria-label="Play"
+      >{#each gained() as r (r.key)}<button
+          {@attach rowPiece(() => ({ id: `gained:${r.key}`, rank: GAINED[r.key], yields: true }))}
+          aria-label={r.label}
+          title={r.label}
+          disabled={r.disabled || (!!starting && starting !== r.key)}
+          aria-busy={starting === r.key}
+          onclick={r.run}><Icon name={r.icon} size={22} /></button
+        >{/each}</span
+    >{/if}{/snippet}
 {#snippet editActions()}
   <!-- Edit mode's buttons on the top right glass (the owner, 2026-11-02: "The bottom glass was a bad idea!! Should be
        top right glass"), as the pill's own: a playlist's Delete, Cancel (in red once something changed), the heart,
@@ -2163,7 +2166,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     ><Icon name={e.key === 'heart' ? 'heart' : 'moreVert'} {size} /></button
   >{/snippet}
 <!-- The row's end on the right glass once the row has scrolled away. -->
-{#snippet endsGained()}{#each barEnds as e (e.key)}{@render endButton(e, 22, true)}{/each}{/snippet}
+{#snippet endsGained()}{#each barEnds.filter((e) => e.key === 'menu') as e (e.key)}{@render endButton(e, 22, true)}{/each}{/snippet}
 {#snippet glassExtra()}<PanelPlace />{/snippet}
 
 {#snippet leave()}
@@ -2206,7 +2209,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
          action bar has the top they float just under it. -->
     {#if !handed}
       <div class="pills" bind:this={pillsEl} {@attach rowRoot()}>
-        {@render glassLeft()}
+        <NavigationControls left={glassLeft} />
         <span class="end">{#if pill()}<ContentControls {...pill()!} />{/if}<PanelPlace /></span>
       </div>
     {/if}
@@ -2818,6 +2821,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     keepFrom={inApp && selected.length === 1 && source ? source : null}
     start={menuStart}
     ondeleted={() => (editing = null)}
+    onedit={!album && !artist && !offServer && p && p.mine !== false && rows && !editWaits ? startEdit : null}
     onclose={() => {
       menuOpen = false;
       menuStart = 'menu';
@@ -3424,6 +3428,32 @@ ${r.album_artist ?? r.artist ?? ''}`;
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+
+  /* The row's actions once it is under the glass: an extension of the left glass beside Back and Home (lib/
+     NavigationControls: the glass stretched), its buttons as theirs. */
+  .gained {
+    display: flex;
+    flex: none;
+    padding: 2px 2px 2px 0;
+  }
+
+  /* None of them shown (no room, the search open): no extension. */
+  .gained:not(:has(button:not([data-row-gone]))) {
+    display: none;
+  }
+
+  .gained button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 22px;
+    background: none;
+    color: inherit;
+    cursor: pointer;
   }
 
   /* Back and ✕ (lib/ContentControls's look). */

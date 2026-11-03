@@ -309,9 +309,10 @@
 
 <span class="pill-row" bind:this={row}>
   <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
-    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
-    <!-- Everywhere, while a search finds something there (the owner, 2026-11-02): on the pill's one glass, which grows
-         for it, as back's grows for a title (lib/NavigationControls), not a glass of its own under it. -->
+    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span><span class="main" aria-hidden="true"></span>
+    <!-- Everywhere, while a search finds something there: the pill's extension (the owner, 2026-11-03: "thin glass, one
+         part"), its thin back layer stretched from under the main glass's round end, as back's is for a title
+         (lib/NavigationControls); not a glass of its own. -->
     {#if globeShown}
       <button
         class="funnel globe"
@@ -350,7 +351,7 @@
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: Math.min(fieldLeast, FIELD_MIN), max: 320 }))}>
+        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: Math.min(fieldLeast, FIELD_MIN), max: 320, takes: true }))}>
           <span class="typed" class:layered={!!layered}>
             {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
             <input
@@ -454,7 +455,8 @@
   }
 
   .pill > .glass,
-  .pill > .shade {
+  .pill > .shade,
+  .pill > .main {
     position: absolute;
     inset: 0;
     z-index: -1;
@@ -462,10 +464,22 @@
     pointer-events: none;
   }
 
+  /* The back layer, the thin glass the extension is; the main glass over it behind the pill's own buttons. */
   .pill > .glass {
+    background: var(--float-thin-bg);
+    -webkit-backdrop-filter: var(--float-thin-blur);
+    backdrop-filter: var(--float-thin-blur);
+  }
+
+  .pill > .main {
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
+  }
+
+  /* The globe on the extension: the main glass from past it (the pill's 2 px and its 48 px button). */
+  .pill:has(> .globe) > .main {
+    left: 50px;
   }
 
   .pill > .shade {

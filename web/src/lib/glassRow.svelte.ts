@@ -7,7 +7,9 @@
 import type { Attachment } from 'svelte/attachments';
 import { layoutRow, type Piece } from './rowLayout';
 
-type Spec = { id: string; rank: number; min?: number; max?: number; width?: number };
+/** `takes`: the open search field, which takes the row; `yields`: the left glass's extension (a page's title or picker,
+ *  a panel's levels, its actions), which goes whole while the field is open (the owner, 2026-11-03: as it used to). */
+type Spec = { id: string; rank: number; min?: number; max?: number; width?: number; takes?: boolean; yields?: boolean };
 type Entry = { el: HTMLElement; spec: Spec };
 
 const GONE = 'data-row-gone';
@@ -90,7 +92,10 @@ class Row {
   decide() {
     if (!this.el.isConnected) return;
     const entries = [...this.entries.values()].filter((e) => e.el.isConnected && this.el.contains(e.el));
-    const pieces: Piece[] = entries.map((e) => ({ id: e.spec.id, rank: e.spec.rank, min: e.spec.min, max: e.spec.max, width: this.whole(e) }));
+    // The search open: the left glass's extension gone whole, the rest laid out without it.
+    const searching = entries.some((e) => e.spec.takes);
+    const laid = entries.filter((e) => !(searching && e.spec.yields));
+    const pieces: Piece[] = laid.map((e) => ({ id: e.spec.id, rank: e.spec.rank, min: e.spec.min, max: e.spec.max, width: this.whole(e) }));
     const room = this.el.clientWidth - this.fixed(this.el, new Set(entries.map((e) => e.el)));
     const d = layoutRow(room, pieces, this.before);
     this.before = d.shown;
