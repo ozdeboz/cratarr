@@ -46,6 +46,7 @@
     onclose,
     onrenamed,
     ondeleted,
+    onedit = null,
     downloadable = null,
     keepFrom = null,
     start = 'menu',
@@ -57,6 +58,8 @@
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
+    /** Its panel's Edit (the owner, 2026-11-03: in the menu too), where the panel shows the playlist. */
+    onedit?: (() => void) | null;
     /** Its tracks, for Download… to this device (in the app, by an opener that has its rows: one playlist viewed); else
      *  asked for. */
     downloadable?: Downloadable[] | null;
@@ -374,6 +377,15 @@
   {:else if e === 'info'}
     <!-- A step of the menu, as a track's Info (the owner, 2026-11-02: it was a tab of the panel). -->
     <MenuEntry icon="info" label="Info" onclick={() => (mode = 'info')} />
+  {:else if e === 'edit'}
+    {#if one && !others && onedit}{@const go = onedit}<MenuEntry
+        icon="pencil"
+        label="Edit"
+        onclick={() => {
+          onclose();
+          go();
+        }}
+      />{/if}
   {:else if e === 'rename'}
     {#if one && !others}
       <MenuEntry

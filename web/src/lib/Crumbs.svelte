@@ -50,9 +50,9 @@
         onclick={() => u.go?.()}><Icon name="arrowUp" size={22} /></button
       >{/if}</span
   >{/if}<h2 class="crumbs">
-  {#each trail as level, i (i)}<span class="level" {@attach rowPiece(() => ({ id: `crumb:${i}:${level.label}`, rank: rankOf(i) }))}
+  {#each trail as level, i (i)}<span class="level" {@attach rowPiece(() => ({ id: `crumb:${i}:${level.label}`, rank: rankOf(i), yields: true }))}
       >{#if level.pick}<span class="up pick"><GlassPicker shown={level.label} menuLabel={level.pick.menuLabel} options={level.pick.options} chosen={level.pick.chosen} onchoose={level.pick.onchoose} /></span>{:else if level.go}<button class="up" onclick={level.go}>{level.label}</button>{:else}<span class="up">{level.label}</span>{/if}<span class="sep" aria-hidden="true">›</span></span
-    >{/each}<span class="here-box" {@attach rowPiece(() => ({ id: `crumb-here:${here}`, rank: 10, min: 48 }))}
+    >{/each}<span class="here-box" {@attach rowPiece(() => ({ id: `crumb-here:${here}`, rank: 10, min: 48, yields: true }))}
     >{#if siblings}<GlassPicker shown={here} menuLabel={siblings.menuLabel} options={siblings.options} chosen={siblings.chosen} onchoose={siblings.onchoose} />{:else}<span class="here" aria-current="page">{here}</span>{/if}</span
   >
 </h2>

@@ -1,11 +1,9 @@
 <script lang="ts">
   // Symfonium's floating pill (2026-10-15), at the top right of the panel (lib/PlaylistView) and of a page with something
   // to play (App.svelte): the page's search (it opens into a field over the row), the filter (lib/FilterSheet), View
-  // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and where it plays (lib/OutputSheet)
-  // where nothing else leads to it (no mini-player, which has it beside the heart; no player beside the page; the panel's
-  // pill and the page's alike), and last the page's own button (a + to
-  // make something, its ticked ones' ⋮; pageView.usePageAction). Google's Cast guidelines put the device button at the
-  // top right of the screen that plays.
+  // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and last the page's own button (a + to
+  // make something, its ticked ones' ⋮; pageView.usePageAction). Where it plays is not here (the owner, 2026-11-03: no
+  // room): the mini-player's, or its glass in the mini-player's place while nothing plays (lib/MiniPlayer).
   import FilterSheet from './FilterSheet.svelte';
   import { noteChange } from './lastChange.svelte';
   import ProgressRing from './ProgressRing.svelte';
@@ -19,7 +17,6 @@
   import { glassPart } from './glassMotion';
   import { untrack } from 'svelte';
   import { innerWidth } from 'svelte/reactivity/window';
-  import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
   import { pageCovered, panelBeside } from './panel.svelte';
@@ -35,7 +32,6 @@
   let {
     page = null,
     view = false,
-    device = true,
     order = null,
     tempos = null,
     filter = true,
@@ -54,7 +50,6 @@
      *  absent, the page that set it last (pageView.action). */
     action?: import('./pageView.svelte').PageAction | null;
     view?: boolean;
-    device?: boolean;
     /** The panel list's order, for its View. */
     order?: ListOrder | null;
     /** The panel list's tempos, for its filter's tempo selector (decision 0041). */
@@ -81,7 +76,6 @@
   const pageAction = $derived(action !== undefined ? action : pageView.action);
   let filterOpen = $state(false);
   let viewOpen = $state(false);
-  let outputOpen = $state(false);
 
   // The search: the magnifier opens a field over the row (the whole row on a phone, the pill grown leftwards on a
   // wide page); Esc, Enter or leaving it empty folds it, ✕ empties it. A search that applies keeps the magnifier lit.
@@ -309,9 +303,10 @@
 
 <span class="pill-row" bind:this={row}>
   <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
-    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
-    <!-- Everywhere, while a search finds something there (the owner, 2026-11-02): on the pill's one glass, which grows
-         for it, as back's grows for a title (lib/NavigationControls), not a glass of its own under it. -->
+    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span><span class="main" aria-hidden="true"></span>
+    <!-- Everywhere, while a search finds something there: the pill's extension (the owner, 2026-11-03: "thin glass, one
+         part"), its thin back layer stretched from under the main glass's round end, as back's is for a title
+         (lib/NavigationControls); not a glass of its own. -->
     {#if globeShown}
       <button
         class="funnel globe"
@@ -350,7 +345,7 @@
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: Math.min(fieldLeast, FIELD_MIN), max: 320 }))}>
+        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: Math.min(fieldLeast, FIELD_MIN), max: 320, takes: true }))}>
           <span class="typed" class:layered={!!layered}>
             {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
             <input
@@ -385,7 +380,6 @@
       >{/if}
     {#if view && (page || order?.columns?.shown.length || order?.view || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))}><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
-    {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     {#if extra && !searching}{@render extra()}{/if}
     <!-- The page's mode (Playlists' Quick add), lit while on. -->
     {#if page && pageView.mode && !searching && !(showing && pageAction)}
@@ -416,9 +410,6 @@
 {#if asking && pageAction}
   {@const a = pageAction}
   <ConfirmSheet title={`${a.label}?`} label={a.label} icon={a.icon} danger={false} onconfirm={() => confirm(a)} onclose={() => (asking = false)} />
-{/if}
-{#if outputOpen}
-  <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 
 <style>
@@ -454,7 +445,8 @@
   }
 
   .pill > .glass,
-  .pill > .shade {
+  .pill > .shade,
+  .pill > .main {
     position: absolute;
     inset: 0;
     z-index: -1;
@@ -462,10 +454,22 @@
     pointer-events: none;
   }
 
+  /* The back layer, the thin glass the extension is; the main glass over it behind the pill's own buttons. */
   .pill > .glass {
+    background: var(--float-thin-bg);
+    -webkit-backdrop-filter: var(--float-thin-blur);
+    backdrop-filter: var(--float-thin-blur);
+  }
+
+  .pill > .main {
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
+  }
+
+  /* The globe on the extension: the main glass from past it (the pill's 2 px and its 48 px button). */
+  .pill:has(> .globe) > .main {
+    left: 50px;
   }
 
   .pill > .shade {

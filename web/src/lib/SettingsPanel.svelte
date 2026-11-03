@@ -159,7 +159,7 @@
   // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
   // its own beside it).
   const resetAction = () => (resetRows(section).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
-  const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings', action: resetAction() } : null);
+  const pill = () => (!thing ? { filter: false, view: false, search: 'settings', action: resetAction() } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
