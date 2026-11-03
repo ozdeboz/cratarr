@@ -45,6 +45,11 @@ object Plays {
         val source = track.optString("source")
         val id = track.optString("id")
         if (source.isEmpty() || id.isEmpty()) return
+        // A server's track (decision 0098): its play is that server's, never Cratarr's.
+        if (source.startsWith(Servers.MODE_PREFIX)) {
+            if (counts) Servers.played(context, source, id, atMs)
+            return
+        }
         val prefs = Prefs(context)
         val play = JSONObject()
             .put("id", UUID.randomUUID().toString())

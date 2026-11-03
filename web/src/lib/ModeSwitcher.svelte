@@ -6,8 +6,11 @@
   // directories"), never in a browser; otherwise the top stays as it was. While Local plays, a note before the device's
   // name (the owner: "Add a music icon to the left of Lenovo tab in case of local playback, if it's currently playing").
   // A switch is the whole app: what plays pauses and is put by, the other mode's queue comes back paused (the app's).
+  // Each server signed in to is a mode too, between Cratarr and Local (decision 0098), its kind and user under it.
   import { appInfo } from './app.svelte';
-  import { localMode, setMode } from './deviceMusic.svelte';
+  import { localMode, localThere, setMode } from './deviceMusic.svelte';
+  import { KIND_NAMES, servers } from './servers.svelte';
+  import { serverMode, serverSource } from './serverMode.svelte';
   import GlassMenu from './GlassMenu.svelte';
   import Icon from './Icon.svelte';
   import { local } from './localPlayer.svelte';
@@ -31,7 +34,9 @@
   const playingHere = $derived(localMode() && !local.paused && local.index >= 0);
   const conn = $derived(connection?.ok ? 'Connected' : (connection?.text ?? 'Connecting'));
 
-  function choose(mode: 'cratarr' | 'device') {
+  const server = $derived(serverMode());
+  const current = $derived(localMode() ? 'Local' : (server?.name ?? 'Cratarr'));
+  function choose(mode: string) {
     open = false;
     setMode(mode);
   }
@@ -41,22 +46,30 @@
 {#snippet localLine()}{#if playingHere}<span class="note" role="img" aria-label="Playing"><Icon name="music" size={slim ? 12 : 14} /></span>{/if}{here}{/snippet}
 
 <div class="switcher" class:slim bind:this={root}>
-  <button class="current" class:open aria-haspopup="menu" aria-expanded={open} aria-label="Cratarr or Local" bind:this={button} onclick={() => (place(), (open = !open))}>
+  <button class="current" class:open aria-haspopup="menu" aria-expanded={open} aria-label="Mode: {current}" bind:this={button} onclick={() => (place(), (open = !open))}>
     <span class="tile"><Mark /></span>
     <span class="lines">
-      <strong>{localMode() ? 'Local' : 'Cratarr'}</strong>
-      <span class="sub">{#if localMode()}{@render localLine()}{:else}{@render cratarrLine()}{/if}</span>
+      <strong>{current}</strong>
+      <span class="sub">{#if localMode()}{@render localLine()}{:else if server}{KIND_NAMES[server.kind]} · {server.user}{:else}{@render cratarrLine()}{/if}</span>
     </span>
     <span class="chev" aria-hidden="true"><Icon name="chevronsUpDown" size={18} /></span>
   </button>
   {#if open}
-    <GlassMenu {at} keep={() => button} label="Cratarr or Local" role="menu" onclose={() => (open = false)}>
-      <button class="option" role="menuitemradio" aria-checked={!localMode()} onclick={() => choose('cratarr')}>
-        <span class="mode"><span>Cratarr</span><span class="sub">{@render cratarrLine()}</span></span>{#if !localMode()}<Icon name="check" size={18} />{/if}
+    <GlassMenu {at} keep={() => button} label="Modes" role="menu" onclose={() => (open = false)}>
+      <button class="option" role="menuitemradio" aria-checked={appInfo.mode === 'cratarr'} onclick={() => choose('cratarr')}>
+        <span class="mode"><span>Cratarr</span><span class="sub">{@render cratarrLine()}</span></span>{#if appInfo.mode === 'cratarr'}<Icon name="check" size={18} />{/if}
       </button>
-      <button class="option" role="menuitemradio" aria-checked={localMode()} onclick={() => choose('device')}>
-        <span class="mode"><span>Local</span><span class="sub">{@render localLine()}</span></span>{#if localMode()}<Icon name="check" size={18} />{/if}
-      </button>
+      {#each servers.list ?? [] as s (s.id)}
+        {@const on = appInfo.mode === serverSource(s.id)}
+        <button class="option" role="menuitemradio" aria-checked={on} onclick={() => choose(serverSource(s.id))}>
+          <span class="mode"><span>{s.name}</span><span class="sub">{KIND_NAMES[s.kind]} · {s.user}</span></span>{#if on}<Icon name="check" size={18} />{/if}
+        </button>
+      {/each}
+      {#if localThere()}
+        <button class="option" role="menuitemradio" aria-checked={localMode()} onclick={() => choose('device')}>
+          <span class="mode"><span>Local</span><span class="sub">{@render localLine()}</span></span>{#if localMode()}<Icon name="check" size={18} />{/if}
+        </button>
+      {/if}
     </GlassMenu>
   {/if}
 </div>

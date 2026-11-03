@@ -113,6 +113,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             val want = modeOf(command.optJSONArray("tracks")) ?: mode
             if (want != mode) {
                 if (want == Prefs.MODE_DEVICE && !DeviceMusic.on(context)) return
+                if (want.startsWith(Servers.MODE_PREFIX) && !Servers.has(context, want.removePrefix(Servers.MODE_PREFIX))) return
                 if (!m.optBoolean("switched")) switchMode(want, JSONObject(m.toString()).put("switched", true))
                 return
             }
@@ -228,7 +229,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     /** The mode tracks are of (the first's), null for none. */
     private fun modeOf(tracks: JSONArray?): String? {
         val t = (0 until (tracks?.length() ?: 0)).firstNotNullOfOrNull { tracks?.optJSONObject(it) } ?: return null
-        return if (t.optString("source") == DeviceMusic.SOURCE) Prefs.MODE_DEVICE else Prefs.MODE_CRATARR
+        return Prefs.modeOfSource(t.optString("source"))
     }
 
     private fun describe(e: PlaybackException): String {
