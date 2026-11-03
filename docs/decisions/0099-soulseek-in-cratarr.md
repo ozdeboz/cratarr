@@ -60,13 +60,15 @@ configuration that Lidarr abstracts for our app. But they are still siblings fro
 
 - **Two fetchers, either or both:** Lidarr (it watches artists and grabs, through its own downloaders) and Soulseek
   (Cratarr through slskd, as above). Each works without the other.
-- **What Soulseek fetches:** Cratarr's approved Requests, searched first; Lidarr's Wanted too, only where Lidarr is
-  connected. Without Lidarr nothing watches artists for new releases: that is what Lidarr adds.
+- **What Soulseek fetches:** Cratarr's approved Requests, and nothing of Lidarr's (the owner, 2026-11-03: "The whole
+  idea is that Cratarr's Soulseek doesn't need Lidarr"): it never reads Lidarr's Wanted. Lidarr fetches its own Wanted
+  through its own downloaders. Without Lidarr nothing watches artists for new releases: that is what Lidarr adds.
 - **A request approved** goes to every fetcher connected: to Lidarr as now, and into Soulseek's list.
 - **One shape in the page:** Requests lists one list per fetcher connected, each the same: what it fetches now, what
   it has not found yet (Lidarr, Soulseek; "Monitor" was Lidarr's). Settings › Connections groups them as Fetchers,
   each its own page (Lidarr: its address and key; Soulseek: slskd's address, key and folder). An Incoming library's
   "Fetched by" names its fetcher (0096: one Incoming library per fetcher).
+- This replaces the decision's "What is wanted" above (Lidarr's Wanted, read every six hours) for Soulseek.
 - The server's part (Soulseek's wanted list from Cratarr's Requests, a library's fetcher "lidarr" beside "soulseek")
   is a5's; the page's 632's.
 
