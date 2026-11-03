@@ -40,27 +40,54 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 - **0.14: references and the intake** (the owner, 2026-11-01: "this comes next"): MusicBrainz, Discogs and Bandcamp as
   references, the checks without one, the hand check's intake card, one Health item for references (Soulseek in
   Cratarr, below). With it, the other writers onto 0092's path (Health's fixes, Renumber, the tempo, the covers, the
-  length fixes, single-track intake), each losing its own Undo.
+  length fixes, single-track intake), each losing its own Undo ([the map](writers-onto-0092.md)).
+  And all of what the owner decided on 2026-11-02 ("All in 0.14"): taste in sequences and lists
+  ([0094](decisions/0094-taste-in-sequences-and-lists.md): one taste per account, Best match on every list, Your taste
+  as a radio mode, skips keeping tracks away gently, one radio sheet wherever radio starts, own orders named); one way to
+  say nothing ([0095](decisions/0095-one-way-to-say-nothing.md)); a library's quality limit
+  ([0096](decisions/0096-libraries-equal.md)'s amendment); energy and danceability on the library's 0–100% in the
+  profile, the filter's window lit on the panel's bars (the sheet unchanged); a record's own Health problems on its page;
+  and, suggested, the tagged total ("05/06") for missing tracks without a reference. Added the same day: faster
+  previews (the image built on the tests' compiled parts) and a dependency check (duplicate crate versions, ts-rs out of
+  the server); the settings' section Resets from the panel's one declaration, opening its sheet; the choice controls
+  streamlined (the owner, 2026-11-02, as the preview.4 review decided: one row everywhere, one of many, several, a
+  switch or a value, rows never carrying a pill); the global search
+  button always an extension on the back layer; the false "no sound" on some MP3s (the dev page's player reconnecting every 3 s left out: no one
+  could see it again, the owner included). Moved to 0.16 with 0096 (the owner, 2026-11-02): a playlist's Sync into "Shared with other users" and
+  Repair into Health (both rework the .m3u files 0096 replaces), and Health's check for records above their library's
+  quality limit (the limit itself for moves and Keep stays in 0.14). Previews on staging along the way. ([whats-new-0.14](whats-new-0.14.md).)
 - **0.15: modes per server** (the External library below, taken up) **and scrobbling from the device**
-  ([0091](decisions/0091-scrobbling-from-the-device.md)). Cratarr's mode is Cratarr's own library, its libraries still
+  ([0091](decisions/0091-scrobbling-from-the-device.md)). With them, **Soulseek in Cratarr, Lidarr staying** (the
+  owner, 2026-11-02, below): soularr goes; Cratarr fetches whole albums from Soulseek its own way (Lidarr's wanted
+  albums through its API and Cratarr's own Requests, each searched by its release recording by recording, a folder
+  chosen by its tracks, every file gated), into Incoming for the intake card; Lidarr keeps watching artists and
+  grabbing torrents. Cratarr's mode is Cratarr's own library, its libraries still
   switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
   library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. Wants the
   owner's design choices first.
-- **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)) **and the whole library's index on the
-  device** (offline first's fourth step).
-- **0.17: crates and the queue on the device** (offline first's fifth step); then all servers in one library, on the
-  device (below), as a view over the modes' indexes.
+  With it, rhythm (the owner, 2026-11-02): four on the floor as a score (the share of beats a kick lands on, in the sub
+  and bass bands' percussive hits, against the strikes between them) and the time signature from Beat this!'s
+  downbeats (4/4, 3/4; odd meters less sure); measured in the analysis from then on, the library measured again at
+  night (AudioMuse paused); conditions in the filter and the crate, words in the crate sentence ("four on the floor",
+  "4/4"). The device index (0.16) carries them. And the playlist map's fourth closeness signal, Sound (the owner, 2026-11-02): playlists compared
+  by their profiles (energy, danceability, tempo, the moods), so two that share no track or artist sit close when they
+  sound alike; a switch beside shared tracks, genre and artists.
+- **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)), **the whole library's index on the
+  device, and crates and the queue on the device** (offline first's fourth and fifth steps, one version: the owner,
+  2026-11-02, "17 sounds like 16 work"). Then all servers in one library, on the device (below), as a view over the
+  modes' indexes.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
   own pages (0.11, done); Downloads an offline shelf, and nothing done offline lost, playlist edits included (0.12,
-  done); the whole library's index on the device (0.16); crates and the queue on the device (0.17).
+  done); the whole library's index on the device, and crates and the queue on the device (0.16).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
 
 ## Soulseek in Cratarr, not through Lidarr (explored 2026-10-31)
 
 The owner: "I want to explore whether it's time we left SoulSeek in the hands of Cratarr altogether instead of using
-Lidarr. But I'm not sure about this." Not decided; written down to read first. Only the bulk intake of missing
+Lidarr. But I'm not sure about this." Decided 2026-11-02: the first way below, *Cratarr does Soulseek, Lidarr stays*,
+in 0.15. Only the bulk intake of missing
 tracks below is being built (the owner, 2026-10-31: "Bulk search, you approve").
 
 **What happens now.** Lidarr keeps the wanted list (its monitored artists and albums, Cratarr's Requests among them)
@@ -124,6 +151,34 @@ needs no MusicBrainz; judging what was found does: a reference says which tracks
   unlike its album, a "Classical" that sounds like house. Never red, never blocking; only if AcoustID turns out to
   miss too much. AudioMuse runs after import, so in Health, not on the intake card.
 - Mockups of the intake card first (632), then the server's checks and references (a5).
+- *All of it in 0.14* (the owner, 2026-11-02): Discogs' and Bandcamp's track lists and lengths as references, not only
+  MusicBrainz's; a record checked by hand its own reference for its type and year; references that disagree side by
+  side, and one found by guessing confirmed once; where a record came from for Lidarr and Bandcamp too.
+
+**From SoulSync and DroppedNeedle (reviewed 2026-11-02, the HomeAssistant session, placed by 632).** The owner's rule:
+0.14 stays light, only truly helpful bug fixes; the rest into 0.15 or 0.16, 0.17 only for a very good reason. Never
+anything in without the owner's tick (0080); never a chat room.
+
+- *0.14: nothing.* gapfill's two bugs are not Cratarr's: a refused enqueue fails the item at once (slskd's status, its
+  failures, no batch: `slskd::fetch`), and a transfer slskd dropped fails it at the next read, every 2 s (the batch
+  gone or empty is an error in `track_fetch::follow`), not after the 45 minutes. What gapfill guards, Cratarr's add
+  already does: never overwriting (a file there already refuses), decoding whole, the length measured on the file
+  against the recording's, AcoustID, copied in under a hidden name then renamed (no move across filesystems half
+  done), a replaced track to the trash first and an Undo.
+- *0.15, with the bulk intake (0096: a library's fetcher is a setting):* on to the next candidate when a peer refuses,
+  errs or keeps it queued too long (its own queued limit, now one 30 minutes); a read of slskd that fails once is not
+  the end of a fetch (today it refuses it and leaves slskd's download running, its file in slskd's folder); the
+  intake's state on disk (in memory today: a restart forgets it); the peers that failed remembered per record; a
+  ladder of searches (record and year, the title stripped, the main artist only, wildcards for artists Soulseek's
+  server filters, none twice); a ladder of retries for missing tracks (none after 0 or 1 failures, 4 hours after 2, a
+  day after 3, a week after 4 and more; never given up; Search now overrides; a time that cannot be read counts as
+  due); each file set aside with why.
+- *0.16, with each user's own music (0084):* the intake per library, each user's own and their room. Maybe a whole
+  track's spectrum beside the 16 kHz gate (SoulSync's own detector is too crude to copy).
+- *Not planned:* other sources (Usenet, streaming).
+- To read again when building: DroppedNeedle's thin slskd client (429: one search or enqueue at a time; a circuit
+  breaker; a test that keeps Soulseek's protocol out of the app) and SoulSync's retry backoff and quarantine (a JSON
+  note beside each set-aside file).
 
 ## External library
 

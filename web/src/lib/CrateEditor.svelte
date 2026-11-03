@@ -14,6 +14,7 @@
   // crate, and that is in the panel"): a crate grabbed (a search's card, a menu's Sounds like this) opens here with its
   // sentence as it was read (`sentence`) or its words still to read (`words`); a new one empty, the caret in its field.
   import { untrack } from 'svelte';
+  import { hiddenLibraries } from './listFilter.svelte';
   import { getCrateAxes, type Axis, type Condition } from './api';
   import ConditionList from './ConditionList.svelte';
   import CrateResults from './CrateResults.svelte';
@@ -112,7 +113,9 @@
   // The axes: their kinds and domains in this library.
   let axes = $state<Axis[] | null>(null);
   $effect(() => {
-    getCrateAxes(prefs.source || undefined).then(
+    // Counted over the libraries switched on, as the crate's preview is (the owner, 2026-11-02: a mood said 18, the
+    // crate then 0: all 18 in Incoming, switched off).
+    getCrateAxes(prefs.source || undefined, hiddenLibraries()).then(
       (a) => (axes = a),
       (e) => {
         axes ??= [];

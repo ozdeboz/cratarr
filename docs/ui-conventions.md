@@ -388,10 +388,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     - Where a part's settings are kept is its group's heading ("This browser", "This device"), not a sentence.
   - **The row** (`lib/settings/Item`): its name, at most one short line, and one thing at its end:
     - the switch, the whole row being it;
-    - a value and ›, which opens the value's sheet: `lib/settings/ValueSheet` to type it (from the top), or
-      `lib/settings/ChoiceSheet` to choose one of several;
+    - a value and ›, which opens the value's sheet: `lib/settings/ValueSheet` to type it (from the top), or the one-of
+      sheet to choose (`lib/settings/ChoiceRow`, any choice of two or more: a row never carries a pill);
     - › alone, which opens a thing's own page;
-    - a control of its own: a choice of a few (`lib/Seg`), or one small button (Check, Remove, Sign out, Revoke);
+    - a control of its own: one small button (Check, Remove, Sign out, Revoke);
     - or the row is the act itself: "+ Add …" in the accent, the last row of its group; "Remove …" in red, last on a
       thing's own page, asked again in `lib/settings/ConfirmSheet`.
   - **A thing** (a server, Lidarr, a library, a Kodi, a user) is a row with a dot and its state in the line. It opens
@@ -407,9 +407,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Shared pieces, not each page's own layout** (decided 2026-10-16): a sheet's or a setting's card is `lib/Card`
   (its title and a muted note, then what it holds); a setting's row is `lib/SettingRow` (its name at the start, its
   control at the end; where both do not fit, the control goes under the name: the row wraps, no page rule decides it);
-  a choice of one as rows is `lib/ChoiceList` (round marks); a few choices in a row `lib/Seg` (its words never break:
-  the row takes the control under the name instead); on/off `lib/Switch`. View, More music, Settings' Display and
-  Libraries are made of them.
+  a choice of one as rows is `lib/ChoiceList`; on/off `lib/Switch`. View, More music, Settings' Display and Libraries
+  are made of them.
+- **Choices: one row, its end says what kind** (the owner, 2026-11-02, 0.14; mockups "Choice sheet mockups"): every
+  choice in a sheet, a dropdown or a list is the same row, an icon or cover at its start where it has one, its words
+  and a line, and at its end (`lib/ChoiceMark`): a round mark for one of many (a sheet closes on it; the glass
+  dropdowns too), a rounded square for several of many (the sheet stays open; select mode, Add to playlist), a switch
+  for one setting on or off, a value and › for what opens. The pill (`lib/Seg`) lives only inside a sheet (Download's
+  two halves, View, a filter's or an editor's own fields); a row never carries one. Special cases stay special: the
+  theme and backdrop pictures, colour swatches, filter chips, ordered on/off lists.
 - **Phone check** (`npm run check:phone`, decided 2026-10-16): every page, every part of the settings and an album in
   the panel at 390 px must not scroll sideways (the page, or any box that scrolls up and down); run it after a layout
   change.

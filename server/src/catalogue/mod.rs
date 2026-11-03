@@ -324,7 +324,7 @@ pub struct RowAnalysis {
 }
 
 impl ServedRow {
-    pub const TAGS: [&'static str; 26] = [
+    pub const TAGS: [&'static str; 27] = [
         "title",
         "artist",
         "artists",
@@ -332,6 +332,8 @@ impl ServedRow {
         "albumartists",
         "album",
         "tracknumber",
+        // The record's track count its tags say (0.14, Health's missing tracks without a reference).
+        "totaltracks",
         "discnumber",
         "date",
         "originaldate",
@@ -433,6 +435,10 @@ impl Catalogue {
             // no key for (STYLE, unread since lofty 0.25): every file read again too.
             if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 7) {
                 cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, READ])?;
+            }
+            // Reader 8 checks a FLAC's seek table (0.14, a broken one ended tracks on a far seek): the FLACs read again.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 8) {
+                cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2 AND format = 'FLAC'", params![PENDING, READ])?;
             }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
@@ -949,13 +955,9 @@ impl Catalogue {
         if let Some(s) = &served
             && let Ok(albums) = s.library.song_album_map()
         {
-            // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
-            if let Ok(merged) = crate::app::words::merged(s) {
-                for f in &mut facts {
-                    if let Some(words) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))).and_then(|a| merged.albums.get(a)) {
-                        crate::app::words::add_to(f, words);
-                    }
-                }
+            // Each file with its record's words and its own, from the one store (decision 0097): every source.
+            if let Err(e) = crate::app::words::build(s, &albums, &mut facts) {
+                tracing::warn!("crates: the words not read: {e:#}");
             }
             // And with its album's id (0.11, quick crates: the Album axis, an album seed), one copy for all its
             // tracks; its labels Discogs' for its album where its tags name none, as kept (never asked for here).
@@ -1091,13 +1093,8 @@ impl Catalogue {
                     danceability = d.map(|d| (d * 100.0).round());
                     styles = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect();
                 }
-                for (into, own) in [(&mut moods, file_moods), (&mut styles, file_styles)] {
-                    for w in own {
-                        if !into.iter().any(|x| x.eq_ignore_ascii_case(&w)) {
-                            into.push(w);
-                        }
-                    }
-                }
+                // The files' STYLE and MOOD words apart from AudioMuse's: the words' store weighs them (decision 0097).
+                let file_words = (!file_styles.is_empty() || !file_moods.is_empty()).then(|| Box::new((file_styles, file_moods)));
                 let (credits, credit_names) = crate::app::excluded_artists::credited(&artists.iter().chain(&listed).collect::<Vec<_>>());
                 Some(crate::crates::Facts {
                     year: crate::crates::year_of(&first),
@@ -1124,6 +1121,7 @@ impl Catalogue {
                     tags: file_tags,
                     album: None,
                     labels: tag_labels.remove(&place).unwrap_or_default(),
+                    file_words,
                 })
             })
             .collect())
@@ -1469,15 +1467,28 @@ impl Catalogue {
         served_fingerprint(&self.db())
     }
 
-    /// Files with a problem, worst first ("broken", then damaged tags, …), at most `limit`. Blocking.
-    pub fn problems(&self, limit: usize) -> Result<Vec<Problem>> {
+    /// Files with a problem, worst first ("broken", then damaged tags, …), at most `each` of every kind: a kind past
+    /// the others' files still has its own (2026-11-02: one cap over all kinds left the last kind on Home with none,
+    /// and its Health panel said it was no longer a problem). Blocking.
+    /// The files with one kind of problem, by folder and line. Blocking.
+    pub fn with_issue(&self, kind: &str) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!("SELECT folder, rel FROM files WHERE issue = ?1 AND {PRESENT} ORDER BY rel"))?;
+        let rows = st.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn problems(&self, each: usize) -> Result<Vec<Problem>> {
         let folders = self.folders();
         let db = self.db();
         let mut st = db.prepare(&format!(
-            "SELECT folder, rel, issue, issue_detail FROM files WHERE issue IS NOT NULL AND {PRESENT}
-             ORDER BY CASE issue WHEN 'broken' THEN 0 WHEN 'damaged_tag' THEN 1 WHEN 'no_length' THEN 2 ELSE 3 END, rel LIMIT ?1"
+            "SELECT folder, rel, issue, issue_detail FROM (
+                 SELECT folder, rel, issue, issue_detail, ROW_NUMBER() OVER (PARTITION BY issue ORDER BY rel) AS n
+                 FROM files WHERE issue IS NOT NULL AND {PRESENT})
+             WHERE n <= ?1
+             ORDER BY CASE issue WHEN 'broken' THEN 0 WHEN 'damaged_tag' THEN 1 WHEN 'no_length' THEN 2 ELSE 3 END, rel"
         ))?;
-        let rows = st.query_map([limit as i64], |r| {
+        let rows = st.query_map([each as i64], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
         })?;
         rows.map(|r| {
@@ -1485,6 +1496,20 @@ impl Catalogue {
             Ok(Problem { folder: folders.get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default(), rel, kind, detail })
         })
         .collect()
+    }
+
+    /// The problems of these files of a folder (0.14, a record's own Health): those that have one, in their order.
+    pub fn problems_in(&self, folder: i64, rels: &[String]) -> Result<Vec<Problem>> {
+        let path = self.folders().get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default();
+        let db = self.db();
+        let mut st = db.prepare_cached(&format!("SELECT issue, issue_detail FROM files WHERE folder = ?1 AND rel = ?2 AND issue IS NOT NULL AND {PRESENT}"))?;
+        let mut out = Vec::new();
+        for rel in rels {
+            if let Some((kind, detail)) = st.query_row(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))).optional()? {
+                out.push(Problem { folder: path.clone(), rel: rel.clone(), kind, detail });
+            }
+        }
+        Ok(out)
     }
 
     /// Tests elsewhere: treat every file waiting for its tags as read (test files are not audio).
@@ -2826,6 +2851,11 @@ mod tests {
         assert_eq!(s.tags_failed, 2);
         assert_eq!(s.issues.get("broken"), Some(&2), "unreadable files are classified as broken");
         assert_eq!(cat.problems(10).unwrap().len(), 2);
+        // Capped by kind: one of each, whatever the first kind holds.
+        cat.db().execute("UPDATE files SET issue = 'no_length' WHERE rel = 'A - B (2020)/02 Two.flac'", []).unwrap();
+        let kinds: Vec<String> = cat.problems(1).unwrap().into_iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, ["broken", "no_length"]);
+        cat.db().execute("UPDATE files SET issue = 'broken' WHERE rel = 'A - B (2020)/02 Two.flac'", []).unwrap();
         // A changed file is read again; a removed one is forgotten.
         std::fs::write(d.join("A - B (2020)/01 One.mp3"), b"changed and longer than before").unwrap();
         std::fs::remove_file(d.join("A - B (2020)/02 Two.flac")).unwrap();

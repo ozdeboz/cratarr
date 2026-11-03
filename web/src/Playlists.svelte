@@ -107,7 +107,7 @@ ${prefs.playlistOrder}`,
   );
   const listed = $derived(kept.loader ? { shows: 'asking' as const, list: [] } : kept.value);
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone); never before the playlists are read.
-  searchNone(() => (view && listed.shows === 'empty' ? 'playlists' : null));
+  searchNone(() => !!view && listed.shows === 'empty' && { n: shownPlaylists().filter((p) => !pass.keys || pass.keys.has(p.id)).length, one: 'playlist' });
 
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {

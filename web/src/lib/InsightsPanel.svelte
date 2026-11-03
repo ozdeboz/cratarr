@@ -4,8 +4,8 @@
   // pill the pages have (lib/ContentControls: the same glass, the same motion; the owner, 2026-10-25): its funnel opening what is
   // counted, its sliders how it is shown (lib/InsightsSheet), each where the view has any. The views are the tabs' as they
   // were (Collection's sections, Listening's History and Profile, the Map).
-  import Icon from './Icon.svelte';
   import InsightsCollection from './InsightsCollection.svelte';
+  import { rowRoot } from './glassRow.svelte';
   import DiscoveryList from './DiscoveryList.svelte';
   import InsightsListening from './InsightsListening.svelte';
   import InsightsMap from './InsightsMap.svelte';
@@ -23,9 +23,16 @@
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
+  import { matchesSearch, pageView, searchElsewhere } from './pageView.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
 
   let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
 
+  // The page's search through every view (the owner, 2026-11-02, as Settings' parts): under this view, the other
+  // views the words name; a tap opens one, the words still searched.
+  const otherViews = $derived(pageView.query.trim() ? INSIGHTS_VIEWS.filter((x) => x.id !== view && !x.under && matchesSearch(x.label, x.group)) : []);
+  searchElsewhere(() => otherViews.length > 0);
   // The views and their controls read the tab and its section: set before they draw.
   $effect.pre(() => showView(view));
   $effect(() => insights.load());
@@ -41,7 +48,6 @@
   const pill = () =>
     filters.length || views.length || !beside || view === 'map'
       ? {
-          device: false,
           filter: filters.length > 0,
           view: views.length > 0,
           filterLit: leftOut,
@@ -81,15 +87,15 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   {@const parent = v.under ? INSIGHTS_VIEWS.find((x) => x.id === v.under) : null}
   <!-- The levels Back walks through (lib/Crumbs): Insights, the view a deeper one was opened from; between them its
        group, a heading of the page's list and not a place: a picker of the groups (the owner, 2026-11-02). On a phone
        the view's name picks another view of its group. -->
   <Crumbs
+    back={beside ? null : backOne}
     trail={[
-      ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('#/insights') }, groupLevel]),
-      ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: () => history.back() }] : []),
+      ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('insights') }, groupLevel]),
+      ...(v.under && isStep() ? [{ label: parent?.label ?? v.group, go: backOne }] : []),
     ]}
     here={v.label}
     {siblings}
@@ -98,7 +104,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
@@ -118,6 +124,12 @@
       <PageLoading />
     {:else}
       <InsightsCollection data={insights.data} />
+    {/if}
+    {#if otherViews.length}
+      <!-- The other views the search names (lib/settings/Group, Item). -->
+      <Group title="Other views">
+        {#each otherViews as o (o.id)}<Item name={o.label} line={o.group} onclick={() => viewSibling(INSIGHTS + o.id)} />{/each}
+      </Group>
     {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     {#if handed && everywhere()}<GlobalResults />{/if}
@@ -158,29 +170,6 @@
 
   .error {
     color: var(--danger-ink);
-  }
-
-  .navpill {
-    display: flex;
-    padding: 2px;
-    border-radius: 26px;
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
-  }
-
-  .navpill button {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: none;
-    color: var(--text);
-    cursor: pointer;
   }
 
   /* Its glass handed to App's row on a phone (lib/glass): the view starts under it, its first heading where the page's

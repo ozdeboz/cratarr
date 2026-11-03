@@ -3,15 +3,13 @@
   // way): the numbers a release has for it, looked up as a task (MusicBrainz, then Discogs at its pace), each
   // track now and after, then Fix writes exactly those (Undo puts the old ones back). Where they come from and whether
   // its discs stay (a CD's) or run on as one from 01 (vinyl, cassette) is said over the list.
-  import { lookRenumber, missingCall, renumber, type Renumbering } from './api';
+  import { lookRenumber, missingCall, type Renumbering } from './api';
+  import { openRecordPlan } from './fileRuns.svelte';
   import Icon from './Icon.svelte';
   import Meter from './Meter.svelte';
-  import { loadHealth } from './healthReport.svelte';
   import { me } from './me.svelte';
   import PageLoading from './PageLoading.svelte';
   import { progressOf, tasks } from './tasks.svelte';
-  import { toast } from './toast.svelte';
-  import { withUndo } from './undo.svelte';
 
   let { album, title, ongone }: { album: string; title: string; ongone: () => void } = $props();
 
@@ -47,20 +45,8 @@
     x.track === null ? '–' : `${discs && x.disc ? `${x.disc}-` : ''}${String(x.track).padStart(2, '0')}`;
   const changes = $derived(preview ? preview.tracks.filter((t) => t.now.disc !== t.to.disc || t.now.track !== t.to.track).length : 0);
 
-  async function fix() {
-    if (!preview || working) return;
-    working = true;
-    try {
-      const { undo } = await renumber(album, preview.tracks.map((t) => ({ id: t.id, ...t.to })), preview.totals);
-      withUndo(`Renumbered ${title}.`, undo, { after: loadHealth });
-      loadHealth();
-      ongone();
-    } catch (e) {
-      toast.fail(e, "The numbers weren't changed");
-    } finally {
-      working = false;
-    }
-  }
+  // Written on the one path (decision 0092's writers' map, 0.14): the numbers reviewed on the sheet, a run there.
+  const fix = () => preview && openRecordPlan('renumber', album);
 </script>
 
 {#if error}

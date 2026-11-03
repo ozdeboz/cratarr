@@ -1,10 +1,15 @@
 // The panel's subject (decisions 0023, 0025): the player, or what is viewed lying under it: a selection of one or more
 // playlists in tabs (Tracks, Export, Repair, Sync; Info is a step of their menu since 2026-11-02), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
 // or an album (`album:<server>/<id>`).
-// It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (Back closes
-// it, a reload brings it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
+// It is in the address as `?view=…` (repeated for each playlist) and `&tab=…` on whichever page shows (a reload brings
+// it back), and it stays viewed across pages: the navigation keeps it in its links (`keepViewed`).
+// The panel keeps its own history (its trail, below; the owner, 2026-11-02): beside the page, changing what it shows
+// leaves the page's history as it is, and the page's Back leaves the panel as it is; full screen, over the page, one
+// step of the page's history stands for the trail, so Back (the device's, the browser's) steps back through it.
 
 import { leaveOnArrival } from './navStep.svelte';
+import { addressOf, HOME, hrefOf, ownWordsHere, pageHere, wordsIn, type PageId } from './addresses';
+import { prefs } from './prefs.svelte';
 
 export type Tab = 'tracks' | 'export' | 'repair' | 'sync';
 export const TABS: { tab: Tab; label: string }[] = [
@@ -62,26 +67,17 @@ export function openThing(part: string, thing: string) {
  *  (backFromStep). */
 export function openStep(subject: string) {
   panel.playerTop = false;
-  history.pushState({ panel: depth() + 1, thing: true }, '', address([subject], 'tracks'));
-  read();
+  step([subject], 'tracks', 'thing');
 }
 /** Back from a thing's page to its part: the step it was opened as, or else the part in its place (opened by its
- *  address, or the thing gone). Once while a step back is under way (a removal goes back, and so does its page on
- *  finding the thing gone). */
-let goingBack = false;
+ *  address, or the thing gone). */
 export function backFromThing(part: string) {
   backFromStep(`${SETTINGS}${part}`);
 }
 /** Back from a step deeper to `subject`: the step it was opened as, or else `subject` in its place. */
 export function backFromStep(subject: string) {
-  if (goingBack) return;
-  if (history.state?.thing) {
-    goingBack = true;
-    addEventListener('popstate', () => (goingBack = false), { once: true });
-    return history.back();
-  }
-  replace(address([subject], 'tracks'));
-  read();
+  if (trail.at(-1)?.how === 'thing' && trail.length > 1) return backOne();
+  swap([subject], 'tracks');
 }
 
 /** A problem of Health (`health:<its key>`), opened from the Health page's cards (lib/HealthPanel), as Settings' parts. */
@@ -135,41 +131,36 @@ export const panel = $state({
   mark: null as { subject: string; track: string; n: number } | null,
 });
 
-const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
-const base = () => location.hash.split('?')[0] || '#/';
-/** What of the address is the page's own, kept as the panel opens and closes over it (the Library's composer, 0.10). */
-const PAGE_KEYS = ['composer'];
-function pageQuery() {
-  const q = query();
-  const out = new URLSearchParams();
-  for (const k of PAGE_KEYS) {
-    const v = q.get(k);
-    if (v) out.set(k, v);
-  }
-  return out;
-}
-/** The page's address, its own part kept. */
-const pageAddress = () => {
-  const q = pageQuery().toString();
-  return q ? `${base()}?${q}` : base();
-};
+const query = () => wordsIn();
+/** The page's address, its own words kept (lib/addresses: the Library's composer, Discover's Spotify playlist…). */
+const pageAddress = () => addressOf(pageHere(), ownWordsHere());
+/** The page's address with `names` viewed on `tab`, its own words kept. */
 function address(names: string[], tab: Tab) {
-  const q = pageQuery();
+  const q = ownWordsHere();
   for (const n of names) q.append('view', n);
   if (tab !== 'tracks') q.set('tab', tab);
-  return `${base()}?${q}`;
+  return addressOf(pageHere(), q);
 }
 
-// The history entries the panel added in this visit carry how many there are: closing goes Back over all of them, so
-// the history stays tidy (viewing adds one; another view from the menu adds one more).
-const depth = (): number => (history.state && typeof history.state.panel === 'number' ? history.state.panel : 0);
-/** How many of the panel's own views (and tab steps) this visit went through to here: back goes to the one before. */
-export const panelDepth = depth;
-function push(url: string) {
-  history.pushState({ panel: depth() + 1 }, '', url);
-}
-function replace(url: string) {
-  history.replaceState(history.state, '', url);
+/** A level of the panel's own history: what it shows, on which tab, and how it was reached (`tab`: another tab over its
+ *  tracks; `thing`: a step deeper, a thing's own page; else a view, a page's or the panel's own). */
+type Step = { names: string[]; tab: Tab; how: 'view' | 'tab' | 'thing' };
+let trail: Step[] = [];
+/** The trail as the panels read it: how many levels, and how the one shown was reached. */
+const steps = $state({ n: 0, how: 'view' as Step['how'] });
+/** How many levels the panel's history has: Back goes to the one before where there is more than one. */
+export const panelDepth = () => steps.n;
+/** Whether the panel shows beside the page (set by App): its history then is its own, out of the page's. */
+const layout = $state({ beside: false });
+/** A panel shows beside the page (not over it): the page's search is the one in sight. */
+export const panelBeside = () => layout.beside && panel.viewed !== null;
+/** A panel covers the page (full screen, over it): the page says nothing about itself meanwhile (decision 0095: a
+ *  page's "nothing" over a panel pointed at a list out of sight). */
+export const pageCovered = () => !layout.beside && panel.viewed !== null;
+export function setBeside(beside: boolean) {
+  if (layout.beside === beside) return;
+  layout.beside = beside;
+  guard();
 }
 
 /** What follows the address with the panel, in the same step (App's page): a page and its panel change together, never
@@ -181,28 +172,119 @@ export function followAddress(f: () => void) {
   return () => void alongside.delete(f);
 }
 
-function read() {
-  for (const f of alongside) f();
-  const q = query();
-  const viewed = q.getAll('view');
-  const first = viewed[0] ?? null;
-  if (first !== panel.viewed || viewed.join('\n') !== panel.selection.join('\n')) {
-    panel.playerTop = false;
-  }
+/** The panel as the trail's last level says, in the address too (no step of the page's history). */
+function show() {
+  const t = trail.at(-1) ?? null;
+  const first = t?.names[0] ?? null;
+  if (first !== panel.viewed || (t?.names ?? []).join('\n') !== panel.selection.join('\n')) panel.playerTop = false;
   panel.viewed = first;
   if (first === null) panel.shown = null;
-  panel.selection = first && !isSingleSubject(first) ? viewed : [];
-  const tab = q.get('tab');
-  panel.tab = panel.selection.length && isTab(tab) ? tab : 'tracks';
+  panel.selection = first && !isSingleSubject(first) ? t!.names : [];
+  panel.tab = panel.selection.length ? t!.tab : 'tracks';
+  steps.n = trail.length;
+  steps.how = t?.how ?? 'view';
+  const st = history.state?.panelGuard ? { ...history.state, trail } : history.state;
+  history.replaceState(st, '', t ? address(t.names, t.tab) : pageAddress());
+  guard();
 }
 
-read();
-addEventListener('hashchange', read);
-addEventListener('popstate', read);
+// Full screen, one step of the page's history (`panelGuard`, the trail with it) stands for the trail while it has a
+// level: Back takes it, and the panel goes back one level (another guard then for the rest); Back to it from a page
+// gone to over the panel (its Home) brings the trail back. Beside the page, none; one left from full
+// screen is taken back, quietly.
+let dropping: (() => void)[] | null = null;
+function guard() {
+  const want = !layout.beside && trail.length > 0;
+  const has = !!history.state?.panelGuard;
+  if (want && !has) {
+    at = key();
+    history.pushState({ ...(history.state ?? {}), panelGuard: true, trail, pk: at }, '', location.href);
+  }
+  else if (!want && has && !dropping) {
+    dropping = [];
+    history.back();
+  }
+}
+/** `then` once the page's history is settled (a guard being taken back is not immediate). */
+function settled(then?: () => void) {
+  if (!then) return;
+  if (dropping) dropping.push(then);
+  else then();
+}
 
-/** Views playlists (one, or a selection), a crate or an album in the panel, on `tab`. What is already viewed is replaced,
- *  without a step in the history (no stack: ✕ and Back then close it rather than going to the one before). */
-export function viewSelection(names: string[], tab: Tab = 'tracks') {
+/** The address as it is, read into the trail: its view the trail's one level (a reload, a link from outside). */
+function fromAddress() {
+  const q = query();
+  const names = q.getAll('view');
+  const tab = q.get('tab');
+  trail = names.length ? [{ names, tab: isTab(tab) ? tab : 'tracks', how: 'view' }] : [];
+}
+
+// Each step of the page's history the panel has seen carries its own key (`pk`); one without is a link followed (an
+// address set, `location.hash`; others' marks on a step keep the key, a step another module adds copies it). A link's
+// view opens as a step of the panel's history (a page's open, the owner 2026-11-02); none closes the panel (Home's
+// button, a page that fills its own panel). A step through the page's history (Back, Forward) goes to its page and
+// leaves the panel as it is, but for the guard's own (full screen). Each step is taken once (popstate and hashchange
+// both come for one).
+let seen = 0;
+const key = () => `${Date.now().toString(36)}-${++seen}`;
+let at: string | null = null;
+function onAddress() {
+  const pk = history.state?.pk as string | undefined;
+  if (pk && pk === at) return;
+  if (!pk) {
+    at = key();
+    history.replaceState({ ...(history.state ?? {}), pk: at }, '', location.href);
+    for (const f of alongside) f();
+    const q = query();
+    const names = q.getAll('view');
+    const tab = isTab(q.get('tab')) ? (q.get('tab') as Tab) : 'tracks';
+    const t = trail.at(-1);
+    if (!names.length) trail = [];
+    else if (!t || names.join('\n') !== t.names.join('\n') || tab !== t.tab) trail = [...trail, { names, tab, how: 'view' }];
+    show();
+    return;
+  }
+  at = pk;
+  if (dropping) {
+    const then = dropping;
+    dropping = null;
+    show();
+    for (const f of then) f();
+    return;
+  }
+  if (!history.state.panelGuard && !layout.beside && trail.length) {
+    // Back over the guard: the panel's own Back.
+    trail = trail.slice(0, -1);
+    show();
+    return;
+  }
+  if (history.state.panelGuard && !layout.beside && !trail.length && Array.isArray(history.state.trail)) trail = history.state.trail;
+  for (const f of alongside) f();
+  show();
+}
+addEventListener('popstate', onAddress);
+addEventListener('hashchange', onAddress);
+at = (history.state?.pk as string | undefined) ?? key();
+history.replaceState({ ...(history.state ?? {}), pk: at }, '', location.href);
+fromAddress();
+show();
+
+/** A level onto the trail. */
+function step(names: string[], tab: Tab, how: Step['how'] = 'view') {
+  trail = [...trail, { names, tab, how }];
+  show();
+}
+/** The trail's last level in its place (none: the first). */
+function swap(names: string[], tab: Tab, how: Step['how'] = 'view') {
+  trail = [...trail.slice(0, -1), { names, tab, how }];
+  show();
+}
+
+/** Views playlists (one, or a selection), a crate or an album in the panel, on `tab`. A selection changing (ticked in
+ *  Select) is in its place; a page's open (viewPlaylist) a step of the panel's history (the owner, 2026-11-02: "Each
+ *  page open is a step"), which Back returns from. */
+export function viewSelection(names: string[], tab: Tab = 'tracks', how: 'swap' | 'step' = 'swap') {
   panel.mark = null;
   if (!names.length) return closePlaylist();
   const t = isSingleSubject(names[0]) ? 'tracks' : tab;
@@ -211,20 +293,18 @@ export function viewSelection(names: string[], tab: Tab = 'tracks') {
     panel.again++;
     return;
   }
-  if (panel.viewed) replace(address(names, t));
-  else push(address(names, t));
-  read();
+  if (how === 'step') step(names, t);
+  else swap(names, t);
 }
 
-/** Views one playlist (or a crate, or an album) on its Tracks. */
-export const viewPlaylist = (name: string) => viewSelection([name]);
+/** Views one playlist (or a crate, or an album) on its Tracks: a step of the panel's history. */
+export const viewPlaylist = (name: string) => viewSelection([name], 'tracks', 'step');
 
-/** Views a subject without a step in the history, even when nothing was viewed: what a page shows by itself (Settings
- *  opening a part beside its list), which Back does not close. */
+/** Views a subject in the place of the one shown, even when nothing was viewed: what a page shows by itself (Settings
+ *  opening a part beside its list). */
 export function viewInPlace(name: string) {
   panel.playerTop = false;
-  replace(address([name], 'tracks'));
-  read();
+  swap([name], 'tracks');
 }
 
 /** Views a subject over the one viewed, going deeper (an album's artist, an artist's album, as Symfonium's): a step of
@@ -237,8 +317,7 @@ export function viewOver(name: string) {
     panel.again++;
     return;
   }
-  push(address([name], 'tracks'));
-  read();
+  step([name], 'tracks');
 }
 
 /** Views `subject` (an album, a playlist, a crate) over the one viewed, for one of its tracks: its list scrolls to the
@@ -254,15 +333,13 @@ export function viewFor(subject: string, track: string) {
 export function openTab(names: string[], tab: Tab) {
   if (names.join('\n') !== panel.selection.join('\n')) return viewSelection(names, tab);
   if (tab === panel.tab) return;
-  history.pushState({ panel: depth() + 1, tab: true }, '', address(panel.selection, tab));
-  read();
+  step(panel.selection, tab, 'tab');
 }
 
 /** Back from another view to the tracks: the step it was opened as, or else the tracks in its place. */
 export function backToTracks() {
-  if (history.state?.tab) return history.back();
-  replace(address(panel.selection, 'tracks'));
-  read();
+  if (trail.at(-1)?.how === 'tab' && trail.length > 1) return backOne();
+  swap(panel.selection, 'tracks');
 }
 
 /** Closes what is viewed (✕, Esc): the player shows if something plays, else the panel goes. `then` runs once it
@@ -280,7 +357,7 @@ export const opening = (subject: string) => panel.viewed === subject && panel.sh
  *  over the navigation (the owner, 2026-10-24). */
 export function goHome() {
   panel.playerTop = false;
-  location.hash = '#/home';
+  location.hash = hrefOf(HOME);
   // Home's button starts it at its top, from Home itself too (the owner, 2026-10-25); back brings back where it was.
   window.scrollTo(0, 0);
 }
@@ -293,55 +370,50 @@ export function viewSibling(name: string) {
 /** Back one level (the panel's back button, a breadcrumb's level above; the owner, 2026-11-01: one rule for every
  *  panel's breadcrumbs, the levels Back walks through): the step before, or the panel closed where it is the first. */
 export function backOne() {
-  if (depth() > 0) return history.back();
-  closePlaylist();
+  if (trail.length < 2) return closePlaylist();
+  trail = trail.slice(0, -1);
+  show();
 }
-/** What shows was opened a step deeper (openStep): the level above it is the step before. Read again as the address
- *  changes. */
-export const isStep = () => (void panel.viewed, void panel.selection, !!history.state?.thing);
+/** What shows was opened a step deeper (openStep): the level above it is the step before. */
+export const isStep = () => steps.how === 'thing' && steps.n > 1;
 
+/** Closes the panel, its whole history with it; `then` once the page's history is settled. */
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
-  const d = depth();
-  if (d > 0) {
-    if (then) addEventListener('popstate', () => then(), { once: true });
-    history.go(-d);
-  } else {
-    replace(pageAddress());
-    read();
-    then?.();
-  }
+  trail = [];
+  show();
+  settled(then);
 }
 
 /** A breadcrumb's page (lib/Crumbs, 0.9.3): the panel closed, as its ✕ closes it, and that page shown, wherever the
  *  panel was opened from (the owner, 2026-10-25: breadcrumbs as what global search needs, its results opening anywhere). */
-export function upToPage(href: string) {
+export function upToPage(page: PageId) {
   // Its layer stays over the page until the page gone to shows (lib/navStep), never the page before for a moment.
-  if (!location.hash.startsWith(href)) leaveOnArrival({ layer: true }, false, href);
+  if (pageHere() !== page) leaveOnArrival({ layer: true }, false, hrefOf(page));
   closePlaylist(() => {
-    if (!location.hash.startsWith(href)) location.hash = href;
+    if (pageHere() !== page) location.hash = hrefOf(page);
   });
 }
 
 /** A renamed playlist stays viewed under its new name; a deleted one leaves the selection. */
 export function playlistRenamed(from: string, to: string) {
   if (!panel.selection.includes(from)) return;
-  replace(address(panel.selection.map((x) => (x === from ? to : x)), panel.tab));
-  read();
+  trail = trail.map((t) => ({ ...t, names: t.names.map((x) => (x === from ? to : x)) }));
+  show();
 }
 export function playlistDeleted(id: string) {
   if (!panel.selection.includes(id)) return;
   const rest = panel.selection.filter((x) => x !== id);
   if (!rest.length) return backOne();
-  replace(address(rest, panel.tab));
-  read();
+  swap(rest, panel.tab);
 }
 
 /** An album that moved (kept or replaced into Music: a new id on the server) stays viewed as itself there. */
 export function albumMoved(source: string, from: string, to: string) {
   if (panel.viewed !== albumSubject(source, from)) return;
-  replace(address([albumSubject(source, to)], 'tracks'));
-  read();
+  const [was, now] = [albumSubject(source, from), albumSubject(source, to)];
+  trail = trail.map((t) => ({ ...t, names: t.names.map((x) => (x === was ? now : x)) }));
+  show();
 }
 
 /** An album that left Incoming (kept, replaced or deleted) closes. */
@@ -350,11 +422,18 @@ export function albumGone(source: string, id: string) {
   if (panel.viewed === albumSubject(source, id)) backOne();
 }
 
+/** The pages of music, whose panels show the same kinds of things (the owner, 2026-11-02): between them a locked panel
+ *  stays, an unlocked one closes. */
+const MUSIC_PAGES: readonly PageId[] = ['home', 'crates', 'playlists', 'library', 'discover'];
 /** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own, Insights' panel
- *  Insights': they stay there. */
-export const keepViewed = (href: string) => {
-  const q = location.hash.split('?')[1];
-  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) && !panel.viewed.startsWith(HEALTH) && !panel.viewed.startsWith(INSIGHTS) && !panel.viewed.startsWith(REQUESTS) && !panel.viewed.startsWith(DOWNLOADS)
-    ? `${href}?${q}`
-    : href;
+ *  Insights': they stay there. Beside the page, from one page of music to another, only while the panel is locked
+ *  (prefs.panelLocked); a link to the page that shows keeps it. */
+export const keepViewed = (page: PageId) => {
+  const here = pageHere();
+  const leaves = layout.beside && !prefs.panelLocked && page !== here && MUSIC_PAGES.includes(page) && MUSIC_PAGES.includes(here);
+  const kept = panel.viewed && !leaves && ![SETTINGS, HEALTH, INSIGHTS, REQUESTS, DOWNLOADS].some((p) => panel.viewed!.startsWith(p));
+  if (!kept) return hrefOf(page);
+  // The panel's words only: the page left keeps its own (the Library's composer is no word of Crates').
+  const w = wordsIn();
+  return addressOf(page, { view: w.getAll('view'), tab: w.get('tab') });
 };

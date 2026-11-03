@@ -1,5 +1,6 @@
 // Deep (decision 0072): what the server's search finds of a kind by what it holds (a playlist or a crate by its tracks),
 // with why; asked a moment after the pill's words stop changing. A page lets these through beside its own name filter.
+import { hiddenLibraries } from './listFilter.svelte';
 import { search, type SearchKind } from './api';
 import { pageView } from './pageView.svelte';
 import { matchLine, type Matched } from './search';
@@ -29,7 +30,7 @@ export function deepMatches(kind: SearchKind, prefix: string): Deep {
     }
     let gone = false;
     const t = setTimeout(() => {
-      search(q, [kind], 100).then(
+      search(q, [kind], 100, 0, hiddenLibraries()).then(
         (r) => {
           if (gone) return;
           const m = new Map<string, Matched>();

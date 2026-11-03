@@ -32,7 +32,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::Serialize;
-use ts_rs::TS;
 
 use super::import::loose;
 use super::works::{Person, Stored};
@@ -216,8 +215,9 @@ struct Line {
 }
 
 /// A work as Other versions names it.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct WorkRef {
     pub mbid: String,
     pub title: String,
@@ -249,24 +249,26 @@ pub struct Versions {
 /// A work as a composer's page lists it (0.12, decision 0086; `GET /api/classical/composers/{key}/works`): its MusicBrainz id
 /// and title, its musical key and catalogue number where its title says them, how many parts the library knows of it,
 /// and how many of its recordings the library holds (an album each).
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct ComposerWork {
     pub work: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub catalogue: Option<String>,
     pub parts: usize,
     pub recordings: usize,
 }
 
 /// A part of a work (a movement), in the work's order: its number there where MusicBrainz gives one.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct WorkPart {
     pub mbid: String,
     pub title: String,
@@ -274,22 +276,24 @@ pub struct WorkPart {
 }
 
 /// A track of a work's recording: the part of the work it is (none: the whole work, or not known) and its length.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct WorkTrack {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub part: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub duration_secs: Option<f64>,
 }
 
 /// One recording of a work: an album's tracks of it, in the work's order (by their part's number; a track whose
 /// number is not known after those, in the album's order), with the album's performers and year.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct WorkRecording {
     pub album_id: String,
     pub album: String,
@@ -300,13 +304,14 @@ pub struct WorkRecording {
 
 /// A work (0.12, decision 0086; `GET /api/works/{mbid}`): its composers, the work it is a part of, its parts in order,
 /// and the library's recordings of it (the oldest first).
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct WorkView {
     pub title: String,
     pub composers: Vec<ComposerRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub parent: Option<WorkRef>,
     pub parts: Vec<WorkPart>,
     pub recordings: Vec<WorkRecording>,
@@ -315,16 +320,17 @@ pub struct WorkView {
 /// The work an album's track performs (0.12, decision 0086; an album's rows' `work`): the work that holds it and its
 /// number there, where MusicBrainz says. A classical record's tracks only (0.13: MusicBrainz has works for almost every
 /// song, so a soundtrack listed its songs as works).
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct RowWork {
     pub mbid: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub parent: Option<WorkRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub part_number: Option<u32>,
 }
 
@@ -1498,7 +1504,7 @@ mod tests {
         assert_eq!(facts[0].release_types, ["Album", "Classical"]);
         assert_eq!(facts[1].release_types, ["Album"], "ELO's Time, tagged only: no");
         let membership = HashMap::new();
-        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
         let classical = || Value::AnyOf { values: vec!["classical".into()] };
         let not = [Condition::new("type", true, classical())];
         let only = [Condition::new("type", false, classical())];

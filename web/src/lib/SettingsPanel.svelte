@@ -10,13 +10,14 @@
   // server's parts are its administrators' (decision 0051): for anyone else they show nothing, and the server's
   // settings are not asked for.
   import { deviceName } from './playOnTarget.svelte';
+  import { rowRoot } from './glassRow.svelte';
   import { glass, handGlass } from './glass.svelte';
   import ResetSheet from './settings/ResetSheet.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { untrack } from 'svelte';
   import { narrowSettings } from './settings/narrow';
-  import { matchesSearch, pageView } from './pageView.svelte';
+  import { matchesSearch, pageView, searchElsewhere, searchNone } from './pageView.svelte';
   import { words } from './search';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
@@ -36,6 +37,9 @@
   import AuthPart from './settings/AuthPart.svelte';
   import UsersPart from './settings/UsersPart.svelte';
   import { me } from './me.svelte';
+  import { loadSettingsWords, settingsMatches, settingsWords } from './settingsSearch.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
   import AppearancePart from './settings/AppearancePart.svelte';
@@ -128,28 +132,46 @@
   // Its own search there, as every panel's (the owner, 2026-10-25): the part's rows narrowed to it (lib/settings/narrow),
   // all of them when the part's name has the words; a thing's page has none.
   const narrowing = $derived(handed && !thing && words(pageView.query).length > 0 && !matchesSearch(partTitle));
+  // None here or in another part (decision 0095): the pill says so from the magnifier, not the panel's own words.
+  // Its own rows read as the other parts' are (lib/settingsSearch), once the words are known.
+  searchNone(
+    () => narrowing && !!settingsWords.by && !settingsMatches(section, partTitle, words(pageView.query)).rows.length && { n: settingsWords.by[section]?.length ?? 0, one: 'setting' },
+    'panel',
+  );
   narrowSettings(() => narrowing);
+  // The page's search through every part (the owner, 2026-11-02: "the search input field should be page-wide across all
+  // child panels. Obviously, the current panel should surface at the top, but directly after, all siblings on the page
+  // should surface too"): under this part's own rows, each other part it finds with its rows; a tap opens that part,
+  // the words still searched. Nothing anywhere: the page's search says so (decision 0095), not this panel.
+  $effect(() => {
+    if (narrowing) void loadSettingsWords();
+  });
+  const elsewhere = $derived.by(() => {
+    if (!narrowing) return [];
+    void settingsWords.by;
+    const w = words(pageView.query);
+    return SECTIONS.filter((x) => x.id !== section && (!x.app || inApp) && (!x.admin || me.admin || x.everyone))
+      .map((x) => ({ id: x.id, title: x.title, found: settingsMatches(x.id, x.title, w) }))
+      .filter((x) => x.found.title || x.found.rows.length);
+  });
+  searchElsewhere(() => elsewhere.length > 0);
+
   // Its Reset as the pill's own button, in the top right glass (the owner, 2026-11-02: "to save space", not a glass of
   // its own beside it).
   const resetAction = () => (resetRows(section).length ? { icon: 'resetSettings' as const, label: 'Reset', run: () => (resetting = true) } : null);
-  const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings', action: resetAction() } : null);
+  const pill = () => (!thing ? { filter: false, view: false, search: 'settings', action: resetAction() } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if thing}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromThing(section)}><Icon name="back" size={22} /></button></span>
-  {:else if !beside}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
-  {/if}
   <!-- Settings › its group › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25;
        the group a picker, the owner 2026-11-02). -->
-  {@const top: Level[] = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }, ...(groupLevel ? [groupLevel] : [])]}
+  {@const top: Level[] = beside ? [] : [{ label: 'Settings', go: () => upToPage('settings') }, ...(groupLevel ? [groupLevel] : [])]}
   {#if thing}
-    <Crumbs trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
+    <Crumbs back={() => backFromThing(section)} trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
   {:else}
-    <Crumbs trail={top} here={partTitle} siblings={beside ? null : siblings} />
+    <Crumbs back={beside ? null : backOne} trail={top} here={partTitle} siblings={beside ? null : siblings} />
   {/if}
 {/snippet}
 {#snippet glassExtra()}
@@ -163,7 +185,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-  <div class="bar" class:beside={beside && !thing}>
+  <div class="bar" {@attach rowRoot()} class:beside={beside && !thing}>
     {@render glassLeft()}
     <span class="end">
       {@render glassExtra()}
@@ -224,7 +246,16 @@
 
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     <!-- Its own search leaving no row (shown until one is left, lib/settings/narrow). -->
-    {#if narrowing}<p class="none">No settings match.</p>{/if}
+    {#if elsewhere.length}
+      <!-- The other parts the search finds, each a group of its rows (lib/settings/Group, Item). -->
+      <div class="elsewhere" aria-label="In other parts">
+        {#each elsewhere as e (e.id)}
+          <Group title={e.title}>
+            {#each e.found.rows.length ? e.found.rows : [e.title] as row (row)}<Item name={row} onclick={() => viewSibling(SETTINGS + e.id)} />{/each}
+          </Group>
+        {/each}
+      </div>
+    {/if}
     {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
@@ -303,13 +334,4 @@
     padding-bottom: calc(var(--mini-h, 0px) + var(--glass-bottom) + 16px);
   }
 
-  .none {
-    margin: 8px 4px;
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
-
-  .scroll:has(:global(.item:not(.left))) .none {
-    display: none;
-  }
 </style>

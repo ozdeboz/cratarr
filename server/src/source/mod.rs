@@ -259,8 +259,9 @@ pub struct ReleaseType {
 
 /// A composer as a record, a track or a search result names them (0.10): the key the page addresses them by, and
 /// their name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct ComposerRef {
     pub key: String,
     pub name: String,
@@ -333,6 +334,8 @@ pub struct OwnPlaylist {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayHow {
     /// Replace what plays, in the given order.
+    Replace,
+    /// Played at once, right after the current track, the rest of the queue kept (one track plays now, 2026-11-02).
     Now,
     /// Right after the current track, in the given order.
     Next,

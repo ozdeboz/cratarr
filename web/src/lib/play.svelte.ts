@@ -4,17 +4,19 @@
 // media server's player the server queues them itself.
 import { ApiError, UNREACHED, pickCollection, type Collection, type CrateLook, type Picked, type Picking, type PlayHow } from './api';
 import { away, pickHere } from './away.svelte';
+import { crates, withoutFor } from './crates.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
-import { crates } from './crates.svelte';
 import { choosePlayer, port } from './player/port.svelte';
 import { prefs } from './prefs.svelte';
 
 /** A crate as its panel and card show it: its two toggles as set here (a tap may be on its way), a crate not listed
  *  here yet as saved; from the libraries switched on; in its panel, as filtered and ordered there (`look`). */
 function shown(what: Collection, look: CrateLook = {}): Picking {
+  // An artist's tracks from the libraries switched on, as their panel shows them.
+  if (what.kind === 'artist') return { ...what, ...(hiddenLibraries() ? { without: hiddenLibraries() } : {}) };
   if (what.kind !== 'crate') return what;
   const c = crates.list?.find((x) => x.id === what.id);
-  const without = hiddenLibraries();
+  const without = withoutFor(what.id);
   return {
     ...what,
     ...(c ? { favourites: c.favourites, ...(c.favourite_albums ? { favourite_albums: c.favourite_albums } : {}) } : {}),
@@ -45,6 +47,8 @@ export async function playCollection(what: Collection, how: PlayHow, name: strin
   // on, it says so (0.12: no longer handed to the media server's player).
   if (!port().holdsQueue) return choosePlayer();
   const got = await pickHereOr(shown(what, look), how, from, source);
-  // The server's shuffle is in its pick already: played as it comes, not shuffled again.
-  return port().playTracks(got.tracks, how === 'shuffle' ? 'play' : how, name, got.source, got.index);
+  // A list of one is one track: it plays now and the queue stays (the owner, 2026-11-02); else the server's shuffle is
+  // in its pick already, played as it comes, not shuffled again.
+  const one = got.tracks.length === 1 && (how === 'play' || how === 'shuffle' || how === 'now');
+  return port().playTracks(got.tracks, one ? 'now' : how === 'shuffle' ? 'play' : how, name, got.source, got.index);
 }

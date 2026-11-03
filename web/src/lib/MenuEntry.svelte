@@ -1,14 +1,18 @@
 <script lang="ts">
   // One entry in a menu sheet (decision 0021), as Finamp's: a 56 px row, a 24 px icon in the accent colour, the label
-  // at 16 px. Destructive entries stay Cratarr's way: red (and last in the list). `checked` makes it one of Finamp's
-  // toggle cards (the playlists for a track): filled with the accent, stronger when on, a mark at the right. `busy`:
+  // at 16 px. Destructive entries stay Cratarr's way: red (and last in the list). `checked` makes it a choice (the owner,
+  // 2026-11-02: one row, its end says what kind): the rounded square at its end for one of several (the playlists for a
+  // track), the round mark for one of many (`plus: false`), filled once chosen (lib/ChoiceMark). `busy`:
   // its action is under way (an album going into a playlist track by track), the spinner in place of its label. `badge`:
   // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means. `onmark`: the
-  // toggle's mark (+ or the tick) is a button of its own, `markLabel` saying what it does; the label keeps `onclick`.
-  // `plus: false`: no + while off (a choice that adds nothing), the tick only when on.
+  // toggle's mark is a button of its own, `markLabel` saying what it does; the label keeps `onclick`.
+  // `plus: false`: one of many (a choice that adds nothing), its round mark.
   // `switched`: an entry that turns something on or off (Sync to this device), its switch at the end. `sub`: a toggle's
   // second line, smaller, after `subIcon` (another player's track and whether it plays, in Play On; no cover).
   // `progress` (0 to 1): the row fills behind its label as its work goes (Download… to this device, lib/DownloadEntry).
+  // `mark`: drawn in the icon's place, where the entry has its own (a snippet's, lib/SnippetMark).
+  import ChoiceMark from './ChoiceMark.svelte';
+  import type { Snippet } from 'svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import SwitchTrack from './SwitchTrack.svelte';
 
@@ -29,6 +33,7 @@
     sub = null,
     subIcon = null,
     progress = null,
+    mark = null,
   }: {
     icon?: IconName | null;
     label: string;
@@ -46,6 +51,7 @@
     sub?: string | null;
     subIcon?: IconName | null;
     progress?: number | null;
+    mark?: Snippet | null;
   } = $props();
 </script>
 
@@ -74,19 +80,19 @@
     aria-busy={busy || progress !== null}
     {onclick}
   >
-    {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
+    {#if mark}{@render mark()}{:else if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
   </button>
 {:else if onmark}
   <div class="toggle split" class:on={checked}>
     <button class="name" role="menuitemradio" aria-checked={checked} disabled={disabled || busy} {onclick}>
       {@render text()}
     </button><i aria-hidden="true"></i><button class="mark" aria-label={markLabel} title={markLabel} disabled={disabled || busy} onclick={onmark}
-      ><Icon name={checked ? 'check' : 'plus'} size={22} /></button
+      ><ChoiceMark kind={plus ? 'several' : 'one'} on={!!checked} /></button
     >
   </div>
 {:else}
   <button class="toggle" class:on={checked} role="menuitemcheckbox" aria-checked={checked} disabled={disabled || busy} aria-busy={busy} {onclick}>
-    {@render text()}{#if checked || plus}<i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />{/if}
+    {@render text()}<ChoiceMark kind={plus ? 'several' : 'one'} on={!!checked} />
   </button>
 {/if}
 
@@ -152,15 +158,11 @@
     padding: 0 14px;
     border: 0;
     border-radius: 12px;
-    background: color-mix(in srgb, var(--art-accent, var(--accent)) 10%, transparent);
+    background: color-mix(in srgb, var(--text) 6%, transparent);
     color: var(--text);
     font: inherit;
     text-align: left;
     cursor: pointer;
-  }
-
-  .toggle.on {
-    background: color-mix(in srgb, var(--art-accent, var(--accent)) 30%, transparent);
   }
 
   .toggle span {
@@ -268,7 +270,7 @@
   }
 
   [aria-busy='true'] :global(svg),
-  [aria-busy='true'] i {
+  [aria-busy='true'] :global(.mark) {
     visibility: hidden;
   }
 </style>

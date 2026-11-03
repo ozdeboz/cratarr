@@ -186,6 +186,25 @@ pub struct FileWrite {
     pub from: Vec<(String, String)>,
     #[serde(default)]
     pub undone: bool,
+    /// A file written whole, not its tags (a length's fixes: the writers' map, 0.14); its `before` and `after` say
+    /// what changes for the sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole: Option<Whole>,
+}
+
+/// A file written whole: what is done to it, the length it is given (ms) where one is, its original's copy kept for
+/// Undo, and the file's prints as planned and as written (Undo puts the copy back only where it is still as written).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Whole {
+    /// reread, length, trim, seektable (`app::length_fixes`).
+    pub op: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<std::path::PathBuf>,
+    pub planned: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrote: Option<String>,
 }
 
 /// One playlist's file before a change, and the fingerprint of the file the change left.
@@ -380,6 +399,22 @@ impl Journal {
 
     /// The last album action done (and not undone) on a server's album: what became of it, for a page still showing
     /// the album by its old id.
+    /// The album actions applied since `since` (epoch seconds), newest first: id, when, the event, whether undone.
+    pub fn album_events_since(&self, since: i64) -> Result<Vec<(EventId, i64, Event, bool)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, at, event, undone_at FROM events WHERE applied = 1 AND at >= ?1 ORDER BY id DESC")?;
+        let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, at, event, undone) = row?;
+            // An event of another kind than the album actions is not one of them.
+            if let Ok(e) = serde_json::from_str::<Event>(&event) {
+                out.push((id, at, e, undone.is_some()));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn album_fate(&self, source: &str, album_id: &str) -> Result<Option<Event>> {
         let db = self.db();
         let event: Option<String> = db
@@ -516,7 +551,7 @@ mod change_tests {
             before: vec![("date".into(), vec![])],
             after: vec![("date".into(), vec!["2010".into()])],
             from: vec![("date".into(), "the album's year".into())],
-            undone: false,
+            undone: false, whole: None,
         };
         let record = RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() };
         let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new() };

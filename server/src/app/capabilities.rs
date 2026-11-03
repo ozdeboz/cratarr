@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde::Serialize;
-use ts_rs::TS;
 
 use super::{App, discover, switches, track_fetch};
 
@@ -109,8 +108,9 @@ pub fn names(on: &Configured) -> Vec<&'static str> {
 
 /// `GET /api/capabilities`. `version` is for showing and the logs only: the page decides by the names.
 /// `{ "version": "0.11.0", "capabilities": ["batches", "classical", "lidarr", …] }`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct Capabilities {
     pub version: String,
     pub capabilities: Vec<String>,

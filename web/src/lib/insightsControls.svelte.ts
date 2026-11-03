@@ -7,6 +7,7 @@
 // brings playlists together.
 import { getLibraries, type LibrariesView } from './api';
 import { prefs } from './prefs.svelte';
+import { setTasteSource, tasteSourceOn } from './mySettings.svelte';
 import { known, libraryShown, showLibrary } from './sources.svelte';
 
 /** One of a few (a segmented switch), or on and off (a switch). */
@@ -101,7 +102,7 @@ const profile = (): ControlGroup[] =>
     ? [
         {
           title: 'Built from',
-          controls: PROFILE_SOURCES.map((s) => ({ kind: 'toggle', name: s.label, line: s.line, get: () => prefs.profileSources[s.id], set: (on: boolean) => (prefs.profileSources[s.id] = on) })),
+          controls: PROFILE_SOURCES.map((s) => ({ kind: 'toggle', name: s.label, line: s.line, get: () => tasteSourceOn(s.id), set: (on: boolean) => void setTasteSource(s.id, on) })),
         },
       ]
     : [];

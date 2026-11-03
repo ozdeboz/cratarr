@@ -1,21 +1,19 @@
-//! The library's words (0.9.7, the owner: one structured harvest of descriptive words, and global search finding them):
-//! every album's genres, styles, moods and tags from every source, each kept with its source and a weight (the user
-//! data's `words`, filled by the harvest's passes), merged here by album. Crates read them (`crate:<kind>:<word>`, the
-//! genre crate and its three siblings), and so search and similarity.
+//! The library's words (0.9.7; decision 0097, the one store): every record's genres, styles, moods and tags from
+//! every source, merged in `store` and read by every reader through the crates' facts (`build`: each file's facts take
+//! its record's words and its own), and by a record's view and a word's menu (`stored`).
 //!
-//! - **Sources**: the files' genres (as the library reads them); MusicBrainz's genres and tags, Discogs' genres and
-//!   styles, Last.fm's tags (by album, and by artist for each of the artist's albums at half their weight); the
-//!   household's album tags. AudioMuse's styles and CLAP's moods stay each file's own (`crates::Facts`).
-//! - **Kind** by the word, not by who said it, so a word is one kind everywhere: a genre where it is one of the broad
-//!   genres (`GENRES`) or any file's genre; a style where a curated source (MusicBrainz's genre list, Discogs' styles)
-//!   names it; a mood where it is one (`MOODS`); else a tag.
-//! - **Weight**: each source's own strength times how far it is trusted (`trust`), summed by album and capped at 1;
-//!   a word below `FLOOR` is left out, so agreement raises a word and one passing remark does not make it.
+//! - **Sources**: the files' tags (Genre, STYLE, MOOD read again, Grouping), AudioMuse's styles and moods (mood is
+//!   AudioMuse's alone), MusicBrainz's genres and tags, Discogs' genres and styles, Last.fm's tags (by album, and by
+//!   artist for each of the artist's albums at half their weight), the household's album tags, and what is set by
+//!   hand (0089).
+//! - **Kind** by the word, not by who said it (`store::Library`); **weight** and floor as 0.9.7's (`store::FLOOR`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+
+pub mod store;
 
 /// The kinds, in search's order.
 pub const KINDS: [&str; 4] = ["genre", "style", "mood", "tag"];
@@ -50,167 +48,13 @@ const GENRES: [&str; 26] = [
     "alternative",
 ];
 
-/// Moods: a word among these is one, whoever said it.
-const MOODS: [&str; 30] = [
-    "happy",
-    "sad",
-    "relaxed",
-    "relaxing",
-    "aggressive",
-    "party",
-    "chill",
-    "chillout",
-    "melancholic",
-    "melancholy",
-    "mellow",
-    "uplifting",
-    "dark",
-    "energetic",
-    "calm",
-    "romantic",
-    "dreamy",
-    "atmospheric",
-    "angry",
-    "peaceful",
-    "sexy",
-    "moody",
-    "upbeat",
-    "hypnotic",
-    "epic",
-    "nostalgic",
-    "sensual",
-    "haunting",
-    "playful",
-    "bittersweet",
-];
-
-/// A word below this merged weight is left out.
-const FLOOR: f32 = 0.15;
 /// An artist's words count for each of their albums at this share.
 const ARTIST_SHARE: f32 = 0.5;
-
-/// An album's words of each kind kept, at most: its strongest.
-fn most_of(kind: &str) -> usize {
-    match kind {
-        "genre" | "mood" => 3,
-        _ => 5,
-    }
-}
-
-/// How far a source's word is trusted: the files and the household's own words the most.
-fn trust(source: &str, raw_kind: &str) -> f32 {
-    match (source, raw_kind) {
-        ("files" | "household", _) => 1.0,
-        ("musicbrainz", "tag") => 0.5,
-        ("musicbrainz", _) => 0.9,
-        ("discogs", _) => 0.8,
-        ("lastfm", _) => 0.5,
-        _ => 0.5,
-    }
-}
 
 /// A word's key: its words as search reads them ("Hip-Hop" and "hip hop" are one).
 pub fn key(word: &str) -> String {
     crate::search::words(word).join(" ")
 }
-
-/// A word of an album's, merged.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Word {
-    /// As most sources write it.
-    pub word: String,
-    pub kind: &'static str,
-    pub weight: f32,
-    /// The sources that said it (musicbrainz, discogs, lastfm, files, household), each once.
-    pub sources: Vec<String>,
-}
-
-/// The library's words by album id.
-#[derive(Debug, Default)]
-pub struct Merged {
-    pub albums: HashMap<String, Vec<Word>>,
-}
-
-/// One source's word for one subject, as the merge reads it.
-#[derive(Debug, Clone)]
-pub struct Said {
-    /// The library's album ids it holds for (an artist's word: each of their albums).
-    pub albums: Vec<String>,
-    pub source: String,
-    pub word: String,
-    /// What the source called it: genre, style, mood or tag.
-    pub raw_kind: String,
-    /// The source's own strength, 0 to 1 (an artist's already shared out).
-    pub weight: f32,
-}
-
-/// The words merged from what the sources said (`said`): each word's one kind, each album's words with their weights.
-pub fn merge(said: &[Said]) -> Merged {
-    let curated: HashSet<String> = said.iter().filter(|s| s.raw_kind != "tag" && s.raw_kind != "mood" && s.source != "household").map(|s| key(&s.word)).collect();
-    let file_genres: HashSet<String> = said.iter().filter(|s| s.source == "files").map(|s| key(&s.word)).collect();
-    let kind_of = |k: &str, said_mood: bool| -> &'static str {
-        if file_genres.contains(k) || GENRES.contains(&k) {
-            "genre"
-        } else if curated.contains(k) {
-            "style"
-        } else if said_mood || MOODS.contains(&k) {
-            "mood"
-        } else {
-            "tag"
-        }
-    };
-    let mood_said: HashSet<String> = said.iter().filter(|s| s.raw_kind == "mood").map(|s| key(&s.word)).collect();
-    // Each key's spellings, the most used shown.
-    let mut spellings: HashMap<String, HashMap<&str, usize>> = HashMap::new();
-    let mut weights: HashMap<(&str, String), (f32, Vec<String>)> = HashMap::new();
-    for s in said {
-        let k = key(&s.word);
-        if k.is_empty() {
-            continue;
-        }
-        *spellings.entry(k.clone()).or_default().entry(s.word.as_str()).or_default() += 1;
-        let w = s.weight.clamp(0.0, 1.0) * trust(&s.source, &s.raw_kind);
-        for a in &s.albums {
-            let e = weights.entry((a.as_str(), k.clone())).or_default();
-            e.0 += w;
-            if !e.1.contains(&s.source) {
-                e.1.push(s.source.clone());
-            }
-        }
-    }
-    let shown: HashMap<String, String> = spellings
-        .into_iter()
-        .map(|(k, s)| {
-            let best = s.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0))).map_or_else(|| k.clone(), |(w, _)| w.to_string());
-            (k, best)
-        })
-        .collect();
-    let mut albums: HashMap<String, Vec<Word>> = HashMap::new();
-    for ((album, k), (w, sources)) in weights {
-        let w = w.min(1.0);
-        if w < FLOOR {
-            continue;
-        }
-        let kind = kind_of(&k, mood_said.contains(&k));
-        albums.entry(album.to_string()).or_default().push(Word { word: shown.get(&k).cloned().unwrap_or(k), kind, weight: w, sources });
-    }
-    for words in albums.values_mut() {
-        words.sort_by(|a, b| b.weight.total_cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));
-        // The strongest of each kind only (0.9.7): every file carries its album's words in the crates' facts, which are
-        // held several times over (the radio, the similarity library, search); a long tail of passing tags cost the
-        // sim about 90 MB at half the harvest, and said little.
-        let mut kept: HashMap<&'static str, usize> = HashMap::new();
-        words.retain(|w| {
-            let n = kept.entry(w.kind).or_default();
-            *n += 1;
-            *n <= most_of(w.kind)
-        });
-    }
-    Merged { albums }
-}
-
-/// The merged words as of the last build and the last change of the words (`stamp`), made again when either moved.
-static MERGED: Mutex<Option<(i64, Arc<Merged>)>> = Mutex::new(None);
 
 /// What the merge is made from, cheaply: when the library was built, and the words and the album tags as kept.
 pub fn stamp(serve: &crate::serve::Serve) -> i64 {
@@ -218,70 +62,162 @@ pub fn stamp(serve: &crate::serve::Serve) -> i64 {
     serve.built_at().wrapping_mul(1_000_003).wrapping_add(words)
 }
 
-/// The library's words, merged (kept until the library or the words change). Blocking.
-pub fn merged(serve: &crate::serve::Serve) -> Result<Arc<Merged>> {
-    let now = stamp(serve);
-    if let Some((at, m)) = MERGED.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
-        && *at == now
-    {
-        return Ok(m.clone());
+/// The store as last built with the crates' facts (`build`): each record's words by its id (Cratarr's own library's),
+/// and every word by kind and key with its one spelling and every source that says it anywhere.
+#[derive(Debug, Default)]
+pub struct Stored {
+    pub records: HashMap<String, store::Words>,
+    pub words: HashMap<(store::Kind, String), (String, Vec<store::Source>)>,
+}
+
+impl Stored {
+    /// A word as a word's menu names it: its kind, its one spelling, its sources (`kind:` as the word crates' ids).
+    pub fn word(&self, kind: &str, word: &str) -> Option<WordOf> {
+        let kind = store::Kind::of(kind)?;
+        let (shown, sources) = self.words.get(&(kind, key(word)))?;
+        Some(WordOf { kind, word: shown.clone(), sources: sources.clone() })
     }
-    let mut said = Vec::new();
-    let rules = serve.rules();
-    // The library's albums: their ids under their Music-form id (the user data's subjects), by artist.
-    let albums = serve.library.album_word_inputs()?;
-    let mut by_base: HashMap<&str, Vec<String>> = HashMap::new();
-    let mut by_artist: HashMap<&str, Vec<String>> = HashMap::new();
-    for (id, base, artist, genres) in &albums {
-        by_base.entry(base.as_str()).or_default().push(id.clone());
-        by_artist.entry(artist.as_str()).or_default().push(id.clone());
-        for g in genres {
-            said.push(Said { albums: vec![id.clone()], source: "files".into(), word: g.clone(), raw_kind: "genre".into(), weight: 1.0 });
-        }
+}
+
+/// A word with every source that says it anywhere (a word crate's `word`: its menu's header).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct WordOf {
+    pub kind: store::Kind,
+    pub word: String,
+    pub sources: Vec<store::Source>,
+}
+
+static STORED: Mutex<Option<Arc<Stored>>> = Mutex::new(None);
+
+/// The store as last built, without building it: for a reader that holds the facts it was built with.
+pub fn stored_now() -> Option<Arc<Stored>> {
+    STORED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The store as built with the crates' facts, built now where they were not. Blocking.
+pub fn stored(serve: &crate::serve::Serve) -> Result<Arc<Stored>> {
+    serve.catalogue().crate_facts()?;
+    Ok(STORED.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default())
+}
+
+/// The store built (decision 0097) from the crates' facts as read (each file's tags and AudioMuse's), the services'
+/// words, the household's tags and what is set by hand, and the facts' words made the store's: a file's genres,
+/// styles, moods and tags become its record's and its own, so every reader of the facts reads the store. A file of no
+/// record of the library is a record of its own. Blocking.
+pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, facts: &mut [crate::crates::Facts]) -> Result<()> {
+    use store::{Kind, RecordIn, Said, Source, TrackIn};
+    let track_id = |f: &crate::crates::Facts| f.track.map_or_else(|| f.rel.clone(), crate::serve::ids::song);
+    let mut order: Vec<String> = Vec::new();
+    let mut files: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, f) in facts.iter().enumerate() {
+        let record = f.track.and_then(|t| album_of.get(&crate::serve::ids::song(t))).cloned().unwrap_or_else(|| format!("line:{}", f.rel));
+        files
+            .entry(record.clone())
+            .or_insert_with(|| {
+                order.push(record);
+                Vec::new()
+            })
+            .push(i);
     }
+    // The services' words and the household's tags, by the records they are said of (an artist's: each of theirs).
+    let mut base_of: HashMap<String, String> = HashMap::new();
+    let mut by_base: HashMap<String, Vec<String>> = HashMap::new();
+    let mut by_artist: HashMap<String, Vec<String>> = HashMap::new();
+    for (id, base, artist, _) in serve.library.album_word_inputs()? {
+        by_base.entry(base.clone()).or_default().push(id.clone());
+        by_artist.entry(artist).or_default().push(id.clone());
+        base_of.insert(id, base);
+    }
+    let mut said: HashMap<String, Vec<Said>> = HashMap::new();
     for (subject, source, word, raw_kind, weight) in serve.userdata.all_words()? {
+        let Some(source) = Source::of(&source) else { continue };
         let (held, share) = match subject.split_once(':') {
             Some(("album", base)) => (by_base.get(base), 1.0),
             Some(("artist", artist)) => (by_artist.get(artist), ARTIST_SHARE),
             _ => continue,
         };
-        let Some(held) = held else { continue };
-        // Named as the rules name genres (their aliases and merges, 0.9.7).
-        let word = crate::catalogue::normalise::aliased(&word, &rules.genre_aliases);
-        said.push(Said { albums: held.clone(), source, word, raw_kind, weight: weight as f32 * share });
+        for a in held.into_iter().flatten() {
+            said.entry(a.clone()).or_default().push(Said { source, word: word.clone(), raw_kind: raw_kind.clone(), weight: weight as f32 * share });
+        }
     }
     for (base, tag) in serve.userdata.all_album_tags()? {
-        if let Some(held) = by_base.get(base.as_str()) {
-            said.push(Said { albums: held.clone(), source: "household".into(), word: tag, raw_kind: "tag".into(), weight: 1.0 });
+        for a in by_base.get(&base).into_iter().flatten() {
+            said.entry(a.clone()).or_default().push(Said { source: Source::Household, word: tag.clone(), raw_kind: "tag".into(), weight: 1.0 });
         }
     }
-    let m = Arc::new(merge(&said));
-    *MERGED.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, m.clone()));
-    Ok(m)
+    let overrides = serve.userdata.overrides()?;
+    let rules = serve.rules();
+    let aliases = HashMap::from([(Kind::Genre, rules.genre_aliases.iter().map(|a| (a.to.clone(), a.from.clone())).collect::<Vec<_>>())]);
+    let records: Vec<RecordIn> = order
+        .iter()
+        .map(|id| {
+            let tracks = files[id]
+                .iter()
+                .map(|&i| {
+                    let f = &facts[i];
+                    let (style, mood) = f.file_words.as_deref().cloned().unwrap_or_default();
+                    TrackIn {
+                        id: track_id(f),
+                        genre: f.genres.clone(),
+                        style,
+                        mood,
+                        tag: f.tags.clone(),
+                        heard: f.clap_moods.is_some(),
+                        heard_styles: f.styles.clone(),
+                        heard_moods: f.moods.clone(),
+                        hand: HashMap::new(),
+                    }
+                })
+                .collect();
+            let hand = base_of.get(id).and_then(|b| overrides.get(b)).map(hand_of).unwrap_or_default();
+            RecordIn { id: id.clone(), tracks, said: said.remove(id).unwrap_or_default(), hand }
+        })
+        .collect();
+    let lib = store::Library::of(&records, &aliases);
+    let mut out = Stored::default();
+    for r in &records {
+        let w = store::record(&lib, r);
+        for (t, &i) in r.tracks.iter().zip(&files[&r.id]) {
+            let list = |k: Kind| -> Vec<String> { w.of_track(&t.id, k).iter().map(|x| x.word.clone()).collect() };
+            let f = &mut facts[i];
+            (f.genres, f.styles, f.moods, f.tags) = (list(Kind::Genre), list(Kind::Style), list(Kind::Mood), list(Kind::Tag));
+            f.file_words = None;
+        }
+        for k in w.kinds.iter().chain(w.tracks.iter().flat_map(|t| t.kinds.iter())) {
+            for x in &k.words {
+                let e = out.words.entry((k.kind, key(&x.word))).or_insert_with(|| (x.word.clone(), Vec::new()));
+                for s in &x.sources {
+                    if !e.1.contains(s) {
+                        e.1.push(*s);
+                    }
+                }
+            }
+        }
+        if !r.id.starts_with("line:") {
+            out.records.insert(r.id.clone(), w);
+        }
+    }
+    for (_, sources) in out.words.values_mut() {
+        sources.sort();
+    }
+    *STORED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(out));
+    Ok(())
 }
 
-/// A file's facts with its album's words (`album`): genres, styles, moods and tags, each once (in any case).
-pub fn add_to(f: &mut crate::crates::Facts, words: &[Word]) {
-    for w in words {
-        let into = match w.kind {
-            "genre" => &mut f.genres,
-            "style" => &mut f.styles,
-            "mood" => &mut f.moods,
-            _ => &mut f.tags,
-        };
-        if !into.iter().any(|x| x.eq_ignore_ascii_case(&w.word) || key(x) == key(&w.word)) {
-            into.push(w.word.clone());
-        }
-    }
+/// A record's words set by hand (0089's fields), by kind.
+fn hand_of(o: &crate::userdata::overrides::Overrides) -> HashMap<store::Kind, Vec<String>> {
+    use store::Kind;
+    [(Kind::Genre, &o.genres), (Kind::Style, &o.styles), (Kind::Mood, &o.moods), (Kind::Tag, &o.tags)].into_iter().filter_map(|(k, v)| v.clone().map(|v| (k, v))).collect()
 }
 
 /// Every word of the library by kind, with the albums that carry it (by the files' crate facts: the files' own genres,
 /// AudioMuse's styles and moods, and the merged words): what search finds a word by. A word shown as a genre is not
 /// also a style. The labels too (0.11, quick crates: search's label), a kind apart: a label named as a genre is both.
 /// Blocking.
-pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>) -> Vec<(&'static str, String, usize)> {
+pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>, off: &HashSet<i64>) -> Vec<(&'static str, String, usize)> {
     let mut by: HashMap<(&'static str, String), (HashMap<String, usize>, HashSet<&str>)> = HashMap::new();
-    for f in facts {
+    // Of the libraries switched on (`off`: the folders of those switched off): what a word's crate holds.
+    for f in facts.iter().filter(|f| !off.contains(&f.folder)) {
         let Some(album) = f.track.and_then(|t| album_of.get(&crate::serve::ids::song(t))) else { continue };
         for (kind, list) in [("genre", &f.genres), ("style", &f.styles), ("mood", &f.moods), ("tag", &f.tags), ("label", &f.labels)] {
             for w in list {
@@ -309,68 +245,21 @@ pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>)
 }
 
 /// The search index (`index`) as of the files' crate facts: made again when they are.
-static INDEX: Mutex<Option<(usize, usize, Arc<Vec<(&'static str, String, usize)>>)>> = Mutex::new(None);
+static INDEX: Mutex<Option<(usize, usize, Vec<i64>, Arc<Vec<(&'static str, String, usize)>>)>> = Mutex::new(None);
 
 /// Every word of the library by kind with how many albums carry it, for search. Blocking.
-pub fn search_index(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue) -> Result<Arc<Vec<(&'static str, String, usize)>>> {
+pub fn search_index(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue, off: &HashSet<i64>) -> Result<Arc<Vec<(&'static str, String, usize)>>> {
     let facts = cat.crate_facts()?;
     let of = (Arc::as_ptr(&facts) as usize, facts.len());
-    if let Some((p, n, i)) = INDEX.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+    let mut folders: Vec<i64> = off.iter().copied().collect();
+    folders.sort_unstable();
+    if let Some((p, n, f, i)) = INDEX.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
         && (*p, *n) == of
+        && *f == folders
     {
         return Ok(i.clone());
     }
-    let made = Arc::new(index(&facts, &serve.library.song_album_map()?));
-    *INDEX.lock().unwrap_or_else(|e| e.into_inner()) = Some((of.0, of.1, made.clone()));
+    let made = Arc::new(index(&facts, &serve.library.song_album_map()?, off));
+    *INDEX.lock().unwrap_or_else(|e| e.into_inner()) = Some((of.0, of.1, folders, made.clone()));
     Ok(made)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn said(album: &str, source: &str, word: &str, raw_kind: &str, weight: f32) -> Said {
-        Said { albums: vec![album.into()], source: source.into(), word: word.into(), raw_kind: raw_kind.into(), weight }
-    }
-
-    fn words_of<'a>(m: &'a Merged, album: &str) -> Vec<(&'a str, &'static str)> {
-        m.albums.get(album).map(|w| w.iter().map(|w| (w.word.as_str(), w.kind)).collect()).unwrap_or_default()
-    }
-
-    #[test]
-    fn a_word_has_one_kind_by_what_it_is_not_by_who_said_it() {
-        let m = merge(&[
-            said("a", "files", "Trip Hop", "genre", 1.0),
-            said("a", "discogs", "Electronic", "genre", 1.0),
-            said("a", "discogs", "Downtempo", "style", 1.0),
-            said("a", "lastfm", "downtempo", "tag", 1.0),
-            said("a", "lastfm", "melancholic", "tag", 1.0),
-            said("a", "lastfm", "seen at the park", "tag", 1.0),
-            // Another album's file genre: a genre everywhere.
-            said("b", "files", "Shoegaze", "genre", 1.0),
-            said("a", "musicbrainz", "shoegaze", "style", 1.0),
-        ]);
-        let a = words_of(&m, "a");
-        assert!(a.contains(&("Trip Hop", "genre")) && a.contains(&("Electronic", "genre")), "{a:?}");
-        assert!(a.contains(&("Downtempo", "style")), "curated, so a style however Last.fm calls it: {a:?}");
-        assert!(a.contains(&("melancholic", "mood")) && a.contains(&("seen at the park", "tag")), "{a:?}");
-        assert!(a.iter().any(|(w, k)| w.eq_ignore_ascii_case("shoegaze") && *k == "genre"), "a file's genre stays a genre: {a:?}");
-    }
-
-    #[test]
-    fn an_album_keeps_its_strongest_words_of_each_kind() {
-        let tags: Vec<Said> = (0..9).map(|i| said("a", "lastfm", &format!("tag {i}"), "tag", 0.9 - i as f32 * 0.05)).collect();
-        let m = merge(&tags);
-        let a = m.albums.get("a").unwrap();
-        assert_eq!(a.len(), 5, "five tags at most");
-        assert_eq!(a[0].word, "tag 0", "the strongest first");
-    }
-
-    #[test]
-    fn agreement_raises_a_word_and_a_passing_remark_does_not_make_one() {
-        let m = merge(&[said("a", "lastfm", "jazzy", "tag", 0.2), said("a", "lastfm", "smooth", "tag", 0.6), said("a", "musicbrainz", "smooth", "tag", 0.6)]);
-        let a = m.albums.get("a").unwrap();
-        assert!(a.iter().all(|w| w.word != "jazzy"), "0.2 × 0.5 is below the floor");
-        assert!((a[0].weight - 0.6).abs() < 1e-6 && a[0].word == "smooth", "two sources summed: {a:?}");
-    }
 }

@@ -2,6 +2,7 @@
 // while any search is on, so its count shows beside the page's before it is looked at; and which the page or panel
 // shows, its own results or everywhere's (the globe beside the search, lib/ContentControls). The library's kinds and what is not in it from the
 // server, the pages and Settings' parts from the browser (lib/everywhere).
+import { hiddenLibraries } from './listFilter.svelte';
 import { search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
 import { isSpotifyView } from './discoverModes';
@@ -48,9 +49,9 @@ const PAGE_KINDS: Record<string, string[]> = {
   playlists: ['playlist'],
   crates: ['crate', 'genre'],
   settings: ['setting'],
-  requests: ['page:#/requests'],
-  downloads: ['page:#/downloads'],
-  insights: ['page:#/insights'],
+  requests: ['page:requests'],
+  downloads: ['page:downloads'],
+  insights: ['page:insights'],
 };
 /** A few of each kind. */
 const EACH = 5;
@@ -112,7 +113,7 @@ $effect.root(() => {
     if (kept) globalSearch.found = { q, r: kept };
     let gone = false;
     const t = setTimeout(() => {
-      search(q, KINDS, EACH).then(
+      search(q, KINDS, EACH, 0, hiddenLibraries()).then(
         (r) => {
           keep(foundKept, q, r);
           if (gone) return;
@@ -145,7 +146,7 @@ $effect.root(() => {
     const finds = (r: ServerSearch): Finds => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, READINGS) ?? []);
     const ask = (phrase: string): Promise<Finds> => {
       const key = words(phrase).join(' ');
-      const got = key === whole ? Promise.resolve(f.r) : search(phrase, KINDS, EACH);
+      const got = key === whole ? Promise.resolve(f.r) : search(phrase, KINDS, EACH, 0, hiddenLibraries());
       return got.then((r) => (answers.set(key, r), finds(r)));
     };
     untrack(() =>
@@ -209,7 +210,7 @@ ${kind}`, globalSearch.allFound);
     return;
   }
   try {
-    const r = await search(q, [kind as SearchKind], PAGE, have.length);
+    const r = await search(q, [kind as SearchKind], PAGE, have.length, hiddenLibraries());
     const g = r.groups[kind as SearchKind];
     const page = (g?.items ?? []) as Found[];
     const now = globalSearch.allFound;

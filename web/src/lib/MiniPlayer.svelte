@@ -17,6 +17,8 @@
   import { portal } from './portal';
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
+  import { playsHere } from './output.svelte';
+  import { drivenName } from './playOn.svelte';
   import QueueSheet from './QueueSheet.svelte';
   import { queueCue } from './queueCue.svelte';
   import { playingCrateOuts } from './crates.svelte';
@@ -59,6 +61,8 @@
   $effect(() => () => clearTimeout(grabTimer));
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
   let outputOpen = $state(false);
+  /** Where it would play: this device, or the player it plays on. */
+  const whereName = $derived(playsHere() ? 'This device' : (drivenName() ?? 'This device'));
   /** The bar's width from which the queue button has room beside the title. */
   const QUEUE_ROOM = 420;
   /** How long the queue button shows what went in. */
@@ -243,6 +247,15 @@
       {/if}
       {/if}
     </div>
+  </div>
+{:else}
+  <!-- Nothing playing: in its place, as tall as it, where it would play (the owner, 2026-11-03: the top right glass has
+       no room for it). -->
+  <div class="idle">
+    <!-- Round, as tall as the bar, the bar's icon with its words under it (the owner, 2026-11-03). -->
+    <button class="where" aria-haspopup="dialog" aria-label={`Play on: ${whereName}`} title={`Play on: ${whereName}`} onclick={() => (outputOpen = true)}
+      ><Icon name="speaker" size={24} /><span>Play on</span></button
+    >
   </div>
 {/if}
 {#if outputOpen}
@@ -506,5 +519,35 @@
     font-weight: 700;
     line-height: 16px;
     text-align: center;
+  }
+
+  /* Nothing playing: the glass with where it plays, at the end of the mini-player's place; only it takes taps. */
+  .idle {
+    display: flex;
+    justify-content: flex-end;
+    pointer-events: none;
+  }
+
+  .where {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    width: 64px;
+    height: 64px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    /* The mini-player's own colour and shadow (the owner, 2026-11-03), as its bar's (.body) with no cover playing. */
+    background: color-mix(in srgb, var(--accent) 25%, var(--bg));
+    box-shadow: 0 4px 20px rgb(0 0 0 / 0.45);
+    color: var(--text);
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.1;
+    pointer-events: auto;
+    cursor: pointer;
   }
 </style>

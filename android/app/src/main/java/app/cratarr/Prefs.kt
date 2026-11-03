@@ -11,7 +11,7 @@ class Prefs(context: Context) {
 
     /** Cratarr's public address (the one used from anywhere), with its scheme; null until set. */
     var publicAddress: String?
-        get() = p.getString(SERVER_URL, null)?.trim()?.takeIf { it.isNotEmpty() }
+        get() = p.getString(SERVER_URL, null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.PREVIEW_SERVER.takeIf { it.isNotEmpty() }
         set(value) {
             p.edit().putString(SERVER_URL, value).apply()
         }
@@ -442,7 +442,7 @@ class Prefs(context: Context) {
                     o.optBoolean("albums"),
                     o.optBoolean("restart"),
                     (0 until (seed?.length() ?: 0)).map { i -> seed!!.optString(i) },
-                    o.optString("within").takeIf { w -> w.isNotEmpty() && !o.isNull("within") },
+                    o.optJSONObject("within")?.toString(),
                 )
             } catch (e: Exception) {
                 null
@@ -458,7 +458,7 @@ class Prefs(context: Context) {
                         .put("albums", value.albums)
                         .put("restart", value.restart)
                         .put("seed", org.json.JSONArray(value.seed))
-                        .put("within", value.within ?: org.json.JSONObject.NULL)
+                        .put("within", value.within?.let { org.json.JSONObject(it) } ?: org.json.JSONObject.NULL)
                         .toString(),
                 )
             }.apply()
@@ -479,7 +479,7 @@ class Prefs(context: Context) {
                 mode == "album_mix",
                 mode == "reshuffle",
                 (0 until (seed?.length() ?: 0)).map { seed!!.optString(it) },
-                o.optString("within").takeIf { it.isNotEmpty() && !o.isNull("within") },
+                null,
             )
         } catch (e: Exception) {
             // nothing usable: off

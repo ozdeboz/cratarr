@@ -269,6 +269,19 @@ by a later record that says so in its header. A new decision takes the next numb
   in one shape; Health shows each kind of difference in one line with its action. Amends 0089: types into files
   follow Cratarr.
 - [0093: Test and development data](0093-test-and-development-data.md): accepted, for 0.13. A fixture library of small
-  generated albums in the repository; one end-to-end suite starting the real server on a throwaway copy of it; a
-  development instance on this PC with its own data and music (the fixtures and a read-only sample from the NAS), which
-  the dev page points at instead of production; previews stay on the NAS, built once the suite passes.
+  generated albums made by the server; one end-to-end suite starting the real server on a throwaway copy of it; an
+  optional development instance with its own data and music, fenced off from the world. How developers work, and
+  where a maintainer tries a preview, are not directed.
+- [0094: Taste in sequences and lists](0094-taste-in-sequences-and-lists.md): accepted, for 0.14. One taste per
+  account, its source switches on the server and read by every use; taste chosen, never mixed in unseen: Best match on
+  every list, Your taste as a radio mode; skips keep tracks away gently; one radio sheet wherever radio starts (where,
+  how, whole records); a list's own order named by what it is. Amends 0036 and 0060.
+- [0095: One way to say nothing](0095-one-way-to-say-nothing.md): accepted, for 0.14. Every list passes through the
+  same states: loading keeps what shows, an error says so with Try again, nothing caused here is the popover on its
+  cause with its reasons as chips, nothing truly is plain text in place; reasons are data, the server's where it
+  decides them; one component each.
+- [0096: Libraries equal; playlists in Cratarr; Incoming a library's setting](0096-libraries-equal.md): accepted, to be
+  built in 0.15/0.16. Playlists in Cratarr's database, .m3u an export; any number of main libraries, each with its own
+  name, colour, naming and format; Incoming one library per fetcher, its records the only new ones, Keep into a chosen
+  main library; Health over every library; each user's own music a main library with an owner. Amends 0009, 0034 and
+  0084.

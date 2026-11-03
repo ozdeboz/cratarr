@@ -47,7 +47,7 @@
   let missed = $state<string[]>([]);
   /** The term whose sheet shows. */
   let at = $state<number | null>(null);
-  let field = $state<HTMLInputElement>();
+  let field = $state<HTMLTextAreaElement>();
   /** The caret into its field (a new crate's start). */
   export function focus() {
     field?.focus();
@@ -56,20 +56,30 @@
   /** How many of each kind a phrase's readings offer (the owner, 2026-10-30: the right one could not be chosen with one). */
   const EACH = 3;
   const ask = (phrase: string): Promise<Found> =>
-    search(phrase, [...TERM_KINDS], EACH).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
+    search(phrase, [...TERM_KINDS], EACH, 0, hiddenLibraries()).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
 
   /** Words read as a whole line (lib/quickCrate readLine), each phrase a term of its best reading, one already in it
    *  once; an "and" or "or" between two terms of one kind sets how they join (modesFrom). A search's words too. */
+  /** Words given and not read in yet: the field says "and…" meanwhile, never the example again (the owner, 2026-11-02:
+   *  after Enter the example showed for a moment, the field empty before its words came back as terms). */
+  let reading = $state(0);
   export async function add(words: string) {
     if (!words.trim()) return;
-    const r = readOnto(chips, await readLine(words, ask));
-    missed = r.missed;
-    modes = { ...modes, ...r.modes };
-    chips = [...chips, ...r.add];
+    reading++;
+    try {
+      const r = readOnto(chips, await readLine(words, ask));
+      missed = r.missed;
+      modes = { ...modes, ...r.modes };
+      chips = [...chips, ...r.add];
+    } finally {
+      reading--;
+    }
   }
 
   /** A comma (or a semicolon) ends what is before it: read, the rest stays in the field; Enter reads it all. */
   function typed() {
+    // One line of words: a pasted line break is a space.
+    if (/[\r\n]/.test(text)) text = text.replace(/[\r\n]+/g, ' ');
     const cut = Math.max(text.lastIndexOf(','), text.lastIndexOf(';'));
     if (cut < 0) return;
     void add(text.slice(0, cut));
@@ -134,15 +144,19 @@
           class="term not"
           aria-label="Take {name} back into this crate"
           onclick={() => onexcluded?.(name)}>{name}</button
-        >{/each}{/if}{#if parts.length || excluded.length}{' '}{/if}<input
-    type="search"
-    placeholder={chips.length ? 'and…' : EXAMPLE}
+        >{/each}{/if}{#if parts.length || excluded.length}{' '}{/if}<textarea
+    class="field"
+    rows="1"
+    enterkeyhint="done"
+    autocomplete="off"
+    spellcheck="false"
+    placeholder={chips.length || reading ? 'and…' : EXAMPLE}
     aria-label={chips.length ? 'More words for the crate' : 'Words for a crate'}
     bind:this={field}
     bind:value={text}
     oninput={typed}
     onkeydown={entered}
-  />
+  ></textarea>
 </p>
 {#if rest.length}<button class="more" onclick={() => onmore?.()}>and {rest.length} more {rest.length === 1 ? 'condition' : 'conditions'}</button>{/if}
 {#if missed.length}<p class="note">Nothing found for {missed.join(', ')}</p>{/if}
@@ -170,6 +184,7 @@
   /* The crate as a sentence (mockup B): its terms in the text's own weight, underlined, the words between muted. */
   /* On an accent line, like writing (the owner's 3a, 2026-10-30): no box, before typing or after. */
   .sentence {
+    min-width: 0;
     margin: 0;
     padding: 4px 2px 8px;
     border-bottom: 2px solid var(--accent);
@@ -228,11 +243,20 @@
     border-radius: 3px;
   }
 
-  /* Where more is typed: the sentence's end, as wide as what is in it. */
-  input[type='search'] {
+  /* Where more is typed: the sentence's end, as wide as what is in it, never wider than the sentence; what is in it
+     (the example while nothing is typed, or long words) wraps inside it (the owner, 2026-11-02: the example made the
+     field wider than the panel; "it should contain its content"). One line of words: Enter reads them. */
+  .field {
+    display: inline-block;
+    box-sizing: border-box;
     field-sizing: content;
     min-width: 5ch;
     max-width: 100%;
+    margin: 0;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    resize: none;
+    vertical-align: top;
     padding: 0;
     border: 0;
     background: none;
@@ -242,17 +266,17 @@
     caret-color: var(--accent);
   }
 
-  input[type='search']::placeholder {
+  .field::placeholder {
     color: var(--muted);
     opacity: 1;
   }
 
-  input[type='search']:focus {
+  .field:focus {
     outline: none;
   }
 
   /* Nothing typed yet: the example alone, the field as wide as it. */
-  .empty input[type='search'] {
+  .empty .field {
     min-width: min(100%, 12ch);
   }
 

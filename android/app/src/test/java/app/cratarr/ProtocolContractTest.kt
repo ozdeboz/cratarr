@@ -39,6 +39,7 @@ class ProtocolContractTest {
             JSONObject().put("op", "seek").put("positionMs", 1_000).put("wind", true),
             JSONObject().put("op", "sleep").put("atMs", 5_000).put("endOfTrack", false),
             JSONObject().put("op", "add").put("tracks", tracks).put("at", 1),
+            JSONObject().put("op", "add").put("tracks", tracks).put("at", 1).put("now", true),
             JSONObject().put("op", "move").put("from", 0).put("to", 1),
             JSONObject().put("op", "remove").put("index", 0),
             JSONObject().put("op", "upcoming").put("tracks", tracks).put("shuffled", true),

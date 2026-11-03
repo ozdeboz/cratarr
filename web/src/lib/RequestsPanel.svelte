@@ -6,7 +6,10 @@
   // requests: each with where it stands, a waiting one taken back from its menu, or many at once in Select (the owner,
   // 2026-10-27: what one has, several have). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
   // fetches now (how far), then what it watches for and has not found yet.
+  import ChoiceMark from './ChoiceMark.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
+  import { rowRoot } from './glassRow.svelte';
+  import { hrefOf, viewOn } from './addresses';
   import { toast } from './toast.svelte';
   import { plural } from './insights.svelte';
   import { glass, handGlass } from './glass.svelte';
@@ -20,7 +23,7 @@
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
   import { backOne, REQUESTS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
@@ -104,6 +107,14 @@
   const found = (r: AlbumRequest) => matchesSearch(r.album, r.artist, r.user);
   const waiting = $derived((view?.waiting ?? []).filter(found));
   const mine = $derived((view?.mine ?? []).filter(found));
+  const seen = (a: { album: string; artist: string | null }) => matchesSearch(a.album, a.artist);
+  // The page's words leaving none of the list (decision 0095): said from the magnifier, not the list's "None waiting".
+  searchNone(() => {
+    if (list === 'waiting') return !waiting.length && { n: view?.waiting?.length ?? 0, one: 'request' };
+    if (list === 'mine') return !mine.length && { n: view?.mine.length ?? 0, one: 'request' };
+    const w = requests.watching;
+    return !!w && !w.fetching.some(seen) && !w.looking.some(seen) && { n: w.fetching.length + w.looking.length, one: 'record' };
+  }, 'panel');
   /** What Select can tick in this list. */
   const selectable = $derived(list === 'waiting' ? waiting : list === 'mine' ? mine.filter(canTakeBack) : []);
   const ticked = $derived(selecting ? selectable.filter((r) => selecting!.has(r.id)).map((r) => r.id) : []);
@@ -136,15 +147,15 @@
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
   const handed = $derived(glass.one && !beside);
-  const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'requests' } : null);
+  const pill = () => (!beside ? { filter: false, view: false, search: 'requests' } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   <Crumbs
-    trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]}
+    back={beside ? null : backOne}
+    trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('requests') }]}
     here={L.name}
     siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
   />
@@ -161,7 +172,7 @@
   {#if tickable && selecting}
     <ReleaseRow cover={r.cover} title={r.album} line={line(r, who)} tone={tone(r)}>
       <button class="tick" class:on={selecting.has(r.id)} role="checkbox" aria-checked={selecting.has(r.id)} aria-label={`Select ${r.album}`} onclick={() => tick(r.id)}
-        ><Icon name={selecting.has(r.id) ? 'circleCheck' : 'circle'} size={24} /></button
+        ><ChoiceMark kind="several" on={selecting.has(r.id)} /></button
       >
     </ReleaseRow>
   {:else}
@@ -171,7 +182,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}
@@ -183,27 +194,27 @@
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
-      {#if !view.fetcher}<p class="note">Approved requests need Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
+      {#if !view.fetcher}<p class="note">Approved requests need Lidarr: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
       <Group>
-        {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}<Item name="None waiting" />{/each}
+        {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}{#if !view.waiting?.length}<Item name="None waiting" />{/if}{/each}
       </Group>
     {:else if list === 'mine'}
       <Group>
         {#each mine as r (r.id)}{@render row(r, false, canTakeBack(r))}{:else}
-          <Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = '#/discover')} />
+          {#if !view.mine.length}<Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = hrefOf('discover'))} />{/if}
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}
         <Group title="Fetching now">
-          {#each w.fetching.filter((a) => matchesSearch(a.album, a.artist)) as a (`f:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} fill={a.done} />{/each}
+          {#each w.fetching.filter(seen) as a (`f:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} fill={a.done} />{/each}
         </Group>
       {/if}
       <Group title="Not found yet" more="What Lidarr watches for and has not found yet (its Wanted).">
-        {#each w.looking.filter((a) => matchesSearch(a.album, a.artist)) as a (`l:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} />{:else}<Item name="Nothing" />{/each}
+        {#each w.looking.filter(seen) as a (`l:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} />{:else}{#if !w.looking.length}<Item name="Nothing" />{/if}{/each}
         {#if w.more}<Item name="{w.more.toLocaleString()} more" line="In Lidarr's Wanted" />{/if}
       </Group>
     {/if}
@@ -248,7 +259,7 @@
         <MenuEntry icon="undo" label="Take back" danger onclick={() => (takeBack(r), (opened = null))} />
       {/if}
       {#if !answers && !canTakeBack(r)}
-        <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = '#/discover'))} />
+        <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = hrefOf('discover')))} />
       {/if}
     </div>
   </MenuSheet>

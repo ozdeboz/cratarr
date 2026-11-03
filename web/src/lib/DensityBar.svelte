@@ -18,14 +18,15 @@
 <script lang="ts">
   // One number of a list's profile (lib/ListProfile): its density over the scale as the bar's colour, its middle a
   // mark; the scale's ends under it. No values beside it: they read from the bar. No outline of the middle half (the
-  // owner: with a few tracks it spans empty space; the density shows where they are).
-  let { bins, lo, hi, mid, ends }: { bins: readonly number[]; lo: number; hi: number; mid: number; ends: [string, string] } = $props();
+  // owner: with a few tracks it spans empty space; the density shows where they are). `inside`: the list filter's
+  // window on it (0 to 1 of the scale, lib/profileWindow), the rest greyed.
+  let { bins, lo, hi, mid, ends, inside = null }: { bins: readonly number[]; lo: number; hi: number; mid: number; ends: [string, string]; inside?: [number, number] | null } = $props();
 
   const at = (x: number) => Math.min(1, Math.max(0, (x - lo) / (hi - lo || 1))) * 100;
 </script>
 
 <div class="bar">
-  <div class="track" style:background-image={densityGradient(bins)}>
+  <div class="track" style:background-image={densityGradient(bins, inside)}>
     <div class="mid" style:left="{at(mid)}%"></div>
   </div>
   <div class="ends"><span>{ends[0]}</span><span>{ends[1]}</span></div>

@@ -15,8 +15,9 @@ export type GlassParts = {
   left: Snippet;
   pill: () => PillSettings | null;
   extra?: Snippet | null;
-  /** The panel's action bar has the top (stuck): the glass goes just under it, as the panel's own pills did. */
-  below?: () => boolean;
+  /** A library item's panel (a playlist, a crate, a record, an artist): the bar of pages may make way for it (Display's
+   *  Hide when opening a library item). */
+  item?: boolean;
 };
 
 export const glass = $state<{ one: boolean; panel: GlassParts | null }>({ one: false, panel: null });

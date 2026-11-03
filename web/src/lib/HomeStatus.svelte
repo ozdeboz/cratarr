@@ -6,6 +6,7 @@
   // and what is wrong; of what is worth knowing only AudioMuse's progress (the owner's tile). Nothing: it does not show.
   // An administrator's only: the report is theirs.
   import { getHealthReport, type HealthFinding } from './api';
+  import { hrefOf } from './addresses';
   import { iconOf, openInHealth } from './health';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
@@ -55,7 +56,7 @@
 {:else if me.admin && rows.length}
   <section aria-label="System status">
     <!-- Its arrow: the Health page, where all of it is (decision 0063). -->
-    <SectionHead title="System status" onmore={() => (location.hash = '#/health')} />
+    <SectionHead title="System status" onmore={() => (location.hash = hrefOf('health'))} />
     <div class="needs">
       {#each rows as f (f.key)}
         {#if f.open}

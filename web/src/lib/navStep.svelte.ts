@@ -4,6 +4,7 @@
 import { untrack } from 'svelte';
 import { arm, MOVE_MS, step, type Leave, type Pending, type Where } from './navStep';
 import { panel } from './panel.svelte';
+import { hrefOf, pageHere } from './addresses';
 
 /** App's page as asked and as shown (lib/Hold), App's to keep; `layerHeld`: a closed panel's layer stays over the page
  *  until the page gone to shows. */
@@ -15,7 +16,7 @@ export const onArrival = (f: (l: Leave) => void) => void letGo.push(f);
 
 let pending: Pending | null = null;
 let timer: ReturnType<typeof setTimeout> | undefined;
-const asked = (): Where => ({ page: navPlace.page, viewed: panel.viewed, hash: location.hash.split('?')[0] || '#/' });
+const asked = (): Where => ({ page: navPlace.page, viewed: panel.viewed, hash: hrefOf(pageHere()) });
 const shown = (): Where => ({ page: navPlace.shownPage, viewed: panel.shown });
 
 function run() {

@@ -9,8 +9,8 @@ import { can } from './capabilities.svelte';
 import { localMode } from './deviceMusic.svelte';
 import { complete } from './filterRow';
 import { askAtOnce, filterOf, filterStep, hiddenLibraries, setConditions } from './listFilter.svelte';
-import { prefs } from './prefs.svelte';
-import { ALL, rowsOfType, typeOfRows, typeOptions, typesShown, type TypeAxis, type TypeOption } from './recordTypeRules';
+import { prefs, type FilterCondition } from './prefs.svelte';
+import { ALL, rowsOfType, toggledRows, typeOfRows, typeOptions, typesShown, typesTicked, type TypeAxis, type TypeOption } from './recordTypeRules';
 
 const KIND = 'library';
 
@@ -41,6 +41,8 @@ const typeRows = () => filterOf(KIND).conditions.filter((c) => c.axis === 'type'
 
 /** The one type the rows are (Records: none); null where they are more (Selected types). */
 export const typeNow = () => typeOfRows(typeRows());
+/** The types ticked in the picker: every one the rows select. */
+export const typesTickedNow = () => typesTicked(typeRows());
 /** What the picker reads. */
 export const typesLabel = () => typesShown(typeRows());
 
@@ -54,9 +56,16 @@ export function typesOffered(): TypeOption[] {
 /** The filter's Type rows replaced by the pick's (none for Records): one step of the history (`step`: on the Library;
  *  a sidebar link elsewhere goes there instead). */
 export function chooseType(id: string, step = true) {
+  setTypeRows(rowsOfType(id), step);
+}
+
+/** A type taken into the selection or out of it (a long-press in the picker), one step of the history as a pick. */
+export const toggleType = (id: string) => setTypeRows(toggledRows(typeRows(), id), true);
+
+function setTypeRows(rows: FilterCondition[], step: boolean) {
   const set = () => {
     const was = JSON.stringify(filterOf(KIND).conditions);
-    setConditions(KIND, [...filterOf(KIND).conditions.filter((c) => c.axis !== 'type'), ...rowsOfType(id)]);
+    setConditions(KIND, [...filterOf(KIND).conditions.filter((c) => c.axis !== 'type'), ...rows]);
     if (JSON.stringify(filterOf(KIND).conditions) !== was) askAtOnce(KIND);
   };
   if (step) filterStep(KIND, set);

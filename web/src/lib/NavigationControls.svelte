@@ -7,19 +7,17 @@
   // what it holds changes, its glass reaches from the old outline to the new, the pill beside it doing the same as the
   // two share the row.
   import type { Snippet } from 'svelte';
-  import { tick } from 'svelte';
   import Icon from './Icon.svelte';
   import RecordsPicker from './RecordsPicker.svelte';
   import DiscoverPicker from './DiscoverPicker.svelte';
   import { glassPart } from './glassMotion';
-  import { pageView } from './pageView.svelte';
+  import { rowPiece } from './glassRow.svelte';
 
   let {
     left = null,
     back = null,
     name = null,
     picker = null,
-    right,
     el = $bindable(),
   }: {
     /** The panel's left part, where it handed its glass: in place of the rest. */
@@ -31,74 +29,24 @@
     /** What the page shows, as a control page's name (the owner, 2026-10-25): the Library's kind of record, Discover's
      *  mode (the owner, 2026-10-29). */
     picker?: 'library' | 'discover' | null;
-    /** The pill's side of the row, to give way to. */
-    right: () => HTMLElement | undefined;
     el?: HTMLElement;
   } = $props();
 
-  // The title beside back gives way to the open search where it would be cut to a few letters or less (the owner,
-  // 2026-10-25), and as the window or the pill's side changes (its globe coming): the pill is laid out as it ends at
-  // once (lib/glassMotion), so it is measured then, before its glass moves. A title that fits beside the open field
-  // stays as it is. Library's view (its picker is never cut: the field's glass slides over it) gives way the same
-  // where the two glasses would meet (the owner, 2026-10-26).
-  let away = $state(false);
-  /** The width a glass's children take laid out side by side (its padding and gaps too), without their motion: not its
-   *  layers, nor the copies of what leaves (lib/glassMotion). */
-  function heldWidth(box: HTMLElement): number {
-    const s = getComputedStyle(box);
-    const kids = [...box.children].filter((e): e is HTMLElement => e instanceof HTMLElement && !e.matches('.glass, .shade, [data-glass-ghost]'));
-    const gap = parseFloat(s.columnGap) || 0;
-    return kids.reduce((n, e) => n + e.offsetWidth, 0) + Math.max(0, kids.length - 1) * gap + (parseFloat(s.paddingLeft) || 0) + (parseFloat(s.paddingRight) || 0);
-  }
-  // Said to the pill beside it: the open search then takes the room the title left, to the gap beside back.
-  $effect(() => {
-    pageView.leadAway = away;
-    return () => (pageView.leadAway = false);
-  });
-  $effect(() => {
-    if (!pageView.searchOpen) return void (away = false);
-    const measure = () => {
-      if (!el || away) return;
-      const parts = [...el.querySelectorAll<HTMLElement>('.page-name, .crumbs .up, .crumbs .here, .title, .views')].filter((e) => !e.closest('[data-glass-ghost]'));
-      const cut = parts.reduce((n, e) => n + Math.max(0, e.scrollWidth - e.clientWidth), 0);
-      const room = parts.reduce((n, e) => n + e.clientWidth, 0);
-      // More than a few letters cut (about three, or a third of it: "Req…"), or no room at all.
-      // Its content's edge, not its glass's: a narrowed glass lets the picker run out under the field.
-      const edge = Math.max(el.getBoundingClientRect().right, ...parts.map((e) => e.getBoundingClientRect().left + e.scrollWidth));
-      const r = right();
-      const met = !!r && edge > r.getBoundingClientRect().left - 4;
-      // The open field squeezed narrower than it wants (lib/ContentControls' `data-wants`): the owner, 2026-11-01,
-      // "Why did records not collapse??" beside a field cut short.
-      const field = r?.querySelector<HTMLElement>('.field');
-      const squeezed = !!field && field.getBoundingClientRect().width < Number(field.dataset.wants ?? 0) - 2;
-      // Or the pill narrower than what it holds (its buttons never squeezed, its work's line never cut: the owner,
-      // 2026-11-02). By what it holds laid out, not its scrolled width: what slides in (the field from the lens) counts
-      // there at its start, and the title went away beside room to spare (the owner, 2026-11-02, Discover on the tablet).
-      const pill = r?.querySelector<HTMLElement>('[role="toolbar"]');
-      const work = r?.querySelector<HTMLElement>('.work');
-      const over = (!!pill && heldWidth(pill) > pill.clientWidth + 1) || (!!work && work.scrollWidth > work.clientWidth + 1);
-      away = parts.length > 0 && (met || squeezed || over || cut > 36 || room < 48 || room < 0.7 * (room + cut));
-    };
-    tick().then(measure);
-    const r = right();
-    const seen = new ResizeObserver(measure);
-    if (r) seen.observe(r);
-    addEventListener('resize', measure);
-    return () => {
-      seen.disconnect();
-      removeEventListener('resize', measure);
-    };
-  });
+  // The title beside back (the page's name, the Library's or Discover's picker) is a piece of its row (lib/glassRow), as a
+  // breadcrumb's current level: cut with … for want of room, gone where it would be cut to a few letters, and gone
+  // whole while the search is open (the owner, 2026-11-03). One decision for the row: nothing here measures the pill.
 </script>
 
-<span class="lead" class:title-away={away} bind:this={el} {@attach glassPart({ radius: 26 })}>
+<span class="lead" bind:this={el} {@attach glassPart({ radius: 26 })}>
   <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
   {#if left}
     {@render left()}
   {:else}
     {#if back}<span class="navpill"><button aria-label="Back" title="Back" onclick={back}><Icon name="back" size={22} /></button></span>{/if}
-    {#if name && !away}<h1 class="page-name">{name}</h1>{/if}
-    {#if picker === 'library' && !away}<RecordsPicker />{:else if picker === 'discover' && !away}<DiscoverPicker />{/if}
+    {#if name}<h1 class="page-name" {@attach rowPiece(() => ({ id: `title:${name}`, rank: 10, min: 48, yields: true }))}>{name}</h1>{/if}
+    {#if picker}<span class="title-box" {@attach rowPiece(() => ({ id: `title:${picker}`, rank: 10, min: 48, yields: true }))}
+        >{#if picker === 'library'}<RecordsPicker />{:else}<DiscoverPicker />{/if}</span
+      >{/if}
   {/if}
 </span>
 
@@ -136,10 +84,12 @@
     pointer-events: none;
   }
 
+  /* The part's back layer is the thin glass, which an extension is (the owner, 2026-11-03: "thin glass, one part");
+     the main buttons have the glass over it (below). */
   .lead > .glass {
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
+    background: var(--float-thin-bg);
+    -webkit-backdrop-filter: var(--float-thin-blur);
+    backdrop-filter: var(--float-thin-blur);
   }
 
   .lead > .shade {
@@ -151,17 +101,21 @@
     opacity: 1;
   }
 
-  /* A title in it: the glass stretched past it. Not a fading copy's (lib/glassMotion), nor a title given way. */
-  .lead:not(.title-away):has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *))) {
+  /* A title in it: the glass stretched past it. Not a fading copy's (lib/glassMotion), nor a title given way (its row's
+     decision, lib/glassRow). */
+  .lead:has(:global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost], [data-glass-ghost] *, [data-row-gone], [data-row-gone] *))) {
     padding-right: 18px;
   }
 
-  /* The buttons on the lead's glass: none of their own (a panel's left part brings its back as a `navpill`). */
+  /* The main buttons (Back, Home, ✕; a panel's left part brings them as a `navpill`): the main glass, over the back
+     layer; whatever beside them is the extension, on the thin glass alone. Never changing as the extension comes and
+     goes ("I don't want this button to change the color when the extension removes"). */
   .lead :global(.navpill) {
     flex: none;
-    background: none;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
+    border-radius: 26px;
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
     box-shadow: none;
   }
 
@@ -169,15 +123,15 @@
     flex: none;
   }
 
-  /* The search open with no room for the title (`away`; not the class `away`, app.css's for what slides away): only the
-     round button. The panel's left part hides its own (its breadcrumbs, its name); the page's are not drawn. Not inside
-     a leaving copy (lib/glassMotion): its picker hidden, its words fell to the top of its box, above back's middle
-     (the owner, 2026-11-02). */
-  .lead.title-away :global(:is(.page-name, .crumbs, .title, .views):not([data-glass-ghost] *)) {
-    display: none;
+  /* The picker as a title: cut as a name is. */
+  .title-box {
+    display: flex;
+    flex: 0 1 auto;
+    min-width: 0;
   }
 
   .page-name {
+    min-width: 0;
     margin: 0;
     overflow: hidden;
     font-size: 22px;

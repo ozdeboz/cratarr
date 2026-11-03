@@ -4,4 +4,4 @@
  * How Cratarr chooses, as a player asks: Radio's inserts, or one of Autoplay's modes. Continuous, AlbumMix and
  * Reshuffle are the modes from before the amendment, still taken from apps not yet updated.
  */
-export type RadioMode = "similar" | "artist" | "era" | "random" | "radio" | "continuous" | "album_mix" | "reshuffle";
+export type RadioMode = "similar" | "artist" | "era" | "random" | "radio" | "taste" | "continuous" | "album_mix" | "reshuffle";

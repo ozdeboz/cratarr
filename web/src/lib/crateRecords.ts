@@ -11,9 +11,30 @@ export const RECORD_CRATES: readonly string[] = ['home:new', 'home:graves'];
 /** How crate `id` shows: as chosen for it, else as its kind starts. */
 export const crateViewOf = (id: string, kept: Readonly<Record<string, CrateView>>): CrateView => kept[id] ?? (RECORD_CRATES.includes(id) ? 'records' : 'tracks');
 
-export type RecordOrder = 'own' | 'artist' | 'title' | 'year' | 'added' | 'tracks' | 'length';
-export const RECORD_ORDERS: OrderField<RecordOrder>[] = [
-  { value: 'own', label: 'Crate order' },
+/** A crate's own order, named by what it is (decision 0094 #6), where it has one: New for you's as Home showed it, a
+ *  Sounds like crate's closest first. One's own crate, a genre and Grave digging have none (its newest added first was
+ *  Added). */
+export function ownOrderOf(crate: string | null | undefined): string | null {
+  if (crate === 'home:new') return 'As on Home';
+  if (crate?.startsWith('like:')) return 'Closest first';
+  return null;
+}
+
+/** Best match and its own: the records in their tracks' order (the server's). */
+export type RecordOrder = 'bestMatch' | 'own' | 'artist' | 'title' | 'year' | 'added' | 'tracks' | 'length';
+export const RECORD_ORDER_KEYS: readonly RecordOrder[] = ['bestMatch', 'own', 'artist', 'title', 'year', 'added', 'tracks', 'length'];
+/** Crate `crate`'s record orders: Best match first, its own where it has one, then the fields. */
+export const recordOrders = (crate: string | null | undefined): OrderField<RecordOrder>[] => {
+  const own = ownOrderOf(crate);
+  return [{ value: 'bestMatch', label: 'Best match' }, ...(own ? [{ value: 'own' as const, label: own }] : []), ...RECORD_FIELDS];
+};
+/** Its records' order: as chosen where the crate has it; else Best match, what every crate opens on (the owner,
+ *  2026-11-02, amending decision 0094: "Every crate"). */
+export const recordOrderOf = (crate: string | null | undefined, kept: { key: RecordOrder; down: boolean }) =>
+  recordOrders(crate).some((f) => f.value === kept.key) ? kept : { key: 'bestMatch' as const, down: false };
+/** What its tracks are asked in, shown as records: Best match, or its own; the records then ordered here. */
+export const tracksForRecords = (key: RecordOrder): 'bestMatch' | 'own' => (key === 'own' ? 'own' : 'bestMatch');
+const RECORD_FIELDS: OrderField<RecordOrder>[] = [
   { value: 'artist', label: 'Artist' },
   { value: 'title', label: 'Title' },
   { value: 'year', label: 'Year' },
@@ -75,7 +96,7 @@ const byNumber = (x: number | null, y: number | null) => (x === y ? 0 : x === nu
 /** Records in `key`'s order, turned round with `down`; equals keep the crate's order. */
 export function orderRecords(recs: readonly CrateRecord[], key: RecordOrder, down: boolean): CrateRecord[] {
   const list = [...recs];
-  if (key === 'own') return down ? list.reverse() : list;
+  if (key === 'own' || key === 'bestMatch') return down ? list.reverse() : list;
   const way = down ? -1 : 1;
   const cmp = (a: CrateRecord, b: CrateRecord) =>
     key === 'artist' ? words(a.artist ?? '', b.artist ?? '') || words(a.title, b.title)

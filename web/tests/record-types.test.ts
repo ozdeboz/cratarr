@@ -76,3 +76,17 @@ test('records are named by their one release type, else records (the owner, 2026
   assert.equal(recordsTitle(['album', 'album']), 'Albums');
   assert.equal(recordsTitle(['album', 'single']), 'Records');
 });
+
+test('the picker ticks every type the rows select, and a long-press takes one in or out (the owner, 2026-11-02)', async () => {
+  const { typesTicked, toggledRows, ALL } = await import('../src/lib/recordTypeRules.ts');
+  const row = (values: string[], not = false) => ({ axis: 'type', not, value: { kind: 'any_of' as const, values } });
+  assert.deepEqual(typesTicked([]), [ALL]);
+  assert.deepEqual(typesTicked([row(['Album'])]), ['Album']);
+  assert.deepEqual(typesTicked([row(['Album', 'EP']), row(['Live'])]), ['Album', 'EP', 'Live']);
+  assert.deepEqual(typesTicked([row(['Album']), row(['Live'], true)]), ['Album'], 'what a Not row leaves out is not ticked');
+  assert.deepEqual(toggledRows([], 'EP'), [row(['EP'])]);
+  assert.deepEqual(toggledRows([row(['Album'])], 'EP'), [row(['Album', 'EP'])]);
+  assert.deepEqual(toggledRows([row(['Album', 'EP'])], 'Album'), [row(['EP'])]);
+  assert.deepEqual(toggledRows([row(['Album'])], 'Album'), [], 'none left: Records');
+  assert.deepEqual(toggledRows([row(['Album'])], ALL), [], 'Records: none');
+});

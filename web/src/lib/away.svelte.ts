@@ -3,6 +3,7 @@
 // app's `downloads` report); in the installed page the tracks it keeps (lib/offline). What plays is picked here, as the
 // server would (lib/play's one way to play): from what the pages last read of the collection (public/sw.js keeps it),
 // those tracks on the device alone, in their order or mixed.
+import { hiddenLibraries } from './listFilter.svelte';
 import { ApiError, albumView, artistView, crateRows, playlistRows, type Picked, type Picking, type PlayHow, type PlaylistRow } from './api';
 import { downloads, inApp, onApp } from './app.svelte';
 import { DEVICE } from './deviceMusic.svelte';
@@ -56,7 +57,7 @@ async function rowsOf(what: Picking, source: string | undefined): Promise<{ sour
       return { source: v.source, rows: v.rows.map((r) => ({ ...r, album_id: r.album_id ?? what.id })) };
     }
     case 'artist': {
-      const v = await artistView(what.source, what.name);
+      const v = await artistView(what.source, what.name, hiddenLibraries());
       return { source: v.source, rows: v.rows };
     }
     case 'playlist':

@@ -110,8 +110,26 @@ export function startSnippet(t: SnippetTrack) {
   sound(t, s);
 }
 
+/** A part of a track heard from where it is said (an intake card's start, middle and end: the server's, ms), SNIPPET_S
+ *  long; on, or off again. */
+export function toggleSnippetAt(t: SnippetTrack, fromMs: number) {
+  if (!snippetable(t)) return;
+  const key = `${keyOf(t)}@${fromMs}`;
+  if (snippet.key === key) return endSnippet();
+  endNow();
+  const from = fromMs / 1000;
+  const length = lengthOf(t);
+  const to = length ? Math.min(length, from + SNIPPET_S) : from + SNIPPET_S;
+  Object.assign(snippet, { key, from, to, at: from });
+  sound(t, { from, to });
+}
+/** Whether the part of `t` from `fromMs` is on. */
+export const snippetAtOn = (t: SnippetTrack, fromMs: number) => snippet.key === `${keyOf(t)}@${fromMs}`;
+
 /** Whether `t`'s snippet is on (starting or sounding). */
 export const snippetOn = (t: SnippetTrack | null | undefined) => !!t && snippet.key === keyOf(t);
+/** How far the snippet sounding has been heard, 0..1 (its mark's circle, lib/SnippetMark); 0 while none sounds. */
+export const heardShare = () => (snippet.sounding && snippet.to > snippet.from ? Math.min(1, Math.max(0, (snippet.at - snippet.from) / (snippet.to - snippet.from))) : 0);
 
 /** Play snippet: on, or off again. */
 export function toggleSnippet(t: SnippetTrack) {

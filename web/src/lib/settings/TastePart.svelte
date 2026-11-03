@@ -9,9 +9,11 @@
   // switched as Insights' Profile switches them (the same choice), how much of it AudioMuse has heard, and the profile
   // itself. Discover's own exclusions sit with the others (`thing` `discover`: lib/DiscoveryList's).
   import { getCrateFits, getDiscoverExcluded, getTasteProfile, traitLabel, type FitSummary, type TasteProfile } from '../api';
+  import { hrefOf } from '../addresses';
   import DiscoveryList from '../DiscoveryList.svelte';
   import { PROFILE_SOURCES } from '../insightsControls.svelte';
   import { prefs } from '../prefs.svelte';
+  import { setTasteSource, taste, tasteSourceOn } from '../mySettings.svelte';
   import { crateName, crates, loadCrates } from '../crates.svelte';
   import ExcludedList from '../ExcludedList.svelte';
   import ExcludedSheet from '../ExcludedSheet.svelte';
@@ -54,9 +56,9 @@
   // The profile, of everything (all time, every library), from the sources switched on.
   let profile = $state<TasteProfile | null>(null);
   $effect(() => {
-    const off = Object.entries(prefs.profileSources).flatMap(([k, on]) => (on ? [] : [k]));
+    void taste.read;
     let gone = false;
-    getTasteProfile(undefined, [], 'all', off).then(
+    getTasteProfile(undefined, [], 'all').then(
       (p) => !gone && (profile = p),
       () => !gone && (profile = null),
     );
@@ -68,7 +70,7 @@
   function openProfile() {
     prefs.insightsTab = 'listening';
     prefs.listeningView = 'profile';
-    location.hash = '#/insights';
+    location.hash = hrefOf('insights');
   }
   // Discover's own: albums and artists it leaves out.
   let discoverOut = $state<number | null>(null);
@@ -122,7 +124,7 @@
       <Item
         name={s.label}
         line={n === null ? s.line : `${s.line} · ${count(n)} ${n === 1 ? 'track' : 'tracks'}`}
-        toggle={{ checked: prefs.profileSources[s.id], onchange: (on) => (prefs.profileSources[s.id] = on) }}
+        toggle={{ checked: tasteSourceOn(s.id), onchange: (on) => void setTasteSource(s.id, on) }}
       />
     {/each}
     {#if profile && tracksIn}<Item name="Analysed" value={`${count(heard)} of ${count(tracksIn)}`} progress={heard / tracksIn} line={`${Math.round((100 * heard) / tracksIn)}%`} />{/if}

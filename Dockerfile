@@ -26,10 +26,16 @@ WORKDIR /app/server
 # The same build settings in every stage that compiles the server's own crates (tests, e2e): a stage that differs
 # compiles them again (0.13: the e2e stage rebuilt them for 15 minutes beside the tests'). Release is not incremental.
 ENV CARGO_INCREMENTAL=0
+# Every compile starts by giving the sources the time now (2026-11-02). All builds share one target cache, and COPY
+# keeps the times the files had (a git archive's: the commit's), so a source older than the last build's artifacts (a
+# branch built before another, built again) was judged unchanged and the other branch's binary was tested or shipped.
+# Only a step whose files changed runs at all (BuildKit keeps the rest), so this costs a compile of the server's own
+# crates, never the crates it uses.
+ENV FRESH="find /app -path /app/server/target -prune -o -path /app/web -prune -o -type f -exec touch {} +"
 
 FROM source AS build
 # The crates and what was compiled before are kept between builds (BuildKit caches): only what changed is built again.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo build --release --locked && cp target/release/cratarr-server /cratarr-server
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo build --release --locked && cp target/release/cratarr-server /cratarr-server
 
 # The tests, in the build's own toolchain and cache (the shipped binary's libc and allocator: musl's). The shared
 # examples the web is held to too are read from ../web/tests/fixtures.
@@ -37,16 +43,18 @@ FROM source AS test
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
 # Unoptimised (the owner, 2026-10-26): the tests are their own compile whatever is done, and this one is the quicker.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace
+# The end-to-end suite runs after them on the same compile (0.14, faster previews: as a stage of its own after the
+# tests it compiled the server's own crates a second time).
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace && cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
 
 # The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library, driven through
-# its API. Its own stage, after the tests: `docker build --target e2e .` (one heavy job at a time).
+# its API. The test stage runs it too; this stage runs it alone: `docker build --target e2e .`.
 FROM source AS e2e
 COPY web/tests/fixtures /app/web/tests/fixtures
 COPY shared /app/shared
-# Unoptimised and on the test stage's cache, as the tests are: what they compiled (the server and this suite) is reused,
-# so after them this stage only runs.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
+# Unoptimised and on the test stage's cache, as the tests are; its sources freshly timed as theirs are, so run after
+# the tests it compiles the server's own crates again (a preview build runs it alone, before the image).
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     sh -c "$FRESH" && cargo test --locked --workspace -- --ignored fixtures:: types_and_years_into_the_files_end_to_end --nocapture
 
 # The binary alone, to take out (the test server runs on it, with CRATARR_WEB_DIR at a built web/dist).
 FROM scratch AS binary

@@ -12,7 +12,6 @@ use crate::app::ToggleError;
 use crate::app::library::epoch_now;
 use crate::incoming::{AlbumFile, ReplacePlan, ReplaceRefusal};
 use crate::journal::{Entry, Event, TrackMove};
-use crate::settings;
 
 /// What Replace would do with an album, for the page to show before asking.
 #[derive(Debug, Serialize)]
@@ -27,7 +26,7 @@ pub struct ReplacePreview {
     /// New tracks the old album does not have.
     pub added: usize,
     pub refused: Option<ReplaceRefused>,
-    /// Hi-res files converted to CD format first (Replace then waits in the queue).
+    /// Lossless files above Music's quality limit, converted first (Replace then waits in the queue).
     pub convert: usize,
     /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
     pub acquisition: bool,
@@ -346,8 +345,8 @@ impl IncomingService {
         let at = self.locate(source_id, album_id).await?;
         let (libraries, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
         let old = verdicts(std::slice::from_ref(&at.album), &libraries, &incoming, |_| None).remove(&at.album.id).filter(|v| v.replaceable).map(|v| v.library).unwrap_or_default();
-        // Converted where Music's format is CD format, as Keep's (the owner, 2026-11-02: a library's format holds).
-        let convert = if self.music_format(source_id) == settings::Format::Cd { self.to_convert(&at).await.len() } else { 0 };
+        // Converted above Music's quality limit, as Keep's (the owner, 2026-11-02: a library's format holds).
+        let convert = self.to_convert(&at, self.music_quality(source_id)).await.len();
         let acquisition = self.acquisition().is_some();
         let music = PathBuf::from(self.lib.music().unwrap_or_default());
         Ok(match self.plan_replace(&at, year).await? {
@@ -390,7 +389,7 @@ impl IncomingService {
     /// before, Incoming's), the new ones into Music
     /// named per the library's template, each taking over its old track's id. Lidarr stops fetching the album and the
     /// old tracks' play data goes to the new server items (handlers). Undo puts it all back.
-    /// Hi-res files are converted first, in the queue, where Music's format is CD format: the plan is checked now, so a
+    /// Lossless files above Music's quality limit are converted first, in the queue: the plan is checked now, so a
     /// refusal shows at once.
     pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
@@ -415,16 +414,42 @@ impl IncomingService {
                 tracing::warn!("replace: {e}");
             }
         }
-        let convert = if self.music_format(source_id) == settings::Format::Cd { self.to_convert(&at).await } else { Vec::new() };
-        if !convert.is_empty() {
-            return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, planned.plan.folder, 0));
+        let quality = self.music_quality(source_id);
+        let convert = self.to_convert(&at, quality).await;
+        if let (false, Some(limit)) = (convert.is_empty(), quality.limit()) {
+            return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, limit, planned.plan.folder, 0));
         }
         self.replace_now(&at, year, Vec::new(), None).await
     }
 
     /// Replace, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
     /// the event's id as soon as it is intended.
+    /// Replace, told on Health's list of changes to files as it goes, as Keep is (`keep_now`): moving, then adding until
+    /// the server has read the album, then done.
     pub(super) async fn replace_now(
+        &self,
+        at: &Located,
+        year: Option<&str>,
+        converted: Vec<crate::journal::Converted>,
+        job: Option<u64>,
+    ) -> Result<KeepResult, ToggleError> {
+        let run = crate::app::file_runs::track("replace", format!("Replaced: {}", at.album.title));
+        let done = self.replacing(at, year, converted, job).await;
+        match &done {
+            Ok(k) => {
+                let (lib, journal, source, album) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone());
+                run.moved(k.undo.clone(), move || {
+                    let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
+                    async move { matches!(super::fate_of(&lib, &journal, &source, &album).await, Some(super::AlbumFate::Moved(_))) }
+                });
+            }
+            Err(e) => run.failed(&at.album.id, e.to_string()),
+        }
+        done
+    }
+
+    /// Replace's moving.
+    async fn replacing(
         &self,
         at: &Located,
         year: Option<&str>,

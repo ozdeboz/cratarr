@@ -28,6 +28,13 @@ android {
         // release is newer than the one before without a second number to keep.
         versionName = cratarrVersion
         versionCode = cratarrVersion.split('.').map(String::toInt).let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
+        // A preview for a staging Cratarr (`-Pcratarr.preview.server=<address>`; 0.14's preview.1 kept the everyday app's
+        // address and asked production, which knew none of its calls): an app of its own beside the everyday one, with
+        // its own settings, that address its first.
+        val previewServer = findProperty("cratarr.preview.server")?.toString().orEmpty()
+        buildConfigField("String", "PREVIEW_SERVER", "\"$previewServer\"")
+        resValue("string", "app_name", if (previewServer.isEmpty()) "Cratarr" else "Cratarr preview")
+        if (previewServer.isNotEmpty()) applicationIdSuffix = ".preview"
     }
 
     signingConfigs {
@@ -69,6 +76,8 @@ android {
 
     buildFeatures {
         buildConfig = true
+        // The app's name per build (a preview's "Cratarr preview": `cratarr.preview.server`).
+        resValues = true
     }
 
     compileOptions {

@@ -1,6 +1,6 @@
 // The health report and the files' problems (decision 0063), read once for the Health page's list and its panel
 // (lib/HealthPanel) alike, and again on each visit to the page.
-import { getFileProblems, getHealthReport, type FileProblem, type HealthFinding, type HealthItem } from './api';
+import { getFileProblems, getHealthReport, type FileProblem, type HealthFinding, type HealthItem, type RecordFinding } from './api';
 import { type Area, areaOf, DOMAINS, iconOf } from './health';
 import type { IconName } from './Icon.svelte';
 
@@ -54,7 +54,9 @@ export type Problem = {
   domain: string;
   /** Its area of Health (lib/health AREAS). */
   area: Area;
-  /** Its short name, the panel's breadcrumb (the owner, 2026-10-25: "Quality replacements", "Missing genres"). */
+  /** Its name, the one it goes by everywhere: Health's list, the panel's breadcrumb, its picker, Up, global search (the
+   *  owner, 2026-11-02: the picker said "Responses" and the breadcrumb "Slow responses"; "Shouldn't we use the short
+   *  ones everywhere?"): the finding's thing where it has one, else its name. */
   name: string;
   /** What it is, on its card ("12 albums without a genre"; a file kind's "Files without tags"). */
   title: string;
@@ -73,15 +75,62 @@ const fileItem = (p: FileProblem): HealthItem => {
   return { title: p.rel.slice(at + 1), line: [p.rel.slice(0, Math.max(0, at)), p.detail].filter(Boolean).join(' · ') };
 };
 
-/** Every problem, the report's order (worst first); the files' kinds after their own findings would say the same. */
+/** Every problem, the report's order (worst first); the files' kinds after their own findings would say the same.
+ *  A kind of the files' is a problem wherever the report counts it, whether its files are listed yet or not: the list
+ *  holds the first files of every kind together, and a kind past them was no problem at all, so Home's row for it
+ *  opened "This is no longer a problem" (the owner, 2026-11-02). */
 export function problems(): Problem[] {
   const out: Problem[] = health.findings
     .filter((f) => f.domain !== 'files')
-    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, area: areaOf(f.domain), name: f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
-  for (const k of FILE_KINDS) {
-    const files = (health.problems ?? []).filter((p) => p.kind === k.kind);
-    if (files.length)
-      out.push({ key: `files-${k.kind}`, icon: DOMAINS.files.icon, urgent: k.kind === 'broken', domain: DOMAINS.files.name, area: areaOf('files'), name: health.findings.find((f) => f.key === `files:${k.kind}`)?.name ?? k.title, title: k.title, said: `${files.length.toLocaleString()} ${files.length === 1 ? 'file' : 'files'}${k.title.slice('Files'.length)}`, line: `${files.length} ${files.length === 1 ? 'file' : 'files'}`, finding: null, items: files.map(fileItem), hint: k.hint });
+    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, area: areaOf(f.domain), name: f.thing ?? f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
+  const listed = health.problems ?? [];
+  const counted = health.findings.filter((f) => f.domain === 'files').map((f) => f.key.split(':')[1]);
+  const kinds = [...FILE_KINDS.map((k) => k.kind as string), ...counted.filter((k) => !FILE_KINDS.some((x) => x.kind === k))];
+  for (const kind of kinds) {
+    const k = FILE_KINDS.find((x) => x.kind === kind);
+    const f = health.findings.find((x) => x.key === `files:${kind}`);
+    const files = listed.filter((p) => p.kind === kind);
+    // Its items: the files list's where it holds them, else the finding's own (cut off, sound breaking off, lengths
+    // guessed come only with their finding; the owner, 2026-11-03: "8 tracks' lengths are guessed", none listed).
+    const items = files.length ? files.map(fileItem) : (f?.items ?? []);
+    const n = Math.max(f?.count ?? 0, items.length);
+    if (!n) continue;
+    const title = k?.title ?? f?.title ?? kind;
+    const nFiles = (x: number) => `${x.toLocaleString()} ${x === 1 ? 'file' : 'files'}`;
+    out.push({
+      key: `files-${kind}`,
+      icon: DOMAINS.files.icon,
+      urgent: kind === 'broken',
+      domain: DOMAINS.files.name,
+      area: areaOf('files'),
+      name: f?.thing ?? f?.name ?? title,
+      title,
+      said: k ? `${nFiles(n)}${k.title.slice('Files'.length)}` : (f?.title ?? title),
+      line: items.length < n ? `${items.length.toLocaleString()} of ${nFiles(n)} listed` : nFiles(n),
+      finding: null,
+      items,
+      hint: k?.hint ?? null,
+    });
   }
   return out;
+}
+
+/** A record's own problem (the owner, 2026-11-02: its Health problems on its page, a line each under its title): the
+ *  Health problem it is of (a file kind's as problems() names it, `files-…`), its line, and whether it is urgent.
+ *  Missing tracks say how many (`missing`), the line the page has for them. */
+export function recordProblem(f: RecordFinding): { key: string; text: string; urgent: boolean; missing: number } {
+  const kind = f.key.startsWith('files:') ? f.key.slice('files:'.length) : null;
+  const n = f.items.length;
+  const missing = f.items.reduce((m, x) => m + (x.missing?.length ?? 0), 0);
+  if (kind) {
+    const k = FILE_KINDS.find((x) => x.kind === kind);
+    return { key: `files-${kind}`, text: `${k?.title ?? f.thing ?? f.name}${n > 1 ? ` · ${n} tracks` : ''}`, urgent: kind === 'broken', missing: 0 };
+  }
+  const text = [f.thing ?? f.name, f.state].filter(Boolean).join(' ');
+  return { key: f.key, text: text.charAt(0).toUpperCase() + text.slice(1), urgent: f.level === 'critical', missing };
+}
+/** A record narrowed to in Health's panel (`health:<problem>/<the record's subject>`): its server and id. */
+export function recordIn(thing: string | null): { source: string; id: string } | null {
+  const m = thing?.match(/^album:(.+)\/([^/]+)$/);
+  return m ? { source: m[1], id: m[2] } : null;
 }

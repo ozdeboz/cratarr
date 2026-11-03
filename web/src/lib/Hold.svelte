@@ -8,7 +8,7 @@
   // whose content shows (what a page marks as open follows it, not the key asked for).
   import { mount, setContext, tick, unmount, untrack, type Snippet } from 'svelte';
   import { HOLD, type HoldPlace } from './holdPlace.svelte';
-  import { LOADER_AFTER_MS } from './loader';
+  import { LOADER_AFTER_MS, loaderSizeIn } from './loader';
   import MarkLoader from './MarkLoader.svelte';
 
   // `seeThrough`: opening, the place is not there at all until its content is ready (the phone's panel over the page):
@@ -71,7 +71,7 @@
       if (z !== 'auto') at.style.zIndex = z;
       frame.after(at);
       signAt = at;
-      sign = mount(MarkLoader, { target: at, props: { size: 40 } });
+      sign = mount(MarkLoader, { target: at, props: { size: loaderSizeIn(frame) } });
     }, LOADER_AFTER_MS);
   }
 

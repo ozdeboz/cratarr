@@ -8,7 +8,7 @@
   import { insights } from './lib/insights.svelte';
   import { INSIGHTS_GROUPS, INSIGHTS_VIEWS, type InsightsView } from './lib/insightsViews';
   import { INSIGHTS, insightsOf, panel, viewPlaylist } from './lib/panel.svelte';
-  import { matchesSearch } from './lib/pageView.svelte';
+  import { matchesSearch, searchNone } from './lib/pageView.svelte';
   import { getDiscover } from './lib/api';
 
   $effect(() => insights.load());
@@ -18,6 +18,8 @@
     INSIGHTS_GROUPS.map((g) => ({ title: g, views: INSIGHTS_VIEWS.filter((v) => v.group === g && !v.under && matchesSearch(v.label, v.group)) })).filter((g) => g.views.length),
   );
 
+  // The words leaving none of its views (decision 0095): the pill says so from the magnifier.
+  searchNone(() => !groups.length && { n: INSIGHTS_VIEWS.filter((v) => !v.under).length, one: 'view' });
   const count = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
   // Discovery's number (the owner, 2026-10-25): Discover's suggestions, read once with the page.
   let suggestions = $state<number | null>(null);

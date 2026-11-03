@@ -125,7 +125,7 @@ export const MENUS: Record<MenuKind, Kind> = {
       { group: 'collect', entries: ['pin', 'copyToMine'] },
       { group: 'take', entries: ['download', 'keep', 'share', 'sharedWithUsers'] },
       { group: 'know', entries: ['info'] },
-      { group: 'change', entries: ['rename', 'spokenAs', 'repair', 'sync'] },
+      { group: 'change', entries: ['edit', 'rename', 'spokenAs', 'repair', 'sync'] },
       { group: 'remove', entries: ['deletePlaylist'] },
     ],
   },

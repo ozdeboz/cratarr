@@ -8,6 +8,7 @@
   // track its album so; an artist their page from Discover. A playlist opens its tracks here (`?spotify=` in the
   // address, so back returns).
   import { untrack } from 'svelte';
+  import { hereWith, wordHere } from './addresses';
   import {
     getSpotifyAlbums,
     getSpotifyArtists,
@@ -32,7 +33,7 @@
   import type { LocalTrack } from './localPlayer.svelte';
   import { playPlaylistFrom } from './output.svelte';
   import PageLoading from './PageLoading.svelte';
-  import { matchesSearch, pageView } from './pageView.svelte';
+  import { matchesSearch, pageView, searchNone } from './pageView.svelte';
   import ProblemSheet from './ProblemSheet.svelte';
   import { markOf } from './requests.svelte';
   import Row from './Row.svelte';
@@ -62,7 +63,7 @@
   });
 
   // A playlist opened: its tracks, by `?spotify=<id>` in the address.
-  const openedId = () => new URLSearchParams(location.hash.split('?')[1] ?? '').get('spotify');
+  const openedId = () => wordHere('spotify');
   let opened = $state<string | null>(openedId());
   let openList = $state<(SpotifyPlaylist & { tracks: SpotifyTrack[] }) | null>(null);
   $effect(() => {
@@ -80,10 +81,7 @@
       );
   });
   function openPlaylist(p: SpotifyPlaylist) {
-    const [h, rest] = location.hash.split('?');
-    const q = new URLSearchParams(rest ?? '');
-    q.set('spotify', p.id);
-    location.hash = `${h}?${q}`;
+    location.hash = hereWith((w) => w.set('spotify', p.id));
   }
 
   // What shows: through the Filter's Leave out and the search.
@@ -95,6 +93,16 @@
   const artistsShown = $derived(keep(artists, (a) => [a.name]));
   const all = $derived(view === 'spotify-albums' ? albums : view === 'spotify-tracks' || openList ? (openList?.tracks ?? tracks) : view === 'spotify-playlists' ? playlists : artists);
   const shown = $derived(view === 'spotify-albums' ? albumsShown : view === 'spotify-tracks' || openList ? tracksShown : view === 'spotify-playlists' ? playlistsShown : artistsShown);
+  /** The search, not the Filter's Leave out, left none (decision 0095): some pass the filter, none the words. The pill
+   *  says so from the magnifier; the list says nothing then. */
+  const searchLeft = $derived(!!all?.length && !shown?.length && (all as { status: SpotifyStatus }[]).some((x) => spotifyPasses(x.status)));
+  searchNone(
+    () =>
+      searchLeft && {
+        n: (all as { status: SpotifyStatus }[]).filter((x) => spotifyPasses(x.status)).length,
+        one: view === 'spotify-albums' ? 'album' : view === 'spotify-tracks' || openList ? 'track' : view === 'spotify-playlists' ? 'playlist' : 'artist',
+      },
+  );
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
     pageView.counted = all && shown ? { shown: shown.length, total: all.length } : null;
@@ -199,14 +207,14 @@
     {/each}
   </ul>
   {#if albumsShown.length > drawn}<span class="more" {@attach more}></span>{/if}
-  {#if !albumsShown.length}<p class="empty">No albums.</p>{/if}
+  {#if !albumsShown.length && !searchLeft}<p class="empty">No albums.</p>{/if}
 {:else if openList && tracksShown}
   <SectionHead title={openList.name} />
   {@render trackRows(tracksShown)}
-  {#if !tracksShown.length}<p class="empty">No tracks.</p>{/if}
+  {#if !tracksShown.length && !searchLeft}<p class="empty">No tracks.</p>{/if}
 {:else if view === 'spotify-tracks' && tracksShown}
   {@render trackRows(tracksShown)}
-  {#if !tracksShown.length}<p class="empty">No tracks.</p>{/if}
+  {#if !tracksShown.length && !searchLeft}<p class="empty">No tracks.</p>{/if}
 {:else if view === 'spotify-playlists' && playlistsShown}
   {#if opened}
     <PageLoading />
@@ -220,7 +228,7 @@
         </li>
       {/each}
     </ul>
-    {#if !playlistsShown.length}<p class="empty">No playlists.</p>{/if}
+    {#if !playlistsShown.length && !searchLeft}<p class="empty">No playlists.</p>{/if}
   {/if}
 {:else if artistsShown}
   <ul class="rows">
@@ -239,7 +247,7 @@
     {/each}
   </ul>
   {#if artistsShown.length > drawn}<span class="more" {@attach more}></span>{/if}
-  {#if !artistsShown.length}<p class="empty">No artists.</p>{/if}
+  {#if !artistsShown.length && !searchLeft}<p class="empty">No artists.</p>{/if}
 {/if}
 
 <ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />

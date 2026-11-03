@@ -7,7 +7,7 @@
 //!    without flaws (`analysis::flaws`, 0.10: lossless or of its bitrate by where its highs stop, no clicks, no pop at
 //!    the end, not clipped), and named that recording by AcoustID at [`crate::acoustid::SURE`] or more;
 //! 4. "Add to album" (`add`): tagged from MusicBrainz and the album's own tags, named as its neighbours are, the cover
-//!    inside, into the album's folder; a track it replaces goes to the trash. Undo (`UNDO`) puts it all back.
+//!    inside, into the album's folder; a track it replaces goes to the trash. Undo (the run's, `undo_at`) puts it all back.
 //!
 //! A track can come from a file already on the server instead of a search (0.9.19, the owner: tracks found on old
 //! drives): one in Cratarr's own folder under slskd's (`files`), copied into staging with the original left where it is
@@ -28,8 +28,6 @@ use serde_json::Value;
 use super::musicbrainz::Asked as _;
 use crate::slskd::{Candidate, Slskd};
 
-/// What an undo token starts with.
-pub const UNDO: char = 'a';
 /// Where the connection's choices are kept (user data's server choices, as Discogs' key).
 pub const SLSKD_URL: &str = "slskd:url";
 pub const SLSKD_KEY: &str = "slskd:key";
@@ -804,8 +802,10 @@ fn undo_file(id: &str) -> Result<PathBuf> {
     Ok(Path::new(&data).join("track-fetch-undo").join(format!("{id}.json")))
 }
 
-/// Adds a passed fetch to its album; the undo token.
-pub async fn add(fetch: &str) -> Result<String> {
+/// Adds a passed fetch to its album as a run on the one path (decision 0092's writers' map, 0.14: the copy chosen after
+/// Cratarr's check is the yes): "Missing tracks · Album", or "Better copy · Album" where it replaces one; its Undo the
+/// run's (the new track to the trash, the one it replaced back).
+pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super::file_runs::Status> {
     let (wanted, staged) = jobs(|j| {
         let f = j.fetches.get(fetch)?;
         (f.view.state == Fetching::Passed).then(|| (f.wanted.clone(), f.staged.clone()))
@@ -813,7 +813,32 @@ pub async fn add(fetch: &str) -> Result<String> {
     .context("That track has not passed the check")?;
     let staged = staged.context("That track is not staged")?;
     let s = served()?;
-    let token = tokio::task::spawn_blocking(move || place_track(&s, &wanted, &staged)).await??;
+    let status = super::file_runs::made(app, move || {
+        let (_, _, _, artist, title) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
+        let replaced = match &wanted.replace {
+            Some(id) => super::renumber::tracks_of(&wanted.album)?.0.into_iter().find(|t| &t.id == id).map(|t| t.title),
+            None => None,
+        };
+        let (dest, undo) = place_track(&s, &wanted, &staged)?;
+        let what = if wanted.replace.is_some() { "Better copy" } else { "Missing tracks" };
+        Ok(super::file_runs::Proposal {
+            kind: "track".into(),
+            title: format!("{what} · {title}"),
+            records: vec![crate::journal::RunRecord { album: wanted.album.clone(), title, artist }],
+            files: vec![crate::journal::FileWrite {
+                album: wanted.album.clone(),
+                path: dest,
+                track: Some(wanted.track.title.clone()),
+                before: vec![("track".into(), replaced.into_iter().collect())],
+                after: vec![("track".into(), vec![wanted.track.title.clone()])],
+                from: vec![("track".into(), "its check".into())],
+                undone: false,
+                whole: Some(crate::journal::Whole { op: "track".into(), ms: None, kept: Some(undo), planned: String::new(), wrote: None }),
+            }],
+            failed: Vec::new(),
+        })
+    })
+    .await?;
     jobs(|j| {
         if let Some(f) = j.fetches.get_mut(fetch) {
             f.view.state = Fetching::Added;
@@ -821,10 +846,11 @@ pub async fn add(fetch: &str) -> Result<String> {
     });
     tell(fetch);
     drop_fetch(fetch);
-    Ok(token)
+    Ok(status)
 }
 
-fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Result<String> {
+/// Places a passed track in its album: where it went, and what its Undo needs (`undo_at`).
+fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Result<(PathBuf, PathBuf)> {
     let (folder, dir, ..) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
     let (tracks, ..) = super::renumber::tracks_of(&wanted.album)?;
@@ -837,13 +863,16 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         .min_by_key(|x| (x.disc.unwrap_or(1) != t.disc, x.track.map_or(u32::MAX, |n| n.abs_diff(t.position))))
         .context("The album has no other track to take its tags from")?;
     let album_dir = root.join(&dir);
-    // Hi-res is made CD's 16 bit / 44.1 kHz as Incoming's are (decision 0013).
-    let source = if crate::convert::needs_conversion(staged)?.is_some() {
-        let cd = staged.with_extension("cd.flac");
-        crate::convert::to_cd_flac_told(staged, &cd, |_| {})?;
-        cd
-    } else {
-        staged.to_path_buf()
+    // Lossless above its library's quality limit is made FLAC at it, as a move into that library is (decision 0096's
+    // amendment; before, always CD's 16 bit / 44.1 kHz).
+    let saved = s.data_dir.as_ref().and_then(|d| crate::settings::load(&d.join("settings.json"), &|k: &str| std::env::var(k).ok()).ok().flatten());
+    let source = match quality_at(saved.as_ref(), &root).limit() {
+        Some(limit) if crate::convert::needs_conversion(staged, limit)?.is_some() => {
+            let converted = staged.with_extension("converted.flac");
+            crate::convert::to_flac_told(staged, &converted, limit, |_| {})?;
+            converted
+        }
+        _ => staged.to_path_buf(),
     };
     let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("flac").to_ascii_lowercase();
     let name = name_like(&neighbour.file, t.position, &t.title, &ext);
@@ -886,11 +915,20 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let file = undo_file(&id)?;
     std::fs::create_dir_all(file.parent().context("no folder")?)?;
     std::fs::write(&file, serde_json::to_vec(&undo)?)?;
-    let mut changed = vec![dest];
+    let mut changed = vec![dest.clone()];
     changed.extend(replaced.map(|r| r.path.clone()));
     s.reread(&changed);
     s.catalogue().poke();
-    Ok(format!("{UNDO}{id}"))
+    Ok((dest, file))
+}
+
+/// The quality limit of the library whose folder is `root`: as Cratarr's own source has it (its libraries are its
+/// folders); CD format, Music's by its use, while none is found there (as a move's `quality_in`).
+fn quality_at(saved: Option<&crate::settings::Saved>, root: &Path) -> crate::settings::Quality {
+    saved
+        .and_then(|s| s.sources.iter().find(|c| c.enabled && c.kind == crate::source::cratarr::KIND.id))
+        .and_then(|c| c.libraries.music.iter().chain(&c.libraries.incoming).find(|l| Path::new(l.as_str()) == root).map(|l| c.libraries.quality_of(l)))
+        .unwrap_or(crate::settings::Quality::Cd)
 }
 
 fn rel_of(root: &Path, p: &Path) -> Result<String> {
@@ -942,12 +980,11 @@ fn tag(track: &Path, neighbour: &Path, t: &ReleaseTrack) -> Result<()> {
     )
 }
 
-/// Undoes an Add to album: the new track to the trash, the one it replaced back.
-pub async fn undo(token: &str) -> Result<()> {
-    let id = token.strip_prefix(UNDO).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric())).context("Not an added track's undo")?.to_string();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let file = undo_file(&id)?;
-        let a: Added = serde_json::from_slice(&std::fs::read(&file).context("That can no longer be undone")?)?;
+/// An added track's Undo from what its add kept (`file`): the new track to the trash, the one it replaced back.
+/// Blocking.
+pub fn undo_at(file: &Path) -> Result<()> {
+    {
+        let a: Added = serde_json::from_slice(&std::fs::read(file).context("That can no longer be undone")?)?;
         let now = super::moment::now_secs();
         crate::trash::trash_file(&a.root, &a.added, now)?;
         let mut changed = vec![a.root.join(&a.added)];
@@ -955,19 +992,34 @@ pub async fn undo(token: &str) -> Result<()> {
             let back = crate::trash::restore_file(&a.root, tok)?;
             changed.push(a.root.join(back));
         }
-        std::fs::remove_file(&file).ok();
+        std::fs::remove_file(file).ok();
         if let Some(s) = crate::serve::instance() {
             s.reread(&changed);
             s.catalogue().poke();
         }
         Ok(())
-    })
-    .await?
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_track_is_converted_to_its_librarys_limit() {
+        use crate::settings::{LibraryPolicy, Quality, Roles, Saved, SourceConfig};
+        let roles = Roles { music: vec!["/music".into()], incoming: vec!["/incoming".into(), "/hires".into()], ..Roles::default() };
+        let mut saved = Saved {
+            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: roles, values: Default::default() }],
+            ..Default::default()
+        };
+        saved.sources[0].libraries.policies.insert("/hires".into(), LibraryPolicy { quality: Some(Quality::Hr96), ..Default::default() });
+        assert_eq!(quality_at(Some(&saved), Path::new("/music")), Quality::Cd, "Music's by its use");
+        assert_eq!(quality_at(Some(&saved), Path::new("/incoming")), Quality::None, "Incoming's by its use: as it is");
+        assert_eq!(quality_at(Some(&saved), Path::new("/hires")), Quality::Hr96);
+        assert_eq!(quality_at(Some(&saved), Path::new("/elsewhere")), Quality::Cd);
+        assert_eq!(quality_at(None, Path::new("/incoming")), Quality::Cd, "nothing saved: CD format");
+    }
 
     #[test]
     fn a_new_track_is_named_as_its_neighbour_is() {

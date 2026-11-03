@@ -33,15 +33,21 @@ test('the ops that are the command by name, with their fields as given', () => {
   assert.deepEqual(commandOf('skip_favourites', { on: false }), { command: 'skip_favourites', on: false });
   assert.deepEqual(commandOf('repeat', { mode: 'all' }), { command: 'repeat', mode: 'all' });
   assert.deepEqual(commandOf('radio', { on: true, by: 'artist', count: 2 }), { command: 'radio', on: true, by: 'artist', count: 2 });
+  // A Play now (the owner, 2026-11-02): added after the playing track and played at once.
+  assert.deepEqual(commandOf('add', { tracks: [t], at: 3, now: true }), { command: 'add', tracks: [t], at: 3, now: true });
   assert.deepEqual(commandOf('autoplay', { mode: 'stop' }), { command: 'autoplay', mode: 'stop' });
-  assert.deepEqual(commandOf('autoplay', { mode: 'similar', albums: false, restart: false, seed: ['a'], within: '' }), {
+  assert.deepEqual(commandOf('autoplay', { mode: 'similar', albums: false, restart: false, seed: ['a'], within: null }), {
     command: 'autoplay',
     mode: 'similar',
     albums: false,
     restart: false,
     seed: ['a'],
-    within: '',
+    within: null,
   });
+  // What it plays inside is a collection (decision 0094); anything else is no `within`.
+  const crate = { kind: 'crate', id: 'like:now' };
+  assert.deepEqual(commandOf('autoplay', { mode: 'similar', within: crate }), { command: 'autoplay', mode: 'similar', within: crate });
+  assert.deepEqual(commandOf('autoplay', { mode: 'similar', within: 'like:now' }), { command: 'autoplay', mode: 'similar' });
   assert.deepEqual(commandOf('wind', { dir: 'back', phase: 'start' }), { command: 'wind', dir: 'back', phase: 'start' });
   assert.deepEqual(commandOf('direction', { dir: 'L' }), { command: 'direction', dir: 'L' });
   for (const op of ['toggle', 'next', 'previous', 'stop']) assert.deepEqual(commandOf(op, op === 'toggle' ? { plain: true } : {}), { command: op });

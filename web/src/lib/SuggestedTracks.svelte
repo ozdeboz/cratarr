@@ -8,7 +8,7 @@
   import { appendTracks, coverUrl, crateRows, leaveOutOfCrate, type PlaylistRow } from './api';
   import AvoidLine from './AvoidLine.svelte';
   import Cover from './Cover.svelte';
-  import { LIKE, viewLike } from './crates.svelte';
+  import { LIKE, viewLike, withoutFor } from './crates.svelte';
   import Icon from './Icon.svelte';
   import { playCollection } from './play.svelte';
   import SectionHead from './SectionHead.svelte';
@@ -32,7 +32,7 @@
   async function load(at: number) {
     const [c, n] = [crate, count];
     try {
-      const r = await crateRows(c, at, SHOW);
+      const r = await crateRows(c, at, SHOW, undefined, undefined, undefined, { without: withoutFor(c) });
       if (c !== crate || n !== count) return;
       rows = r.rows.filter((x) => x.id && !x.missing);
       source = r.source;

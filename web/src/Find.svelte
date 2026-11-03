@@ -6,6 +6,7 @@
   // Bandcamp where it is there (looked for when opened), else its menu to Want it. The words ride in the address
   // (`#/find?q=`); the pill's search asks again.
   import { searchBeyond, type BeyondFound } from './lib/api';
+  import { wordHere } from './lib/addresses';
   import Cover from './lib/Cover.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
   import CoverBusy from './lib/CoverBusy.svelte';
@@ -18,7 +19,7 @@
   import { goToArtist } from './lib/albums.svelte';
 
   /** The words: the pill's while it searches, else the address's. */
-  const fromAddress = () => new URLSearchParams(location.hash.split('?')[1] ?? '').get('q') ?? '';
+  const fromAddress = () => wordHere('q') ?? '';
   let addressed = $state(fromAddress());
   $effect(() => {
     const on = () => (addressed = fromAddress());

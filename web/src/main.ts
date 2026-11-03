@@ -12,6 +12,8 @@ import { watchForUpdates } from './lib/update.svelte';
 
 markGpu();
 export default mount(App, { target: document.getElementById('app')! });
+// The page has started: its own loaders from here on (index.html's still mark only covered the code coming in).
+document.getElementById('boot')?.remove();
 
 enterCloses();
 inputWay();

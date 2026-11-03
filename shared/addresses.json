@@ -1,0 +1,17 @@
+{
+  "about": "Cratarr's page addresses, one table (the owner, 2026-11-02: one address a page, a coherent and robust whole): the page's lib/addresses, the server's links back to the page and the app's each checked against it by their tests. An address is `#/<page>`, then after `?` the panel's words (what it views, on which tab) and the page's own; no address, or one no page has, is Home's. Change it here and in all three.",
+  "home": "home",
+  "pages": ["home", "playlists", "library", "discover", "crates", "insights", "health", "settings", "requests", "downloads", "find", "local"],
+  "panel_words": ["view", "tab"],
+  "page_words": {
+    "library": ["composer"],
+    "discover": ["spotify"],
+    "find": ["q"],
+    "settings": ["scrobble", "spotify_error"]
+  },
+  "links": {
+    "settings": { "page": "settings" },
+    "listening_service": { "page": "settings", "view": "settings:tracking/{service}", "word": "scrobble" },
+    "spotify_account": { "page": "settings", "view": "settings:account/spotify", "word": "spotify_error" }
+  }
+}

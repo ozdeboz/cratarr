@@ -8,7 +8,9 @@
   // a crate's own; an artist (or what is not known well enough for its own menu) a short one: Go to it, Stop syncing.
   // The pill's search narrows the two lists. Select: the ticked ones played, queued or removed from this device (the
   // owner, 2026-10-27: what one has, several have).
+  import ChoiceMark from './ChoiceMark.svelte';
   import { glass, handGlass } from './glass.svelte';
+  import { rowRoot } from './glassRow.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
@@ -23,7 +25,7 @@
   import { DOWNLOADS_LISTS, goTo, onceAlbums, WAITS, type DownloadsList, type OnceAlbum } from './downloadsLists.svelte';
   import Icon from './Icon.svelte';
   import { kept, setKept, syncKept, type KeptItem } from './kept.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -115,6 +117,8 @@
       return matchesSearch(titleOf(g), artistOf(g), yearOf(g) ? String(yearOf(g)) : null, [...new Set(s.flatMap((r) => r.genres))].join(' '), s.map((r) => r.name).join(' '));
     }),
   );
+  // The page's words leaving none of the list (decision 0095): said from the magnifier, not "Nothing synced".
+  searchNone(() => (list === 'synced' ? !synced.length && { n: kept.items.length, one: 'download' } : list === 'once' && !once.length && { n: onceAlbums().length, one: 'record' }), 'panel');
   function albumLine(g: OnceAlbum): { text: string; fill: number | null; bad: boolean } {
     const listed = listedOf(g);
     const done = g.tracks.filter((t) => t.download.state === 'done').length;
@@ -201,15 +205,15 @@
   }
 
   const handed = $derived(glass.one && !beside);
-  const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'downloads' } : null);
+  const pill = () => (!beside ? { filter: false, view: false, search: 'downloads' } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
   <Crumbs
-    trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]}
+    back={beside ? null : backOne}
+    trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('downloads') }]}
     here={L.label}
     siblings={beside ? null : { menuLabel: 'Downloads shows', options: DOWNLOADS_LISTS.map((l) => ({ id: l.id, label: l.label })), chosen: L.id, onchoose: (id) => viewSibling(DOWNLOADS + id) }}
   />
@@ -226,13 +230,13 @@
 {#snippet tickOf(k: string, name: string)}
   {@const on = !!selecting?.has(k)}
   <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Select ${name}`} onclick={() => tick(k)}
-    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+    ><ChoiceMark kind="several" on={on} /></button
   >
 {/snippet}
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
       {@render glassExtra()}
@@ -275,7 +279,7 @@
             />
           {/if}
         {:else}
-          <Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />
+          {#if !kept.items.length}<Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />{/if}
         {/each}
       </Group>
     {:else}
@@ -308,7 +312,7 @@
           />
           {/if}
         {:else}
-          <Item name="Nothing downloaded once" />
+          {#if !onceAlbums().length}<Item name="Nothing downloaded once" />{/if}
         {/each}
       </Group>
     {/if}

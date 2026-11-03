@@ -6,6 +6,7 @@
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and System status (lib/HomeStatus). A tile with nothing to show is left out.
   import { onMount, untrack, type Snippet } from 'svelte';
+  import { hrefOf } from './lib/addresses';
   import {
     albumView,
     coverUrl,
@@ -36,7 +37,7 @@
   import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeStatus from './lib/HomeStatus.svelte';
-  import { CRATE, LIKE, viewGenre, viewLike } from './lib/crates.svelte';
+  import { CRATE, LIKE, viewGenre, viewLike, withoutFor } from './lib/crates.svelte';
   import { device, DEVICE, localMode } from './lib/deviceMusic.svelte';
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -186,7 +187,7 @@
     navigator.vibrate?.(8);
     starting = true;
     try {
-      await startRadio([], moment.name, `${LIKE}now`);
+      await startRadio([], moment.name, { kind: 'crate', id: `${LIKE}now`, without: withoutFor(`${LIKE}now`) });
     } catch (e) {
       toast.fail(e, "The radio didn't start");
     } finally {
@@ -333,7 +334,7 @@
   // Each asked once a visit, its kept shelf showing meanwhile.
   const asking = new Set<string>();
   const readCrate = (id: string) =>
-    Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
+    Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: withoutFor(id) }), getCrate(id)]).then(
       ([page, def]) => {
         const albums: CrateShelf['albums'] = [];
         for (const r of page.rows) {
@@ -639,7 +640,7 @@
 {#snippet newestPart()}
   {#if turn('newest') && newest.length}
     <section aria-label="New for you">
-      <SectionHead title={local ? NEWEST_HERE : 'New for you'} onmore={() => (local ? (location.hash = '#/local/albums') : viewPlaylist(CRATE + 'home:new'))} />
+      <SectionHead title={local ? NEWEST_HERE : 'New for you'} onmore={() => (local ? (location.hash = hrefOf('local')) : viewPlaylist(CRATE + 'home:new'))} />
       <ul class="shelf">
         {#each newest as n (n.source + n.a.id)}
           <li><AlbumCard source={n.source} album={n.a} lines={[n.a.artist ?? '', `added ${addedOn(n.a.added!)}`]} /></li>

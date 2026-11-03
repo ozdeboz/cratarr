@@ -7,7 +7,10 @@
 // - the shade: its edges from the old outline to the new (its own layout only, an empty layer: never stretched, so its
 //   round ends stay round);
 // - a child that stays: moved from where it was (translate); one that comes: faded in; one that goes: a copy of it
-//   where it was, faded out. Each is clipped to the glass's outline as it moves, so nothing shows past the glass.
+//   where it was, faded out. Each is clipped to the glass's outline as it moves, so nothing shows past the glass: each
+//   frame, to the outline shown then, from where it is then (`confine`; the owner, 2026-11-02: "unconfined content in
+//   animations! Structural fix is required app wide"), never a clip foretold at the move's start that a child coming
+//   mid-move, a badge or a second change could outrun.
 // Nothing in the page's flow animates a size or a place, so no step of it lays the page out again. A blur inside a clipped element sees only that element (a backdrop
 // root), so a child that is a glass of its own (the round back button) is never clipped by an ancestor here: each child
 // gets its own clip. A child hidden (display: none) goes as one removed: its copy shows as it was.
@@ -34,6 +37,8 @@ type Part = {
   run: { from: Rect; to: Rect; clock: Animation } | null;
   anims: Animation[];
   window: string;
+  /** The clipping each frame (confine) runs. */
+  confining: boolean;
 };
 
 const GHOST = 'data-glass-ghost';
@@ -202,23 +207,18 @@ function play(p: Part) {
     if (box.x >= swept.x + swept.w || box.x + box.w <= swept.x) return [0, 0];
     return [b.x - a.x, b.y - a.y];
   };
-  const shifted = (k: Rect, [dx, dy]: [number, number]): Rect => ({ ...k, x: k.x + dx, y: k.y + dy });
   const kidsNow = [...after.kids.keys()];
   for (const [el, k1] of after.kids) {
     const k0 = was.get(el);
     let frames: Keyframe[];
     if (k0) {
-      frames = [
-        { translate: `${k0.x - k1.x}px ${k0.y - k1.y}px`, clipPath: insetOf(from, k0, r) },
-        { translate: '0px 0px', clipPath: insetOf(to, k1, r) },
-      ];
+      frames = [{ translate: `${k0.x - k1.x}px ${k0.y - k1.y}px` }, { translate: '0px 0px' }];
     } else {
       const i = kidsNow.indexOf(el);
       const [dx, dy] = moveOf(k1, [...kidsNow.slice(0, i).reverse(), ...kidsNow.slice(i + 1)]);
-      const start = shifted(k1, [-dx, -dy]);
       frames = [
-        { opacity: 0, translate: `${-dx}px ${-dy}px`, clipPath: insetOf(from, start, r) },
-        { opacity: 1, translate: '0px 0px', clipPath: insetOf(to, k1, r) },
+        { opacity: 0, translate: `${-dx}px ${-dy}px` },
+        { opacity: 1, translate: '0px 0px' },
       ];
     }
     p.anims.push(begin(el as HTMLElement, frames, timing));
@@ -247,8 +247,8 @@ function play(p: Part) {
     const a = begin(
       ghost,
       [
-        { opacity: 1, translate: '0px 0px', clipPath: insetOf(from, k0, r) },
-        { opacity: 0, translate: `${move[0]}px ${move[1]}px`, clipPath: insetOf(to, shifted(k0, move), r) },
+        { opacity: 1, translate: '0px 0px' },
+        { opacity: 0, translate: `${move[0]}px ${move[1]}px` },
       ],
       { ...timing, fill: 'forwards' },
     );
@@ -260,6 +260,7 @@ function play(p: Part) {
   p.shows = after.shows;
   p.seen = after.glass;
   p.run = { from, to, clock };
+  confine(p);
   const anims = p.anims;
   Promise.all(anims.map((a) => a.finished)).then(
     () => {
@@ -269,6 +270,26 @@ function play(p: Part) {
     },
     () => {},
   );
+}
+
+/** What the glass holds kept inside its outline while it moves: each frame, each child and each copy of one going is
+ *  clipped to the outline shown then (shownNow, the glass's own clock), from where it is then (its translate in it).
+ *  Measured, not foretold, so nothing that changes during the move can show past the glass. Cleared as the move ends. */
+function confine(p: Part) {
+  if (p.confining) return;
+  p.confining = true;
+  const step = () => {
+    const out = p.run ? shownNow(p) : null;
+    const f = out ? p.frame() : null;
+    for (const el of p.box.children) {
+      if (el === p.glass || el === p.shade || !(el instanceof HTMLElement)) continue;
+      if (out && f) el.style.clipPath = insetOf(out, rectIn(el.getBoundingClientRect(), f), p.radius);
+      else el.style.removeProperty('clip-path');
+    }
+    if (out) requestAnimationFrame(step);
+    else p.confining = false;
+  };
+  step();
 }
 
 /** Makes `box` a glass part (an attachment: `{@attach glassPart({ radius: 26 })}`): its first children of class `glass`
@@ -291,6 +312,7 @@ export function glassPart({ radius, still = () => false }: { radius: number; sti
       run: null,
       anims: [],
       window: windowNow(),
+      confining: false,
     };
     const first = measure(p);
     p.at = first.at;

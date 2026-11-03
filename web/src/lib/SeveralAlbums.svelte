@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { openRadio } from './radioAsk.svelte';
   import type { IconName } from './Icon.svelte';
   import { port } from './player/port.svelte';
 
@@ -21,7 +22,7 @@
   import { recordsWord } from './recordTypeRules';
   import { jobs } from './jobs.svelte';
   import { isKept, setKept } from './kept.svelte';
-  import { startRadio, type LocalTrack } from './localPlayer.svelte';
+  import { type LocalTrack } from './localPlayer.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { me } from './me.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -53,7 +54,7 @@
     const [seed, name] = [tracks.map((t) => t.id), n];
     close();
     navigator.vibrate?.(8);
-    startRadio(seed, name).catch((e) => toast.fail(e, 'Could not start playing'));
+    openRadio({ name, kind: 'selection', within: { kind: 'tracks', source: 'cratarr', ids: seed }, seed: async () => seed });
   }
 
   // The rating: the stars they share (none when they differ), a tap giving them all those, a tap on the shared one
@@ -181,7 +182,7 @@
       `${named(go.map((y) => y.x.a.title))}.`,
       refused.length ? `Not moved: ${refused.slice(0, 8).map((y) => `${y.x.a.title} (${why(y.p)})`).join(', ')}${refused.length > 8 ? ` and ${refused.length - 8} more` : ''}.` : '',
       unread.length ? `${plural(unread.length, word)} couldn't be looked at.` : '',
-      convert ? `${plural(convert, 'hi-res file')} ${convert === 1 ? 'is' : 'are'} converted to 16-bit/44.1 kHz first.` : '',
+      convert ? `${plural(convert, 'lossless file')} above ${name}'s quality limit ${convert === 1 ? 'is' : 'are'} converted to FLAC first.` : '',
       go.some((y) => !y.p.acquisition && !y.x.primary) ? NO_LIDARR : '',
     ]
       .filter(Boolean)
@@ -200,7 +201,7 @@
           go,
           async ({ x }) => {
             const r = await moveAlbum(x.s.id, x.a.id, x.to.id);
-            // Queued (hi-res files to convert first): its row shows the progress instead.
+            // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
             if (r.queued) queued = true;
             else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id }));
           },

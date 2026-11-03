@@ -6,7 +6,8 @@
 //!   playlist, an album, an artist, tracks named one by one (a selection, a queue), the favourites, or the library.
 //! - **How:** Play (the collection's order, its first [`QUEUE_MOST`], or from a given track on), Shuffle
 //!   ([`QUEUE_MOST`] drawn evenly from all of it, then mixed; all of it when it is that small), Play next and Add to
-//!   queue (in order, as Play takes them).
+//!   queue (in order, as Play takes them), and Now: at once, the queue kept. A list of one is one track (the owner,
+//!   2026-11-02): its Play or Shuffle is Now, so the queue, "Playing from" and Autoplay stay.
 //! - **Where:** the answer always carries the tracks (the page's own player queues them itself); asked, the server
 //!   also queues them on the server's player (as `/api/queue/add` and a playlist's Play reach it) or on one of
 //!   Cratarr's players by name (Play On, decision 0031).
@@ -39,8 +40,9 @@ pub enum Collection {
         /// The filter on it (decision 0061): conditions, unsaved, besides its own.
         #[serde(default)]
         filter: Vec<crate::crates::Condition>,
-        /// The order its list shows (decision 0060), so Play plays as it is shown.
-        #[serde(default)]
+        /// The order its list shows (decision 0060), so Play plays as it is shown; none asked, Best match
+        /// (`CrateOrder::opened`).
+        #[serde(default = "super::CrateOrder::opened")]
         order: super::CrateOrder,
         #[serde(default)]
         down: bool,
@@ -55,6 +57,9 @@ pub enum Collection {
     Artist {
         source: String,
         name: String,
+        /// The libraries switched off: their albums and tracks left out, as the artist showed (the owner, 2026-11-02).
+        #[serde(default)]
+        without: Vec<String>,
     },
     Tracks {
         source: String,
@@ -204,16 +209,22 @@ pub async fn play(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Play
     let owner = app.served.as_ref().and_then(|s| s.current_user());
     let most = r.limit.unwrap_or(QUEUE_MOST);
     let c = choose(app, want, &r.what, r.how, r.from.map(Start::Track), most, owner.as_deref()).await?;
+    let how = one_now(r.how, c.total);
     let player = match r.on {
         None => None,
-        Some(On::Server) => Some(on_server(app, &c.source, &c.tracks, c.index, r.how).await?.0),
+        Some(On::Server) => Some(on_server(app, &c.source, &c.tracks, c.index, how).await?.0),
         Some(On::Player(name)) => {
             let queue_name = r.name.or(c.name);
-            on_player(app, &name, c.tracks.clone(), c.index, r.how, queue_name).await?;
+            on_player(app, &name, c.tracks.clone(), c.index, how, queue_name).await?;
             Some(name)
         }
     };
     Ok(Played { source: c.source, tracks: c.tracks, index: c.index, total: c.total, player })
+}
+
+/// A list of one is one track (the owner, 2026-11-02): its Play or Shuffle plays it now, the queue kept.
+pub fn one_now(how: How, total: usize) -> How {
+    if total == 1 && matches!(how, How::Play | How::Shuffle) { How::Now } else { how }
 }
 
 /// A playlist played on the server's player (`POST /api/playlists/{id}/play`), through [`choose`] as every play.
@@ -224,7 +235,7 @@ pub async fn play_playlist(app: &Arc<App>, id: &str, how: How, want: Option<&str
         Err(ToggleError::CannotPlay(_)) => return Err(ToggleError::CannotPlay(app.playlists.why_none(want).await?)),
         Err(e) => return Err(e),
     };
-    let (player, sent) = on_server(app, &c.source, &c.tracks, c.index, how).await?;
+    let (player, sent) = on_server(app, &c.source, &c.tracks, c.index, one_now(how, c.total)).await?;
     Ok(super::PlayResult { player, sent, total: c.total, unknown: c.unknown })
 }
 
@@ -258,6 +269,12 @@ pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
     }
 }
 
+/// The songs of Cratarr's own library a collection holds, in its order, read as a play reads them: what Radio and
+/// Autoplay stay inside (decision 0094). `owner`: whose favourites and exclusions.
+pub async fn own_songs(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Vec<String>, ToggleError> {
+    Ok(candidates(app, Some(source::cratarr::KIND.id), what, owner).await?.ids)
+}
+
 /// The favourites of `owner`, or all of Cratarr's own library, less what `owner` excluded from automatic picks.
 async fn own_candidates(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
     let Some(served) = app.served.clone() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
@@ -287,10 +304,12 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             let look = super::CrateLook {
                 favourites: *favourites,
                 favourite_albums: *favourite_albums,
-                without: without.clone(),
+                // Home's crates of every library, as they show (the owner's one exception, 2026-11-02).
+                without: if crate::crates::home_crate(id) { Vec::new() } else { without.clone() },
                 filter: filter.clone(),
                 order: *order,
                 down: *down,
+                ..Default::default()
             };
             let shown = app.playlists.crate_shown(id, &look).await?;
             let (source, lines) = app.playlists.crate_lines_in_order(&shown, want, &look).await?;
@@ -345,8 +364,8 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
             let ids = named.iter().map(|t| t.id.clone()).collect();
             Ok(Candidates { named: Some(named), ..Candidates::of(v.source, ids, Some(v.title)) })
         }
-        Collection::Artist { source, name } => {
-            let v = app.playing.artist_view(source, name).await?;
+        Collection::Artist { source, name, without } => {
+            let v = app.playing.artist_view(source, name, without).await?;
             let named: Vec<QueueTrack> = v
                 .rows
                 .into_iter()
@@ -453,8 +472,8 @@ async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usiz
     Ok((tracks, index))
 }
 
-/// Queues them on the server's player: Play and Shuffle replace what it plays (from the first to play), Play next and
-/// Add to queue go to the player that plays. A Jellyfin player (Finamp) holds fewer than a queue here: it gets what it
+/// Queues them on the server's player: Play and Shuffle replace what it plays (from the first to play), Play next, Add
+/// to queue and Now go to the player that plays (Now with nothing playing: plays them, as Play). A Jellyfin player (Finamp) holds fewer than a queue here: it gets what it
 /// holds. Answers with the player's label and how many it was sent.
 async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index: usize, how: How) -> Result<(String, usize), ToggleError> {
     let (active, s) = app
@@ -466,10 +485,15 @@ async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index
     let most = if active.cfg.kind == source::jellyfin::KIND.id { super::playlists::PLAY_MAX } else { QUEUE_MOST };
     let from = if matches!(how, How::Play | How::Shuffle) { index } else { 0 };
     let ids: Vec<String> = tracks[from..].iter().take(most).map(|t| t.id.clone()).collect();
+    let replace = || async { s.play_tracks(&ids, PlayHow::Replace).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}"))) };
     let label = match how {
-        How::Play | How::Shuffle => s.play_tracks(&ids, PlayHow::Now).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?,
+        How::Play | How::Shuffle => replace().await?,
         How::Next => app.playing.queue_add(Some(source_id), &ids, PlayHow::Next).await?,
         How::Last => app.playing.queue_add(Some(source_id), &ids, PlayHow::Last).await?,
+        How::Now => match app.playing.queue_add(Some(source_id), &ids, PlayHow::Now).await {
+            Err(ToggleError::NothingPlaying) => replace().await?,
+            r => r?,
+        },
     };
     Ok((label, ids.len()))
 }
@@ -488,12 +512,13 @@ async fn on_player(app: &Arc<App>, name: &str, tracks: Vec<QueueTrack>, index: u
             queue_id: None,
             queue_name,
         },
-        How::Next | How::Last => Command::Add {
+        How::Next | How::Last | How::Now => Command::Add {
             from: Default::default(),
             tracks,
             at: None,
             after: None,
-            how: Some(if how == How::Next { "next" } else { "last" }.into()),
+            how: Some(if how == How::Last { "last" } else { "next" }.into()),
+            now: how == How::Now,
         },
     };
     app.play_on.command(name, command).await
@@ -513,13 +538,13 @@ mod tests {
             "what": { "kind": "crate", "id": "unlisted", "favourites": "only" }, "how": "shuffle", "on": "server"
         }))
         .unwrap();
-        assert_eq!(r.what, Collection::Crate { id: "unlisted".into(), favourites: Some(Favourites::Only), favourite_albums: None, without: Vec::new(), filter: Vec::new(), order: Default::default(), down: false });
+        assert_eq!(r.what, Collection::Crate { id: "unlisted".into(), favourites: Some(Favourites::Only), favourite_albums: None, without: Vec::new(), filter: Vec::new(), order: super::super::CrateOrder::opened(), down: false });
         assert_eq!((r.how, r.on), (How::Shuffle, Some(On::Server)));
         let w: Request = serde_json::from_value(serde_json::json!({
             "what": { "kind": "crate", "id": "unlisted", "without": ["cratarr//media/Incoming"] }, "how": "play"
         }))
         .unwrap();
-        assert_eq!(w.what, Collection::Crate { id: "unlisted".into(), favourites: None, favourite_albums: None, without: vec!["cratarr//media/Incoming".into()], filter: Vec::new(), order: Default::default(), down: false });
+        assert_eq!(w.what, Collection::Crate { id: "unlisted".into(), favourites: None, favourite_albums: None, without: vec!["cratarr//media/Incoming".into()], filter: Vec::new(), order: super::super::CrateOrder::opened(), down: false });
         let r: Request = serde_json::from_value(serde_json::json!({
             "what": { "kind": "tracks", "source": "cratarr", "ids": ["tr-1", "tr-2"] }, "how": "next", "on": { "player": "Lenovo Tab" }
         }))

@@ -197,8 +197,9 @@ object Autoplay {
     private const val BATCH = 5
     private const val LOW = 3
 
-    /** On with its mode (similar, artist, era, random), whole albums, restarting playlists, its seed (empty: the
-     *  queue's own tracks) and a crate as its bound; null: off ("stop"). */
+    /** On with its mode (similar, artist, era, random, taste), whole albums, restarting playlists, its seed (empty: the
+     *  queue's own tracks) and what it stays inside (decision 0094: the server's `{kind, …}`, kept as its JSON text);
+     *  null: off ("stop"). */
     data class State(val mode: String, val albums: Boolean, val restart: Boolean, val seed: List<String>, val within: String?)
 
     @Volatile private var filling = false
@@ -215,8 +216,8 @@ object Autoplay {
         if (Repeat.mode(context) == Repeat.ALL) Repeat.set(context, player, Repeat.OFF) { it }
     }
 
-    /** An `autoplay` op or command: `mode` ("stop": off), `albums`, `restart`, `seed`, `within` ("" or null: out of the
-     *  crate); what is left out stays. Another mode drops what the old one chose. */
+    /** An `autoplay` op or command: `mode` ("stop": off), `albums`, `restart`, `seed`, `within` (null: beyond what it
+     *  stayed inside); what is left out stays. Another mode drops what the old one chose. */
     fun command(context: Context, player: Player, m: JSONObject) {
         val mode = m.optString("mode").takeIf { it.isNotEmpty() && it != "null" }
         if (mode == "stop") return set(context, player, null)
@@ -225,7 +226,7 @@ object Autoplay {
         val within = when {
             !m.has("within") -> was?.within
             m.isNull("within") -> null
-            else -> m.optString("within").ifEmpty { null }
+            else -> m.optJSONObject("within")?.toString()
         }
         val next = State(
             mode ?: was?.mode ?: "similar",
@@ -249,7 +250,7 @@ object Autoplay {
     /** For a report: `{mode, albums, restart, seed, within}`, or null while off. */
     fun json(context: Context): Any {
         val a = get(context) ?: return JSONObject.NULL
-        return JSONObject().put("mode", a.mode).put("albums", a.albums).put("restart", a.restart).put("seed", JSONArray(a.seed)).put("within", a.within ?: JSONObject.NULL)
+        return JSONObject().put("mode", a.mode).put("albums", a.albums).put("restart", a.restart).put("seed", JSONArray(a.seed)).put("within", a.within?.let { JSONObject(it) } ?: JSONObject.NULL)
     }
 
     /** With Autoplay on and fewer than three tracks ahead: the next ones by its mode, appended. Called on the main
@@ -269,7 +270,7 @@ object Autoplay {
             .put("skip_favourites", skip)
             .put("albums", a.albums)
             .put("seed", JSONArray(a.seed.ifEmpty { own.map { it.optString("id") } }))
-            .put("within", a.within ?: JSONObject.NULL)
+            .put("within", a.within?.let { JSONObject(it) } ?: JSONObject.NULL)
             .put("exclude", JSONArray(queue.map { it.optString("id") }))
             .put("last", playing?.optString("id") ?: JSONObject.NULL)
             .put("count", BATCH)

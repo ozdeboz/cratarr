@@ -3,9 +3,9 @@
   // typical track's level, or as it is). In the app its own player's, here this browser's. The same rows in This
   // device's Playing (lib/settings/DevicePart) and in the sheet a long press on the player's Level button opens
   // (lib/LevelSheet). Whether the waveform shows it: this page's own (the owner, 2026-10-27).
+  import ChoiceRow from './ChoiceRow.svelte';
   import { levelOn, levelUnknown, playingLevelOn, playingLevelUnknown, setLevelOn, setLevelUnknown, setPlayingLevelOn, setPlayingLevelUnknown } from '../level.svelte';
   import { prefs } from '../prefs.svelte';
-  import Seg from '../Seg.svelte';
   import Item from './Item.svelte';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -41,11 +41,13 @@
   toggle={{ checked: on, onchange: setOn }}
 />
 {#if on}
-  <Item
+  <ChoiceRow
     name="Not measured yet"
     more={"A track Cratarr has not measured yet: turned down as a typical track is, or played as it is until it has been."}
-    ><Seg label="Not measured yet" options={UNKNOWN} bind:value={() => unknown, setUnknown} /></Item
-  >
+    options={UNKNOWN}
+    value={unknown}
+    onchange={setUnknown}
+  />
   <Item name="Waveform" value={WAVES.find((w) => w.value === prefs.waveLevel)?.label ?? ''} onclick={() => (waveOpen = true)} />
 {/if}
 

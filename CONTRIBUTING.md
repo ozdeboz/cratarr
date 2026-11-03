@@ -21,7 +21,8 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 
 - **Server**: `cargo check` and `cargo test` in `server/`: the whole suite, not only the part changed, and no new
   warnings. Both, because a test build can compile what a real build cannot (a method kept for tests only, used in
-  the server).
+  the server). A change to how files are written also passes the end-to-end suite on the fixture library:
+  `docker build --target e2e .` ([0093](docs/decisions/0093-test-and-development-data.md)).
 - **Web**: `pnpm check` in `web/` (svelte-check, no errors or warnings) and `pnpm test`, and the change looked at in a
   browser, at a phone's width too where it shows there (`pnpm check:phone` checks that no page scrolls sideways at
   390 px).

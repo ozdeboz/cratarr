@@ -3,6 +3,7 @@
 import { albumOfDownload } from './albums.svelte';
 import { downloads, type DownloadedTrack } from './app.svelte';
 import type { IconName } from './Icon.svelte';
+import { viewOn } from './addresses';
 
 /** The page's lists, each opened in the panel (`downloads:<id>`). */
 export type DownloadsList = 'device' | 'synced' | 'once';
@@ -34,6 +35,5 @@ export function onceAlbums(): OnceAlbum[] {
 /** An item where it lives: its own page, the item opened there (an album or an artist in the Library, a playlist in
  *  Playlists, a crate in Crates). */
 export function goTo(kind: 'album' | 'artist' | 'playlist' | 'crate', subject: string) {
-  const page = kind === 'crate' ? 'crates' : kind === 'playlist' ? '' : 'library';
-  location.hash = `#/${page}?${new URLSearchParams({ view: subject })}`;
+  location.hash = viewOn(kind === 'crate' ? 'crates' : kind === 'playlist' ? 'playlists' : 'library', subject);
 }

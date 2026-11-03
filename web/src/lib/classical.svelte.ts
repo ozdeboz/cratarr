@@ -2,7 +2,9 @@
 // /api/classical/composers), a record under each of its composers; a composer opens their records, the Library's own
 // list narrowed to them. The composer rides in the address (`#/library?composer=<key>`, kept as the panel opens over
 // it, lib/panel), so back returns to the composers as any step does.
+import { hiddenLibraries } from './listFilter.svelte';
 import { getClassicalComposer, getClassicalComposers } from './api';
+import { hereWith, wordHere } from './addresses';
 import { CLASSICAL } from './recordTypeRules';
 import { classicalListed, typeNow } from './recordTypes.svelte';
 import { byComposer, type Composer } from './composers';
@@ -17,26 +19,25 @@ export const classical = $state({
 /** Whether the Library shows the composers now (Classical chosen, no composer open): its View is theirs. */
 export const composersShown = () => typeNow() === CLASSICAL && classicalListed() && !classical.composer;
 
-let asked = false;
-/** The composers, read once (again with `fresh`). */
+let asked: string | null = null;
+/** The composers, read once for the libraries switched on (again with `fresh`, or when those change). */
 export function loadComposers(fresh = false) {
-  if (asked && !fresh) return;
-  asked = true;
-  getClassicalComposers().then(
+  const without = hiddenLibraries();
+  const key = JSON.stringify(without ?? []);
+  if (asked === key && !fresh) return;
+  asked = key;
+  getClassicalComposers(without).then(
     (l) => ((classical.composers = [...(l ?? [])].sort(byComposer)), (classical.error = null)),
     (e) => (classical.error = e instanceof Error ? e.message : String(e)),
   );
 }
 
 /** The composer the address names, if any. */
-export const composerInAddress = () => new URLSearchParams(location.hash.split('?')[1] ?? '').get('composer');
+export const composerInAddress = () => wordHere('composer');
 
 /** A composer opened: a step of its own in the address. */
 export function openComposer(c: Composer) {
-  const [h, rest] = location.hash.split('?');
-  const q = new URLSearchParams(rest ?? '');
-  q.set('composer', c.key);
-  location.hash = `${h}?${q}`;
+  location.hash = hereWith((w) => w.set('composer', c.key));
 }
 
 let shownKey: string | null = null;

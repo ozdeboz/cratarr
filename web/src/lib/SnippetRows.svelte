@@ -11,8 +11,9 @@
   import { longpress } from './longpress';
   import { clockText } from './remote.svelte';
   import Row from './Row.svelte';
+  import SnippetMark from './SnippetMark.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, snippet, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, heardShare, snippet, startSnippet, type SnippetTrack } from './snippetPlayer.svelte';
   import TrackCover from './TrackCover.svelte';
 
   let {
@@ -45,8 +46,6 @@
     openRow = i;
     startSnippet(t);
   }
-  /** How far its snippet has sounded, 0..1 (its button's ring). */
-  const heardShare = $derived(snippet.sounding && snippet.to > snippet.from ? Math.min(1, Math.max(0, (snippet.at - snippet.from) / (snippet.to - snippet.from))) : 0);
   $effect(() => {
     void key;
     untrack(() => {
@@ -77,11 +76,7 @@
           {#if st}
             {@const on = openRow === i && isOn(st) && snippet.sounding}
             <button class="snip" aria-label={openRow === i ? `Stop ${r.name ?? r.file}` : `Hear ${r.name ?? r.file}`} aria-pressed={openRow === i} onclick={() => snipTap(i, st)}>
-              <svg viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
-                <circle class="ring" cx="18" cy="18" r="16" />
-                {#if on}<circle class="fill" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{heardShare * 100} 100" transform="rotate(-90 18 18)" />{/if}
-                {#if openRow === i}<rect x="13" y="12" width="3.5" height="12" /><rect x="19.5" y="12" width="3.5" height="12" />{:else}<path d="M14 11v14l11-7z" />{/if}
-              </svg>
+              <SnippetMark open={openRow === i} share={on ? heardShare() : 0} />
             </button>
           {/if}
           {#if onmenu && !off}
@@ -105,7 +100,7 @@
     list-style: none;
   }
 
-  /* A row's snippet button (the owner's mockup C2) and its open row (A2's strip). */
+  /* A row's snippet button (its mark, lib/SnippetMark) and its open row (A2's strip). */
   .snip,
   .menu {
     display: grid;
@@ -121,22 +116,6 @@
     width: 40px;
     height: 40px;
     color: var(--muted);
-  }
-
-  .snip svg {
-    fill: currentColor;
-  }
-
-  .snip .ring {
-    fill: none;
-    stroke: var(--border);
-    stroke-width: 3;
-  }
-
-  .snip .fill {
-    fill: none;
-    stroke: var(--art-accent, var(--accent));
-    stroke-width: 3;
   }
 
   .snipped {

@@ -18,11 +18,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
-use ts_rs::TS;
 
 use super::play::{How, QUEUE_MOST};
 use super::queue::{PlayedOn, Queue, Repeat};
-use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, RadioBy, from_old};
+use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, RadioBy, Within, from_old};
 use super::{PlaylistService, ToggleError};
 
 mod along;
@@ -44,18 +43,19 @@ const SETTLE: Duration = Duration::from_millis(300);
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A track as players hold it: the page's own description (`LocalTrack` in web/src/lib/localPlayer.svelte.ts).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct QueueTrack {
     /// Its entry in the queue (decision 0033): an id of its own, never reused, apart from the track's.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub entry: String,
     /// `next`: added by hand (Play next, Add to queue), not part of the album or playlist that plays (0033's lanes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub lane: Option<String>,
     /// Its place in the album or playlist as it was played, before any shuffle: turning shuffle off orders by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub n: Option<u32>,
     pub source: String,
     pub id: String,
@@ -69,17 +69,18 @@ pub struct QueueTrack {
     pub album_id: Option<String>,
     /// Its length, for the queue's rows and the time left; players keep it as they keep the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub duration_secs: Option<f64>,
     /// Who asked for it, a queue request accepted (decision 0079; 0.10): the follower's name, or the guest's as the
     /// page shows it ("Guest Sam"). It stays with the entry wherever the entry goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub asked_by: Option<String>,
 }
 
 /// An announcement as a player reports it (Command::Announce).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Announcing {
     /// The command's id.
     pub id: String,
@@ -87,15 +88,16 @@ pub struct Announcing {
     pub state: AnnounceState,
     /// Why it failed, in a few words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub error: Option<String>,
     /// When its parts happened, as the app measured them (0.9.1); apps from before it leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub timeline: Option<Timeline>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum AnnounceState {
     Playing,
@@ -107,25 +109,26 @@ pub enum AnnounceState {
 /// better instrumentation", after a duck that came back ten seconds late): the clip's length, its first sound, the
 /// music fully ducked, the speech's end (its last loud block), the music back up, and done; `gave_up` when the clip
 /// was given up (the music stopped under it). Each as far as it came.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Timeline {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub clip_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub started_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub ducked_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub speech_end_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub released_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub done_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gave_up: bool,
@@ -181,47 +184,48 @@ impl Announcing {
 }
 
 /// What a player reports.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, rename = "PlayerReport")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, rename = "PlayerReport"))]
 pub struct Report {
     /// The playing track's place in the queue; -1 with nothing loaded.
     pub index: i64,
     /// The entry that plays (decision 0033); apps from before it say only `index`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub entry: Option<String>,
     /// The queue's version in the last command the player took: a queue it reports from before Cratarr's latest edit
     /// reached it is not taken (that edit is on its way). Apps from before it leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub version: Option<u64>,
     /// Its repeat mode, as it applies it (it may change it itself: a new play turns repeat one off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub repeat: Option<Repeat>,
     /// Its sleep timer, as it keeps it; none set (or one that fired) is left out or null.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub sleep: Option<Sleep>,
     /// Its Radio (decision 0036, amended): on or off. Apps from before the amendment report their Autoplay here, as an
     /// object; apps from before 0036 leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub radio: Option<ReportedRadio>,
     /// What its Radio's inserts are like, and how many follow each own track; left out: not said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub radio_by: Option<RadioBy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub radio_count: Option<u8>,
     /// Whether its Radio and Autoplay leave favourites out; left out: not said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub skip_favourites: Option<bool>,
     /// Its Autoplay: the setting, or null while off; left out: not said.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub autoplay: Option<Option<Autoplay>>,
     pub position_ms: u64,
     #[serde(default)]
@@ -235,20 +239,20 @@ pub struct Report {
     /// An announcement it plays or last played (Command::Announce): Home Assistant waits on it. Apps from before it
     /// leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub announce: Option<Announcing>,
     /// The whole queue when it changed since the last report; `None` keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub queue: Option<Vec<QueueTrack>>,
     /// Its own view of its link to Cratarr (decision 0045); apps from before it leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub link: Option<ReportedLink>,
     /// Why it does not play what it was told to: the device would not let it (decision 0031, amended 2026-10-19). Left
     /// out or null: nothing holds it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub held: Option<String>,
     /// Tape rewind under way (0.9.10): `position_ms` goes back to the start as the clip plays, so it is not counted on
     /// from the report. Apps from before leave it out.
@@ -262,64 +266,65 @@ pub struct Report {
     /// from them, as the app's own page does (the audit, 2026-10-29: the app sent them and they were dropped here).
     /// Players from before leave them out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub speed_x: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub accel_x: Option<f64>,
     /// Where its hold lands (0.11.1: a driven player's wind shown as it is, 2026-10-30), as a page says it while it holds;
     /// null once it holds no more. Left out: not said (apps and pages from before, a page in a group).
     #[serde(default, deserialize_with = "landing_said", skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub landing: Option<Option<Landing>>,
     /// The direction knob as set (0.9.12): `L` backwards, `R` (or left out) forwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub direction: Option<String>,
     /// Level the volume as the player has it (0.9.12): on, how a track not measured is taken, and what it turns the
     /// playing track down by now (dB, 0 or less). Players from before leave them out: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub levelling: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub level_unknown: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub level_db: Option<f64>,
     /// `device` while the app plays the device's own music (decision 0052, local mode): the rest of this report is that
     /// player's, and Cratarr's queue is left as it was. Left out: Cratarr's music, as ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub mode: Option<String>,
     /// In local mode, the track that plays (the device's own: Cratarr cannot serve it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub device_track: Option<DeviceTrack>,
     /// Where its sound goes now (decision 0033, amended 2026-10-19), as its app tells: left out by pages, Kodi and
     /// apps from before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub output: Option<Output>,
     /// Which queue it plays, and its name (decision 0033, amended): another id than Cratarr's is a queue the player
     /// started itself, and the one before is kept. Apps from before leave them out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub queue_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub queue_name: Option<String>,
 }
 
 /// Where a hold lands, as the player has it (0.11.1: a driven player's wind shown as it is, 2026-10-30): the track's
 /// place in the queue, the place in it, and the hold's top speed (×) where it says it. A page driving the player shows
 /// its look-ahead and the hold's zoom by it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Landing {
     pub index: i64,
     pub position_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub top_x: Option<f64>,
 }
 
@@ -331,7 +336,8 @@ fn landing_said<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<
 }
 
 /// A track of a device's own music, as its app tells it in local mode (decision 0052).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct DeviceTrack {
     pub name: String,
     #[serde(default)]
@@ -348,8 +354,9 @@ const OWN_MUSIC: &str = "That device plays its own music.";
 
 /// A device's audio output (decision 0033, amended 2026-10-19): `bluetooth`, `speaker`, `wired`, `usb`, `hdmi`,
 /// `remote` or `other`, and the device's own name where it has one (a car's Bluetooth, say; none for a speaker).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(rename = "AudioOutput")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "AudioOutput"))]
 pub struct Output {
     #[serde(rename = "type")]
     pub kind: String,
@@ -366,39 +373,41 @@ impl Output {
 
 /// A player's link as the player sees it (decision 0045): what Cratarr cannot see while the player's reports still get
 /// through and its command stream does not. Times are epoch ms on Cratarr's clock.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ReportedLink {
     /// Its command stream open since; none while it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub connected_since: Option<u64>,
     /// Attempts to connect that failed since it was last connected.
     #[serde(default)]
     pub failed: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub last_error: Option<String>,
     /// The address of Cratarr's it uses (home or public).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub address: Option<String>,
     /// A wait it is in before trying again: until when, and why (a refusal's ten minutes, say).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub wait_until: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub wait_why: Option<String>,
 }
 
 /// A player's link as Cratarr knows it (decision 0045), in its view.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
-#[ts(rename = "PlayerLink")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "PlayerLink"))]
 pub struct LinkView {
     /// Offline since (epoch seconds); none while online, or not known (offline since Cratarr started).
     pub offline_since: Option<u64>,
     /// How its last connection ended (`replaced`, `gone quiet`, `closed`, `server stopping`), and when (epoch seconds).
-    #[ts(type = "\"replaced\" | \"gone quiet\" | \"closed\" | \"server stopping\" | null")]
+    #[cfg_attr(test, ts(type = "\"replaced\" | \"gone quiet\" | \"closed\" | \"server stopping\" | null"))]
     pub ended: Option<&'static str>,
     pub ended_at: Option<u64>,
     /// Its own view, from its last report.
@@ -411,7 +420,8 @@ fn full_volume() -> u8 {
 
 /// A sleep timer: the player pauses at `at_ms` (epoch milliseconds), or when the playing track ends. The player that
 /// plays keeps it, as only it is sure to be awake then (offline, behind a locked screen).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Sleep {
     #[serde(default)]
     pub at_ms: Option<u64>,
@@ -420,7 +430,8 @@ pub struct Sleep {
 }
 
 /// A report's `radio`: Radio's switch, or (an app from before the amendment) its Autoplay as the radio was then.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(untagged)]
 pub enum ReportedRadio {
     On(bool),
@@ -433,21 +444,23 @@ fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Resul
 }
 
 /// A player's radio as apps before the amendment report it: on with its mode and seed, or off. Taken as Autoplay.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RadioState {
     pub on: bool,
     #[serde(default)]
     pub mode: RadioMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seed: Vec<String>,
-    /// The crate it plays inside, when it does ("Play as radio").
+    /// What it plays inside, when it does ("Play as radio"; decision 0094: the page's collection).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub within: Option<String>,
+    #[cfg_attr(test, ts(optional))]
+    pub within: Option<Within>,
 }
 
 /// What `play` plays when it is not given tracks; resolved here, so it never reaches the player.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct PlayFrom {
     /// A playlist, by name.
     #[serde(default, skip_serializing)]
@@ -484,9 +497,10 @@ fn yes() -> bool {
 }
 
 /// What can be asked of a player.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "command", rename_all = "snake_case")]
-#[ts(export, rename = "PlayerCommand")]
+#[cfg_attr(test, ts(export, rename = "PlayerCommand"))]
 pub enum Command {
     /// A playlist, an album, the favourites, the library or tracks, from track `index`, `position_ms` into it; shuffled
     /// first when asked (then from the start). What reaches the player is always `tracks`.
@@ -494,7 +508,7 @@ pub enum Command {
         #[serde(flatten)]
         from: PlayFrom,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         tracks: Option<Vec<QueueTrack>>,
         #[serde(default)]
         index: usize,
@@ -509,10 +523,10 @@ pub enum Command {
         /// Which queue this is, and its name (decision 0033, amended: queue history): a player reports them back as it
         /// plays it. Given by the one who asks only to take up a queue again (a handover, a switch).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         queue_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         queue_name: Option<String>,
     },
     /// Tracks into the queue after entry `after` ("" for first), else at place `at`, else at the end. A player is told
@@ -524,27 +538,33 @@ pub enum Command {
         #[serde(default)]
         tracks: Vec<QueueTrack>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         at: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         after: Option<String>,
         #[serde(default, skip_serializing)]
         how: Option<String>,
+        /// Played at once (the owner, 2026-11-02: one track plays now): the first added plays now, the queue kept. The
+        /// one it cuts counts as played (it ended, not skipped) and the queue goes on after the added ones; Radio and
+        /// Autoplay go on as they were (no new seed). Nothing playing: the first added plays.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(test, ts(as = "Option<bool>", optional))]
+        now: bool,
     },
     /// Entry `entry` (or the one at place `from`) to after entry `after` ("" for first), or to place `to`.
     Move {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         from: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         to: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         entry: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         after: Option<String>,
     },
     /// Everything after the playing track replaced by these; the playing track plays on.
@@ -552,7 +572,7 @@ pub enum Command {
         tracks: Vec<QueueTrack>,
         /// Whether they come shuffled now, when that changed (the shuffle switch).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         shuffled: Option<bool>,
     },
     /// Shuffle, once (the owner, 2026-10-23: a queue always has an order; shuffle is an action, not a state): the tracks
@@ -579,38 +599,39 @@ pub enum Command {
     Radio {
         on: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         by: Option<RadioBy>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         count: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         mode: Option<RadioMode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         seed: Option<Vec<String>>,
-        /// A crate to play inside (its id); "" plays outside any again; left out: as it was.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        within: Option<String>,
+        /// What to play inside (decision 0094: a crate, a playlist, a record, an artist or tracks); null plays beyond
+        /// it again; left out: as it was.
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(test, ts(optional))]
+        within: Option<Option<Within>>,
     },
     /// Autoplay in a mode, or `stop` (decision 0036, amended): the player appends its tracks when the queue runs out.
-    /// What is left out stays as it was; `within` "" plays outside any crate again. On turns repeat all off.
+    /// What is left out stays as it was; `within` null plays beyond what it stayed inside again. On turns repeat all off.
     Autoplay {
         mode: AutoplayMode,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         albums: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         restart: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         seed: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        within: Option<String>,
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(test, ts(optional))]
+        within: Option<Option<Within>>,
     },
     /// Radio's and Autoplay's picks leave the owner's favourites out, or not (decision 0036, amended). A change takes
     /// their picks still to come out.
@@ -625,19 +646,19 @@ pub enum Command {
     /// Entry `entry` (or the one at place `index`) out.
     Remove {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         index: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         entry: Option<String>,
     },
     /// To entry `entry` (or the one at place `index`), from its start.
     Jump {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         index: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         entry: Option<String>,
     },
     Pause,
@@ -648,7 +669,7 @@ pub enum Command {
     /// none.
     Stop {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         moved_to: Option<String>,
     },
     Next,
@@ -668,17 +689,17 @@ pub enum Command {
     /// measured is taken (`typical`, `untouched`). The player eases into its new level over a second.
     Level {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         on: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         unknown: Option<String>,
     },
     /// To `position_ms`, or `percent` (0 to 100) of the track, or `by_ms` on from where it is now (back below 0: the
     /// visuals' double and triple taps). What reaches the player is always `position_ms`.
     Seek {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         position_ms: Option<u64>,
         #[serde(default, skip_serializing)]
         percent: Option<f64>,
@@ -713,7 +734,7 @@ pub enum Command {
         /// Instead of `id`: the newest queue heard on an output (or player) this names, as "the car queue": this
         /// player's first, then the same account's other players' (decision 0033, amended 2026-10-19). Played.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         played_on: Option<String>,
     },
     /// Queue history: queue `id` (the one that plays too) renamed; kept then until deleted. Handled here.
@@ -733,7 +754,7 @@ pub enum Command {
         leader: Option<String>,
         /// Where Snapcast's port is, when not on the host the player reaches Cratarr on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[cfg_attr(test, ts(optional))]
         host: Option<String>,
         port: u16,
         buffer_ms: u32,
@@ -755,7 +776,8 @@ impl Command {
 }
 
 /// Cratarr's own ids of the playing track (decision 0030): what Home Assistant's library calls take.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct TrackIds {
     pub track_id: Option<String>,
     pub album_id: Option<String>,
@@ -763,7 +785,8 @@ pub struct TrackIds {
 }
 
 /// Autoplay as the player view shows it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AutoplayView {
     pub mode: AutoMode,
     pub albums: bool,
@@ -771,7 +794,8 @@ pub struct AutoplayView {
 }
 
 /// Where a player's music went at a handover, and when (the owner, 2026-10-30: "the screen follows the music").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct MovedTo {
     pub player: String,
     /// When (epoch ms).
@@ -785,8 +809,9 @@ const MOVED_SHOWN: Duration = Duration::from_secs(5 * 60);
 const MOVES_FOLLOWED: usize = 4;
 
 /// A player as Home Assistant and the pages see it.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export, rename = "PlayOnPlayer")]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, rename = "PlayOnPlayer"))]
 pub struct PlayerView {
     pub name: String,
     /// Connected now and heard from lately: commands reach it.
@@ -794,7 +819,7 @@ pub struct PlayerView {
     /// Its link, as Cratarr knows it and as the player last told (decision 0045).
     pub link: LinkView,
     /// `playing`, `paused` or `stopped` (nothing loaded).
-    #[ts(type = "\"playing\" | \"paused\" | \"stopped\"")]
+    #[cfg_attr(test, ts(type = "\"playing\" | \"paused\" | \"stopped\""))]
     pub state: &'static str,
     /// When it was last heard from (epoch seconds).
     pub seen: u64,
@@ -819,17 +844,17 @@ pub struct PlayerView {
     /// ms, signed, and how fast that changes a second. Left out where it does not say (a page says it only while it
     /// winds or holds): then 1 playing, 0 paused.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub speed_x: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub accel_x: Option<f64>,
     /// Where its hold lands, as the player says (0.11.1): null once it holds no more; left out where it does not say.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub landing: Option<Option<Landing>>,
     /// The direction knob as the player says (0.9.12): `L` or `R`.
-    #[ts(type = "\"L\" | \"R\"")]
+    #[cfg_attr(test, ts(type = "\"L\" | \"R\""))]
     pub direction: &'static str,
     /// Level the volume as the player says (0.9.12): on, how an unmeasured track is taken, what it turns down by now.
     pub levelling: bool,
@@ -873,55 +898,55 @@ pub struct PlayerView {
     pub delay_ms: u16,
     /// It has been in a group (`PlayOnSettings::grouped`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    #[ts(as = "Option<bool>", optional)]
+    #[cfg_attr(test, ts(as = "Option<bool>", optional))]
     pub grouped: bool,
     /// Shared with everyone on this Cratarr (0.9.8).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    #[ts(as = "Option<bool>", optional)]
+    #[cfg_attr(test, ts(as = "Option<bool>", optional))]
     pub shared: bool,
     /// The asking account's own (its settings theirs to change); a shared one of another's is not. Its owner's name
     /// beside it when it is not.
     pub mine: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub owner: Option<String>,
     /// `app` (the Android app) or `kodi` (a Kodi Cratarr drives): what it can do (a Kodi joins no group).
-    #[ts(type = "\"app\" | \"kodi\" | \"browser\"")]
+    #[cfg_attr(test, ts(type = "\"app\" | \"kodi\" | \"browser\""))]
     pub kind: &'static str,
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub queue: Option<Vec<QueueTrack>>,
     /// Its queues (decision 0033, amended: queue history), the one that plays marked, newest first: in every view, so
     /// what is pushed (the players stream, Home Assistant's webhook) carries them.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub queues: Option<Vec<QueueItem>>,
     /// Goes up whenever that list changes: ask for the player by name to see it.
     pub queues_version: u64,
     /// `cratarr`, or `device` while it plays the device's own music (decision 0052): then `title`, `artist`, `album`,
     /// `state` and `position_ms` are that music's, and nothing of Cratarr's queue plays (`track` none, `index` -1,
     /// `queue_length` 0; the queue itself waits, as do its queues).
-    #[ts(type = "\"cratarr\" | \"device\"")]
+    #[cfg_attr(test, ts(type = "\"cratarr\" | \"device\""))]
     pub mode: &'static str,
     /// The player it follows, by its user and name (decision 0079: listening along): what it plays is kept in line
     /// with that player's.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub following: Option<FollowTarget>,
     /// The users following it (decision 0079), by name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    #[ts(as = "Option<Vec<String>>", optional)]
+    #[cfg_attr(test, ts(as = "Option<Vec<String>>", optional))]
     pub followers: Vec<String>,
     /// Queue requests waiting for its owner's answer (decision 0079); on the asking account's own players only.
     #[serde(skip_serializing_if = "is_zero")]
-    #[ts(as = "Option<usize>", optional)]
+    #[cfg_attr(test, ts(as = "Option<usize>", optional))]
     pub queue_requests: usize,
     /// Where its music went, as a handover moved it (the owner, 2026-10-30: "the screen follows the music"): a screen
     /// showing this player switches to that one. Until it plays again, five minutes at most; only to one who may reach
     /// that player.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[cfg_attr(test, ts(optional))]
     pub moved_to: Option<MovedTo>,
 }
 
@@ -1533,7 +1558,8 @@ struct Kept {
 }
 
 /// A queue in a player's list, as a page shows it.
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct QueueItem {
     pub id: String,
     pub name: String,
@@ -2466,14 +2492,16 @@ impl PlayOn {
                 Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle: false, paused, queue_id, queue_name: Some(queue_name) }
             }
             // By name too (a playlist, an album, the favourites), as `play` takes them: Home Assistant's "add this album".
-            Command::Add { from, mut tracks, at, after, how } => {
+            Command::Add { from, mut tracks, at, after, how, now } => {
+                // Now goes where Play next goes (right after the playing track), and plays.
+                let how = if now { Some("next".into()) } else { how };
                 let by = if how.as_deref() == Some("next") { How::Next } else { How::Last };
                 tracks.truncate(QUEUE_MOST);
                 let tracks = self.picked(name, &from, by, None).await?.map_or(tracks, |(t, _)| t);
                 if tracks.is_empty() {
                     return Err(ToggleError::Refused("Add what? Give tracks, a playlist, an album or the favourites.".into()));
                 }
-                Command::Add { from: PlayFrom::default(), tracks: self.named(tracks).await, at, after, how }
+                Command::Add { from: PlayFrom::default(), tracks: self.named(tracks).await, at, after, how, now }
             }
             Command::Seek { position_ms: None, percent: Some(p), wind, .. } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
@@ -2716,7 +2744,7 @@ impl PlayOn {
                 albums: Some(a.albums),
                 restart: Some(a.restart),
                 seed: Some(a.seed),
-                within: Some(a.within.unwrap_or_default()),
+                within: Some(a.within),
             },
             None => Command::Autoplay { mode: AutoplayMode::Stop, albums: None, restart: None, seed: None, within: None },
         };
@@ -2787,13 +2815,14 @@ impl PlayOn {
             account: self.account_of(name),
             folders: None,
         };
-        let first = super::radio::next(ask).await?;
+        let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
+        let first = super::radio::next(&app, ask).await?;
         if first.is_empty() {
             return Err(ToggleError::Refused("Nothing like it was found.".into()));
         }
         let title = from.name.clone().or(from.playlist.clone()).unwrap_or_else(|| name_of(&seeds));
         // Set before the play: a play of Autoplay's tracks only keeps its seed.
-        let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: Some(false), seed: Some(seed), within: Some(String::new()) };
+        let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: Some(false), seed: Some(seed), within: Some(None) };
         Box::pin(self.command(name, auto)).await?;
         let play = Command::Play {
             from: PlayFrom { name: Some(format!("Radio: {title}")), ..PlayFrom::default() },
@@ -4172,7 +4201,7 @@ mod tests {
         p.command("Phone", Command::Pause).await.unwrap();
         p.command("Phone", Command::Stop { moved_to: None }).await.unwrap();
         assert_eq!(said(&mut phone), ["pause", "pause"]);
-        let add = Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: None, how: None };
+        let add = Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: None, how: None, now: false };
         assert!(matches!(p.command("Phone", add).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
         let _tablet = p.connect("tablet").unwrap();
         assert!(matches!(p.command("Phone", Command::Handover { to: "tablet".into() }).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
@@ -4487,7 +4516,7 @@ mod tests {
         for c in [
             Command::Next,
             Command::Previous,
-            Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()) },
+            Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()), now: false },
             Command::Remove { index: Some(0), entry: None },
             Command::Upcoming { tracks: Vec::new(), shuffled: None },
         ] {
@@ -4527,7 +4556,7 @@ mod tests {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         assert!(p.was_following("Bob phone", now - 3), "a play told later is known as heard while following");
         assert!(!p.was_following("Bob phone", now + 10));
-        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()) };
+        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-9")], at: None, after: None, how: Some("next".into()), now: false };
         assert!(p.answer("Bob phone", add).await.is_ok());
     }
 
@@ -4607,7 +4636,7 @@ mod tests {
         assert_eq!(add["tracks"][0]["asked_by"], "bob");
         // A guest's, accepted at once; an ordinary add says nothing.
         p.ask_for(Asker::Guest("Sam".into()), "Ann phone", "ann", track("tr-8"), "last", Some("tok".into()), true).await.unwrap();
-        let plain = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-7")], at: None, after: None, how: Some("last".into()) };
+        let plain = Command::Add { from: PlayFrom::default(), tracks: vec![track("tr-7")], at: None, after: None, how: Some("last".into()), now: false };
         p.command("Ann phone", plain).await.unwrap();
         let q = queue(&p);
         assert_eq!((who(&q, "tr-9").as_deref(), who(&q, "tr-8").as_deref()), (Some("bob"), Some("Guest Sam")));

@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { openRadio } from './radioAsk.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import RecordEdit from './RecordEdit.svelte';
   import { leavePlayer } from './navStep.svelte';
@@ -38,6 +39,7 @@
 </script>
 
 <script lang="ts">
+  import { whenWritten } from './fileRuns.svelte';
   // An album's menu, the one every album has wherever it is opened (a Library row or tile, the select bar's More, the
   // album panel's ⋮), after Symfonium's album sheet: the album at the top (its heart there), the large actions (Play,
   // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable),
@@ -79,7 +81,7 @@
   import { grabCrate } from './quickCrates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player } from './live.svelte';
-  import { startRadio, type LocalTrack } from './localPlayer.svelte';
+  import { type LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import MenuTable from './MenuTable.svelte';
@@ -96,7 +98,8 @@
   import { shuffled } from './shuffle';
   import { albumGone, albumSubject, panel, viewOver } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { toast } from './toast.svelte';
   import { askFor, followingNow } from './following.svelte';
   import AlbumCard from './AlbumCard.svelte';
@@ -223,10 +226,12 @@
     albumResume(id).then((r) => r.track && (resumeAt = { track: r.track, position: r.position_secs ?? 0 }), () => {});
   });
   async function forgetResume() {
+    // What it does once the server answered, fixed as it is chosen: the menu closes at once (tests/menus-run-first).
+    const [id, gone] = [a.id, onresumegone];
     onclose();
     try {
-      await forgetAlbumResume(a.id);
-      onresumegone?.();
+      await forgetAlbumResume(id);
+      gone?.();
     } catch (e) {
       toast.fail(e, "The resume point wasn't removed");
     }
@@ -281,7 +286,10 @@
       { icon: 'listAdd', label: 'Add to queue', onclick: () => run(() => (source === DEVICE ? playAlbums(listed(), 'last') : playCollection({ kind: 'album', source, id: a.id }, 'last', a.title)), 'Added to the queue.') },
     );
     // Start radio (decision 0058, as a playlist's): tracks like the album's, from the whole library; on this device.
-    if (port().radio && t?.length) list.push({ icon: 'radio', label: 'Start radio', onclick: () => run(() => startRadio(t.map((x) => x.id), a.title)) });
+    if (port().radio && t?.length) {
+      const seed = t.map((x) => x.id);
+      list.push({ icon: 'radio', label: 'Start radio', onclick: () => (onclose(), openRadio({ name: a.title, kind: 'record', within: source === DEVICE ? null : { kind: 'album', source, id: a.id }, seed: async () => seed })) });
+    }
     return inOrder('album', list);
   });
 
@@ -341,10 +349,8 @@
   async function upload(src: string, id: string, title: string, file: File) {
     if (file.size > COVER_MAX) return toast.fail(null, 'That picture is too large (at most 12 MB)');
     try {
-      const { undo } = await uploadAlbumCover(src, id, file);
-      const again = () => void refreshCover(src, id, albumCoverUrl(src, id));
-      again();
-      withUndo(`Changed the cover of ${title}.`, undo, { after: again });
+      const run = await uploadAlbumCover(src, id, file);
+      whenWritten(run, `Changed the cover of ${title}.`, () => void refreshCover(src, id, albumCoverUrl(src, id)));
     } catch (e) {
       const big = e instanceof ApiError && e.status === 413;
       toast.fail(missingCall(e) || big ? null : e, big ? 'That picture is too large (at most 12 MB)' : missingCall(e) ? "This server can't take a cover yet" : "The cover wasn't uploaded");
@@ -397,6 +403,10 @@
   const primary = offer?.from?.use === 'music';
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
+  // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
+  // 2026-11-02).
+  const converted = (n: number, library: string) =>
+    `${n} lossless ${n === 1 ? 'file' : 'files'} above ${library}'s quality limit ${n === 1 ? 'is' : 'are'} converted to FLAC first.`;
   let ask = $state<false | Ask | 'really'>(false);
   /** The move's library. */
   let to = $state<LibraryInfo | null>(null);
@@ -471,11 +481,9 @@
     settingCover = c.url;
     stopLook();
     return act(async () => {
-      const { undo } = await setAlbumCover(source, a.id, c.url);
+      const run = await setAlbumCover(source, a.id, c.url);
       onclose();
-      const again = () => void refreshCover(source, a.id, albumCoverUrl(source, a.id));
-      again();
-      withUndo(`Changed the cover of ${a.title}.`, undo, { after: again });
+      whenWritten(run, `Changed the cover of ${a.title}.`, () => void refreshCover(source, a.id, albumCoverUrl(source, a.id)));
     }, 'Could not change the cover').finally(() => (settingCover = null));
   };
   const size = (c: CoverChoice) => (c.width && c.height ? `${c.width} × ${c.height}` : '');
@@ -528,8 +536,8 @@
       onclose();
     }
   }
-  // Done: the album leaves its library. Queued (hi-res files to convert first): its row shows the progress instead,
-  // and the queue says when it is done.
+  // Done: the album leaves its library. Queued (lossless files above the target's quality limit to convert first): its
+  // row shows the progress instead, and the queue says when it is done.
   function moved(r: AlbumMoved, words: string) {
     if (r.queued) {
       jobs.poke();
@@ -719,7 +727,7 @@
       {:else}
         <p class="ask">
           Move {a.title} into {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
-            {` ${keep.convert} hi-res ${keep.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !keep.acquisition && !primary}
+            {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
@@ -747,7 +755,7 @@
             ? `, ${swap.added} new`
             : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
           {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
-            {` ${swap.convert} hi-res ${swap.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !swap.acquisition}
+            {` ${converted(swap.convert, music)}`}{/if}{#if !swap.acquisition}
             {` ${NO_LIDARR}`}{/if}
         </p>
         <!-- Its cover (the owner, 2026-10-25): the one it has, or the new copy's; both shown. -->

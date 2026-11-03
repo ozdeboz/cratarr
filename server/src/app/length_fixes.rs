@@ -8,8 +8,8 @@
 //!   MP3's info frame's counts (one written where it has none), a FLAC's STREAMINFO total. Replacing the track is the
 //!   album's single-track replacement (`track_fetch`), which the finding's items lead to.
 //!
-//! A file is written in place (its folder's owner and group kept), its original copied beside the undo first
-//! (`fix-undo/<id>/`); Undo copies it back.
+//! A file is written in place (its folder's owner and group kept), as a run on the one path (`fix_plans`, decision
+//! 0092): the run keeps its original first, and its Undo copies it back (`file_runs`).
 
 use std::path::{Path, PathBuf};
 
@@ -19,14 +19,15 @@ use super::fixes::Fix;
 use super::health::{SHORT_SLACK_MS, clock, short_cause};
 use crate::serve::Serve;
 
-/// The fields these fixes have (`<field>:<song id>`).
-pub const FIELDS: [&str; 3] = ["reread", "length", "trim"];
+/// The fields these fixes have (`<field>:<song id>`); `seektable` a FLAC's broken seek table made padding (0.14).
+pub const FIELDS: [&str; 4] = ["reread", "length", "trim", "seektable"];
 
 fn field_of(key: &str) -> Option<&'static str> {
     match key {
         "files:length-misread" => Some("reread"),
         "files:length-guessed" => Some("length"),
         "files:cut-short" | "files:sound-breaks" => Some("trim"),
+        "files:bad_seektable" => Some("seektable"),
         _ => None,
     }
 }
@@ -36,6 +37,15 @@ pub fn of_finding(key: &str) -> Result<Vec<Fix>> {
     let Some(field) = field_of(key) else { return Ok(Vec::new()) };
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let mut out = Vec::new();
+    if field == "seektable" {
+        for (folder, rel) in served.catalogue().with_issue("bad_seektable")? {
+            let Some((song, ..)) = served.library.song_at(folder, &rel)? else { continue };
+            if let Some(f) = fix(&served, field, &song)? {
+                out.push(f);
+            }
+        }
+        return Ok(out);
+    }
     for (folder, rel, path, _, heard) in served.catalogue().shorter_than_heard(SHORT_SLACK_MS)? {
         if short_cause(&path, heard) != key {
             continue;
@@ -69,6 +79,21 @@ fn walked_ms(path: &Path) -> Option<i64> {
 /// One fix (`field` for `song`), as it stands now; none where it does not apply. Blocking.
 pub fn fix(served: &Serve, field: &str, song: &str) -> Result<Option<Fix>> {
     let Some((folder, rel, path, album, title)) = file_of(served, song)? else { return Ok(None) };
+    if field == "seektable" {
+        let Some(_) = crate::catalogue::tags::flac_seektable(&path).and_then(|t| t.wrong()) else { return Ok(None) };
+        return Ok(Some(Fix {
+            id: format!("seektable:{song}"),
+            album,
+            field: "seektable",
+            from: Some("A broken seek table".into()),
+            to: "Seeks by its frames".into(),
+            source: "its file".into(),
+            certainty: "certain",
+            why: format!("{title}: its seek table sends a far seek to the wrong place, so the track ends early: the table taken out (its audio untouched)."),
+            writes: Vec::new(),
+            candidates: Vec::new(),
+        }));
+    }
     let given = served.catalogue().duration_of(folder, &rel).map(|d| d as i64);
     let flac = is_flac(&path);
     let (field, to, source, why): (&'static str, Option<i64>, &str, &str) = match field {
@@ -93,31 +118,35 @@ pub fn fix(served: &Serve, field: &str, song: &str) -> Result<Option<Fix>> {
     }))
 }
 
-/// Applies one fix: the file to read again, and its original's copy where it was written (`backups`, a folder of the
-/// undo's). Blocking.
-pub fn apply(fix: &Fix, backups: &Path, n: usize) -> Result<(PathBuf, Option<PathBuf>)> {
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+/// Writes a length's change into a file in place (`op`: length, trim, seektable; `ms` a FLAC's length to set): the run on
+/// the one path keeps its original first (`file_runs`). Blocking.
+pub fn write(op: &str, path: &Path, ms: Option<i64>) -> Result<()> {
+    match op {
+        "seektable" => crate::catalogue::tags::flac_drop_seektable(path),
+        "length" | "trim" if is_flac(path) => set_flac_total(path, ms.context("its sound's length is not known")?),
+        "length" | "trim" => set_mp3_length(path),
+        "reread" => Ok(()),
+        _ => bail!("no such change: {op}"),
+    }
+}
+
+/// A length's fix as a file of a run: its track, the length now → after (a seek table's broken → by its frames), and
+/// what is done to it, its print as it stands. None where it no longer applies. Blocking.
+pub fn file_write(served: &Serve, fix: &Fix) -> Result<Option<crate::journal::FileWrite>> {
     let song = fix.id.split_once(':').map(|(_, s)| s).context("not a fix")?;
-    let (folder, rel, path, ..) = file_of(&served, song)?.context("that track is gone")?;
-    if fix.field == "reread" {
-        return Ok((path, None));
-    }
-    std::fs::create_dir_all(backups)?;
-    let backup = backups.join(format!("{n}-{}", path.file_name().and_then(|f| f.to_str()).unwrap_or("track")));
-    std::fs::copy(&path, &backup).with_context(|| format!("keeping {} first", path.display()))?;
-    let written = if is_flac(&path) {
-        let ms = served.catalogue().heard_ms(folder, &rel).context("its sound's length is not known")?;
-        set_flac_total(&path, ms)
-    } else {
-        set_mp3_length(&path)
-    };
-    if let Err(e) = written {
-        // Nothing half-written stays: the original back.
-        let _ = std::fs::copy(&backup, &path);
-        let _ = std::fs::remove_file(&backup);
-        return Err(e);
-    }
-    Ok((path, Some(backup)))
+    let Some((folder, rel, path, album, title)) = file_of(served, song)? else { return Ok(None) };
+    let ms = (fix.field == "trim" && is_flac(&path)).then(|| served.catalogue().heard_ms(folder, &rel)).flatten();
+    let field = if fix.field == "seektable" { "seek table" } else { "length" };
+    Ok(Some(crate::journal::FileWrite {
+        album,
+        track: Some(title),
+        before: vec![(field.to_string(), fix.from.clone().into_iter().collect())],
+        after: vec![(field.to_string(), vec![fix.to.clone()])],
+        from: vec![(field.to_string(), fix.source.clone())],
+        undone: false,
+        whole: Some(crate::journal::Whole { op: fix.field.to_string(), ms, kept: None, planned: super::file_runs::print(&path)?, wrote: None }),
+        path,
+    }))
 }
 
 /// An MP3's info frame set to the frames and bytes its sound has; one written before its sound where it has none.

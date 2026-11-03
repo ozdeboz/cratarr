@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 await import('./with-matcher.ts');
 
-const { splitTerms, yearOf, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
+const { splitTerms, yearOf, tempoOf, tempoSaid, readingOf, readingsFor, chipOf, readAs, seedsOf, conditionsOf, nameOf, countAt, minAt, fits, readLine, sentenceOf, recentFor, likeChip, wordChip, crateOfLine, CLOSE, LIKE_MOST, chipsOf, modesFrom, joinOf, briefOf, keptChips, namesOf, crateShows, crateCardOn, readOnto } = await import(
   '../src/lib/quickCrate.ts'
 );
 const { words, match } = await import('../src/lib/search.ts');
@@ -587,4 +587,134 @@ test('a line read onto a crate: new terms as chips, a term already in it once, t
   assert.deepEqual(out.add.map((c) => c.reading.label), ['Soul']);
   assert.deepEqual(out.modes, { genre: 'and' }, "an 'and' between two genres joins them");
   assert.deepEqual(out.missed, ['qwzx']);
+});
+
+// The tempo (0.14; the owner, 2026-11-02): read as a year is, by rule and only with its "bpm"; never "fast" or "slow".
+test('a tempo by rule: a span, open at the top or the bottom, about one; only with its bpm, only a tempo', () => {
+  const span = (t: string) => tempoOf(t)?.value ?? null;
+  assert.equal(span('120-130 bpm'), '120-130');
+  assert.equal(span('120–130 bpm'), '120-130');
+  assert.equal(span('120 to 130 bpm'), '120-130');
+  assert.equal(span('130 - 120 BPM'), '120-130');
+  assert.equal(span('over 140 bpm'), '140-9999');
+  assert.equal(span('above 140 bpm'), '140-9999');
+  assert.equal(span('under 90 bpm'), '0-90');
+  assert.equal(span('below 90 bpm'), '0-90');
+  assert.equal(span('128 bpm'), '125-131');
+  assert.equal(span('128bpm'), '125-131');
+  assert.equal(span('about 128 bpm'), '125-131');
+  assert.equal(span('around 128 bpm'), '125-131');
+  assert.deepEqual(
+    ['120-130 bpm', 'above 140 bpm', 'below 90 bpm', '128 bpm'].map((t) => tempoOf(t)?.label),
+    ['120–130 bpm', 'over 140 bpm', 'under 90 bpm', 'about 128 bpm'],
+  );
+  assert.equal(tempoOf('128 bpm')?.kind, 'bpm');
+  for (const t of ['128', '120-130', 'fast', 'slow', '19 bpm', '301 bpm', 'over 400 bpm', '10-130 bpm', 'over 120-130 bpm', 'bpm'])
+    assert.equal(tempoOf(t), null, t);
+  assert.equal(span('20 to 300 bpm'), '20-300', 'its bounds in');
+});
+
+test('a tempo in a line: one term, asking nothing; out of its bounds or without bpm, the words as they read before', async () => {
+  const r = await read('hip hop 120-130 bpm, ann quartet');
+  assert.deepEqual(r.terms, ['hip hop → genre:Hip Hop', '120-130 bpm → bpm:120–130 bpm', 'ann quartet → artist:Ann Quartet']);
+  assert.deepEqual(r.asked, ['hip hop', 'ann quartet'], 'a tempo asks nothing');
+  assert.deepEqual((await read('jazz 120 to 130 bpm')).terms, ['jazz → genre:Jazz', '120 to 130 bpm → bpm:120–130 bpm']);
+  assert.deepEqual((await read('jazz over 140 bpm')).terms, ['jazz → genre:Jazz', 'over 140 bpm → bpm:over 140 bpm']);
+  assert.deepEqual((await read('jazz above 140 bpm')).terms, ['jazz → genre:Jazz', 'above 140 bpm → bpm:over 140 bpm']);
+  assert.deepEqual((await read('jazz under 90 bpm')).terms, ['jazz → genre:Jazz', 'under 90 bpm → bpm:under 90 bpm']);
+  assert.deepEqual((await read('jazz below 90 bpm')).terms, ['jazz → genre:Jazz', 'below 90 bpm → bpm:under 90 bpm']);
+  assert.deepEqual((await read('jazz 128 bpm 90s')).terms, ['jazz → genre:Jazz', '128 bpm → bpm:about 128 bpm', '90s → year:1990s']);
+  // Out of a tempo's bounds: no tempo, its words read as any are (here: nothing).
+  assert.deepEqual((await read('jazz 400 bpm')).terms, ['jazz → genre:Jazz', '400 → nothing', 'bpm → nothing']);
+  // No bpm: a plain number as ever, a year a year.
+  assert.deepEqual((await read('jazz 1975')).terms, ['jazz → genre:Jazz', '1975 → year:1975']);
+  assert.deepEqual((await read('jazz 1970 to 1979')).terms, ['jazz → genre:Jazz', '1970-1979 → year:1970–1979']);
+  assert.deepEqual((await read('jazz 128')).terms, ['jazz → genre:Jazz', '128 → nothing']);
+  assert.deepEqual(
+    readingsFor('over 140 bpm', [hit('genre', 'Jazz')]).map((x) => `${x.kind}:${x.label}`),
+    ['bpm:over 140 bpm', 'genre:Jazz'],
+    'a term read again (the term sheet) a tempo first',
+  );
+});
+
+test('a tempo in the conditions: the bpm range, open at an end; several one span; left out each its own row', async () => {
+  const cond = async (line: string) => conditionsOf(await chipsOfLine(line));
+  assert.deepEqual(await cond('jazz 120-130 bpm'), [
+    { axis: 'genre', not: false, value: { kind: 'any_of', values: ['Jazz'] } },
+    { axis: 'bpm', not: false, value: { kind: 'range', min: 120, max: 130 } },
+  ]);
+  assert.deepEqual((await cond('jazz over 140 bpm'))[1], { axis: 'bpm', not: false, value: { kind: 'range', min: 140, max: null } });
+  assert.deepEqual((await cond('jazz under 90 bpm'))[1], { axis: 'bpm', not: false, value: { kind: 'range', min: null, max: 90 } });
+  assert.deepEqual((await cond('jazz 128 bpm'))[1], { axis: 'bpm', not: false, value: { kind: 'range', min: 125, max: 131 } });
+  assert.deepEqual(
+    await cond('128 bpm 90s'),
+    [
+      { axis: 'year', not: false, value: { kind: 'range', min: 1990, max: 1999 } },
+      { axis: 'bpm', not: false, value: { kind: 'range', min: 125, max: 131 } },
+    ],
+    'the years before the tempo, however typed',
+  );
+  assert.deepEqual(await cond('jazz 100 bpm, over 140 bpm'), [
+    { axis: 'genre', not: false, value: { kind: 'any_of', values: ['Jazz'] } },
+    { axis: 'bpm', not: false, value: { kind: 'range', min: 97, max: null } },
+  ]);
+  assert.deepEqual(await cond('hip hop not over 140 bpm'), [
+    { axis: 'genre', not: false, value: { kind: 'any_of', values: ['Hip Hop'] } },
+    { axis: 'bpm', not: true, value: { kind: 'range', min: 140, max: null } },
+  ]);
+});
+
+test('a tempo said as its chip reads, typed back the same, and read back from the conditions as that phrase', async () => {
+  const say = async (line: string) => plain(sentenceOf(await chipsOfLine(line)));
+  assert.equal(await say('jazz 120-130 bpm'), 'Jazz at 120–130 bpm');
+  assert.equal(await say('jazz 120 to 130 bpm'), 'Jazz at 120–130 bpm');
+  assert.equal(await say('jazz over 140 bpm'), 'Jazz over 140 bpm');
+  assert.equal(await say('jazz above 140 bpm'), 'Jazz over 140 bpm');
+  assert.equal(await say('under 90 bpm on blue note'), 'Tracks on Blue Note under 90 bpm');
+  assert.equal(await say('jazz from the 90s 128 bpm that sounds like miles davis'), 'Jazz from the 1990s at about 128 bpm that sounds like Miles Davis');
+  assert.equal(await say('jazz 100 bpm, over 140 bpm'), 'Jazz at about 100 bpm to over 140 bpm');
+  assert.equal(await say('hip hop not over 140 bpm'), 'Hip Hop, but not over 140 bpm');
+  assert.equal(await say('soul not 00s or 120-130 bpm'), 'Soul, but not from the 2000s, not at 120–130 bpm');
+  for (const line of [
+    'jazz 120-130 bpm',
+    'jazz over 140 bpm',
+    'jazz under 90 bpm',
+    'jazz 128 bpm',
+    'jazz from the 90s 128 bpm that sounds like miles davis',
+    'jazz 100 bpm, over 140 bpm',
+    'hip hop not over 140 bpm',
+    'soul not 00s or 120-130 bpm',
+  ]) {
+    const chips = await chipsOfLine(line);
+    const sentence = plain(sentenceOf(chips));
+    // Typed back: the same terms, the same crate.
+    const typed = await chipsOfLine(sentence);
+    assert.deepEqual(typed.map((ch) => `${ch.reading.kind}:${ch.reading.label}${ch.not ? '!' : ''}`), chips.map((ch) => `${ch.reading.kind}:${ch.reading.label}${ch.not ? '!' : ''}`), `${sentence}: typed back`);
+    // Read back from its conditions: the same crate, said the same where it was one term of a kind.
+    const conditions = conditionsOf(chips);
+    const back = chipsOf(conditions, namesOf(chips));
+    assert.deepEqual(back.rest, [], line);
+    assert.deepEqual(conditionsOf(back.chips, back.min, back.modes), conditions, line);
+    if (!line.includes(',')) assert.equal(plain(sentenceOf(back.chips)), sentence, `${line}: read back`);
+  }
+  const back = chipsOf(conditionsOf(await chipsOfLine('jazz 120-130 bpm'))).chips;
+  assert.deepEqual(
+    back.map((ch) => `${ch.reading.kind}:${ch.reading.label}`),
+    ['genre:Jazz', 'bpm:120–130 bpm'],
+  );
+});
+
+test("a tempo the sentence cannot say as typed stays the conditions': not whole, out of a tempo's bounds, open at both ends", () => {
+  const bpm = (min: number | null, max: number | null) => ({ axis: 'bpm', not: false, value: { kind: 'range' as const, min, max } });
+  const label = (min: number | null, max: number | null) => chipsOf([bpm(min, max)]).chips[0]?.reading.label;
+  assert.equal(label(120, 130), '120–130 bpm');
+  assert.equal(label(null, 90), 'under 90 bpm');
+  assert.equal(label(140, null), 'over 140 bpm');
+  assert.equal(label(125, 131), 'about 128 bpm', 'six wide: about its middle, as a year span of ten is its decade');
+  for (const c of [bpm(120.5, 130), bpm(10, 400), bpm(null, 400), bpm(null, null), bpm(15, 21)]) assert.deepEqual(chipsOf([c]).rest, [c], JSON.stringify(c.value));
+  assert.equal(tempoSaid(97, null), 'over 97 bpm');
+  assert.equal(tempoSaid(17, 23), 'about 20 bpm', 'about a tempo in its bounds');
+  assert.equal(tempoSaid(15, 21), null, 'about 18: no tempo');
+  const twice = [bpm(120, 130), bpm(90, 100)];
+  assert.deepEqual(chipsOf(twice).rest, [twice[1]], 'a second row of one kind');
 });

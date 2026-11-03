@@ -10,6 +10,7 @@
 
 <script lang="ts">
   import { findOnBandcamp, wantAlbum } from './api';
+  import { hrefOf } from './addresses';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
   import { bandcampOf, rememberBandcamp } from './bandcampFound.svelte';
   import LinkSheet from './LinkSheet.svelte';
@@ -65,7 +66,7 @@
         {#if a.have}
           <MenuEntry icon="disc" label="In your library" disabled onclick={() => {}} />
         {:else if asked.includes(elsewhereKey(a))}
-          <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = '#/requests'))} />
+          <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = hrefOf('requests')))} />
         {:else}
           <MenuEntry icon="circlePlus" label="Want" onclick={() => want(a)} />
         {/if}

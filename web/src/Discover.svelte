@@ -10,6 +10,7 @@
   // a line says what one would add. In modes (the owner, 2026-10-29), picked beside back (lib/DiscoverPicker): Fresh,
   // Alike, Gaps and New artists, each suggestion in the one whose reason fits it best, and the account's Spotify lists.
   import ProblemSheet from './lib/ProblemSheet.svelte';
+  import { hrefOf, viewOn } from './lib/addresses';
   import { getDiscover, hideDiscover, notDiscover, notDiscoverArtist, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverPlay from './lib/CoverPlay.svelte';
@@ -165,7 +166,14 @@
     return [...by].map(([name, records]) => ({ name, why: [] as string[], records }));
   });
   // Not while a Spotify list is the one on screen (lib/SpotifyLibrary): the callout would tell of the hidden one.
-  searchNone(() => (!spotifyView && kept.length && !looking && (mode === 'artists' ? !artists.length : !cards.length) ? (mode === 'artists' ? 'artists' : 'albums') : null));
+  searchNone(
+    () =>
+      !spotifyView &&
+      kept.length > 0 &&
+      !looking &&
+      (mode === 'artists' ? !artists.length : !cards.length) &&
+      (mode === 'artists' ? { n: new Set(kept.map((a) => a.artist)).size, one: 'artist' } : { n: kept.filter(inMode).length, one: 'record' }),
+  );
   // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): Fresh.
   loadSpotify().then(() => {
     if (inSpotify() && spotify.state && !spotify.state.shown) prefs.discoverMode = 'fresh';
@@ -338,7 +346,7 @@
     <PageLoading>{@render how()}</PageLoading>
   {:else}
     {#if !connected}
-      <p class="note">ListenBrainz or Last.fm would add albums like what you play: <a href="#/settings?view=settings%3Aconnections">connect one</a>.</p>
+      <p class="note">ListenBrainz or Last.fm would add albums like what you play: <a href={viewOn('settings', 'settings:connections')}>connect one</a>.</p>
     {/if}
     {#if looking && !albums.length}
       <!-- The first look: the page's loader where it always is, how far it is under it (ui-conventions, Progress). -->
@@ -353,7 +361,7 @@
       {#if !looking}{#if kept.length || view.found}{#if !(kept.length && pageView.none)}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{/if}{:else if error}<Notice text={error} onretry={load} />{:else if task?.error}<Notice text={task.error} onretry={refresh} />{:else}<PageLoading />{/if}{/if}
     {:else}
       {#if me.admin && !view.lidarr}
-        <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
+        <p class="note">Want needs Lidarr: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>
       {/if}
       {#if (mode === 'artists' ? !artists.length : !cards.length) && !pageView.none}<p class="note">None of them match.</p>{/if}
       {#each artists as x (x.name)}
@@ -396,7 +404,7 @@
       </MenuGroup>
       <MenuGroup label="Discover">
         {#if r && open(r)}
-          <MenuEntry icon="inbox" label={r.status === 'pending' ? 'Requested' : 'Approved'} onclick={act(() => (location.hash = '#/requests'))} />
+          <MenuEntry icon="inbox" label={r.status === 'pending' ? 'Requested' : 'Approved'} onclick={act(() => (location.hash = hrefOf('requests')))} />
         {:else}
           <MenuEntry icon="circlePlus" label="Want" disabled={!canWant || asking === a.key} busy={asking === a.key} onclick={act(() => want(a))} />
         {/if}

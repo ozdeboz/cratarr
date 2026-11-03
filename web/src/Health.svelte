@@ -25,7 +25,7 @@
   // The pill's search (the owner, 2026-10-25): a problem whose words, or one of its items', hold every word.
   const list = $derived(problems().filter((p) => matchesSearch(p.domain, p.title, p.line, ...p.items.map((x) => `${x.title} ${x.line ?? ''}`))));
   // Its words leave none: the pill says so, from its magnifier (pageView searchNone).
-  searchNone(() => (health.loaded && problems().length && !list.length ? 'problems' : null));
+  searchNone(() => health.loaded && !list.length && { n: problems().length, one: 'problem' });
   const groups = $derived(byArea(list, AREAS));
   // Changes to files (decision 0092; administrators'): the records whose files differ from their types and years (while
   // types into files is on) a line under Library, opening its review; every run one line under Files, naming what
@@ -35,9 +35,9 @@
   const differ = $derived(fileFacts.value?.on ? fileFacts.value.differ : 0);
   const now = $derived((fileRuns.list ?? []).filter((r) => r.state !== 'done'));
   const changesLine = $derived.by(() => {
-    const writing = now.find((r) => r.state === 'writing');
+    const writing = now.find((r) => r.state === 'writing' || r.state === 'adding');
     const waiting = now.filter((r) => r.state === 'waiting').length;
-    const parts = [writing ? `${writing.title} writing` : null, waiting ? `${waiting} waiting` : null].filter(Boolean);
+    const parts = [writing ? `${writing.title} ${writing.state === 'adding' ? 'adding' : 'writing'}` : null, waiting ? `${waiting} waiting` : null].filter(Boolean);
     return parts.length ? parts.join(' · ') : null;
   });
   // Activity shows only while something runs or ran this month (the owner, 2026-11-01: only what matters shows).
@@ -52,6 +52,12 @@
   });
   const LIBRARY = 'Library';
   const ACTIVITY = 'Activity';
+  /** Whether a row's line says how many already ("98 albums without a genre"): its value then says nothing more (the
+   *  owner, 2026-11-03: the same number twice per row is wrong). */
+  const saysCount = (p: ReturnType<typeof problems>[number], line: string | null) => {
+    const count = p.finding?.count ?? p.items.length;
+    return !!line && line.trim().split(/\s/)[0] === count.toLocaleString();
+  };
   /** How many, and how it stands where the server says ("3 missing"): the finding's count, else its items. */
   const countOf = (p: ReturnType<typeof problems>[number]) => {
     const count = p.finding?.count ?? p.items.length;
@@ -75,11 +81,12 @@
       {#each groups as g (g.area)}
         <Group title={g.area}>
           {#each g.problems as p (p.key)}
+            {@const line = p.name === p.title ? p.line : p.title}
             <Item
               lead={dotOf(p)}
-              name={p.finding?.thing ?? p.name}
-              line={p.name === p.title ? p.line : p.title}
-              value={countOf(p)}
+              name={p.name}
+              {line}
+              value={saysCount(p, line) ? null : countOf(p)}
               open={panelBeside() && healthOf(panel.viewed) === p.key}
               onclick={() => viewPlaylist(HEALTH + p.key)}
             />

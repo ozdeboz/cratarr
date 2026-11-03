@@ -791,7 +791,7 @@ fn convert(t: &Track, how: Treatment, work: &Path, rt: &tokio::runtime::Handle) 
     match how {
         Treatment::AsIs => {}
         Treatment::CdFlac => {
-            crate::convert::to_cd_flac_told(&t.path, &made.0, |_| {})?;
+            crate::convert::to_flac_told(&t.path, &made.0, crate::convert::CD, |_| {})?;
         }
         Treatment::Opus(kbps) => {
             let file = std::fs::File::create(&made.0).with_context(|| format!("creating {}", made.0.display()))?;

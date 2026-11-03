@@ -3,11 +3,11 @@
   // screen is left alone first, the snapshot they start from (or as last seen), and whether the look stays or a new
   // one comes each track. In Settings → This device, and without its heading in the sheet a long press on the player's
   // visuals button opens (lib/VisualsAutoSheet), as the info button's Details (lib/DetailsSheet).
+  import ChoiceRow from './ChoiceRow.svelte';
   import { slide } from 'svelte/transition';
   import { getVisualsSnapshots, type VisualsSnapshot } from '../api';
   import { reducedMotion } from '../motion';
   import { prefs, VISUALS_AFTER } from '../prefs.svelte';
-  import Seg from '../Seg.svelte';
   import { libraryOf } from '../visuals/library';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Group from './Group.svelte';
@@ -43,7 +43,7 @@
     <div transition:slide={{ duration: reducedMotion() ? 0 : 160 }}>
       <Item name="After" value={afterLabel(prefs.visualsAutoAfter)} onclick={() => (choosing = 'after')} />
       <Item name="Start from" value={startLabel} onclick={() => (choosing = 'start')} />
-      <Item name="The look"><Seg label="The look" options={RUN} bind:value={prefs.visualsAutoRun} /></Item>
+      <ChoiceRow name="The look" options={RUN} value={prefs.visualsAutoRun} onchange={(v) => (prefs.visualsAutoRun = v)} />
     </div>
   {/if}
 </Group>

@@ -1,18 +1,18 @@
 <script lang="ts">
   // Libraries: each server library (Cratarr's own: each folder, decision 0044) a row with its use and where it is;
-  // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its format and dot
-  // (decision 0034); Music's names, how long deleted albums are kept, the catalogue and tag splitting (its own page,
-  // `tags`). Saved with the Save bar (the settings' North Star, 2026-10-19).
+  // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its quality limit
+  // and dot (decision 0034); Music's names, how long deleted records are kept, the catalogue and tag splitting (its own
+  // page, `tags`). Saved as they change (the owner, 2026-11-02: no Unsaved changes bar).
+  import ChoiceRow from './ChoiceRow.svelte';
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { fileFacts, loadFileFacts, switchFileFacts } from '../fileFacts.svelte';
   import { folderStatus, getCatalogue, type FolderStatus, type ServerLibrary } from '../api';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
-  import Seg from '../Seg.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
-  import { count, ed, FORMATS, USES, type Draft } from './editor.svelte';
+  import { count, ed, QUALITIES, USES, type Draft } from './editor.svelte';
   import FolderBrowser from './FolderBrowser.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -20,14 +20,17 @@
 
   let { thing = null }: { thing?: string | null } = $props();
 
-  // Seg's choices: a use, a format.
+  // The choice sheets' choices: a use, a quality limit.
   const USE_OPTIONS = USES.map((x) => ({ value: x.id, label: x.label }));
-  const FORMAT_OPTIONS = FORMATS.map((f) => ({ value: f.id, label: f.label }));
+  const QUALITY_OPTIONS = QUALITIES.map((q) => ({ value: q.id, label: q.label }));
   const useLabel = (id: string) => USES.find((u) => u.id === id)?.label ?? id;
+  const qualityLabel = (id: string) => QUALITIES.find((q) => q.id === id)?.label ?? id;
   const FILE_FACTS_MORE =
     "A record's release types, its year and Classical (as a genre) written into its files' tags, in Music, Incoming, Lidarr's folder and each user's own music, so other apps read them as Cratarr does. Nothing is written without you: Health says which records' files differ, and writes them when you tap Write.";
   $effect(() => loadFileFacts());
   const USE_MORE = 'Music: the playlists and the tracks that can go in them. Incoming: new music waiting to be heard.';
+  const QUALITY_MORE =
+    "As albums move into this library or are kept into it, only lossless files above the limit are converted, to FLAC at the limit; lossy files and those within it stay as they are. Sync and Export don't follow it.";
   const TAGS_MORE =
     'How tags with several artists or genres in one value are read. The files are never changed: this is only how Cratarr reads them.\n\nArtist separators: "&", "," and "feat." are never split on, as they are part of credits.';
 
@@ -145,8 +148,9 @@
   let colouring = $state<Lib | null>(null);
   /** The library whose use is being chosen (the choice sheet). */
   let choosingUse = $state<Lib | null>(null);
+  /** The library whose quality limit is being chosen (the choice sheet). */
+  let choosingQuality = $state<Lib | null>(null);
   let removing = $state<Lib | null>(null);
-  const incomingUsed = $derived(ed.drafts.some((d) => d.enabled && d.libraries.incoming.length));
   const lines = (t: string) => t.split('\n').map((l) => l.trim()).filter(Boolean);
   // The server's own settings (lib/serverRuntime), read once here.
   loadRuntime();
@@ -179,9 +183,14 @@
     <!-- The row says it, the choice sheet picks it (the owner, 2026-10-25). -->
     <Item name="Use" more={USE_MORE} value={useLabel(u)} onclick={() => (choosingUse = l)} />
     {#if u !== 'unused'}
-      <Item name="Albums moved in">
-        <Seg label={`Albums moved into ${l.name}`} options={FORMAT_OPTIONS} bind:value={() => pol.format, (v) => ed.setPolicy(l.d, l.id, { format: v })} />
-      </Item>
+      <!-- Four steps, so the choice sheet (the owner, 2026-11-02: a quality limit in place of CD format or as it is). -->
+      <Item
+        name="Quality limit"
+        line="Lossless files above it become FLAC on a move or Keep"
+        more={QUALITY_MORE}
+        value={qualityLabel(pol.quality)}
+        onclick={() => (choosingQuality = l)}
+      />
     {/if}
     {#if u === 'incoming'}
       <Item name="Dot colour" swatch={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onclick={() => (colouring = l)} />
@@ -293,22 +302,22 @@
       />
     </Group>
   {/if}
-  {#if incomingUsed}
-    <Group title="Incoming">
+  <!-- How long what is deleted is kept, from any library (the owner, 2026-11-02: "we can delete from any library, so
+       this should probably be called retention instead of incoming"). -->
+  <Group title="Retention">
       <Item
-        name="Keep deleted albums"
+        name="Keep deleted records"
         value={`${ed.trashDays} ${ed.trashDays === 1 ? 'day' : 'days'}`}
         onclick={() =>
           (typing = {
-            title: 'Keep deleted albums',
+            title: 'Keep deleted records',
             value: String(ed.trashDays),
             type: 'number',
             suffix: 'days',
             save: (v) => (ed.trashDays = Math.min(3650, Math.max(1, Math.round(Number(v)) || 1))),
           })}
       />
-    </Group>
-  {/if}
+  </Group>
   <Group title="Catalogue">
     {#if ed.cat}
       {@const c = ed.catalogueLine(ed.cat)}
@@ -330,9 +339,14 @@
     <!-- The analysis on this server and Beat This! (0.9.8: the environment's until then; lib/serverRuntime). -->
     {#if runtime.value}
       {@const r = runtime.value}
-      <Item name="Analysis here" more={ANALYSIS_MORE} line={r.from_env?.analysis ? 'Set by the environment until changed here' : null}>
-        <Seg label="Analysis here" options={ANALYSIS} bind:value={() => r.analysis, (v) => void saveRuntime({ analysis: v })} />
-      </Item>
+      <ChoiceRow
+        name="Analysis here"
+        more={ANALYSIS_MORE}
+        line={r.from_env?.analysis ? 'Set by the environment until changed here' : null}
+        options={ANALYSIS}
+        value={r.analysis}
+        onchange={(v) => void saveRuntime({ analysis: v })}
+      />
       <Item
         name="Beats with Beat This!"
         more={BEAT_THIS_MORE}
@@ -411,6 +425,16 @@
 {#if choosingUse}
   {@const l = choosingUse}
   <ChoiceSheet title={`Use of ${l.name}`} options={USE_OPTIONS} value={ed.useOf(l.d, l.id)} onchange={(v) => ed.setUse(l.d, l.id, v)} onclose={() => (choosingUse = null)} />
+{/if}
+{#if choosingQuality}
+  {@const l = choosingQuality}
+  <ChoiceSheet
+    title={`Quality limit of ${l.name}`}
+    options={QUALITY_OPTIONS}
+    value={ed.policyOf(l.d, l.id).quality}
+    onchange={(v) => ed.setPolicy(l.d, l.id, { quality: v })}
+    onclose={() => (choosingQuality = null)}
+  />
 {/if}
 {#if colouring}
   {@const l = colouring}

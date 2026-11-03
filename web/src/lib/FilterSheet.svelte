@@ -16,7 +16,7 @@
   import type { ListAxis } from './ConditionCard.svelte';
   import { activeConditions, filterChange, filterOf, filtersOn, hiddenLibraries, inView, resetFilter, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
-  import { startCrate } from './crates.svelte';
+  import { startCrate, withoutFor } from './crates.svelte';
   import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
   import { me } from './me.svelte';
   import Icon from './Icon.svelte';
@@ -88,7 +88,8 @@
   $effect(() => {
     if (!conditioned) return;
     const at = inView[list];
-    const without = at && (at.list.kind === 'library' || at.list.kind === 'artists' || at.list.kind === 'crate') ? hiddenLibraries() : undefined;
+    // A crate's: from the libraries switched on, New for you and Grave digging from every one (lib/crates withoutFor).
+    const without = at && (at.list.kind === 'library' || at.list.kind === 'artists') ? hiddenLibraries() : at?.list.kind === 'crate' ? withoutFor(at.list.id) : undefined;
     const whole = () => getCrateAxes(prefs.source || undefined, hiddenLibraries());
     (at ? filterList(at.list, [], at.source, without).then((f) => f.axes, whole) : whole()).then(
       (a) => (axes = a),

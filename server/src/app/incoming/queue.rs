@@ -1,5 +1,6 @@
-//! The conversion queue (decision 0013): an album with hi-res files waits here while they are converted to CD format,
-//! one album and one file at a time (the NAS stays free for the media server), then Keep or Replace runs on it.
+//! The conversion queue (decision 0013): an album with hi-res files waits here while they are converted to its target's
+//! quality limit (decision 0096's amendment), one album and one file at a time (the NAS stays free for the media
+//! server), then Keep or Replace runs on it.
 //!
 //! Each file is converted into `<Incoming folder>/.cratarr-convert/<album>/…`. When all are done, one plan of moves
 //! puts the originals in the trash and the converted files in their place; then the action runs, its event carrying
@@ -50,6 +51,8 @@ struct Job {
     year: Option<String>,
     /// The music files to convert, inside the album folder.
     files: Vec<String>,
+    /// The quality limit they are converted to: the target library's.
+    limit: crate::convert::Limit,
     /// How many are converted.
     done: usize,
     /// How far the one being converted is, 0 to 1 (not written down: it starts again from the file's beginning).
@@ -71,6 +74,10 @@ struct Job {
     /// Who queued it (decision 0051): the journal says who changed the library.
     #[serde(default)]
     by: Option<String>,
+    /// The library it moves into, as the pages key libraries (`source/library`): a job of a library switched off is
+    /// not counted where those switched on are (the owner, 2026-11-02).
+    #[serde(default)]
+    library: Option<String>,
 }
 
 /// A job as the page sees it.
@@ -88,6 +95,9 @@ pub struct JobView {
     pub total: usize,
     /// The album's folder in Music.
     pub folder: String,
+    /// The library it moves into (`source/library`), where known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
     /// Once done: pass to undo.
     pub undo: Option<String>,
     /// Once failed: why.
@@ -265,6 +275,7 @@ fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
             part: j.part,
             total: j.files.len(),
             folder: j.to.clone(),
+            library: j.library.clone(),
             undo: j.undo.clone(),
             why: j.why.clone(),
         })
@@ -282,8 +293,14 @@ enum Outcome {
 impl IncomingService {
     /// Queue Keep or Replace of an album whose `files` need converting first. Returns at once.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, to: String, target: i64) -> KeepResult {
+    pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, limit: crate::convert::Limit, to: String, target: i64) -> KeepResult {
         let title = at.album.title.clone();
+        // The library its target folder is, as the pages key it.
+        let into = self.lib.catalogue().folders().get(target as usize).cloned();
+        let library = self.lib.live().iter().find(|a| a.cfg.id == source_id).and_then(|a| {
+            let l = a.placement.libraries.iter().find(|l| into.as_ref().is_some_and(|p| l.folders.iter().any(|f| PathBuf::from(f) == *p)))?;
+            Some(format!("{source_id}/{}", l.id))
+        });
         self.queue.change(|jobs| {
             jobs.next += 1;
             jobs.list.push(Job {
@@ -296,6 +313,7 @@ impl IncomingService {
                 action,
                 year: year.map(str::to_string),
                 files,
+                limit,
                 done: 0,
                 part: 0.0,
                 state: State::Waiting,
@@ -307,6 +325,7 @@ impl IncomingService {
                 why: None,
                 finished: None,
                 by: crate::serve::who::current().map(|w| w.user),
+                library,
             });
         });
         self.queue.wake.notify_one();
@@ -400,13 +419,13 @@ impl IncomingService {
                         let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
                         return Outcome::Cancelled;
                     }
-                    let (input, output) = (root.join(&job.dir).join(rel), root.join(staged(&job.dir, rel)));
+                    let (input, output, limit) = (root.join(&job.dir).join(rel), root.join(staged(&job.dir, rel)), job.limit);
                     let (tell, mut told) = tokio::sync::watch::channel(0f32);
                     let mut work = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                         // Written whole or not at all, and the same input gives the same bytes: one already there is done.
                         if !output.is_file() {
                             crate::moves::create_dirs_like_parent(output.parent().unwrap_or(Path::new(".")))?;
-                            crate::convert::to_cd_flac_told(&input, &output, |p| {
+                            crate::convert::to_flac_told(&input, &output, limit, |p| {
                                 let _ = tell.send(p);
                             })?;
                         }
@@ -580,6 +599,7 @@ mod tests {
             action: Action::Keep,
             year: None,
             files: vec!["01.flac".into()],
+            limit: crate::convert::CD,
             done: 0,
             part: 0.0,
             state,
@@ -591,6 +611,7 @@ mod tests {
             why: None,
             finished,
             by: None,
+            library: None,
         };
         {
             let q = Queue::open(Some(file.clone()));

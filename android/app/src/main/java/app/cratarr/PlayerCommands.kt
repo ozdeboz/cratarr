@@ -54,14 +54,19 @@ class PlayerCommands(
             "play" -> if (from == From.PAGE) playFromPage(m) else play(m)
             // Edits name entries (decision 0033); by place only when the entry is not found here. The page's by place
             // only, as ever (its `entry` and `after` are for a player it drives), the tracks of the mode it plays.
+            // `now` (the owner, 2026-11-02: one track plays now): the first added plays at once, the queue kept.
             "add" -> if (from == From.PAGE) {
-                p.addMediaItems(m.optInt("at", p.mediaItemCount), mediaItems(only(m.optJSONArray("tracks"), prefs.mode)).map(service::located))
+                val items = mediaItems(only(m.optJSONArray("tracks"), prefs.mode)).map(service::located)
+                val at = m.optInt("at", p.mediaItemCount).coerceIn(0, p.mediaItemCount)
+                p.addMediaItems(at, items)
+                if (m.optBoolean("now") && items.isNotEmpty()) playNow(at, from)
             } else {
                 val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
                 val after = m.optString("after", null)?.let { if (it.isEmpty()) 0 else placeOf(p, it).takeIf { a -> a >= 0 }?.plus(1) }
                 val at = after ?: if (m.has("at")) m.optInt("at").coerceIn(0, p.mediaItemCount) else p.mediaItemCount
                 p.addMediaItems(at, items)
                 if (p.playbackState == Player.STATE_IDLE) p.prepare()
+                if (m.optBoolean("now") && items.isNotEmpty()) playNow(at, from)
             }
             "move" -> if (from == From.PAGE) {
                 p.moveMediaItem(m.optInt("from"), m.optInt("to"))
@@ -204,6 +209,24 @@ class PlayerCommands(
             p.play()
         } else {
             startStop.play { p.play() }
+        }
+    }
+
+    /**
+     * Plays the track at [at] now (one track plays now, the owner 2026-11-02): no new play, so the queue, its name,
+     * repeat, Radio and Autoplay stay as they are; the track it cuts counts as played ([PlayerService.cutForNow]), and the
+     * queue goes on after the new one. Reached as a tap in the queue is: the page's through the session's player,
+     * Cratarr's the knob's way.
+     */
+    private fun playNow(at: Int, from: From) {
+        val p = player
+        if (p.mediaItemCount > 0 && p.playbackState != Player.STATE_IDLE && p.playbackState != Player.STATE_ENDED) service.cutForNow()
+        if (from == From.PAGE) {
+            shown.seekTo(at, 0)
+            resume(From.PAGE)
+        } else {
+            startStop.jump { p.seekTo(at, 0) }
+            resume(From.PLAY_ON)
         }
     }
 

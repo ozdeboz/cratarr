@@ -375,9 +375,10 @@ impl Source for CratarrSource {
             let tracks = queue_tracks(ids);
             // Next and Last are added by hand: Play On places them (decision 0033's lanes).
             let c = match how {
-                super::PlayHow::Now => Command::play(tracks, 0, 0),
-                super::PlayHow::Next => Command::Add { from: Default::default(), tracks, at: None, after: None, how: Some("next".into()) },
-                super::PlayHow::Last => Command::Add { from: Default::default(), tracks, at: None, after: None, how: Some("last".into()) },
+                super::PlayHow::Replace => Command::play(tracks, 0, 0),
+                super::PlayHow::Now => Command::Add { from: Default::default(), tracks, at: None, after: None, how: Some("next".into()), now: true },
+                super::PlayHow::Next => Command::Add { from: Default::default(), tracks, at: None, after: None, how: Some("next".into()), now: false },
+                super::PlayHow::Last => Command::Add { from: Default::default(), tracks, at: None, after: None, how: Some("last".into()), now: false },
             };
             on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(name)

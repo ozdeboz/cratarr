@@ -2,6 +2,7 @@
 // filters what it shows, decided 2026-10-16; no dropdown on the pages). Filled by the shell's status call and by the
 // playlist poll (which also says which are playing).
 import type { SourceTab } from './api';
+import { noteChange } from './lastChange.svelte';
 import { prefs } from './prefs.svelte';
 
 export const known = $state<{ list: SourceTab[] }>({ list: [] });
@@ -27,6 +28,7 @@ export function libraryShown(source: string, library: string) {
 
 /** Switches a library on or off. */
 export function showLibrary(source: string, library: string, on: boolean) {
+  noteChange('libraries_off');
   const key = `${source}/${library}`;
   prefs.hiddenLibraries = on ? prefs.hiddenLibraries.filter((k) => k !== key) : [...prefs.hiddenLibraries, key];
 }

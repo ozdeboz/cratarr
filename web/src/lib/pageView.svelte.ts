@@ -3,6 +3,7 @@
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
 import { pageQueries, type Chip } from './quickCrate';
+import { ownOrderOf } from './crateRecords';
 import { keepWhile, type Kept } from './keepWhile.svelte';
 import { matches } from './search';
 import { untrack } from 'svelte';
@@ -93,12 +94,16 @@ export const CRATE_ORDERS: OrderField<CrateOrder>[] = [
 ];
 
 /** A list of tracks' fields (decision 0060): every list of tracks offers all its rows know. Its own order is named by
- *  what it is: Playlist order, Track number (an album), Newest first (a crate), Newest album first (an artist). */
-export type TrackOrder = 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
-export function trackOrders(kind: PanelKind): OrderField<TrackOrder>[] {
-  const own = { playlist: 'Playlist order', album: 'Track number', crate: 'Newest first', artist: 'Newest album first' }[kind];
+ *  what it is: Playlist order, Track number (an album), Newest album first (an artist); a crate's where it has one
+ *  (lib/crateRecords ownOrderOf), after Best match, which a crate opens on (decision 0094, amended). Best match on every
+ *  list of Cratarr's own (`taste`; decision 0094 #3): a crate's first, the others' after their own order. */
+export type TrackOrder = 'bestMatch' | 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
+export function trackOrders(kind: PanelKind, crate?: string | null, taste = true): OrderField<TrackOrder>[] {
+  const own = kind === 'crate' ? ownOrderOf(crate) : { playlist: 'Playlist order', album: 'Track number', artist: 'Newest album first' }[kind];
   return [
-    { value: 'own', label: own },
+    ...(kind === 'crate' ? [{ value: 'bestMatch' as const, label: 'Best match' }] : []),
+    ...(own ? [{ value: 'own' as const, label: own }] : []),
+    ...(kind !== 'crate' && taste ? [{ value: 'bestMatch' as const, label: 'Best match' }] : []),
     { value: 'title', label: 'Title' },
     { value: 'artist', label: 'Artist' },
     { value: 'albumArtist', label: 'Album artist' },
@@ -180,27 +185,65 @@ export const pageView = $state({
   counted: null as { shown: number; total: number; pending?: boolean } | null,
   /** The pill's search field is open (App's title gives way when it leaves no room, lib/ContentControls). */
   searchOpen: false,
-  /** The title beside back gave way to the open search (lib/NavigationControls): the field takes its room. */
-  leadAway: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
   /** The page's mode button (usePageMode), while it shows. */
   mode: null as PageMode | null,
-  /** What the page lists ("records"), while its own search finds none of it (searchNone). */
+  /** The page's words leaving none of its list: what comes back without them ("101 records without", searchNone). */
   none: null as string | null,
+  /** The panel's, the same ("12 tracks without"), while the page's search leaves none of what it holds. */
+  panelNone: null as string | null,
+  /** A control page's panel shows what the words find in its siblings (Settings' parts, Health's problems, Insights'
+   *  views): its own none is not said then, the siblings are the answer (searchElsewhere). */
+  elsewhere: false,
 });
 
+/** What a list's words leave none of: how many come back without them, one and many of its kind. */
+export type Without = { n: number; one: string; many?: string };
 /** The calling page's own search finding none (0.13; the owner, 2026-10-31: A2, "an overlay pointing at the search
- *  glass with a button to clear"): `what` it lists ("records") while its words leave none of it, else null. The page's
- *  pill says it, from its lit magnifier, the words a chip whose ✕ clears (lib/ContentControls); the page itself says nothing
- *  then. An effect: it follows what `what` reads. */
-export function searchNone(what: () => string | null) {
+ *  glass with a button to clear"): how many of what it lists come back `without` the words, while they leave none of
+ *  it, else null. Said as every cause is (decision 0095, the owner 2026-11-02: "Count without cause", "101 records
+ *  without [Search ✕]"), from the lit magnifier (lib/ContentControls); the list itself says nothing then. A panel the
+ *  same (`where` 'panel', the owner 2026-11-02: an artist's panel said "Nothing of Lawrence Guy's matches." with nothing
+ *  pointing at the words that did it), by whichever pill holds the search (the page's beside it, its own over the
+ *  page). An effect: it follows what `without` reads. */
+export function searchNone(without: () => Without | null | false | 0 | undefined, where: 'page' | 'panel' = 'page') {
+  const key = where === 'page' ? 'none' : 'panelNone';
   $effect(() => {
-    const mine = pageView.query.trim() ? what() : null;
-    pageView.none = mine;
-    // Gone with the page, unless the next page has said its own already.
+    const w = pageView.query.trim() ? without() : null;
+    const mine = w && w.n > 0 ? `${howMany(w.n, w.one, w.many)} without` : null;
+    pageView[key] = mine;
+    // Gone with the page (or the panel's view), unless the next has said its own already.
     return () => {
-      if (untrack(() => pageView.none) === mine) pageView.none = null;
+      if (untrack(() => pageView[key]) === mine) pageView[key] = null;
+    };
+  });
+}
+
+/** What hides part of a list (the owner, 2026-11-02, claude-db's proposal: "33 of 36 tracks hidden by [Search ✕]
+ *  [Favourites only ✕]"; a long-press on the lit magnifier or funnel shows it): its line and each cause that keeps one
+ *  out, as 0095's popover says nothing. Asked only then (the filter's explain is a request). */
+export type Hidden = { said: string; chips: { label: string; onclear?: () => void; onopen?: () => void }[] };
+const hiddenAsks: Record<'page' | 'panel', (() => Promise<Hidden | null>) | null> = { page: null, panel: null };
+/** The calling list's answer to "what hides part of it", the page's or a panel's (an effect: while it shows). */
+export function explainHidden(ask: () => Promise<Hidden | null>, where: 'page' | 'panel' = 'page') {
+  $effect(() => {
+    hiddenAsks[where] = ask;
+    return () => {
+      if (hiddenAsks[where] === ask) hiddenAsks[where] = null;
+    };
+  });
+}
+/** What hides part of the page's list, or the panel's; null where nothing does or none says. */
+export const askHidden = (where: 'page' | 'panel') => hiddenAsks[where]?.().catch(() => null) ?? Promise.resolve(null);
+
+/** A control page's panel finding the words in its siblings (an effect: it follows what `found` reads). */
+export function searchElsewhere(found: () => boolean) {
+  $effect(() => {
+    const mine = found();
+    pageView.elsewhere = mine;
+    return () => {
+      if (untrack(() => pageView.elsewhere) === mine) pageView.elsewhere = false;
     };
   });
 }
@@ -238,6 +281,9 @@ export function matchesSearch(...texts: (string | null | undefined)[]): boolean 
   void matching.ready;
   return (listQueries?.value ?? pageQueries(pageView.query, null)).some((q) => matches(q, ...texts));
 }
+/** The page's search as lines of words, each one way it can match (as matchesSearch reads it): what the server judges
+ *  as the search where it says what keeps things out (decision 0095). None: no words. */
+export const searchLines = (): string[] => (pageView.query.trim() ? (listQueries?.value ?? pageQueries(pageView.query, null)).map((q) => q.join(' ')).filter(Boolean) : []);
 /** Whether the page's list gives its place to the loader: its words read as a crate for longer than the one rule keeps
  *  what it showed (lib/loader). */
 export const listReading = () => !!listQueries?.loader;

@@ -181,12 +181,7 @@ class MainActivity : AppCompatActivity() {
         val data = intent.data ?: return null
         if (data.scheme != "cratarr" || data.host != "connected") return null
         val service = data.pathSegments.firstOrNull()?.takeIf { it.matches(Regex("[a-z]+")) } ?: return null
-        if (service == "spotify") {
-            val why = data.getQueryParameter("spotify_error")?.let { "&spotify_error=" + Uri.encode(it) } ?: ""
-            return "#/settings?view=settings%3Aaccount%2Fspotify$why"
-        }
-        val why = data.getQueryParameter("scrobble")?.let { "&scrobble=" + Uri.encode(it) } ?: ""
-        return "#/settings?view=settings%3Aconnections%2F$service$why"
+        return connectedAt(service, data.getQueryParameter(if (service == "spotify") "spotify_error" else "scrobble"))
     }
 
     /** The downloads' progress goes to the page as it changes, a second apart at most. */
@@ -898,3 +893,13 @@ class MainActivity : AppCompatActivity() {
         const val FIRST_LOOK_MS = 2_000L
     }
 }
+
+/**
+ * Where a sign-in that came back to the app opens the page (`cratarr://connected/<service>`): Spotify's at one's account,
+ * a listening service's at one's own tracking, where the page's own return goes (not the server's keys page, which only
+ * an administrator sees and which never read `scrobble`; 2026-11-02). As the one table of addresses says
+ * (shared/addresses.json `links`), checked against it in the tests. `why`: the sign-in's message, if any.
+ */
+internal fun connectedAt(service: String, why: String?): String =
+    if (service == "spotify") "#/settings?view=settings%3Aaccount%2Fspotify" + (why?.let { "&spotify_error=" + Uri.encode(it) } ?: "")
+    else "#/settings?view=settings%3Atracking%2F$service" + (why?.let { "&scrobble=" + Uri.encode(it) } ?: "")

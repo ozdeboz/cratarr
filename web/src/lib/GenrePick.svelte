@@ -1,12 +1,13 @@
 <script lang="ts">
   // A genre fix's genres to pick (0.9.8; the owner, 2026-10-27: "the option to use multiple found genres! Picking is
   // best in this screen"): the genre as it is and as it would be, then every genre and style found (Discogs with the
-  // rest), strongest first, as a filter's chips (lib/ConditionCard); the strongest picked to begin with. Health's item
-  // (lib/HealthFixes) and Incoming's intake (lib/IntakeCheck).
-  import type { Fix } from './api';
+  // rest), strongest first, as a filter's chips (lib/ConditionCard); the strongest picked to begin with. On the review
+  // sheet's genre field (lib/FileChanges).
   import Icon from './Icon.svelte';
 
-  let { fix, picked = $bindable() }: { fix: Fix; picked: string[] } = $props();
+  /** A genre field on the review sheet (lib/FileChanges): as it is, and every word found. */
+  type Found = { from: string | null; candidates?: { word: string; kind: 'genre' | 'style'; source: string }[] };
+  let { fix, picked = $bindable() }: { fix: Found; picked: string[] } = $props();
 
   function pick(word: string) {
     picked = picked.includes(word) ? picked.filter((w) => w !== word) : [...picked, word];

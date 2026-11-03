@@ -10,9 +10,11 @@
   import { wordShown } from './facts';
   import Icon from './Icon.svelte';
   import { PROFILE_ROWS, prefs, type ProfileRow } from './prefs.svelte';
+  import { insideOf, type Window } from './profileWindow';
 
-  // `fixed`: beside an artist's albums on a wide panel (the owner, 2026-10-23): all of it, nothing to fold.
-  let { data, fixed = false }: { data: ListProfileData; fixed?: boolean } = $props();
+  // `fixed`: beside an artist's albums on a wide panel (the owner, 2026-10-23): all of it, nothing to fold. `windows`:
+  // the list filter's on each number (lib/profileWindow), lit on its bar.
+  let { data, fixed = false, windows = {} }: { data: ListProfileData; fixed?: boolean; windows?: Partial<Record<string, Window>> } = $props();
 
   const ENDS: Record<string, [string, string]> = { tempo: ['60', '180 BPM'], energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
@@ -59,7 +61,7 @@
             <span class="one">{oneValue(number(r.id))}</span>
           {:else}
             {@const n = number(r.id)}
-            <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} mid={n.mid} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} />
+            <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} mid={n.mid} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} inside={insideOf(n, windows[n.key])} />
           {/if}
         </div>
       {/each}

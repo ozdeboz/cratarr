@@ -2,7 +2,7 @@
 // is remembered). Server-wide settings live on the server, see Settings.svelte.
 
 import { inApp, toApp } from './app.svelte';
-import { RECORD_ORDERS, type CrateView, type RecordOrder } from './crateRecords';
+import { RECORD_ORDER_KEYS, type CrateView, type RecordOrder } from './crateRecords';
 import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
@@ -108,9 +108,6 @@ export type Prefs = {
   discoverMode: DiscoverMode;
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
-  /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
-   *  owner 2026-10-25: "global on the device"); whole by default (the owner, the same day). */
-  crumbsWhole: boolean;
   /** The part last seen in each group of a panel (`settings/device` → `appearance`; lib/groupCrumb): a group's pick in
    *  the breadcrumb lands there (the owner, 2026-11-02: "automatically remembered"). */
   groupLast: Record<string, string>;
@@ -124,9 +121,6 @@ export type Prefs = {
   /** The bar of pages slides away while a library item (a playlist, an album, an artist, a crate) is open: on by
    *  default, as such a panel has long covered it (the owner, 2026-10-25). */
   navHidesOnItem: boolean;
-  /** A panel's action bar docks at the top when scrolled to (on by default); in such a panel the bar of pages slides
-   *  away scrolling down, as with navHides. Off, the action bar scrolls away with the rest. */
-  stickyActions: boolean;
   /** Where the mini-player floats below 1024 px: along the bottom, or the top (under the bar there). */
   miniAt: 'top' | 'bottom';
   /** Where back (or ✕), Home and the title float below 1024 px, next to the mini-player on that edge. */
@@ -242,8 +236,6 @@ export type Prefs = {
   insightsPeriod: 'week' | 'month' | 'year' | 'all';
   /** Listening's own sections (its second row): what was heard, or the taste it makes. */
   listeningView: 'history' | 'profile';
-  /** What Profile is built from (its panel): each source on or off. */
-  profileSources: { favourites: boolean; playlists: boolean; plays: boolean; skipped: boolean; excluded: boolean };
   signals: { tracks: boolean; genre: boolean; artists: boolean };
   /** Genre territories on Insights' Map (the owner, 2026-10-24: a switch, off until turned on). */
   mapTerritories: boolean;
@@ -254,6 +246,11 @@ export type Prefs = {
   /** Wide windows show the player beside the page (true) or the mini-player with the player over the page (false,
    *  after Maximise). */
   sidebar: boolean;
+  /** The panel beside the page locked (the owner, 2026-11-02, a long-press on its grip): moving between the pages of
+   *  music (Home, Crates, Playlists, Library, Discover) keeps what it shows; unlocked, the page gone to closes it. */
+  panelLocked: boolean;
+  /** The radio sheet's last choices (decision 0094 #5: it opens on them): where, how it moves on, whole records. */
+  radioLast: { where: 'within' | 'like'; mode: 'similar' | 'artist' | 'era' | 'random' | 'taste'; albums: boolean };
   /** The navigation folded to a strip of icons on a wide window (decision 0042). */
   navFolded: boolean;
   /** The part of the settings last open: Settings opens on it beside its list on a roomy window ('' = the first). */
@@ -428,14 +425,12 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
-  crumbsWhole: true,
   groupLast: {},
   modeSwitchInBar: false,
   discoverMode: 'fresh',
   navAt: 'top',
   navHides: false,
   navHidesOnItem: true,
-  stickyActions: true,
   miniAt: 'bottom',
   navControlsAt: 'top',
   contentControlsAt: 'top',
@@ -488,12 +483,13 @@ export const DEFAULTS: Prefs = {
   tracksCount: 'listed',
   insightsPeriod: 'all',
   listeningView: 'history',
-  profileSources: { favourites: true, playlists: true, plays: true, skipped: true, excluded: true },
   signals: { tracks: true, genre: true, artists: true },
   mapTerritories: false,
   mapGenres: null,
   playerWidth: 400,
   sidebar: true,
+  panelLocked: false,
+  radioLast: { where: 'like', mode: 'similar', albums: false },
   navFolded: false,
   settingsPart: '',
   healthPart: '',
@@ -522,7 +518,7 @@ export const DEFAULTS: Prefs = {
   crateDown: false,
   panelSorts: {},
   crateViews: {},
-  crateRecordSort: { key: 'own', down: false },
+  crateRecordSort: { key: 'bestMatch', down: false },
   filters: {},
 };
 
@@ -533,7 +529,6 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
-      if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
       if (saved.groupLast && typeof saved.groupLast === 'object')
         for (const [k, v] of Object.entries(saved.groupLast)) if (typeof v === 'string') p.groupLast[k] = v;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
@@ -543,7 +538,6 @@ function read(): Prefs {
       if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
       if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
       if (typeof saved.navHidesOnItem === 'boolean') p.navHidesOnItem = saved.navHidesOnItem;
-      if (typeof saved.stickyActions === 'boolean') p.stickyActions = saved.stickyActions;
       for (const k of ['miniAt', 'navControlsAt', 'contentControlsAt'] as const) if (saved[k] === 'top' || saved[k] === 'bottom') p[k] = saved[k];
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
       if (Number.isInteger(saved.listZoom) && saved.listZoom >= 0 && saved.listZoom < LIST_WIDTHS.length) p.listZoom = saved.listZoom;
@@ -634,6 +628,10 @@ function read(): Prefs {
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
+      if (typeof saved.panelLocked === 'boolean') p.panelLocked = saved.panelLocked;
+      const r = saved.radioLast;
+      if (r && (r.where === 'within' || r.where === 'like') && ['similar', 'artist', 'era', 'random', 'taste'].includes(r.mode) && typeof r.albums === 'boolean')
+        p.radioLast = { where: r.where, mode: r.mode, albums: r.albums };
       if (typeof saved.navFolded === 'boolean') p.navFolded = saved.navFolded;
       if (typeof saved.settingsPart === 'string') p.settingsPart = saved.settingsPart;
       if (typeof saved.healthPart === 'string') p.healthPart = saved.healthPart;
@@ -646,7 +644,7 @@ function read(): Prefs {
       if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
       if (saved.crateViews && typeof saved.crateViews === 'object')
         for (const [k, v] of Object.entries(saved.crateViews)) if (v === 'records' || v === 'tracks') p.crateViews[k] = v;
-      if (RECORD_ORDERS.some((o) => o.value === saved.crateRecordSort?.key) && typeof saved.crateRecordSort?.down === 'boolean')
+      if (RECORD_ORDER_KEYS.includes(saved.crateRecordSort?.key) && typeof saved.crateRecordSort?.down === 'boolean')
         p.crateRecordSort = { key: saved.crateRecordSort.key, down: saved.crateRecordSort.down };
       if (saved.panelSorts && typeof saved.panelSorts === 'object')
         for (const [k, v] of Object.entries(saved.panelSorts) as [PanelKind, ListSort][])
@@ -666,8 +664,6 @@ function read(): Prefs {
       if (saved.tracksCount === 'listed' || saved.tracksCount === 'plays') p.tracksCount = saved.tracksCount;
       if (['week', 'month', 'year', 'all'].includes(saved.insightsPeriod)) p.insightsPeriod = saved.insightsPeriod;
       if (saved.listeningView === 'history' || saved.listeningView === 'profile') p.listeningView = saved.listeningView;
-      if (saved.profileSources && typeof saved.profileSources === 'object')
-        for (const k of Object.keys(p.profileSources) as (keyof typeof p.profileSources)[]) if (typeof saved.profileSources[k] === 'boolean') p.profileSources[k] = saved.profileSources[k];
       if (typeof saved.mapTerritories === 'boolean') p.mapTerritories = saved.mapTerritories;
       if (Array.isArray(saved.mapGenres) && saved.mapGenres.every((g: unknown) => typeof g === 'string')) p.mapGenres = saved.mapGenres;
       if (saved.signals && typeof saved.signals === 'object') {

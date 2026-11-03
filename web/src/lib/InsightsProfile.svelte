@@ -8,15 +8,16 @@
   import { hiddenLibraries } from './listFilter.svelte';
   import PageLoading from './PageLoading.svelte';
   import { prefs } from './prefs.svelte';
+  import { taste } from './mySettings.svelte';
 
   let data = $state<TasteProfile | null>(null);
   let error = $state<string | null>(null);
   // Of the libraries switched on and the period (Insights' own, every tab's), from the sources on (its panel).
   $effect(() => {
     const [source, without, period] = [prefs.source || undefined, hiddenLibraries(), prefs.insightsPeriod];
-    const off = Object.entries(prefs.profileSources).flatMap(([k, on]) => (on ? [] : [k]));
+    void taste.read;
     let gone = false;
-    getTasteProfile(source, without, period, off).then(
+    getTasteProfile(source, without, period).then(
       (d) => !gone && ((data = d), (error = null)),
       (e) => !gone && (error = e instanceof ApiError ? e.message : 'Unexpected error'),
     );

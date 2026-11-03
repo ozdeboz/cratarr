@@ -13,12 +13,13 @@
   import DownloadStep from './DownloadStep.svelte';
   import { inOrder, type EntryId, type MenuKind } from './menuTable';
   import MenuTable from './MenuTable.svelte';
-  import { CRATE, EDIT_CRATE, WORD_LABEL, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate, wordOf } from './crates.svelte';
+  import { CRATE, EDIT_CRATE, WORD_LABEL, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate, wordOf, withoutFor } from './crates.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { panel, viewPlaylist } from './panel.svelte';
   import { work } from './panelWork.svelte';
   import { prefs } from './prefs.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { toast } from './toast.svelte';
   import { plural } from './insights.svelte';
   import { wordChip } from './quickCrate';
@@ -42,7 +43,7 @@
   $effect(() => {
     const c = id;
     if (!c) return;
-    crateRows(c, 0, 1, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() })
+    crateRows(c, 0, 1, prefs.source || undefined, undefined, undefined, { without: withoutFor(c) })
       .then((r) => (source = r.source))
       .catch(() => {});
   });
@@ -114,7 +115,7 @@
     const got: Downloadable[] = [];
     try {
       for (let at = 0; at < MOST; at += 500) {
-        const r = await crateRows(id, at, 500, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() });
+        const r = await crateRows(id, at, 500, prefs.source || undefined, undefined, undefined, { without: withoutFor(id) });
         for (const x of r.rows) {
           if (x.id && !x.missing) got.push({ source: r.source, id: x.id, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: x.album_id ?? null });
         }
@@ -166,7 +167,7 @@
     : inOrder(kind, [
         { icon: 'play', label: 'Play', disabled: working, onclick: () => run(() => playCrate(id, name, 'play'), null, 'Could not start playing') },
         { icon: 'shuffle', label: 'Shuffle', disabled: working, onclick: () => run(() => shuffleCrate(id, name), null, 'Could not start playing') },
-        { icon: 'radio', label: 'Start radio', disabled: working, onclick: () => run(() => crateRadio(id, name), null, "The radio didn't start") },
+        { icon: 'radio', label: 'Start radio', disabled: working, onclick: () => run(async () => crateRadio(id, name), null, "The radio didn't start") },
       ])}
   onback={step === 'menu' ? null : () => (step = 'menu')}
   {step}

@@ -3,6 +3,7 @@
 import type { HealthFinding } from './api';
 import type { IconName } from './Icon.svelte';
 import { setSwitch } from './listFilter.svelte';
+import { hrefOf, isPage, pageHere, viewOn } from './addresses';
 
 /** Each domain's name and icon, in the Health page's order. */
 export const DOMAINS: Record<string, { name: string; icon: IconName }> = {
@@ -35,16 +36,14 @@ const AREA_OF: Record<string, Area> = {
 };
 export const areaOf = (domain: string): Area => AREA_OF[domain] ?? 'Connections';
 
-const PAGES: Record<string, string> = { library: '#/library', playlists: '#/', settings: '#/settings', health: '#/health', requests: '#/requests' };
-
 /** Opens where a finding is dealt with (a switch turned on there first); none: nothing. */
 export function openFinding(f: HealthFinding) {
   if (!f.open) return;
   if (f.open.page === 'library' && f.open.switch) setSwitch('library', f.open.switch, true);
   // A connection's own page in Settings › Connections.
-  if (f.open.page === 'settings' && f.open.thing) return void (location.hash = `#/settings?view=${encodeURIComponent(`settings:connections/${f.open.thing}`)}`);
-  const to = PAGES[f.open.page];
-  if (to && location.hash !== to) location.hash = to;
+  if (f.open.page === 'settings' && f.open.thing) return void (location.hash = viewOn('settings', `settings:connections/${f.open.thing}`));
+  // The page the server names (lib/addresses); one the page does not have: nothing.
+  if (isPage(f.open.page) && pageHere() !== f.open.page) location.hash = hrefOf(f.open.page);
 }
 
 /** Health with this finding open in its panel (Home's System status, the owner 2026-10-23); a files' finding is its kind's
@@ -53,7 +52,7 @@ export function openInHealth(f: HealthFinding) {
   openHealth(f.domain === 'files' ? `files-${f.key.split(':')[1]}` : f.key);
 }
 /** Health with one of its problems open (`library:incomplete`). */
-export const openHealth = (key: string) => (location.hash = `#/health?view=${encodeURIComponent(`health:${key}`)}`);
+export const openHealth = (key: string) => (location.hash = viewOn('health', `health:${key}`));
 
 /** Its icon: its domain's. */
 export const iconOf = (f: HealthFinding): IconName => DOMAINS[f.domain]?.icon ?? 'info';

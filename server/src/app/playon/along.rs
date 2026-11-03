@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use super::{Command, Entry, OWN_MUSIC, PlayFrom, PlayOn, PlayerKind, PlayerView, QueueTrack, belongs_to, first_owner, key, view_in};
 use crate::app::ToggleError;
@@ -35,7 +34,8 @@ const SPANS: usize = 50;
 const SPANS_KEPT_SECS: i64 = 30 * 86_400;
 
 /// A player followed, by its user and name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FollowTarget {
     pub user: String,
     pub player: String,
@@ -574,7 +574,7 @@ impl PlayOn {
     pub async fn accept(&self, id: &str, by: &str, admin: bool) -> Result<QueueRequest, ToggleError> {
         let r = self.waiting(id, by, admin)?;
         let track = QueueTrack { asked_by: Some(r.from.named()), ..r.track.clone() };
-        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track], at: None, after: None, how: Some(r.how.clone()) };
+        let add = Command::Add { from: PlayFrom::default(), tracks: vec![track], at: None, after: None, how: Some(r.how.clone()), now: false };
         let leader = crate::serve::who::Who { user: r.leader.clone(), admin: false, scope: crate::serve::who::Scope::Full, home: true };
         crate::serve::who::acting_as(leader, self.command(&r.player, add)).await?;
         let done = self.requests.answer(id, State::Accepted).ok_or_else(|| ToggleError::Refused("That request was answered meanwhile.".into()))?;

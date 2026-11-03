@@ -243,7 +243,7 @@
   /** The Playlists page, from the player over the page (its playlists' sheet): the player closes. */
   function toPlaylistsPage() {
     leavePlayer();
-    location.hash = keepViewed('#/');
+    location.hash = keepViewed('playlists');
   }
 
   // Gestures, over the page and beside it. Anywhere: a swipe up or down does what Settings › Player says for that half

@@ -39,7 +39,11 @@
   /* Every glass island's 2 px band of the extensions' thinner glass (the owner, 2026-10-25: an island with an
      extension (a title, the globe) has it, so one without has it too and all are the same size). A shadow: nothing
      moves. Inside an extension an island has none of its own; the extension is its band. */
-  --island-ring: 0 0 0 2px color-mix(in srgb, var(--float-bg) 45%, transparent);
+  --island-ring: 0 0 0 2px var(--float-thin-bg);
+  /* That thinner glass (the owner, 2026-11-03: "thin glass, one part"): a glass part's back layer, which its extension
+     is (a title, a picker, a panel's actions, the globe), stretched from under the main buttons' glass. */
+  --float-thin-bg: color-mix(in srgb, var(--float-bg) 45%, transparent);
+  --float-thin-blur: blur(10px) saturate(1.3);
   /* The floating glass's room from the edge it floats along (the window's, the bar's), smaller now that every island
      has its band (the owner, 2026-10-25: by a third or a half, "whatever rounds well"): beside it 8 px (was 12), above
      and below it 6 px (was 8; half would leave the band 2 px from the bar). */
@@ -91,6 +95,11 @@
 
 *::-webkit-scrollbar {
   display: none;
+}
+
+/* A row's piece there is no room for (lib/glassRow: one decision for the whole row). */
+[data-row-gone] {
+  display: none !important;
 }
 
 html,
@@ -218,6 +227,14 @@ button.solid[aria-busy='true']::after {
 .edge-grip:focus-visible::after {
   background: var(--accent);
   opacity: 1;
+}
+
+/* The panel locked (a long-press on its grip, the owner 2026-11-02): the pixel clear round the handle (the panel's cut,
+   App's .player-side) in the accent, the handle's fill as it is ("no fill change, only the border"; "I didn't want any
+   extra thickness"), and fully opaque ("instead of transparent when locked"). */
+.edge-grip.locked::after {
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 /* Searching, Everywhere chosen (lib/SearchScope): the page's or the panel's own content is set aside (kept, not

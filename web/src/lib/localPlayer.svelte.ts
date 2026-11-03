@@ -15,10 +15,12 @@
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
 import { playback } from './deviceLog';
+import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type QueueItem, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type Collection, type QueueItem, type TrackGain } from './api';
+import { collectionIn } from './within';
 import { commandOf } from './player/commands';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
@@ -69,8 +71,9 @@ export type Repeat = 'off' | 'one' | 'all';
 /** A sleep timer: pause at `atMs` (epoch ms), or when the playing track ends. */
 export type Sleep = { atMs: number | null; endOfTrack: boolean };
 /** Autoplay's modes (decision 0036, amended); off is null. */
-export type AutoplayMode = 'similar' | 'artist' | 'era' | 'random';
-export const AUTOPLAY_MODES: readonly AutoplayMode[] = ['similar', 'artist', 'era', 'random'];
+/** `taste`: Your taste, what fits the account's taste best (decision 0094; it says it follows the taste). */
+export type AutoplayMode = 'similar' | 'artist' | 'era' | 'random' | 'taste';
+export const AUTOPLAY_MODES: readonly AutoplayMode[] = ['similar', 'artist', 'era', 'random', 'taste'];
 /** What Radio's inserts are like (decision 0036, amended): the track (its artist weighed double), its artist, its era. */
 export type RadioBy = 'track' | 'artist' | 'era';
 export const RADIO_BYS: readonly RadioBy[] = ['track', 'artist', 'era'];
@@ -80,7 +83,7 @@ export const RADIO_MAX = 10;
 /** Autoplay while on: its mode; whole albums (`albums`); a playlist that ends starts again instead (`restart`); the
  *  tracks it stays close to when started from an item, else the queue's own (`seed`); the crate it plays inside
  *  ("Play as radio": only the crate's tracks), when it does. */
-export type Autoplay = { mode: AutoplayMode; albums: boolean; restart: boolean; seed: string[]; within: string | null };
+export type Autoplay = { mode: AutoplayMode; albums: boolean; restart: boolean; seed: string[]; within: Collection | null };
 
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
  *  unknown), and the length the server read from the file (s), shown while the exact one is unknown. */
@@ -1182,6 +1185,7 @@ const handed = () => inApp || driven !== null;
 export function drive(name: string | null) {
   driven = name;
   // The next player's own, from its first report, on its own clock.
+  asked = null;
   deck = null;
   eased = null;
   clockGaps = [];
@@ -1275,6 +1279,15 @@ function gliding() {
 }
 /** A queue's track as itself (its entry too), or null. */
 const trackKey = (t: LocalTrack | undefined) => (t ? `${t.source}/${t.id}/${t.entry ?? ''}` : null);
+/** A track asked of the player that plays it (lib/player/asked): reports from before it are not taken. */
+let asked: Asked = null;
+const asking = (index: number) => (asked = ask(trackKey(local.queue[index]), index, performance.now()));
+function fromBefore(m: { queue?: unknown; index?: unknown }): boolean {
+  const queue = Array.isArray(m.queue) ? (m.queue as LocalTrack[]) : local.queue;
+  const v = heardAsked(asked, m.index, (i) => trackKey(queue[i]), performance.now());
+  asked = v.asked;
+  return v.before;
+}
 const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
   a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
@@ -1303,6 +1316,7 @@ export function reportedBy(m: {
   deckAtMs?: unknown;
   landing?: unknown;
 }) {
+  if (fromBefore(m)) return;
   const trackBefore = trackKey(local.queue[local.index]);
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -1437,14 +1451,14 @@ function autoplayOf(a: unknown): Autoplay | null {
     albums: albums === true,
     restart: restart === true,
     seed: Array.isArray(seed) ? seed.filter((x): x is string => typeof x === 'string') : [],
-    within: typeof within === 'string' && within ? within : null,
+    within: collectionIn(within),
   };
 }
 
 /** A radio from before the amendment (`{on, mode, seed, within}`), as Autoplay. */
 function fromOld(r: Record<string, unknown>): Record<string, unknown> | null {
   if (r.on === false) return null;
-  const mode = r.mode === 'artist' || r.mode === 'era' || r.mode === 'random' ? r.mode : 'similar';
+  const mode = r.mode === 'artist' || r.mode === 'era' || r.mode === 'random' || r.mode === 'taste' ? r.mode : 'similar';
   return { ...r, mode, albums: r.mode === 'album_mix', restart: r.mode === 'reshuffle' };
 }
 
@@ -1630,7 +1644,7 @@ export function sourcesChanged() {
 /** Autoplay in a mode, or 'stop' (decision 0036, amended): the player that plays appends its tracks when the queue runs
  *  out. What is not given stays as it was; another mode, albums or crate lets its earlier picks make way. On turns
  *  repeat all off. */
-export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolean; restart?: boolean; seed?: string[]; within?: string | null } = {}) {
+export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolean; restart?: boolean; seed?: string[]; within?: Collection | null } = {}) {
   if (mode === 'stop') {
     local.autoplay = null;
     dropAhead('autoplay');
@@ -1646,7 +1660,7 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
     seed: opts.seed ?? was?.seed ?? [],
     within: opts.within === undefined ? (was?.within ?? null) : opts.within,
   };
-  if (was && (was.mode !== next.mode || was.albums !== next.albums || was.within !== next.within)) dropAhead('autoplay');
+  if (was && (was.mode !== next.mode || was.albums !== next.albums || JSON.stringify(was.within) !== JSON.stringify(next.within))) dropAhead('autoplay');
   local.autoplay = next;
   if (local.repeat === 'all') local.repeat = 'off';
   // What is given only: the player keeps the rest (a player's view does not show the seed here).
@@ -1656,7 +1670,7 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
       ...(opts.albums !== undefined ? { albums: opts.albums } : {}),
       ...(opts.restart !== undefined ? { restart: opts.restart } : {}),
       ...(opts.seed ? { seed: opts.seed } : {}),
-      ...(opts.within !== undefined ? { within: opts.within ?? '' } : {}),
+      ...(opts.within !== undefined ? { within: opts.within } : {}),
     });
   }
   fillAutoplay();
@@ -1697,18 +1711,19 @@ function dropAhead(lane: 'radio' | 'autoplay') {
 }
 
 /** "Start radio" from an item (decision 0036; amended: it sets Autoplay): tracks like `seed` (its own left out) play,
- *  and Autoplay goes on with that seed. `within`: a crate's id, to play only the crate's tracks ("Play as radio"; its
- *  own then may play). `from`: its name, for the queue sheet. */
-export async function startRadio(seed: string[], from: string | null, within: string | null = null) {
-  const mode = local.autoplay?.mode ?? 'similar';
-  const albums = local.autoplay?.albums ?? false;
+ *  and Autoplay goes on with that seed. `within`: what it plays inside, only its tracks (decision 0094: a crate, a
+ *  playlist, a record, an artist or tracks; "Play as radio"; its own then may play). `from`: its name, for the queue sheet. */
+export async function startRadio(seed: string[], from: string | null, within: Collection | null = null, how?: { mode: AutoplayMode; albums: boolean }) {
+  // As the radio sheet chose (lib/RadioSheet), else as Autoplay is.
+  const mode = how?.mode ?? local.autoplay?.mode ?? 'similar';
+  const albums = how?.albums ?? local.autoplay?.albums ?? false;
   const skip_favourites = local.skipFavourites;
   const { tracks } = await radioNext({ mode, albums, seed, exclude: within ? [] : seed, last: null, count: BATCH, within, skip_favourites });
   if (!tracks.length) throw new Error('Nothing like it was found.');
   // Set before the play: a play of Autoplay's tracks only keeps its seed.
   local.autoplay = { mode, albums, restart: false, seed, within };
   if (local.repeat === 'all') local.repeat = 'off';
-  if (handed()) hand('autoplay', { mode, albums, restart: false, seed, within: within ?? '' });
+  if (handed()) hand('autoplay', { mode, albums, restart: false, seed, within });
   playQueue(tracks as LocalTrack[], 0, from);
 }
 
@@ -1854,6 +1869,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   if (handed()) {
     Object.assign(local, { index, position, paused: false, error: null });
     reported = { positionMs: position * 1000, at: performance.now() };
+    asking(index);
     hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled, name: from });
     if (anew) handArm();
     return;
@@ -1864,6 +1880,30 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   keepLocal(left, newQueueId());
   fresh(index, position);
   fill();
+}
+
+/** The queue place a Play now cut short (`index/source/id`): told as played for the time it got, not as a skip
+ *  (lib/output; the owner, 2026-11-02: "The interrupted song counts as played"). */
+export const cutForNow = { at: null as string | null };
+
+/** One track plays now and keeps the queue (the owner, 2026-11-02): put right after the playing track and started at
+ *  once; what was queued after it stays, and so do "Playing from" and Autoplay (its mode, seed and within: a detour,
+ *  not a new play). Nothing playing: it starts a queue of its own. */
+export function playNow(tracks: LocalTrack[], from: string | null = null) {
+  if (local.index < 0 || !local.queue.length) return playQueue(tracks, 0, from);
+  tracks = tracks.map((t) => ({ ...t, lane: 'next' as const }));
+  const at = local.index + 1;
+  const cur = local.queue[local.index];
+  cutForNow.at = cur ? `${local.index}/${cur.source}/${cur.id}` : null;
+  const after = cur?.entry;
+  local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
+  if (handed()) {
+    Object.assign(local, { index: at, position: 0, paused: false });
+    asking(at);
+    return hand('add', { at, tracks, ...(after === undefined ? {} : { after }), now: true });
+  }
+  cutFrom(at);
+  void skipRamped(() => jump(at));
 }
 
 /** Adds tracks by hand (decision 0033's two lanes): right after the playing one (`next`, so the newest come first), or
@@ -1990,6 +2030,7 @@ export function jump(index: number) {
   if (handed() && index >= 0 && index < local.queue.length) {
     const entry = local.queue[index].entry;
     Object.assign(local, { index, position: 0, paused: false });
+    asking(index);
     return hand('jump', { index, ...(entry ? { entry } : {}) });
   }
   if (!audio || index < 0 || index >= local.queue.length) return;
@@ -4272,7 +4313,13 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       const at = after >= 0 ? after : typeof m.at === 'number' ? Math.min(Math.max(0, m.at), local.queue.length) : local.queue.length;
       local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
       if (local.index < 0) fresh(0, 0, false);
-      else cutFrom(at);
+      else if (m.now === true && at > local.index) {
+        // Played now (a5's Command::Add now): started at once, the one playing told as played.
+        const cur = local.queue[local.index];
+        cutForNow.at = cur ? `${local.index}/${cur.source}/${cur.id}` : null;
+        cutFrom(at);
+        void skipRamped(() => jump(at));
+      } else cutFrom(at);
       return false;
     }
     case 'move': {
@@ -4336,7 +4383,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
           ...(typeof m.albums === 'boolean' ? { albums: m.albums } : {}),
           ...(typeof m.restart === 'boolean' ? { restart: m.restart } : {}),
           ...(Array.isArray(m.seed) ? { seed: m.seed as string[] } : {}),
-          ...(typeof m.within === 'string' || m.within === null ? { within: m.within as string | null } : {}),
+          ...(m.within === null || collectionIn(m.within) ? { within: collectionIn(m.within) } : {}),
         });
       return false;
     case 'skip_favourites':

@@ -1,14 +1,14 @@
 // Quick crates (0.11; the owner, 2026-10-29 and 2026-10-30): a crate made from a few typed terms, each a chip. A
-// genre, style, mood, tag, label, album or year (or decade) narrows it; an artist means "sounds like" them, the chip
-// switching to "by" them, their own tracks left out unless kept. Filtered first, then ranked by how alike, cut where
-// it stops being close (the closeness curve's handle loosens it). A word that reads several ways takes its best
+// genre, style, mood, tag, label, album, year (or decade) or tempo narrows it; an artist means "sounds like" them, the
+// chip switching to "by" them, their own tracks left out unless kept. Filtered first, then ranked by how alike, cut
+// where it stops being close (the closeness curve's handle loosens it). A word that reads several ways takes its best
 // reading, its kind shown, the others a tap away. Pure: terms in, chips and a crate's conditions out.
 import type { Condition } from './api';
 import { byRelevance, relevance, words, type SearchResult } from './search';
 
-export type ChipKind = 'artist' | 'album' | 'track' | 'label' | 'genre' | 'style' | 'mood' | 'tag' | 'year';
-/** One way a term reads: its kind, what a condition matches (a name, an album's id, a year's span `min-max`), and how
- *  it shows. An artist's `id` (the library's `ar-…`) seeds "sounds like". */
+export type ChipKind = 'artist' | 'album' | 'track' | 'label' | 'genre' | 'style' | 'mood' | 'tag' | 'year' | 'bpm';
+/** One way a term reads: its kind, what a condition matches (a name, an album's id, a year's or a tempo's span
+ *  `min-max`), and how it shows. An artist's `id` (the library's `ar-…`) seeds "sounds like". */
 export type Reading = { kind: ChipKind; value: string; label: string; id?: string };
 /** A typed term made a chip: its reading, the other ways it could read, and for an artist "like" or "by" them and
  *  whether their own tracks stay. */
@@ -68,7 +68,7 @@ export type Read = { term: string; readings: Reading[]; how?: 'like' | 'by'; joi
 type Want = { kind?: ChipKind; how?: 'like' | 'by'; not?: boolean };
 /** The words the sentence joins its terms with (sentenceOf's, and what people type between them): dropped between
  *  terms, never where a name holds them ("The Roots", "Earth, Wind & Fire", "The Dark Side of the Moon"). */
-const JOINS = new Set(['and', 'or', '&', 'the', 'from', 'with', 'in', 'of', 'that', 'to', 'tracks', 'a']);
+const JOINS = new Set(['and', 'or', '&', 'the', 'from', 'with', 'in', 'of', 'that', 'to', 'tracks', 'a', 'at']);
 /** The sentence's kind words, longest first: what follows them reads as that kind where it can. */
 const MARKERS: [string[], Want][] = (
   [
@@ -304,6 +304,9 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
   let carried: Want | null = null;
   for (const piece of splitTerms(text)) {
     const tokens = piece
+      // "120-130 bpm", "over 140 bpm", "about 128 bpm": one tempo (tempoOf), read as one term; out of a tempo's
+      // bounds, its words as they were.
+      .replace(TEMPOS, (m: string) => (tempoOf(m) ? m.trim().replace(/\s+/g, ':') : m))
       .replace(/(\d{4})\s*(?:[-–]|\bto\b)\s*(\d{4})/gi, '$1-$2')
       // "before 1970", "after the 90s", "since 2010", "until 1980": one open span (yearOf), read as one term.
       .replace(OPEN_YEARS, (_, w: string, y: string) => `${w.toLowerCase()}:${y}`)
@@ -311,8 +314,8 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
     const parts: (Read | string[])[] = [];
     for (const t of tokens) {
       if (!words(t).length && t !== '&') continue;
-      const year = yearOf(t, now);
-      if (year) parts.push({ term: t.replace(':', ' '), readings: [year] });
+      const year = yearOf(t, now) ?? tempoOf(t);
+      if (year) parts.push({ term: t.replace(/:/g, ' '), readings: [year] });
       else if (Array.isArray(parts.at(-1))) (parts.at(-1) as string[]).push(t);
       else parts.push([t]);
     }
@@ -400,6 +403,41 @@ export function yearOf(term: string, now = new Date().getFullYear()): Reading | 
   return null;
 }
 
+/** A tempo's bounds as typed (beats per minute): a number outside them is no tempo, its words read as they are. */
+export const TEMPO_LOW = 20;
+export const TEMPO_HIGH = 300;
+/** "128 bpm" is about it, this many either side (the owner, 2026-11-02: "128 bpm" → 125 to 131). */
+export const ABOUT = 3;
+/** A tempo said in a line, for readLine to make one token ("over:140:bpm"), tempoOf to read. */
+const TEMPOS = /\b(?:(?:over|above|under|below|about|around)\s+)?\d{1,4}(?:\s*(?:[-–]|\bto\b)\s*\d{1,4})?\s*bpm\b/gi;
+
+/** A tempo as typed (0.14; the owner, 2026-11-02), the way a year is read: "120-130 bpm" or "120 to 130 bpm" a span,
+ *  "over 140 bpm" ("above") open at the top, "under 90 bpm" ("below") open at the bottom, "128 bpm" ("about",
+ *  "around") about it, `ABOUT` either side. Only with its "bpm", so a plain number stays what it reads as (a year);
+ *  never "fast" or "slow" (the owner: they mean different things per genre). Its value a span as a year's is, an open
+ *  end `NO_START` or `NO_END`; readLine's token ("over:140:bpm") too. */
+export function tempoOf(term: string): Reading | null {
+  const t = term.trim().toLowerCase().replace(/[:\s]+/g, ' ');
+  const m = /^(?:(over|above|under|below|about|around) )?(\d{1,4})(?: ?(?:[-–]|to) ?(\d{1,4}))? ?bpm$/.exec(t);
+  if (!m) return null;
+  const [a, b] = [Number(m[2]), m[3] === undefined ? null : Number(m[3])];
+  if ([a, b].some((n) => n !== null && (n < TEMPO_LOW || n > TEMPO_HIGH))) return null;
+  const span = (min: number, max: number, label: string): Reading => ({ kind: 'bpm', value: `${min}-${max}`, label });
+  if (b !== null) return m[1] ? null : span(Math.min(a, b), Math.max(a, b), `${Math.min(a, b)}–${Math.max(a, b)} bpm`);
+  if (m[1] === 'over' || m[1] === 'above') return span(a, NO_END, `over ${a} bpm`);
+  if (m[1] === 'under' || m[1] === 'below') return span(NO_START, a, `under ${a} bpm`);
+  return span(a - ABOUT, a + ABOUT, `about ${a} bpm`);
+}
+
+/** A tempo's span as the sentence says it, read back from a crate's conditions: "under 90 bpm", "over 140 bpm",
+ *  "about 128 bpm" (`ABOUT` either side), else "120–130 bpm"; null where that, typed back, would not read as the same
+ *  span (not whole numbers, or outside a tempo's bounds): the conditions' to say then. */
+export function tempoSaid(min: number | null, max: number | null): string | null {
+  const [a, z] = [min ?? NO_START, max ?? NO_END];
+  const label = min === null ? `under ${z} bpm` : max === null ? `over ${a} bpm` : z - a === 2 * ABOUT ? `about ${a + ABOUT} bpm` : `${a}–${z} bpm`;
+  return tempoOf(label)?.value === `${a}-${z}` ? label : null;
+}
+
 /** A search result as a reading, where it is one (a track, a playlist or a crate is not). */
 export function readingOf(r: SearchResult & { id?: string }): Reading | null {
   const k = r.kind;
@@ -412,11 +450,11 @@ export function readingOf(r: SearchResult & { id?: string }): Reading | null {
   return null;
 }
 
-/** A term's readings, the best first: a year or decade where it is one, then search's finds by how well they match the
- *  term (its words, the name's own first), equals in ORDER; each once. */
+/** A term's readings, the best first: a year, a decade or a tempo where it is one, then search's finds by how well
+ *  they match the term (its words, the name's own first), equals in ORDER; each once. */
 export function readingsFor(term: string, found: readonly (SearchResult & { id?: string })[], now?: number): Reading[] {
   const q = words(term);
-  const year = yearOf(term, now);
+  const year = yearOf(term, now) ?? tempoOf(term);
   const ranked = found
     .map((r) => ({ read: readingOf(r), rel: relevance(q, r) }))
     .filter((x): x is { read: Reading; rel: number[] } => x.read !== null)
@@ -431,8 +469,8 @@ export function readingsFor(term: string, found: readonly (SearchResult & { id?:
 export function chipOf(term: string, readings: readonly Reading[], how?: 'like' | 'by', not?: boolean): Chip | null {
   const [reading, ...others] = readings;
   if (!reading) return null;
-  // Left out (0.13, "but not"): a kind a crate can leave out, an artist "by" them, a year or a span its own; a track
-  // cannot be (no condition names one).
+  // Left out (0.13, "but not"): a kind a crate can leave out, an artist "by" them, a year, a tempo or a span its own; a
+  // track cannot be (no condition names one).
   if (not) {
     if (reading.kind === 'track') return null;
     return reading.kind === 'artist' ? { term, reading, others, how: 'by', own: false, not: true } : { term, reading, others, not: true };
@@ -556,9 +594,14 @@ export const seedsOf = (chips: readonly Chip[]): string[] => chips.filter(likes)
 /** Whether the artists chipped "like" keep their own tracks (one of them keeping them keeps them). */
 export const keepsOwn = (chips: readonly Chip[]) => chips.some((c) => likes(c) && !!c.own);
 
+/** The kinds a crate holds as one span (a range row), in their rows' order: the years, the tempos (0.14). */
+const SPANNED = ['year', 'bpm'] as const;
+type Spanned = (typeof SPANNED)[number];
+const spanned = (k: ChipKind): k is Spanned => (SPANNED as readonly string[]).includes(k);
+
 /** The chips as a crate's conditions: each kind's chips one row, any of them (two genres: either); the years one span
- *  from the earliest to the latest; the artists "by" them one row; those "like" them one Sounds like, cut at `min`,
- *  their own tracks out unless one of them keeps them. */
+ *  from the earliest to the latest, the tempos one from the slowest to the fastest; the artists "by" them one row;
+ *  those "like" them one Sounds like, cut at `min`, their own tracks out unless one of them keeps them. */
 export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes = {}): Condition[] {
   const rows: Condition[] = [];
   const byAxis = new Map<string, string[]>();
@@ -569,16 +612,17 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
   };
   // What is left out (0.13, "but not"): each kind's one row, negated (none of them).
   const notAxis = new Map<string, string[]>();
-  let years: [number, number] | null = null;
-  // Years left out: each its own negated span ("not the 2000s, not 1975").
-  const notYears: [number, number][] = [];
+  // The years' one span, the tempos' another (0.14).
+  const spans: Partial<Record<Spanned, [number, number]>> = {};
+  // Years and tempos left out: each its own negated span ("not the 2000s, not 1975").
+  const notSpans: [Spanned, number, number][] = [];
   for (const c of chips) {
     const r = c.reading;
     if (c.not) {
       if (r.kind === 'track') continue;
-      if (r.kind === 'year') {
-        const [a, b] = r.value.split('-').map(Number);
-        if (!notYears.some(([x, y]) => x === a && y === b)) notYears.push([a, b]);
+      if (spanned(r.kind)) {
+        const [k, [a, b]] = [r.kind, r.value.split('-').map(Number)];
+        if (!notSpans.some(([j, x, y]) => j === k && x === a && y === b)) notSpans.push([k, a, b]);
         continue;
       }
       const vs = notAxis.get(r.kind) ?? [];
@@ -587,9 +631,10 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
       continue;
     }
     if (likes(c) || r.kind === 'track') continue;
-    if (r.kind === 'year') {
+    if (spanned(r.kind)) {
       const [a, b] = r.value.split('-').map(Number);
-      years = years ? [Math.min(years[0], a), Math.max(years[1], b)] : [a, b];
+      const was = spans[r.kind];
+      spans[r.kind] = was ? [Math.min(was[0], a), Math.max(was[1], b)] : [a, b];
     } else add(r.kind, r.value);
   }
   // Several of a kind a track carries, joined "and": all of them (0.13).
@@ -597,11 +642,14 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
     const all = values.length > 1 && isMulti(axis) && joinOf(modes, axis) === 'and';
     rows.push({ axis, not: false, value: { kind: all ? 'all_of' : 'any_of', values } });
   }
-  // An open end ("before 1970") none (the conditions' open range).
+  // An open end ("before 1970", "over 140 bpm") none (the conditions' open range).
   const end = (y: number) => (y <= NO_START || y >= NO_END ? null : y);
-  if (years) rows.push({ axis: 'year', not: false, value: { kind: 'range', min: end(years[0]), max: end(years[1]) } });
+  for (const axis of SPANNED) {
+    const s = spans[axis];
+    if (s) rows.push({ axis, not: false, value: { kind: 'range', min: end(s[0]), max: end(s[1]) } });
+  }
   for (const [axis, values] of notAxis) rows.push({ axis, not: true, value: { kind: 'any_of', values } });
-  for (const [min, max] of notYears) rows.push({ axis: 'year', not: true, value: { kind: 'range', min: end(min), max: end(max) } });
+  for (const [axis, min, max] of notSpans) rows.push({ axis, not: true, value: { kind: 'range', min: end(min), max: end(max) } });
   const seeds = seedsOf(chips);
   if (seeds.length) {
     const either = seeds.length > 1 && joinOf(modes, 'like') === 'or';
@@ -622,7 +670,7 @@ export type Part = { text: string; chip?: number; tight?: boolean; flip?: JoinKi
  *  sounds like Miles Davis". As `conditionsOf` combines them, so it says what the crate is: a kind's terms any of them
  *  ("or"), the kinds all of them; the years one span from the earliest to the latest; the artists "like" one Sounds
  *  like of them all ("and", as the server names it). Genres lead (else styles, else "Tracks"); then a style beside a
- *  genre, tags, by, on a label, from an album, the years; last what it feels and sounds like. */
+ *  genre, tags, by, on a label, from an album, the years, the tempo; last what it feels and sounds like. */
 export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: string | null = null): Part[] {
   if (!chips.length && !brief) return [];
   const all = chips.map((c, i) => ({ c, i }));
@@ -675,6 +723,19 @@ export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: str
     if (last !== years[0]) (word('to'), yearTerm(last));
   }
 
+  // The tempo (0.14), as the years: one span, from the slowest chip's to the fastest's, each as its chip reads; "at
+  // 120–130 bpm", "at about 128 bpm", an open one without the "at" ("over 140 bpm").
+  const tempos = of('bpm')
+    .map(yearAt)
+    .sort((a, b) => a.span[0] - b.span[0] || a.span[1] - b.span[1]);
+  if (tempos.length) {
+    if (!open(tempos[0])) word('at');
+    const last = tempos.reduce((a, b) => (b.span[1] > a.span[1] ? b : a));
+    term(tempos[0].i);
+    for (const t of tempos.slice(1)) if (t !== last) (word(',', true), term(t.i));
+    if (last !== tempos[0]) (word('to'), term(last.i));
+  }
+
   // What it feels and sounds like, one clause: "that feels Calm and sounds like Miles Davis" ("Tracks that feel…").
   const plural = !head.length;
   const moods = of('mood');
@@ -721,6 +782,16 @@ export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: str
       yearTerm(y);
     });
   }
+  // Tempos left out, each as itself: "but not over 140 bpm".
+  const leftTempos = left('bpm').map(yearAt);
+  if (leftTempos.length) {
+    leaving();
+    if (!open(leftTempos[0])) word('at');
+    leftTempos.forEach((t, k) => {
+      if (k) (k < leftTempos.length - 1 ? word(',', true) : word('or'));
+      term(t.i);
+    });
+  }
   return out;
 }
 
@@ -757,9 +828,10 @@ export function briefOf(of: readonly string[], names: Readonly<Record<string, Na
 }
 
 /** A crate's conditions read back as its terms (0.13, decision 0088: one crate, two views): the chips, how they join,
- *  the cut, and `rest`, the conditions a sentence cannot say (negated, switched off, an open range, a Sounds like by
- *  how many or weighted, a second row of one kind, any other axis), kept as they are. `names`: the server's for the
- *  ids a condition holds; an id it no longer has reads as gone (removable). The inverse of `conditionsOf`. */
+ *  the cut, and `rest`, the conditions a sentence cannot say (negated, switched off, an open range, a tempo it cannot
+ *  say as typed, a Sounds like by how many or weighted, a second row of one kind, any other axis), kept as they are.
+ *  `names`: the server's for the ids a condition holds; an id it no longer has reads as gone (removable). The inverse
+ *  of `conditionsOf`. */
 export function chipsOf(
   conditions: readonly Condition[],
   names: Readonly<Record<string, Named>> = {},
@@ -797,6 +869,11 @@ export function chipsOf(
       const label =
         v.min === null ? `before ${z + 1}` : v.max === null ? `since ${a}` : a === z ? String(a) : a % 10 === 0 && z === a + 9 ? `${a}s` : `${a}–${z}`;
       chips.push({ term: label, reading: { kind: 'year', value: `${a}-${z}`, label }, others: [], ...(c.not ? { not: true } : {}) });
+    } else if (c.enabled !== false && !c.quantifier && (c.not || !done.has(at)) && c.axis === 'bpm' && v.kind === 'range' && tempoSaid(v.min, v.max)) {
+      // The tempo's one span (0.14), as the years': open at one end too ("over 140 bpm"), left out each its own row; a
+      // span the sentence cannot say as typed (120.5 to 130, 10 to 400) stays the conditions'.
+      const label = tempoSaid(v.min, v.max)!;
+      chips.push({ term: label, reading: { kind: 'bpm', value: `${v.min ?? NO_START}-${v.max ?? NO_END}`, label }, others: [], ...(c.not ? { not: true } : {}) });
     } else if (plain && !c.not && v.kind === 'like' && !brief && (v.min === undefined || v.fresh || !!v.weights?.length || v.of.length > SEEDS_LISTED)) {
       // A built-in crate's (by how many, weighted, fresh) or a long list: said briefly, kept as it is.
       brief = { text: briefOf(v.of, names, crateName), condition: c };

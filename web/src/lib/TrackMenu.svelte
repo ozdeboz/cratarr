@@ -16,6 +16,7 @@
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
+  import { openRadio } from './radioAsk.svelte';
   import { can, findsTracks } from './capabilities.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { leavePlayer } from './navStep.svelte';
@@ -51,18 +52,20 @@
   import { inOrder, type EntryId } from './menuTable';
   import MenuEntry from './MenuEntry.svelte';
   import SnippetStrip from './SnippetStrip.svelte';
-  import { endSnippet, fromLabel, snippetable, snippetOn, startOf, toggleSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import { endSnippet, fromLabel, heardShare, snippetable, snippetOn, startOf, toggleSnippet, type SnippetTrack } from './snippetPlayer.svelte';
+  import SnippetMark from './SnippetMark.svelte';
   import { prefs } from './prefs.svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
-  import { enqueue, jump as localJump, moveUpcoming, removeUpcoming, startRadio } from './localPlayer.svelte';
+  import { enqueue, jump as localJump, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
   import { playUpcoming } from './remote.svelte';
   import { setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
   import { albumSubject, artistOf, panel, viewFor } from './panel.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { crateOf, genreOf, viewGenre } from './crates.svelte';
   import { likeChip } from './quickCrate';
   import { grabCrate } from './quickCrates.svelte';
@@ -387,12 +390,9 @@
   async function radio() {
     const tr = t;
     if (!tr) return;
-    working = true;
     onclose();
     try {
-      await startRadio([tr.id], tr.name);
-    } catch (e) {
-      toast.fail(e, "The radio didn't start");
+      openRadio({ name: tr.name, kind: 'track', within: null, seed: async () => [tr.id] });
     } finally {
       working = false;
     }
@@ -502,8 +502,8 @@
         label={o.label}
         danger
         onclick={() => {
-          onclose();
           o.run();
+          onclose();
         }}
       />
     {/each}
@@ -529,8 +529,8 @@
             icon: 'playlists',
             label: 'Playlists',
             onclick: () => {
-              onclose();
               onplaylists();
+              onclose();
             },
           },
         ]
@@ -560,7 +560,10 @@
         <!-- Its snippet (0.12, the owner's mockup A2): its place in the track, and Play snippet from there (again, it
              stops). -->
         <SnippetStrip track={snip} />
-        <MenuEntry icon={snippetOn(snip) ? 'pause' : 'play'} label={fromLabel(startOf(snip))} onclick={() => toggleSnippet(snip)} />
+        <!-- Its mark as every snippet's button (the owner, 2026-11-02): the circle fading, its progress as it sounds. -->
+        <MenuEntry label={fromLabel(startOf(snip))} onclick={() => toggleSnippet(snip)}>
+          {#snippet mark()}<SnippetMark open={snippetOn(snip)} share={snippetOn(snip) ? heardShare() : 0} size={24} />{/snippet}
+        </MenuEntry>
       {/if}
       <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
       <MenuTable kind="track" {entry} />

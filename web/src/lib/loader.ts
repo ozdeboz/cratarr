@@ -14,3 +14,10 @@ export function waitShows(since: number | null, now: number): 'answer' | 'kept' 
   if (since === null) return 'answer';
   return now - since < LOADER_AFTER_MS ? 'kept' : 'loader';
 }
+
+/** The loader's size where it is (the owner, 2026-11-02: "we're using smaller kinds these days in smaller panels", and
+ *  Home "has no big loading spinner in the middle"): a page's large; in a panel (beside the page or over it) or a
+ *  sheet, small. One rule for every loader of a place (lib/PageLoading, lib/Hold's sign). */
+export const LOADER_LARGE = 96;
+export const LOADER_SMALL = 40;
+export const loaderSizeIn = (el: Element): number => (el.closest('.player-side, .playlist-layer, .sheet') ? LOADER_SMALL : LOADER_LARGE);

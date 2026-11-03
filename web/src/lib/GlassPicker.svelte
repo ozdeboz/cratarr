@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import ChoiceMark from './ChoiceMark.svelte';
   /** One choice; `group`: a heading it comes under (a menu's group), named once before the first of it; `count`: how
    *  many it shows (the Library's types), at its end. */
   export type PickerOption = { id: string; label: string; group?: string; count?: number };
@@ -8,9 +9,12 @@
   // What a page shows, on the glass beside back as the page's name (the owner, 2026-10-25): only the choice shown
   // ("Records ▾"); a tap grows the glass downwards with every choice, the one shown ticked; a choice (or a tap
   // elsewhere, or Esc) folds it. The Library's kind of record (lib/RecordsPicker) and Discover's mode
-  // (lib/DiscoverPicker) are both this one.
+  // (lib/DiscoverPicker) are both this one. Where more than one can be chosen, each chosen is ticked, and a long-press
+  // (`onhold`; with a mouse a right-click, as every long-press, and Ctrl-click or ⌘-click, the desktop's habit for
+  // choosing several) takes one in or out without folding it (the owner, 2026-11-02, the Library's types).
   import GlassMenu from './GlassMenu.svelte';
   import Icon from './Icon.svelte';
+  import { longpress } from './longpress';
 
   let {
     shown,
@@ -18,7 +22,20 @@
     options,
     chosen,
     onchoose,
-  }: { shown: string; menuLabel: string; options: readonly PickerOption[]; chosen: string | null; onchoose: (id: string) => void } = $props();
+    onhold = null,
+  }: {
+    shown: string;
+    menuLabel: string;
+    options: readonly PickerOption[];
+    /** What is chosen: one, several (each ticked), or none. */
+    chosen: string | readonly string[] | null;
+    onchoose: (id: string) => void;
+    /** A long-press on a choice: taken in or out of what is chosen, the menu staying open. */
+    onhold?: ((id: string) => void) | null;
+  } = $props();
+  // One of many, the round mark (a tap chooses one); the square once several are chosen (by a long-press).
+  const markKind = $derived(Array.isArray(chosen) && chosen.length > 1 ? 'several' : 'one');
+  const ticked = (id: string) => (typeof chosen === 'string' ? chosen === id : !!chosen?.includes(id));
 
   let open = $state(false);
   // Counts in a column of their own, the tick's room kept beside them so they line up.
@@ -44,8 +61,14 @@
     <GlassMenu {at} keep={() => el} label={menuLabel} onclose={() => (open = false)}>
       {#each options as o, i (o.id)}
         {#if o.group && o.group !== options[i - 1]?.group}<span class="group" role="presentation">{o.group}</span>{/if}
-        <button class="option" role="option" aria-selected={o.id === chosen} aria-label={o.group ? `${o.group} ${o.label.toLowerCase()}` : undefined} onclick={() => choose(o.id)}
-          >{o.label}{#if counted}<span class="end">{#if o.count !== undefined}<span class="count">{o.count.toLocaleString()}</span>{/if}<span class="tick">{#if o.id === chosen}<Icon name="check" size={18} />{/if}</span></span>{:else if o.id === chosen}<Icon name="check" size={18} />{/if}</button
+        <button
+          class="option"
+          role="option"
+          aria-selected={ticked(o.id)}
+          aria-label={o.group ? `${o.group} ${o.label.toLowerCase()}` : undefined}
+          onclick={(e) => (onhold && (e.ctrlKey || e.metaKey) ? onhold(o.id) : choose(o.id))}
+          use:longpress={() => onhold?.(o.id)}
+          >{o.label}{#if counted}<span class="end">{#if o.count !== undefined}<span class="count">{o.count.toLocaleString()}</span>{/if}<span class="tick"><ChoiceMark kind={markKind} on={ticked(o.id)} /></span></span>{:else}<ChoiceMark kind={markKind} on={ticked(o.id)} />{/if}</button
         >
       {/each}
     </GlassMenu>

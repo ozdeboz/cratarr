@@ -2,6 +2,7 @@
 // album cannot be had): the album's release as MusicBrainz has it (which tracks are there), one Soulseek search for a
 // track, its candidates, one fetched and checked (decoded whole, its length, AcoustID naming that recording), then added
 // to the album's folder, tagged from MusicBrainz, with Undo. Administrators only.
+import type { FileRun } from './api';
 
 export type ReleaseTrack = {
   disc: number;
@@ -84,7 +85,8 @@ export const fetchFile = (path: string, album: { source: string; id: string }, r
 export const fetchCandidate = (search: string, candidate: string) => call<{ id: string }>(`/api/track-search/${enc(search)}/fetch`, 'POST', { candidate });
 export const getFetch = (id: string) => call<Fetch>(`/api/track-fetch/${enc(id)}`);
 export const dropFetch = (id: string) => call<void>(`/api/track-fetch/${enc(id)}`, 'DELETE');
-export const addFetched = (id: string) => call<{ undo: string[] }>(`/api/track-fetch/${enc(id)}/add`, 'POST', {});
+/** A run on the one path (0.14): the copy chosen is the yes, its Undo the run's (lib/fileRuns whenWritten). */
+export const addFetched = (id: string) => call<FileRun>(`/api/track-fetch/${enc(id)}/add`, 'POST', {});
 
 // Many at once, you approve (0.13; the owner, 2026-10-31: "Bulk search, you approve", decision 0080 amended): the ticked
 // albums' missing tracks looked for in turn (one Soulseek search at a time), the best copy of each chosen; nothing goes
@@ -103,7 +105,7 @@ export type IntakeItem = {
   /** The candidate chosen for it (the best), unless picked otherwise. */
   chosen: string | null;
   why?: string;
-  /** Added: the token that takes it out again (POST /api/undo). */
+  /** Added: its run, which Undo takes out again (lib/fileRuns undoRun). */
   undo?: string;
 };
 export type Intake = { running: boolean; items: IntakeItem[] };

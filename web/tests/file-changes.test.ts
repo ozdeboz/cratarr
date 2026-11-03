@@ -75,3 +75,10 @@ test("a kept run under way again is its Undo: said so in the list and on the rec
   assert.equal(stateLine({ state: 'writing', done: 1, of: 4, run: 'r4' } as never)?.text, 'Undoing its files, 1 of 4');
   assert.equal(stateLine({ state: 'waiting', run: 'l4' } as never)?.text, 'Waiting to write its files');
 });
+
+test("a Keep's or a move's files moved: Adding to its library, where its title says", async () => {
+  const { runLine } = await import('../src/lib/fileChangeRules.ts');
+  const run = { id: 'l1', what: 'keep', title: 'Kept into Music: Ignorance', state: 'adding' as const, done: 1, of: 1, failed: [], undone: false, albums: 1 };
+  assert.equal(runLine(run), 'Adding to Music…');
+  assert.equal(runLine({ ...run, title: 'Replaced: Ignorance' }), 'Adding to its library…');
+});

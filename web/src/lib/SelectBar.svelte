@@ -2,7 +2,8 @@
   // Symfonium's select bar (decided 2026-10-15), wherever a list has a select mode: the panel's track lists and the
   // Playlists page (2026-10-16). It floats over the list's end while selecting: how many of how many, ✕ (Select ends),
   // and what to do with the ticked ones (`children`: icon buttons; `fav` fills a heart). In the panel it stands over
-  // the panel's end; on a page it stays at the bottom of the window as the list scrolls.
+  // the panel's end; on a page it stays at the bottom of the window as the list scrolls. A panel's edit mode floats its
+  // buttons in it too (the owner, 2026-11-02: "so the buttons are always in sight"), without the count and ✕.
   import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
 
@@ -16,9 +17,9 @@
   }: {
     /** What is ticked, for screen readers ("Selected tracks"). */
     label: string;
-    /** How many of how many ("3/12"). */
-    count: string;
-    onclose: () => void;
+    /** How many of how many ("3/12"); none (edit mode): no head, the buttons only. */
+    count?: string;
+    onclose?: () => void;
     place?: 'panel' | 'page';
     /** All or none at once (the owner, 2026-10-25): the top row's left button, "All", or "None" with every one ticked. */
     every?: { all: boolean; onall: () => void; onnone: () => void } | null;
@@ -27,6 +28,7 @@
 </script>
 
 <div class="selbar {place}" role="toolbar" aria-label={label}>
+  {#if count !== undefined}
   <div class="selhead">
     {#if every}
       <button class="every" onclick={() => (every.all ? every.onnone() : every.onall())}>{every.all ? 'None' : 'All'}</button>
@@ -36,6 +38,7 @@
     <span class="selcount">{count}</span>
     <button class="close" aria-label="Stop selecting" title="Stop selecting" onclick={onclose}><Icon name="close" size={22} /></button>
   </div>
+  {/if}
   <div class="selacts">{@render children()}</div>
 </div>
 

@@ -5,7 +5,7 @@
   // checked for both themes; a legend with each genre's time, as light mode's lighter hues need words beside them; a
   // tooltip on every column); and the period's top artists, albums and tracks. The log starts empty (filled from
   // ListenBrainz where that kept the history): what is not there yet is not made up.
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
   import { albumCoverUrl, coverUrl, getListening, type Listening, type ListeningTop } from './api';
   import ReleaseRow from './ReleaseRow.svelte';
   import Group from './settings/Group.svelte';
@@ -82,6 +82,11 @@
   }
   const heard = $derived(!!data && data.total_secs > 0);
   const logged = $derived(data?.log_from ? day(data.log_from, { day: 'numeric', month: 'long', year: 'numeric' }) : null);
+  // The page's words leaving none of what was heard (decision 0095): said from the magnifier.
+  searchNone(() => {
+    const all = data ? [...data.artists, ...data.albums, ...data.tracks] : [];
+    return !all.some((t) => matchesSearch(t.name, t.by)) && { n: all.length, one: 'entry', many: 'entries' };
+  }, 'panel');
 </script>
 
 {#snippet top(title: string, all: ListeningTop[], kind: 'artist' | 'album' | 'track')}

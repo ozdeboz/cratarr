@@ -9,7 +9,7 @@
   // owner, 2026-10-31): its stops one after another, each album's missing tracks (or each damaged file) in turn, the
   // sheet moving on by itself after Add to album or Skip; each one still its own choice (decision 0080).
   import { untrack } from 'svelte';
-  import { undo } from './api';
+  import { whenWritten } from './fileRuns.svelte';
   import { on } from './events.svelte';
   import { plural } from './insights.svelte';
   import MenuCards from './MenuCards.svelte';
@@ -37,7 +37,6 @@
     type Search,
     type TrackFile,
   } from './replaceTrack';
-  import { toast } from './toast.svelte';
   import { offers } from './capabilities.svelte';
   import { handledOne, nextStop, nextWanted, skipStop, startThrough, throughLine, type Stop, type Through } from './healthThrough';
 
@@ -236,10 +235,10 @@
     if (!fetchId) return;
     adding = true;
     try {
-      const { undo: tokens } = await addFetched(fetchId);
+      const run = await addFetched(fetchId);
       fetchId = null;
       forgetRelease(here.source, here.album.id);
-      toast.show({ text: `${wanted?.title ?? 'The track'} added.`, tone: 'done', act: { label: 'Undo', run: () => void undo(tokens) } });
+      whenWritten(run, `${wanted?.title ?? 'The track'} added.`);
       if (!through || !wanted) return onclose();
       fetching = null;
       walk = handledOne(walk, wanted.recording);

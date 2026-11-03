@@ -1,14 +1,16 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { noteChange } from './lastChange.svelte';
 import { port } from './player/port.svelte';
-import { dropFromQueue, local, startRadio } from './localPlayer.svelte';
+import { dropFromQueue, local } from './localPlayer.svelte';
 import { shownPlaylists } from './output.svelte';
 import { pickOf, playCollection } from './play.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
 import { viewOver } from './panel.svelte';
 import { toast } from './toast.svelte';
+import { openRadio } from './radioAsk.svelte';
 import { withUndo } from './undo.svelte';
 
 export const crates = $state<{ list: Crate[] | null; error: string | null }>({ list: null, error: null });
@@ -44,15 +46,23 @@ export const FAVOURITES = {
 } as const;
 const NEXT: Record<CrateFavourites, CrateFavourites> = { none: 'only', only: 'all', all: 'none' };
 /** A tap on the toggle: No favourites, Only favourites, All tracks, and round again. */
-export function cycleFavourites(id: string) {
+export const cycleFavourites = (id: string) => setFavourites(id, (was) => NEXT[was]);
+/** The toggle set (`to` from what it was), shown at once, saved after; a failure puts it back. Its chip's ✕ in the
+ *  popover of a crate left empty (decision 0095) sets it to All. */
+export function setFavourites(id: string, to: (was: CrateFavourites) => CrateFavourites) {
   const c = crates.list?.find((x) => x.id === id);
   if (!c) return;
   const was = c.favourites;
-  const next = NEXT[was];
+  const next = to(was);
+  noteChange('favourites');
   c.favourites = pending[id] = next;
   saving = saving.then(() =>
     setCrateFavourites(id, next).then(
-      () => pending[id] === next && delete pending[id],
+      ({ undo }) => {
+        if (pending[id] !== next) return;
+        delete pending[id];
+        saved(next, FAVOURITES, undo);
+      },
       (e) => {
         if (pending[id] !== next) return;
         delete pending[id];
@@ -76,18 +86,22 @@ export const FAVOURITE_ALBUMS = {
   none: { icon: 'albumsOff', label: 'No favourite albums', filled: false },
 } as const;
 /** A tap on the albums toggle: No favourite albums, Only favourite albums, All albums, and round again. */
-export function cycleFavouriteAlbums(id: string) {
+export const cycleFavouriteAlbums = (id: string) => setFavouriteAlbums(id, (was) => NEXT[was]);
+/** The favourite albums toggle set, as setFavourites. */
+export function setFavouriteAlbums(id: string, to: (was: CrateFavourites) => CrateFavourites) {
   const c = crates.list?.find((x) => x.id === id);
   if (!c) return;
   const was = c.favourite_albums ?? 'all';
-  const next = NEXT[was];
+  const next = to(was);
+  noteChange('favourite_albums');
   c.favourite_albums = pendingAlbums[id] = next;
   saving = saving.then(() =>
     setCrateFavouriteAlbums(id, next).then(
-      () => {
+      ({ undo }) => {
         if (pendingAlbums[id] !== next) return;
         delete pendingAlbums[id];
         loadCrates();
+        saved(next, FAVOURITE_ALBUMS, undo);
       },
       (e) => {
         if (pendingAlbums[id] !== next) return;
@@ -98,6 +112,14 @@ export function cycleFavouriteAlbums(id: string) {
       },
     ),
   );
+}
+
+/** An own crate's toggle saved as the crate is (its Favourite or Favourite album condition, one truth): its Undo, the
+ *  crates read again after it (sizes, the toggle as it then is). A built-in's has none: a tap again. */
+function saved(to: CrateFavourites, shown: Record<CrateFavourites, { label: string }>, undo: string | null | undefined) {
+  if (!undo) return;
+  loadCrates();
+  withUndo(`${shown[to].label}.`, [undo], { after: () => loadCrates() });
 }
 
 // Before the setting was the server's (2026-10-14), each browser kept its own: sent once, then forgotten here.
@@ -174,6 +196,10 @@ export function forgetDraft(id: string | null) {
 /** Home's shelves as crates (the server's `home:new`, `home:graves`; the owner, 2026-10-24): their › open them. */
 export const HOME_CRATES: Record<string, string> = { 'home:new': 'New for you', 'home:graves': 'Grave digging' };
 export const homeCrate = (id: string | null) => !!id && id in HOME_CRATES;
+/** The libraries a crate's request leaves out (the owner, 2026-11-02: "Only what's switched on": every number, list,
+ *  Play, download, playlist and radio pick from the libraries switched on); New for you and Grave digging the one
+ *  exception, a whole one: always every library, everywhere. */
+export const withoutFor = (id: string | null | undefined) => (homeCrate(id ?? null) ? undefined : hiddenLibraries());
 export const crateNameKnown = (id: string): string | null =>
   HOME_CRATES[id] ??
   crates.list?.find((c) => c.id === id)?.name ?? wordOf(id)?.word ?? likeNames[id] ?? (crates.list && !likeOf(id) ? id : null);
@@ -260,14 +286,15 @@ export function startCrate(name: string, conditions: Condition[] = [], more: Omi
 // 500 at most). Shuffle: 500 drawn from all of it, mixed (all of it when it is that small); Play: its first 500.
 export const shuffleCrate = (id: string, name: string) => playCollection({ kind: 'crate', id }, 'shuffle', name);
 export const playCrate = (id: string, name: string, mode: 'play' | 'next' | 'last') => playCollection({ kind: 'crate', id }, mode, name);
-/** Start radio: tracks like the crate's from the whole library, seeded with up to 300 of its tracks drawn from all of
- *  it (decision 0036). */
-export async function crateRadio(id: string, name: string) {
-  const { tracks } = await pickOf({ kind: 'crate', id }, 'shuffle', 'cratarr');
-  await startRadio(
-    tracks.slice(0, 300).map((t) => t.id),
+/** Start radio from a crate (decision 0036): the radio sheet (decision 0094 #5), only its tracks or like it, seeded with
+ *  up to 300 of its tracks drawn from all of it. */
+export function crateRadio(id: string, name: string) {
+  openRadio({
     name,
-  );
+    kind: 'crate',
+    within: { kind: 'crate', id, ...(withoutFor(id) ? { without: withoutFor(id) } : {}) },
+    seed: async () => (await pickOf({ kind: 'crate', id }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id),
+  });
 }
 /** One's own crate deleted, Undo bringing it back. */
 export async function deleteOwnCrate(id: string) {

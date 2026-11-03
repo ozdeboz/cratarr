@@ -9,6 +9,7 @@
   import { refresh } from './live.svelte';
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
+  import { whenWritten } from './fileRuns.svelte';
 
   let { source, tracks }: { source: string; tracks: { id: string; name: string }[] } = $props();
 
@@ -42,7 +43,10 @@
     try {
       const r = await adjustTempo(source, ids, how);
       tempo = r.tracks;
-      withUndo(one && r.tracks[0]?.bpm ? `${r.tracks[0].bpm} BPM.` : WORDS[how], [r.undo], { after: load });
+      const said = one && r.tracks[0]?.bpm ? `${r.tracks[0].bpm} BPM.` : WORDS[how];
+      // Cratarr's own: a run (its Undo once written); a media server's: its token.
+      if (r.run) whenWritten(r.run, said, load);
+      else withUndo(said, [r.undo], { after: load });
       refresh();
     } catch (e) {
       toast.fail(e, "The BPM didn't change");

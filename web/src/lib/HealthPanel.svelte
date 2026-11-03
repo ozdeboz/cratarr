@@ -10,14 +10,16 @@
   // you approve", 0080 amended): albums ticked, their missing tracks looked for in turn, each found one's best copy
   // chosen, and a review list over the albums where nothing goes in until it is ticked and added (lib/trackIntake).
   // Beside the list on a roomy window (no ✕ there), over it on a phone.
+  import ChoiceMark from './ChoiceMark.svelte';
   import { untrack } from 'svelte';
+  import { rowRoot } from './glassRow.svelte';
   import { findsTracks, offers } from './capabilities.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import MoreInfo from './MoreInfo.svelte';
-  import { albumCoverUrl, undo, wantAlbum, type HealthItem } from './api';
+  import { albumCoverUrl, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
   import { plural } from './insights.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -28,21 +30,20 @@
   import { anyOver, approvePayload, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } from './trackIntake';
   import { toast } from './toast.svelte';
   import { openFinding } from './health';
-  import { health, loadHealth, problems } from './healthReport.svelte';
+  import { health, loadHealth, problems, recordIn, recordProblem } from './healthReport.svelte';
   import { damagedStops, missingStops, throughKind, throughTotal, type Stop } from './healthThrough';
   import HealthEvents from './HealthEvents.svelte';
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
   import HealthRenumber from './HealthRenumber.svelte';
-  import HealthFixes from './HealthFixes.svelte';
-  import { apply, FIXABLE, healthFixes, readFixes } from './fixes.svelte';
-  import ConfirmSheet from './settings/ConfirmSheet.svelte';
+  import RecordReferences from './RecordReferences.svelte';
+  import { FIXABLE } from './fixes.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { releaseOf, type ReleaseTrack } from './replaceTrack';
   import { me } from './me.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, pageView, searchElsewhere, searchNone } from './pageView.svelte';
   import ContentControls from './ContentControls.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
@@ -55,12 +56,50 @@
   import { prefs } from './prefs.svelte';
   import FileChanges from './FileChanges.svelte';
   import Notice from './Notice.svelte';
-  import { CHANGES, changesView, fileRuns, openChanges } from './fileRuns.svelte';
+  import { CHANGES, changesView, fileRuns, openChanges, openFixes, undoRun } from './fileRuns.svelte';
   import Crumbs from './Crumbs.svelte';
 
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
-  const p = $derived(problems().find((x) => x.key === problem) ?? null);
+  // Opened from elsewhere than the Health page (a record's page): the report read here too.
+  $effect(() => {
+    if (!health.loaded) untrack(() => loadHealth());
+  });
+  const whole = $derived(problems().find((x) => x.key === problem) ?? null);
+  // Narrowed to one record (its page's Health line, the owner 2026-11-02: "The problem, this record only"): its own items
+  // as the record's answer has them (the report keeps a finding's first 100), said as its page says it.
+  const record = $derived(recordIn(healthThing(panel.viewed)));
+  let recordFound = $state.raw<{ for: string; finding: RecordFinding | null } | null>(null);
+  $effect(() => {
+    const r = record;
+    void health.findings;
+    if (!r) return void (recordFound = null);
+    const key = `${r.source}/${r.id}`;
+    let gone = false;
+    getRecordHealth(r.source, r.id).then(
+      (h) => !gone && (recordFound = { for: key, finding: h.findings.find((f) => recordProblem(f).key === problem) ?? null }),
+      () => !gone && (recordFound = { for: key, finding: null }),
+    );
+    return () => (gone = true);
+  });
+  const narrowed = $derived(record && recordFound?.for === `${record.source}/${record.id}` ? recordFound.finding : null);
+  // The record's problem gone (fixed here): back to the record.
+  $effect(() => {
+    if (record && recordFound && recordFound.for === `${record.source}/${record.id}` && !recordFound.finding) untrack(() => backOne());
+  });
+  const p = $derived(
+    whole && record ? (narrowed ? { ...whole, items: narrowed.items, said: recordProblem(narrowed).text } : { ...whole, items: [] }) : whole,
+  );
+  // One record's one item: open at once.
+  $effect(() => {
+    if (narrowed?.items.length === 1) untrack(() => (openKey = keyOf(narrowed.items[0])));
+  });
   const f = $derived(p?.finding ?? null);
+  // Opened for a problem the report, read whole, no longer has (fixed meanwhile): the Health page, never an empty panel
+  // over it saying so (the owner, 2026-11-02: "← Health" over "This is no longer a problem", and Back to the page with
+  // "← Health" again). Not after a failed read: that says so (errors are never shown as nothing).
+  $effect(() => {
+    if (problem !== CHANGES && !p && health.loaded && !health.reportError && !health.error) untrack(() => closePlaylist());
+  });
   const LEVEL = { critical: 'Critical', warning: 'Warning', info: 'To know' } as const;
   const WHERE: Record<string, string> = { library: 'Open the Library', playlists: 'Open Playlists', settings: 'Open Settings', health: 'Open Health', requests: 'Open Requests' };
   /** An Incoming album waiting (or not converted): compared with Music, its menu at hand (lib/HealthIncoming). */
@@ -77,6 +116,21 @@
   const RENUMBERS = new Set(['library:track-numbers', 'library:discs']);
 
   /** An item's own key, the row open in place by it (the report read again keeps it open where it still is). */
+  // The page's words leaving none of the problem's items (decision 0095): said from the magnifier.
+  // The page's search through every problem (the owner, 2026-11-02: "when in any control page, the search input field
+  // should be page-wide across all child panels ... the current panel should surface at the top, but directly after,
+  // all siblings on the page should surface too"): under this one's items, each other problem the words find, with the
+  // items they find (a few, then how many more); a tap opens it, the words still searched. Not narrowed to a record.
+  const SOME = 5;
+  const elsewhere = $derived.by(() => {
+    if (!pageView.query.trim() || record) return [];
+    return problems()
+      .filter((x) => x.key !== problem)
+      .map((x) => ({ x, hits: x.items.filter((i) => matchesSearch(i.title, i.line)) }))
+      .filter((e) => e.hits.length || matchesSearch(e.x.name, e.x.title));
+  });
+  searchElsewhere(() => elsewhere.length > 0);
+  searchNone(() => !!p && !p.items.some((x) => matchesSearch(x.title, x.line)) && { n: p.items.length, one: 'item' }, 'panel');
   const keyOf = (x: HealthItem) => (x.track ? `t/${x.track}` : x.album ? `a/${x.album.join('/')}` : x.playlist ? `p/${x.playlist}` : `n/${x.title}`);
   let openKey = $state<string | null>(null);
   // Another problem: none open.
@@ -226,14 +280,10 @@
     }
   }
   async function undoItem(i: IntakeItem) {
-    if (!i.undo) return;
-    try {
-      await undo([i.undo]);
-      undone = new Set([...undone, i.id]);
-      loadHealth();
-    } catch (e) {
-      toast.fail(e, "It wasn't undone");
-    }
+    // Its run's Undo (0.14: an added track is a run in Changes to files).
+    if (!i.undo || !(await undoRun(i.undo))) return;
+    undone = new Set([...undone, i.id]);
+    loadHealth();
   }
   /** A track of the review list tapped: its copies to pick from, looking for it by hand, or out of the list. */
   let pickOf = $state<IntakeItem | null>(null);
@@ -250,7 +300,7 @@
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
   const handed = $derived(glass.one && !beside);
-  const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'health' } : null);
+  const pill = () => (!beside ? { filter: false, view: false, search: 'health' } : null);
   handGlass(() => handed, { left: glassLeft, pill });
   // An album missing tracks: the whole release asked for (Lidarr fetches it into Incoming; Replace carries over).
   let asking = $state(false);
@@ -267,24 +317,14 @@
       asking = false;
     }
   }
-  // A library finding's fixes (0.9.7, the administrators' metadata workflow): read for its list (Apply all certain) and
-  // its items' rows (lib/HealthFixes).
-  const fixable = $derived(me.admin && FIXABLE.has(problem));
-  $effect(() => {
-    if (fixable) readFixes(problem);
-  });
-  const certain = $derived(fixable ? (healthFixes[problem]?.certain ?? 0) : 0);
-  let applyingAll = $state(false);
-  let askAll = $state(false);
-  async function applyAll() {
-    askAll = false;
-    applyingAll = true;
-    await apply({ certain: problem }, problem, `Applied ${certain} certain ${certain === 1 ? 'fix' : 'fixes'}`);
-    applyingAll = false;
-  }
+  // A library finding's fixes (the administrators' metadata workflow): reviewed on the one sheet, every record's fields
+  // with where from and how sure, certain ones ticked, written as one run (decision 0092's writers' map, 0.14).
+  /** The finding the problem is (a files kind's page key `files-<kind>` is its finding `files:<kind>`). */
+  const findingKey = $derived(problem.startsWith('files-') ? `files:${problem.slice('files-'.length)}` : problem);
+  const fixable = $derived(me.admin && FIXABLE.has(findingKey));
   // Every problem and Changes to files, in Health's areas, each area's most urgent first (as the page lists them).
   const parts = $derived([
-    ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.finding?.thing ?? x.name }))),
+    ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.name }))),
     ...(me.admin ? [{ id: CHANGES, group: 'Activity', label: 'Changes to files' }] : []),
   ]);
   const shownId = $derived(problem === CHANGES ? CHANGES : (p?.key ?? null));
@@ -309,7 +349,7 @@
         }
       : null,
   );
-  const top = $derived<Level[]>(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }, ...(areaLevel ? [areaLevel] : [])]);
+  const top = $derived<Level[]>(beside ? [] : [{ label: 'Health', go: () => upToPage('health') }, ...(areaLevel ? [areaLevel] : [])]);
   // The problem seen, remembered for its area's next pick.
   $effect(() => {
     if (areaNow && shownId) prefs.groupLast = remembered(prefs.groupLast, 'health', areaNow, shownId);
@@ -318,7 +358,7 @@
   const changes = $derived(problem === CHANGES ? changesView(healthThing(panel.viewed)) : null);
   // The levels Back walks through (lib/Crumbs, one rule for every panel; the owner, 2026-11-01): Changes to files above a
   // run only where the run was opened from it (a step), and a tap there is that step back, never a jump to the list.
-  const changesTrail = $derived(changes && changes.view !== 'list' && isStep() ? [...top, { label: 'Changes to files', go: () => history.back() }] : top);
+  const changesTrail = $derived(changes && changes.view !== 'list' && isStep() ? [...top, { label: 'Changes to files', go: backOne }] : top);
   const changesHere = $derived(
     !changes ? '' : changes.view === 'list' ? 'Changes to files' : changes.view === 'plan' ? planTitle(changes.kind) : (fileRuns.list?.find((r) => r.id === changes.id)?.title ?? 'A change to files'),
   );
@@ -332,14 +372,12 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}
-    <span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>
-  {/if}
   {#if changes}
-    <Crumbs trail={changesTrail} here={changesHere} siblings={changes.view === 'list' ? siblings : null} />
+    <Crumbs back={beside ? null : backOne} trail={changesTrail} here={changesHere} siblings={changes.view === 'list' ? siblings : null} />
   {:else if p}
-    <Crumbs trail={top} here={p.name} {siblings} />
+    <Crumbs back={beside ? null : backOne} trail={top} here={p.name} {siblings} />
   {:else}
+    {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={backOne}><Icon name="back" size={22} /></button></span>{/if}
     <h2 class="title">Health</h2>
   {/if}
 {/snippet}
@@ -352,8 +390,8 @@
     {#if incoming && x.album}<div class="tool"><HealthIncoming source={x.album[0]} album={x.album[1]} ongone={gone} /></div>{/if}
     <!-- Track numbers off (unnumbered ones too), disc numbers: renumbered as a release has them (lib/HealthRenumber). -->
     {#if RENUMBERS.has(problem) && x.album?.[0] === 'cratarr' && offers('renumber')}<div class="tool"><HealthRenumber album={x.album[1]} title={x.title} ongone={gone} /></div>{/if}
-    <!-- Year, genre, album artist, MusicBrainz release, a rule's names: the fix proposed, Apply (lib/HealthFixes). -->
-    {#if fixable && x.album?.[0] === 'cratarr'}<div class="tool"><HealthFixes finding={problem} album={x.album[1]} track={x.track ?? null} title={x.title} ongone={gone} /></div>{/if}
+    <!-- Records none speaks for: a row per source, Use this, Paste a link, Checked by hand (lib/RecordReferences). -->
+    {#if problem === 'library:references' && x.album?.[0] === 'cratarr'}<div class="tool"><RecordReferences album={x.album[1]} /></div>{/if}
     {#if EVENTS[problem]}<div class="tool"><HealthEvents {...EVENTS[problem]} value={x.title} /></div>{/if}
     {#if x.missing?.length}
       <!-- An album missing tracks (0.9.7; the owner, 2026-10-26: "golden work"): each one, looked for on Soulseek one at a
@@ -390,7 +428,7 @@
 
 <div class="view" class:handed>
   {#if !handed}
-    <div class="bar" class:beside>
+    <div class="bar" {@attach rowRoot()} class:beside>
       {@render glassLeft()}
       {#if pill()}<ContentControls {...pill()!} />{/if}
     </div>
@@ -409,7 +447,7 @@
         {#if f?.detail || p.hint}<MoreInfo label={p.name} text={(f?.detail ?? p.hint)!} />{/if}
       </p>
       <!-- How much. -->
-      {#if f && f.of}
+      {#if f && f.of && !record}
         <div class="meter" role="meter" aria-valuemin="0" aria-valuemax={f.of} aria-valuenow={f.count} aria-label={p.title}>
           <!-- What it is, in its sentence (the owner, 2026-10-25), over how much of the whole. -->
           <div class="head"><span>{p.said}</span><b>{Math.round((100 * f.count) / f.of)}%</b></div>
@@ -419,7 +457,7 @@
         <p class="count"><b>{p.said}</b></p>
       {/if}
       <!-- All of it at once where it can be: its tracks in turn (Work through), every certain fix (asked once more). -->
-      {#if kind || certain > 0}
+      {#if kind || fixable}
         <Group>
           {#if kind}
             <Item name={kind === 'missing' ? 'Work through the missing tracks' : 'Work through the damaged files'} line={kind === 'missing' ? 'One at a time, most missing albums first' : 'One at a time, album by album'}>
@@ -433,8 +471,8 @@
               <Item name="Find missing tracks" line="Many at once, each approved by you" onclick={() => ((openKey = null), (selecting = new Set()))} />
             {/if}
           {/if}
-          {#if certain > 0}
-            <Item name={`Apply all certain (${certain.toLocaleString()})`} busy={applyingAll} disabled={applyingAll} onclick={() => (askAll = true)} />
+          {#if fixable}
+            <Item name="Review the fixes" line="Certain ones ticked, each written into its files" onclick={() => openFixes(findingKey)} />
           {/if}
         </Group>
       {/if}
@@ -462,7 +500,7 @@
               {#if tickable(i)}
                 {@const on = ticks.has(i.id)}
                 <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.title}`} onclick={() => tickItem(i.id)}
-                  ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                  ><ChoiceMark kind="several" on={on} /></button
                 >
               {:else if i.state === 'added' && i.undo && !undone.has(i.id)}
                 <button onclick={() => void undoItem(i)}>Undo</button>
@@ -486,7 +524,7 @@
                 {@const on = selecting.has(id)}
                 <ReleaseRow cover={albumCoverUrl(x.album[0], id)} title={x.title} line={x.line ?? null} onclick={() => tickAlbum(id)}>
                   <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Select ${x.title}`} onclick={() => tickAlbum(id)}
-                    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                    ><ChoiceMark kind="several" on={on} /></button
                   >
                 </ReleaseRow>
               {:else if x.album}
@@ -503,6 +541,18 @@
       {#if f?.open}
         <Group><Item name={WHERE[f.open.page] ?? 'Open'} onclick={() => f && openFinding(f)} /></Group>
       {/if}
+    {/if}
+    {#if elsewhere.length}
+      <!-- The other problems the search finds, each a group of what it finds (lib/settings/Group, Item). -->
+      <div class="elsewhere" aria-label="In other problems">
+        {#each elsewhere as e (e.x.key)}
+          <Group title={e.x.name}>
+            {#each e.hits.slice(0, SOME) as h, i (i)}<Item name={h.title} line={h.line ?? null} onclick={() => viewSibling(HEALTH + e.x.key)} />{/each}
+            {#if e.hits.length > SOME}<Item name={`${(e.hits.length - SOME).toLocaleString()} more`} onclick={() => viewSibling(HEALTH + e.x.key)} />{/if}
+            {#if !e.hits.length}<Item name={e.x.title} onclick={() => viewSibling(HEALTH + e.x.key)} />{/if}
+          </Group>
+        {/each}
+      </div>
     {/if}
     <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     {#if handed && everywhere()}<GlobalResults />{/if}
@@ -565,16 +615,6 @@
       </MenuGroup>
     </MenuCards>
   </MenuSheet>
-{/if}
-{#if askAll}
-  <ConfirmSheet
-    title={`Apply ${certain.toLocaleString()} certain ${certain === 1 ? 'fix' : 'fixes'}?`}
-    text="Written into the files; Undo puts the old values back."
-    label="Apply"
-    icon="check"
-    onconfirm={applyAll}
-    onclose={() => (askAll = false)}
-  />
 {/if}
 
 <style>

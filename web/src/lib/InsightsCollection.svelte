@@ -4,7 +4,8 @@
   // one series each in the accent, labelled directly; the playlists' figures as tiles and the tracks in the most
   // playlists as a list. Five views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
   // Artists (all of them), Tracks (those in playlists), Discovery (what Discover found, the owner 2026-10-25).
-  import { matchesSearch } from './pageView.svelte';
+  import { matchesSearch, searchNone } from './pageView.svelte';
+  import { hrefOf, viewOn } from './addresses';
   import { getDiscover, getDiscoverExcluded, getDiscoverMissing, type Count, type DiscoverView, type Insights, type Layered } from './api';
   import Icon from './Icon.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -21,6 +22,11 @@
   const widest = (rows: Count[]) => Math.max(1, ...rows.map((r) => r.n));
 
   const l = $derived(data.library);
+  // Genres or Artists, a list only: the page's words leaving none of it (decision 0095), said from the magnifier.
+  searchNone(() => {
+    const list = prefs.insightsCollection === 'genres' ? l.genres : prefs.insightsCollection === 'artists' ? l.top_artists : null;
+    return !!list && !list.some((r) => matchesSearch(r.name)) && { n: list.length, one: prefs.insightsCollection === 'genres' ? 'genre' : 'artist' };
+  }, 'panel');
   const p = $derived(data.playlists);
   // The overview beyond the files (the owner's exploration, 2026-10-23): Incoming, growth, what was heard.
   const o = $derived(data.overview);
@@ -111,15 +117,15 @@
     const at = disc?.found?.at;
     const hours = at ? Math.floor((Date.now() / 1000 - at) / 3600) : null;
     return [
-      { value: num(found.length), label: 'suggestions', href: '#/discover' },
+      { value: num(found.length), label: 'suggestions', href: hrefOf('discover') },
       { value: num(new Set(found.map((a) => a.artist)).size), label: 'artists' },
       { value: num(new Set(found.filter((a) => a.new_artist).map((a) => a.artist)).size), label: 'new to you' },
       { value: num(found.filter((a) => a.bandcamp).length), label: 'play on Bandcamp' },
       { value: num(found.filter((a) => (a.year ?? 0) >= thisYear - 1).length), label: `from ${thisYear - 1} and ${thisYear}` },
-      { value: num(asked.length), label: 'asked for', href: '#/requests' },
+      { value: num(asked.length), label: 'asked for', href: hrefOf('requests') },
       // The two lists one level deeper (the owner, 2026-10-25), where the server keeps them.
-      ...(missingN !== null ? [{ value: num(missingN), label: 'missing albums', href: '#/insights?view=insights%3Adiscover-missing' }] : []),
-      ...(excludedN !== null ? [{ value: num(excludedN), label: 'excluded', href: '#/insights?view=insights%3Adiscover-excluded' }] : []),
+      ...(missingN !== null ? [{ value: num(missingN), label: 'missing albums', href: viewOn('insights', 'insights:discover-missing') }] : []),
+      ...(excludedN !== null ? [{ value: num(excludedN), label: 'excluded', href: viewOn('insights', 'insights:discover-excluded') }] : []),
       ...(hours !== null ? [{ value: hours < 1 ? 'now' : hours < 48 ? `${hours} h` : plural(Math.floor(hours / 24), 'day'), label: 'since the last look' }] : []),
     ];
   });
@@ -279,7 +285,7 @@
   {:else if !disc}
     <PageLoading />
   {:else if !found.length}
-    <p class="formats">Discover has found nothing yet: <a href="#/discover">look on its page</a>.</p>
+    <p class="formats">Discover has found nothing yet: <a href={hrefOf('discover')}>look on its page</a>.</p>
   {:else}
     <section aria-label="Discovery">
       <div class="tiles">

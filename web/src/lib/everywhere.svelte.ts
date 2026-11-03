@@ -8,6 +8,7 @@ import { DOWNLOADS_LISTS } from './downloadsLists.svelte';
 import { INSIGHTS_VIEWS } from './insightsViews';
 import { me } from './me.svelte';
 import { DOWNLOADS, HEALTH, INSIGHTS, REQUESTS, SETTINGS } from './panel.svelte';
+import { hrefOf, viewOn, type PageId } from './addresses';
 import { problems } from './healthReport.svelte';
 import { REQUESTS_LISTS } from './requests.svelte';
 import { matchedOn, matches, provide, type SearchResult } from './search';
@@ -17,7 +18,6 @@ import { SECTIONS } from './settingsSections.svelte';
 /** A page as the app lists it: its name and its address. */
 export type PageLink = { label: string; href: string };
 
-const at = (href: string, view: string) => `${href}?view=${encodeURIComponent(view)}`;
 const result = (kind: string, subject: string, title: string, sub: string, query: string[]): SearchResult => ({
   kind,
   subject,
@@ -40,7 +40,7 @@ export function provideEverywhere(pages: () => PageLink[]) {
         return [
           {
             kind: 'setting',
-            subject: at('#/settings', SETTINGS + x.id),
+            subject: viewOn('settings', SETTINGS + x.id),
             title: x.title,
             sub: f.rows.length ? f.rows.slice(0, 3).join(' · ') : 'Settings',
             score: f.title ? 2 : 1,
@@ -54,20 +54,20 @@ export function provideEverywhere(pages: () => PageLink[]) {
   // The control pages' parts, each page's under its name (the owner, 2026-10-25): Requests, Downloads, Insights, Health
   // and Settings. Home, Library and Discover only gather, so nothing of theirs; crates and playlists are sets, found as
   // the albums and artists are (the server's); a page itself is never a result.
-  const PARTS: { href: string; label: string; parts: () => { view: string; label: string; sub?: string }[] }[] = [
-    { href: '#/requests', label: 'Requests', parts: () => REQUESTS_LISTS.map((l) => ({ view: REQUESTS + l.id, label: l.label })) },
-    { href: '#/downloads', label: 'Downloads', parts: () => DOWNLOADS_LISTS.map((l) => ({ view: DOWNLOADS + l.id, label: l.label })) },
-    { href: '#/insights', label: 'Insights', parts: () => INSIGHTS_VIEWS.map((v) => ({ view: INSIGHTS + v.id, label: v.label, sub: v.group })) },
+  const PARTS: { page: PageId; label: string; parts: () => { view: string; label: string; sub?: string }[] }[] = [
+    { page: 'requests', label: 'Requests', parts: () => REQUESTS_LISTS.map((l) => ({ view: REQUESTS + l.id, label: l.label })) },
+    { page: 'downloads', label: 'Downloads', parts: () => DOWNLOADS_LISTS.map((l) => ({ view: DOWNLOADS + l.id, label: l.label })) },
+    { page: 'insights', label: 'Insights', parts: () => INSIGHTS_VIEWS.map((v) => ({ view: INSIGHTS + v.id, label: v.label, sub: v.group })) },
     // Its problems as far as its report is in (read when Health was opened).
-    { href: '#/health', label: 'Health', parts: () => problems().map((x) => ({ view: HEALTH + x.key, label: x.title, sub: x.domain })) },
+    { page: 'health', label: 'Health', parts: () => problems().map((x) => ({ view: HEALTH + x.key, label: x.name, sub: x.title })) },
   ];
   for (const p of PARTS)
     provide({
-      kind: `page:${p.href}`,
+      kind: `page:${p.page}`,
       label: p.label,
       find: (query) => {
-        if (!pages().some((x) => x.href === p.href)) return [];
-        return p.parts().map((x) => result(`page:${p.href}`, at(p.href, x.view), x.label, x.sub ?? '', query)).filter((r) => matches(query, r.title));
+        if (!pages().some((x) => x.href === hrefOf(p.page))) return [];
+        return p.parts().map((x) => result(`page:${p.page}`, viewOn(p.page, x.view), x.label, x.sub ?? '', query)).filter((r) => matches(query, r.title));
       },
     });
 }

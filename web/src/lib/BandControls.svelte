@@ -6,6 +6,7 @@
   // carried over. Its reset asks first, in the Reset sheet as every section's (lib/settings/ResetSheet), from Settings →
   // Player's declaration (lib/settings/resetItems: the owner, 2026-11-02, the part's Reset did not know the looks); a
   // long press resets every look to its own defaults (asking too).
+  import ChoiceRow from './settings/ChoiceRow.svelte';
   import BandSlider, { bandValueText } from './BandSlider.svelte';
   import Item from './settings/Item.svelte';
   import { BAND_DIRECTIONS, BAND_ENGINES, BAND_LOOKS, BANDS_MORE, COUNT_MORE, ENGINE_MORE, WINDOW_MORE } from './bandWaves.svelte';
@@ -97,10 +98,10 @@
   <Item name="Look" more={BANDS_MORE} value={BAND_LOOKS.find((o) => o.value === prefs.playerBands)?.label ?? null} onclick={() => (picking = true)} />
   {#if look && tune}
     {#each SLIDERS.filter((x) => !x.not?.includes(look)) as x (x.key)}
-      {#if x.key === 'taper'}<Item name="Direction"><Seg label="Direction" options={BAND_DIRECTIONS} bind:value={direction.get, direction.set} /></Item>{/if}
+      {#if x.key === 'taper'}<ChoiceRow name="Direction" options={BAND_DIRECTIONS} value={direction.get()} onchange={direction.set} />{/if}
       <Item name={x.label} more={x.more ?? null} value={valueOf(x)} onclick={() => (sliding = x)} />
     {/each}
-    <Item name="Engine" more={ENGINE_MORE}><Seg label="Engine" options={BAND_ENGINES} bind:value={prefs.playerBandsEngine} /></Item>
+    <ChoiceRow name="Engine" more={ENGINE_MORE} options={BAND_ENGINES} value={prefs.playerBandsEngine} onchange={(v) => (prefs.playerBandsEngine = v)} />
     <Item name="Reset {named(look)}" disabled={!lookChanged(look)} onclick={() => (asking = 'look')} />
     {#if anyChanged}<Item name="Reset every look" onclick={() => (asking = 'all')} />{/if}
   {/if}

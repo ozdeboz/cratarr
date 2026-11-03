@@ -1,0 +1,53 @@
+{
+  "about": "Decision 0097's one reader test: one record's words as every reader must see them. `library` is what the rest of the library says (another record's file genres; each kind's aliases), `record` the record's inputs by layer (each track's files' tags and AudioMuse's; the services' words; what is set by hand), `expect.words` the album view's `words`, `expect.crates` the tracks each word's crate holds. The server's words store and the page's tests check theirs against it.",
+  "library": {
+    "genres": ["Techno"],
+    "aliases": { "genre": [{ "to": "Hip Hop", "from": ["rap", "hiphop"] }] }
+  },
+  "record": {
+    "id": "al-1",
+    "tracks": [
+      { "id": "t1", "genre": ["Dub"], "style": [], "mood": ["melancholic", "religious"], "tag": [], "heard": true, "heard_styles": ["dub techno"], "heard_moods": ["relaxed"] },
+      { "id": "t2", "genre": ["Dub", "Hip-Hop"], "style": [], "mood": [], "tag": [], "heard": true, "heard_styles": ["dub techno"], "heard_moods": ["relaxed"] },
+      { "id": "t3", "genre": ["Dub"], "style": [], "mood": [], "tag": [], "heard": true, "heard_styles": ["ambient dub"], "heard_moods": ["sad"] }
+    ],
+    "said": [
+      { "source": "discogs", "word": "Religious", "raw_kind": "style", "weight": 1.0 },
+      { "source": "discogs", "word": "Dub", "raw_kind": "style", "weight": 1.0 },
+      { "source": "lastfm", "word": "dark", "raw_kind": "mood", "weight": 1.0 },
+      { "source": "lastfm", "word": "seen live", "raw_kind": "tag", "weight": 0.2 }
+    ],
+    "hand": {}
+  },
+  "expect": {
+    "words": {
+      "kinds": [
+        { "kind": "genre", "hand": false, "words": [{ "word": "Dub", "sources": ["files", "discogs"] }] },
+        { "kind": "style", "hand": false, "words": [{ "word": "dub techno", "sources": ["audiomuse"] }, { "word": "Religious", "sources": ["discogs"] }] },
+        { "kind": "mood", "hand": false, "words": [{ "word": "relaxed", "sources": ["audiomuse"] }] },
+        { "kind": "tag", "hand": false, "words": [{ "word": "dark", "sources": ["lastfm"] }] }
+      ],
+      "tracks": [
+        { "id": "t1", "kinds": [{ "kind": "tag", "hand": false, "words": [{ "word": "dark", "sources": ["lastfm"] }, { "word": "melancholic", "sources": ["files"] }] }] },
+        { "id": "t2", "kinds": [{ "kind": "genre", "hand": false, "words": [{ "word": "Dub", "sources": ["files", "discogs"] }, { "word": "Hip Hop", "sources": ["files"] }] }] },
+        {
+          "id": "t3",
+          "kinds": [
+            { "kind": "style", "hand": false, "words": [{ "word": "dub techno", "sources": ["audiomuse"] }, { "word": "Religious", "sources": ["discogs"] }, { "word": "ambient dub", "sources": ["audiomuse"] }] },
+            { "kind": "mood", "hand": false, "words": [{ "word": "sad", "sources": ["audiomuse"] }] }
+          ]
+        }
+      ]
+    },
+    "crates": {
+      "genre:dub": ["t1", "t2", "t3"],
+      "genre:hip hop": ["t2"],
+      "style:religious": ["t1", "t2", "t3"],
+      "style:ambient dub": ["t3"],
+      "mood:relaxed": ["t1", "t2"],
+      "mood:melancholic": [],
+      "tag:melancholic": ["t1"],
+      "tag:seen live": []
+    }
+  }
+}

@@ -1,13 +1,14 @@
 <script lang="ts">
   // Symfonium's floating pill (2026-10-15), at the top right of the panel (lib/PlaylistView) and of a page with something
   // to play (App.svelte): the page's search (it opens into a field over the row), the filter (lib/FilterSheet), View
-  // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and where it plays (lib/OutputSheet)
-  // where nothing else leads to it (no mini-player, which has it beside the heart; no player beside the page; the panel's
-  // pill and the page's alike), and last the page's own button (a + to
-  // make something, its ticked ones' ⋮; pageView.usePageAction). Google's Cast guidelines put the device button at the
-  // top right of the screen that plays.
+  // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and last the page's own button (a + to
+  // make something, its ticked ones' ⋮; pageView.usePageAction). Where it plays is not here (the owner, 2026-11-03: no
+  // room): the mini-player's, or its glass in the mini-player's place while nothing plays (lib/MiniPlayer).
   import FilterSheet from './FilterSheet.svelte';
+  import { noteChange } from './lastChange.svelte';
   import ProgressRing from './ProgressRing.svelte';
+  import NothingPopover from './NothingPopover.svelte';
+  import { rowPiece } from './glassRow.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import Meter from './Meter.svelte';
@@ -16,11 +17,13 @@
   import { glassPart } from './glassMotion';
   import { untrack } from 'svelte';
   import { innerWidth } from 'svelte/reactivity/window';
-  import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
+  import { pageCovered, panelBeside } from './panel.svelte';
+  import { askHidden, type Hidden } from './pageView.svelte';
   import { globalAsked, globalGroups, globalSearch, pageKinds } from './globalSearch.svelte';
   import type { PanelKind } from './prefs.svelte';
+  import type { Snippet } from 'svelte';
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
   import { inSpotify, SPOTIFY_FILTER } from './spotify.svelte';
   import { dimmedIn } from './quickCrate';
@@ -29,7 +32,6 @@
   let {
     page = null,
     view = false,
-    device = true,
     order = null,
     tempos = null,
     filter = true,
@@ -39,6 +41,7 @@
     search = null,
     onview = null,
     filterLit = null,
+    extra = null,
     action = undefined,
   }: {
     /** The page it is on (its search, its own filters and View), or null in the panel. */
@@ -47,7 +50,6 @@
      *  absent, the page that set it last (pageView.action). */
     action?: import('./pageView.svelte').PageAction | null;
     view?: boolean;
-    device?: boolean;
     /** The panel list's order, for its View. */
     order?: ListOrder | null;
     /** The panel list's tempos, for its filter's tempo selector (decision 0041). */
@@ -66,15 +68,17 @@
     search?: string | null;
     onview?: (() => void) | null;
     filterLit?: boolean | null;
+    /** Buttons of the list's own on the pill's glass, after its tools (a panel's heart and menu once its action row has
+     *  scrolled away, the owner 2026-11-02). */
+    extra?: Snippet | null;
   } = $props();
   /** The page's own button: App's say, else the page that set it last. */
   const pageAction = $derived(action !== undefined ? action : pageView.action);
   let filterOpen = $state(false);
   let viewOpen = $state(false);
-  let outputOpen = $state(false);
 
   // The search: the magnifier opens a field over the row (the whole row on a phone, the pill grown leftwards on a
-  // wide page); Esc or leaving it empty folds it, ✕ empties it. A search that applies keeps the magnifier lit.
+  // wide page); Esc, Enter or leaving it empty folds it, ✕ empties it. A search that applies keeps the magnifier lit.
   const words = $derived(page ? searchFor(page) : search ? searchFor(search) : null);
   let searching = $state(false);
   let field = $state<HTMLInputElement>();
@@ -244,13 +248,16 @@
   // magnifier (lit, folded, after another page; or the field open), the words a chip whose ✕ clears; everywhere's
   // count stays the globe's alone. Not while everywhere's results show.
   // Not while the words make a crate whose card shows (the owner, 2026-11-02: the crate card wins, the page found that).
-  const noneShown = $derived(!!page && !!pageView.none && pageView.query.trim() !== '' && !globeOn && crateCards.shown === 0);
+  // A panel's none (searchNone 'panel') by the pill that holds the search: the page's while the panel is beside it, the
+  // panel's own while it covers the page; the page's own none first.
+  const panelNone = $derived(pageView.elsewhere ? null : pageView.panelNone);
+  const noneSaid = $derived(page ? (pageCovered() ? null : pageView.none && crateCards.shown === 0 ? pageView.none : panelBeside() ? panelNone : null) : search ? panelNone : null);
+  const noneShown = $derived(!!noneSaid && pageView.query.trim() !== '' && !globeOn);
   let row = $state<HTMLElement>();
   // The open search never narrower than the pill folded (the owner, 2026-11-01): the field takes at least the room the
-  // buttons it replaces took, besides its own wish (as wide as its row allows, 320 px at most). Its row's, not the
-  // window's: beside a panel or the player the row is narrower, and a field sized by the window pushed back aside or
-  // sent the title away to fill the row (the owner, 2026-11-02). Said on the field (`data-wants`) for the title beside
-  // it to give way where it would squeeze it (lib/NavigationControls).
+  // buttons it replaces took, and grows from what its row has left, 320 px at most. A piece of its row (lib/glassRow): the
+  // row decides it with everything else in it, the title beside back giving way before the field is squeezed (the
+  // owner, 2026-11-02: one decision for the row, nothing measuring another).
   let pill = $state<HTMLElement>();
   let folded = $state(0);
   $effect(() => {
@@ -262,47 +269,44 @@
     seen.observe(p);
     return () => seen.disconnect();
   });
-  /** The width of the row the pill is in: App's page row, or a panel's own bar. */
-  let rowRoom = $state<number | null>(null);
-  $effect(() => {
-    const line = row?.closest<HTMLElement>('.page-row, .bar, .pills');
-    if (!line) return void (rowRoom = null);
-    const seen = new ResizeObserver(() => (rowRoom = line.clientWidth));
-    seen.observe(line);
-    return () => seen.disconnect();
-  });
   /** The lens and the pill's own room, beside the field. */
   const LENS = 52;
-  /** Back, the gap after it, the lens and a short title's room: what the row keeps beside the field it wants. */
-  const BESIDE = 204;
-  const fieldWants = $derived(Math.max(Math.min(320, (rowRoom ?? (innerWidth.current ?? 400) - 16) - BESIDE), folded - LENS, 140));
+  /** The field's least: the room the buttons it replaces took. */
+  const fieldLeast = $derived(Math.max(folded - LENS, 140));
+  /** Short of room the field gives way first, down to this, before the title is cut (the owner, 2026-11-02: "title
+   *  whole, field shrinks"; lib/rowLayout). */
+  const FIELD_MIN = 96;
+  /** The magnifier: where the popover's tip points (lib/NothingPopover). */
   let lens = $state<HTMLElement>();
-  /** The magnifier's middle, from the row's right end: where the callout's tip points. */
-  let tip = $state(24);
+  // What hides part of the list (lib/pageView explainHidden), on a long-press of the lit magnifier or funnel (the
+  // owner, 2026-11-02: taps keep doing what they do): the page's, and the panel's beside it; the panel's own pill its.
+  let hidden = $state<{ anchor: HTMLElement; said: Hidden[] } | null>(null);
+  async function showHidden(anchor: HTMLElement | undefined) {
+    if (!anchor) return;
+    const wheres: ('page' | 'panel')[] = page ? ['page', ...(panelBeside() ? (['panel'] as const) : [])] : search ? ['panel'] : [];
+    const said = (await Promise.all(wheres.map(askHidden))).filter((x): x is Hidden => !!x);
+    hidden = said.length ? { anchor, said } : null;
+  }
+  // Gone with a tap elsewhere, or once one of its causes is cleared.
   $effect(() => {
-    const [r, l] = [row, lens];
-    if (!noneShown || !r || !l) return;
-    const place = () => {
-      const a = r.getBoundingClientRect();
-      const b = l.getBoundingClientRect();
-      tip = a.right - (b.left + b.width / 2);
-    };
-    place();
-    // The pill's outline changes (the field opening, at once; its glass then moves): the tip follows.
-    const seen = new ResizeObserver(place);
-    seen.observe(r);
-    return () => seen.disconnect();
+    if (!hidden) return;
+    const away = (e: PointerEvent) => !(e.target as Element | null)?.closest?.('.nothing') && (hidden = null);
+    addEventListener('pointerdown', away, true);
+    return () => removeEventListener('pointerdown', away, true);
   });
+  const closing = (h: Hidden) => h.chips.map((c) => (c.onclear ? { ...c, onclear: () => (c.onclear?.(), (hidden = null)) } : c));
+  let funnelEl = $state<HTMLElement>();
   $effect(() => {
     if (!globeShown && untrack(() => globalSearch.scope) === 'everywhere') globalSearch.scope = 'page';
   });
 </script>
 
-<span class="pill-row" class:fill={searching && pageView.leadAway} bind:this={row}>
+<span class="pill-row" bind:this={row}>
   <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
-    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span>
-    <!-- Everywhere, while a search finds something there (the owner, 2026-11-02): on the pill's one glass, which grows
-         for it, as back's grows for a title (lib/NavigationControls), not a glass of its own under it. -->
+    <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span><span class="main" aria-hidden="true"></span>
+    <!-- Everywhere, while a search finds something there: the pill's extension (the owner, 2026-11-03: "thin glass, one
+         part"), its thin back layer stretched from under the main glass's round end, as back's is for a title
+         (lib/NavigationControls); not a glass of its own. -->
     {#if globeShown}
       <button
         class="funnel globe"
@@ -328,18 +332,20 @@
     {#if words && !(showing && page && pageAction)}
       <button
         bind:this={lens}
+        class="lens"
+        use:longpress={() => !searching && pageView.query.trim() !== '' && void showHidden(lens)}
         class:lit={!searching && pageView.query.trim() !== ''}
-        aria-label={words}
+        aria-label={!searching && pageView.query.trim() !== '' ? `${words}: still narrowed by its words` : words}
         title={words}
         onmousedown={(e) => searching && e.preventDefault()}
         onclick={() => (searching = !searching)}
        
-        ><Icon name="search" size={22} /></button
+        ><Icon name="search" size={22} />{#if !searching && pageView.query.trim() !== ''}<span class="badge" aria-hidden="true">!</span>{/if}</button
       >
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" style:width="{fieldWants}px" data-wants={fieldWants}>
+        <span class="field" role="search" {@attach rowPiece(() => ({ id: 'field', rank: 0, width: fieldLeast, min: Math.min(fieldLeast, FIELD_MIN), max: 320, takes: true }))}>
           <span class="typed" class:layered={!!layered}>
             {#if layered}<span class="mirror" aria-hidden="true" bind:this={mirror}>{#each layered as part, k (k)}<span class:dim={part.dim}>{part.text}</span>{/each}</span>{/if}
             <input
@@ -348,11 +354,20 @@
               placeholder={words}
               aria-label={words}
               bind:value={pageView.query}
-              oninput={() => ((typedHere = true), follow())}
+              oninput={() => ((typedHere = true), noteChange('search'), follow())}
               onscroll={follow}
               onkeyup={follow}
               onselect={follow}
-              onkeydown={(e) => e.key === 'Escape' && (searching = false)}
+              onkeydown={(e) => {
+                // Esc folds it; Enter too, the words kept and the magnifier lit while they apply (the owner, 2026-11-02:
+                // "The search input field should auto-close on pressing enter"), the keyboard going with it.
+                if (e.key === 'Escape') searching = false;
+                else if (e.key === 'Enter' && !e.isComposing) {
+                  e.preventDefault();
+                  field?.blur();
+                  searching = false;
+                }
+              }}
               onblur={() => pageView.query.trim() === '' && (searching = false)}
             />
           </span>
@@ -360,12 +375,12 @@
         </span>
       {/if}
     {/if}
-    {#if filter && !searching && !(showing && page && pageAction)}<button class="funnel" class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))}
+    {#if filter && !searching && !(showing && page && pageAction)}<button class="funnel" bind:this={funnelEl} use:longpress={() => (filterLit ?? filtering) && void showHidden(funnelEl)} class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))}
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
     {#if view && (page || order?.columns?.shown.length || order?.view || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))}><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
-    {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
+    {#if extra && !searching}{@render extra()}{/if}
     <!-- The page's mode (Playlists' Quick add), lit while on. -->
     {#if page && pageView.mode && !searching && !(showing && pageAction)}
       {@const m = pageView.mode}
@@ -379,11 +394,11 @@
       >
     {/if}
   </div>
+  {#if hidden}
+    {#each hidden.said as h, i (i)}<NothingPopover anchor={hidden.anchor} said={h.said} chips={closing(h)} onclearall={h.chips.filter((c) => c.onclear).length > 1 ? () => (h.chips.forEach((c) => c.onclear?.()), (hidden = null)) : null} />{/each}
+  {/if}
   {#if noneShown}
-    <div class="none" role="status" style:--tip="{tip}px" transition:fade={{ duration: 150 }}>
-      <span class="said">No {pageView.none} for</span>
-      <span class="words"><span class="q">{pageView.query.trim()}</span><button class="clear" aria-label="Clear the search" title="Clear" onclick={clear}><Icon name="close" size={14} /></button></span>
-    </div>
+    <NothingPopover anchor={lens} said={noneSaid ?? ''} chips={[{ label: 'Search', onclear: clear }]} />
   {/if}
 </span>
 {#if filterOpen}
@@ -396,9 +411,6 @@
   {@const a = pageAction}
   <ConfirmSheet title={`${a.label}?`} label={a.label} icon={a.icon} danger={false} onconfirm={() => confirm(a)} onclose={() => (asking = false)} />
 {/if}
-{#if outputOpen}
-  <OutputSheet onclose={() => (outputOpen = false)} />
-{/if}
 
 <style>
   /* The pill, and the search's callout under it. */
@@ -409,63 +421,10 @@
     min-width: 0;
   }
 
-  /* The page's search finding none (A2): one slim line hanging from the pill, its tip on the magnifier, the words a
-     chip whose ✕ clears. */
-  .none {
-    position: absolute;
-    top: calc(100% + 12px);
-    right: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    max-width: calc(100vw - 24px);
-    padding: 6px 6px 6px 14px;
-    border-radius: 999px;
-    background: var(--surface);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 9%, transparent), 0 12px 32px rgb(0 0 0 / 0.4);
-    white-space: nowrap;
-  }
-
-  .none::before {
-    content: '';
-    position: absolute;
-    top: -6px;
-    right: calc(var(--tip) - 6px);
-    width: 12px;
-    height: 12px;
-    transform: rotate(45deg);
-    background: var(--surface);
-    box-shadow: -1px -1px 0 color-mix(in srgb, var(--text) 9%, transparent);
-  }
-
-  .said {
-    color: var(--muted);
-    font-size: 14px;
-  }
-
-  .words {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    padding: 4px 4px 4px 12px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text) 9%, transparent);
-    font-size: 14px;
-  }
-
-  .words .q {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .words .clear {
-    flex: none;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: var(--accent-text);
+  /* Nothing to show (an album beside the page while music plays: no search there, nowhere else to play it): no glass,
+     not an empty one (the owner, 2026-11-02: "a shim of a button, unfilled and tiny"). */
+  .pill-row:not(:has(button, .work)) {
+    display: none;
   }
 
   /* Everywhere's shown: lit. */
@@ -486,7 +445,8 @@
   }
 
   .pill > .glass,
-  .pill > .shade {
+  .pill > .shade,
+  .pill > .main {
     position: absolute;
     inset: 0;
     z-index: -1;
@@ -494,10 +454,22 @@
     pointer-events: none;
   }
 
+  /* The back layer, the thin glass the extension is; the main glass over it behind the pill's own buttons. */
   .pill > .glass {
+    background: var(--float-thin-bg);
+    -webkit-backdrop-filter: var(--float-thin-blur);
+    backdrop-filter: var(--float-thin-blur);
+  }
+
+  .pill > .main {
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
+  }
+
+  /* The globe on the extension: the main glass from past it (the pill's 2 px and its 48 px button). */
+  .pill:has(> .globe) > .main {
+    left: 50px;
   }
 
   .pill > .shade {
@@ -537,6 +509,12 @@
     color: var(--accent-ink);
   }
 
+  /* Folded with words kept (the owner, 2026-11-02: they narrow every list, so a lit lens alone hid them): the funnel's
+     badge on the magnifier, an exclamation mark in it ("an exclamation mark instead of a dot"). */
+  .lens {
+    position: relative;
+  }
+
   /* How many filters are on: a small count on the funnel's corner, the list itself left clean (decision 0061). */
   .funnel {
     position: relative;
@@ -559,11 +537,12 @@
   }
 
   /* The search open: its field and ✕ inside the pill, right of the magnifier, as wide as a phone's row allows. */
+  /* Its width is its row's decision (lib/glassRow); outside a row, as wide as fits, 320 px at most. */
   .field {
     display: flex;
     align-items: center;
     width: min(320px, calc(100vw - 220px));
-    min-width: 140px;
+    min-width: 0;
     flex-shrink: 1;
     overflow: hidden;
   }
@@ -614,13 +593,6 @@
   /* Its joining words, as the sentence's (lib/CrateSentence .w). */
   .mirror .dim {
     opacity: 0.55;
-  }
-
-  /* The open search where the title gave way: it grows to meet back (the owner, 2026-11-01), its own width the least. */
-  .pill-row.fill,
-  .pill-row.fill .pill,
-  .pill-row.fill .field {
-    flex: 1 1 auto;
   }
 
   /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour, the pill

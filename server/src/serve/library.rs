@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS songs (
   track_no INTEGER, disc_no INTEGER, year INTEGER, genre TEXT, bpm INTEGER, duration_ms INTEGER, size INTEGER NOT NULL,
   suffix TEXT, kbps INTEGER, created INTEGER, mbid TEXT, order_title TEXT NOT NULL, cover TEXT,
   rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL, rg_album_peak REAL, genres TEXT NOT NULL DEFAULT '',
-  dir TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '');
+  dir TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', track_total INTEGER);
 CREATE INDEX IF NOT EXISTS songs_by_album ON songs (album_id, disc_no, track_no, rel);
 CREATE INDEX IF NOT EXISTS songs_by_dir ON songs (folder, dir);
 CREATE INDEX IF NOT EXISTS songs_by_title ON songs (order_title, n);
@@ -409,7 +409,7 @@ mod release_type_tests {
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 12;
+const LAYOUT: i64 = 13;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -508,6 +508,12 @@ pub(super) fn bpm_of(r: &ServedRow) -> Option<u32> {
     r.first("bpm")
         .and_then(leading_number)
         .or_else(|| r.analysis.as_ref().and_then(|a| a.bpm).map(|b| b.round()).filter(|b| *b > 0.0).map(|b| b as u32))
+}
+
+/// The record's track count a song's tags say (0.14): TRACKNUMBER's "05/06", else its total (Vorbis TRACKTOTAL or
+/// TOTALTRACKS; lofty splits ID3v2's TRCK and MP4's trkn into the number and the total).
+fn total_of(r: &ServedRow) -> Option<u32> {
+    r.first("tracknumber").and_then(|v| v.split_once('/')).and_then(|(_, t)| leading_number(t)).or_else(|| r.first("totaltracks").and_then(leading_number))
 }
 
 fn leading_number(v: &str) -> Option<u32> {
@@ -1349,9 +1355,9 @@ fn write_albums(
         let mut ins_song = tx.prepare_cached(
             "INSERT INTO songs (id, pid, folder, rel, album_id, title, artist, album, album_artist, track_no, disc_no, year,
                genre, bpm, duration_ms, size, suffix, kbps, created, mbid, order_title, path,
-               rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, genres, dir, src)
+               rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, genres, dir, src, track_total)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-               ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+               ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
         )?;
         let mut ins_fts = tx.prepare_cached("INSERT INTO songs_fts (rowid, title, artist, album) VALUES (?1, ?2, ?3, ?4)")?;
         let mut ins_tri = tx.prepare_cached("INSERT INTO songs_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
@@ -1391,6 +1397,7 @@ fn write_albums(
                 s.genres.join("\u{1f}"),
                 crate::catalogue::dir_of(&r.rel),
                 row_src(r),
+                total_of(r),
             ])?;
             let n = tx.last_insert_rowid();
             ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
@@ -1940,6 +1947,17 @@ mod tests {
     }
 
     #[test]
+    fn a_songs_tagged_total_is_kept_from_its_number_or_its_total_tag() {
+        // The Orb's "1/10"; Homogenic's second track with TOTALTRACKS, its first with none.
+        let tagged = with(sample(), |rows| rows[1].tags.push(("totaltracks".into(), "10".into())));
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&tagged, &Rules::default()).unwrap();
+        let mut totals: Vec<Vec<u32>> = lib.track_totals().unwrap().into_values().collect();
+        totals.sort();
+        assert_eq!(totals, [vec![10], vec![10]]);
+    }
+
+    #[test]
     fn an_albums_length_is_its_songs_summed_and_unknown_when_one_is() {
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();
@@ -2125,7 +2143,7 @@ mod tests {
             secondary: Some(vec!["live".into()]),
             year: Some(2008),
             genres: Some(vec!["Psybient".into()]),
-            classical: None,
+            ..Overrides::default()
         };
         let before = lib.originals_print();
         lib.set_overrides([(base, set)].into());

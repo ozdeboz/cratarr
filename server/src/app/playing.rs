@@ -138,6 +138,10 @@ pub struct AlbumMore {
     /// Its tags that are not among its genres.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Its words by kind, with their sources, and its tracks' own (decision 0097, the one store): Cratarr's own
+    /// library's records.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub words: Option<super::words::store::Words>,
     /// Where it is elsewhere: its own page first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<super::discover::Link>,
@@ -711,6 +715,14 @@ impl PlayingService {
             }
         }
         let listening = s.album_listening(album_id).await.unwrap_or_default();
+        // Its words, from the one store (decision 0097).
+        let words = match crate::serve::instance() {
+            Some(served) if source_id == crate::source::cratarr::KIND.id => {
+                let id = album_id.to_string();
+                tokio::task::spawn_blocking(move || super::words::stored(&served).map(|s| s.records.get(&id).cloned())).await.ok().and_then(Result::ok).flatten()
+            }
+            _ => None,
+        };
         Ok(AlbumView {
             source: source_id.to_string(),
             id: album_id.to_string(),
@@ -724,12 +736,14 @@ impl PlayingService {
             added: listening.added,
             played: listening.played,
             plays: listening.plays,
-            more: AlbumMore::default(),
+            more: AlbumMore { words, ..AlbumMore::default() },
         })
     }
 
     /// An artist of a connected server, for their view in the panel (by name, as the albums credit them).
-    pub async fn artist_view(&self, source_id: &str, name: &str) -> Result<ArtistView, ToggleError> {
+    /// `without`: the libraries switched off (`source/library` keys): their albums and tracks left out, as every list
+    /// leaves them (the owner, 2026-11-02).
+    pub async fn artist_view(&self, source_id: &str, name: &str, without: &[String]) -> Result<ArtistView, ToggleError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(ToggleError::Refused("That is not an artist.".into()));
@@ -780,6 +794,14 @@ impl PlayingService {
         };
         // Classical (0.10), as the Library's albums say it.
         let (mut albums, mut appears_on) = (w.albums, w.appears_on);
+        // Of the libraries switched on: an album of one switched off goes, and its tracks with it.
+        if !without.is_empty() {
+            let off = |a: &source::Album| a.library.as_ref().is_some_and(|l| without.contains(&format!("{source_id}/{l}")));
+            let gone: std::collections::HashSet<String> = albums.iter().chain(&appears_on).filter(|a| off(a)).map(|a| a.id.clone()).collect();
+            albums.retain(|a| !off(a));
+            appears_on.retain(|a| !off(a));
+            rows.retain(|r| r.album_id.as_ref().is_none_or(|a| !gone.contains(a)));
+        }
         super::classical::tell(source_id, &mut albums).await;
         super::classical::tell(source_id, &mut appears_on).await;
         super::file_facts::tell(source_id, &mut albums);

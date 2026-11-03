@@ -1,5 +1,6 @@
 <script lang="ts">
   import { installed } from './lib/offline.svelte';
+  import { rowRoot } from './lib/glassRow.svelte';
   import { backdropUrl, nextBackdrop, SHUFFLE_EVERY_MS, shuffleStale, shuffleTurns } from './lib/backdrop.svelte';
   import Playlists from './Playlists.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
@@ -53,7 +54,7 @@
   import { hasView, listReading, matchCrateBy, pageView } from './lib/pageView.svelte';
   import { searchesAsTable } from './lib/layouts';
   import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
-  import { art, playing } from './lib/remote.svelte';
+  import { art } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { reducedMotion, SHEET_OUT } from './lib/motion';
@@ -76,8 +77,11 @@
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
   import { tick, untrack } from 'svelte';
-  import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { followAddress } from './lib/panel.svelte';
+  import { inSidebar, live, panelShowsPlayer, player, sidePanel } from './lib/live.svelte';
+  import { longpress } from './lib/longpress';
+  import { followAddress, setBeside } from './lib/panel.svelte';
+  import RadioSheet from './lib/RadioSheet.svelte';
+  import { radioSheet } from './lib/radioAsk.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
   import DownloadsPanel from './lib/DownloadsPanel.svelte';
@@ -97,30 +101,29 @@
   // pill's lists read again when it is in.
   import { loadMatcherWhenIdle } from './lib/matcherLoad';
   import { matcherLoaded } from './lib/pageView.svelte';
+  import { addressOf, HOME as HOME_ID, hrefOf, pageIn, wordsIn, type PageId } from './lib/addresses';
   loadMatcherWhenIdle(matcherLoaded);
 
-  type Page = { id: string; href: string; label: string; icon: IconName };
+  type Page = { id: PageId; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
   // 0025: Health beside Settings, Insights beside Health).
-  const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
+  const PLAYLISTS: Page = { id: 'playlists', href: hrefOf('playlists'), label: 'Playlists', icon: 'playlists' };
   // Albums outside the library, from what is listened to (decision 0069): beside Playlists (the owner, 2026-10-24).
-  const DISCOVER: Page = { id: 'discover', href: '#/discover', label: 'Discover', icon: 'compass' };
+  const DISCOVER: Page = { id: 'discover', href: hrefOf('discover'), label: 'Discover', icon: 'compass' };
   // The quick look, the leftmost tab (the owner, 2026-10-23); where the app opens without an address.
-  const HOME: Page = { id: 'home', href: '#/home', label: 'Home', icon: 'home' };
+  const HOME: Page = { id: 'home', href: hrefOf('home'), label: 'Home', icon: 'home' };
   // Every used library's albums, Music and Incoming (decision 0034: one page; a dashboard will give the quick look).
-  const LIBRARY: Page = { id: 'library', href: '#/library', label: 'Library', icon: 'library' };
-  // Incoming's and Collection's addresses from before Library (decision 0034): they open Library.
-  const FORMER = ['#/incoming', '#/collection'];
-  const INSIGHTS: Page = { id: 'insights', href: '#/insights', label: 'Insights', icon: 'insights' };
+  const LIBRARY: Page = { id: 'library', href: hrefOf('library'), label: 'Library', icon: 'library' };
+  const INSIGHTS: Page = { id: 'insights', href: hrefOf('insights'), label: 'Insights', icon: 'insights' };
   // The second step after the Library (decision 0024).
-  const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
-  const HEALTH: Page = { id: 'health', href: '#/health', label: 'Health', icon: 'health' };
-  const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
+  const CRATES: Page = { id: 'crates', href: hrefOf('crates'), label: 'Crates', icon: 'crates' };
+  const HEALTH: Page = { id: 'health', href: hrefOf('health'), label: 'Health', icon: 'health' };
+  const SETTINGS: Page = { id: 'settings', href: hrefOf('settings'), label: 'Settings', icon: 'settings' };
   // Albums asked for from Discover, and their answers (decision 0070): left of Downloads (the owner, 2026-10-24), for
   // whoever may ask or answer.
-  const REQUESTS: Page = { id: 'requests', href: '#/requests', label: 'Requests', icon: 'inbox' };
+  const REQUESTS: Page = { id: 'requests', href: hrefOf('requests'), label: 'Requests', icon: 'inbox' };
   // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
-  const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
+  const DOWNLOADS: Page = { id: 'downloads', href: hrefOf('downloads'), label: 'Downloads', icon: 'download' };
   /** The pages that are an index with their lists in the panel (Requests, Downloads, Insights, Health, Settings): their
    *  name on the page beside back and their panel under the top bar, not over it, both wherever the bar of pages is
    *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
@@ -129,29 +132,25 @@
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings). Its records
   // alone, as the Library's (the owner, 2026-10-29: one rule for both modes; its Artists and Tracks went).
-  const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Records', icon: 'disc' };
-  const LOCAL = [LOCAL_ALBUMS];
+  const LOCAL: Page = { id: 'local', href: hrefOf('local'), label: 'Records', icon: 'disc' };
   /** Find more music (0.9.3): the words looked up on MusicBrainz, reached from a search that found nothing anywhere. */
-  const FIND: Page = { id: 'find', href: '#/find', label: 'Find more music', icon: 'search' };
+  const FIND: Page = { id: 'find', href: hrefOf('find'), label: 'Find more music', icon: 'search' };
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
   /** A tab's least width in the bar: more fit on a wider screen. */
   const BAR_SLOT_PX = 72;
 
-  // Playlists are created, renamed, deleted and repaired on the Playlists page and its panel now; old Manage and
-  // Repairs links land there (decision 0025). The page is the address before `?` (what is viewed rides along as
-  // `?view=`, decision 0023).
-  const fromHash = () => {
-    const [h, rest] = location.hash.split('?');
-    if (FORMER.includes(h)) {
-      history.replaceState(history.state, '', LIBRARY.href + (rest ? `?${rest}` : ''));
-      return LIBRARY.id;
-    }
-    if (!h) return HOME.id;
-    // 0.9.16's addresses of the Library's pages (`#/library/tracks`): the Library, its one page now.
-    if (h.startsWith(`${LIBRARY.href}/`)) return LIBRARY.id;
-    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, FIND, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+  // The page is the address's (lib/addresses). None, or one no page has, is Home's, written as Home's address as it is
+  // read, its words kept: what builds an address from the one shown never meets one without a page (the owner,
+  // 2026-11-02: a moment's cover, on Home as the app first showed it, went to Playlists first).
+  /** Opened without an address of its own (the app's downloads away from home, below). */
+  const openedBare = !location.hash.replace(/^#\/?/, '').split('?')[0];
+  const fromHash = (): PageId => {
+    const p = pageIn();
+    if (p) return p;
+    history.replaceState(history.state, '', addressOf(HOME_ID, wordsIn()));
+    return HOME_ID;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -263,6 +262,9 @@
   $effect(() => {
     panel.split = split;
   });
+  // Beside the page, the panel's history is its own: the device's and the browser's Back are the page's (the owner,
+  // 2026-11-02); full screen, Back steps back through the panel (lib/panel).
+  $effect(() => setBeside(split || sidePanel()));
   // Over the page unless the player is beside it: a split page (Settings, Health, Insights) has the panel, not the
   // player, so with the player not wanted beside, the mini-player's tap opens it over the page there too (the owner,
   // 2026-10-24: in Settings › Display it would not open).
@@ -397,12 +399,13 @@
   /** The mini-player's height with its margin (64 px and app.css's --gutter-x either side), kept free under the page
    *  and the toasts. */
   const MINI_SPACE = 80;
-  const miniSpace = $derived(mini && playing() ? MINI_SPACE : 0);
+  // Its place is always taken: the bar while something plays, else its Play on (lib/MiniPlayer; the owner, 2026-11-03).
+  const miniSpace = $derived(mini ? MINI_SPACE : 0);
   // The page's row (Symfonium's, decided 2026-10-15), floating over the page's top: back on the left, when this visit
   // has a step before this one; on the right, on a page with something to play, the pill (lib/ContentControls): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
-  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local-albums'];
+  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local'];
   // A part of the settings in the panel (lib/SettingsPanel), when the panel shows one.
   const settingsShown = $derived(SECTIONS.find((x) => x.id === settingsOf(panel.viewed))?.id ?? (null as SettingsSection | null));
   // What the panel showed when this page was entered (panel.arrived, see openedHere).
@@ -531,9 +534,6 @@
     if (!v || !el || !panelBeside()) return;
     return reveal(() => subjectIn(el, v), { key: v });
   });
-  // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
-  const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown && !downloadsShown);
-  const pillDevice = $derived(!playing() && !playerInPanel && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
   let navAt = $state(0);
@@ -611,9 +611,7 @@
         ? {
             page: page,
             view: hasView(page),
-            // Home's too (the owner, 2026-10-28: the device with nothing playing, as every page with the pill).
-            device: (pagePill || page === 'home') && pillDevice,
-            filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover',
+            filter: (pagePill && page !== LOCAL.id && page !== 'downloads') || page === 'discover',
             action: pageView.action,
           }
         : null,
@@ -678,9 +676,7 @@
     addEventListener('scroll', scrolled, { capture: true, passive: true });
     return () => removeEventListener('scroll', scrolled, { capture: true });
   });
-  // In a panel whose action bar sticks (lib/glass's `below`), the bar is away exactly while it sticks, scrolling up
-  // too (the owner, 2026-10-25).
-  // And while a library item is open, where the user wants it so (Display; its panel hands a `below`).
+  // While a library item is open, where the user wants it so (Display; its panel hands `item`).
   // The keyboard up on a phone (lib/keyboard): along the bottom only the glass being typed in stays, over the keyboard;
   // the bar, the mini-player and the navigation controls there make way (the owner, 2026-11-01: "But only input glass
   // needs that").
@@ -688,7 +684,7 @@
   const navHidden = $derived(
     navBottom
       ? typing
-      : navAway || (phone && !!handedNow?.below && (prefs.navHidesOnItem || (prefs.stickyActions && handedNow.below()))),
+      : navAway || (phone && !!handedNow?.item && prefs.navHidesOnItem),
   );
   // Somewhere else: the bar shows again.
   $effect(() => {
@@ -772,6 +768,12 @@
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
   }
+  /** A long-press on the grip (the owner, 2026-11-02): the panel locked, kept as the pages of music change, or unlocked
+   *  again; locked, the pixel round the grip's handle is in the accent. */
+  function toggleLock() {
+    navigator.vibrate?.(8);
+    prefs.panelLocked = !prefs.panelLocked;
+  }
   function gripKey(e: KeyboardEvent) {
     const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0;
     if (!step) return;
@@ -801,7 +803,7 @@
     if (!inApp || openedAway || reach.answered || !reach.away || localMode()) return;
     if (!downloads.known) return askDownloads();
     openedAway = true;
-    if (downloads.tracks.length && (page === HOME.id || page === PLAYLISTS.id) && !location.hash.replace(/^#\/?/, '')) {
+    if (downloads.tracks.length && page === HOME.id && openedBare) {
       history.replaceState(history.state, '', DOWNLOADS.href);
       page = DOWNLOADS.id;
     }
@@ -824,7 +826,8 @@
   // The conversion queue, followed on every page (an administrator's): its count on the Incoming tab, a toast when an
   // album is done.
   $effect(() => (me.admin ? jobs.start() : undefined));
-  const waiting = $derived(jobs.open.length);
+  // Of the libraries switched on only (the owner, 2026-11-02: "Only what's switched on"); a job from before says none.
+  const waiting = $derived(jobs.open.filter((j) => !j.library || prefs.hiddenLibraries.indexOf(j.library) < 0).length);
 
   // Connection line in the sidebar header.
   let status = $state<Status | null>(null);
@@ -868,7 +871,7 @@
   $effect(() => {
     serverConnection.value = connection;
   });
-  const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
+  const MAIN: Page[] = $derived(localMode() ? [HOME, LOCAL] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
   // The sidebar's direct links under Library and Discover (the owner, 2026-10-29): what each one's picker beside back
   // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
   loadSpotify();
@@ -942,8 +945,8 @@
     if (local) untrack(() => (visuals.open = false));
     const p = untrack(() => page);
     if (p === 'settings' || p === HOME.id) return;
-    if (local && !p.startsWith('local-')) location.hash = HOME.href;
-    else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
+    if (local && p !== LOCAL.id) location.hash = HOME.href;
+    else if (!local && p === LOCAL.id) location.hash = LIBRARY.href;
   });
   const ALL = $derived([...MAIN, ...APART]);
   /** The page's search has its globe (lib/ContentControls): everywhere's shown in the page's place. */
@@ -1045,7 +1048,7 @@
         </div>
         <!-- Its line's room kept until the server answers, so the pages under it do not move (the owner, 2026-11-02). -->
         {#if connection}
-          <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
+          <a class="conn" class:down={!connection.ok} href={keepViewed(SETTINGS.id)}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
         {:else}
           <span class="conn" aria-hidden="true"><span class="label">&nbsp;</span></span>
         {/if}
@@ -1058,7 +1061,7 @@
             <!-- A section (Library, Discover): its name opens it, its links go there. -->
             <div class="section" data-section={p.id}>
               <a
-                href={keepViewed(p.href)}
+                href={keepViewed(p.id)}
                 aria-current={page === p.id ? 'page' : undefined}
                 aria-expanded={openSection === p.id}
                 onclick={(e) => sectionTap(e, p.id)}
@@ -1067,13 +1070,13 @@
               {#if openSection === p.id}
                 <div class="subs" role="group" aria-label="{p.label} shows" transition:slide={{ duration: reducedMotion() ? 0 : 150 }}>
                   {#each subs as s (s.id)}
-                    <a class="sub" href={keepViewed(p.href)} aria-current={page === p.id && s.on ? 'true' : undefined} onclick={() => ((peek = false), (opened = null), s.pick())}>{s.label}</a>
+                    <a class="sub" href={keepViewed(p.id)} aria-current={page === p.id && s.on ? 'true' : undefined} onclick={() => ((peek = false), (opened = null), s.pick())}>{s.label}</a>
                   {/each}
                 </div>
               {/if}
             </div>
           {:else}
-            <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
+            <a href={keepViewed(p.id)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
               ><Icon name={p.icon} /><span class="label">{p.label}</span></a
             >
           {/if}
@@ -1082,7 +1085,7 @@
 
       <div class="foot">
         {#each APART as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
+          <a href={keepViewed(p.id)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
         {/each}
         {#if status}<div class="version">Cratarr {status.version}</div>{:else}<div class="version" aria-hidden="true">&nbsp;</div>{/if}
       </div>
@@ -1121,7 +1124,7 @@
       <Downloads />
     {:else if page === 'library'}
       <Library />
-    {:else if page === 'local-albums'}
+    {:else if page === LOCAL.id}
       <LocalAlbums />
     {:else if status && !status.music && me.admin}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
@@ -1160,8 +1163,10 @@
         aria-valuemin={PLAYER_MIN}
         aria-valuemax={area.w - PAGE_MIN}
         tabindex="0"
+        class:locked={prefs.panelLocked}
         onpointerdown={grip}
         onkeydown={gripKey}
+        use:longpress={toggleLock}
       ></div>
     {/if}
     {#if besideDrawn}
@@ -1225,10 +1230,9 @@
          Library's and Discover's picker; or the panel's left part where it handed its glass. -->
     <NavigationControls
       left={handed?.left ?? null}
-      back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.href))) : null}
+      back={navAt > 0 || backHome || globalSearch.all ? () => (globalSearch.all || !backHome ? history.back() : (location.hash = keepViewed(HOME.id))) : null}
       name={panelPage && phone ? panelPage.label : null}
       picker={page === 'library' ? 'library' : page === 'discover' ? 'discover' : null}
-      right={() => rightEl}
       bind:el={leadEl}
     />
   {/snippet}
@@ -1245,13 +1249,13 @@
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. Below
          1024 px each half at the edge its setting says (Display: Navigation controls, Content controls). -->
     {#if !leadBottom || !rightBottom}
-      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row" class:away={rowAway} class:beside={besideDrawn && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
+      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row" {@attach rowRoot()} class:away={rowAway} class:beside={besideDrawn && !handed} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
         {#if !leadBottom}{@render leadPart()}{:else}<span></span>{/if}
         {#if !rightBottom}{@render rightPart()}{/if}
       </div>
     {/if}
     {#if leadBottom || rightBottom}
-      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row at-bottom" class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
+      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row at-bottom" {@attach rowRoot()} class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
         {#if leadBottom && !typing}{@render leadPart()}{:else}<span></span>{/if}
         {#if rightBottom}{@render rightPart()}{/if}
       </div>
@@ -1306,6 +1310,9 @@
   </nav>
 </div>
 
+<!-- One radio sheet, wherever radio starts (decision 0094 #5, lib/radioAsk). -->
+{#if radioSheet.ask}<RadioSheet ask={radioSheet.ask} />{/if}
+
 <style>
   /* Phone first: content full width, navigation in a bar at the bottom. From 1024 px (as seerr does) a fixed
      sidebar takes over and the bar goes away. */
@@ -1355,6 +1362,11 @@
   /* Along the top (Display's Mini player), under the bar there. */
   /* Typing (the keyboard up): out of the way, only the glass being typed in stands over the keyboard (the owner,
      2026-11-01: "only input glass needs that"); the bar along the bottom goes the same way (navHidden). */
+  /* Nothing playing: only its glass takes taps, not the strip it spans. */
+  .mini-dock:has(:global(.idle)) {
+    pointer-events: none;
+  }
+
   .mini-dock.typing {
     opacity: 0;
     pointer-events: none;
@@ -1408,9 +1420,11 @@
     pointer-events: auto;
   }
 
-  /* The pill's side of the row: the extension's 2 px, as lib/NavigationControls' (the owner, 2026-10-26). */
+  /* The pill's side of the row: the extension's 2 px, as lib/NavigationControls' (the owner, 2026-10-26); none above, so
+     its glass's top is the lead's (the lead has none: back's 2 px are inside its glass; the owner, 2026-11-02: "why
+     are these glasses not perfectly aligned vertically?"). */
   .right {
-    padding: 2px;
+    padding: 0 2px 2px;
   }
 
   /* Going: up out under the bar, whole (a row along the bottom: down); nothing in it takes a tap meanwhile. */
@@ -1438,11 +1452,6 @@
       translate 200ms ease;
   }
 
-  /* The panel's action bar has the top: its glass slides just under it (52 px), as its own pills did (the owner,
-     2026-10-25: "the top panel used to slide down when this sticky action bar took its space"). */
-  .page-row.below {
-    transform: translateY(52px);
-  }
 
   /* An index page's glass on a phone stays over its panel's layer as that fades out on closing, instead of showing
      through it (the owner, 2026-10-25: "the top glass and title show a fade in"); under the More sheet while it is open. */
@@ -1522,6 +1531,16 @@
     position: sticky;
     top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
     height: calc(var(--app-h, 100dvh) - var(--top-h, 0px) - env(safe-area-inset-top));
+  }
+
+  /* Beside the page the panel starts under the bar and a mini-player along the top (--top-h, above): neither is over
+     it, so it states that for what it holds (each container its own room, as --mini-h along the foot). The layer
+     (.playlist-layer) fills the screen under them and keeps App's. The owner, 2026-11-02: the action row stuck, and a
+     crate's own search started, a bar's height too low beside the page. */
+  .player-side {
+    --bar-top: 0px;
+    --bar-room: 0px;
+    --mini-top: 0px;
   }
 
   /* The edge between page and player wears the shared handle (app.css .edge-grip). Beside Settings' list it is a plain

@@ -1,9 +1,10 @@
 // A list's filter (decisions 0060 and 0061): its conditions, a crate's unsaved, and its kind's own switches
 // (lib/pageView SWITCHES), remembered per kind of list (a page's id, or a panel kind) in the prefs. The Filter sheet
 // changes them (lib/FilterSheet); the lists read them.
-import { filterList, type Condition, type FilterList } from './api';
+import { filterList, type Condition, type FilterList, type ListBlocked, type ListReason } from './api';
+import { noteChange } from './lastChange.svelte';
 import { complete } from './filterRow';
-import { SWITCHES } from './pageView.svelte';
+import { pageView, SWITCHES } from './pageView.svelte';
 import { prefs, type FilterCondition, type ListFilter } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -12,16 +13,45 @@ const NO_FILTER: ListFilter = { conditions: [], on: [] };
 /** A kind of list's filter as remembered (none yet: empty). */
 export const filterOf = (kind: string): ListFilter => prefs.filters[kind] ?? NO_FILTER;
 
+/** A cause that left a list showing nothing (decision 0095) as the popover's chip, for a list of `kind`: a
+ *  condition's ✕ takes its rows out, a switch's turns it off, the libraries switched off are switched on (for this
+ *  device), the search's ✕ clears its words; the exclusions open where they are taken back (`excluded`; the owner,
+ *  2026-11-02: too much for one ✕). A crate's heart and disc are the crate's (lib/PlaylistView). */
+export function causeChip(kind: string, c: { kind: ListReason['kind']; key?: string; label: string }, excluded: () => void): { label: string; onclear?: () => void; onopen?: () => void } {
+  if (c.kind === 'search') return { label: c.label, onclear: () => (pageView.query = '') };
+  if (c.kind === 'libraries_off') return { label: c.label, onclear: () => (prefs.hiddenLibraries = []) };
+  if (c.kind === 'excluded') return { label: c.label, onopen: excluded };
+  const key = c.key ?? '';
+  if ((SWITCHES[kind] ?? []).some((w) => w.key === key)) return { label: c.label, onclear: () => setSwitch(kind, key, false) };
+  return { label: c.label, onclear: () => setConditions(kind, filterOf(kind).conditions.filter((x) => x.axis !== key)) };
+}
+
+/** What keeps each of a kind of list's things out by its filter (decision 0095: the filter's answer with `explain`),
+ *  as its filter stands now; none on, nothing. */
+export async function filterBlocked(kind: string, list: FilterList, source?: string): Promise<ListBlocked | null> {
+  const conditions = $state.snapshot(conditionsFor(kind)) ?? [];
+  const switches = switchesOn(kind);
+  const without = list.kind === 'library' || list.kind === 'artists' ? hiddenLibraries() : undefined;
+  if (!conditions.length && !switches.length && !without?.length) return null;
+  return (await filterList(list, conditions, source, without, switches, true)).blocked ?? null;
+}
+
 /** One of a kind of list's own switches is on. */
 export const switchOn = (kind: string, key: string) => filterOf(kind).on.includes(key);
 
 export function setSwitch(kind: string, key: string, on: boolean) {
+  noteChange('filter', key);
   const f = filterOf(kind);
   const rest = f.on.filter((k) => k !== key);
   prefs.filters[kind] = { ...f, on: on ? [...rest, key] : rest };
 }
 
 export function setConditions(kind: string, conditions: FilterCondition[]) {
+  // The axis that changed, where one did (decision 0095: the popover points at what was changed last).
+  const was = filterOf(kind).conditions;
+  const of = (list: readonly FilterCondition[], axis: string) => JSON.stringify(list.filter((c) => c.axis === axis));
+  const changed = [...new Set([...was, ...conditions].map((c) => c.axis))].filter((a) => of(was, a) !== of(conditions, a));
+  if (changed.length) noteChange('filter', changed.length === 1 ? changed[0] : undefined);
   prefs.filters[kind] = { ...filterOf(kind), conditions };
 }
 

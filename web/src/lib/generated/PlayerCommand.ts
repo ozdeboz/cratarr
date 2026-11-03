@@ -4,6 +4,7 @@ import type { RadioMode } from "./RadioMode";
 import type { QueueTrack } from "./QueueTrack";
 import type { RadioBy } from "./RadioBy";
 import type { Repeat } from "./Repeat";
+import type { Within } from "./Within";
 
 /**
  * What can be asked of a player.
@@ -52,6 +53,12 @@ name?: string | null,
  */
 radio?: boolean, } | { "command": "add", tracks: Array<QueueTrack>, at?: number, after?: string, how?: string | null, 
 /**
+ * Played at once (the owner, 2026-11-02: one track plays now): the first added plays now, the queue kept. The
+ * one it cuts counts as played (it ended, not skipped) and the queue goes on after the added ones; Radio and
+ * Autoplay go on as they were (no new seed). Nothing playing: the first added plays.
+ */
+now?: boolean, 
+/**
  * A playlist, by name.
  */
 playlist?: string | null, 
@@ -85,9 +92,10 @@ radio?: boolean, } | { "command": "move", from?: number, to?: number, entry?: st
  */
 shuffled?: boolean, } | { "command": "shuffle", on: boolean, } | { "command": "clear" } | { "command": "restore", tracks: Array<QueueTrack>, } | { "command": "repeat", mode: Repeat, } | { "command": "radio", on: boolean, by?: RadioBy, count?: number, mode?: RadioMode, seed?: Array<string>, 
 /**
- * A crate to play inside (its id); "" plays outside any again; left out: as it was.
+ * What to play inside (decision 0094: a crate, a playlist, a record, an artist or tracks); null plays beyond
+ * it again; left out: as it was.
  */
-within?: string, } | { "command": "autoplay", mode: AutoplayMode, albums?: boolean, restart?: boolean, seed?: Array<string>, within?: string, } | { "command": "skip_favourites", on: boolean, } | { "command": "sleep", at_ms: number | null, end_of_track?: boolean, } | { "command": "remove", index?: number, entry?: string, } | { "command": "jump", index?: number, entry?: string, } | { "command": "pause" } | { "command": "resume" } | { "command": "toggle" } | { "command": "stop", moved_to?: string, } | { "command": "next" } | { "command": "previous" } | { "command": "wind", dir: string, phase: string, } | { "command": "direction", dir: string, } | { "command": "level", on?: boolean, unknown?: string, } | { "command": "seek", position_ms?: number, percent?: number | null, by_ms?: number | null, 
+within?: Within | null, } | { "command": "autoplay", mode: AutoplayMode, albums?: boolean, restart?: boolean, seed?: Array<string>, within?: Within | null, } | { "command": "skip_favourites", on: boolean, } | { "command": "sleep", at_ms: number | null, end_of_track?: boolean, } | { "command": "remove", index?: number, entry?: string, } | { "command": "jump", index?: number, entry?: string, } | { "command": "pause" } | { "command": "resume" } | { "command": "toggle" } | { "command": "stop", moved_to?: string, } | { "command": "next" } | { "command": "previous" } | { "command": "wind", dir: string, phase: string, } | { "command": "direction", dir: string, } | { "command": "level", on?: boolean, unknown?: string, } | { "command": "seek", position_ms?: number, percent?: number | null, by_ms?: number | null, 
 /**
  * Wound there (decision 0074) whatever the player's own setting, where it plays and it is more than a moment
  * away (0.9.12: a page driving it with its seek winding on).

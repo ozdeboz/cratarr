@@ -20,6 +20,7 @@
   import type { FilterCondition } from './prefs.svelte';
   import Switch from './Switch.svelte';
   import DensityRange from './DensityRange.svelte';
+  import { trimScale } from './rangeScale';
   import LikeCurve from './LikeCurve.svelte';
   import { likeCurve, type Condition } from './api';
   import { curveKey, type CurveAsk } from './likeCurveAsk';
@@ -179,7 +180,7 @@
     if (q.length < 2) return void (seedHits = []);
     let stale = false;
     const t = setTimeout(() => {
-      search(q, ['artist', 'album', 'track'], 4).then(
+      search(q, ['artist', 'album', 'track'], 4, 0, hiddenLibraries()).then(
         (r) => {
           if (stale) return;
           const hits: { id: string; named: Named }[] = [];
@@ -291,14 +292,16 @@
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
         {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}
-          <!-- The profile's bar as the slider: the density over the list's span, the chosen part lit. -->
+          <!-- The profile's bar as the slider: the density over where the tracks are (lib/rangeScale: thin tails cut off,
+               an end handle open), the chosen part lit. -->
+          {@const sc = trimScale(axis.bins, axis.min, axis.max)}
           <DensityRange
-            bins={axis.bins}
-            min={Math.floor(axis.min)}
-            max={Math.ceil(axis.max)}
+            bins={sc.bins}
+            min={Math.floor(sc.min)}
+            max={Math.ceil(sc.max)}
             value={{ min: r.min, max: r.max }}
             {label}
-            ends={ENDS[axis.key] ?? [`${Math.floor(axis.min)}`, `${Math.ceil(axis.max)}${unit(axis.key)}`]}
+            ends={ENDS[axis.key] ?? [`${Math.floor(sc.min)}`, `${Math.ceil(sc.max)}${unit(axis.key)}`]}
             onchange={(v) => change({ value: { kind: 'range', ...v } })}
           />
         {:else if axis.key === 'bpm' && bpms}

@@ -51,7 +51,7 @@ pub struct KeepPreview {
     pub files: usize,
     /// Why Keep cannot go ahead as it is (`needs_year`: the page asks for the year and tries again).
     pub refused: Option<KeepRefused>,
-    /// Hi-res files converted to CD format first (Keep then waits in the queue).
+    /// Lossless files above the target's quality limit, converted first (Keep then waits in the queue).
     pub convert: usize,
     /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
     pub acquisition: bool,
@@ -96,10 +96,10 @@ struct Located {
     root: PathBuf,
 }
 
-/// The files of an album (`rels`, inside `dir`) that are lossless beyond CD format: converted on the way in (decision
-/// 0013). Reads only their headers. Blocking.
-fn to_convert(root: &std::path::Path, dir: &str, rels: &[String]) -> Vec<String> {
-    rels.iter().filter(|rel| crate::convert::needs_conversion(&root.join(dir).join(rel)).ok().flatten().is_some()).cloned().collect()
+/// The files of an album (`rels`, inside `dir`) that are lossless beyond `limit`: converted on the way in (decisions
+/// 0013, 0096's amendment). Reads only their headers. Blocking.
+fn to_convert(root: &std::path::Path, dir: &str, rels: &[String], limit: crate::convert::Limit) -> Vec<String> {
+    rels.iter().filter(|rel| crate::convert::needs_conversion(&root.join(dir).join(rel), limit).ok().flatten().is_some()).cloned().collect()
 }
 
 /// Every file under `dir` (recursively), relative to it, leaving out hidden files and folders.
@@ -239,10 +239,10 @@ fn library_in(roles: &settings::Roles, placement: &crate::placement::Placement, 
         .map(|l| l.id.clone())
 }
 
-/// The format of the used library in a catalogue folder: its own (a Music library set to "as is" keeps hi-res files as
-/// they are); CD format, Music's by its use, while no library is found there.
-fn format_in(roles: &settings::Roles, placement: &crate::placement::Placement, folder: &std::path::Path) -> settings::Format {
-    library_in(roles, placement, folder).map_or(settings::Format::Cd, |l| roles.format_of(&l))
+/// The quality limit of the used library in a catalogue folder: its own (a Music library set to none keeps hi-res
+/// files as they are); CD format, Music's by its use, while no library is found there.
+fn quality_in(roles: &settings::Roles, placement: &crate::placement::Placement, folder: &std::path::Path) -> settings::Quality {
+    library_in(roles, placement, folder).map_or(settings::Quality::Cd, |l| roles.quality_of(&l))
 }
 
 /// The catalogue's album directory behind a server path (the server's paths and Cratarr's differ in front).
@@ -822,7 +822,7 @@ impl IncomingService {
     pub async fn keep_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate(source_id, album_id).await?;
         let (_, plan) = self.plan_keep(&at, year).await?;
-        let convert = if self.music_format(source_id) == settings::Format::Cd { self.to_convert(&at).await.len() } else { 0 };
+        let convert = self.to_convert(&at, self.music_quality(source_id)).await.len();
         let acquisition = self.acquisition().is_some();
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
@@ -830,8 +830,9 @@ impl IncomingService {
         })
     }
 
-    /// The album's music files that need converting first.
-    async fn to_convert(&self, at: &Located) -> Vec<String> {
+    /// The album's music files that need converting first, under the target's quality limit (none: no file).
+    async fn to_convert(&self, at: &Located, quality: settings::Quality) -> Vec<String> {
+        let Some(limit) = quality.limit() else { return Vec::new() };
         let (c, folder, dir, root) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone());
         tokio::task::spawn_blocking(move || {
             let prefix = format!("{dir}/");
@@ -841,7 +842,7 @@ impl IncomingService {
                 .into_iter()
                 .map(|(rel, _)| rel.strip_prefix(&prefix).unwrap_or(&rel).to_string())
                 .collect();
-            to_convert(&root, &dir, &rels)
+            to_convert(&root, &dir, &rels, limit)
         })
         .await
         .unwrap_or_default()
@@ -850,43 +851,43 @@ impl IncomingService {
     /// Keep (decision 0013): move a new album from Incoming into Music, named per the library's template. Write-ahead
     /// like Delete; the files and catalogue rows move (track ids kept); Lidarr stops fetching it, and the moved
     /// files' new server items get the old ones' play data (handlers). Undo puts it all back.
-    /// Hi-res files are converted first, in the queue, where Music's format is CD format: the plan is checked now, so a
+    /// Lossless files above Music's quality limit are converted first, in the queue: the plan is checked now, so a
     /// refusal shows at once.
     pub async fn keep(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
-        self.move_located(source_id, at, 0, self.music_format(source_id), year).await
+        self.move_located(source_id, at, 0, self.music_quality(source_id), year).await
     }
 
-    /// The format of the Music library on a server (Keep's target), as a move into it has it (`target_of`).
-    fn music_format(&self, source_id: &str) -> settings::Format {
+    /// The quality limit of the Music library on a server (Keep's target), as a move into it has it (`target_of`).
+    fn music_quality(&self, source_id: &str) -> settings::Quality {
         let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
         match (live.iter().find(|a| a.cfg.id == source_id), folders.first()) {
-            (Some(a), Some(music)) => format_in(&a.cfg.libraries, &a.placement, music),
-            _ => settings::Format::Cd,
+            (Some(a), Some(music)) => quality_in(&a.cfg.libraries, &a.placement, music),
+            _ => settings::Quality::Cd,
         }
     }
 
     /// Move (decision 0034): an album of any used library into another of its server; Keep is the move into Music.
     /// The target's policies apply on the way in: its naming (Music: the template; another library: the album's
-    /// folder as it is) and its format (CD format: hi-res converted first, in the queue). `album` is the listed album
-    /// (Music's or another library's).
+    /// folder as it is) and its quality limit (lossless files above it converted first, in the queue). `album` is the
+    /// listed album (Music's or another library's).
     pub async fn move_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(&album.id)?;
         let at = self.locate_listed(source_id, album).await?;
-        let (target, format) = self.target_of(source_id, to)?;
+        let (target, quality) = self.target_of(source_id, to)?;
         if target == at.dir.folder {
             return Err(ToggleError::Refused("the album is in that library already".into()));
         }
-        self.move_located(source_id, at, target, format, year).await
+        self.move_located(source_id, at, target, quality, year).await
     }
 
     /// What a move would do (decision 0034), for the page to show before asking. Changes nothing.
     pub async fn move_preview(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate_listed(source_id, album).await?;
-        let (target, format) = self.target_of(source_id, to)?;
+        let (target, quality) = self.target_of(source_id, to)?;
         let (_, plan) = self.plan_move(&at, target, year).await?;
-        let convert = if format == settings::Format::Cd { self.to_convert(&at).await.len() } else { 0 };
+        let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some() && at.dir.folder != 0;
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
@@ -894,7 +895,7 @@ impl IncomingService {
         })
     }
 
-    async fn move_located(&self, source_id: &str, at: Located, target: i64, format: settings::Format, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+    async fn move_located(&self, source_id: &str, at: Located, target: i64, quality: settings::Quality, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         let (root, plan) = self.plan_move(&at, target, year).await?;
         let plan = plan.map_err(|r| match r {
             KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
@@ -903,29 +904,29 @@ impl IncomingService {
         if !self.can_write(&at.root).await || !self.can_write(&root).await {
             return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
-        let convert = if format == settings::Format::Cd { self.to_convert(&at).await } else { Vec::new() };
-        if !convert.is_empty() {
-            return Ok(self.enqueue(source_id, at, queue::Action::Keep, year, convert, plan.folder, target));
+        let convert = self.to_convert(&at, quality).await;
+        if let (false, Some(limit)) = (convert.is_empty(), quality.limit()) {
+            return Ok(self.enqueue(source_id, at, queue::Action::Keep, year, convert, limit, plan.folder, target));
         }
         self.keep_now(&at, target, year, Vec::new(), None).await
     }
 
-    /// A library of a server as Cratarr's catalogue folder (0: the Music folder), and its format policy.
-    fn target_of(&self, source_id: &str, library: &str) -> Result<(i64, settings::Format), ToggleError> {
+    /// A library of a server as Cratarr's catalogue folder (0: the Music folder), and its quality limit.
+    fn target_of(&self, source_id: &str, library: &str) -> Result<(i64, settings::Quality), ToggleError> {
         let live = self.lib.live();
         let a = live.iter().find(|a| a.cfg.id == source_id).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
         let roles = &a.cfg.libraries;
         if !roles.music.iter().chain(&roles.incoming).any(|l| l == library) {
             return Err(ToggleError::Refused("that library is not used".into()));
         }
-        let format = roles.format_of(library);
+        let quality = roles.quality_of(library);
         if roles.music.iter().any(|l| l == library) {
-            return Ok((0, format));
+            return Ok((0, quality));
         }
         let placed = a.placement.libraries.iter().find(|l| l.id == library).and_then(|l| l.folders.first()).ok_or_else(|| ToggleError::Refused("Cratarr cannot see that library's files".into()))?;
         let folders = self.lib.catalogue().folders();
         let i = folders.iter().position(|f| f == &PathBuf::from(placed)).ok_or_else(|| ToggleError::Refused("that library's folder is not in use yet".into()))?;
-        Ok((i as i64, format))
+        Ok((i as i64, quality))
     }
 
     /// Work out a move's names, or why not: into Music by the template (Keep's plan), into another library as the album's
@@ -948,9 +949,35 @@ impl IncomingService {
         Ok((root, plan))
     }
 
-    /// Keep, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
-    /// the event's id as soon as it is intended.
+    /// Keep, its files ready, told on Health's list of changes to files as it goes (decision 0092's one list; the owner,
+    /// 2026-11-02: a move "was hard to see"): moving, then adding until the server has read the album, then done.
     async fn keep_now(
+        &self,
+        at: &Located,
+        target: i64,
+        year: Option<&str>,
+        converted: Vec<crate::journal::Converted>,
+        job: Option<u64>,
+    ) -> Result<KeepResult, ToggleError> {
+        let (what, title) = if target == 0 { ("keep", format!("Kept into Music: {}", at.album.title)) } else { ("move", format!("Moved: {}", at.album.title)) };
+        let run = super::file_runs::track(what, title);
+        let done = self.keep_moving(at, target, year, converted, job).await;
+        match &done {
+            Ok(k) => {
+                let (lib, journal, source, album) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone());
+                run.moved(k.undo.clone(), move || {
+                    let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
+                    async move { matches!(fate_of(&lib, &journal, &source, &album).await, Some(AlbumFate::Moved(_))) }
+                });
+            }
+            Err(e) => run.failed(&at.album.id, e.to_string()),
+        }
+        done
+    }
+
+    /// Keep's moving (`converted`: what conversion did just before). `job`: the queued job doing it, told the event's
+    /// id as soon as it is intended.
+    async fn keep_moving(
         &self,
         at: &Located,
         target: i64,
@@ -1060,24 +1087,7 @@ impl IncomingService {
 
     /// What became of a server's album after Keep, Replace or Delete; `None` when none of them happened to it.
     pub async fn album_fate(&self, source_id: &str, album_id: &str) -> Option<AlbumFate> {
-        let event = self.journal.album_fate(source_id, album_id).ok()??;
-        let (moves, title) = match &event {
-            Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
-            Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
-        };
-        let s = self.lib.connected_sources().into_iter().find(|(id, _)| id == source_id).map(|(_, s)| s)?;
-        // Its tracks' new items (once a sync pass linked them), and the album the server put them in.
-        let Some(folder) = moves.first().map(|m| m.to.0) else { return Some(AlbumFate::NotYet(title.clone())) };
-        let rels: Vec<String> = moves.iter().filter(|m| m.track.is_some()).map(|m| m.to.1.clone()).collect();
-        let items = self.lib.catalogue().track_ids(source_id, folder, &rels).unwrap_or_default();
-        for item in items.into_iter().flatten().take(3) {
-            if let Ok(t) = s.track(&item).await
-                && let Some(album) = t.album_id
-            {
-                return Some(AlbumFate::Moved(album));
-            }
-        }
-        Some(AlbumFate::NotYet(title.clone()))
+        fate_of(&self.lib, &self.journal, source_id, album_id).await
     }
 
     /// Refused while the album waits in the conversion queue (Cancel it first).
@@ -1491,16 +1501,62 @@ mod tests {
     }
 
     #[test]
-    fn keep_follows_the_music_librarys_own_format() {
+    fn keep_follows_the_music_librarys_own_quality_limit() {
         let mut roles = settings::Roles { music: vec!["m".into()], ..settings::Roles::default() };
         let placement = crate::placement::Placement {
             roots: Vec::new(),
             libraries: vec![crate::placement::PlacedLibrary { id: "m".into(), name: "Music".into(), folders: vec!["/music".into()], paths: Vec::new(), read_only: false }],
         };
         let music = std::path::Path::new("/music");
-        assert_eq!(format_in(&roles, &placement, music), settings::Format::Cd, "Music's by its use");
-        roles.policies.insert("m".into(), settings::LibraryPolicy { format: Some(settings::Format::AsIs), ..Default::default() });
-        assert_eq!(format_in(&roles, &placement, music), settings::Format::AsIs, "set to as is: hi-res files stay as they are");
-        assert_eq!(format_in(&roles, &placement, std::path::Path::new("/elsewhere")), settings::Format::Cd);
+        assert_eq!(quality_in(&roles, &placement, music), settings::Quality::Cd, "Music's by its use");
+        roles.policies.insert("m".into(), settings::LibraryPolicy { quality: Some(settings::Quality::None), ..Default::default() });
+        assert_eq!(quality_in(&roles, &placement, music), settings::Quality::None, "set to none: hi-res files stay as they are");
+        roles.policies.insert("m".into(), settings::LibraryPolicy { quality: Some(settings::Quality::Hr96), ..Default::default() });
+        assert_eq!(quality_in(&roles, &placement, music), settings::Quality::Hr96);
+        assert_eq!(quality_in(&roles, &placement, std::path::Path::new("/elsewhere")), settings::Quality::Cd);
     }
+
+    #[test]
+    fn what_a_move_converts_follows_the_targets_limit() {
+        use crate::convert::tests::{sine, write_wav24};
+        let root = std::env::temp_dir().join(format!("cratarr-to-convert-{}", std::process::id()));
+        let album = root.join("A");
+        std::fs::create_dir_all(&album).unwrap();
+        write_wav24(&album.join("01 Hi.wav"), 192_000, &sine(192_000, 440.0, 0.3, 0.05, 2));
+        write_wav24(&album.join("02 Mid.wav"), 96_000, &sine(96_000, 440.0, 0.3, 0.05, 2));
+        write_wav24(&album.join("03 Low.wav"), 44_100, &sine(44_100, 440.0, 0.3, 0.05, 2));
+        // Lossy: never converted, whatever the limit.
+        let mut mp3 = vec![0xFF, 0xFB, 0x94, 0x64];
+        mp3.resize(384 * 4, 0);
+        std::fs::write(album.join("04 Lossy.mp3"), mp3).unwrap();
+        let rels: Vec<String> = ["01 Hi.wav", "02 Mid.wav", "03 Low.wav", "04 Lossy.mp3"].map(String::from).into();
+        let count = |q: settings::Quality| q.limit().map_or(0, |l| to_convert(&root, "A", &rels, l).len());
+        assert_eq!(count(settings::Quality::Cd), 3, "24 bit at 44.1 kHz is above CD too");
+        assert_eq!(count(settings::Quality::Hr48), 2);
+        assert_eq!(count(settings::Quality::Hr96), 1);
+        assert_eq!(count(settings::Quality::None), 0);
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+/// What became of an album that left a library (`IncomingService::album_fate`).
+async fn fate_of(lib: &Library, journal: &Journal, source_id: &str, album_id: &str) -> Option<AlbumFate> {
+    let event = journal.album_fate(source_id, album_id).ok()??;
+    let (moves, title) = match &event {
+        Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
+        Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
+    };
+    let s = lib.connected_sources().into_iter().find(|(id, _)| id == source_id).map(|(_, s)| s)?;
+    // Its tracks' new items (once a sync pass linked them), and the album the server put them in.
+    let Some(folder) = moves.first().map(|m| m.to.0) else { return Some(AlbumFate::NotYet(title.clone())) };
+    let rels: Vec<String> = moves.iter().filter(|m| m.track.is_some()).map(|m| m.to.1.clone()).collect();
+    let items = lib.catalogue().track_ids(source_id, folder, &rels).unwrap_or_default();
+    for item in items.into_iter().flatten().take(3) {
+        if let Ok(t) = s.track(&item).await
+            && let Some(album) = t.album_id
+        {
+            return Some(AlbumFate::Moved(album));
+        }
+    }
+    Some(AlbumFate::NotYet(title.clone()))
 }

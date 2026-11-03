@@ -41,7 +41,7 @@
   /** How many of each kind a phrase's readings offer, as the crate search asks. */
   const EACH = 3;
   const ask = (phrase: string): Promise<Found> =>
-    search(phrase, [...TERM_KINDS], EACH).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
+    search(phrase, [...TERM_KINDS], EACH, 0, hiddenLibraries()).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
   /** Its count and its first records' covers (the server's: the first six records, a crate's own order coming a record
    *  at a time; a first page of 24 tracks was two albums, fewer than the strip's four, and the card showed no covers,
    *  the owner 2026-10-31). One track: the card lists none (the server asks one at least). */

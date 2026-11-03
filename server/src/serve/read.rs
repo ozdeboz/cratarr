@@ -817,6 +817,19 @@ impl Library {
         Ok(albums)
     }
 
+    /// Every album's tagged totals (0.14, Health's missing tracks without a reference): by album id, the track count each
+    /// of its songs' tags says, where one says one.
+    pub fn track_totals(&self) -> Result<HashMap<String, Vec<u32>>> {
+        let db = self.db();
+        let mut out: HashMap<String, Vec<u32>> = HashMap::new();
+        let mut st = db.prepare("SELECT album_id, track_total FROM songs WHERE track_total > 0")?;
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            let (album, total) = row?;
+            out.entry(album).or_default().push(total as u32);
+        }
+        Ok(out)
+    }
+
     /// An album's place: its catalogue folder and folder in it, its MusicBrainz release, artist and name (0.9.5: its
     /// cover changed by hand).
     #[allow(clippy::type_complexity)]
@@ -889,6 +902,14 @@ impl Library {
         let db = self.db();
         let mut st = db.prepare("SELECT id, base_id FROM albums")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Each album's catalogue folder, by its id (the libraries switched on, the owner 2026-11-02).
+    pub fn album_folders(&self) -> Result<HashMap<String, i64>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, folder FROM albums")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

@@ -4,6 +4,7 @@
   // its Undo or Redo); errors stay until tapped away, replaced, or the page changes. Touching or hovering it holds the timer; a
   // swipe sideways or down dismisses it.
   import { toast } from './toast.svelte';
+  import { pageIn } from './addresses';
 
   const t = $derived(toast.current);
   let held = $state(false);
@@ -18,7 +19,7 @@
   // The page changing takes it away; the panel's view coming or going (the address's `?…`) does not: a deleted playlist's
   // panel closes, and its Undo must stay.
   $effect(() => {
-    const page = () => location.hash.split('?')[0];
+    const page = () => pageIn();
     let was = page();
     const away = () => {
       if (page() !== was) toast.dismiss();

@@ -12,6 +12,10 @@
 //!
 //! Its writers so far: types, years and Classical into the files (`file_facts`). Health's fixes, Renumber, the tempo,
 //! the covers, the length fixes and single-track intake move here in that order (0092).
+//!
+//! The album actions (Keep, a move between libraries, Replace, Delete) are on the one list too (the owner, 2026-11-02:
+//! a move "was hard to see … Health activity had no listing of this"): a Keep, a move and a Replace told as they go
+//! (`Tracked`: moving, then adding while the library reads it), then from the journal, each with its own Undo (`m…`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -71,6 +75,9 @@ pub struct PlanView {
     pub kind: String,
     pub title: String,
     pub records: Vec<RecordView>,
+    /// Still being made (a match looked for): the sheet asks again.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub making: bool,
 }
 
 /// A record on the sheet (and in a run as written: `written` of `of` files).
@@ -100,6 +107,24 @@ pub struct FieldView {
     pub before: Vec<String>,
     pub after: Vec<String>,
     pub from: String,
+    /// How sure what is proposed is (certain ones come ticked, likely ones not: decision 0092, the owner's choice 2);
+    /// none where the sheet ticks per record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certainty: Option<&'static str>,
+    /// What may be chosen instead (a genre's words found).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<FieldOption>,
+}
+
+/// One value a field may be given instead, where it was found and how sure.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FieldOption {
+    pub value: String,
+    /// genre or style, as the sources have it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    pub from: String,
+    pub certainty: &'static str,
 }
 
 /// A run's status, the same for every writer (0092).
@@ -108,7 +133,7 @@ pub struct Status {
     pub id: String,
     pub what: String,
     pub title: String,
-    /// waiting, writing or done.
+    /// waiting, writing, adding (an album action's files moved, its library reading it) or done.
     pub state: &'static str,
     /// Records done of all.
     pub done: usize,
@@ -139,6 +164,10 @@ pub struct FilesState {
 
 /// What a run's id and undo token start with (a kept run: its journal id).
 pub const RUN: char = 'r';
+/// An album action's (its journal event's id).
+pub const MOVE: char = 'm';
+/// How long a Keep or a move waits for its library to read the record before it says done anyway.
+const ADDING_MOST: std::time::Duration = std::time::Duration::from_secs(600);
 /// A run not kept yet (waiting or writing).
 const LIVE: char = 'l';
 /// Albums apart, so a run never takes the disk from playback.
@@ -192,13 +221,17 @@ pub fn busy(what: &str) -> bool {
 }
 
 /// A field's values as compared: each item split where several are kept in one (ID3v2's NUL, a "; "), trimmed, a
-/// byte-order mark left off, in lower case, in order.
+/// byte-order mark left off, in lower case, in order; a number as its number ("03" is 3, "3/12" is 3).
 pub fn flat(values: &[String]) -> Vec<String> {
     values
         .iter()
         .flat_map(|v| v.split(['\0', ';']))
         .map(|v| v.trim().trim_start_matches('\u{feff}').to_lowercase())
         .filter(|v| !v.is_empty())
+        .map(|v| match v.split('/').next().and_then(|n| n.trim().parse::<u32>().ok()) {
+            Some(n) if v.chars().all(|c| c.is_ascii_digit() || c == '/' || c == ' ') => n.to_string(),
+            _ => v,
+        })
         .collect()
 }
 
@@ -226,6 +259,18 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
         "releasetype" => ItemKey::MusicBrainzReleaseType,
         "date" => ItemKey::RecordingDate,
         "genre" => ItemKey::Genre,
+        "albumartist" => ItemKey::AlbumArtist,
+        "musicbrainz_albumid" => ItemKey::MusicBrainzReleaseId,
+        "musicbrainz_releasegroupid" => ItemKey::MusicBrainzReleaseGroupId,
+        "musicbrainz_albumartistid" => ItemKey::MusicBrainzReleaseArtistId,
+        "musicbrainz_artistid" => ItemKey::MusicBrainzArtistId,
+        "musicbrainz_trackid" => ItemKey::MusicBrainzRecordingId,
+        // A BPM as its tag type keeps it (ID3v2's whole-number TBPM): `write`.
+        "bpm" => ItemKey::Bpm,
+        "tracknumber" => ItemKey::TrackNumber,
+        "totaltracks" => ItemKey::TrackTotal,
+        "discnumber" => ItemKey::DiscNumber,
+        "totaldiscs" => ItemKey::DiscTotal,
         _ => return None,
     })
 }
@@ -233,7 +278,7 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
 /// Writes `fields` into a file (each field's values as items; none: the field cleared), read back before it takes
 /// the file's place.
 fn write(path: &Path, fields: &[(String, Vec<String>)]) -> Result<()> {
-    use lofty::tag::{ItemValue, TagItem};
+    use lofty::tag::{ItemKey, ItemValue, TagItem};
     let keys: Vec<(lofty::tag::ItemKey, &Vec<String>)> =
         fields.iter().map(|(n, v)| Ok((key_of(n).with_context(|| format!("no field {n}"))?, v))).collect::<Result<_>>()?;
     let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
@@ -242,8 +287,15 @@ fn write(path: &Path, fields: &[(String, Vec<String>)]) -> Result<()> {
         |tag| {
             for (k, values) in &keys {
                 tag.remove_key(*k);
+                let mut k = *k;
+                if k == ItemKey::Bpm {
+                    tag.remove_key(ItemKey::IntegerBpm);
+                    if tag.tag_type() == lofty::tag::TagType::Id3v2 {
+                        k = ItemKey::IntegerBpm;
+                    }
+                }
                 for v in *values {
-                    tag.push(TagItem::new(*k, ItemValue::Text(v.clone())));
+                    tag.push(TagItem::new(k, ItemValue::Text(v.clone())));
                 }
             }
         },
@@ -263,6 +315,80 @@ fn apply_one(path: &Path, from: &[(String, Vec<String>)], to: &[(String, Vec<Str
         bail!("{moved}");
     }
     write(path, to)
+}
+
+/// A file's print: its size and its first and last MiB (a whole file's change touches its header or its end), to tell
+/// whether it is still as planned or as written.
+pub fn print(path: &Path) -> Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const PART: u64 = 1 << 20;
+    let mut f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    let mut buf = Vec::new();
+    (&mut f).take(PART).read_to_end(&mut buf)?;
+    if len > PART {
+        f.seek(SeekFrom::Start(len.saturating_sub(PART).max(PART)))?;
+        f.read_to_end(&mut buf)?;
+    }
+    let text: String = buf.iter().map(|b| char::from(*b)).collect();
+    Ok(format!("{len}:{:016x}", crate::journal::fingerprint(&text)))
+}
+
+/// A file written whole (a length's fix): set aside where it is no longer as planned; else its original copied into
+/// `keep` first, the change made, the original back where it fails. Its copy and its print as written kept.
+fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize) -> Result<()> {
+    let Some(w) = f.whole.as_mut() else { bail!("not a whole file's change") };
+    // A cover: its folder's picture and its tracks', from what `covers` kept.
+    if w.op == "cover" {
+        return super::covers::write_kept(w.kept.as_ref().context("the picture is no longer kept")?);
+    }
+    if print(&f.path)? != w.planned {
+        bail!("changed since it was planned");
+    }
+    if w.op != "reread" {
+        std::fs::create_dir_all(keep)?;
+        let kept = keep.join(format!("{n}-{}", f.path.file_name().and_then(|x| x.to_str()).unwrap_or("track")));
+        std::fs::copy(&f.path, &kept).with_context(|| format!("keeping {} first", f.path.display()))?;
+        if let Err(e) = super::length_fixes::write(&w.op, &f.path, w.ms) {
+            let _ = std::fs::copy(&kept, &f.path);
+            let _ = std::fs::remove_file(&kept);
+            return Err(e);
+        }
+        w.kept = Some(kept);
+    }
+    w.wrote = Some(print(&f.path)?);
+    Ok(())
+}
+
+/// A file written whole put back: as planned already, nothing (false); as written, its copy back (true); else set aside.
+fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bool> {
+    if w.op == "cover" {
+        super::covers::undo_kept(w.kept.as_ref().context("its old cover is no longer kept")?)?;
+        return Ok(true);
+    }
+    // A track added: to the trash, the one it replaced back.
+    if w.op == "track" {
+        super::track_fetch::undo_at(w.kept.as_ref().context("that can no longer be undone")?)?;
+        return Ok(true);
+    }
+    let now = print(path)?;
+    if now == w.planned || w.kept.is_none() {
+        return Ok(false);
+    }
+    if w.wrote.as_deref() != Some(now.as_str()) {
+        bail!("changed since it was written");
+    }
+    let kept = w.kept.as_ref().context("its original is no longer kept")?;
+    std::fs::copy(kept, path).with_context(|| format!("{} not given back", path.display()))?;
+    Ok(true)
+}
+
+/// Where a run keeps the originals of files it writes whole: beside the journal, under Cratarr's data folder.
+fn kept_dir(run: &str) -> Result<PathBuf> {
+    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let data = served.data_dir.clone().context("Cratarr's data folder is needed")?;
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis();
+    Ok(Path::new(&data).join("run-files").join(format!("{at}-{run}")))
 }
 
 /// One file put back: already as it was before (an Undo cut short, a person's own undo): nothing to write, undone all
@@ -305,7 +431,7 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
                         let after = f.after.iter().find(|(n, _)| n == name)?.1.clone();
                         let before = f.before.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_default();
                         let from = f.from.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_default();
-                        Some(FieldView { field: name.clone(), track: f.track.clone(), before, after, from })
+                        Some(FieldView { field: name.clone(), track: f.track.clone(), before, after, from, certainty: None, options: Vec::new() })
                     })
                     .collect();
                 // The same change in every file of the record: said once.
@@ -327,7 +453,7 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
             })
         })
         .collect();
-    PlanView { kind: kind.to_string(), title: title.to_string(), records }
+    PlanView { kind: kind.to_string(), title: title.to_string(), records, making: false }
 }
 
 /// Starts a run of a proposal's ticked records (an administrator's yes, given by the route): one album at a time under
@@ -363,12 +489,18 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         for (album, files) in albums {
             let of = files.len();
             set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(id.clone()), at: None });
+            let keep = kept_dir(&id);
             let done = tokio::task::spawn_blocking(move || {
                 let mut ok = Vec::new();
                 let mut failed = Vec::new();
                 let mut seen = Vec::new();
-                for f in files {
-                    match apply_one(&f.path, &f.before, &f.after, "changed since it was planned") {
+                for (n, mut f) in files.into_iter().enumerate() {
+                    let wrote = match (&f.whole, &keep) {
+                        (None, _) => apply_one(&f.path, &f.before, &f.after, "changed since it was planned"),
+                        (Some(_), Ok(keep)) => apply_whole(&mut f, keep, n),
+                        (Some(_), Err(e)) => Err(anyhow::anyhow!("{e:#}")),
+                    };
+                    match wrote {
                         Ok(()) => ok.push(f),
                         Err(e) => {
                             failed.push((f.path.file_name().and_then(|n| n.to_str()).map(str::to_string), super::plain(format!("{e:#}"))));
@@ -435,6 +567,27 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
     first
 }
 
+/// A change a writer makes itself (a track added to its record: its fetch's own steps), made under the one lock and
+/// kept as a run done (decision 0092's writers' map, 0.14): in Changes to files, its Undo the run's. `work` gives the
+/// proposal of what it wrote (its files as written). Returns the run's status, its Undo the kept run's.
+pub async fn made(app: &Arc<super::App>, work: impl FnOnce() -> Result<Proposal> + Send + 'static) -> Result<Status> {
+    let _turn = LOCK.lock().await;
+    let p = tokio::task::spawn_blocking(work).await??;
+    let at = super::moment::now_secs();
+    let account = crate::serve::who::current().map(|w| w.user);
+    let keep = i64::from(app.incoming.trash_days()) * 86_400;
+    let run = FileRun { what: p.kind.clone(), title: p.title.clone(), records: p.records.clone(), files: p.files.clone(), failed: p.failed.clone() };
+    let j = app.journal.record_run(at, &run, account.as_deref(), keep)?;
+    let id = format!("{RUN}{j}");
+    for (album, files) in albums_of(&p.files) {
+        set_state(&album, FilesState { state: "written".into(), done: Some(files.len()), of: Some(files.len()), run: Some(id.clone()), at: Some(at) });
+    }
+    let status = kept_status(j, at, &run, false);
+    tracing::info!(target: "library", what = %status.what, albums = status.of, "files changed");
+    let _ = channel().send(status.clone());
+    Ok(status)
+}
+
 /// A kept run's status, from the journal.
 fn kept_status(id: i64, at: i64, run: &FileRun, undone: bool) -> Status {
     let albums = albums_of(&run.files).len();
@@ -453,12 +606,95 @@ fn kept_status(id: i64, at: i64, run: &FileRun, undone: bool) -> Status {
     }
 }
 
-/// Every run since `since`: those waiting or writing, then those kept, newest first.
+/// Every run since `since`: those going, then those kept and the album actions, newest first.
 pub fn runs(app: &super::App, since: i64) -> Result<Vec<Status>> {
     let mut out: Vec<Status> = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.values().cloned().collect()).unwrap_or_default();
     out.retain(|s| s.state != "done");
-    out.extend(app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)));
+    let mut kept: Vec<Status> = app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
+    kept.extend(app.journal.album_events_since(since)?.iter().filter(|(id, ..)| !out.iter().any(|s| s.id == format!("{MOVE}{id}"))).map(|(id, at, e, undone)| moved_status(*id, *at, e, *undone)));
+    kept.sort_by(|a, b| b.at.cmp(&a.at));
+    out.extend(kept);
     Ok(out)
+}
+
+/// What an album action is called on the list, and its title.
+fn named(e: &crate::journal::Event) -> (&'static str, String) {
+    use crate::journal::Event;
+    match e {
+        Event::AlbumAdopted { title, to_dir, .. } if to_dir.0 == 0 => ("keep", format!("Kept into Music: {title}")),
+        Event::AlbumAdopted { title, .. } => ("move", format!("Moved: {title}")),
+        Event::AlbumReplaced { title, .. } => ("replace", format!("Replaced: {title}")),
+        Event::AlbumRejected { title, .. } => ("delete", format!("Deleted: {title}")),
+    }
+}
+
+/// An album action's status, from the journal.
+fn moved_status(id: i64, at: i64, e: &crate::journal::Event, undone: bool) -> Status {
+    let (what, title) = named(e);
+    Status { id: format!("{MOVE}{id}"), what: what.into(), title, state: "done", done: 1, of: 1, failed: Vec::new(), at: Some(at), undo: Some(format!("{MOVE}{id}")), undone, albums: 1 }
+}
+
+/// An album action told on the list as it goes (`track`): moving, then adding until its library has read it, then done
+/// with its Undo; or failed, with why.
+pub struct Tracked {
+    status: Status,
+}
+
+/// An album action starting (`what`: keep, move, replace; `title` as the list names it): told moving.
+pub fn track(what: &str, title: String) -> Tracked {
+    let status = Status {
+        id: format!("{LIVE}{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+        what: what.into(),
+        title,
+        state: "writing",
+        done: 0,
+        of: 1,
+        failed: Vec::new(),
+        at: None,
+        undo: None,
+        undone: false,
+        albums: 1,
+    };
+    tell(&status);
+    Tracked { status }
+}
+
+impl Tracked {
+    /// It could not be done: why, and done.
+    pub fn failed(mut self, album: &str, why: String) {
+        self.status.failed.push(RunFailed { album: album.into(), title: None, artist: None, file: None, why });
+        self.end(None);
+    }
+
+    /// Its files moved (`undo`: the action's journal id): adding while `added` says its library has not read it yet,
+    /// asked every few seconds for at most `ADDING_MOST`, then done.
+    pub fn moved<F, Fut>(mut self, undo: Option<String>, added: F)
+    where
+        F: Fn() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
+        self.status.state = "adding";
+        self.status.done = 1;
+        tell(&self.status);
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            while started.elapsed() < ADDING_MOST && !added().await {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+            self.end(undo);
+        });
+    }
+
+    fn end(mut self, undo: Option<String>) {
+        self.status.state = "done";
+        self.status.at = Some(super::moment::now_secs());
+        self.status.undo = undo.map(|id| format!("{MOVE}{id}"));
+        tell(&self.status);
+        // Its id from now on: the journal's, as the list reads it.
+        if let Some(kept) = self.status.undo.clone() {
+            let _ = channel().send(Status { id: kept, ..self.status.clone() });
+        }
+    }
 }
 
 /// A kept run's id as the journal's.
@@ -466,8 +702,24 @@ fn kept_id(token: &str) -> Result<i64> {
     token.strip_prefix(RUN).and_then(|n| n.parse().ok()).context("Not a kept run")
 }
 
-/// A kept run, its records as written.
+/// A kept run, its records as written; an album action, its folder before and after.
 pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
+    if let Some(id) = token.strip_prefix(MOVE).and_then(|n| n.parse::<i64>().ok()) {
+        use crate::journal::Event;
+        let entry = app.journal.get(id)?.filter(|e| e.applied).context("That is no longer kept")?;
+        let status = moved_status(id, entry.at, &entry.event, entry.undone);
+        let folders = app.library.catalogue().folders();
+        let place = |(f, rel): &(i64, String)| folders.get(*f as usize).map_or_else(|| rel.clone(), |root| root.join(rel).display().to_string());
+        let (album, title, before, after) = match &entry.event {
+            Event::AlbumAdopted { album_id, title, from_dir, to_dir, .. } => (album_id, title, vec![place(from_dir)], vec![place(to_dir)]),
+            Event::AlbumReplaced { album_id, title, .. } => (album_id, title, Vec::new(), Vec::new()),
+            Event::AlbumRejected { album_id, title, folder, dir, .. } => (album_id, title, vec![place(&(*folder, dir.clone()))], vec!["the trash".to_string()]),
+        };
+        let fields = if before.is_empty() { Vec::new() } else { vec![FieldView { field: "folder".into(), track: None, before, after, from: status.what.clone(), certainty: None, options: Vec::new() }] };
+        let record = RecordView { album: album.clone(), title: title.clone(), artist: String::new(), files: 0, fields, written: None, undone: Some(entry.undone), stamp: None };
+        let sheet = PlanView { kind: status.what.clone(), title: status.title.clone(), records: vec![record], making: false };
+        return Ok((status, sheet));
+    }
     let id = kept_id(token)?;
     let (run, at, undone) = app.journal.file_run(id)?.context("That run is no longer kept")?;
     Ok((kept_status(id, at, &run, undone), view(&run.what, &run.title, &run.records, &run.files, true)))
@@ -476,6 +728,15 @@ pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
 /// Undoes a run (`r…`), or its records `albums`: each file put back where it still holds what the run wrote, the
 /// others set aside ("changed since it was written"). Its status, `undone` once all of it is.
 pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>>) -> Result<Status> {
+    // An album action: its own Undo (Incoming's), then its status as the list has it.
+    if let Some(key) = token.strip_prefix(MOVE) {
+        app.incoming.undo(key).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let id: i64 = key.parse().context("Not an album action")?;
+        let entry = app.journal.get(id)?.context("That is no longer kept")?;
+        let status = moved_status(id, entry.at, &entry.event, true);
+        tell(&status);
+        return Ok(status);
+    }
     let id = kept_id(token)?;
     let (run, at, undone) = app.journal.file_run(id)?.context("That run is no longer kept")?;
     if undone {
@@ -518,7 +779,16 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
             let of = files.len();
             set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(token.clone()), at: None });
             let results = tokio::task::spawn_blocking(move || {
-                files.into_iter().map(|(i, f)| (i, f.path.clone(), restore_one(&f.path, &f.after, &f.before))).collect::<Vec<_>>()
+                files
+                    .into_iter()
+                    .map(|(i, f)| {
+                        let back = match &f.whole {
+                            Some(w) => restore_whole(&f.path, w),
+                            None => restore_one(&f.path, &f.after, &f.before),
+                        };
+                        (i, f.path.clone(), back)
+                    })
+                    .collect::<Vec<_>>()
             })
             .await
             .unwrap_or_default();
@@ -594,7 +864,8 @@ async fn reread(paths: &[PathBuf]) {
         return;
     }
     let Some(served) = crate::serve::instance() else { return };
-    let paths = paths.to_vec();
+    // Files only: a cover's run names its folder (its tracks read again by `covers`).
+    let paths: Vec<PathBuf> = paths.iter().filter(|p| !p.is_dir()).cloned().collect();
     let _ = tokio::task::spawn_blocking(move || served.reread(&paths)).await;
 }
 
@@ -651,6 +922,7 @@ mod tests {
             after: vec![("releasetype".into(), s(&["ep"]))],
             from: Vec::new(),
             undone: false,
+            whole: None,
         };
         let shown = vec![file("a", &["album"]), file("b", &["album"])];
         let stamps: HashMap<String, String> = ["a", "b"].iter().map(|x| (x.to_string(), stamp(&shown, x))).collect();
@@ -671,6 +943,7 @@ mod tests {
             after: vec![("date".into(), s(after)), ("releasetype".into(), s(&["album", "compilation"]))],
             from: vec![("date".into(), "the album's year".into()), ("releasetype".into(), "the type rule".into())],
             undone: false,
+            whole: None,
         };
         let records = [RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() }];
         let v = view("types", "Types and years", &records, &[file("A", &[], &["2010"]), file("B", &["2011"], &["2010"])], false);

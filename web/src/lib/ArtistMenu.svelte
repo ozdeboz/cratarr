@@ -5,6 +5,7 @@
   // in the app Sync to this device (decision 0038), Share, and their picture on this device (one chosen here, or their
   // newest album's cover again). No Instant mix (the owner: "a confusing thing"), no rating (the server keeps none for
   // artists).
+  import { hiddenLibraries } from './listFilter.svelte';
   import { albumCoverUrl, search } from './api';
   import { likeChip } from './quickCrate';
   import { grabCrate, openQuickCrate } from './quickCrates.svelte';
@@ -21,7 +22,8 @@
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { artistSubject } from './panel.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
-  import { linkTo, share } from './share';
+  import { linkTo } from './addresses';
+  import { share } from './share';
   import { toast } from './toast.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import { excludedArtists, excludedEverywhere, loadCrateArtists, loadExcludedArtists, notInThisCrate, setExcludedEverywhere, setNotInCrate } from './excludedArtists.svelte';
@@ -68,8 +70,8 @@
   const actions = $derived.by<SheetAction[]>(() => {
     if (exporting || step !== 'menu') return [];
     const act = (mode: Act) => () => {
-      onclose();
       onact(mode);
+      onclose();
     };
     const none = !tracks.length;
     return inOrder('artist', [
@@ -84,8 +86,8 @@
               label: 'Start radio',
               disabled: none,
               onclick: () => {
-                onclose();
                 onradio?.();
+                onclose();
               },
             },
           ]
@@ -114,7 +116,7 @@
   function soundsLike() {
     const n = name;
     onclose();
-    search(n, ['artist'], 5).then(
+    search(n, ['artist'], 5, 0, hiddenLibraries()).then(
       (r) => {
         const id = r.groups.artist?.items.find((x) => x.title.toLowerCase() === n.toLowerCase())?.id;
         if (id) grabCrate([likeChip('artist', id, n)]);

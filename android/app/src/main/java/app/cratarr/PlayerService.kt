@@ -154,7 +154,7 @@ class PlayerService : MediaSessionService() {
             // (local mode, content://) through Android.
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, Downloads.playback(this))).setLoadErrorHandlingPolicy(Patience()))
             .build()
-        player.addListener(Keeper(player))
+        player.addListener(Keeper(player).also { keeper = it })
         player.addListener(Course(player))
         sync.attach(player)
         sync.onChange = { main.post(::groupChanged) }
@@ -508,7 +508,20 @@ class PlayerService : MediaSessionService() {
      * Keeps the next tracks on the device as the queue moves on, counts the plays (Plays), and skips a track that cannot
      * be played.
      */
+    private var keeper: Keeper? = null
+
+    /**
+     * The track playing is cut for one played now (the owner, 2026-11-02: one track plays now): when it is left, it is
+     * told as played (`stopped`, counted), not as a skip.
+     */
+    fun cutForNow() {
+        keeper?.cut = true
+    }
+
     private inner class Keeper(private val player: ExoPlayer) : Player.Listener {
+        /** The next track left was cut for one played now ([cutForNow]). */
+        var cut = false
+
         private val keep = Runnable {
             // Local mode's tracks are on the device already.
             if (prefs.mode == Prefs.MODE_DEVICE) return@Runnable
@@ -532,11 +545,16 @@ class PlayerService : MediaSessionService() {
         }
         private var hearing: Hearing? = null
 
-        /** Tells the track left, unless it was told as counted or heard for less than a second. */
+        /** Tells the track left, unless it was told as counted or heard for less than a second; one cut for a track
+         *  played now as played ([cutForNow]). */
         private fun leave(ended: String) {
+            val now = cut
+            cut = false
             val h = hearing ?: return
             hearing = null
-            if (!h.counted && h.heardMs >= 1_000) Plays.heard(this@PlayerService, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
+            if (h.counted || h.heardMs < 1_000) return
+            if (now) Plays.heard(this@PlayerService, h.track, h.atMs, "stopped", true, h.heardMs, h.lengthMs)
+            else Plays.heard(this@PlayerService, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
         }
 
         private val count = object : Runnable {
