@@ -127,7 +127,7 @@
     {#if switchable()}
       <Item
         name="Mode switch in the bar"
-        more="Cratarr or Local, over the bar's pages. Off, it is at the top of Settings."
+        more="Cratarr, each server and Local, over the bar's pages. Off, it is at the top of Settings."
         toggle={{ checked: prefs.modeSwitchInBar, onchange: (on) => (prefs.modeSwitchInBar = on) }}
       />
     {/if}

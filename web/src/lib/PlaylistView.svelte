@@ -105,6 +105,7 @@
     withoutFor,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
+  import { isServerSource, serverAlbumView, serverArtistView, serverPlaylistView } from './serverMode.svelte';
   import { BANDCAMP } from './bandcampPreview';
   import { DISCOVER, discoverArtistView } from './discoverArtist';
   import RowHeart from './RowHeart.svelte';
@@ -160,6 +161,7 @@
   import { playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
+  import { serverPlaylistOf } from './panel.svelte';
   import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
@@ -247,8 +249,11 @@
   const album = $derived(albumOf(panel.viewed));
   /** The viewed artist (their page), or all their tracks (`tracks`: their Top recommendations' ›), when an artist is viewed. */
   const artist = $derived(artistOf(panel.viewed));
+  /** A server's playlist in its mode (decision 0098): its tracks as that server lists them; its name as it came. */
+  const serverList = $derived(serverPlaylistOf(panel.viewed));
+  let serverListName = $state<string | null>(null);
   /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
-  const plain = $derived(!!crate || !!album || !!artist || crateEditing || creating);
+  const plain = $derived(!!crate || !!album || !!artist || !!serverList || crateEditing || creating);
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
   let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite' | 'mbid'> & { studio?: number | null }) | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
@@ -272,7 +277,9 @@
           ? (crateNameKnown(crate) ?? '')
           : album
             ? (albumHead?.title ?? '')
-            : artist
+            : serverList
+              ? (serverListName ?? '')
+              : artist
               ? artist.tracks
                 ? 'All tracks'
                 : artist.name
@@ -384,9 +391,9 @@
 
   // The album's heart: shows the change at once, back as it was when the server refuses.
   const albumFav = $derived(album ? isFavorite(album.source, album.id) : false);
-  /** An album or artist of the device's own music (local mode, decision 0052): played and played next, nothing of
-   *  Cratarr's (hearts, menus, About, radio, select). */
-  const onDevice = $derived((album?.source ?? artist?.source) === DEVICE);
+  /** An album or artist of the device's own music (local mode, decision 0052), or of a server's in its mode (decision
+   *  0098): played and played next, nothing of Cratarr's (hearts, menus, About, radio, select). */
+  const onDevice = $derived((album?.source ?? artist?.source) === DEVICE || isServerSource(album?.source ?? artist?.source) || !!serverList);
   // Played here and kept by none of Cratarr's: the device's own music, or a Bandcamp album (a Discover suggestion's,
   // decision 0071, the owner 2026-10-25): its tracks, no heart, rating, Resume or similar albums of the server's.
   // An artist from Discover, or one asked for on Bandcamp (no server of that name): Discover's page of them.
@@ -465,7 +472,7 @@
     const asked = c
       ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav, alb, look)
       : a
-        ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : albumView(a.source, a.id)).then((r) => {
+        ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : isServerSource(a.source) ? serverAlbumView(a.source, a.id) : albumView(a.source, a.id)).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
@@ -473,7 +480,7 @@
             return { ...r, total: r.rows.length };
           })
         : ar
-          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name, hiddenLibraries())).then((r) => {
+          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : isServerSource(ar.source) ? serverArtistView(ar.source, ar.name) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name, hiddenLibraries())).then((r) => {
               if (want === id) {
                 artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, mbid: (r as { mbid?: string }).mbid, studio: (r as { studio?: number | null }).studio };
                 // Their picture: their newest album's cover (Symfonium's, without an artist's photo); one from Discover's
@@ -483,6 +490,14 @@
               }
               return { ...r, total: r.rows.length, genres: null };
             })
+          : serverPlaylistOf(want)
+            ? serverPlaylistView(serverPlaylistOf(want)!.source, serverPlaylistOf(want)!.id).then((r) => {
+                if (want === id) {
+                  serverListName = r.title;
+                  covers = r.cover ? [r.cover] : [];
+                }
+                return { ...r, genres: null };
+              })
           : playlistRows(want, prefs.source || undefined).then((r) => {
               const shown = withWaiting(want, r.rows);
               return { ...r, rows: shown, total: shown.length, genres: null };
@@ -504,7 +519,7 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        if (r.source !== DEVICE && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        if (r.source !== DEVICE && !isServerSource(r.source) && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
       },
       (e) => {
         if (want !== id) return;
@@ -604,7 +619,7 @@
     covers = [];
     coversKnown = true;
     // An artist's comes with their albums (above).
-    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want)) return;
+    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want) || serverPlaylistOf(want)) return;
     const a = albumOf(want);
     if (a) {
       covers = [albumCoverUrl(a.source, a.id)];
@@ -1098,7 +1113,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
    *  crates and artists with it (the owner, 2026-11-02: "Profile everywhere"); Settings › Display says how much shows. */
   const profileList = $derived.by((): { list: FilterList; source?: string } | null => {
     if (crate) return { list: { kind: 'crate', id: crate }, source: prefs.source || undefined };
-    const ours = (source: string) => source !== DEVICE && !fromDiscover(source);
+    const ours = (source: string) => source !== DEVICE && !isServerSource(source) && !fromDiscover(source);
     if (album) return ours(album.source) ? { list: { kind: 'album', source: album.source, id: album.id } } : null;
     if (artist) return ours(artist.source) ? { list: { kind: 'artist', source: artist.source, name: artist.name } } : null;
     return p ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null;

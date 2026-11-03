@@ -61,9 +61,10 @@ export const appInfo = $state({
    *  connected one in `known`, every output seen, in that order. */
   ordered: false,
   known: [] as AppOutput[],
-  /** Local mode (decision 0052): which mode plays, Cratarr's or the device's own music; `local`: a local folder is on
-   *  and Android lets the app read them (the switcher shows); Android's permission for the device's music. */
-  mode: 'cratarr' as 'cratarr' | 'device',
+  /** Local mode (decision 0052): which mode plays, Cratarr's or the device's own music, or a server's (decision 0098:
+   *  `server:<id>`); `local`: a local folder is on and Android lets the app read them; Android's permission for the
+   *  device's music. */
+  mode: 'cratarr' as string,
   /** Where this device's controls point (decision 0062), as the app keeps it: `self`, `player:<name>` or `server`;
    *  null from an app before it, where the page keeps its own. */
   target: null as string | null,

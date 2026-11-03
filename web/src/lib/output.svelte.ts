@@ -6,6 +6,7 @@
 // other side, which plays from there, and the side that played stops.
 import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
+import { isServerSource, serverAlbumView } from './serverMode.svelte';
 import { albumView, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
 import { untrack } from 'svelte';
 import { canPlayHere, cutForNow, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
@@ -241,14 +242,14 @@ export const playPlaylistFrom = async (name: string, source: string, tracks: Loc
  *  Incoming) the server says with each track's state. */
 export async function playAlbumHere(source: string, album: string, title?: string): Promise<boolean> {
   if (!port().holdsQueue) return false;
-  // Out of reach (lib/away): its tracks on this device alone.
-  if (away()) {
+  // Out of reach (lib/away): its tracks on this device alone. A server's own (decision 0098) is reached by the app.
+  if (away() && !isServerSource(source)) {
     const got = await pickHere({ kind: 'album', source, id: album }, 'play', undefined, source);
     playQueue(got.tracks, 0, title ?? null);
     return true;
   }
-  // The device's own (local mode, decision 0052): its album as the app lists it.
-  const r = source === DEVICE ? deviceAlbumView(album) : await albumView(source, album);
+  // The device's own (local mode, decision 0052): its album as the app lists it; a server's, as that server gives it.
+  const r = source === DEVICE ? deviceAlbumView(album) : isServerSource(source) ? await serverAlbumView(source, album) : await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
     r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs })),

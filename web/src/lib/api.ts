@@ -4,6 +4,7 @@ import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
+import { isServerSource, serverAlbumCoverUrl } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
@@ -294,9 +295,13 @@ export const acceptRequest = (id: string) => request<void>(`/api/queue-requests/
 export const declineRequest = (id: string) => request<void>(`/api/queue-requests/${encodeURIComponent(id)}/decline`, json('POST'));
 
 /** A track's cover. The device's own music (local mode, decision 0052) has its album's, which the app serves on the
- *  page's own address. */
+ *  page's own address; so has a server's (decision 0098), through the app. */
 export const coverUrl = (np: { source: string; id: string; album_id?: string | null }) =>
-  np.source === 'device' ? `/__device/cover/${encodeURIComponent(np.album_id ?? '')}` : `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
+  np.source === 'device'
+    ? `/__device/cover/${encodeURIComponent(np.album_id ?? '')}`
+    : isServerSource(np.source)
+      ? serverAlbumCoverUrl(np.source, np.album_id ?? np.id)
+      : `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
 
 /** play: in file order · shuffle: random order · next: after the current track · last: at the end of the queue. */
 export type PlayMode = 'play' | 'shuffle' | 'next' | 'last';
@@ -1739,6 +1744,8 @@ export const serverCoverUrl = (source: string, album: string) =>
  *  of its own (until the stamp has come). Cratarr's own library has no covers of a device's own (the owner,
  *  2026-10-25: its administrators upload one for everyone instead), so one chosen here before is passed over. */
 export const albumCoverUrl = (source: string, album: string) => {
+  // A server's mode (decision 0098): its covers through the app, with the sign-in it keeps.
+  if (isServerSource(source)) return serverAlbumCoverUrl(source, album);
   const key = coverKey(source, album);
   const v = [coverStamps[key], coverRounds[key]].filter(Boolean).join('-');
   return (source === 'cratarr' ? undefined : localCovers[key]) ?? `${serverCoverUrl(source, album)}${v ? `?v=${v}` : ''}`;
