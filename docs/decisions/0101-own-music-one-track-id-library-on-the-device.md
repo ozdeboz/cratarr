@@ -232,3 +232,11 @@ built.
 - **How the app runs the rules crate.**
   - 0085: natively, through UniFFI (the desktop app natively).
   - The recommendation: one WebAssembly build for the page and the app, native only if it misses the budget.
+
+## Amended 2026-11-03: the tape engine joins 0.16 (0102)
+
+The owner decided 0102 the same day, for 0.16: every wind's sound is made on the device, from the track decoded in
+memory, with the engine's arithmetic in the rules crate. So:
+- **29's scope** is this record, 0100 and 0102.
+- **27's move:** the tape engine's arithmetic joins the rules crate after Radio's picker, proved the same way, on the
+  server's tests.
