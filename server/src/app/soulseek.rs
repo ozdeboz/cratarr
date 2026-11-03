@@ -1,10 +1,11 @@
 //! Soulseek in Cratarr (0.15, the owner, 2026-11-02: "Cratarr does Soulseek, Lidarr stays"): soularr goes; Cratarr
-//! fetches whole records from Soulseek its own way. Lidarr keeps watching artists and grabbing torrents.
+//! fetches whole records from Soulseek its own way. Lidarr and Soulseek are sibling fetchers, either or both (the
+//! owner, 2026-11-03): Lidarr fetches its own Wanted through its own downloaders.
 //!
-//! - **What is wanted:** Lidarr's Wanted (monitored and missing), Cratarr's approved Requests among them (they go to
-//!   Lidarr, and are searched first), read again every few hours.
-//! - **Judged by its release:** each record's release as MusicBrainz lists it (Lidarr's monitored one, else the release
-//!   group's first official one with tracks) is the reference: a Soulseek folder is a candidate only when every track
+//! - **What is wanted:** Cratarr's approved Requests, and only those (the owner, 2026-11-03: "The whole idea is that
+//!   Cratarr's Soulseek doesn't need Lidarr"); read each round. One taken off the list stays off.
+//! - **Judged by its release:** each record's release as MusicBrainz lists it (the release group's first official one
+//!   with tracks) is the reference: a Soulseek folder is a candidate only when every track
 //!   of the release is one of its files, by title and length (`folders_of`), never because its name looks right.
 //! - **Searched on a ladder** (`ladder`): the record and its year, its title stripped of what is in brackets, the main
 //!   artist only, then the artist with a wildcard for the artists Soulseek's server filters; none twice; one search at a
@@ -48,10 +49,8 @@ const FETCH_AT_MOST: Duration = Duration::from_secs(4 * 3600);
 const READS: u32 = 15;
 /// Folders a record shows, best first.
 const SHOWN: usize = 5;
-/// How often Lidarr's Wanted is read again.
-const WANTED_EVERY: Duration = Duration::from_secs(6 * 3600);
-/// The most of Lidarr's Wanted read.
-const WANTED_AT_MOST: usize = 1000;
+/// The most approved Requests read.
+const REQUESTS_AT_MOST: usize = 1000;
 /// The shortest wait between two rounds of searches for one record (the ladder's "at once" still waits this).
 const ROUND_AT_LEAST: i64 = 15 * 60;
 /// A file's length may be this far from its track's.
@@ -69,12 +68,9 @@ pub struct Record {
     pub release: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
-    /// Lidarr's id for it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lidarr: Option<i64>,
-    /// One of Cratarr's approved Requests: searched first.
-    #[serde(default)]
-    pub requested: bool,
+    /// The approved Request it fetches (decision 0099's amendment, the owner 2026-11-03: Soulseek fetches only Cratarr's
+    /// approved Requests; Lidarr its own Wanted, through its own downloaders).
+    pub request: i64,
 }
 
 /// One of the release's tracks, as a folder's files are judged by.
@@ -172,9 +168,9 @@ pub struct SetAside {
 struct Kept {
     next: u64,
     items: Vec<Item>,
-    /// When Lidarr's Wanted was last read (epoch s).
+    /// Requests taken off the list: not taken in again.
     #[serde(default)]
-    wanted_at: i64,
+    dropped: Vec<i64>,
 }
 
 static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
@@ -437,9 +433,15 @@ pub fn search_now(app: &Arc<super::App>, id: &str) -> View {
     view(app)
 }
 
-/// A record taken off the list (not while it is fetched); Lidarr still wants it until told otherwise.
+/// A record taken off the list (not while it is fetched): its Request is not taken in again.
 pub fn drop_item(app: &Arc<super::App>, id: &str) -> View {
-    kept(|k| k.items.retain(|i| i.id != id || matches!(i.state, State::Fetching | State::Checking)));
+    kept(|k| {
+        if let Some(i) = k.items.iter().find(|i| i.id == id && !matches!(i.state, State::Fetching | State::Checking)) {
+            let r = i.record.request;
+            k.dropped.push(r);
+        }
+        k.items.retain(|i| i.id != id || matches!(i.state, State::Fetching | State::Checking));
+    });
     view(app)
 }
 
@@ -465,8 +467,14 @@ fn library_in(saved: &crate::settings::Saved) -> Option<PathBuf> {
 
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
-fn wake() {
+/// The searcher woken (a Request approved: taken in now, not at the next round).
+pub fn wake() {
     WAKE.notify_waiters();
+}
+
+/// Whether Soulseek fetches here: slskd set up and switched on (Settings › Server), as single-track intake's.
+pub async fn connected() -> bool {
+    super::track_fetch::slskd_ready().await.is_ok()
 }
 
 /// The workers started, once: one searches (one search at a time), one fetches (one record at a time).
@@ -492,12 +500,9 @@ pub fn start(app: &Arc<super::App>) {
                 let _ = tokio::time::timeout(Duration::from_secs(600), WAKE.notified()).await;
                 continue;
             }
-            if let Some(l) = &super::discover::lidarr(&app)
-                && kept(|k| now() - k.wanted_at >= WANTED_EVERY.as_secs() as i64)
-            {
-                if let Err(e) = read_wanted(l, &served).await {
-                    tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "Lidarr's Wanted not read");
-                }
+            // The approved Requests, read each round (they are Cratarr's own: no service asked).
+            if let Err(e) = read_requests(&served).await {
+                tracing::warn!(target: "soulseek", reason = %format!("{e:#}"), "the approved Requests not read");
             }
             match next_search() {
                 Some(id) => {
@@ -522,64 +527,57 @@ pub fn start(app: &Arc<super::App>) {
     });
 }
 
-/// Lidarr's Wanted taken in: a record not on the list yet is added, waiting to be searched; one Lidarr no longer wants
-/// goes, unless it is fetched or placed. Requests are marked.
-async fn read_wanted(l: &crate::lidarr::Lidarr, served: &Arc<crate::serve::Serve>) -> Result<()> {
-    let wanted = l.wanted(WANTED_AT_MOST).await?;
+/// The approved Requests taken in (decision 0099's amendment: Soulseek never reads Lidarr's Wanted): one with its
+/// release group not on the list yet is added, waiting to be searched; one no longer approved (cancelled, declined)
+/// goes, unless it is fetched or placed.
+async fn read_requests(served: &Arc<crate::serve::Serve>) -> Result<()> {
     let ud = served.userdata.clone();
-    let requested: std::collections::HashSet<String> = tokio::task::spawn_blocking(move || ud.requests(None, Some(super::requests::APPROVED), 1000))
-        .await??
-        .into_iter()
-        .filter_map(|r| r.release_group)
-        .collect();
-    kept(|k| {
-        let groups: std::collections::HashSet<&str> = wanted.iter().map(|w| w.release_group.as_str()).collect();
-        k.items.retain(|i| groups.contains(i.record.release_group.as_str()) || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed));
-        for w in &wanted {
-            let asked = requested.contains(&w.release_group);
-            if let Some(i) = k.items.iter_mut().find(|i| i.record.release_group == w.release_group) {
-                i.record.requested = asked;
-                continue;
-            }
-            k.next += 1;
-            k.items.push(Item {
-                id: format!("ss-{}", k.next),
-                record: Record {
-                    artist: w.artist.clone(),
-                    album: w.album.clone(),
-                    release_group: w.release_group.clone(),
-                    release: w.release.clone(),
-                    year: w.year,
-                    lidarr: Some(w.lidarr),
-                    requested: asked,
-                },
-                state: State::Waiting,
-                tracks: Vec::new(),
-                folders: Vec::new(),
-                chosen: None,
-                failed: Vec::new(),
-                misses: 0,
-                due: 0,
-                why: None,
-                batch: None,
-                percent: 0.0,
-                placed: None,
-                set_aside: Vec::new(),
-            });
-        }
-        k.wanted_at = now();
-    });
+    let approved = tokio::task::spawn_blocking(move || ud.requests(None, Some(super::requests::APPROVED), REQUESTS_AT_MOST)).await??;
+    kept(|k| take_requests(k, &approved));
     Ok(())
 }
 
-/// The next record to search: waiting and due, the requested first, then the longest waiting.
+/// [`read_requests`]'s list kept: pure.
+fn take_requests(k: &mut Kept, approved: &[crate::userdata::Request]) {
+    let ids: std::collections::HashSet<i64> = approved.iter().map(|r| r.id).collect();
+    k.items.retain(|i| ids.contains(&i.record.request) || matches!(i.state, State::Approved | State::Fetching | State::Checking | State::Placed));
+    k.dropped.retain(|r| ids.contains(r));
+    for r in approved {
+        if k.dropped.contains(&r.id) {
+            continue;
+        }
+        let Some(group) = r.release_group.clone() else { continue };
+        if k.items.iter().any(|i| i.record.request == r.id || i.record.release_group == group) {
+            continue;
+        }
+        k.next += 1;
+        k.items.push(Item {
+            id: format!("ss-{}", k.next),
+            record: Record { artist: r.artist.clone(), album: r.album.clone(), release_group: group, release: None, year: r.year, request: r.id },
+            state: State::Waiting,
+            tracks: Vec::new(),
+            folders: Vec::new(),
+            chosen: None,
+            failed: Vec::new(),
+            misses: 0,
+            due: 0,
+            why: None,
+            batch: None,
+            percent: 0.0,
+            placed: None,
+            set_aside: Vec::new(),
+        });
+    }
+}
+
+/// The next record to search: waiting and due, the longest waiting first.
 fn next_search() -> Option<String> {
     let t = now();
     kept(|k| {
         k.items
             .iter()
             .filter(|i| i.state == State::Waiting && i.due <= t)
-            .min_by_key(|i| (!i.record.requested, i.due, i.id.clone()))
+            .min_by_key(|i| (i.due, i.id.clone()))
             .map(|i| i.id.clone())
     })
 }
@@ -595,7 +593,7 @@ fn next_fetch() -> Option<String> {
     })
 }
 
-/// The release a record is judged by: Lidarr's monitored release, else the release group's first official one with
+/// The release a record is judged by: its own where it names one, else the release group's first official one with
 /// tracks.
 async fn reference(r: &Record) -> Result<ReleaseView> {
     if let Some(id) = &r.release {
@@ -880,7 +878,7 @@ mod tests {
     use super::*;
 
     fn record(artist: &str, album: &str, year: Option<i32>) -> Record {
-        Record { artist: artist.into(), album: album.into(), release_group: "rg".into(), release: None, year, lidarr: None, requested: false }
+        Record { artist: artist.into(), album: album.into(), release_group: "rg".into(), release: None, year, request: 1 }
     }
 
     fn track(n: u32, title: &str, secs: i64) -> Track {
@@ -999,10 +997,48 @@ mod tests {
         assert_eq!(library_in(&saved), Some(PathBuf::from("/soulseek")));
     }
 
+    fn asked(id: i64, group: Option<&str>) -> crate::userdata::Request {
+        crate::userdata::Request {
+            id,
+            user: "u".into(),
+            album_key: format!("k{id}"),
+            artist_key: "a".into(),
+            release_group: group.map(Into::into),
+            album: format!("Album {id}"),
+            artist: "Artist".into(),
+            year: Some(2000),
+            cover: None,
+            at: 0,
+            status: "approved".into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+        }
+    }
+
+    #[test]
+    fn only_approved_requests_are_wanted_and_one_taken_off_stays_off() {
+        let mut k = Kept::default();
+        take_requests(&mut k, &[asked(1, Some("rg1")), asked(2, None), asked(3, Some("rg3"))]);
+        // One without a release group cannot be judged: not taken.
+        assert_eq!(k.items.iter().map(|i| i.record.request).collect::<Vec<_>>(), vec![1, 3]);
+        // Taken off: not taken in again while it stays approved.
+        k.dropped.push(3);
+        k.items.retain(|i| i.record.request != 3);
+        take_requests(&mut k, &[asked(1, Some("rg1")), asked(3, Some("rg3"))]);
+        assert_eq!(k.items.len(), 1);
+        // No longer approved (cancelled): it goes, unless it is being fetched or placed.
+        k.items[0].state = State::Found;
+        take_requests(&mut k, &[]);
+        assert!(k.items.is_empty());
+        assert!(k.dropped.is_empty(), "a dropped one no longer approved is forgotten");
+    }
+
     #[test]
     fn a_kept_item_reads_back_and_a_time_that_cannot_be_read_counts_as_due() {
-        let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg"},"state":"waiting"}]}"#;
+        let raw = r#"{"next":3,"items":[{"id":"ss-3","record":{"artist":"Air","album":"Moon Safari","release_group":"rg","request":7},"state":"waiting"}]}"#;
         let k: Kept = serde_json::from_str(raw).unwrap();
-        assert_eq!((k.items[0].due, k.items[0].misses, k.wanted_at), (0, 0, 0), "no time kept: due");
+        assert_eq!((k.items[0].due, k.items[0].misses, k.items[0].record.request), (0, 0, 7), "no time kept: due");
     }
 }
