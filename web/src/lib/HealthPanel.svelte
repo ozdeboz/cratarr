@@ -26,8 +26,8 @@
   import MenuGroup from './MenuGroup.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import SelectBar from './SelectBar.svelte';
-  import { approveIntake, clearIntake, copyLine, dropIntake, getIntake, startIntake, type Intake, type IntakeItem } from './replaceTrack';
-  import { anyOver, approvePayload, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } from './trackIntake';
+  import { approveIntake, clearIntake, copyLine, dropIntake, getIntake, searchIntakeNow, startIntake, type Intake, type IntakeItem } from './replaceTrack';
+  import { anyOver, approvePayload, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, searchable, tickable, underWay } from './trackIntake';
   import { toast } from './toast.svelte';
   import { openFinding } from './health';
   import { health, loadHealth, problems, recordIn, recordProblem } from './healthReport.svelte';
@@ -285,6 +285,14 @@
     undone = new Set([...undone, i.id]);
     loadHealth();
   }
+  /** Search now (0.15): a track not found, or gone wrong, looked for at once, its wait set aside. */
+  async function searchItemNow(i: IntakeItem) {
+    try {
+      intake = await searchIntakeNow(i.id);
+    } catch (e) {
+      toast.fail(e, "It isn't being looked for");
+    }
+  }
   /** A track of the review list tapped: its copies to pick from, looking for it by hand, or out of the list. */
   let pickOf = $state<IntakeItem | null>(null);
   async function dropItem(i: IntakeItem) {
@@ -418,6 +426,12 @@
     {/if}
     <!-- A folder's files not heard yet, by name. -->
     {#each x.files ?? [] as file (file)}<Item name={file} wrap />{/each}
+    <!-- A file's own row (Files' kinds): where it is and what is wrong, whole (its row cuts it off), and its fix where
+         the finding has one (the owner, 2026-11-03: it opened to nothing). -->
+    {#if !x.album && !x.playlist && !x.track && !x.files?.length && x.line}
+      <Item name={x.line} wrap />
+      {#if fixable}<Item name="Review the fixes" line="Certain ones ticked, each written into its files" onclick={() => openFixes(findingKey)} />{/if}
+    {/if}
     <!-- A track's file cut off or breaking off (2026-10-28): a better copy of it, as the track's menu finds one. -->
     {#if x.track && x.album && finds}<Item name="Find a better copy" onclick={() => (betterOf = { source: x.album![0], album: x.album![1], track: x.track! })} />{/if}
     <!-- No cover: Change cover, straight on its choices (Upload and an address in its corner). -->
@@ -504,6 +518,8 @@
                 >
               {:else if i.state === 'added' && i.undo && !undone.has(i.id)}
                 <button onclick={() => void undoItem(i)}>Undo</button>
+              {:else if searchable(i)}
+                <button onclick={() => void searchItemNow(i)}>Search now</button>
               {:else if itemEnd(i)}
                 <span class="ended">{itemEnd(i)}</span>
               {/if}

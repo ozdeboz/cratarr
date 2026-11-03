@@ -27,7 +27,10 @@
   import ContentControls from './ContentControls.svelte';
   import { backOne, REQUESTS, upToPage, viewPlaylist, viewSibling } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
-  import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
+  import { answersRequests, decide, listsShown, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
+  import ChoiceList from './ChoiceList.svelte';
+  import { clearPlaced, dropSoulseek, fetchFound, loadSoulseek, searchSoulseekNow, soulseek } from './soulseek.svelte';
+  import { approvePayload, folderLine, GROUPS, itemLine, itemTone, searchable, tickable, underWay, type SoulseekItem } from './soulseekRules';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import Group from './settings/Group.svelte';
@@ -47,6 +50,43 @@
   });
 
   const view = $derived(requests.view);
+
+  // Soulseek (decision 0099): read while it shows, every few seconds while a search or a fetch is under way, else every
+  // half minute (Lidarr's Wanted is read every six hours, a search may find something any time). Found records ticked
+  // here, none until the administrator ticks them; Fetch sends the ticked ones, each from the folder picked for it.
+  $effect(() => {
+    if (list !== 'soulseek') return;
+    let gone = false;
+    let t: ReturnType<typeof setTimeout>;
+    const again = () => loadSoulseek().then(() => !gone && (t = setTimeout(again, underWay(soulseek.view) ? 3000 : 30_000)));
+    void again();
+    return () => ((gone = true), clearTimeout(t));
+  });
+  let slskTicks = $state(new Set<string>());
+  let slskPicks = $state<Record<string, number>>({});
+  let slskOpen = $state<SoulseekItem | null>(null);
+  let fetching = $state(false);
+  const slskItems = $derived(soulseek.view?.items ?? []);
+  const slskFound = $derived(slskItems.filter(tickable));
+  const slskPayload = $derived(approvePayload(slskItems, slskTicks, slskPicks));
+  // A tick kept only where it can still be (a record fetched or gone loses it).
+  $effect(() => {
+    const can = new Set(slskFound.map((i) => i.id));
+    if ([...slskTicks].some((id) => !can.has(id))) slskTicks = new Set([...slskTicks].filter((id) => can.has(id)));
+  });
+  function slskTick(id: string) {
+    const next = new Set(slskTicks);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    slskTicks = next;
+  }
+  async function fetchTicked() {
+    if (!slskPayload.length || fetching) return;
+    fetching = true;
+    await fetchFound(slskPayload);
+    slskTicks = new Set();
+    fetching = false;
+  }
   const answers = $derived(answersRequests());
 
   const STATUS = { pending: 'Waiting', approved: 'Approved', declined: 'Declined', cancelled: 'Taken back' } as const;
@@ -157,7 +197,7 @@
     back={beside ? null : backOne}
     trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('requests') }]}
     here={L.name}
-    siblings={beside ? null : { menuLabel: 'Requests shows', options: REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
+    siblings={beside ? null : { menuLabel: 'Requests shows', options: listsShown(answersRequests(), me.admin, view?.fetchers ?? []).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
   />
 {/snippet}
 {#snippet glassExtra()}
@@ -194,10 +234,54 @@
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
-      {#if !view.fetcher}<p class="note">Approved requests need Lidarr: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
+      {#if !view.fetchers.length}<p class="note">Approved requests need a fetcher, Lidarr or Soulseek: <a href={viewOn('settings', 'settings:connections')}>connect one</a>.</p>{/if}
       <Group>
         {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}{#if !view.waiting?.length}<Item name="None waiting" />{/if}{/each}
       </Group>
+    {:else if list === 'soulseek'}
+      {#if soulseek.error && !soulseek.view}
+        <Notice text={soulseek.error} onretry={loadSoulseek} />
+      {:else if !soulseek.view}
+        <PageLoading />
+      {:else}
+        {#if !soulseek.view.library}
+          <!-- Nothing is searched until an Incoming library takes Soulseek's records (decision 0099). -->
+          <p class="note">Soulseek's records need an Incoming library to come into: choose one in <a href={viewOn('settings', 'settings:libraries')}>Libraries</a>.</p>
+        {/if}
+        {#if slskFound.length}
+          <Group>
+            <Item name={`${slskTicks.size} of ${slskFound.length} ticked`}>
+              <button onclick={() => (slskTicks = slskTicks.size === slskFound.length ? new Set() : new Set(slskFound.map((i) => i.id)))}
+                >{slskTicks.size === slskFound.length ? 'None' : 'Tick all found'}</button
+              >
+              <button class="primary" disabled={!slskPayload.length || fetching} aria-busy={fetching || undefined} onclick={() => void fetchTicked()}
+                >{slskPayload.length ? `Fetch ${slskPayload.length}` : 'Fetch'}</button
+              >
+            </Item>
+          </Group>
+        {/if}
+        {#each GROUPS as g (g.title)}
+          {@const these = slskItems.filter((i) => g.states.includes(i.state) && matchesSearch(i.record.album, i.record.artist))}
+          {#if these.length}
+            <Group title={g.title}>
+              {#snippet tail()}{#if g.states.includes('placed')}<button class="tailact" onclick={() => void clearPlaced()}>Clear</button>{/if}{/snippet}
+              {#each these as i (i.id)}
+                <ReleaseRow cover={null} title={i.record.album} line={itemLine(i)} tone={itemTone(i)} fill={i.state === 'fetching' ? i.percent / 100 : undefined} onclick={() => (slskOpen = i)}>
+                  {#if tickable(i)}
+                    {@const on = slskTicks.has(i.id)}
+                    <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Tick ${i.record.album}`} onclick={() => slskTick(i.id)}
+                      ><ChoiceMark kind="several" on={on} /></button
+                    >
+                  {:else if searchable(i)}
+                    <button onclick={() => void searchSoulseekNow(i.id)}>Search now</button>
+                  {/if}
+                </ReleaseRow>
+              {/each}
+            </Group>
+          {/if}
+        {/each}
+        {#if !slskItems.length}<Group><Item name="Nothing asked for" line="Requests you approve come here" /></Group>{/if}
+      {/if}
     {:else if list === 'mine'}
       <Group>
         {#each mine as r (r.id)}{@render row(r, false, canTakeBack(r))}{:else}
@@ -205,7 +289,7 @@
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}
@@ -261,6 +345,35 @@
       {#if !answers && !canTakeBack(r)}
         <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = hrefOf('discover')))} />
       {/if}
+    </div>
+  </MenuSheet>
+{/if}
+
+{#if slskOpen}
+  {@const i = soulseek.view?.items.find((x) => x.id === slskOpen?.id) ?? slskOpen}
+  <!-- A Soulseek record (decision 0099): its folders to pick from (the best first), what was set aside and why, Search
+       now, out of the list. -->
+  <MenuSheet label={i.record.album} title={i.record.album} chips={[i.record.artist, ...(i.record.year ? [String(i.record.year)] : [])]} onclose={() => (slskOpen = null)}>
+    {#if tickable(i)}
+      <Group title="Folders" more="Each holds every track of the record, by title and length. The ticked record is fetched from the one chosen.">
+        <ChoiceList
+          label="Folder"
+          options={i.folders.map((f, n) => ({ value: String(n), label: f.dir.split(/[\\/]/).pop() || f.dir, line: folderLine(f) }))}
+          value={String(slskPicks[i.id] ?? i.chosen ?? 0)}
+          onchange={(n) => (slskPicks = { ...slskPicks, [i.id]: Number(n) })}
+        />
+      </Group>
+    {/if}
+    {#if i.set_aside.length}
+      <Group title="Set aside">
+        {#each i.set_aside as a (a.user + a.path)}
+          <Item lead="warn" name={a.path.split(/[\\/]/).pop() || a.path} line={[a.user, ...Object.entries(a.why).map(([f, w]) => `${f}: ${w}`)].join(' · ')} tone="warn" wrap />
+        {/each}
+      </Group>
+    {/if}
+    <div role="menu">
+      {#if searchable(i)}<MenuEntry icon="search" label="Search now" onclick={() => (void searchSoulseekNow(i.id), (slskOpen = null))} />{/if}
+      <MenuEntry icon="trash" label="Out of the list" danger onclick={() => (void dropSoulseek(i.id), (slskOpen = null))} />
     </div>
   </MenuSheet>
 {/if}

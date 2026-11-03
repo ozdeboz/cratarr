@@ -1,6 +1,7 @@
 // The health report and the files' problems (decision 0063), read once for the Health page's list and its panel
 // (lib/HealthPanel) alike, and again on each visit to the page.
 import { getFileProblems, getHealthReport, type FileProblem, type HealthFinding, type HealthItem, type RecordFinding } from './api';
+import { whenChanged } from './dataChanged';
 import { type Area, areaOf, DOMAINS, iconOf } from './health';
 import type { IconName } from './Icon.svelte';
 
@@ -32,6 +33,10 @@ export function loadHealth() {
     (e) => ((health.error = e instanceof Error ? e.message : 'Unexpected error'), settle('files')),
   );
 }
+
+// Read again whenever what it reports on changed (lib/dataChanged): a fix written, a record kept or moved, a playlist
+// changed; what was read stays shown meanwhile. Once read, kept true for the whole page.
+whenChanged(['files', 'collection', 'incoming', 'playlists', 'words'], () => health.loaded && loadHealth());
 
 /** The files' kinds of problem, each its own list in the Files part. */
 export const FILE_KINDS: { kind: FileProblem['kind']; title: string; hint: string }[] = [

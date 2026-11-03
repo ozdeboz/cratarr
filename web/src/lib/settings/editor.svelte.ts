@@ -24,7 +24,7 @@ import {
   type LibraryUse,
   type LidarrView,
   type NamingView,
-  type Quality,
+  type Fetcher, type Quality,
   type Settings,
   type SourceConfig,
   type SourceView,
@@ -365,10 +365,12 @@ class SettingsEditor {
     colour: null as string | null,
     /** Cratarr's own library's name (the owner, 2026-11-02); none: its folder's. */
     name: null as string | null,
+    /** An Incoming library's fetcher (decision 0099's amendment): whose records come into it; none: nobody's. */
+    fetcher: null as Fetcher | null,
     ...d.view?.policies?.[id],
     ...d.libraries.policies?.[id],
   });
-  setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null }) => {
+  setPolicy = (d: Draft, id: string, change: { quality?: Quality; colour?: string; name?: string | null; fetcher?: Fetcher | null }) => {
     d.libraries.policies = { ...(d.libraries.policies ?? {}), [id]: { ...this.policyOf(d, id), ...change } };
   };
 

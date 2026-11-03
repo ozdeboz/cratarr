@@ -53,6 +53,8 @@
     { id: 'tracks', label: 'Shared tracks' },
     { id: 'genre', label: 'Genre' },
     { id: 'artists', label: 'Artists' },
+    // Sound (0.15; the owner, 2026-11-02): two playlists that share no track or artist sit close when they sound alike.
+    { id: 'sound', label: 'Sound' },
   ];
   const anyOn = $derived(SIGNALS.some((s) => prefs.signals[s.id]));
 
@@ -143,7 +145,7 @@
   {:else if !shown || shown.playlists.length < 2}
     <p class="empty">Related playlists need at least two playlists.</p>
   {:else if !anyOn}
-    <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
+    <p class="empty">Turn on at least one of shared tracks, genre, artists or sound.</p>
   {:else}
     <div class="stage" class:full={mapFull.on} {@attach fill} style:--map-h={mapFull.on ? '100dvh' : mapH ? `${mapH}px` : null}>
       <div class="box">

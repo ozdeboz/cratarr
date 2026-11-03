@@ -27,6 +27,8 @@ export type Choices = {
   auto_accept?: string[];
   /** Settings › Profile's sources switched off (decision 0094: the account's, which every use of the taste reads). */
   taste_off?: string[];
+  /** Where it is scrobbled from (decision 0091): each device, or through the server (absent: the server's own say). */
+  scrobble?: 'device' | 'server';
 };
 export type MoreFrom = { libraries: string[] | null; bandcamp: boolean };
 
@@ -124,6 +126,11 @@ export async function setTasteSource(id: string, on: boolean) {
   keep({ taste_off: taste.off });
   await flush();
   taste.read++;
+}
+/** The account's way of scrobbling (decision 0091), kept at once: the server lets its keys go, or takes them again. */
+export function setScrobbleWay(way: 'device' | 'server'): Promise<void> {
+  keep({ scrobble: way });
+  return flush();
 }
 export function setTracking(on: boolean) {
   mine.tracking = on;

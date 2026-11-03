@@ -4,11 +4,16 @@
   // and Start radio as the large actions (no Play next or Add to queue: a crate's or a playlist's make no sense, the
   // owner) (its tracks as its favourites settings have them),
   // then the shared groups in the table's order (lib/menuTable): View; Save as playlist (a genre: Start a crate from
-  // it); Download…, Sync to this device and Share; Edit (one's own); Delete (one's own, last).
+  // it); Download…, Sync to this device and Share; Edit (one's own); Delete (one's own, last). A word's (a genre, style,
+  // mood or tag; decision 0097, administrators'): the sources that say it in its header, Rename everywhere and Merge
+  // into… (its spelling, everywhere: the kind's spellings in Catalogue), and, opened from a record's words (`from`),
+  // Remove from this record (the record's words of that kind set by hand without it).
   import { hiddenLibraries } from './listFilter.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import { crateRows, getCrate } from './api';
+  import { crateRows, getCrate, getCrateAxes, setAlbumOverrides, type WordSource } from './api';
+  import { me } from './me.svelte';
+  import { WORD_FIELD_OF, mergeInto, sourceNames } from './words.svelte';
   import { inApp, type Downloadable } from './app.svelte';
   import DownloadStep from './DownloadStep.svelte';
   import { inOrder, type EntryId, type MenuKind } from './menuTable';
@@ -25,7 +30,19 @@
   import { wordChip } from './quickCrate';
   import { grabCrate } from './quickCrates.svelte';
 
-  let { id, onclose, onsave }: { id: string; onclose: () => void; /** Its panel's own Make playlist, where it shows. */ onsave?: () => void } = $props();
+  let {
+    id,
+    onclose,
+    onsave,
+    from = null,
+  }: {
+    id: string;
+    onclose: () => void;
+    /** Its panel's own Make playlist, where it shows. */
+    onsave?: () => void;
+    /** A word's opened from a record's words: the record, and its words of that kind as it shows them. */
+    from?: { album: string; words: string[] } | null;
+  } = $props();
 
   const name = $derived(crateName(id));
   const genre = $derived(genreOf(id));
@@ -44,9 +61,52 @@
     const c = id;
     if (!c) return;
     crateRows(c, 0, 1, prefs.source || undefined, undefined, undefined, { without: withoutFor(c) })
-      .then((r) => (source = r.source))
+      .then((r) => ((source = r.source), (saidBy = r.word?.sources ?? [])))
       .catch(() => {});
   });
+
+  // A word of 0097's kinds (not a label): who says it, and its spelling changed by an administrator.
+  const kindWord = $derived(word && word.kind !== 'label' ? { kind: word.kind, word: word.word } : null);
+  let saidBy = $state<WordSource[]>([]);
+  const wordAdmin = $derived(me.admin && kindWord !== null);
+  let typed = $state('');
+  let known = $state<string[]>([]);
+  function openRename() {
+    typed = kindWord?.word ?? '';
+    step = 'rename';
+  }
+  function openMerge() {
+    typed = '';
+    step = 'merge';
+    const k = kindWord?.kind;
+    if (!k || known.length) return;
+    getCrateAxes(prefs.source || undefined).then(
+      (axes) => (known = axes.find((x) => x.key === k)?.values ?? []),
+      () => {},
+    );
+  }
+  const mergeChips = $derived.by(() => {
+    const q = typed.trim().toLowerCase();
+    return known.filter((w) => w !== kindWord?.word && (!q || w.toLowerCase().includes(q))).slice(0, q ? 60 : 24);
+  });
+  /** Its spelling becomes `into` everywhere; the panel showing it shows `into`'s. */
+  async function spellAs(into: string) {
+    const w = kindWord;
+    const to = into.trim().replace(/\s+/g, ' ');
+    if (!w || !to || to === w.word || working) return;
+    working = true;
+    const shown = viewed;
+    const ok = await mergeInto(w.kind, w.word, to);
+    working = false;
+    if (!ok) return;
+    onclose();
+    if (shown) viewPlaylist(`${CRATE}${w.kind}:${to}`);
+  }
+  function removeHere() {
+    const [w, f] = [kindWord, from];
+    if (!w || !f) return;
+    void run(() => setAlbumOverrides([f.album], { [WORD_FIELD_OF[w.kind]]: f.words.filter((x) => x !== w.word) }), null, "It wasn't removed");
+  }
 
   let working = $state(false);
   async function run(what: () => Promise<unknown>, done: string | null, fail: string) {
@@ -105,7 +165,7 @@
   }
 
   // Download… (0.10): its tracks as it lists them, read when the step opens, a page at a time.
-  let step = $state<'menu' | 'download'>('menu');
+  let step = $state<'menu' | 'download' | 'rename' | 'merge'>('menu');
   let all = $state<Downloadable[] | null>(null);
   /** The most a crate's Download… takes. */
   const MOST = 10000;
@@ -151,6 +211,12 @@
     <MenuEntry icon="share" label="Share" onclick={shareIt} />
   {:else if e === 'edit'}
     {#if own}<MenuEntry icon="pencil" label="Edit" onclick={edit} />{/if}
+  {:else if e === 'renameWord'}
+    {#if wordAdmin}<MenuEntry icon="pencil" label="Rename everywhere" onclick={openRename} />{/if}
+  {:else if e === 'mergeWord'}
+    {#if wordAdmin}<MenuEntry icon="arrowRight" label="Merge into…" onclick={openMerge} />{/if}
+  {:else if e === 'removeWord'}
+    {#if wordAdmin && from?.words.includes(kindWord?.word ?? '')}<MenuEntry icon="minus" label="Remove from this record" disabled={working} onclick={removeHere} />{/if}
   {:else if e === 'deleteCrate'}
     {#if own}<MenuEntry icon="trash" label="Delete crate" danger disabled={working} onclick={() => run(() => deleteOwnCrate(id), null, "The crate wasn't deleted")} />{/if}
   {/if}
@@ -161,7 +227,11 @@
   {onclose}
   images={crateArt(id)}
   title={name}
-  chips={[word !== null ? WORD_LABEL[word.kind] : like !== null ? 'Sounds like' : 'Crate', ...(tracks !== null ? [plural(tracks, 'track')] : [])]}
+  chips={[
+    word !== null ? WORD_LABEL[word.kind] : like !== null ? 'Sounds like' : 'Crate',
+    ...(tracks !== null ? [plural(tracks, 'track')] : []),
+    ...(kindWord && saidBy.length ? [sourceNames(saidBy)] : []),
+  ]}
   actions={step !== 'menu'
     ? []
     : inOrder(kind, [
@@ -174,8 +244,65 @@
 >
   {#if step === 'download'}
     {#if all}<DownloadStep what={{ kind: 'tracks', name, tracks: all.map((t) => ({ source: t.source, id: t.id })) }} tracks={all} {onclose} />{/if}
+  {:else if step === 'rename'}
+    <div class="step field">
+      <!-- svelte-ignore a11y_autofocus -->
+      <input type="text" aria-label="Spelled as" autofocus bind:value={typed} onkeydown={(e) => e.key === 'Enter' && void spellAs(typed)} />
+    </div>
+    <MenuEntry icon="check" label="Done" disabled={working || !typed.trim() || typed.trim() === kindWord?.word} onclick={() => void spellAs(typed)} />
+  {:else if step === 'merge'}
+    <div class="step field">
+      <input type="search" placeholder="Find a word" aria-label="Find a word" bind:value={typed} />
+    </div>
+    <div class="step chips">
+      {#each mergeChips as w (w)}
+        <button class="chip" disabled={working} onclick={() => void spellAs(w)}>{w}</button>
+      {/each}
+    </div>
   {:else}
     <!-- The shared groups, in the table's order (decision 0058, lib/menuTable). -->
     <MenuTable {kind} {entry} />
   {/if}
 </MenuSheet>
+
+<style>
+  .step {
+    padding: 0 16px 8px;
+  }
+
+  .field {
+    display: grid;
+  }
+
+  /* Record Edit's field and chips (lib/RecordEdit). */
+  input {
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+</style>

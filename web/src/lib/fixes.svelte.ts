@@ -14,4 +14,12 @@ export const FIXABLE = new Set([
   'files:length-guessed',
   'files:cut-short',
   'files:sound-breaks',
+  // A FLAC's broken seek table, made padding (0.14, the server's length fixes): offered nowhere before (the owner,
+  // 2026-11-03: no sheet to be found).
+  'files:bad_seektable',
+  // Cratarr's words into the files (decision 0097), one finding per kind set to Write in Catalogue's "Written to files".
+  'words:genre',
+  'words:style',
+  'words:mood',
+  'words:tag',
 ]);

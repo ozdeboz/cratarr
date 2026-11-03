@@ -2,7 +2,6 @@
 // Downloads, Insights, Health and Settings; the lists in the panel): the account's requests and everyone's waiting ones,
 // what Lidarr is looking for, and the actions on them.
 import { cancelRequest, decideRequests, getRequests, getWatching, type AlbumRequest, type RequestMark, type RequestsView, type Watching } from './api';
-import type { IconName } from './Icon.svelte';
 import { toast } from './toast.svelte';
 
 /** A request's mark on its album's cover (lib/CoverStatus), where the server's own is not there: wanted while open,
@@ -17,14 +16,7 @@ export function markOf(r: AlbumRequest | null | undefined): RequestMark | null {
 }
 
 /** The page's lists, each opened in the panel (`requests:<id>`). */
-export type RequestsList = 'waiting' | 'mine' | 'lidarr';
-/** `label`: the row on the Requests page; `name`: short, the panel's breadcrumb (the owner, 2026-10-26: Requests ›
- *  Queue, not Requests › Waiting for an answer; as Health's). */
-export const REQUESTS_LISTS: { id: RequestsList; label: string; name: string; icon: IconName }[] = [
-  { id: 'waiting', label: 'Queue', name: 'Queue', icon: 'inbox' },
-  { id: 'mine', label: 'Your requests', name: 'Yours', icon: 'user' },
-  { id: 'lidarr', label: 'Monitor', name: 'Monitor', icon: 'download' },
-];
+export { listsShown, REQUESTS_LISTS, type RequestsList } from './requestLists';
 
 export const requests = $state({
   view: null as RequestsView | null,

@@ -208,7 +208,13 @@ function guard() {
   const has = !!history.state?.panelGuard;
   if (want && !has) {
     at = key();
-    history.pushState({ ...(history.state ?? {}), panelGuard: true, trail, pk: at }, '', location.href);
+    // Over the player's own step (App: the player over everything, which a panel opened from it leaves): in its place,
+    // not on it, so the player closing takes no step back over the panel (the owner, 2026-11-03: Go to album from the
+    // player closed the album it opened, and showed the page).
+    const { player, ...rest } = (history.state ?? {}) as Record<string, unknown>;
+    const st = { ...rest, panelGuard: true, trail, pk: at };
+    if (player) history.replaceState(st, '', location.href);
+    else history.pushState(st, '', location.href);
   }
   else if (!want && has && !dropping) {
     dropping = [];
