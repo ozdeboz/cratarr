@@ -205,7 +205,7 @@
   }
 
   const handed = $derived(glass.one && !beside);
-  const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'downloads' } : null);
+  const pill = () => (!beside ? { filter: false, view: false, search: 'downloads' } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 

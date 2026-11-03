@@ -54,7 +54,7 @@
   import { hasView, listReading, matchCrateBy, pageView } from './lib/pageView.svelte';
   import { searchesAsTable } from './lib/layouts';
   import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
-  import { art, playing } from './lib/remote.svelte';
+  import { art } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { reducedMotion, SHEET_OUT } from './lib/motion';
@@ -399,7 +399,8 @@
   /** The mini-player's height with its margin (64 px and app.css's --gutter-x either side), kept free under the page
    *  and the toasts. */
   const MINI_SPACE = 80;
-  const miniSpace = $derived(mini && playing() ? MINI_SPACE : 0);
+  // Its place is always taken: the bar while something plays, else its Play on (lib/MiniPlayer; the owner, 2026-11-03).
+  const miniSpace = $derived(mini ? MINI_SPACE : 0);
   // The page's row (Symfonium's, decided 2026-10-15), floating over the page's top: back on the left, when this visit
   // has a step before this one; on the right, on a page with something to play, the pill (lib/ContentControls): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
@@ -533,9 +534,6 @@
     if (!v || !el || !panelBeside()) return;
     return reveal(() => subjectIn(el, v), { key: v });
   });
-  // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
-  const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown && !downloadsShown);
-  const pillDevice = $derived(!playing() && !playerInPanel && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
   let navAt = $state(0);
@@ -613,8 +611,6 @@
         ? {
             page: page,
             view: hasView(page),
-            // Home's too (the owner, 2026-10-28: the device with nothing playing, as every page with the pill).
-            device: (pagePill || page === 'home') && pillDevice,
             filter: (pagePill && page !== LOCAL.id && page !== 'downloads') || page === 'discover',
             action: pageView.action,
           }
@@ -1366,6 +1362,11 @@
   /* Along the top (Display's Mini player), under the bar there. */
   /* Typing (the keyboard up): out of the way, only the glass being typed in stands over the keyboard (the owner,
      2026-11-01: "only input glass needs that"); the bar along the bottom goes the same way (navHidden). */
+  /* Nothing playing: only its glass takes taps, not the strip it spans. */
+  .mini-dock:has(:global(.idle)) {
+    pointer-events: none;
+  }
+
   .mini-dock.typing {
     opacity: 0;
     pointer-events: none;

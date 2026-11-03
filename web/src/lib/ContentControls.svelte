@@ -1,11 +1,9 @@
 <script lang="ts">
   // Symfonium's floating pill (2026-10-15), at the top right of the panel (lib/PlaylistView) and of a page with something
   // to play (App.svelte): the page's search (it opens into a field over the row), the filter (lib/FilterSheet), View
-  // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and where it plays (lib/OutputSheet)
-  // where nothing else leads to it (no mini-player, which has it beside the heart; no player beside the page; the panel's
-  // pill and the page's alike), and last the page's own button (a + to
-  // make something, its ticked ones' ⋮; pageView.usePageAction). Google's Cast guidelines put the device button at the
-  // top right of the screen that plays.
+  // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and last the page's own button (a + to
+  // make something, its ticked ones' ⋮; pageView.usePageAction). Where it plays is not here (the owner, 2026-11-03: no
+  // room): the mini-player's, or its glass in the mini-player's place while nothing plays (lib/MiniPlayer).
   import FilterSheet from './FilterSheet.svelte';
   import { noteChange } from './lastChange.svelte';
   import ProgressRing from './ProgressRing.svelte';
@@ -19,7 +17,6 @@
   import { glassPart } from './glassMotion';
   import { untrack } from 'svelte';
   import { innerWidth } from 'svelte/reactivity/window';
-  import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
   import { pageCovered, panelBeside } from './panel.svelte';
@@ -35,7 +32,6 @@
   let {
     page = null,
     view = false,
-    device = true,
     order = null,
     tempos = null,
     filter = true,
@@ -54,7 +50,6 @@
      *  absent, the page that set it last (pageView.action). */
     action?: import('./pageView.svelte').PageAction | null;
     view?: boolean;
-    device?: boolean;
     /** The panel list's order, for its View. */
     order?: ListOrder | null;
     /** The panel list's tempos, for its filter's tempo selector (decision 0041). */
@@ -81,7 +76,6 @@
   const pageAction = $derived(action !== undefined ? action : pageView.action);
   let filterOpen = $state(false);
   let viewOpen = $state(false);
-  let outputOpen = $state(false);
 
   // The search: the magnifier opens a field over the row (the whole row on a phone, the pill grown leftwards on a
   // wide page); Esc, Enter or leaving it empty folds it, ✕ empties it. A search that applies keeps the magnifier lit.
@@ -386,7 +380,6 @@
       >{/if}
     {#if view && (page || order?.columns?.shown.length || order?.view || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))}><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
-    {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     {#if extra && !searching}{@render extra()}{/if}
     <!-- The page's mode (Playlists' Quick add), lit while on. -->
     {#if page && pageView.mode && !searching && !(showing && pageAction)}
@@ -417,9 +410,6 @@
 {#if asking && pageAction}
   {@const a = pageAction}
   <ConfirmSheet title={`${a.label}?`} label={a.label} icon={a.icon} danger={false} onconfirm={() => confirm(a)} onclose={() => (asking = false)} />
-{/if}
-{#if outputOpen}
-  <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 
 <style>
