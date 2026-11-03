@@ -11,6 +11,21 @@ export const KIND_NAMES: Record<CatalogueKind, string> = { type: 'Type', year: '
 /** The kinds with sources and spellings of their own (type and year have neither). */
 export const SPELLED: WordKind[] = ['genre', 'style', 'mood', 'tag'];
 
+/** A kind's field in a record's hand words (lib/recordEdit's overrides). */
+export const WORD_FIELD_OF: Record<WordKind, 'genres' | 'styles' | 'moods' | 'tags'> = { genre: 'genres', style: 'styles', mood: 'moods', tag: 'tags' };
+/** The sources' names (the store's ids; Catalogue's own names where it was read). */
+const SOURCE_NAME: Record<WordSource, string> = {
+  hand: 'set by hand',
+  files: 'files',
+  audiomuse: 'AudioMuse',
+  household: 'household',
+  musicbrainz: 'MusicBrainz',
+  discogs: 'Discogs',
+  lastfm: 'Last.fm',
+};
+/** Who says a word, strongest first: "set by hand, Discogs". */
+export const sourceNames = (ids: readonly WordSource[]) => ids.map((id) => SOURCE_NAME[id] ?? id).join(', ');
+
 export const words = $state({ value: null as WordsCatalogue | null, error: null as string | null });
 
 export function readWords() {

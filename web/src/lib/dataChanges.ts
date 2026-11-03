@@ -6,9 +6,10 @@
 //   collection  records came, went or moved (`changed`: collection)
 //   incoming    an Incoming library changed (`changed`: incoming)
 //   playlists   playlists changed (`changed`: playlists)
+//   words       a record's or a track's words, a kind's sources or its spellings (`changed`: words; decision 0097)
 // A run's own view follows the run as it goes (lib/fileRuns); this is for everything else that shows its outcome.
 
-export type DataKind = 'files' | 'collection' | 'incoming' | 'playlists';
+export type DataKind = 'files' | 'collection' | 'incoming' | 'playlists' | 'words';
 type On = <T>(name: string, handler: (data: T) => void) => () => void;
 
 /** How long changes close together wait to be read as one. */
@@ -33,7 +34,7 @@ export function changesOn(on: On) {
     listening = true;
     on<{ state?: string }>('file_run', (r) => void (r.state === 'done' && changed('files')));
     on<{ area?: string }>('changed', ({ area }) => {
-      if (area === 'collection' || area === 'incoming' || area === 'playlists') changed(area);
+      if (area === 'collection' || area === 'incoming' || area === 'playlists' || area === 'words') changed(area);
     });
   }
   /** `read` again whenever data of these kinds changed on the server (a few changes together read once). Until the

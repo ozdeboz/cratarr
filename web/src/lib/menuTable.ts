@@ -40,6 +40,8 @@ export type EntryId =
   | 'webSearch'
   | 'geniusSearch'
   | 'rename'
+  | 'renameWord'
+  | 'mergeWord'
   | 'spokenAs'
   | 'edit'
   | 'changeCover'
@@ -59,6 +61,7 @@ export type EntryId =
   | 'replaceIn'
   | 'removeFromQueue'
   | 'removeFromList'
+  | 'removeWord'
   | 'removeResume'
   | 'clearQueue'
   | 'deleteAlbum'
@@ -137,8 +140,9 @@ export const MENUS: Record<MenuKind, Kind> = {
       // (a style, a mood, a tag, a label) grabs a crate of that word to refine (0.12).
       { group: 'collect', entries: ['saveAsPlaylist', 'startCrate', 'grabCrate'] },
       { group: 'take', entries: ['download', 'keep', 'share'] },
-      { group: 'change', entries: ['edit'] },
-      { group: 'remove', entries: ['deleteCrate'] },
+      // A word's (decision 0097; administrators'): its spelling everywhere, and out of the record it is opened from.
+      { group: 'change', entries: ['edit', 'renameWord', 'mergeWord'] },
+      { group: 'remove', entries: ['removeWord', 'deleteCrate'] },
     ],
   },
   genre: {
@@ -148,6 +152,8 @@ export const MENUS: Record<MenuKind, Kind> = {
       // The genre as a crate search's term to refine (0.12; one way to make a crate: the sentence, its Edit the builder).
       { group: 'collect', entries: ['grabCrate'] },
       { group: 'take', entries: ['download', 'share'] },
+      { group: 'change', entries: ['renameWord', 'mergeWord'] },
+      { group: 'remove', entries: ['removeWord'] },
     ],
   },
   // A queue's Shuffle and Repeat are at its header's end, not large actions.
@@ -195,6 +201,9 @@ export const OWN_CARD: readonly EntryId[] = ['discover', 'extra'];
  *  lib/recordTypeRules) are left out. */
 export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   view: 'View',
+  renameWord: 'Rename everywhere',
+  mergeWord: 'Merge into…',
+  removeWord: 'Remove from this record',
   goAlbum: 'Go to album',
   soundsLike: 'Sounds like this',
   otherVersions: 'Other versions',

@@ -39,7 +39,7 @@ let lastRead: { text: string; sources: AlbumsView['sources'] | null } = { text: 
 /** Reads it (`fresh`: past the service worker's copy); one read at a time. */
 // The Library's list read again whenever its records' files or places changed (lib/dataChanged: a fix's titles, years
 // or lengths written; a record kept or moved), once it has been read.
-whenChanged(['files', 'collection'], () => void (library.view && readLibrary(true).catch(() => {})));
+whenChanged(['files', 'collection', 'words'], () => void (library.view && readLibrary(true).catch(() => {})));
 
 export function readLibrary(fresh: boolean): Promise<void> {
   reading ??= getAlbums(prefs.source || undefined, fresh)

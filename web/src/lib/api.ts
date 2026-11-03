@@ -1124,7 +1124,7 @@ export const mergeWord = (kind: CatalogueKind, from: string, into: string) => re
 /** A track's own words where they differ from its record's: a list sets them, null goes back to the record's. */
 export type TrackWords = Partial<Record<WordKind, string[] | null>>;
 export const setTrackWords = (source: string, id: string, words: TrackWords) =>
-  request<TrackWords>(`/api/tracks/${encodeURIComponent(source)}/${encodeURIComponent(id)}/words`, json('PUT', words));
+  request<TrackWords>(`${trackPath(source, id)}/words`, json('PUT', words));
 
 // One way to change files (decision 0092; administrators'): a plan reviewed (what each record's files hold, what
 // Cratarr holds, and from where), applied as a run; every run in one shape, also told live (`file_run`).
