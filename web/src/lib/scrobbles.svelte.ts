@@ -1,6 +1,7 @@
 // Scrobbling, the account's way (decision 0091): from each device (the start) or through the server. This device's
 // own sign-ins and, in a browser, its queue and its sending (lib/scrobbleDevice); in the apps, their own code does the
 // sending with the sign-ins the app keeps (the page asks it: `scrobblers`). Never sent to Cratarr's server.
+import { perAccount, whenAccount } from './account';
 import { getScrobbles } from './api';
 import { inApp, onApp, toApp } from './app.svelte';
 import { mine, setScrobbleWay } from './mySettings.svelte';
@@ -56,13 +57,14 @@ export async function setWay(way: Way) {
   await readWay();
 }
 
-// The sign-ins: the app's, or this browser's own storage.
+// The sign-ins: the app's, or this browser's own storage, each account's apart (decision 0101), as its queue.
 type Kept = { listenbrainz?: { token: string; name: string; broken?: string | null }; lastfm?: { key: string; secret: string; session: string; name: string; broken?: string | null } };
 const KEPT = 'cratarr.scrobblers';
 const QUEUE = 'cratarr.scrobbleQueue';
+const PENDING = 'cratarr.lastfmPending';
 function read<T>(k: string, none: T): T {
   try {
-    const v = localStorage.getItem(k);
+    const v = localStorage.getItem(perAccount(k));
     return v ? (JSON.parse(v) as T) : none;
   } catch {
     return none;
@@ -70,11 +72,15 @@ function read<T>(k: string, none: T): T {
 }
 function write(k: string, v: unknown) {
   try {
-    localStorage.setItem(k, JSON.stringify(v));
+    localStorage.setItem(perAccount(k), JSON.stringify(v));
   } catch {
     // Kept for this page only.
   }
 }
+// Another account signed in: its own shown.
+whenAccount.add(() => {
+  if (!inApp) readHere();
+});
 function shown(k: Kept) {
   scrobbling.here = {
     listenbrainz: k.listenbrainz ? { name: k.listenbrainz.name, broken: k.listenbrainz.broken ?? null } : null,
@@ -110,7 +116,7 @@ export async function keepListenBrainz(token: string) {
  *  app, back through its own link (`cratarr://connected/lastfm-device`), the app then trading it for the session. */
 export function signInLastFm(key: string, secret: string) {
   if (inApp) return toApp({ type: 'scrobblers', op: 'lastfm', key, secret });
-  write('cratarr.lastfmPending', { key, secret });
+  write(PENDING, { key, secret });
   const back = `${location.origin}${location.pathname}#/settings?view=${encodeURIComponent('settings:tracking/lastfm')}`;
   location.assign(`https://www.last.fm/api/auth/?api_key=${encodeURIComponent(key)}&cb=${encodeURIComponent(back)}`);
 }
@@ -118,7 +124,7 @@ export function signInLastFm(key: string, secret: string) {
 export async function lastFmBack(): Promise<string | null> {
   if (inApp) return null;
   const token = /[?&]token=([^&#]+)/.exec(location.href)?.[1];
-  const pending = read<{ key: string; secret: string } | null>('cratarr.lastfmPending', null);
+  const pending = read<{ key: string; secret: string } | null>(PENDING, null);
   if (!token || !pending) return null;
   try {
     const { session, name } = await lastFmSession(pending.key, pending.secret, decodeURIComponent(token));
@@ -129,7 +135,7 @@ export async function lastFmBack(): Promise<string | null> {
     return e instanceof Error ? e.message : 'Last.fm refused the sign-in';
   } finally {
     try {
-      localStorage.removeItem('cratarr.lastfmPending');
+      localStorage.removeItem(perAccount(PENDING));
     } catch {
       // Gone with the page.
     }

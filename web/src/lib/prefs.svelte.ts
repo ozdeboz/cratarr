@@ -1,6 +1,9 @@
 // Display preferences: per browser, kept in localStorage (which may be unavailable; then defaults apply and nothing
-// is remembered). Server-wide settings live on the server, see Settings.svelte.
+// is remembered). Server-wide settings live on the server, see Settings.svelte. The person's own of them ([PERSONAL],
+// decision 0101: pinned items, libraries switched off, filters, Home's rows, Radio's last choice…) are kept per account
+// on the device, hidden while another is signed in, and taken up when another signs in; the rest are the device's.
 
+import { accountKey, whenAccount, whoOf } from './account';
 import { HOME_LISTS, type HomeList } from './servers/server';
 import { inApp, toApp } from './app.svelte';
 import { RECORD_ORDER_KEYS, type CrateView, type RecordOrder } from './crateRecords';
@@ -527,10 +530,25 @@ export const DEFAULTS: Prefs = {
   filters: {},
 };
 
+/** The person's own (decision 0101): about their music, their players, their crates, never this device's look. */
+const PERSONAL = ['pinned', 'hiddenLibraries', 'filters', 'crateViews', 'homeParts', 'homeCrates', 'serverHome', 'radioLast', 'discoverMode', 'output', 'source'] as const;
+
+/** The device's settings as kept, with those of [PERSONAL] the account's (`who`, lib/account's whoOf) on top. */
+// Fields as JSON.parse's: each is checked by read().
+function savedOf(who: string): Record<string, any> | null {
+  const device = JSON.parse(localStorage.getItem(KEY) ?? 'null');
+  const theirs = JSON.parse(localStorage.getItem(KEY + who) ?? 'null');
+  if (!device && !theirs) return null;
+  const out: Record<string, any> = device && typeof device === 'object' ? { ...device } : {};
+  for (const k of PERSONAL) delete out[k];
+  if (theirs && typeof theirs === 'object') for (const k of PERSONAL) if (k in theirs) out[k] = theirs[k];
+  return out;
+}
+
 function read(): Prefs {
   const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {} } as Prefs;
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
+    const saved = savedOf(whoOf(accountKey()));
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
@@ -702,17 +720,43 @@ export function togglePin(id: string) {
   prefs.pinned = prefs.pinned.includes(id) ? prefs.pinned.filter((p) => p !== id) : [...prefs.pinned, id];
 }
 
+/** Whose the person's own in [prefs] are now (lib/account's whoOf): saved under them, even while another's come in. */
+let prefsWho = whoOf(accountKey());
+
+/** [prefs] as kept: the device's, and the person's own of [prefsWho]. */
+function save() {
+  const all = JSON.parse(JSON.stringify(prefs));
+  const theirs: Record<string, unknown> = {};
+  for (const k of PERSONAL) {
+    theirs[k] = all[k];
+    delete all[k];
+  }
+  const device = JSON.stringify(all);
+  const own = JSON.stringify(theirs);
+  try {
+    localStorage.setItem(KEY, device);
+    localStorage.setItem(KEY + prefsWho, own);
+  } catch {
+    /* not remembered */
+  }
+  // In the app the same settings go to it too: it hands them to its pages on either of its two addresses (Network).
+  if (inApp) toApp({ type: 'page-prefs', prefs: device, mine: own, who: prefsWho });
+}
+
+// Another account signed in, or nobody: the one leaving's own are kept, and the one come's taken up.
+whenAccount.add(() => {
+  const who = whoOf(accountKey());
+  if (who === prefsWho) return;
+  save();
+  prefsWho = who;
+  const now = read();
+  Object.assign(prefs, Object.fromEntries(PERSONAL.map((k) => [k, now[k]])));
+});
+
 // Remember every change and apply the theme (app.css reads data-theme; no attribute = follow the system).
 $effect.root(() => {
   $effect(() => {
-    const snapshot = JSON.stringify(prefs);
-    try {
-      localStorage.setItem(KEY, snapshot);
-    } catch {
-      /* not remembered */
-    }
-    // In the app the same settings go to it too: it hands them to its pages on either of its two addresses (Network).
-    if (inApp) toApp({ type: 'page-prefs', prefs: snapshot });
+    save();
     if (prefs.theme === 'auto') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.dataset.theme = prefs.theme;
     if (prefs.animations) document.documentElement.removeAttribute('data-motion');
