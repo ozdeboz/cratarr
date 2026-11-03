@@ -298,3 +298,8 @@ by a later record that says so in its header. A new decision takes the next numb
   a master record, artist and label, owned or not, each mapped to MusicBrainz, Discogs and Bandcamp, none required;
   the reference that fits counts; artist pages for anyone, label pages with the whole catalogue, search's "beyond"
   opening Cratarr's own pages; Soulseek judged by any reference, never a MusicBrainz id required.
+- [0101: 0.16 — each user's own music, one track id, and the library on the device](0101-own-music-one-track-id-library-on-the-device.md):
+  accepted, for 0.16; libraries in list order, requests through Incoming into one's own music, the catalogue's track id
+  served once switched, downloads with a holder per account and caches hidden at sign-out, the whole index with vectors
+  and fits offline, Radio's picker in the rules crate; one migration at first start, rehearsed; two previews. Where it
+  meets 0084, 0085 and 0091, open for later.
