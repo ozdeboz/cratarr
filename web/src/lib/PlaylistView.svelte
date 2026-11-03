@@ -3490,7 +3490,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     pointer-events: none;
   }
 
-  .pills > * {
+  /* Every part on it takes taps, another component's too (the left glass is lib/NavigationControls since 0.14: scoped,
+     `*` matched only this component's own, and the glass let taps through on the tablet: the owner, 2026-11-03). */
+  .pills > :global(*) {
     pointer-events: auto;
   }
 
