@@ -5,16 +5,19 @@ import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 
 export const PAGE = process.env.E2E_PAGE ?? 'http://127.0.0.1:5400';
-const passwords = Object.fromEntries(
-  readFileSync(process.env.E2E_ACCOUNTS ?? 'missing', 'utf8')
-    .trim()
-    .split('\n')
-    .map((l) => l.trim().split(' ')),
-);
+const passwords = process.env.E2E_ACCOUNTS
+  ? Object.fromEntries(
+      readFileSync(process.env.E2E_ACCOUNTS, 'utf8')
+        .trim()
+        .split('\n')
+        .map((l) => l.trim().split(' ')),
+    )
+  : {};
 
-/** One browser and one page in it: one device. Errors the page throws are kept, for the test to say. */
-export async function device() {
-  const browser = await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
+/** One browser and one page in it: one device. Errors the page throws are kept, for the test to say. `args`: the
+ *  browser's own (sound without a press, say). */
+export async function device(args = []) {
+  const browser = await chromium.launch({ args, ...(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {}) });
   const page = await (await browser.newContext()).newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
