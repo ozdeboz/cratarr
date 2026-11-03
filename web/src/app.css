@@ -39,7 +39,11 @@
   /* Every glass island's 2 px band of the extensions' thinner glass (the owner, 2026-10-25: an island with an
      extension (a title, the globe) has it, so one without has it too and all are the same size). A shadow: nothing
      moves. Inside an extension an island has none of its own; the extension is its band. */
-  --island-ring: 0 0 0 2px color-mix(in srgb, var(--float-bg) 45%, transparent);
+  --island-ring: 0 0 0 2px var(--float-thin-bg);
+  /* That thinner glass (the owner, 2026-11-03: "thin glass, one part"): a glass part's back layer, which its extension
+     is (a title, a picker, a panel's actions, the globe), stretched from under the main buttons' glass. */
+  --float-thin-bg: color-mix(in srgb, var(--float-bg) 45%, transparent);
+  --float-thin-blur: blur(10px) saturate(1.3);
   /* The floating glass's room from the edge it floats along (the window's, the bar's), smaller now that every island
      has its band (the owner, 2026-10-25: by a third or a half, "whatever rounds well"): beside it 8 px (was 12), above
      and below it 6 px (was 8; half would leave the band 2 px from the bar). */
