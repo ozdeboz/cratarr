@@ -41,6 +41,9 @@ test('each state says where it stands; a found one its chosen copy, or the one p
   assert.equal(itemLine(item('1', 'found')), 'FLAC 16/44.1 · 30 MB · free slot · someone');
   assert.equal(itemLine(item('1', 'found'), 'c2'), 'MP3 320 kbps · 30 MB · free slot · someone');
   assert.equal(itemLine(item('1', 'none')), 'Not found');
+  assert.equal(itemLine(item('1', 'none', { misses: 3, due: 1_000 + 4 * 3600 }), undefined, 1_000), 'Not found · 3 times · again in 4 hours');
+  assert.equal(itemLine(item('1', 'none', { misses: 4, due: 1_000 + 7 * 86_400 }), undefined, 1_000), 'Not found · 4 times · again in 7 days');
+  assert.equal(itemLine(item('1', 'refused', { why: 'Too short', set_aside: ['a', 'b'] })), 'Too short · 2 set aside');
   assert.equal(itemLine(item('1', 'failed')), 'The search did not finish');
   assert.equal(itemLine(item('1', 'approved')), 'To be added');
   assert.equal(itemLine(item('1', 'fetching')), 'Downloading');
@@ -83,6 +86,7 @@ test('asked again while it runs or a track is on its way in; Clear finished wher
   assert.equal(underWay({ running: false, items: [item('1', 'checking')] }), true);
   assert.equal(anyOver([item('1', 'found')]), false);
   assert.equal(anyOver([item('1', 'found'), item('2', 'refused')]), true);
+  assert.equal(anyOver([item('1', 'none')]), false, 'not found is looked for again later: not over');
   assert.deepEqual(lookedFor([item('1', 'found'), item('2', 'searching'), item('3', 'queued'), item('4', 'none')]), { done: 2, total: 4 });
 });
 
