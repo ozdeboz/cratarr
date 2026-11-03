@@ -12,16 +12,21 @@ import { keep, readKept } from './keptStore';
 const NAME = 'account';
 const LS = 'cratarr-who';
 
-function stored(): string | null {
+/** The key kept in localStorage: its name, `''`, or null for nobody; undefined where none is kept there (or it cannot
+ *  be read), so the kept store's copy counts instead. Nobody kept there is an answer (signed out), never a gap. */
+function stored(): string | null | undefined {
   try {
-    const v = JSON.parse(localStorage.getItem(LS) ?? 'null');
+    const raw = localStorage.getItem(LS);
+    if (raw === null) return undefined;
+    const v = JSON.parse(raw);
     return typeof v === 'string' ? v : null;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-let key: string | null = typeof window === 'undefined' ? null : stored();
+const kept = typeof window === 'undefined' ? undefined : stored();
+let key: string | null = kept ?? null;
 /** Learnt from /api/me in this page: the kept one read in late does not take its place. */
 let learnt = false;
 
@@ -49,7 +54,9 @@ function set(k: string | null) {
   for (const f of whenAccount) f();
 }
 
-if (typeof window !== 'undefined')
+// The kept store's copy only where localStorage keeps none (refused, or cleared): one that says nobody is not undone by
+// an older copy there (the tablet, 2026-11-04).
+if (typeof window !== 'undefined' && kept === undefined)
   readKept<unknown>(NAME).then((v) => {
     if (!learnt && key === null && typeof v === 'string') set(v);
   });
