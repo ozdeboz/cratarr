@@ -2576,13 +2576,16 @@ export type Proximity = {
     tracks: number;
     genre: number;
     artists: number;
+    /** Sounding alike, 0..1 (0.15; the owner, 2026-11-02): their energy, danceability, tempo and moods; 0 where either's
+     *  sound is not known. */
+    sound: number;
     shared_tracks: number;
     shared_artists: number;
     genres: string[];
   }[];
 };
 
-export type Signal = 'tracks' | 'genre' | 'artists';
+export type Signal = 'tracks' | 'genre' | 'artists' | 'sound';
 
 /** Collection's figures from the libraries switched on (`without`) of the server followed (decision 0065). */
 export const getInsights = (source?: string, without?: string[], period: Listening['period'] = 'all') =>
