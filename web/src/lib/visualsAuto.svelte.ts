@@ -1,7 +1,7 @@
 // The visuals by themselves (0.10; the owner, 2026-10-30): where this device says so, while music plays and the screen
 // is left alone a while, they open full screen, as a screensaver; a touch closes them (and does nothing else). Opened by
 // hand they are as before. Not in local mode (decision 0052: no visuals there).
-import { localMode } from './deviceMusic.svelte';
+import { ownMode } from './serverMode.svelte';
 import { prefs } from './prefs.svelte';
 import { playing, shownPaused } from './remote.svelte';
 import { visuals } from './visuals/shown.svelte';
@@ -14,9 +14,9 @@ if (typeof window !== 'undefined') {
   };
   const arm = () => {
     clearTimeout(timer);
-    if (!prefs.visualsAuto || visuals.open || localMode() || !plays()) return;
+    if (!prefs.visualsAuto || visuals.open || ownMode() || !plays()) return;
     timer = setTimeout(() => {
-      if (!prefs.visualsAuto || visuals.open || localMode() || !plays()) return;
+      if (!prefs.visualsAuto || visuals.open || ownMode() || !plays()) return;
       visuals.auto = true;
       visuals.side = false;
       visuals.open = true;
@@ -39,7 +39,7 @@ if (typeof window !== 'undefined') {
   $effect.root(() => {
     // Again whenever what decides it changes: the setting, the music starting or pausing, the visuals closing.
     $effect(() => {
-      void [prefs.visualsAuto, prefs.visualsAutoAfter, visuals.open, plays(), localMode()];
+      void [prefs.visualsAuto, prefs.visualsAutoAfter, visuals.open, plays(), ownMode()];
       if (!visuals.open) visuals.auto = false;
       arm();
     });

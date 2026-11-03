@@ -212,4 +212,59 @@ object Servers {
             null
         }
     }
+
+    private val reports = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /** Jellyfin's own way of naming a client, with the kept token. */
+    private fun jellyfinAuth(context: Context, s: JSONObject) =
+        "MediaBrowser Client=\"Cratarr\", Device=\"${Prefs(context).playerName}\", DeviceId=\"cratarr-${s.optString("id")}\", Version=\"${BuildConfig.VERSION_NAME}\", Token=\"${s.optString("secret")}\""
+
+    /** One request of a report, best effort: false where it was not taken. */
+    private fun send(url: String, method: String, auth: String?, body: String?): Boolean = try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 10_000
+        c.readTimeout = 15_000
+        c.requestMethod = method
+        auth?.let { c.setRequestProperty("Authorization", it) }
+        if (body != null) {
+            c.doOutput = true
+            c.setRequestProperty("Content-Type", "application/json")
+            c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        }
+        val ok = c.responseCode in 200..299
+        c.disconnect()
+        ok
+    } catch (e: IOException) {
+        false
+    }
+
+    /** That a server's track started playing here (its "now playing"), best effort, off the main thread. */
+    fun playing(context: Context, source: String, track: String) {
+        val s = ofSource(context, source) ?: return
+        reports.execute {
+            when (s.optString("kind")) {
+                "jellyfin" -> send("${base(s)}/Sessions/Playing", "POST", jellyfinAuth(context, s), JSONObject().put("ItemId", track).put("CanSeek", true).toString())
+                else -> send("${base(s)}/rest/scrobble.view?id=${Uri.encode(track)}&submission=false&v=1.16.1&c=Cratarr&f=json&${subsonicAuth(s)}", "GET", null, null)
+            }
+        }
+    }
+
+    /** A play of a server's track (played 90% through), told to that server at the time it was played, as that server
+     *  counts plays; off the main thread. A play it did not take is not kept for later (its own history, best effort). */
+    fun played(context: Context, source: String, track: String, atMs: Long) {
+        val s = ofSource(context, source) ?: return
+        reports.execute {
+            val ok = when (s.optString("kind")) {
+                "jellyfin" -> {
+                    val at = Uri.encode(java.time.Instant.ofEpochMilli(atMs).toString())
+                    val user = Uri.encode(s.optString("userId"))
+                    // Jellyfin 10.9 on, then the one before it.
+                    send("${base(s)}/UserPlayedItems/${Uri.encode(track)}?userId=$user&datePlayed=$at", "POST", jellyfinAuth(context, s), null) ||
+                        send("${base(s)}/Users/$user/PlayedItems/${Uri.encode(track)}?datePlayed=$at", "POST", jellyfinAuth(context, s), null)
+                }
+                else -> send("${base(s)}/rest/scrobble.view?id=${Uri.encode(track)}&submission=true&time=$atMs&v=1.16.1&c=Cratarr&f=json&${subsonicAuth(s)}", "GET", null, null)
+            }
+            if (!ok) Log.w(TAG, "a play was not taken by ${s.optString("kind")}")
+        }
+    }
 }

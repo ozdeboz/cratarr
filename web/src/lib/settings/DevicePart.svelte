@@ -17,7 +17,8 @@
   import { outputName } from '../playOn.svelte';
   import { allowDeviceMusic, askFolders, device, deviceMusicSettings, setFolder } from '../deviceMusic.svelte';
   import { plural } from '../insights.svelte';
-  import { localMode, switchable } from '../deviceMusic.svelte';
+  import { switchable } from '../deviceMusic.svelte';
+  import { ownMode } from '../serverMode.svelte';
   import { prefs } from '../prefs.svelte';
   import { defaultBrowserName } from '../playOnTarget.svelte';
   import Group from './Group.svelte';
@@ -102,7 +103,7 @@
 </Group>
 
 <!-- The visuals by themselves (0.10): this device's, not in local mode (no visuals there, decision 0052). -->
-{#if !localMode()}<VisualsAutoGroup />{/if}
+{#if !ownMode()}<VisualsAutoGroup />{/if}
 
 {#if inApp}
   <Group title="Local music">

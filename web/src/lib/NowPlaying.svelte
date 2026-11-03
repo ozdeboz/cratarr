@@ -42,7 +42,7 @@
   import { deckMost } from './tapeDeck';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
-  import { localMode } from './deviceMusic.svelte';
+  import { ownMode } from './serverMode.svelte';
   import HeartSheet from './HeartSheet.svelte';
   import { isCircle } from './circle';
   import Cover from './Cover.svelte';
@@ -508,7 +508,7 @@
         >
       {/if}
       <!-- Not in local mode (decision 0052; the owner: "In local mode, the visuals feature is not supported"). -->
-      {#if np && !localMode()}
+      {#if np && !ownMode()}
         <button class="corner" aria-label="Visuals" aria-haspopup="dialog" onclick={() => (visuals.open = true)} use:longpress={() => (visualsSheet = true)}><Icon name="visuals" size={22} /></button>
       {/if}
       {#if place === 'side'}
@@ -659,10 +659,10 @@
           >
           <!-- In the middle (the owner). Always there; until the server says whether it is a favourite, not to be pressed.
                Not in local mode (decision 0052: no hearts for the device's own music). -->
-          {#if !localMode() && np.source === BANDCAMP}
+          {#if !ownMode() && np.source === BANDCAMP}
             <!-- A Bandcamp track: no heart, crossed out and said so (the owner, 2026-10-26). -->
             <span class="fav off" role="img" aria-label="On Bandcamp" title="On Bandcamp"><Icon name="heartOff" size={26} /></span>
-          {:else if !localMode()}
+          {:else if !ownMode()}
           <button
             class="fav"
             class:on={favorite()}
@@ -675,7 +675,7 @@
           {/if}
           <!-- More music (Radio and Autoplay, decision 0036, amended), where the device button was; only where the page holds the queue.
                A tap opens its sheet; lit while either is on. -->
-          {#if port().radio && !localMode()}
+          {#if port().radio && !ownMode()}
             <button
               class="act radio more"
               class:on={local.radio || local.autoplay !== null}

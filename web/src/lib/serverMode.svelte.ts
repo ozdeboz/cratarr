@@ -5,6 +5,7 @@
 
 import type { AlbumView, ArtistView, ListedAlbum, PlaylistRow } from './api';
 import { appInfo, inApp } from './app.svelte';
+import { localMode } from './deviceMusic.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { servers, serverOf } from './servers.svelte';
 import type { AlbumOrder, HomeList, MusicServer, ServerAlbum, ServerArtist, ServerSignIn, ServerTrack } from './servers/server';
@@ -21,6 +22,10 @@ export function serverMode(): ServerSignIn | null {
   const id = serverIdOf(appInfo.mode);
   return servers.list?.find((s) => s.id === id) ?? null;
 }
+/** A mode of the device's own player: Local, or a server's; nothing of Cratarr's server (no visuals, no hearts of
+ *  Cratarr's, no Cratarr radio). */
+export const ownMode = () => localMode() || !!serverMode();
+
 /** The reader of the server a source names; it is gone where that server was removed. */
 export function readerOf(source: string): Promise<MusicServer> {
   const s = servers.list?.find((x) => x.id === serverIdOf(source));
