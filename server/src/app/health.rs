@@ -213,8 +213,8 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "library:musicbrainz" => ("MusicBrainz ids", "missing"),
         "library:track-numbers" => ("Track numbers", "off"),
         "library:discs" => ("Disc numbers", "off"),
-        "library:incomplete" => ("Records", "missing tracks"),
-        "library:references" => ("Records", "without a reference"),
+        "library:incomplete" => ("Tracks", "missing"),
+        "library:references" => ("References", "missing"),
         "library:rules" => ("Names", "set by a rule"),
         "files:broken" => ("Files", "unreadable"),
         "files:cut-short" => ("Files", "cut off"),
@@ -263,7 +263,7 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "library:track-numbers" => "Track numbers",
         "library:discs" => "Disc numbers",
         "library:musicbrainz" => "Missing MusicBrainz ids",
-        "library:incomplete" => "Albums missing tracks",
+        "library:incomplete" => "Records missing tracks",
         "library:references" => "References",
         "library:rules" => "Named otherwise by a rule",
         "incoming:upgrades" => "Quality replacements",
@@ -360,11 +360,11 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], discs: &[(String, String, String, String)]) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
     let kinds: [(&str, Level, &str, &str, Pick); 5] = [
-        ("cover", Level::Critical, "album without a cover", "albums without a cover", |r| r.cover),
-        ("year", Level::Warning, "album without a year", "albums without a year", |r| r.year),
-        ("genre", Level::Warning, "album without a genre", "albums without a genre", |r| r.genre),
-        ("album-artist", Level::Warning, "album without an album artist", "albums without an album artist", |r| r.album_artist),
-        ("musicbrainz", Level::Info, "album without its MusicBrainz id", "albums without their MusicBrainz id", |r| r.musicbrainz),
+        ("cover", Level::Critical, "record without a cover", "records without a cover", |r| r.cover),
+        ("year", Level::Warning, "record without a year", "records without a year", |r| r.year),
+        ("genre", Level::Warning, "record without a genre", "records without a genre", |r| r.genre),
+        ("album-artist", Level::Warning, "record without an album artist", "records without an album artist", |r| r.album_artist),
+        ("musicbrainz", Level::Info, "record without its MusicBrainz id", "records without their MusicBrainz id", |r| r.musicbrainz),
     ];
     let mut out = Vec::new();
     for (key, level, one, many, pick) in kinds {
@@ -381,8 +381,8 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
         out.push(f);
     }
     let found: [(&[(String, String, String, String)], &str, &str, &str); 2] = [
-        (numbering, "library:track-numbers", "album with track numbers off", "albums with track numbers off"),
-        (discs, "library:discs", "album that lost its disc numbers", "albums that lost their disc numbers"),
+        (numbering, "library:track-numbers", "record with track numbers off", "records with track numbers off"),
+        (discs, "library:discs", "record that lost its disc numbers", "records that lost their disc numbers"),
     ];
     for (albums, key, one, many) in found {
         if albums.is_empty() {
@@ -418,7 +418,7 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
         out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
     }
     if duplicates > 0 {
-        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "album is in two libraries at once", "albums are in two libraries at once")));
+        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "record is in two libraries at once", "records are in two libraries at once")));
     }
     if failed > 0 {
         out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
@@ -686,7 +686,7 @@ impl App {
                 Ok(items)
             })
             .await??;
-            let mut f = finding("library", "library:rules", Level::Info, count, n(count, "album a rule names otherwise", "albums a rule names otherwise"));
+            let mut f = finding("library", "library:rules", Level::Info, count, n(count, "record a rule names otherwise", "records a rule names otherwise"));
             f.items = items;
             out.push(f);
         }
@@ -750,7 +750,7 @@ impl App {
         }));
         items.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.title.cmp(&b.title)));
         let count = items.len() as u64;
-        let mut f = finding("library", "library:incomplete", Level::Warning, count, n(count, "album missing tracks", "albums missing tracks"));
+        let mut f = finding("library", "library:incomplete", Level::Warning, count, n(count, "record missing tracks", "records missing tracks"));
         f.items = items;
         Ok(vec![f])
     }
@@ -1024,7 +1024,7 @@ mod tests {
         for key in ["files:broken", "library:cover", "library:track-numbers", "library:discs", "incoming:upgrades", "server:slow", "servers:jellyfin", "players:away:Tablet", "library:check"] {
             assert_ne!(name_of(key), "Finding", "{key}");
         }
-        assert_eq!(finding("library", "library:genre", Level::Warning, 12, "12 albums without a genre").name, "Missing genres");
+        assert_eq!(finding("library", "library:genre", Level::Warning, 12, "12 records without a genre").name, "Missing genres");
     }
 
     #[test]
@@ -1032,7 +1032,7 @@ mod tests {
         for key in ["files:broken", "files:no_tags", "library:incomplete", "incoming:failed", "server:slow", "servers:jellyfin", "players:held:Tablet", "players:away:Tablet", "library:check"] {
             assert!(label_of(key).is_some(), "{key}");
         }
-        let f = finding("library", "library:cover", Level::Warning, 3, "3 albums without a cover");
+        let f = finding("library", "library:cover", Level::Warning, 3, "3 records without a cover");
         assert_eq!((f.thing.as_deref(), f.state.as_deref()), (Some("Covers"), Some("missing")));
         assert_eq!(label_of("files:something-new"), None, "the page falls back on the name");
     }
@@ -1060,8 +1060,8 @@ mod tests {
         assert_eq!(waiting[0].title, "13 better copies wait to replace Music's");
         assert_eq!(waiting[0].open, None);
         assert_eq!(waiting[1].title, "1 conversion failed");
-        assert_eq!(incoming(0, 17, 0)[0].title, "17 albums are in two libraries at once");
-        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 album is in two libraries at once"]);
+        assert_eq!(incoming(0, 17, 0)[0].title, "17 records are in two libraries at once");
+        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 record is in two libraries at once"]);
         assert!(incoming(0, 0, 0).is_empty());
     }
 
@@ -1082,7 +1082,7 @@ mod tests {
         };
         let numbers = [("al-in".to_string(), "Heads".to_string(), "Ott".to_string(), "01 twice".to_string())];
         let found = library(&[lacks("al-music", 0), lacks("al-in", 1)], &numbers, &[]);
-        assert_eq!(found.iter().map(|f| (f.key.as_str(), f.title.as_str())).collect::<Vec<_>>(), [("library:cover", "2 albums without a cover"), ("library:track-numbers", "1 album with track numbers off")]);
+        assert_eq!(found.iter().map(|f| (f.key.as_str(), f.title.as_str())).collect::<Vec<_>>(), [("library:cover", "2 records without a cover"), ("library:track-numbers", "1 record with track numbers off")]);
         let opens = |f: &Finding| f.items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
         assert_eq!(opens(&found[0]), ["al-music", "al-in"]);
         assert_eq!(opens(&found[1]), ["al-in"]);
@@ -1092,9 +1092,9 @@ mod tests {
     fn a_records_health_is_its_own_findings_and_files_and_no_other_records() {
         let own = ("cratarr".to_string(), "al-own".to_string());
         let item = |album: &str, title: &str| Item { title: title.into(), album: Some(("cratarr".into(), album.into())), ..Item::default() };
-        let mut cover = finding("library", "library:cover", Level::Critical, 2, "2 albums without a cover");
+        let mut cover = finding("library", "library:cover", Level::Critical, 2, "2 records without a cover");
         cover.items = vec![item("al-other", "Other"), item("al-own", "Own")];
-        let mut genre = finding("library", "library:genre", Level::Warning, 1, "1 album without a genre");
+        let mut genre = finding("library", "library:genre", Level::Warning, 1, "1 record without a genre");
         genre.items = vec![item("al-other", "Other")];
         let mut cut = finding("files", "files:cut-short", Level::Critical, 2, "2 files are cut off");
         cut.detail = Some("Their files hold less than they say.".into());
