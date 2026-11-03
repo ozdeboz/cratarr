@@ -195,9 +195,44 @@ class Varispeed : BaseAudioProcessor() {
         val x = playedUs * r / 1_000_000.0
         // Marks behind what has been played are done with (one kept before it).
         while (marks.size >= 2 && marks.elementAt(1).first <= x) marks.removeFirst()
-        val (g0, r0) = marks.first()
-        val inFrames = if (marks.size >= 2 && x >= g0) {
-            val (g1, r1) = marks.elementAt(1)
+        return readAt(x, r)
+    }
+
+    /**
+     * As [mediaUs], for a place counted on from Android's last word ([OutputPace]): the marks kept for the next word,
+     * and never past what was given to the output (what it was not given it cannot have played).
+     */
+    @Synchronized
+    fun mediaUsAhead(playedUs: Long): Long {
+        val r = format.sampleRate
+        if (r <= 0 || marks.isEmpty()) return playedUs
+        val x = min(playedUs * r / 1_000_000.0, marks.last().first.toDouble())
+        // From the mark at or before it (the first kept where none is).
+        var i = 0
+        while (i + 1 < marks.size && marks.elementAt(i + 1).first <= x) i++
+        return readAt(x, r, i)
+    }
+
+    /** How fast the sound given out at [playedUs] read what came in (×): as it was made, not as it is asked now; the
+     *  speed it is making at where nothing is marked past it yet. */
+    @Synchronized
+    fun madeSpeedAt(playedUs: Long): Double {
+        val r = format.sampleRate
+        if (r <= 0 || marks.size < 2) return speed.toDouble()
+        val x = playedUs * r / 1_000_000.0
+        var i = 0
+        while (i + 1 < marks.size && marks.elementAt(i + 1).first <= x) i++
+        if (i + 1 >= marks.size) return speed.toDouble()
+        val (g0, r0) = marks.elementAt(i)
+        val (g1, r1) = marks.elementAt(i + 1)
+        return if (g1 > g0) (r1 - r0) / (g1 - g0) else speed.toDouble()
+    }
+
+    /** What came in that [x] frames given out had read, between the marks from [i] (µs). */
+    private fun readAt(x: Double, r: Int, i: Int = 0): Long {
+        val (g0, r0) = marks.elementAt(i)
+        val inFrames = if (i + 1 < marks.size && x >= g0) {
+            val (g1, r1) = marks.elementAt(i + 1)
             r0 + (r1 - r0) * (x - g0) / (g1 - g0).coerceAtLeast(1)
         } else {
             r0 + (x - g0)

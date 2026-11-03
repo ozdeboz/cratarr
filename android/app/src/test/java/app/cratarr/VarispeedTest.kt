@@ -69,6 +69,31 @@ class VarispeedTest {
     }
 
     @Test
+    fun a_place_counted_on_is_read_as_it_was_made_and_never_past_what_was_given() {
+        // Half a second made at a quarter, then half a second at 1× (a wind's speed asked up while the output still
+        // plays what was made before): what the output plays is read as it was made, whatever is asked now.
+        val v = varispeed(0.25f)
+        var made = 0
+        while (made < rate / 2) made += run(v, tone(made, buffer)).size / channels
+        v.rate = 1f
+        var given = made
+        while (given < rate) given += run(v, tone(given, buffer)).size / channels
+        // 250 ms played: all of it from the quarter's sound, a sixteenth of a second of the track.
+        assertEquals(62_500.0, v.mediaUsAhead(250_000L).toDouble(), 2_000.0)
+        assertEquals(0.25, v.madeSpeedAt(250_000L), 0.01)
+        // Counted on does not drop the marks a later, earlier word needs.
+        assertEquals(62_500.0, v.mediaUsAhead(250_000L).toDouble(), 2_000.0)
+        // 800 ms played: what was made at a quarter (whole buffers: a little over half a second), then the rest at 1×.
+        val quarterUs = made * 1_000_000.0 / rate
+        // Less the speed's own following up from the quarter (over 10 ms, never a step): three quarters of 10 ms.
+        assertEquals(quarterUs * 0.25 + (800_000.0 - quarterUs) - 7_500.0, v.mediaUsAhead(800_000L).toDouble(), 2_000.0)
+        assertEquals(1.0, v.madeSpeedAt(800_000L), 0.02)
+        // Never past what was given: counted on far beyond it, it stays at the end of what was made.
+        val end = v.mediaUsAhead(given * 1_000_000L / rate)
+        assertEquals(end, v.mediaUsAhead(10_000_000L))
+    }
+
+    @Test
     fun a_speed_coming_and_going_never_clicks() {
         val v = varispeed()
         val out = ArrayList<Short>()

@@ -21,6 +21,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
@@ -57,7 +58,20 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     /** Where the tape's stream is [nowMs] (elapsed realtime), ms from its start, as its sound is heard; null before any
      *  sound since its start. Its player's own place moves only once a second (2026-10-29, the tablet: a held wind's
      *  place stood still, then leapt up to 128 s). */
-    fun tapeHeardMs(nowMs: Long, rate: Double? = null): Double? = tapeSink?.heardMs(nowMs, rate)
+    fun tapeHeardMs(nowMs: Long): Double? = tapeSink?.heardMs(nowMs)
+
+    /** The track's sink, where its sound is heard ([trackHeard]). */
+    private var trackSink: Paced? = null
+
+    /** Where in its track the track's sound is heard [nowMs]: how many tracks on from the one the output last told
+     *  (0, or 1 just across a join), and the track's own ms; null before any word since a seek. */
+    fun trackHeard(nowMs: Long): Pair<Int, Long>? = trackSink?.heardTrack(nowMs)
+
+    /** How fast the track is heard going [nowMs] (×), as its sound was made and played; null before any. */
+    fun trackHeardSpeed(nowMs: Long): Double? = trackSink?.heardSpeed(nowMs)
+
+    /** How fast the tape's stream is heard going [nowMs] (× its own), as it was made and played; null before any. */
+    fun tapeHeardSpeed(nowMs: Long): Double? = tapeSink?.heardSpeed(nowMs)
     /** The announce channel's mix-in (lib Announcer): first in the chain, so a group hears what its leader announces. */
     val announcer = Announcer.Mixer().also { Announcer.mixer = it }
     private val snapclient = Snapclient(context)
@@ -115,7 +129,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
                 override fun getCurrentPositionUs(sourceEnded: Boolean): Long = super.getCurrentPositionUs(sourceEnded).also {
                     if (it != AudioSink.CURRENT_POSITION_NOT_SET && LiveSound.listener != null) LiveSound.heard(it - if (leads) bufferMs * 1000 else 0)
                 }
-            }
+            }.also { trackSink = it }
         }
     }
 
@@ -152,42 +166,74 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     private open class Paced(sink: AudioSink, private val speed: Varispeed) : ForwardingAudioSink(sink) {
         @Volatile private var start = C.TIME_UNSET
 
-        /** Where its sound was last heard (the player asks every few ms): µs since the first sound after the flush,
-         *  when (elapsed realtime, ns), and how fast it goes on from there (0 paused). */
-        private class Heard(val us: Long, val atNs: Long, val rate: Double)
+        /** Where Android's output last said it was: µs of what it was given since the first sound after the flush (before
+         *  [speed]'s own), and when it said so (elapsed realtime, ns). */
+        private class Heard(val playedUs: Long, val atNs: Long)
 
         @Volatile private var heard: Heard? = null
+        /** The output's speed as it ran since then: counted on through each, never the one set now for the time before. */
+        private val pace = OutputPace()
         @Volatile private var playing = false
+
+        /** Each stream's sound since the flush: its first buffer's time and the offset its track's own times carry (the
+         *  renderer says so as each begins), so a heard place is a place in a track. */
+        private class Stream(val firstUs: Long, val offsetUs: Long)
+
+        private val streams = ArrayDeque<Stream>()
+        @Volatile private var offsetUs = 0L
+        @Volatile private var newStream = true
+
+        override fun setOutputStreamOffsetUs(outputStreamOffsetUs: Long) {
+            super.setOutputStreamOffsetUs(outputStreamOffsetUs)
+            offsetUs = outputStreamOffsetUs
+            newStream = true
+        }
 
         override fun flush() {
             start = C.TIME_UNSET
             heard = null
+            synchronized(streams) { streams.clear() }
+            newStream = true
             super.flush()
         }
 
         override fun reset() {
             start = C.TIME_UNSET
             heard = null
+            synchronized(streams) { streams.clear() }
+            newStream = true
             super.reset()
+            playing = false
+            pace.set(SystemClock.elapsedRealtimeNanos(), 0.0)
         }
 
         override fun play() {
-            playing = true
-            // On from where it stood, at the speed it plays at (the player may not ask again for a second).
-            heard = heard?.let { Heard(it.us, SystemClock.elapsedRealtimeNanos(), playbackParameters.speed.toDouble() * speed.rate) }
             super.play()
+            playing = true
+            pace.set(SystemClock.elapsedRealtimeNanos(), super.getPlaybackParameters().speed.toDouble())
         }
 
         override fun pause() {
-            playing = false
-            // Where it stops: as far as it had got, still.
-            val now = SystemClock.elapsedRealtimeNanos()
-            heard = heard?.let { Heard(it.us + ((now - it.atNs) / 1000.0 * it.rate).toLong(), now, 0.0) }
             super.pause()
+            playing = false
+            pace.set(SystemClock.elapsedRealtimeNanos(), 0.0)
+        }
+
+        override fun setPlaybackParameters(playbackParameters: PlaybackParameters) {
+            super.setPlaybackParameters(playbackParameters)
+            // The speed it gave back (over Bluetooth 0.99993 for 1×), from now; still while paused.
+            if (playing) pace.set(SystemClock.elapsedRealtimeNanos(), super.getPlaybackParameters().speed.toDouble())
         }
 
         override fun handleBuffer(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
             if (start == C.TIME_UNSET) start = maxOf(0L, presentationTimeUs)
+            if (newStream) {
+                newStream = false
+                synchronized(streams) {
+                    streams.addLast(Stream(presentationTimeUs, offsetUs))
+                    while (streams.size > STREAMS) streams.removeFirst()
+                }
+            }
             return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
         }
 
@@ -195,20 +241,47 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
             val p = super.getCurrentPositionUs(sourceEnded)
             val s = start
             if (p == AudioSink.CURRENT_POSITION_NOT_SET || s == C.TIME_UNSET || p < s) return p
-            val media = speed.mediaUs(p - s)
-            // On Android's output at its speed, then through the sound's own ([speed]).
-            val rate = if (playing && !sourceEnded) playbackParameters.speed.toDouble() * speed.rate else 0.0
-            heard = Heard(media, SystemClock.elapsedRealtimeNanos(), rate)
-            return s + media
+            val now = SystemClock.elapsedRealtimeNanos()
+            heard = Heard(p - s, now)
+            pace.forget(now)
+            // Through the sound's own speed as it was made ([speed]'s marks).
+            return s + speed.mediaUs(p - s)
         }
 
-        /** ms since the first sound after the flush, [nowMs] (elapsed realtime): as last heard, counted on for at most
-         *  [HEARD_AHEAD_MS] at [rate] (the speed it plays at now, if the caller knows it; its own as heard if not), or
-         *  not at all if it was paused; null before any. The player asks about once a second while it plays
-         *  (2026-10-29, the tablet). */
-        fun heardMs(nowMs: Long, rate: Double? = null): Double? = heard?.let { h ->
-            val ahead = (nowMs - h.atNs / 1_000_000.0).coerceIn(0.0, HEARD_AHEAD_MS)
-            h.us / 1000.0 + ahead * (if (h.rate == 0.0) 0.0 else rate ?: h.rate)
+        /**
+         * ms since the first sound after the flush, [nowMs] (elapsed realtime): where Android's output last said it was,
+         * on through each speed it ran at since ([pace]), through the sound's own speed as it was made, never past what
+         * it was given; null before any word. Nothing guessed: the player asks about once a second while it plays
+         * (2026-10-29, the tablet), and a brake counted that second at its new speed (2026-11-03).
+         */
+        fun heardMs(nowMs: Long): Double? = heard?.let { h ->
+            val ahead = pace.goneUs(h.atNs, nowMs * 1_000_000L)
+            speed.mediaUsAhead(h.playedUs + ahead.toLong()) / 1000.0
+        }
+
+        /**
+         * Where in its track the sound heard [nowMs] is (as [heardMs], counted on through each speed it ran at): the
+         * track's own ms, and how many tracks on from the one heard at the output's last word (1 where the place counted
+         * on has crossed into the next before the player was told). Null before any word.
+         */
+        fun heardTrack(nowMs: Long): Pair<Int, Long>? {
+            val h = heard ?: return null
+            val s = start.takeIf { it != C.TIME_UNSET } ?: return null
+            val atUs = s + speed.mediaUsAhead(h.playedUs + pace.goneUs(h.atNs, nowMs * 1_000_000L).toLong())
+            val toldUs = s + speed.mediaUsAhead(h.playedUs)
+            synchronized(streams) {
+                if (streams.isEmpty()) return null
+                val i = streams.indexOfLast { it.firstUs <= atUs }.coerceAtLeast(0)
+                val told = streams.indexOfLast { it.firstUs <= toldUs }.coerceAtLeast(0)
+                return (i - told) to (atUs - streams.elementAt(i).offsetUs) / 1000
+            }
+        }
+
+        /** How fast its stream is heard going [nowMs] (× its own): the output's speed then, times the speed the sound
+         *  heard then was made at; null before any word. */
+        fun heardSpeed(nowMs: Long): Double? = heard?.let { h ->
+            val ns = nowMs * 1_000_000L
+            pace.at(ns) * speed.madeSpeedAt(h.playedUs + pace.goneUs(h.atNs, ns).toLong())
         }
     }
 
@@ -606,9 +679,9 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
 
     companion object {
         private const val TAG = "CratarrSyncPlay"
+        /** Streams a sink keeps (a gapless queue's joins since its last flush). */
+        private const val STREAMS = 16
         private const val SNAP_TAG = "snapclient"
-        /** How long a heard place is counted on without the player asking again (a stall stops it there). */
-        private const val HEARD_AHEAD_MS = 1_500.0
 
         // Snapcast's binary protocol (its doc/binary_protocol.md), as server/src/snapcast/proto.rs speaks it.
         private const val CODEC_HEADER = 1
