@@ -147,7 +147,7 @@
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
   const handed = $derived(glass.one && !beside);
-  const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'requests' } : null);
+  const pill = () => (!beside ? { filter: false, view: false, search: 'requests' } : null);
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 

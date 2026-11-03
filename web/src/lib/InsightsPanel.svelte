@@ -48,7 +48,6 @@
   const pill = () =>
     filters.length || views.length || !beside || view === 'map'
       ? {
-          device: false,
           filter: filters.length > 0,
           view: views.length > 0,
           filterLit: leftOut,

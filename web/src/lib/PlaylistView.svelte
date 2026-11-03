@@ -2074,11 +2074,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     editing || crateEditing
       ? selecting
         ? null
-        : { view: false, device: false, filter: false, extra: editActions }
+        : { view: false, filter: false, extra: editActions }
       : {
           view: true,
           order: listOrder,
-          device: !playing(),
           filter: filterable,
           tempos: listTempos,
           kind,
