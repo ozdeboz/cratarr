@@ -49,9 +49,9 @@
 
   const NAME: Record<ReferenceSource, string> = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', bandcamp: 'Bandcamp', acoustid: 'AcoustID' };
   const LEAD: Record<Reference['state'], string> = { agrees: 'on', differs: 'warn', found: 'off', missing: '' };
-  /** What it says besides its words: tracks, year, type; guessed until confirmed. */
+  /** What it says besides its words: tracks (where its words do not count them), year, type; guessed until confirmed. */
   const lineOf = (r: Reference) =>
-    [r.said, r.tracks ? `${r.tracks} ${r.tracks === 1 ? 'track' : 'tracks'}` : '', r.year ? String(r.year) : '', r.type ?? '', r.guessed && !r.confirmed ? 'Guessed' : '']
+    [r.said, r.tracks && !/\btracks?\b/.test(r.said) ? `${r.tracks} ${r.tracks === 1 ? 'track' : 'tracks'}` : '', r.year ? String(r.year) : '', r.type ?? '', r.guessed && !r.confirmed ? 'Guessed' : '']
       .filter(Boolean)
       .join(' · ');
 
@@ -81,9 +81,10 @@
     {#each r.sources as x (x.source)}
       {@const counts = r.counting === x.source}
       <Item lead={LEAD[x.state]} name={NAME[x.source] ?? x.source} line={lineOf(x)} tone={x.state === 'differs' ? 'warn' : null} value={counts ? 'Counts' : null} busy={busy === x.source} wrap>
-        {#if x.url}<a class="page" href={x.url} target="_blank" rel="noopener noreferrer">Page</a>{/if}
-        {#if me.admin && x.guessed && !x.confirmed && x.state !== 'missing'}<button class="use" disabled={!!busy} onclick={() => void choose(x.source, { confirm: x.source })}>Confirm</button>{/if}
-        {#if me.admin && !counts && x.state !== 'missing'}<button class="use" disabled={!!busy} onclick={() => void choose(x.source, { counting: x.source })}>Use this</button>{/if}
+        <!-- The row's own buttons, as every settings row's (lib/settings/Item). -->
+        {#if x.url}{@const url = x.url}<button onclick={() => window.open(url, '_blank', 'noopener')}>Page</button>{/if}
+        {#if me.admin && x.guessed && !x.confirmed && x.state !== 'missing'}<button disabled={!!busy} onclick={() => void choose(x.source, { confirm: x.source })}>Confirm</button>{/if}
+        {#if me.admin && !counts && x.state !== 'missing'}<button disabled={!!busy} onclick={() => void choose(x.source, { counting: x.source })}>Use this</button>{/if}
       </Item>
     {/each}
   </Group>
@@ -110,24 +111,6 @@
 {/if}
 
 <style>
-  .page,
-  .use {
-    flex: none;
-    padding: 6px 12px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-size: 14px;
-    text-decoration: none;
-    cursor: pointer;
-  }
-
-  .use:disabled {
-    opacity: 0.5;
-  }
-
   /* The record's lengths and each source's, track by track; one off by more than five seconds marked. */
   .lengths {
     display: grid;
