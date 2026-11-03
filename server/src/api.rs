@@ -308,6 +308,12 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/track-intake", get(track_intake).post(track_intake_add).delete(track_intake_clear))
             .route("/api/track-intake/approve", post(track_intake_approve))
             .route("/api/track-intake/{id}", axum::routing::delete(track_intake_drop))
+            .route("/api/track-intake/{id}/now", post(track_intake_now))
+            // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, whole records fetched on a tick.
+            .route("/api/soulseek", get(soulseek).delete(soulseek_clear))
+            .route("/api/soulseek/approve", post(soulseek_approve))
+            .route("/api/soulseek/{id}/now", post(soulseek_now))
+            .route("/api/soulseek/{id}", axum::routing::delete(soulseek_drop))
             .route("/api/track-files", get(track_files))
             .route("/api/track-files/fetch", post(start_file_fetch))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
@@ -6408,10 +6414,54 @@ async fn track_intake_approve(State(app): State<Arc<App>>, Json(b): Json<IntakeA
     Json(crate::app::track_intake::approve(&app, &picked))
 }
 
+/// A track searched now, whatever its wait (0.15: one not found is searched again later on its own).
+async fn track_intake_now(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::track_intake::View> {
+    Json(crate::app::track_intake::search_now(&app, &id))
+}
+
 /// One item dropped, its staged file with it.
 async fn track_intake_drop(Path(id): Path<String>) -> StatusCode {
     crate::app::track_intake::drop_item(&id);
     StatusCode::NO_CONTENT
+}
+
+/// Soulseek in Cratarr (0.15): every record of Lidarr's Wanted with its state, its folders (best first), the users that
+/// failed it and the folders set aside; and the library its records go into.
+async fn soulseek(State(app): State<Arc<App>>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::view(&app))
+}
+
+#[derive(Deserialize)]
+struct SoulseekPick {
+    id: String,
+    #[serde(default)]
+    folder: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct SoulseekApprove {
+    items: Vec<SoulseekPick>,
+}
+
+/// Found records approved (a folder given, else the best): fetched, gated and placed in turn.
+async fn soulseek_approve(State(app): State<Arc<App>>, Json(b): Json<SoulseekApprove>) -> Json<crate::app::soulseek::View> {
+    let picked: Vec<(String, Option<usize>)> = b.items.into_iter().map(|p| (p.id, p.folder)).collect();
+    Json(crate::app::soulseek::approve(&app, &picked))
+}
+
+/// A record searched now, whatever its wait.
+async fn soulseek_now(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::search_now(&app, &id))
+}
+
+/// A record taken off the list (not while fetched).
+async fn soulseek_drop(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::drop_item(&app, &id))
+}
+
+/// The placed records cleared.
+async fn soulseek_clear(State(app): State<Arc<App>>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::clear_placed(&app))
 }
 
 /// The finished items cleared.

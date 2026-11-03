@@ -57,6 +57,7 @@ pub mod incomplete;
 pub mod track_fetch;
 // Bulk intake of missing tracks (0.13, decision 0080 amended).
 pub mod track_intake;
+pub mod soulseek;
 pub mod runtime;
 pub mod discogs_facts;
 pub mod resume;

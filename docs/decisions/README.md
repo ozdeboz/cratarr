@@ -289,3 +289,7 @@ by a later record that says so in its header. A new decision takes the next numb
   as Local: the app signs in and streams itself, on this device only; added in Settings › This device › Servers; its
   library, search, playlists (edited on that server), Home (its lists) and Radio (its own mix); no crates, Discover,
   Insights or Requests. No second Cratarr server in 0.15.
+- [0099: Soulseek in Cratarr](0099-soulseek-in-cratarr.md): accepted, for 0.15; soularr goes, Lidarr stays. Lidarr's
+  Wanted searched on a ladder, each folder judged by its release (every track by title and length), fetched only with
+  a tick, the next folder when a user fails, every file gated and a folder that fails set aside whole; into its own
+  Incoming library (the fetcher "soulseek"), kept on disk.
