@@ -68,6 +68,8 @@ export type ServerPlaylist = { id: string; name: string; tracks: number; duratio
 /** Home's rows in a server's mode (the owner, 2026-11-03: "That server's lists"). */
 export type HomeList = 'added' | 'played' | 'most' | 'favourites' | 'random';
 export const HOME_LISTS: readonly HomeList[] = ['added', 'played', 'most', 'favourites', 'random'];
+/** Their names, as Home and Settings › Content say them. */
+export const HOME_LIST_NAMES: Record<HomeList, string> = { added: 'Recently added', played: 'Recently played', most: 'Most played', favourites: 'Favourites', random: 'Random' };
 
 export type AlbumOrder = 'name' | 'artist' | 'added' | 'year';
 

@@ -40,7 +40,7 @@
   import { CRATE, LIKE, viewGenre, viewLike, withoutFor } from './lib/crates.svelte';
   import { device, DEVICE, localMode } from './lib/deviceMusic.svelte';
   import { serverList, serverMode, serverSource } from './lib/serverMode.svelte';
-  import type { HomeList } from './lib/servers/server';
+  import { HOME_LIST_NAMES, HOME_LISTS, type HomeList } from './lib/servers/server';
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
@@ -67,13 +67,8 @@
    *  Home's row cards (lib/serverMode), nothing asked of Cratarr. */
   const server = serverMode();
   const serverSrc = server ? serverSource(server.id) : '';
-  const SERVER_ROWS: [HomeList, string][] = [
-    ['added', 'Recently added'],
-    ['played', 'Recently played'],
-    ['most', 'Most played'],
-    ['favourites', 'Favourites'],
-    ['random', 'Random'],
-  ];
+  // Its rows as Settings › Content has them for this server (all five, as they come, until changed).
+  const SERVER_ROWS: [HomeList, string][] = server ? (prefs.serverHome[server.id] ?? HOME_LISTS).map((w) => [w, HOME_LIST_NAMES[w]]) : [];
   let serverRows = $state<Partial<Record<HomeList, ListedAlbum[]>>>({});
   let serverFailed = $state<Partial<Record<HomeList, string>>>({});
   const readServerRow = (which: HomeList) =>
