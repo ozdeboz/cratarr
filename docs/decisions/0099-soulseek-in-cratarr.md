@@ -50,3 +50,23 @@ the next candidate by the same tick, a file that fails the gate set aside with w
 - The page lists Lidarr's Wanted with each record's state, folders and set-asides, ticks many at once, and offers
   Search now (632).
 - Not planned: other sources (Usenet, streaming). With each user's own music (0084, 0.16): the intake per library.
+
+## Amendment (2026-11-03): the fetchers are siblings
+
+The owner, 2026-11-03: "If people have Lidarr in their stack and want to keep using it, then that's legitimate. And
+if people don't want Lidarr in their stack and want to use slskd directly, this should also be possible. And from our
+app, it shouldn't make a whole lot of difference. Sure, each fetcher has its configuration, and slskd requires more
+configuration that Lidarr abstracts for our app. But they are still siblings from our point of view."
+
+- **Two fetchers, either or both:** Lidarr (it watches artists and grabs, through its own downloaders) and Soulseek
+  (Cratarr through slskd, as above). Each works without the other.
+- **What Soulseek fetches:** Cratarr's approved Requests, searched first; Lidarr's Wanted too, only where Lidarr is
+  connected. Without Lidarr nothing watches artists for new releases: that is what Lidarr adds.
+- **A request approved** goes to every fetcher connected: to Lidarr as now, and into Soulseek's list.
+- **One shape in the page:** Requests lists one list per fetcher connected, each the same: what it fetches now, what
+  it has not found yet (Lidarr, Soulseek; "Monitor" was Lidarr's). Settings › Connections groups them as Fetchers,
+  each its own page (Lidarr: its address and key; Soulseek: slskd's address, key and folder). An Incoming library's
+  "Fetched by" names its fetcher (0096: one Incoming library per fetcher).
+- The server's part (Soulseek's wanted list from Cratarr's Requests, a library's fetcher "lidarr" beside "soulseek")
+  is a5's; the page's 632's.
+
