@@ -285,7 +285,7 @@ pub fn router(app: Arc<App>) -> Router {
             )
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
-            .route("/api/intake/cards", get(intake_cards))
+            .route("/api/intake/waiting", get(intake_waiting))
             .route("/api/albums/{source}/{album}/references", get(album_references).put(choose_references))
             .route("/api/albums/{source}/{album}/card", get(intake_card))
             // A record's own Health problems (0.14): its page's and its menu's.
@@ -6490,9 +6490,10 @@ async fn look_renumber(ctx: Ctx, Path((source, album)): Path<(String, String)>) 
     started(crate::app::renumber::start(&account, &album))
 }
 
-/// Every record waiting in an Incoming library as its intake card (0.14, the owner: Health's "Records waiting for you").
-async fn intake_cards(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::app::intake_card::Card>>, ApiError> {
-    Ok(Json(crate::app::intake_card::cards(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+/// Every record waiting in an Incoming library (0.14, the owner: Health's "Records waiting for you"), each opening its
+/// card (`intake_card`).
+async fn intake_waiting(State(app): State<Arc<App>>) -> Json<Vec<crate::app::intake_card::Waiting>> {
+    Json(crate::app::intake_card::waiting(&app).await)
 }
 
 /// A record's references (0.14): each source agreeing, differing, found or missing, the one that counts, by hand.
