@@ -267,4 +267,56 @@ object Servers {
             if (!ok) Log.w(TAG, "a play was not taken by ${s.optString("kind")}")
         }
     }
+
+    /** One GET of a server's answer as JSON, with its sign-in; null where it was not answered. */
+    private fun json(url: String, auth: String?): JSONObject? = try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 10_000
+        c.readTimeout = 20_000
+        auth?.let { c.setRequestProperty("Authorization", it) }
+        val text = if (c.responseCode in 200..299) c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) } else null
+        c.disconnect()
+        text?.let(::JSONObject)
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * That server's own mix from a track (decision 0098; the owner, 2026-11-03: Radio and Autoplay are "that server's own
+     * mix"): Jellyfin's Instant Mix, Subsonic's similar songs; at most `count`, none already in `exclude`, as the page
+     * describes tracks, in `lane`. Empty where the server has none. Off the main thread.
+     */
+    fun mix(context: Context, source: String, track: String, count: Int, exclude: Set<String>, lane: String): JSONArray {
+        val s = ofSource(context, source) ?: return JSONArray()
+        val out = JSONArray()
+        fun put(id: String, name: String, artist: String?, album: String?, albumId: String?, secs: Double?) {
+            if (id.isEmpty() || id in exclude || out.length() >= count) return
+            out.put(
+                JSONObject().put("source", source).put("id", id).put("name", name)
+                    .put("artist", artist ?: JSONObject.NULL).put("album", album ?: JSONObject.NULL)
+                    .put("album_id", albumId ?: JSONObject.NULL).put("duration_secs", secs ?: JSONObject.NULL).put("lane", lane),
+            )
+        }
+        fun JSONObject.text(k: String) = optString(k).takeIf { it.isNotEmpty() && it != "null" }
+        val ask = count + exclude.size.coerceAtMost(50)
+        when (s.optString("kind")) {
+            "jellyfin" -> {
+                val items = json("${base(s)}/Items/${Uri.encode(track)}/InstantMix?userId=${Uri.encode(s.optString("userId"))}&limit=$ask", jellyfinAuth(context, s))?.optJSONArray("Items") ?: return out
+                for (i in 0 until items.length()) {
+                    val it = items.optJSONObject(i) ?: continue
+                    val artist = it.optJSONArray("Artists")?.let { a -> (0 until a.length()).joinToString(", ") { n -> a.optString(n) } }?.ifEmpty { null } ?: it.text("AlbumArtist")
+                    put(it.optString("Id"), it.optString("Name"), artist, it.text("Album"), it.text("AlbumId"), it.optLong("RunTimeTicks").takeIf { t -> t > 0 }?.let { t -> t / 10_000_000.0 })
+                }
+            }
+            else -> {
+                val songs = json("${base(s)}/rest/getSimilarSongs2.view?id=${Uri.encode(track)}&count=$ask&v=1.16.1&c=Cratarr&f=json&${subsonicAuth(s)}", null)
+                    ?.optJSONObject("subsonic-response")?.optJSONObject("similarSongs2")?.optJSONArray("song") ?: return out
+                for (i in 0 until songs.length()) {
+                    val it = songs.optJSONObject(i) ?: continue
+                    put(it.optString("id"), it.optString("title"), it.text("artist"), it.text("album"), it.text("albumId"), it.optDouble("duration").takeIf { d -> !d.isNaN() })
+                }
+            }
+        }
+        return out
+    }
 }

@@ -159,3 +159,16 @@ export async function serverPlaylistView(source: string, id: string): Promise<{ 
   for (const t of tracks) if (t.album_id && t.cover) covers.set(`${source}/${t.album_id}`, t.cover);
   return { source, title: playlist.name, rows: tracks.map(serverRow), total: tracks.length, cover: playlist.cover ? serverCoverUrl(source, playlist.cover) : null };
 }
+
+/** Whether a server has a mix of its own (decision 0098: where it has none, its mode has no Radio): asked once a
+ *  server, from a track of it; null until it has answered. */
+export const mixes = $state<Record<string, boolean>>({});
+export function askMix(source: string, track: string) {
+  if (source in mixes) return;
+  readerOf(source)
+    .then((r) => r.mix(track, 1))
+    .then(
+      (got) => (mixes[source] = got !== null),
+      () => {},
+    );
+}
