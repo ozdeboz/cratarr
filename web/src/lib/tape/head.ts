@@ -152,6 +152,15 @@ export class Marks {
     if (this.list.length > MARKS) this.list.splice(0, this.list.length - MARKS);
   }
 
+  /** The latest block's. */
+  last(): Mark | undefined {
+    return this.list[this.list.length - 1];
+  }
+
+  clear() {
+    this.list = [];
+  }
+
   private at(played: number): Mark | undefined {
     for (let i = this.list.length - 1; i >= 0; i--) if (this.list[i].frame <= played) return this.list[i];
     return undefined;
