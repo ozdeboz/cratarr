@@ -28,3 +28,13 @@ test('a small difference is eased in, half at a time, never a jump', () => {
   assert.ok(JUMP > 0.6);
   assert.equal(heardAt(a, { id: 't', pos: 11, paused: false }, 1000), a, 'as predicted: the anchor stays');
 });
+
+test('a player that says its speed is counted on at it, and from where it said a new one (no guessing)', () => {
+  // A Vinyl ramp on another player, at half speed as it says: two seconds on is one second of the track, not two.
+  const a = heardAt(null, { id: 't', pos: 10, paused: false, speed: 0.5 }, 1000);
+  assert.equal(placeOf(a, 3000), 11);
+  // It says 1× again: on from that report at 1×; the time before it is not counted again at the new speed.
+  const b = heardAt(a, { id: 't', pos: 11.2, paused: false, speed: 1 }, 3400);
+  assert.deepEqual(b, { id: 't', pos: 11.2, at: 3400, paused: false, speed: 1 });
+  assert.equal(placeOf(b, 4400), 12.2);
+});

@@ -157,7 +157,7 @@ $effect.root(() => {
       return;
     }
     const a = untrack(() => clock.anchor);
-    const next = heardAt(a, { id: np.id, pos: p.position_secs, paused: !!p.paused, rewinding: !!p.rewinding }, performance.now());
+    const next = heardAt(a, { id: np.id, pos: p.position_secs, paused: !!p.paused, rewinding: !!p.rewinding, speed: p.speed_x }, performance.now());
     if (next !== a) clock.anchor = next;
   });
   $effect(() => {

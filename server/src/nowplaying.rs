@@ -55,6 +55,11 @@ pub struct Progress {
     pub rewinding: bool,
     /// Asked to play from rest and not sounding yet (0.9.14): the page's waveform stays grey until it sounds.
     pub starting: bool,
+    /// How fast it moves, as its player says (track s per s, signed): a Cratarr player's while it winds, holds or ramps
+    /// (2026-11-03, the owner: "No guessing anywhere": the page counted another player on at 1× through a Vinyl ramp).
+    /// Left out where it says none: its own speed playing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed_x: Option<f64>,
 }
 
 const TICKS_PER_SEC: f64 = 10_000_000.0;
@@ -92,6 +97,7 @@ pub fn progress(
             estimated: false,
             rewinding: false,
             starting: false,
+            speed_x: None,
         });
     }
     let other_music = sessions.iter().any(|s| {
@@ -105,7 +111,7 @@ pub fn progress(
     if duration_secs.is_some_and(|d| elapsed > d) {
         return None;
     }
-    Some(Progress { position_secs: clamp(elapsed), duration_secs, paused: false, estimated: true, rewinding: false, starting: false })
+    Some(Progress { position_secs: clamp(elapsed), duration_secs, paused: false, estimated: true, rewinding: false, starting: false, speed_x: None })
 }
 
 /// True when the log has any audio playback entries at all (so its verdict, even "stopped", is meaningful).
@@ -240,7 +246,7 @@ mod tests {
     fn the_matching_session_gives_the_position() {
         let s = vec![sess("Web", "other", 50_000_000, false), sess("Finamp", "a", 1_234_000_000, true)];
         let p = progress("a", Some(3_240_000_000), &s, finamp, Some(0), 1_000).unwrap();
-        assert_eq!(p, Progress { position_secs: 123.4, duration_secs: Some(324.0), paused: true, estimated: false, rewinding: false, starting: false });
+        assert_eq!(p, Progress { position_secs: 123.4, duration_secs: Some(324.0), paused: true, estimated: false, rewinding: false, starting: false, speed_x: None });
     }
 
     #[test]
@@ -258,7 +264,7 @@ mod tests {
     #[test]
     fn with_no_session_reporting_music_the_start_time_gives_an_estimate() {
         let p = progress("a", Some(3_000_000_000), &[], finamp, Some(1_000), 1_090).unwrap();
-        assert_eq!(p, Progress { position_secs: 90.0, duration_secs: Some(300.0), paused: false, estimated: true, rewinding: false, starting: false });
+        assert_eq!(p, Progress { position_secs: 90.0, duration_secs: Some(300.0), paused: false, estimated: true, rewinding: false, starting: false, speed_x: None });
     }
 
     #[test]

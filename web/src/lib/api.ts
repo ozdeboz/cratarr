@@ -98,6 +98,8 @@ export type Progress = {
   position_secs: number;
   /** Its player plays a tape's rewind (Tape rewind, the app): the position goes back as reported, not run on. */
   rewinding?: boolean;
+  /** How fast it moves, as its player says (× , signed): while it winds, holds or ramps; none: its own speed. */
+  speed_x?: number;
   duration_secs: number | null;
   paused: boolean;
   /** Asked to play from rest and not sounding yet (`starting`, 2026-10-28): still, as the waveform shows it. */
