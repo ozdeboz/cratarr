@@ -36,7 +36,7 @@ export function loadHealth() {
 
 // Read again whenever what it reports on changed (lib/dataChanged): a fix written, a record kept or moved, a playlist
 // changed; what was read stays shown meanwhile. Once read, kept true for the whole page.
-whenChanged(['files', 'collection', 'incoming', 'playlists'], () => health.loaded && loadHealth());
+whenChanged(['files', 'collection', 'incoming', 'playlists', 'words'], () => health.loaded && loadHealth());
 
 /** The files' kinds of problem, each its own list in the Files part. */
 export const FILE_KINDS: { kind: FileProblem['kind']; title: string; hint: string }[] = [

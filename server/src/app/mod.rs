@@ -51,12 +51,14 @@ pub mod fix_plans;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
+pub mod file_words;
 pub mod file_runs;
 pub mod matching;
 pub mod incomplete;
 pub mod track_fetch;
 // Bulk intake of missing tracks (0.13, decision 0080 amended).
 pub mod track_intake;
+pub mod soulseek;
 pub mod runtime;
 pub mod discogs_facts;
 pub mod resume;

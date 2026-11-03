@@ -16,6 +16,12 @@ pub(crate) enum Kind {
 /// Rewrites a track's tag with `edit` (its main tag, made where it has none), through a copy whose audio must be the
 /// original's; `check` looks at the written copy before it takes the original's place.
 pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    rewrite_named(track, edit, &[], check)
+}
+
+/// As [`rewrite`], and fields lofty has no key for set by their name (0.15, decision 0097: a style as Vorbis `STYLE`,
+/// ID3v2 `TXXX:STYLE`, as the reader reads them): each named field's values replaced (none: the field gone).
+pub fn rewrite_named(track: &Path, edit: impl FnOnce(&mut Tag), by_name: &[(String, Vec<String>)], check: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     use lofty::config::{ParseOptions, WriteOptions};
     use lofty::prelude::*;
     let kind = match track.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).as_deref() {
@@ -59,7 +65,15 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
                 let (_, before) = own.clone().split_tag();
                 let mut after = before.clone();
                 edit(&mut after);
-                file.set_vorbis_comments(vorbis_edited(own, &before, &after)?);
+                let mut comments = vorbis_edited(own, &before, &after)?;
+                for (name, values) in by_name {
+                    let key = name.to_ascii_uppercase();
+                    comments.remove(&key).for_each(drop);
+                    for v in values {
+                        comments.push(key.clone(), v.clone());
+                    }
+                }
+                file.set_vorbis_comments(comments);
                 file.save_to_path(&copy, WriteOptions::default())?;
             }
             Kind::Mp3 => {
@@ -68,7 +82,17 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
                 let (_, before) = own.clone().split_tag();
                 let mut after = before.clone();
                 edit(&mut after);
-                file.set_id3v2(id3_edited(own, &before, &after));
+                let mut tag = id3_edited(own, &before, &after);
+                for (name, values) in by_name {
+                    use lofty::id3::v2::{ExtendedTextFrame, Frame};
+                    let key = name.to_ascii_uppercase();
+                    tag.retain(|f| !matches!(f, Frame::UserText(t) if t.description.eq_ignore_ascii_case(&key)));
+                    // One frame, its values as the reader splits them.
+                    if !values.is_empty() {
+                        tag.insert(Frame::UserText(ExtendedTextFrame::new(lofty::TextEncoding::UTF8, key.clone(), values.join("; "))));
+                    }
+                }
+                file.set_id3v2(tag);
                 file.save_to_path(&copy, WriteOptions::default())?;
             }
         }

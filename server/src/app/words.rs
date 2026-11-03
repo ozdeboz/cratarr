@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
+pub mod catalogue;
 pub mod store;
 
 /// The kinds, in search's order.
@@ -50,6 +51,24 @@ const GENRES: [&str; 26] = [
 
 /// An artist's words count for each of their albums at this share.
 const ARTIST_SHARE: f32 = 0.5;
+
+/// Words changed, by any way (a record's or a track's set by hand, aliases, a merge, a kind's sources or writing): the
+/// pages read the open record, the Library and Health again (the live channel's `changed` of area `words`).
+static CHANGED: std::sync::OnceLock<tokio::sync::broadcast::Sender<()>> = std::sync::OnceLock::new();
+
+fn changed_channel() -> &'static tokio::sync::broadcast::Sender<()> {
+    CHANGED.get_or_init(|| tokio::sync::broadcast::channel(16).0)
+}
+
+/// Told that the words changed.
+pub fn tell_changed() {
+    let _ = changed_channel().send(());
+}
+
+/// Listened to by the live channel.
+pub fn subscribe() -> tokio::sync::broadcast::Receiver<()> {
+    changed_channel().subscribe()
+}
 
 /// A word's key: its words as search reads them ("Hip-Hop" and "hip hop" are one).
 pub fn key(word: &str) -> String {
@@ -146,8 +165,15 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
         }
     }
     let overrides = serve.userdata.overrides()?;
-    let rules = serve.rules();
-    let aliases = HashMap::from([(Kind::Genre, rules.genre_aliases.iter().map(|a| (a.to.clone(), a.from.clone())).collect::<Vec<_>>())]);
+    // Each kind's aliases and the sources switched off for it (the Catalogue sheet, 0.15); a track's own words by hand.
+    let aliases = catalogue::aliases(serve);
+    let off = catalogue::off(serve);
+    let mut own: HashMap<String, HashMap<Kind, Vec<String>>> = HashMap::new();
+    for (track, kind, words) in serve.userdata.all_track_words()? {
+        if let Some(k) = Kind::of(&kind) {
+            own.entry(track).or_default().insert(k, words);
+        }
+    }
     let records: Vec<RecordIn> = order
         .iter()
         .map(|id| {
@@ -165,7 +191,7 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
                         heard: f.clap_moods.is_some(),
                         heard_styles: f.styles.clone(),
                         heard_moods: f.moods.clone(),
-                        hand: HashMap::new(),
+                        hand: own.get(&track_id(f)).cloned().unwrap_or_default(),
                     }
                 })
                 .collect();
@@ -173,7 +199,7 @@ pub fn build(serve: &crate::serve::Serve, album_of: &HashMap<String, String>, fa
             RecordIn { id: id.clone(), tracks, said: said.remove(id).unwrap_or_default(), hand }
         })
         .collect();
-    let lib = store::Library::of(&records, &aliases);
+    let lib = store::Library::of(&records, &aliases).with_off(off);
     let mut out = Stored::default();
     for r in &records {
         let w = store::record(&lib, r);

@@ -26,8 +26,8 @@
   import MenuGroup from './MenuGroup.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import SelectBar from './SelectBar.svelte';
-  import { approveIntake, clearIntake, copyLine, dropIntake, getIntake, startIntake, type Intake, type IntakeItem } from './replaceTrack';
-  import { anyOver, approvePayload, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, tickable, underWay } from './trackIntake';
+  import { approveIntake, clearIntake, copyLine, dropIntake, getIntake, searchIntakeNow, startIntake, type Intake, type IntakeItem } from './replaceTrack';
+  import { anyOver, approvePayload, copyOf, foundIds, itemEnd, itemLine, itemTone, keptTicks, lookedFor, searchable, tickable, underWay } from './trackIntake';
   import { toast } from './toast.svelte';
   import { openFinding } from './health';
   import { health, loadHealth, problems, recordIn, recordProblem } from './healthReport.svelte';
@@ -285,6 +285,14 @@
     undone = new Set([...undone, i.id]);
     loadHealth();
   }
+  /** Search now (0.15): a track not found, or gone wrong, looked for at once, its wait set aside. */
+  async function searchItemNow(i: IntakeItem) {
+    try {
+      intake = await searchIntakeNow(i.id);
+    } catch (e) {
+      toast.fail(e, "It isn't being looked for");
+    }
+  }
   /** A track of the review list tapped: its copies to pick from, looking for it by hand, or out of the list. */
   let pickOf = $state<IntakeItem | null>(null);
   async function dropItem(i: IntakeItem) {
@@ -510,6 +518,8 @@
                 >
               {:else if i.state === 'added' && i.undo && !undone.has(i.id)}
                 <button onclick={() => void undoItem(i)}>Undo</button>
+              {:else if searchable(i)}
+                <button onclick={() => void searchItemNow(i)}>Search now</button>
               {:else if itemEnd(i)}
                 <span class="ended">{itemEnd(i)}</span>
               {/if}

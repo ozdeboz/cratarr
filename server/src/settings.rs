@@ -58,7 +58,15 @@ pub struct LibraryPolicy {
     /// server's (a folder of Cratarr's own: the folder's name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The fetcher whose records come into it, an Incoming library's (decision 0096: one per fetcher; [`FETCHERS`]):
+    /// "soulseek", Cratarr fetching from Soulseek itself (0.15; the owner, 2026-11-03: its own Incoming library, not
+    /// Lidarr's), or "lidarr", where Lidarr's imports land.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetcher: Option<String>,
 }
+
+/// The fetchers a library may be fetched into by (decision 0099's amendment, the owner 2026-11-03: siblings).
+pub const FETCHERS: [&str; 2] = ["lidarr", "soulseek"];
 
 /// A library's quality limit (decision 0096's amendment, the owner, 2026-11-02: in place of the format): lossless files
 /// above it become FLAC at it as they move in or are kept into it; lossy files and those within it move as they are.
@@ -409,7 +417,29 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
                 return Err(ChangeError::Invalid(format!("{}: {lib}'s name is longer than {NAME_MOST} characters or holds control characters", d.id)));
             }
         }
-        d.libraries.policies.retain(|_, p| p.quality.is_some() || p.colour.is_some() || p.name.is_some());
+        // Its fetcher (decision 0099's amendment: Lidarr and Soulseek siblings): one of them, an Incoming library's, one
+        // library each.
+        let mut fetched_by: Vec<&str> = Vec::new();
+        for (lib, p) in d.libraries.policies.iter_mut() {
+            p.fetcher = p.fetcher.as_deref().map(str::trim).filter(|f| !f.is_empty()).map(str::to_string);
+            let Some(f) = p.fetcher.as_deref() else { continue };
+            if !FETCHERS.contains(&f) {
+                return Err(ChangeError::Invalid(format!("{}: {lib}'s fetcher {f:?} is not one of {}", d.id, FETCHERS.join(", "))));
+            }
+            if !d.libraries.incoming.iter().any(|i| i == lib) {
+                return Err(ChangeError::Invalid(format!("{}: {lib} is not an Incoming library: only an Incoming library is fetched into", d.id)));
+            }
+        }
+        for p in d.libraries.policies.values() {
+            if let Some(f) = p.fetcher.as_deref() {
+                if fetched_by.contains(&f) {
+                    return Err(ChangeError::Invalid(format!("{}: {f} fetches into one Incoming library only", d.id)));
+                }
+                fetched_by.push(f);
+            }
+        }
+        // An entry with nothing set goes (its fetcher counts: one with only that was dropped, 2026-11-03).
+        d.libraries.policies.retain(|_, p| p.quality.is_some() || p.colour.is_some() || p.name.is_some() || p.fetcher.is_some());
         for secret in fields.iter().filter(|f| f.kind == FieldKind::Secret) {
             if source::text(&d.values, secret.key).is_some() {
                 continue;
@@ -521,6 +551,21 @@ mod tests {
         let out = merge(std::slice::from_ref(&saved), vec![named]).unwrap();
         assert_eq!(out[0].libraries.name_of("i").as_deref(), Some("Vinyl rips"));
         assert!(!out[0].libraries.policies.contains_key("j"));
+        // A fetcher: kept alone; only one of the siblings, only an Incoming library's, one library each.
+        let mut fetch = jf("jf", "http://a", None);
+        fetch.libraries.incoming = vec!["i".into(), "k".into()];
+        fetch.libraries.policies.insert("i".into(), LibraryPolicy { fetcher: Some("soulseek".into()), ..Default::default() });
+        let out = merge(std::slice::from_ref(&saved), vec![fetch.clone()]).unwrap();
+        assert_eq!(out[0].libraries.policies.get("i").and_then(|p| p.fetcher.as_deref()), Some("soulseek"));
+        let mut twice = fetch.clone();
+        twice.libraries.policies.insert("k".into(), LibraryPolicy { fetcher: Some("soulseek".into()), ..Default::default() });
+        assert!(merge(std::slice::from_ref(&saved), vec![twice]).is_err());
+        let mut odd = fetch.clone();
+        odd.libraries.policies.insert("k".into(), LibraryPolicy { fetcher: Some("usenet".into()), ..Default::default() });
+        assert!(merge(std::slice::from_ref(&saved), vec![odd]).is_err());
+        let mut music = fetch.clone();
+        music.libraries.policies.insert("m".into(), LibraryPolicy { fetcher: Some("lidarr".into()), ..Default::default() });
+        assert!(merge(std::slice::from_ref(&saved), vec![music]).is_err());
         let mut long = jf("jf", "http://a", None);
         long.libraries.policies.insert("i".into(), LibraryPolicy { name: Some("x".repeat(81)), ..Default::default() });
         assert!(merge(std::slice::from_ref(&saved), vec![long]).is_err());

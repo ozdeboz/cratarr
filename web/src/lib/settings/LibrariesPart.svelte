@@ -5,8 +5,8 @@
   // page, `tags`). Saved as they change (the owner, 2026-11-02: no Unsaved changes bar).
   import ChoiceRow from './ChoiceRow.svelte';
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
-  import { fileFacts, loadFileFacts, switchFileFacts } from '../fileFacts.svelte';
-  import { folderStatus, getCatalogue, type FolderStatus, type ServerLibrary } from '../api';
+  import { KIND_NAMES, readWords, words } from '../words.svelte';
+  import { folderStatus, getCatalogue, type Fetcher, type FolderStatus, type CatalogueKind, type ServerLibrary } from '../api';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
@@ -17,17 +17,38 @@
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
+  import WordsPart from './WordsPart.svelte';
+  import WrittenSheet from './WrittenSheet.svelte';
 
   let { thing = null }: { thing?: string | null } = $props();
 
   // The choice sheets' choices: a use, a quality limit.
   const USE_OPTIONS = USES.map((x) => ({ value: x.id, label: x.label }));
   const QUALITY_OPTIONS = QUALITIES.map((q) => ({ value: q.id, label: q.label }));
+  // An Incoming library's fetcher (decision 0099's amendment; the owner, 2026-11-03: Lidarr and Soulseek siblings): whose
+  // records come into it, one library per fetcher (decision 0096), chosen here; another library that had it, none.
+  const FETCHER_OPTIONS: { value: 'none' | Fetcher; label: string }[] = [
+    { value: 'none', label: 'Nothing' },
+    { value: 'lidarr', label: 'Lidarr' },
+    { value: 'soulseek', label: 'Soulseek' },
+  ];
+  const fetcherLabel = (f: Fetcher | null | undefined) => FETCHER_OPTIONS.find((o) => o.value === (f ?? 'none'))!.label;
+  function setFetcher(l: Lib, v: 'none' | Fetcher) {
+    const f = v === 'none' ? null : v;
+    if (f) for (const x of libsOf(l.d)) if (x.id !== l.id && ed.policyOf(l.d, x.id).fetcher === f) ed.setPolicy(l.d, x.id, { fetcher: null });
+    ed.setPolicy(l.d, l.id, { fetcher: f });
+  }
+  let choosingFetcher = $state<Lib | null>(null);
   const useLabel = (id: string) => USES.find((u) => u.id === id)?.label ?? id;
   const qualityLabel = (id: string) => QUALITIES.find((q) => q.id === id)?.label ?? id;
-  const FILE_FACTS_MORE =
-    "A record's release types, its year and Classical (as a genre) written into its files' tags, in Music, Incoming, Lidarr's folder and each user's own music, so other apps read them as Cratarr does. Nothing is written without you: Health says which records' files differ, and writes them when you tap Write.";
-  $effect(() => loadFileFacts());
+  // The Catalogue's words (decision 0097): what is written into the files, in its sheet; sources and spellings, a page
+  // per kind (lib/settings/WordsPart).
+  $effect(() => readWords());
+  let writtenOpen = $state(false);
+  const writtenLine = $derived.by(() => {
+    const on = (words.value?.kinds ?? []).filter((k) => k.write && k.kind !== 'year').map((k) => (k.kind === 'type' ? 'Types and years' : KIND_NAMES[k.kind]));
+    return on.length ? on.join(', ') : 'Nothing';
+  });
   const USE_MORE = 'Music: the playlists and the tracks that can go in them. Incoming: new music waiting to be heard.';
   const QUALITY_MORE =
     "As albums move into this library or are kept into it, only lossless files above the limit are converted, to FLAC at the limit; lossy files and those within it stay as they are. Sync and Export don't follow it.";
@@ -115,10 +136,21 @@
     const d = ed.drafts.find((x) => x.id === rest.slice(0, at));
     return d ? (libsOf(d).find((l) => l.id === rest.slice(at + 1)) ?? null) : null;
   });
-  nameThing(() => (thing === 'tags' ? 'Tag splitting' : open ? open.name : null));
+  const wordsThing = $derived(thing === 'words' || !!thing?.startsWith('words:'));
+  nameThing(() =>
+    thing === 'tags'
+      ? 'Tag splitting'
+      : thing === 'words'
+        ? 'Sources and spellings'
+        : thing?.startsWith('words:')
+          ? (KIND_NAMES[thing.slice(6) as CatalogueKind] ?? null)
+          : open
+            ? open.name
+            : null,
+  );
   // A library gone (removed, or its server's): back to the list.
   $effect(() => {
-    if (thing && thing !== 'tags' && !open) backFromThing('libraries');
+    if (thing && thing !== 'tags' && !wordsThing && !open) backFromThing('libraries');
   });
 
   // The catalogue's progress, while this part shows.
@@ -193,6 +225,12 @@
       />
     {/if}
     {#if u === 'incoming'}
+      <Item
+        name="Fetched by"
+        more="Whose records come into this library: Lidarr's, or Soulseek's that Cratarr fetches. One library each."
+        value={fetcherLabel(pol.fetcher)}
+        onclick={() => (choosingFetcher = l)}
+      />
       <Item name="Dot colour" swatch={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onclick={() => (colouring = l)} />
     {/if}
   </Group>
@@ -204,6 +242,8 @@
       <Item name="Remove folder" kind="danger" onclick={() => (removing = l)} />
     </Group>
   {/if}
+{:else if wordsThing && thing}
+  <WordsPart {thing} />
 {:else if thing === 'tags'}
   <Group title="Separators" more={TAGS_MORE}>
     <Item
@@ -336,6 +376,10 @@
       line={[`Artists: ${ed.ruleText.artistSeps || 'not split'}`, `Genres: ${ed.ruleText.genreSeps || 'not split'}`].join(' · ')}
       onclick={() => openThing('libraries', 'tags')}
     />
+    {#if words.value}
+      <Item name="Written to files" line={writtenLine} onclick={() => (writtenOpen = true)} />
+      <Item name="Sources and spellings" onclick={() => openThing('libraries', 'words')} />
+    {/if}
     <!-- The analysis on this server and Beat This! (0.9.8: the environment's until then; lib/serverRuntime). -->
     {#if runtime.value}
       {@const r = runtime.value}
@@ -356,16 +400,12 @@
       {#if r.restart?.some((x) => x === 'analysis' || x === 'beat_this')}<Item lead="warn" name="Takes effect when Cratarr restarts" />{/if}
     {/if}
     {#if runtime.error}<Item lead="bad" name={runtime.error} />{/if}
-    {#if fileFacts.value}
-      <Item
-        name="Write types and years into files"
-        more={FILE_FACTS_MORE}
-        toggle={{ checked: fileFacts.value.on, onchange: (on) => void switchFileFacts(on) }}
-      />
-    {/if}
   </Group>
 {/if}
 
+{#if writtenOpen}
+  <WrittenSheet onclose={() => (writtenOpen = false)} />
+{/if}
 {#if browsing}
   {@const d = browsing}
   <FolderBrowser chosen={chosenOf(d)} onadd={(p) => addFolder(d, p)} onclose={() => (browsing = null)} />
@@ -425,6 +465,16 @@
 {#if choosingUse}
   {@const l = choosingUse}
   <ChoiceSheet title={`Use of ${l.name}`} options={USE_OPTIONS} value={ed.useOf(l.d, l.id)} onchange={(v) => ed.setUse(l.d, l.id, v)} onclose={() => (choosingUse = null)} />
+{/if}
+{#if choosingFetcher}
+  {@const l = choosingFetcher}
+  <ChoiceSheet
+    title={`What fetches into ${l.name}`}
+    options={FETCHER_OPTIONS}
+    value={ed.policyOf(l.d, l.id).fetcher ?? 'none'}
+    onchange={(v) => setFetcher(l, v)}
+    onclose={() => (choosingFetcher = null)}
+  />
 {/if}
 {#if choosingQuality}
   {@const l = choosingQuality}

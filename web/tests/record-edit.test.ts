@@ -3,9 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { classicalChoiceOf, classicalOfChoice, editableOf, isSecondary, sharedOf, shownOf, toSend, yearOf } = await import('../src/lib/recordEdit.ts');
+const { classicalChoiceOf, classicalOfChoice, editableOf, isSecondary, sharedOf, shownOf, toSend, wordsOfView, yearOf } = await import('../src/lib/recordEdit.ts');
 
-const rec = (o: Partial<ReturnType<typeof editableOf>> = {}) => ({ type: 'album', secondary: [], year: 1994, genres: ['Jazz'], classical: false, set: [], ...o });
+const rec = (o: Partial<ReturnType<typeof editableOf>> = {}) => ({ type: 'album', secondary: [], year: 1994, genres: ['Jazz'], classical: false, styles: [], moods: [], tags: [], set: [], ...o });
 
 test('several records share a value or are mixed; set by hand when any has it set', () => {
   const two = [rec(), rec({ type: 'ep', set: ['type'] })];
@@ -70,4 +70,18 @@ test("only MusicBrainz's twelve secondary types are offered and sent", () => {
   assert.equal(isSecondary('audio drama'), true);
   assert.equal(isSecondary('Live'), false);
   assert.equal(isSecondary('bootleg'), false);
+});
+
+test("the words' hand layer (decision 0097): styles, moods and tags set and reset as genres are", () => {
+  const one = [rec({ styles: ['Hard Bop'], set: ['styles'] })];
+  assert.deepEqual(toSend(one, { styles: ['Hard Bop', 'Cool', 'Cool'] }), { styles: ['Hard Bop', 'Cool'] });
+  assert.deepEqual(toSend(one, { styles: null, tags: null }), { styles: null });
+  assert.deepEqual(toSend(one, { moods: ['calm'] }), { moods: ['calm'] });
+  // One record's words from its view: each kind's words, genre from `genres` only where the view has none.
+  const v = { genres: ['Jazz'], words: { kinds: [{ kind: 'style', words: [{ word: 'Hard Bop' }] }, { kind: 'tag', words: [{ word: 'late night' }] }] } };
+  assert.deepEqual(wordsOfView(v), { genres: [], styles: ['Hard Bop'], moods: [], tags: ['late night'] });
+  assert.deepEqual(wordsOfView({ genres: ['Jazz'] }).genres, ['Jazz']);
+  const r = editableOf({ year: 2001 }, wordsOfView(v));
+  assert.equal(r.tags?.[0], 'late night');
+  assert.equal(editableOf({ year: 2001 }).moods, null);
 });

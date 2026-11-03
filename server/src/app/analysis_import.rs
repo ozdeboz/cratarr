@@ -19,6 +19,9 @@ pub struct ImportCounts {
     pub unknown: u64,
     /// Not a line of this kind.
     pub bad: u64,
+    /// Of `stored`, the files analysed already as they are, which only took what their analysis lacked (rhythm).
+    #[serde(default)]
+    pub filled: u64,
 }
 
 #[derive(Deserialize)]
@@ -48,7 +51,7 @@ pub fn import_batch(cat: &Catalogue, folder: i64, lines: &[Vec<u8>], counts: &mu
             Some(_) => counts.stale += 1,
         }
     }
-    cat.store_analyses(&keep)?;
+    counts.filled += cat.store_analyses(&keep)? as u64;
     counts.stored += keep.len() as u64;
     Ok(())
 }
@@ -87,8 +90,19 @@ mod tests {
         ];
         let mut counts = ImportCounts::default();
         import_batch(&cat, 0, &lines, &mut counts).unwrap();
-        assert_eq!(counts, ImportCounts { stored: 1, stale: 1, unknown: 1, bad: 1 });
+        assert_eq!(counts, ImportCounts { stored: 1, stale: 1, unknown: 1, bad: 1, filled: 0 });
         assert_eq!(cat.analysis_of(0, "A/B/01 x.flac").unwrap().track_gain_db, -6.0);
+
+        // Measured again (0.15, rhythm): the analysis kept, only four on the floor taken.
+        let mut again = a.clone();
+        again["track_gain_db"] = (-1.0).into();
+        again["rhythm"] = serde_json::json!({ "four": 0.75 });
+        let line = serde_json::json!({ "rel": "A/B/01 x.flac", "size": size, "mtime": mtime, "analysis": again }).to_string().into_bytes();
+        let mut counts = ImportCounts::default();
+        import_batch(&cat, 0, &[line], &mut counts).unwrap();
+        assert_eq!((counts.stored, counts.filled), (1, 1));
+        let kept = cat.analysis_of(0, "A/B/01 x.flac").unwrap();
+        assert_eq!((kept.track_gain_db, kept.rhythm.map(|r| r.four)), (-6.0, Some(0.75)));
         std::fs::remove_dir_all(&d).ok();
     }
 }

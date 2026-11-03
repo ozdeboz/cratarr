@@ -54,12 +54,13 @@ pub struct Held {
 /// The records whose files differ, as last counted, and the library build they were counted for.
 static DIFFER: Mutex<Option<(i64, HashSet<String>)>> = Mutex::new(None);
 
+/// On unless switched off: type and year write by default (decision 0097, the Catalogue sheet's Write).
 pub fn is_on(serve: &crate::serve::Serve) -> bool {
-    serve.userdata.import_choice(CHOICE).ok().flatten().is_some_and(|c| c == "1")
+    serve.userdata.import_choice(CHOICE).ok().flatten().is_none_or(|c| c == "1")
 }
 
 pub fn set_on(serve: &crate::serve::Serve, on: bool) -> Result<()> {
-    serve.userdata.set_import_choice(CHOICE, if on { "1" } else { "" })
+    serve.userdata.set_import_choice(CHOICE, if on { "1" } else { "0" })
 }
 
 /// A year as a date's first four digits.

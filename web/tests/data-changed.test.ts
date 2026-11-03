@@ -38,3 +38,15 @@ test("a run's end reads the files' kind again, once for several close together; 
   assert.equal(files, 1, 'no longer once let go');
   offLists();
 });
+
+test("a change of words (decision 0097) reads what shows words again, and nothing else", async () => {
+  let words = 0;
+  let files = 0;
+  const offWords = whenChanged(['words'], () => words++);
+  const offFiles = whenChanged(['files'], () => files++);
+  emit('changed', { area: 'words' });
+  await sleep(400);
+  assert.deepEqual([words, files], [1, 0]);
+  offWords();
+  offFiles();
+});

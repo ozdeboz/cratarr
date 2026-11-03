@@ -312,7 +312,7 @@
   let incomingChanged = $state(0);
   $effect(() => on<{ area: string }>('changed', ({ area }) => (area === 'incoming' || area === 'collection') && album && incomingChanged++));
   // A record's files written (lib/dataChanged: a fix's lengths, tags, numbers): its rows read again, as after a save.
-  $effect(() => whenChanged(['files'], () => untrack(() => album || artist) && saved++));
+  $effect(() => whenChanged(['files', 'words'], () => untrack(() => album || artist) && saved++));
 
   // The album's place in the Library's list (lib/albums.svelte.ts): its library, and what Cratarr may do with it there,
   // for its menu. Read when an album shows and the list is not known yet, and again when an album list changed (the
@@ -1284,6 +1284,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let crateMenuOpen = $state(false);
   /** A badge's menu (decision 0058: a genre badge, a related playlist: what its tap opens, by its subject). */
   let badgeMenu = $state<string | null>(null);
+  /** A word's long-pressed under a record's title: the record and that kind's words (its menu's Remove from this record). */
+  let badgeFrom = $state<{ album: string; words: string[] } | null>(null);
   /** The ticked tracks' menu (the select bar's ⋮, lib/SelectionMenu): their rows, for its Remove from and Exclude from. */
   let tickedMenu = $state.raw<{ rows: PlaylistRow[]; tracks: LocalTrack[] } | null>(null);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
@@ -2469,7 +2471,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
           <!-- A genre opens in the panel (its own crate). -->
           {#if recordWords}
-            {#each recordWords as row (row.kind)}<p class="genres"><span class="row-head">{row.label}</span>{#each row.words as w (w)}<button onclick={() => viewOver(`${CRATE}${row.kind}:${w}`)} use:longpress={() => (badgeMenu = `${CRATE}${row.kind}:${w}`)}>{w}</button>{/each}</p>{/each}
+            {#each recordWords as row (row.kind)}<p class="genres"><span class="row-head">{row.label}</span>{#each row.words as w (w)}<button onclick={() => viewOver(`${CRATE}${row.kind}:${w}`)} use:longpress={() => ((badgeMenu = `${CRATE}${row.kind}:${w}`), (badgeFrom = album ? { album: album.id, words: row.words } : null))}>{w}</button>{/each}</p>{/each}
           {:else if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)} use:longpress={() => (badgeMenu = CRATE + GENRE + g)}>{g}</button>{/each}</p>{/if}
           <!-- A playlist's or a crate's telling artists (its profile's), each opening the artist, headed "Typical artists";
                not an album's or an artist's own, whose header names them. -->
@@ -2931,7 +2933,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   />
 {/if}
 {#if badgeMenu}
-  <SubjectMenu subject={badgeMenu} onclose={() => (badgeMenu = null)} />
+  <SubjectMenu subject={badgeMenu} from={badgeFrom} onclose={() => ((badgeMenu = null), (badgeFrom = null))} />
 {/if}
 {#if crateMenuOpen && crate}
   <CrateMenu id={crate} onclose={() => (crateMenuOpen = false)} onsave={() => (making = { name: '', saving: false })} />

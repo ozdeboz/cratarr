@@ -98,6 +98,8 @@ export type Progress = {
   position_secs: number;
   /** Its player plays a tape's rewind (Tape rewind, the app): the position goes back as reported, not run on. */
   rewinding?: boolean;
+  /** How fast it moves, as its player says (× , signed): while it winds, holds or ramps; none: its own speed. */
+  speed_x?: number;
   duration_secs: number | null;
   paused: boolean;
   /** Asked to play from rest and not sounding yet (`starting`, 2026-10-28): still, as the waveform shows it. */
@@ -994,7 +996,8 @@ export type Values = Record<string, string | string[]>;
  *  they move in or are kept into it; `none`: as they are; `hr96`, `hr48`: up to 24-bit/96 or 48 kHz; `cd`: 16/44.1. */
 export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
 /** A library's own settings (decision 0034): its quality limit, its dot's colour and its name. */
-export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null };
+/** `fetcher`: an Incoming library's, whose records come into it (decision 0096: one Incoming library per fetcher). */
+export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null; fetcher?: Fetcher | null };
 export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
 
 export type LibraryUse = 'music' | 'incoming' | 'unused';
@@ -1101,6 +1104,29 @@ export type FileFacts = { on: boolean; differ: number };
 export const getFileFacts = () => quietly<FileFacts>('/api/settings/file-facts');
 export const setFileFacts = (on: boolean) =>
   request<FileFacts>('/api/settings/file-facts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
+
+// The Catalogue's words (decision 0097, the controls; administrators'): per kind whether Cratarr's are written into the
+// files, its sources on or off, and its spellings that are one word. Type and year share one write (0.13's switch): set
+// either, both come back changed. Their sources and spellings are none.
+/** The words' kinds (WordKind) and the two facts the files take with them. */
+export type CatalogueKind = WordKind | 'type' | 'year';
+/** `hand` is always on. */
+export type SourceSwitch = { id: WordSource; name: string; on: boolean };
+export type WordAliases = { word: string; aliases: string[] };
+export type WordsOfKind = { kind: CatalogueKind; write: boolean; sources: SourceSwitch[]; aliases: WordAliases[] };
+export type WordsCatalogue = { kinds: WordsOfKind[] };
+export const getWordsCatalogue = () => request<WordsCatalogue>('/api/words/catalogue');
+export const setWordsKind = (kind: CatalogueKind, part: { write?: boolean; sources?: Partial<Record<WordSource, boolean>> }) =>
+  request<WordsOfKind>(`/api/words/catalogue/${kind}`, json('PUT', part));
+/** A word's other spellings (none: its entry goes), back as the kind's list. */
+export const setWordAliases = (kind: CatalogueKind, word: string, aliases: string[]) =>
+  request<WordAliases[]>(`/api/words/aliases/${kind}`, json('PUT', { word, aliases }));
+/** `from` read as `into` everywhere (Merge into…; Rename everywhere with a new spelling), back as the kind's list. */
+export const mergeWord = (kind: CatalogueKind, from: string, into: string) => request<WordAliases[]>(`/api/words/${kind}/merge`, json('POST', { from, into }));
+/** A track's own words where they differ from its record's: a list sets them, null goes back to the record's. */
+export type TrackWords = Partial<Record<WordKind, string[] | null>>;
+export const setTrackWords = (source: string, id: string, words: TrackWords) =>
+  request<TrackWords>(`${trackPath(source, id)}/words`, json('PUT', words));
 
 // One way to change files (decision 0092; administrators'): a plan reviewed (what each record's files hold, what
 // Cratarr holds, and from where), applied as a run; every run in one shape, also told live (`file_run`).
@@ -2091,7 +2117,10 @@ export type AlbumRequest = {
   album_state?: RequestedAlbum;
 };
 /** The Requests page: the account's own, everyone's waiting ones for those who answer them (else null). */
-export type RequestsView = { mine: AlbumRequest[]; waiting: AlbumRequest[] | null; may: Permissions; fetcher: boolean };
+/** `fetchers`: those connected, configured and answering (decision 0099's amendment: Lidarr and Soulseek siblings,
+ *  either or both); an approved request goes to each. */
+export type Fetcher = 'lidarr' | 'soulseek';
+export type RequestsView = { mine: AlbumRequest[]; waiting: AlbumRequest[] | null; may: Permissions; fetchers: Fetcher[] };
 /** An album Lidarr is looking for, or fetching (`done`, 0 to 1, and what it says of it). */
 export type WatchedAlbum = { album: string; artist: string; release_group: string | null; year: number | null; done: number | null; status: string | null };
 export type Watching = { fetching: WatchedAlbum[]; looking: WatchedAlbum[]; more: number };
@@ -2225,6 +2254,14 @@ export const scrobbleLastFm = (api_key: string, api_secret: string, callback: st
 export const setScrobbleOn = (target: string, on: boolean) =>
   putJson(`/api/scrobble/${encodeURIComponent(target)}`, { on });
 export const forgetScrobble = (target: string) => request<void>(`/api/scrobble/${encodeURIComponent(target)}`, { method: 'DELETE' });
+/** Soulseek in Cratarr (decision 0099): the records Lidarr wants as Cratarr searches and fetches them; found ones
+ *  fetched on a tick (`folder`: one picked, else the best), one searched now, one out of the list, those placed
+ *  cleared. Administrators'. */
+export const getSoulseek = () => request<import('./soulseekRules').SoulseekView>('/api/soulseek');
+export const approveSoulseek = (items: { id: string; folder?: number }[]) => post<import('./soulseekRules').SoulseekView>('/api/soulseek/approve', { items });
+export const soulseekNow = (id: string) => post<import('./soulseekRules').SoulseekView>(`/api/soulseek/${encodeURIComponent(id)}/now`, {});
+export const dropSoulseekItem = (id: string) => request<import('./soulseekRules').SoulseekView>(`/api/soulseek/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const clearSoulseekPlaced = () => request<import('./soulseekRules').SoulseekView>('/api/soulseek', { method: 'DELETE' });
 /** Every listen imported from ListenBrainz out of the asking account's history again: how many. */
 export const undoListenBrainz = () => request<{ removed: number }>('/api/history/listenbrainz', { method: 'DELETE' });
 /** Tells the server tracks heard; answers with the ids it has (now or before). */
@@ -2576,13 +2613,16 @@ export type Proximity = {
     tracks: number;
     genre: number;
     artists: number;
+    /** Sounding alike, 0..1 (0.15; the owner, 2026-11-02): their energy, danceability, tempo and moods; 0 where either's
+     *  sound is not known. */
+    sound: number;
     shared_tracks: number;
     shared_artists: number;
     genres: string[];
   }[];
 };
 
-export type Signal = 'tracks' | 'genre' | 'artists';
+export type Signal = 'tracks' | 'genre' | 'artists' | 'sound';
 
 /** Collection's figures from the libraries switched on (`without`) of the server followed (decision 0065). */
 export const getInsights = (source?: string, without?: string[], period: Listening['period'] = 'all') =>

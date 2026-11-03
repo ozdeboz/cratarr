@@ -1,5 +1,6 @@
 // A record's own values set by hand (0.13; the owner, 2026-10-31: per-record overrides, administrators'): its type, its
-// secondary types, its year, its genres and whether it is classical, one household-wide value each, kept by Cratarr
+// secondary types, its year, its genres and whether it is classical, and (decision 0097, the words' hand layer) its
+// styles, moods and tags, one household-wide value each, kept by Cratarr
 // beside what it finds (PUT /api/albums/overrides). Pure, so the tests take it as it is: what the Edit sheet
 // (lib/RecordEdit) shows for one record or several (a value they share, or mixed; whether it is set by hand), and what
 // it sends: only the fields changed, a value to set, null to go back to what Cratarr finds.
@@ -28,8 +29,13 @@ const SECONDARY_LABEL: Record<string, string> = { 'dj-mix': 'DJ-mix', 'mixtape/s
 export const isSecondary = (v: string): boolean => (SECONDARY_TYPES as readonly string[]).includes(v);
 export const secondaryLabel = (v: string) => SECONDARY_LABEL[v] ?? v.charAt(0).toUpperCase() + v.slice(1);
 
-export type OverrideField = 'type' | 'secondary' | 'year' | 'genres' | 'classical';
-export const OVERRIDE_FIELDS: readonly OverrideField[] = ['type', 'secondary', 'year', 'genres', 'classical'];
+export type OverrideField = 'type' | 'secondary' | 'year' | 'genres' | 'classical' | 'styles' | 'moods' | 'tags';
+export const OVERRIDE_FIELDS: readonly OverrideField[] = ['type', 'secondary', 'year', 'genres', 'classical', 'styles', 'moods', 'tags'];
+/** The words' fields (decision 0097), each a kind of the record's words. */
+export type WordField = 'genres' | 'styles' | 'moods' | 'tags';
+export const WORD_FIELDS: readonly WordField[] = ['genres', 'styles', 'moods', 'tags'];
+export const WORD_KIND: Record<WordField, 'genre' | 'style' | 'mood' | 'tag'> = { genres: 'genre', styles: 'style', moods: 'mood', tags: 'tag' };
+export const WORD_FIELD_NAME: Record<WordField, string> = { genres: 'Genres', styles: 'Styles', moods: 'Moods', tags: 'Tags' };
 
 /** What a PUT sets: a field present sets it (null: back to what Cratarr finds); one absent is left alone. */
 export type OverrideSet = {
@@ -38,16 +44,22 @@ export type OverrideSet = {
   year?: number | null;
   genres?: string[] | null;
   classical?: boolean | null;
+  styles?: string[] | null;
+  moods?: string[] | null;
+  tags?: string[] | null;
 };
 
-/** A record as the sheet reads it: what it is now (found or set), and which of those were set by hand. `genres` null:
- *  not read (several records' genres are not asked for). */
+/** A record as the sheet reads it: what it is now (found or set), and which of those were set by hand. A word field
+ *  null: not read (several records' words are not asked for). */
 export type Editable = {
   type: string | null;
   secondary: string[];
   year: number | null;
   genres: string[] | null;
   classical: boolean | null;
+  styles: string[] | null;
+  moods: string[] | null;
+  tags: string[] | null;
   set: readonly OverrideField[];
 };
 
@@ -106,14 +118,22 @@ export function classicalChoiceOf(records: readonly Editable[], draft: OverrideS
 }
 export const classicalOfChoice = (c: ClassicalChoice): boolean | null => (c === 'yes' ? true : c === 'no' ? false : null);
 
-/** A record of the Library's list as the sheet reads it (its genres given where read). A classical mark from before
+/** A record of the Library's list as the sheet reads it (its words given where read). A classical mark from before
  *  the overrides counts as set by hand. */
 export function editableOf(
   a: { type?: string | null; secondary?: string[]; year: number | null; classical?: boolean; classical_mark?: string | null; set?: readonly string[] },
-  genres: string[] | null = null,
+  words: Partial<Record<WordField, string[]>> | null = null,
 ): Editable {
   const set = OVERRIDE_FIELDS.filter((f) => a.set?.includes(f) || (f === 'classical' && !!a.classical_mark));
-  return { type: a.type ?? null, secondary: a.secondary ?? [], year: a.year, genres, classical: a.classical ?? null, set };
+  const w = (f: WordField) => (words ? (words[f] ?? []) : null);
+  return { type: a.type ?? null, secondary: a.secondary ?? [], year: a.year, genres: w('genres'), classical: a.classical ?? null, styles: w('styles'), moods: w('moods'), tags: w('tags'), set };
+}
+
+/** One record's words as its view has them (decision 0097's one store, the album view's `words`), per field; its
+ *  genres from `genres` where the view has no words. */
+export function wordsOfView(v: { genres: string[]; words?: { kinds: { kind: string; words: { word: string }[] }[] } }): Record<WordField, string[]> {
+  const of = (k: string) => v.words?.kinds.find((x) => x.kind === k)?.words.map((x) => x.word) ?? [];
+  return { genres: v.words ? of('genre') : v.genres, styles: of('style'), moods: of('mood'), tags: of('tag') };
 }
 
 /** A year typed: a whole year from 1000 to 2999, else none. */

@@ -240,7 +240,7 @@ export type Prefs = {
   insightsPeriod: 'week' | 'month' | 'year' | 'all';
   /** Listening's own sections (its second row): what was heard, or the taste it makes. */
   listeningView: 'history' | 'profile';
-  signals: { tracks: boolean; genre: boolean; artists: boolean };
+  signals: { tracks: boolean; genre: boolean; artists: boolean; sound: boolean };
   /** Genre territories on Insights' Map (the owner, 2026-10-24: a switch, off until turned on). */
   mapTerritories: boolean;
   /** The genres the Map's territories show, in the order ticked (their colours follow it); null: the most shared six. */
@@ -488,7 +488,7 @@ export const DEFAULTS: Prefs = {
   tracksCount: 'listed',
   insightsPeriod: 'all',
   listeningView: 'history',
-  signals: { tracks: true, genre: true, artists: true },
+  signals: { tracks: true, genre: true, artists: true, sound: true },
   mapTerritories: false,
   mapGenres: null,
   playerWidth: 400,
@@ -675,7 +675,7 @@ function read(): Prefs {
       if (typeof saved.mapTerritories === 'boolean') p.mapTerritories = saved.mapTerritories;
       if (Array.isArray(saved.mapGenres) && saved.mapGenres.every((g: unknown) => typeof g === 'string')) p.mapGenres = saved.mapGenres;
       if (saved.signals && typeof saved.signals === 'object') {
-        for (const k of ['tracks', 'genre', 'artists'] as const) {
+        for (const k of ['tracks', 'genre', 'artists', 'sound'] as const) {
           if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];
         }
       }

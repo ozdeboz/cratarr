@@ -8,7 +8,7 @@
 //! whole (frames that would not decode, clipping, clicks, a lossy wall) and AcoustID's recordings for it. A card shows
 //! those checks waiting until then.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
