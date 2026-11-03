@@ -303,3 +303,7 @@ by a later record that says so in its header. A new decision takes the next numb
   served once switched, downloads with a holder per account and caches hidden at sign-out, the whole index with vectors
   and fits offline, Radio's picker in the rules crate; one migration at first start, rehearsed; two previews. Where it
   meets 0084, 0085 and 0091, open for later.
+- [0102: The tape engine on the device](0102-the-tape-engine-on-the-device.md): accepted, for 0.16; every wind's sound
+  made where it is heard, from the track decoded in memory (the playing track only), the engine's arithmetic in the
+  rules crate (0101); a streamed track's file fetched whole as it starts; the app and the page together; the server's
+  wind, rewind and brake streams retired.
