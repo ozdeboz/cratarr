@@ -164,6 +164,7 @@
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
   import { serverPlaylistOf } from './panel.svelte';
+  import { whenChanged } from './dataChanged';
   import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
@@ -310,6 +311,8 @@
   // changes.
   let incomingChanged = $state(0);
   $effect(() => on<{ area: string }>('changed', ({ area }) => (area === 'incoming' || area === 'collection') && album && incomingChanged++));
+  // A record's files written (lib/dataChanged: a fix's lengths, tags, numbers): its rows read again, as after a save.
+  $effect(() => whenChanged(['files'], () => untrack(() => album || artist) && saved++));
 
   // The album's place in the Library's list (lib/albums.svelte.ts): its library, and what Cratarr may do with it there,
   // for its menu. Read when an album shows and the list is not known yet, and again when an album list changed (the
