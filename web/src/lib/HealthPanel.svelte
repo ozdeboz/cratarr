@@ -418,6 +418,12 @@
     {/if}
     <!-- A folder's files not heard yet, by name. -->
     {#each x.files ?? [] as file (file)}<Item name={file} wrap />{/each}
+    <!-- A file's own row (Files' kinds): where it is and what is wrong, whole (its row cuts it off), and its fix where
+         the finding has one (the owner, 2026-11-03: it opened to nothing). -->
+    {#if !x.album && !x.playlist && !x.track && !x.files?.length && x.line}
+      <Item name={x.line} wrap />
+      {#if fixable}<Item name="Review the fixes" line="Certain ones ticked, each written into its files" onclick={() => openFixes(findingKey)} />{/if}
+    {/if}
     <!-- A track's file cut off or breaking off (2026-10-28): a better copy of it, as the track's menu finds one. -->
     {#if x.track && x.album && finds}<Item name="Find a better copy" onclick={() => (betterOf = { source: x.album![0], album: x.album![1], track: x.track! })} />{/if}
     <!-- No cover: Change cover, straight on its choices (Upload and an address in its corner). -->
