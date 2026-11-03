@@ -3,6 +3,7 @@
 // shows, its own results or everywhere's (the globe beside the search, lib/ContentControls). The library's kinds and what is not in it from the
 // server, the pages and Settings' parts from the browser (lib/everywhere).
 import { hiddenLibraries } from './listFilter.svelte';
+import { ownMode } from './serverMode.svelte';
 import { search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
 import { isSpotifyView } from './discoverModes';
@@ -164,7 +165,8 @@ $effect.root(() => {
   });
   $effect(() => {
     const q = pageView.query.trim();
-    if (q.replace(/\s/g, '').length < 3) return void (globalSearch.beyond = null);
+    // Beyond the library is Cratarr's (decision 0076): not in a mode of the device's own player (decision 0098).
+    if (q.replace(/\s/g, '').length < 3 || ownMode()) return void (globalSearch.beyond = null);
     const kept = beyondKept.get(q.toLowerCase());
     if (kept) return void (globalSearch.beyond = { q, albums: kept });
     let gone = false;

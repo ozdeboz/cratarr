@@ -198,7 +198,7 @@
     {#if !allowed}
       <!-- Another user's view of an administrator's part: nothing. -->
     {:else if section === 'device'}
-      <DevicePart />
+      <DevicePart {thing} />
     {:else if section === 'network'}
       <NetworkPart />
     {:else if section === 'sync'}

@@ -16,6 +16,7 @@
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
+  import { addToServerPlaylist, isServerSource, serverStar, serverTrackMenuState } from './serverMode.svelte';
   import { openRadio } from './radioAsk.svelte';
   import { can, findsTracks } from './capabilities.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
@@ -39,6 +40,7 @@
   import MenuGroup from './MenuGroup.svelte';
   import { BANDCAMP, previewPage } from './bandcampPreview';
   import DiscoverEntries from './DiscoverEntries.svelte';
+  import DownloadEntry from './DownloadEntry.svelte';
   import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
   import { withHeard } from './trackFacts.svelte';
   import type { IconName } from './Icon.svelte';
@@ -133,13 +135,16 @@
 
   /** One of the device's own (local mode, decision 0052): none of Cratarr's (hearts, playlists, downloads, share,
    *  details); Play next, Add to queue, its album and artist, the web search. */
-  const onDevice = $derived(t?.source === 'device');
+  /** A server's track in its mode (decision 0098): as the device's own, nothing of Cratarr's; its heart its star
+   *  there, Add to playlist that server's. */
+  const onServer = $derived(isServerSource(t?.source));
+  const onDevice = $derived(t?.source === 'device' || onServer);
   // Another track's playlists and heart, asked for when its menu opens.
   let other = $state<TrackState | null>(null);
   $effect(() => {
     if (forPlaying || !track || track.source === 'device') return;
     const { source, id } = track;
-    trackState(source, id).then(
+    (isServerSource(source) ? serverTrackMenuState(source, id) : trackState(source, id)).then(
       (v) => (other = v),
       (e) => toast.fail(e, "This track's playlists couldn't be loaded"),
     );
@@ -341,6 +346,13 @@
   async function heart() {
     if (forPlaying) return toggleFavorite();
     if (!track || !other || other.favorite === null) return;
+    if (isServerSource(track.source)) {
+      const [source, id, on] = [track.source, track.id, !other.favorite];
+      return serverStar(source, 'track', id, on).then(
+        () => other && (other = { ...other, favorite: on }),
+        (e) => toast.fail(e, "The favourite didn't change"),
+      );
+    }
     try {
       other = await setTrackFavorite(track.source, track.id, !other.favorite);
       // The rows' hearts show it too.
@@ -448,7 +460,7 @@
   {:else if e === 'otherVersions'}
     {#if versions}<MenuEntry icon="music" label="Other versions" onclick={() => (step = 'versions')} />{/if}
   {:else if e === 'discover'}
-    <DiscoverEntries page={bandcampPage} artist={t.artist} album={t.album} {onclose} />
+    {#if !onServer}<DiscoverEntries page={bandcampPage} artist={t.artist} album={t.album} {onclose} />{/if}
   {:else if e === 'favourite'}
     {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
   {:else if e === 'excludeEverywhere'}
@@ -475,7 +487,10 @@
   {:else if e === 'addToPlaylist'}
     {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
   {:else if e === 'download'}
-    {#if !onDevice && t.source !== BANDCAMP}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (step = 'download')} />{/if}
+    {#if onServer}
+      <!-- A server's track (decision 0098): downloaded from that server, kept for its mode. -->
+      <DownloadEntry tracks={[{ source: t.source, id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id ?? null }]} />
+    {:else if !onDevice && t.source !== BANDCAMP}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (step = 'download')} />{/if}
   {:else if e === 'share'}
     {#if !onDevice}<MenuEntry icon="share" label="Share" onclick={shareIt} />{/if}
   {:else if e === 'info'}
@@ -572,9 +587,24 @@
     {:else if step === 'tempo'}
       <TempoStep source={t.source} tracks={[{ id: t.id, name: t.name }]} />
     {:else if step === 'lists'}
+      {#if onServer && track}
+        {@const tr = track}
+        <!-- A server's playlists (decision 0098): added to there; which hold it is not known, so no ticks. -->
+        <PlaylistToggles title="Add to playlist" {playlists} ticked={() => false}>
+          {#snippet entry(p)}<MenuEntry
+              icon="playlists"
+              label={p.name}
+              onclick={() => {
+                onclose();
+                addToServerPlaylist(tr.source, p.id, tr.id).catch((e) => toast.fail(e, "It wasn't added"));
+              }}
+            />{/snippet}
+        </PlaylistToggles>
+      {:else}
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}
       </PlaylistToggles>
+      {/if}
     {:else if step === 'versions' && !versions}
       {#if versionsError}<Notice text={versionsError} onretry={() => versionsAgain++} />{:else if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
     {:else if step === 'versions' && versions}

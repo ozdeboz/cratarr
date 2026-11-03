@@ -42,6 +42,7 @@
   import { deckMost } from './tapeDeck';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
+  import { askMix, isServerSource, mixes, ownMode, serverMode } from './serverMode.svelte';
   import { localMode } from './deviceMusic.svelte';
   import HeartSheet from './HeartSheet.svelte';
   import { isCircle } from './circle';
@@ -62,6 +63,10 @@
 
   // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
   const np = $derived(shownPlaying());
+  // A server's track (decision 0098): whether that server has a mix of its own, asked once, for its Radio.
+  $effect(() => {
+    if (np && isServerSource(np.source)) askMix(np.source, np.id);
+  });
   // The tape deck in the row under the title while an effect runs (lib/TapeDeck; the owner, 2026-10-27): a Start and
   // stop ramp or a rewind; kept DECK_HOLD_MS after the last of them ends (the owner, 2026-10-27: the fade only after the
   // last event), a new one starting the count again; then the row back over a second's fade. Or always, where asked.
@@ -508,7 +513,7 @@
         >
       {/if}
       <!-- Not in local mode (decision 0052; the owner: "In local mode, the visuals feature is not supported"). -->
-      {#if np && !localMode()}
+      {#if np && !ownMode()}
         <button class="corner" aria-label="Visuals" aria-haspopup="dialog" onclick={() => (visuals.open = true)} use:longpress={() => (visualsSheet = true)}><Icon name="visuals" size={22} /></button>
       {/if}
       {#if place === 'side'}
@@ -675,7 +680,7 @@
           {/if}
           <!-- More music (Radio and Autoplay, decision 0036, amended), where the device button was; only where the page holds the queue.
                A tap opens its sheet; lit while either is on. -->
-          {#if port().radio && !localMode()}
+          {#if port().radio && !localMode() && (!serverMode() || mixes[np.source] === true)}
             <button
               class="act radio more"
               class:on={local.radio || local.autoplay !== null}
