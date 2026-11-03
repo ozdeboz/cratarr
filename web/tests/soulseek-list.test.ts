@@ -9,7 +9,8 @@ const folder = (user: string, lossless = true) => ({ user, dir: `Music\\${user}\
 const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
   ({
     id,
-    record: { artist: 'M. Rivers', album: 'Late Set', release_group: 'rg', year: 1998, requested: true },
+    record: { artist: 'M. Rivers', album: 'Late Set', release_group: 'rg', year: 1998 },
+    request: 7,
     state,
     folders: state === 'found' ? [folder('ann'), folder('bo', false)] : [],
     chosen: state === 'found' ? 0 : null,
@@ -23,11 +24,11 @@ const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
 
 test("a record's row says where it stands", () => {
   assert.equal(folderLine(folder('ann')), 'FLAC · free slot · 2.5 MB/s · ann');
-  assert.equal(itemLine(item('1', 'found')), 'M. Rivers · 1998 · requested · FLAC · free slot · 2.5 MB/s · ann');
-  assert.equal(itemLine(item('1', 'waiting')), 'M. Rivers · 1998 · requested · Waiting to be searched');
-  assert.equal(itemLine(item('1', 'waiting', { misses: 3, due: 1_000 + 86_400 }), 1_000), 'M. Rivers · 1998 · requested · Not found · 3 times · again tomorrow');
-  assert.equal(itemLine(item('1', 'fetching', { percent: 42.4 })), 'M. Rivers · 1998 · requested · Fetching · 42%');
-  assert.equal(itemLine(item('1', 'stuck', { why: 'No release to judge it by', set_aside: [{ user: 'x', path: 'p', why: {} }] })), 'M. Rivers · 1998 · requested · No release to judge it by · 1 folder set aside');
+  assert.equal(itemLine(item('1', 'found')), 'M. Rivers · 1998 · FLAC · free slot · 2.5 MB/s · ann');
+  assert.equal(itemLine(item('1', 'waiting')), 'M. Rivers · 1998 · Waiting to be searched');
+  assert.equal(itemLine(item('1', 'waiting', { misses: 3, due: 1_000 + 86_400 }), 1_000), 'M. Rivers · 1998 · Not found · 3 times · again tomorrow');
+  assert.equal(itemLine(item('1', 'fetching', { percent: 42.4 })), 'M. Rivers · 1998 · Fetching · 42%');
+  assert.equal(itemLine(item('1', 'stuck', { why: 'No release to judge it by', set_aside: [{ user: 'x', path: 'p', why: {} }] })), 'M. Rivers · 1998 · No release to judge it by · 1 folder set aside');
 });
 
 test('only found records are ticked; Fetch sends the ticked, each with its picked folder', () => {

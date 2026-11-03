@@ -6,7 +6,9 @@ export type SoulseekState = 'waiting' | 'searching' | 'found' | 'approved' | 'fe
 export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number };
 export type SoulseekItem = {
   id: string;
-  record: { artist: string; album: string; release_group: string; year?: number | null; requested: boolean };
+  record: { artist: string; album: string; release_group: string; year?: number | null };
+  /** The approved Request it fetches (every one is one: decision 0099's amendment). */
+  request: number;
   state: SoulseekState;
   folders: SoulseekFolder[];
   /** The folder to be fetched (its place in `folders`). */
@@ -46,7 +48,7 @@ export function againIn(due: number, now: number): string | null {
 
 /** Its row's line: the artist and year, then where it stands. */
 export function itemLine(i: SoulseekItem, now = Math.floor(Date.now() / 1000)): string {
-  const head = [i.record.artist, i.record.year ? String(i.record.year) : null, i.record.requested ? 'requested' : null];
+  const head = [i.record.artist, i.record.year ? String(i.record.year) : null];
   const best = i.folders[i.chosen ?? 0];
   const where = ((): (string | null)[] => {
     switch (i.state) {
