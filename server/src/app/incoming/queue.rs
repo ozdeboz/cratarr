@@ -51,7 +51,8 @@ struct Job {
     year: Option<String>,
     /// The music files to convert, inside the album folder.
     files: Vec<String>,
-    /// The quality limit they are converted to: the target library's.
+    /// The quality limit they are converted to: the target library's; jobs from before the limit were to CD.
+    #[serde(default = "cd")]
     limit: crate::convert::Limit,
     /// How many are converted.
     done: usize,
@@ -116,6 +117,11 @@ pub(super) struct Queue {
     wake: std::sync::Arc<tokio::sync::Notify>,
     /// The whole queue after every change, for pages that follow it (`/api/events`).
     tell: tokio::sync::broadcast::Sender<Vec<JobView>>,
+}
+
+/// The limit of a job from before a library had one (0.13's Keep converted to CD).
+fn cd() -> crate::convert::Limit {
+    crate::convert::CD
 }
 
 /// Where a file is converted to: in the staging folder, named `.flac`.
@@ -628,6 +634,9 @@ mod tests {
         let mut rx = q.subscribe();
         q.update(1, |j| j.done = 1);
         assert_eq!(rx.try_recv().unwrap().iter().find(|v| v.id == 1).map(|v| v.done), Some(1), "every change is told, whole");
+        let mut old = serde_json::to_value(job(4, State::Done, None)).unwrap();
+        old.as_object_mut().unwrap().remove("limit");
+        assert_eq!(serde_json::from_value::<Job>(old).unwrap().limit, crate::convert::CD, "a job from 0.13, before the limit, was to CD");
         std::fs::remove_dir_all(&d).ok();
     }
 }

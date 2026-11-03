@@ -285,3 +285,7 @@ by a later record that says so in its header. A new decision takes the next numb
   name, colour, naming and format; Incoming one library per fetcher, its records the only new ones, Keep into a chosen
   main library; Health over every library; each user's own music a main library with an owner. Amends 0009, 0034 and
   0084.
+- [0098: Modes per server](0098-modes-per-server.md): accepted, for 0.15. A Jellyfin or a Subsonic server in the app,
+  as Local: the app signs in and streams itself, on this device only; added in Settings › This device › Servers; its
+  library, search, playlists (edited on that server), Home (its lists) and Radio (its own mix); no crates, Discover,
+  Insights or Requests. No second Cratarr server in 0.15.
