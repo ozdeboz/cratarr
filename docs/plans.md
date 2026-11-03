@@ -75,7 +75,7 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   sound alike; a switch beside shared tracks, genre and artists.
 - **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)), **the whole library's index on the
   device, and crates and the queue on the device** (offline first's fourth and fifth steps, one version: the owner,
-  2026-11-02, "17 sounds like 16 work"). Then all servers in one library, on the device (below), as a view over the
+  2026-11-02, "17 sounds like 16 work"); settled in [0101](decisions/0101-own-music-one-track-id-library-on-the-device.md). Then all servers in one library, on the device (below), as a view over the
   modes' indexes.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
