@@ -40,6 +40,7 @@
   import MenuGroup from './MenuGroup.svelte';
   import { BANDCAMP, previewPage } from './bandcampPreview';
   import DiscoverEntries from './DiscoverEntries.svelte';
+  import DownloadEntry from './DownloadEntry.svelte';
   import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
   import { withHeard } from './trackFacts.svelte';
   import type { IconName } from './Icon.svelte';
@@ -486,7 +487,10 @@
   {:else if e === 'addToPlaylist'}
     {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
   {:else if e === 'download'}
-    {#if !onDevice && t.source !== BANDCAMP}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (step = 'download')} />{/if}
+    {#if onServer}
+      <!-- A server's track (decision 0098): downloaded from that server, kept for its mode. -->
+      <DownloadEntry tracks={[{ source: t.source, id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id ?? null }]} />
+    {:else if !onDevice && t.source !== BANDCAMP}<MenuEntry icon="arrowDownToLine" label="Download…" onclick={() => (step = 'download')} />{/if}
   {:else if e === 'share'}
     {#if !onDevice}<MenuEntry icon="share" label="Share" onclick={shareIt} />{/if}
   {:else if e === 'info'}

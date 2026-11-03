@@ -15,6 +15,8 @@
   import { albumCoverUrl } from './lib/api';
   import type { CollectionOrder } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
+  import DownloadEntry from './lib/DownloadEntry.svelte';
+  import type { LocalTrack } from './lib/localPlayer.svelte';
   import { serverAlbums, serverAlbumTracks, serverMode, serverSource } from './lib/serverMode.svelte';
 
   const server = serverMode();
@@ -53,6 +55,13 @@
   }
 
   let menu = $state<ListedAlbum | null>(null);
+  // A server's record's tracks, for its menu's Download (decision 0098: kept per server).
+  let menuTracks = $state<LocalTrack[] | null>(null);
+  $effect(() => {
+    const a = menu;
+    menuTracks = null;
+    if (a && server) serverAlbumTracks(source, [a.id]).then((t) => menu === a && (menuTracks = t), () => {});
+  });
 </script>
 
 <main>
@@ -93,6 +102,7 @@
           }}
         />
       {/each}
+      {#if server && menuTracks}<DownloadEntry tracks={menuTracks.map((t) => ({ ...t, album_id: t.album_id ?? null }))} />{/if}
     </div>
   </MenuSheet>
 {/if}
