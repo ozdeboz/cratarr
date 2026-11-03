@@ -170,7 +170,7 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
 27. **The rules crate moves first, proved unchanged.**
     - Before the first preview, every built-in and saved crate's tracks and Radio's picks (same seed) are compared
       before and after the move, on production's copy.
-    - The page runs it as WebAssembly; how the app runs it is open (below).
+    - The page runs it as WebAssembly, the app natively through UniFFI (settled, below).
     - Measured on the slowest device in the second preview: a crate under 0.3 s and a Radio pick under 0.05 s, over
       about 21,000 tracks.
 28. **Test data (0093).**
@@ -229,9 +229,11 @@ built.
   - 0091: the player it plays on scrobbles, never the device that started it.
   - With sign-ins per account on the device (15), that player may not hold the sender's sign-in. The recommendation:
     the sending device scrobbles it then.
-- **How the app runs the rules crate.**
+- **How the app runs the rules crate.** *Settled 2026-11-03 (the owner, in claude-db's session): as 0085 has it.*
   - 0085: natively, through UniFFI (the desktop app natively).
   - The recommendation: one WebAssembly build for the page and the app, native only if it misses the budget.
+  - Settled: UniFFI, native. The rules crate is built for Android and called from Kotlin, as 0.11's Spike B does
+    (server/rules-ffi, RustRules.kt); the page keeps WebAssembly. 27's budget is measured that way.
 
 ## Amended 2026-11-03: the tape engine joins 0.16 (0102)
 
