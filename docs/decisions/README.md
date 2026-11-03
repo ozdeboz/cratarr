@@ -293,3 +293,8 @@ by a later record that says so in its header. A new decision takes the next numb
   Wanted searched on a ladder, each folder judged by its release (every track by title and length), fetched only with
   a tick, the next folder when a user fails, every file gated and a folder that fails set aside whole; into its own
   Incoming library (the fetcher "soulseek"), kept on disk.
+  Amended 2026-11-03: Lidarr and Soulseek siblings; Soulseek takes only Cratarr's approved Requests.
+- [0100: Cratarr's own records, artists and labels](0100-cratarrs-own-records-artists-labels.md): accepted, for 0.16;
+  a master record, artist and label, owned or not, each mapped to MusicBrainz, Discogs and Bandcamp, none required;
+  the reference that fits counts; artist pages for anyone, label pages with the whole catalogue, search's "beyond"
+  opening Cratarr's own pages; Soulseek judged by any reference, never a MusicBrainz id required.
