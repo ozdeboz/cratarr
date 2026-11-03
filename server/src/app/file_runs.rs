@@ -252,6 +252,9 @@ fn holds(now: &HashMap<String, Vec<String>>, want: &[(String, Vec<String>)]) -> 
     want.iter().all(|(n, v)| flat(now.get(n).map(Vec::as_slice).unwrap_or_default()) == flat(v))
 }
 
+/// Fields written by their name, lofty having no key for them (`retag::rewrite_named`): a style.
+const NAMED: [&str; 1] = ["style"];
+
 /// The key a field is written by.
 fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
     use lofty::tag::ItemKey;
@@ -271,6 +274,9 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
         "totaltracks" => ItemKey::TrackTotal,
         "discnumber" => ItemKey::DiscNumber,
         "totaldiscs" => ItemKey::DiscTotal,
+        // A record's words (0.15, decision 0097): its moods, its tags as grouping (a style by its name: `NAMED`).
+        "mood" => ItemKey::Mood,
+        "grouping" => ItemKey::ContentGroup,
         _ => return None,
     })
 }
@@ -279,10 +285,14 @@ fn key_of(name: &str) -> Option<lofty::tag::ItemKey> {
 /// the file's place.
 fn write(path: &Path, fields: &[(String, Vec<String>)]) -> Result<()> {
     use lofty::tag::{ItemKey, ItemValue, TagItem};
-    let keys: Vec<(lofty::tag::ItemKey, &Vec<String>)> =
-        fields.iter().map(|(n, v)| Ok((key_of(n).with_context(|| format!("no field {n}"))?, v))).collect::<Result<_>>()?;
+    let named: Vec<(String, Vec<String>)> = fields.iter().filter(|(n, _)| NAMED.contains(&n.as_str())).cloned().collect();
+    let keys: Vec<(lofty::tag::ItemKey, &Vec<String>)> = fields
+        .iter()
+        .filter(|(n, _)| !NAMED.contains(&n.as_str()))
+        .map(|(n, v)| Ok((key_of(n).with_context(|| format!("no field {n}"))?, v)))
+        .collect::<Result<_>>()?;
     let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
-    crate::retag::rewrite(
+    crate::retag::rewrite_named(
         path,
         |tag| {
             for (k, values) in &keys {
@@ -299,6 +309,7 @@ fn write(path: &Path, fields: &[(String, Vec<String>)]) -> Result<()> {
                 }
             }
         },
+        &named,
         |copy| {
             if !holds(&fields_of(copy, &names)?, fields) {
                 bail!("the written fields did not read back as written");

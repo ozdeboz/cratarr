@@ -51,6 +51,7 @@ pub mod fix_plans;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;
+pub mod file_words;
 pub mod file_runs;
 pub mod matching;
 pub mod incomplete;

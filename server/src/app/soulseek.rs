@@ -478,12 +478,11 @@ pub async fn connected() -> bool {
 }
 
 /// The workers started, once: one searches (one search at a time), one fetches (one record at a time).
-pub fn start(app: &Arc<super::App>) {
+pub fn start(_app: &Arc<super::App>) {
     static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let Some(served) = crate::serve::instance() else { return };
     let Some(dir) = served.data_dir.clone() else { return };
     let _ = FILE.set(dir.join("soulseek.json"));
-    let app = app.clone();
     if STARTED.set(()).is_err() {
         return;
     }
