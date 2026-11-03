@@ -2225,6 +2225,14 @@ export const scrobbleLastFm = (api_key: string, api_secret: string, callback: st
 export const setScrobbleOn = (target: string, on: boolean) =>
   putJson(`/api/scrobble/${encodeURIComponent(target)}`, { on });
 export const forgetScrobble = (target: string) => request<void>(`/api/scrobble/${encodeURIComponent(target)}`, { method: 'DELETE' });
+/** Soulseek in Cratarr (decision 0099): the records Lidarr wants as Cratarr searches and fetches them; found ones
+ *  fetched on a tick (`folder`: one picked, else the best), one searched now, one out of the list, those placed
+ *  cleared. Administrators'. */
+export const getSoulseek = () => request<import('./soulseekRules').SoulseekView>('/api/soulseek');
+export const approveSoulseek = (items: { id: string; folder?: number }[]) => post<import('./soulseekRules').SoulseekView>('/api/soulseek/approve', { items });
+export const soulseekNow = (id: string) => post<import('./soulseekRules').SoulseekView>(`/api/soulseek/${encodeURIComponent(id)}/now`, {});
+export const dropSoulseekItem = (id: string) => request<import('./soulseekRules').SoulseekView>(`/api/soulseek/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const clearSoulseekPlaced = () => request<import('./soulseekRules').SoulseekView>('/api/soulseek', { method: 'DELETE' });
 /** Every listen imported from ListenBrainz out of the asking account's history again: how many. */
 export const undoListenBrainz = () => request<{ removed: number }>('/api/history/listenbrainz', { method: 'DELETE' });
 /** Tells the server tracks heard; answers with the ids it has (now or before). */
