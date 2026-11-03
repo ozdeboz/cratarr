@@ -319,7 +319,9 @@
   }
   // A library finding's fixes (the administrators' metadata workflow): reviewed on the one sheet, every record's fields
   // with where from and how sure, certain ones ticked, written as one run (decision 0092's writers' map, 0.14).
-  const fixable = $derived(me.admin && FIXABLE.has(problem));
+  /** The finding the problem is (a files kind's page key `files-<kind>` is its finding `files:<kind>`). */
+  const findingKey = $derived(problem.startsWith('files-') ? `files:${problem.slice('files-'.length)}` : problem);
+  const fixable = $derived(me.admin && FIXABLE.has(findingKey));
   // Every problem and Changes to files, in Health's areas, each area's most urgent first (as the page lists them).
   const parts = $derived([
     ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.name }))),
@@ -470,7 +472,7 @@
             {/if}
           {/if}
           {#if fixable}
-            <Item name="Review the fixes" line="Certain ones ticked, each written into its files" onclick={() => openFixes(problem)} />
+            <Item name="Review the fixes" line="Certain ones ticked, each written into its files" onclick={() => openFixes(findingKey)} />
           {/if}
         </Group>
       {/if}

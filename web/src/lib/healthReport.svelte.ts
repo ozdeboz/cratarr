@@ -90,7 +90,10 @@ export function problems(): Problem[] {
     const k = FILE_KINDS.find((x) => x.kind === kind);
     const f = health.findings.find((x) => x.key === `files:${kind}`);
     const files = listed.filter((p) => p.kind === kind);
-    const n = Math.max(f?.count ?? 0, files.length);
+    // Its items: the files list's where it holds them, else the finding's own (cut off, sound breaking off, lengths
+    // guessed come only with their finding; the owner, 2026-11-03: "8 tracks' lengths are guessed", none listed).
+    const items = files.length ? files.map(fileItem) : (f?.items ?? []);
+    const n = Math.max(f?.count ?? 0, items.length);
     if (!n) continue;
     const title = k?.title ?? f?.title ?? kind;
     const nFiles = (x: number) => `${x.toLocaleString()} ${x === 1 ? 'file' : 'files'}`;
@@ -103,9 +106,9 @@ export function problems(): Problem[] {
       name: f?.thing ?? f?.name ?? title,
       title,
       said: k ? `${nFiles(n)}${k.title.slice('Files'.length)}` : (f?.title ?? title),
-      line: files.length < n ? `${files.length.toLocaleString()} of ${nFiles(n)} listed` : nFiles(n),
+      line: items.length < n ? `${items.length.toLocaleString()} of ${nFiles(n)} listed` : nFiles(n),
       finding: null,
-      items: files.map(fileItem),
+      items,
       hint: k?.hint ?? null,
     });
   }
