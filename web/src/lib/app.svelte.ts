@@ -89,7 +89,21 @@ export type DownloadedTrack = {
 };
 
 /** The owner's downloads on this device, as the app last told them (`known` once it has). */
-export const downloads = $state({ tracks: [] as DownloadedTrack[], bytes: 0, known: false });
+const kept = $state({ all: [] as DownloadedTrack[], bytes: 0, known: false });
+/** Those of the mode the app is in (decision 0098: downloads are kept per server): a server's mode its own server's
+ *  tracks (their source is the mode's name), Cratarr's mode all but the servers'. */
+const ofMode = (t: DownloadedTrack) => (appInfo.mode.startsWith('server:') ? t.source === appInfo.mode : !t.source.startsWith('server:'));
+export const downloads = {
+  get tracks() {
+    return kept.all.filter(ofMode);
+  },
+  get bytes() {
+    return kept.bytes;
+  },
+  get known() {
+    return kept.known;
+  },
+};
 
 const handlers = new Map<string, (m: Message) => void>();
 
@@ -230,9 +244,9 @@ if (port) {
       networkTest.done = true;
     }
     if (m.type === 'downloads') {
-      downloads.tracks = Array.isArray(m.tracks) ? (m.tracks as DownloadedTrack[]) : [];
-      downloads.bytes = typeof m.bytes === 'number' ? m.bytes : 0;
-      downloads.known = true;
+      kept.all = Array.isArray(m.tracks) ? (m.tracks as DownloadedTrack[]) : [];
+      kept.bytes = typeof m.bytes === 'number' ? m.bytes : 0;
+      kept.known = true;
     }
     handlers.get(m.type)?.(m);
   };

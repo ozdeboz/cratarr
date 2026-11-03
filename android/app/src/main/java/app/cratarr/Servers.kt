@@ -182,7 +182,22 @@ object Servers {
         else -> "${base(s)}/rest/getCoverArt.view?id=${Uri.encode(cover)}&size=$size&v=1.16.1&c=Cratarr&${subsonicAuth(s)}"
     }
 
-    /** A server's track with its stream and its album's cover; null for any other. */
+    /** A server's track's stand-in address (`cratarr-server://{server}/{track}`): what the player and the downloads
+     *  keep, so no sign-in is ever written down; turned into its stream as it is read ([resolve]). */
+    const val SCHEME = "cratarr-server"
+
+    fun streamUri(server: String, track: String): Uri = Uri.parse("$SCHEME://${Uri.encode(server)}/${Uri.encode(track)}")
+
+    /** A stand-in address's stream, with the kept sign-in; null for any other address (or a server no longer kept). */
+    fun resolve(context: Context, uri: Uri): Uri? {
+        if (uri.scheme != SCHEME) return null
+        val s = find(context, Uri.decode(uri.host ?: return null)) ?: return null
+        val track = Uri.decode(uri.path?.removePrefix("/") ?: return null)
+        return Uri.parse(streamUrl(s, track))
+    }
+
+    /** A server's track with its stream (its stand-in, stored whole where it was downloaded: the store's key is its
+     *  media id) and its album's cover; null for any other. */
     fun located(context: Context, item: MediaItem): MediaItem? {
         val slash = item.mediaId.indexOf('/')
         if (slash < 0) return null
@@ -190,7 +205,7 @@ object Servers {
         val s = ofSource(context, source) ?: return null
         val id = Uri.decode(item.mediaId.substring(slash + 1))
         val album = trackOf(item)?.optString("album_id")?.takeIf { it.isNotEmpty() && it != "null" }
-        val b = item.buildUpon().setUri(streamUrl(s, id))
+        val b = item.buildUpon().setUri(streamUri(s.optString("id"), id)).setCustomCacheKey(item.mediaId)
         album?.let { b.setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(Uri.parse(coverUrl(s, it, 600))).build()) }
         return b.build()
     }

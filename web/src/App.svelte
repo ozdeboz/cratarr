@@ -937,7 +937,8 @@
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const mayRequest = $derived(me.admin || me.permissions.request || me.permissions.manage_requests);
   const APART: Page[] = $derived(
-    ownMode ? [SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp || installed ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
+    // A server's mode keeps its own downloads (decision 0098); Local plays what is on the device already.
+    ownMode ? [...(serverMode() ? [DOWNLOADS] : []), SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp || installed ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
   );
   // The global search finds the pages shown and their parts, and Settings' (lib/everywhere).
   provideEverywhere(() => [...MAIN, ...APART]);
@@ -949,7 +950,7 @@
     // No visuals in local mode (the owner: "In local mode, the visuals feature is not supported"), nor in a server's.
     if (local) untrack(() => (visuals.open = false));
     const p = untrack(() => page);
-    if (p === 'settings' || p === HOME.id || (server && p === PLAYLISTS.id)) return;
+    if (p === 'settings' || p === HOME.id || (server && (p === PLAYLISTS.id || p === DOWNLOADS.id))) return;
     if (local && p !== LOCAL.id) location.hash = HOME.href;
     else if (!local && p === LOCAL.id) location.hash = LIBRARY.href;
   });
