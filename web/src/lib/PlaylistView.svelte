@@ -2125,7 +2125,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           kind,
           counted: rows && shown ? { shown: shown.length, total: rows.length, pending: pass.pending } : null,
           search: full ? pageUnder : null,
-          extra: rowAway && barEnds.some((e) => e.key === 'menu') ? endsGained : null,
+          // Not while the search is open (the owner, 2026-11-03: the menu coming in as the row went took the field's room,
+          // and the search wobbled): the field keeps the glass, as the left glass's gained actions go for it.
+          extra: rowAway && !pageView.searchOpen && barEnds.some((e) => e.key === 'menu') ? endsGained : null,
         };
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, item: true });
 </script>
