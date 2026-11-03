@@ -1103,6 +1103,29 @@ export const getFileFacts = () => quietly<FileFacts>('/api/settings/file-facts')
 export const setFileFacts = (on: boolean) =>
   request<FileFacts>('/api/settings/file-facts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });
 
+// The Catalogue's words (decision 0097, the controls; administrators'): per kind whether Cratarr's are written into the
+// files, its sources on or off, and its spellings that are one word. Type and year share one write (0.13's switch): set
+// either, both come back changed. Their sources and spellings are none.
+/** The words' kinds (WordKind) and the two facts the files take with them. */
+export type CatalogueKind = WordKind | 'type' | 'year';
+/** `hand` is always on. */
+export type SourceSwitch = { id: WordSource; name: string; on: boolean };
+export type WordAliases = { word: string; aliases: string[] };
+export type WordsOfKind = { kind: CatalogueKind; write: boolean; sources: SourceSwitch[]; aliases: WordAliases[] };
+export type WordsCatalogue = { kinds: WordsOfKind[] };
+export const getWordsCatalogue = () => request<WordsCatalogue>('/api/words/catalogue');
+export const setWordsKind = (kind: CatalogueKind, part: { write?: boolean; sources?: Partial<Record<WordSource, boolean>> }) =>
+  request<WordsOfKind>(`/api/words/catalogue/${kind}`, json('PUT', part));
+/** A word's other spellings (none: its entry goes), back as the kind's list. */
+export const setWordAliases = (kind: CatalogueKind, word: string, aliases: string[]) =>
+  request<WordAliases[]>(`/api/words/aliases/${kind}`, json('PUT', { word, aliases }));
+/** `from` read as `into` everywhere (Merge into…; Rename everywhere with a new spelling), back as the kind's list. */
+export const mergeWord = (kind: CatalogueKind, from: string, into: string) => request<WordAliases[]>(`/api/words/${kind}/merge`, json('POST', { from, into }));
+/** A track's own words where they differ from its record's: a list sets them, null goes back to the record's. */
+export type TrackWords = Partial<Record<WordKind, string[] | null>>;
+export const setTrackWords = (source: string, id: string, words: TrackWords) =>
+  request<TrackWords>(`/api/tracks/${encodeURIComponent(source)}/${encodeURIComponent(id)}/words`, json('PUT', words));
+
 // One way to change files (decision 0092; administrators'): a plan reviewed (what each record's files hold, what
 // Cratarr holds, and from where), applied as a run; every run in one shape, also told live (`file_run`).
 /** A field's change: its values as the files hold them and as Cratarr does ([] none); `track` where it differs by
