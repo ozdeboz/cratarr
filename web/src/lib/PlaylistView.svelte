@@ -2711,7 +2711,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   <div class="column-head">
     <!-- Its end as wide as its rows' (rowEnd: the heart and the menu, the tick while selecting, nothing for the
          device's own music), so the columns share out the same room and line up (the owner, 2026-10-23). -->
-    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} sorts={sorts ? trackHeads : undefined} action={onDevice ? undefined : endSpace}>
+    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} sorts={sorts ? trackHeads : undefined} action={onDevice && !isServerSource(source) ? undefined : endSpace}>
       {#snippet lead()}<span class="cover-space"></span>{/snippet}
     </Row>
   </div>
@@ -2745,7 +2745,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
-        if (!ok || onDevice) return;
+        if (!ok || (onDevice && !isServerSource(src))) return;
         // In select mode it asks what to tick; else the track's menu (decision 0058: Select is the header's).
         if (selecting && i !== null) selectSheet = true;
         else trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name) };
@@ -2774,6 +2774,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><ChoiceMark kind="several" on={selecting.has(i)} /></button
     >
+  {:else if isServerSource(src)}
+    <!-- A server's track (decision 0098): its menu, with its heart and that server's playlists. -->
+    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu' })}><Icon name="moreVert" size={22} /></button>
   {:else if !offServer}
     <RowHeart
       source={src}

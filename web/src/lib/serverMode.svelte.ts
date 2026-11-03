@@ -212,3 +212,17 @@ export async function serverSearch(source: string, q: string, kinds: SearchKind[
   if (want('track') && trackItems.length) groups.track = { total: trackItems.length, items: trackItems };
   return { q, groups, top: [...artistItems.slice(0, 2), ...albumItems.slice(0, 3), ...trackItems.slice(0, 5)] };
 }
+
+/** A server's track as its menu shows it: its heart (its star there), and that server's playlists to add it to (which
+ *  ones hold it is not asked: a server says that only playlist by playlist). */
+export async function serverTrackMenuState(source: string, id: string): Promise<TrackState> {
+  const lists = await (await readerOf(source)).playlists();
+  return {
+    addable: true,
+    album_id: null,
+    favorite: isFavorite(source, id),
+    playlists: lists.map((p) => ({ id: p.id, name: p.name, member: false, count: p.tracks, dead: 0, links: [], spoken: [] })),
+    info: null,
+  };
+}
+export const addToServerPlaylist = async (source: string, playlist: string, track: string) => (await readerOf(source)).addToPlaylist(playlist, [track]);
