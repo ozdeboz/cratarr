@@ -82,6 +82,7 @@
   import { longpress } from './lib/longpress';
   import { followAddress, setBeside } from './lib/panel.svelte';
   import RadioSheet from './lib/RadioSheet.svelte';
+  import ReviewSheet from './lib/ReviewSheet.svelte';
   import { radioSheet } from './lib/radioAsk.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
@@ -1317,6 +1318,7 @@
 </div>
 
 <!-- One radio sheet, wherever radio starts (decision 0094 #5, lib/radioAsk). -->
+<ReviewSheet />
 {#if radioSheet.ask}<RadioSheet ask={radioSheet.ask} />{/if}
 
 <style>
