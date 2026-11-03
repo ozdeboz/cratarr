@@ -28,7 +28,8 @@
   import PageLoading from './lib/PageLoading.svelte';
   import PlaylistItem from './lib/PlaylistItem.svelte';
   import { NEW_PLAYLIST, serverPlaylistSubject, viewPlaylist, panel } from './lib/panel.svelte';
-  import { serverMode, serverPlaylists, serverSource } from './lib/serverMode.svelte';
+  import { createServerPlaylist, serverMode, serverPlaylists, serverSource } from './lib/serverMode.svelte';
+  import ValueSheet from './lib/settings/ValueSheet.svelte';
   import type { ServerPlaylist } from './lib/servers/server';
 
   // A server's mode (decision 0098): that server's playlists, each viewed in the panel from that server.
@@ -41,6 +42,13 @@
       (e) => (fromServer = { list: [], error: e instanceof Error ? e.message : "Can't reach the server" }),
     );
   if (server) readServer();
+  /** New playlist on that server: its name, then it is made there (empty) and viewed. */
+  let naming = $state(false);
+  async function makeOnServer(name: string) {
+    const id = await createServerPlaylist(serverSrc, name);
+    await readServer();
+    viewPlaylist(serverPlaylistSubject(serverSrc, id));
+  }
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
   import SelectSheet from './lib/SelectSheet.svelte';
@@ -202,7 +210,9 @@ ${prefs.playlistOrder}`,
   // The pill's last button (lib/ContentControls): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
   // Out of reach none (decision 0085): a new playlist is Cratarr's to make, not an outbox change; one line says so.
-  usePageAction(() => (reach.away || server ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
+  usePageAction(() =>
+    server ? { icon: 'plus', label: 'New playlist', run: () => (naming = true) } : reach.away ? null : { icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) },
+  );
   // Its two modes (0.9.18; the owner, 2026-10-29): Normal, the playlists only open; Quick add, each one's circle adds or
   // takes out the playing track. The mode's button is left of New playlist, a double check (the plus is New playlist's).
   const quick = $derived(prefs.playlistQuickAdd);
@@ -350,6 +360,9 @@ ${prefs.playlistOrder}`,
   {/if}
   {/if}
 </main>
+{#if naming}
+  <ValueSheet title="New playlist" value="" allowEmpty={false} onsave={(v) => makeOnServer(v.trim()).catch((e) => toast.fail(e, "The playlist wasn't made"))} onclose={() => (naming = false)} />
+{/if}
 
 {#if menu?.kind === 'selection'}
   <!-- The menu of what is ticked. -->

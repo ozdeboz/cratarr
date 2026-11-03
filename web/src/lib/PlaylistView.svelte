@@ -105,7 +105,7 @@
     withoutFor,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
-  import { isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
+  import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { BANDCAMP } from './bandcampPreview';
   import { DISCOVER, discoverArtistView } from './discoverArtist';
   import RowHeart from './RowHeart.svelte';
@@ -132,6 +132,8 @@
   import SelectionMenu from './SelectionMenu.svelte';
   import RecordSheet from './RecordSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import MenuSheet from './MenuSheet.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { away, here } from './away.svelte';
@@ -252,6 +254,8 @@
   /** A server's playlist in its mode (decision 0098): its tracks as that server lists them; its name as it came. */
   const serverList = $derived(serverPlaylistOf(panel.viewed));
   let serverListName = $state<string | null>(null);
+  let serverListMenu = $state(false);
+  let serverListDeleting = $state(false);
   /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
   const plain = $derived(!!crate || !!album || !!artist || !!serverList || crateEditing || creating);
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
@@ -1327,8 +1331,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return [menu(`Menu of ${title}`, () => (crateMenuOpen = true))];
     // A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu).
     if (album?.source === BANDCAMP) return [menu(`Menu of ${title}`, () => (bandcampMenuOpen = true))];
-    // A server's album in its mode (decision 0098): its heart, its star there; no Cratarr menu.
+    // A server's album in its mode (decision 0098): its heart, its star there; no Cratarr menu. Its playlist: a menu
+    // of what that server does with one (Delete).
     if (album && isServerSource(album.source)) return [heart(albumFav, toggleAlbumFavorite)];
+    if (serverList) return [menu(`Menu of ${title}`, () => (serverListMenu = true))];
     // The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu.
     if (offServer) return [];
     if (artist) return [...(artistHead?.favorite !== undefined ? [heart(artistHead.favorite, toggleArtistFavorite)] : []), menu(`Menu of ${artist.name}`, () => (artistMenuOpen = true))];
@@ -2197,6 +2203,26 @@ ${r.album_artist ?? r.artist ?? ''}`;
         >
   {/if}
 {/snippet}
+{#if serverListMenu && serverList}
+  <MenuSheet label="Playlist" title={title} onclose={() => (serverListMenu = false)}>
+    <div role="menu">
+      <MenuEntry icon="trash" label="Delete…" onclick={() => ((serverListMenu = false), (serverListDeleting = true))} />
+    </div>
+  </MenuSheet>
+{/if}
+{#if serverListDeleting && serverList}
+  {@const sl = serverList}
+  <ConfirmSheet
+    title={`Delete ${title}?`}
+    label="Delete"
+    onconfirm={() =>
+      deleteServerPlaylist(sl.source, sl.id).then(
+        () => closePlaylist(),
+        (e) => toast.fail(e, "The playlist wasn't deleted"),
+      )}
+    onclose={() => (serverListDeleting = false)}
+  />
+{/if}
 {#snippet endButton(e: EndAction, size: number, glass = false)}<button class="icon" class:on-glass={glass} class:fav={e.on} aria-pressed={e.key === 'heart' ? e.on : undefined} aria-label={e.label} onclick={e.run}
     ><Icon name={e.key === 'heart' ? 'heart' : 'moreVert'} {size} /></button
   >{/snippet}
