@@ -191,6 +191,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/tasks/{id}", delete(stop_task))
         .route("/api/tracks/describe", post(describe_tracks))
         .route("/api/scrobble", get(scrobble_targets))
+        .route("/api/scrobbles", post(scrobbles_handed))
+        .route("/api/scrobbles/now", post(scrobbles_now))
         .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
         .route("/api/scrobble/lastfm", post(scrobble_lastfm))
         .route("/api/scrobble/lastfm/callback/{code}", get(scrobble_lastfm_callback))
@@ -4997,11 +4999,74 @@ fn scrobble_refused(e: impl std::fmt::Display) -> ApiError {
     ToggleError::Refused(e.to_string()).into()
 }
 
-/// The asking account's listening services (Connections): whom it scrobbles to, never a secret.
+/// The asking account's listening services (Connections): whom it scrobbles to, never a secret, and from where
+/// (decision 0091: `device` or `server`; switched to `device`, a service's `queued` is what is still to go before its
+/// keys go).
 async fn scrobble_targets(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
-    let targets = tokio::task::spawn_blocking(move || serve.userdata.scrobble_targets(&account)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "targets": targets })))
+    let (targets, way) = tokio::task::spawn_blocking(move || anyhow::Ok((serve.userdata.scrobble_targets(&account)?, serve.userdata.scrobble_way(&account)?)))
+        .await
+        .map_err(scrobble_refused)?
+        .map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "targets": targets, "way": way })))
+}
+
+/// A service connected on the server only while the account scrobbles through it, or has not chosen (decision 0091:
+/// back from `device` means choosing `server` first).
+fn scrobbles_through_server(serve: &crate::serve::Serve, account: &str) -> Result<(), ApiError> {
+    let (_, s) = serve.userdata.settings_of(account).map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    if s.get("scrobble").and_then(serde_json::Value::as_str) == Some("device") {
+        return Err(scrobble_refused("This account scrobbles from each device: choose through the server first."));
+    }
+    Ok(())
+}
+
+/// Plays handed to the server: only while the account scrobbles through it with tracking on.
+fn hand_over_allowed(serve: &crate::serve::Serve, account: &str) -> Result<(), ApiError> {
+    if !serve.userdata.tracking(account) {
+        return Err(scrobble_refused("Tracking is off for this account: nothing is scrobbled."));
+    }
+    match serve.userdata.scrobble_way(account).map_err(|e| scrobble_refused(format!("{e:#}")))? {
+        crate::userdata::scrobbles::Way::Server => Ok(()),
+        crate::userdata::scrobbles::Way::Device => Err(scrobble_refused("This account scrobbles from each device.")),
+    }
+}
+
+#[derive(Deserialize)]
+struct Handed {
+    plays: Vec<crate::userdata::scrobbles::Named>,
+}
+
+/// A device's plays of other servers' tracks, for the server to send (decision 0091): queued for each connected
+/// service as the server's own are, never written to the history; each once by its id.
+async fn scrobbles_handed(ctx: Ctx, Json(b): Json<Handed>) -> Result<Json<crate::userdata::scrobbles::Handed>, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
+    if b.plays.len() > crate::userdata::scrobbles::MOST {
+        return Err(scrobble_refused(format!("At most {} plays at a time.", crate::userdata::scrobbles::MOST)));
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let handed = tokio::task::spawn_blocking(move || {
+        hand_over_allowed(&serve, &account)?;
+        serve.userdata.hand_over(&account, &b.plays, now).map_err(|e| scrobble_refused(format!("{e:#}")))
+    })
+    .await
+    .map_err(scrobble_refused)??;
+    if handed.queued > 0 {
+        crate::app::scrobble::wake();
+    }
+    Ok(Json(handed))
+}
+
+/// "Now playing" of another server's track (decision 0091): sent best effort, the latest winning, never queued.
+async fn scrobbles_now(ctx: Ctx, Json(b): Json<crate::userdata::scrobbles::Named>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
+    if b.artist.trim().is_empty() || b.title.trim().is_empty() {
+        return Err(scrobble_refused("Now playing needs the artist and the title."));
+    }
+    let (s, a) = (serve.clone(), account.clone());
+    tokio::task::spawn_blocking(move || hand_over_allowed(&s, &a)).await.map_err(scrobble_refused)??;
+    crate::app::scrobble::now_playing_named(serve, account, b);
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Deserialize)]
@@ -5012,6 +5077,7 @@ struct ListenBrainzToken {
 /// ListenBrainz connected with the user token from its settings page, checked first.
 async fn scrobble_listenbrainz(ctx: Ctx, Json(b): Json<ListenBrainzToken>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
+    scrobbles_through_server(&serve, &account)?;
     let token = b.token.trim().to_string();
     let name = crate::app::scrobble::listenbrainz_user(&token).await.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     let secret = serde_json::to_string(&crate::app::scrobble::Secret { token: Some(token), ..Default::default() }).map_err(scrobble_refused)?;
@@ -5037,6 +5103,7 @@ struct LastFmKeys {
 /// Last.fm: the API key and its shared secret kept (not sending yet), and where to send the browser to sign in.
 async fn scrobble_lastfm(ctx: Ctx, Json(b): Json<LastFmKeys>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
+    scrobbles_through_server(&serve, &account)?;
     let (key, secret) = (b.api_key.trim().to_string(), b.api_secret.trim().to_string());
     if key.is_empty() || secret.is_empty() {
         return Err(scrobble_refused("Last.fm needs the API key and its shared secret, from last.fm/api/account/create."));
