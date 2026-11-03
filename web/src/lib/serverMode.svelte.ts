@@ -3,7 +3,8 @@
 // playlist, Home's rows and search read it here; its covers come through the app (`/__server/cover/…`, with the
 // sign-in it keeps), as the player's streams do, so no address with a sign-in in it is ever on the page.
 
-import type { AlbumView, ArtistView, ListedAlbum, PlaylistRow } from './api';
+import type { AlbumView, ArtistView, ListedAlbum, PlaylistRow, TrackState } from './api';
+import { isFavorite, setFavorite } from './favourites.svelte';
 import { appInfo, inApp } from './app.svelte';
 import { localMode } from './deviceMusic.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
@@ -45,6 +46,7 @@ const artistIds = new Map<string, string>();
 
 export function listed(source: string, a: ServerAlbum): ListedAlbum {
   if (a.cover) covers.set(`${source}/${a.id}`, a.cover);
+  setFavorite(source, a.id, a.starred);
   if (a.artist && a.artist_id) artistIds.set(`${source}/${a.artist}`, a.artist_id);
   return { id: a.id, title: a.title, artist: a.artist, year: a.year, added: a.added, path: null, tracks: a.tracks, format: null, bitrate_kbps: null, tags: [], duration_secs: a.duration_secs };
 }
@@ -65,6 +67,26 @@ export const serverRow = (t: ServerTrack): PlaylistRow => ({
   ...(t.album_id ? { album_id: t.album_id } : {}),
   ...(t.added ? { added: t.added } : {}),
 });
+
+/** Its tracks' stars, as the hearts show them (lib/favourites: a server's stars are its hearts). */
+const starred = (source: string, tracks: ServerTrack[]) => {
+  for (const t of tracks) setFavorite(source, t.id, t.starred);
+  return tracks;
+};
+
+/** The playing track's state, as Now Playing shows it: its heart, no playlists of Cratarr's. */
+export const serverTrackState = (source: string, id: string): TrackState => ({ addable: false, album_id: null, favorite: isFavorite(source, id), playlists: [], info: null });
+
+/** A heart on that server (its star), shown at once, put back where the server refused it. */
+export async function serverStar(source: string, what: 'track' | 'album', id: string, on: boolean) {
+  setFavorite(source, id, on);
+  try {
+    await (await readerOf(source)).star(what, id, on);
+  } catch (e) {
+    setFavorite(source, id, !on);
+    throw e;
+  }
+}
 
 /** Its tracks as the player takes them. */
 export const asPlayed = (source: string, t: ServerTrack): LocalTrack => ({ source, id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id, duration_secs: t.duration_secs });
@@ -88,6 +110,7 @@ export const serverList = async (source: string, which: HomeList, size = 20) => 
 export async function serverAlbumView(source: string, id: string): Promise<AlbumView & { total: number }> {
   const { album, tracks } = await (await readerOf(source)).album(id);
   listed(source, album);
+  starred(source, tracks);
   return {
     source,
     id,
@@ -115,7 +138,7 @@ export async function serverArtistView(source: string, name: string): Promise<Ar
   const { albums } = await r.artist(id);
   const listedAlbums = albums.map((a) => listed(source, a));
   const views = await Promise.all(albums.map((a) => r.album(a.id).catch(() => null)));
-  const rows = views.flatMap((v) => v?.tracks ?? []).map(serverRow);
+  const rows = starred(source, views.flatMap((v) => v?.tracks ?? [])).map(serverRow);
   return { source, name, albums: listedAlbums, appears_on: [], rows, favorite: false };
 }
 
@@ -132,6 +155,7 @@ export const serverPlaylists = async (source: string) => (await readerOf(source)
 /** A playlist as the panel views one: its tracks, in its order, each with its place (`entry`, what an edit names). */
 export async function serverPlaylistView(source: string, id: string): Promise<{ source: string; title: string; rows: PlaylistRow[]; total: number; cover: string | null }> {
   const { playlist, tracks } = await (await readerOf(source)).playlist(id);
+  starred(source, tracks);
   for (const t of tracks) if (t.album_id && t.cover) covers.set(`${source}/${t.album_id}`, t.cover);
   return { source, title: playlist.name, rows: tracks.map(serverRow), total: tracks.length, cover: playlist.cover ? serverCoverUrl(source, playlist.cover) : null };
 }

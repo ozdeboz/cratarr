@@ -105,7 +105,7 @@
     withoutFor,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
-  import { isServerSource, serverAlbumView, serverArtistView, serverPlaylistView } from './serverMode.svelte';
+  import { isServerSource, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { BANDCAMP } from './bandcampPreview';
   import { DISCOVER, discoverArtistView } from './discoverArtist';
   import RowHeart from './RowHeart.svelte';
@@ -403,8 +403,10 @@
     if (!album) return;
     const { source: s, id: a } = album;
     const on = !albumFav;
-    setFavorite(s, a, on);
     navigator.vibrate?.(8);
+    // A server's album (decision 0098): its star there.
+    if (isServerSource(s)) return serverStar(s, 'album', a, on).catch((e) => toast.fail(e, "The favourite didn't change"));
+    setFavorite(s, a, on);
     try {
       await setAlbumFavorite(s, a, on);
     } catch (e) {
@@ -1325,6 +1327,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return [menu(`Menu of ${title}`, () => (crateMenuOpen = true))];
     // A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu).
     if (album?.source === BANDCAMP) return [menu(`Menu of ${title}`, () => (bandcampMenuOpen = true))];
+    // A server's album in its mode (decision 0098): its heart, its star there; no Cratarr menu.
+    if (album && isServerSource(album.source)) return [heart(albumFav, toggleAlbumFavorite)];
     // The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu.
     if (offServer) return [];
     if (artist) return [...(artistHead?.favorite !== undefined ? [heart(artistHead.favorite, toggleArtistFavorite)] : []), menu(`Menu of ${artist.name}`, () => (artistMenuOpen = true))];

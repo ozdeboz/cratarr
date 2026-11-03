@@ -43,6 +43,7 @@
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { ownMode } from './serverMode.svelte';
+  import { localMode } from './deviceMusic.svelte';
   import HeartSheet from './HeartSheet.svelte';
   import { isCircle } from './circle';
   import Cover from './Cover.svelte';
@@ -659,10 +660,10 @@
           >
           <!-- In the middle (the owner). Always there; until the server says whether it is a favourite, not to be pressed.
                Not in local mode (decision 0052: no hearts for the device's own music). -->
-          {#if !ownMode() && np.source === BANDCAMP}
+          {#if !localMode() && np.source === BANDCAMP}
             <!-- A Bandcamp track: no heart, crossed out and said so (the owner, 2026-10-26). -->
             <span class="fav off" role="img" aria-label="On Bandcamp" title="On Bandcamp"><Icon name="heartOff" size={26} /></span>
-          {:else if !ownMode()}
+          {:else if !localMode()}
           <button
             class="fav"
             class:on={favorite()}
