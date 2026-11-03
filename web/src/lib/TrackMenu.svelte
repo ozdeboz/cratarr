@@ -20,6 +20,7 @@
   import { openRadio } from './radioAsk.svelte';
   import { can, findsTracks } from './capabilities.svelte';
   import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
+  import TrackEdit from './TrackEdit.svelte';
   import { leavePlayer } from './navStep.svelte';
   import { port } from './player/port.svelte';
   import {
@@ -132,6 +133,7 @@
   const t = $derived<MenuTrack | null>(forPlaying ? np : track);
   /** Find a better copy open (lib/ReplaceTrackSheet), in the menu's place. */
   let betterOpen = $state(false);
+  let editOpen = $state(false);
 
   /** One of the device's own (local mode, decision 0052): none of Cratarr's (hearts, playlists, downloads, share,
    *  details); Play next, Add to queue, its album and artist, the web search. */
@@ -499,6 +501,8 @@
     <MenuEntry icon="search" label="Web search" onclick={webSearch} />
   {:else if e === 'geniusSearch'}
     <MenuEntry icon="search" label="Genius search" onclick={geniusSearch} />
+  {:else if e === 'edit'}
+    {#if me.admin && t.source === 'cratarr' && t.album_id}<MenuEntry icon="pencil" label="Edit" onclick={() => (editOpen = true)} />{/if}
   {:else if e === 'adjustBpm'}
     {#if me.admin && !onDevice && hasWave}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
   {:else if e === 'betterCopy'}
@@ -528,6 +532,9 @@
 {#if t && betterOpen && t.album_id}
   <!-- A better copy of it (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
   <ReplaceTrackSheet source={t.source} album={{ id: t.album_id, title: t.album ?? '' }} replace={{ source: t.source, id: t.id }} {onclose} />
+{:else if t && editOpen && t.album_id}
+  <!-- Its own words (decision 0097, lib/TrackEdit): the menu gives way to it. -->
+  <TrackEdit source={t.source} id={t.id} album={t.album_id} title={t.name} artist={t.artist} {onclose} />
 {:else if t}
   <MenuSheet
     label={t.name}

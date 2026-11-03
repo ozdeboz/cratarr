@@ -35,6 +35,7 @@ export const OVERRIDE_FIELDS: readonly OverrideField[] = ['type', 'secondary', '
 export type WordField = 'genres' | 'styles' | 'moods' | 'tags';
 export const WORD_FIELDS: readonly WordField[] = ['genres', 'styles', 'moods', 'tags'];
 export const WORD_KIND: Record<WordField, 'genre' | 'style' | 'mood' | 'tag'> = { genres: 'genre', styles: 'style', moods: 'mood', tags: 'tag' };
+export const WORD_FIELD_NAME: Record<WordField, string> = { genres: 'Genres', styles: 'Styles', moods: 'Moods', tags: 'Tags' };
 
 /** What a PUT sets: a field present sets it (null: back to what Cratarr finds); one absent is left alone. */
 export type OverrideSet = {

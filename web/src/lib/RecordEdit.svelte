@@ -6,12 +6,11 @@
   // the 0.10 Classical… sheet folded in); then (decision 0097, the words' hand layer) Styles, Moods and Tags, steps as
   // Genres' is. A row set by hand says so; several that differ say Mixed and are left alone
   // until changed. Save sends only what changed (lib/recordEdit toSend), once; the Library reads itself again after.
-  import { albumView, getCrateAxes, setAlbumOverrides, type ListedAlbum } from './api';
+  import { albumView, setAlbumOverrides, type ListedAlbum } from './api';
   import { readLibrary } from './albums.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { prefs } from './prefs.svelte';
   import { plural } from './insights.svelte';
   import {
     RECORD_TYPES,
@@ -21,6 +20,7 @@
     classicalOfChoice,
     editableOf,
     secondaryLabel,
+    WORD_FIELD_NAME,
     WORD_FIELDS,
     WORD_KIND,
     wordsOfView,
@@ -34,6 +34,7 @@
     type WordField,
   } from './recordEdit';
   import Seg from './Seg.svelte';
+  import WordsStep from './WordsStep.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
   import { toast } from './toast.svelte';
@@ -87,55 +88,13 @@
   const secondaryOffered = SECONDARY_TYPES;
   const toggleSecondary = (v: string) => (draft.secondary = secondaryNow.includes(v) ? secondaryNow.filter((x) => x !== v) : [...secondaryNow, v]);
 
-  // The words, a kind each (genres, styles, moods, tags): the library's (the crate builder's values of that kind, most
-  // common first), the chosen first; a typed one added. Mood is AudioMuse's words only (the owner, 2026-11-02: one
-  // meaning per kind): chosen among them, never typed.
-  const WORD_NAME: Record<WordField, { name: string; one: string }> = {
-    genres: { name: 'Genres', one: 'genre' },
-    styles: { name: 'Styles', one: 'style' },
-    moods: { name: 'Moods', one: 'mood' },
-    tags: { name: 'Tags', one: 'tag' },
-  };
+  // The words, a kind each (genres, styles, moods, tags), each a step of its own (lib/WordsStep).
   const isWord = (x: string): x is WordField => (WORD_FIELDS as readonly string[]).includes(x);
   const shownWords = $derived(Object.fromEntries(WORD_FIELDS.map((f) => [f, shownOf(records, draft, f)])) as Record<WordField, ReturnType<typeof shownOf<WordField>>>);
   const nowOf = (f: WordField): string[] => {
     const w = shownWords[f];
     return (w.mixed || w.reset ? [] : (w.value as string[] | null)) ?? [];
   };
-  let known = $state<Partial<Record<WordField, string[]>>>({});
-  let find = $state('');
-  $effect(() => {
-    if (!isWord(step) || known[step]) return;
-    getCrateAxes(prefs.source || undefined).then(
-      (axes) => (known = Object.fromEntries(WORD_FIELDS.map((f) => [f, axes.find((x) => x.key === WORD_KIND[f])?.values ?? []]))),
-      () => {},
-    );
-  });
-  const wordChips = $derived.by(() => {
-    if (!isWord(step)) return [];
-    const now = nowOf(step);
-    const q = find.trim().toLowerCase();
-    const rest = (known[step] ?? []).filter((g) => !now.includes(g) && (!q || g.toLowerCase().includes(q)));
-    return [...now, ...rest.slice(0, q ? 60 : 24)];
-  });
-  function toggleWord(f: WordField, g: string) {
-    const now = nowOf(f);
-    draft[f] = now.includes(g) ? now.filter((x) => x !== g) : [...now, g];
-  }
-  function addTyped(e: KeyboardEvent, f: WordField) {
-    if (e.key !== 'Enter' || f === 'moods') return;
-    e.preventDefault();
-    const g = find.trim().replace(/\s+/g, ' ');
-    if (!g) return;
-    const has = (known[f] ?? []).find((k) => k.toLowerCase() === g.toLowerCase()) ?? g;
-    const now = nowOf(f);
-    if (!now.includes(has)) draft[f] = [...now, has];
-    find = '';
-  }
-  function openWords(f: WordField) {
-    find = '';
-    step = f;
-  }
   const listed = (v: string[], label: (x: string) => string = (x) => x) => (v.length ? (v.length > 2 ? `${v.slice(0, 2).map(label).join(', ')} +${v.length - 2}` : v.map(label).join(', ')) : '–');
 
   // Classical: three choices, a slim track.
@@ -227,23 +186,14 @@
     {#if anySet('secondary')}<MenuEntry icon="reset" label={FOUND} onclick={() => reset('secondary')} />{/if}
   {:else if isWord(step)}
     {@const f = step}
-    {@const what = f === 'moods' ? 'Find a mood' : `Find or add a ${WORD_NAME[f].one}`}
-    <div class="step field">
-      <input type="search" placeholder={what} aria-label={what} bind:value={find} onkeydown={(e) => addTyped(e, f)} />
-    </div>
-    <div class="step chips">
-      {#each wordChips as g (g)}
-        <button class="chip" aria-pressed={nowOf(f).includes(g)} onclick={() => toggleWord(f, g)}>{g}</button>
-      {/each}
-    </div>
-    {#if anySet(f)}<MenuEntry icon="reset" label={FOUND} onclick={() => reset(f)} />{/if}
+    <WordsStep kind={WORD_KIND[f]} chosen={nowOf(f)} onchange={(v) => (draft[f] = v)} reset={anySet(f) ? { label: FOUND, onclick: () => reset(f) } : null} />
   {/if}
 </MenuSheet>
 
 {#snippet wordRow(f: WordField)}
   {@const w = shownWords[f]}
   {@const each = albums.length > 1 && !(f in draft)}
-  <Item name={WORD_NAME[f].name} line={w.reset ? FOUND : each ? 'Each its own' : lineOf(w)} value={w.reset || each ? null : listed(nowOf(f))} onclick={() => openWords(f)} />
+  <Item name={WORD_FIELD_NAME[f]} line={w.reset ? FOUND : each ? 'Each its own' : lineOf(w)} value={w.reset || each ? null : listed(nowOf(f))} onclick={() => (step = f)} />
 {/snippet}
 
 <style>

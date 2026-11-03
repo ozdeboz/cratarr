@@ -88,7 +88,8 @@ export const MENUS: Record<MenuKind, Kind> = {
       { group: 'take', entries: ['download', 'share'] },
       { group: 'know', entries: ['info', 'webSearch', 'geniusSearch'] },
       // A track asked for of one's own player (0.10): whoever asked, accepted at once from now on or not.
-      { group: 'change', entries: ['adjustBpm', 'betterCopy', 'alwaysAccept'] },
+      // Its own words (decision 0097; administrators'), where they differ from its record's.
+      { group: 'change', entries: ['edit', 'adjustBpm', 'betterCopy', 'alwaysAccept'] },
       { group: 'remove', entries: ['removeFromQueue', 'removeFromList'] },
     ],
   },
