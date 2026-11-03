@@ -58,6 +58,10 @@ pub struct LibraryPolicy {
     /// server's (a folder of Cratarr's own: the folder's name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The fetcher whose records come into it, an Incoming library's (decision 0096: one per fetcher): "soulseek", Cratarr
+    /// fetching from Soulseek itself (0.15; the owner, 2026-11-03: its own Incoming library, not Lidarr's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetcher: Option<String>,
 }
 
 /// A library's quality limit (decision 0096's amendment, the owner, 2026-11-02: in place of the format): lossless files

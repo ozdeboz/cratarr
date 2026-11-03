@@ -878,6 +878,10 @@ pub struct Facts {
     pub genres: Vec<String>,
     pub year: Option<f64>,
     pub bpm: Option<f64>,
+    /// Rhythm (0.15, `analysis::rhythm`): four on the floor as measured (0 to 1), and the time signature Beat this!'s
+    /// downbeats make sure ("4/4"); none where not measured or not sure.
+    pub four: Option<f32>,
+    pub meter: Option<String>,
     /// AudioMuse's (decision 0054): its energy and CLAP's danceability as 0 to 100, CLAP's moods that stand out, its
     /// style tags; none where AudioMuse has not heard the file.
     pub energy: Option<f64>,
@@ -926,6 +930,11 @@ pub struct Use {
     /// How often it was skipped (the owner, 2026-11-02: Second chance's Skips): its history's plays that ended skipped
     /// before they counted.
     pub skips: u32,
+}
+
+/// Whether a track is four on the floor, as measured (`analysis::rhythm`).
+fn four_on_the_floor(f: &Facts) -> bool {
+    f.four.is_some_and(|s| s >= crate::analysis::rhythm::FOUR_ON_THE_FLOOR)
 }
 
 /// A file's quality as the crates offer it: lossless, else its bitrate's class.
@@ -1013,7 +1022,7 @@ pub struct World<'a> {
 /// where Best match is an order).
 pub const FITS_SHARE: f64 = 0.25;
 
-const AXES: [(&str, &str, Kind); 25] = [
+const AXES: [(&str, &str, Kind); 27] = [
     ("favourite", "Favourite", Kind::YesNo),
     ("favourite_album", "Favourite album", Kind::YesNo),
     // The viewer's taste as a yes or no (the owner, 2026-11-02, Second chance): the best-fitting share of the library.
@@ -1037,6 +1046,9 @@ const AXES: [(&str, &str, Kind); 25] = [
     ("type", "Type", Kind::Values),
     ("year", "Year", Kind::Range),
     ("bpm", "BPM", Kind::Range),
+    // Rhythm (the owner, 2026-11-02): a kick on every beat, and the beats a bar.
+    ("four", "Four on the floor", Kind::YesNo),
+    ("meter", "Time signature", Kind::Values),
     // Length in minutes; quality (lossless or a bitrate's class); key.
     ("length", "Length", Kind::Range),
     ("quality", "Quality", Kind::Values),
@@ -1206,6 +1218,8 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "tag" => f.tags.join("|"),
                 "quality" => f.quality.clone().unwrap_or_default(),
                 "key" => f.key.clone().unwrap_or_default(),
+                "four" => format!("{}", four_on_the_floor(f)),
+                "meter" => f.meter.clone().unwrap_or_default(),
                 "played" => format!("{:?}", used(f).map(|u| u.last)),
                 key => format!("{:?}", number(key, f)),
             }
@@ -1275,6 +1289,11 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "key" => {
                     (a.values, a.counts) = counted(|f| f.key.as_slice());
                     a.known = known(|f| f.key.is_some());
+                }
+                "four" => a.known = known(|f| f.four.is_some()),
+                "meter" => {
+                    (a.values, a.counts) = counted(|f| f.meter.as_slice());
+                    a.known = known(|f| f.meter.is_some());
                 }
                 "like" => a.known = known(|f| f.sound.is_some()),
                 _ if kind == Kind::Range => (a.min, a.max, a.known) = span(key),
@@ -1348,6 +1367,8 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("favourite", Value::Yes) => w.favourites.is_some_and(|s| s.contains(&f.rel)),
         ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| s.contains(&f.rel)),
         ("fit", Value::Yes) => w.fits.is_some_and(|s| s.contains(&f.rel)),
+        ("four", Value::Yes) => four_on_the_floor(f),
+        ("meter", Value::AnyOf { values }) => f.meter.as_ref().is_some_and(|m| values.iter().any(|v| v.eq_ignore_ascii_case(m))),
         (LEFT_OUT, Value::AnyOf { values }) => values.iter().any(|v| *v == f.rel),
         (CREDITED, Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(v)),
         ("playlist", Value::AnyOf { values }) => match w.membership.get(&f.rel) {
@@ -1394,6 +1415,8 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
         "length" => f.length.is_some(),
         "quality" => f.quality.is_some(),
         "key" => f.key.is_some(),
+        "four" => f.four.is_some(),
+        "meter" => f.meter.is_some(),
         "genre" => !f.genres.is_empty(),
         "type" => !f.release_types.is_empty(),
         "year" => f.year.is_some(),
@@ -2953,6 +2976,26 @@ mod tests {
         Facts { rel: rel.into(), genres: genres.iter().map(|g| g.to_string()).collect(), year, bpm, ..Facts::default() }
     }
 
+    #[test]
+    fn four_on_the_floor_goes_by_the_measured_score_and_the_time_signature_by_its_name() {
+        let membership = HashMap::new();
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
+        let house = Facts { rel: "h".into(), four: Some(0.8), meter: Some("4/4".into()), ..Facts::default() };
+        let breaks = Facts { rel: "b".into(), four: Some(0.2), meter: Some("4/4".into()), ..Facts::default() };
+        let waltz = Facts { rel: "w".into(), four: Some(0.0), meter: Some("3/4".into()), ..Facts::default() };
+        let unheard = Facts { rel: "u".into(), ..Facts::default() };
+        let four = Condition::new("four", false, Value::Yes);
+        let picked = |c: &Condition| [&house, &breaks, &waltz, &unheard].iter().filter(|f| matches(c, f, &w)).map(|f| f.rel.as_str()).collect::<Vec<_>>();
+        assert_eq!(picked(&four), ["h"]);
+        assert!(has_value(&four, &breaks, &w) && !has_value(&four, &unheard, &w), "not measured: no value, as All counts");
+        let three = Condition::new("meter", false, Value::AnyOf { values: vec!["3/4".into()] });
+        assert_eq!(picked(&three), ["w"]);
+        let axes = axes([&house, &breaks, &waltz, &unheard], &[]);
+        let meter = axes.iter().find(|a| a.key == "meter").unwrap();
+        assert_eq!((meter.values.clone(), meter.counts.clone(), meter.known), (vec!["4/4".to_string(), "3/4".to_string()], vec![2, 1], 3));
+        assert_eq!(axes.iter().find(|a| a.key == "four").unwrap().known, 3);
+    }
+
     fn library() -> (Vec<Facts>, HashMap<String, Vec<String>>, HashSet<String>) {
         let files = vec![
             f("a", &["Rock"], Some(1994.0), Some(120.0)),
@@ -3330,6 +3373,8 @@ mod tests {
             release_types: vec!["Album".into()],
             album: Some("al-1".into()),
             labels: vec!["Warp".into()],
+            four: Some(0.9),
+            meter: Some("4/4".into()),
             ..Facts::default()
         };
         let uses: HashMap<String, Use> = [("a/1".to_string(), Use { plays: 2, last: Some(1), rating: Some(4), skips: 0 })].into();

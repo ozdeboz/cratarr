@@ -2,9 +2,11 @@
 //! and Proximity). Pure over plain rows: the catalogue's files (`Catalogue::track_rows` on the Music folder) and the
 //! playlists' lines. Tags are split per the saved rules, as everywhere (decision 0008).
 //!
-//! Closeness has three signals, each 0..1, which the page turns on and off: shared tracks (shared over all, so a big
+//! Closeness has four signals, each 0..1, which the page turns on and off: shared tracks (shared over all, so a big
 //! playlist is not close to everything), and genre and artist profiles compared by cosine, where a genre or artist
-//! found in many playlists counts less (tf-idf: "Electronic" says little, "Downtempo" more).
+//! found in many playlists counts less (tf-idf: "Electronic" says little, "Downtempo" more); and Sound (0.15, the owner,
+//! 2026-11-02): each playlist's mean energy, danceability, tempo and moods, so two that share no track or artist sit
+//! close when they sound alike (`sound_of`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -22,6 +24,10 @@ const TOP_ARTISTS: usize = usize::MAX;
 const MIN_SIGNAL: f64 = 0.05;
 /// Genres named per playlist and per pair.
 const NAMED_GENRES: usize = 3;
+/// A playlist's sound is known once this many of its tracks were heard (AudioMuse's energy or moods, or a tempo).
+const HEARD_FOR_SOUND: usize = 3;
+/// What a sound is made of: energy, danceability, tempo and CLAP's five moods (`similarity::MOODS`).
+const SOUND_PARTS: usize = 8;
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct Insights {
@@ -78,6 +84,8 @@ pub struct Link {
     pub genre: f64,
     /// Artist profiles alike, 0..1.
     pub artists: f64,
+    /// Sounding alike, 0..1: their energy, danceability, tempo and moods (0 where either's sound is not known).
+    pub sound: f64,
     pub shared_tracks: usize,
     pub shared_artists: usize,
     /// The genres that bring the two closest, most first.
@@ -315,7 +323,15 @@ pub struct SharedTrack {
 /// `shown`: the tracks of the libraries switched on, which Collection's figures count (the owner, 2026-10-23: "one
 /// toggle per library"), its playlists' among them: how many of those tracks and albums are in one, and which of them
 /// are in the most (Incoming's are in none: a playlist's lines are the Music folder's). `playlists`: (name, entry lines, missing tracks), as the playlist store has them.
-pub fn build(rows: &[TrackRow], shown: &[TrackRow], on: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Insights {
+/// `facts`: the crates' facts by playlist line, for the map's Sound.
+pub fn build(
+    rows: &[TrackRow],
+    shown: &[TrackRow],
+    on: &[TrackRow],
+    rules: &Rules,
+    playlists: &[(String, Vec<String>, usize)],
+    facts: &HashMap<&str, &crate::crates::Facts>,
+) -> Insights {
     let in_any: HashSet<&str> = playlists.iter().flat_map(|(_, l, _)| l.iter().map(String::as_str)).collect();
     let library = library_stats(shown, rules, &in_any);
 
@@ -356,11 +372,11 @@ pub fn build(rows: &[TrackRow], shown: &[TrackRow], on: &[TrackRow], rules: &Rul
         .filter(|(_, l, _)| l.iter().any(|x| on_rels.contains(x.as_str())))
         .map(|(n, l, d)| (n.clone(), l.iter().filter(|x| on_rels.contains(x.as_str()) || !music_rels.contains(x.as_str())).cloned().collect(), *d))
         .collect();
-    Insights { library, playlists: playlists_view, proximity: proximity(rows, rules, &mapped), overview: None }
+    Insights { library, playlists: playlists_view, proximity: proximity(rows, rules, &mapped, facts), overview: None }
 }
 
-/// How close every two playlists are, by tracks, genre and artists.
-pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Proximity {
+/// How close every two playlists are, by tracks, genre, artists and sound (`facts` by playlist line).
+pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)], facts: &HashMap<&str, &crate::crates::Facts>) -> Proximity {
     let by_rel: HashMap<&str, &TrackRow> = rows.iter().map(|r| (r.rel.as_str(), r)).collect();
     let tracks: Vec<HashSet<&str>> = playlists.iter().map(|(_, l, _)| l.iter().map(String::as_str).collect()).collect();
     // Per playlist: how many of its tracks carry each genre / artist.
@@ -392,6 +408,7 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
     // closeness to every other (a reggae playlist alone with Ska and Rocksteady looked unlike everything).
     let genres_cmp = shared(&genres);
     let artists_cmp = shared(&artists);
+    let sounds = standardised(&tracks.iter().map(|set| sound_of(set, facts)).collect::<Vec<_>>());
     let points = playlists
         .iter()
         .enumerate()
@@ -411,7 +428,8 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
             let t = if union == 0 { 0.0 } else { shared_tracks as f64 / union as f64 };
             let g = cosine(&genres_cmp[a], &genres_cmp[b]);
             let r = cosine(&artists_cmp[a], &artists_cmp[b]);
-            if t.max(g).max(r) < MIN_SIGNAL {
+            let s = alike(sounds[a].as_ref(), sounds[b].as_ref());
+            if t.max(g).max(r).max(s) < MIN_SIGNAL {
                 continue;
             }
             let mut both: Vec<(String, f64)> =
@@ -423,6 +441,7 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
                 tracks: t,
                 genre: g,
                 artists: r,
+                sound: s,
                 shared_tracks,
                 shared_artists: artists[a].keys().filter(|k| artists[b].contains_key(*k)).count(),
                 genres: both.into_iter().take(NAMED_GENRES).map(|(k, _)| k).collect(),
@@ -430,6 +449,66 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
         }
     }
     Proximity { playlists: points, links }
+}
+
+/// A playlist's sound: the mean of each part over its tracks that have it (energy and danceability 0..1, the tempo in
+/// hundreds of BPM, each of CLAP's moods); `None` for a part none has. None at all with fewer than `HEARD_FOR_SOUND`
+/// tracks heard.
+fn sound_of(lines: &HashSet<&str>, facts: &HashMap<&str, &crate::crates::Facts>) -> Option<[Option<f64>; SOUND_PARTS]> {
+    let mut sum = [0f64; SOUND_PARTS];
+    let mut n = [0usize; SOUND_PARTS];
+    let mut heard = 0;
+    for f in lines.iter().filter_map(|l| facts.get(l)) {
+        let mut parts = [None; SOUND_PARTS];
+        parts[0] = f.energy.map(|e| e / 100.0);
+        parts[1] = f.danceability.map(|d| d / 100.0);
+        parts[2] = f.bpm.map(|b| b / 100.0);
+        if let Some(m) = f.clap_moods {
+            for (i, v) in m.iter().enumerate() {
+                parts[3 + i] = Some(f64::from(*v));
+            }
+        }
+        if parts.iter().any(Option::is_some) {
+            heard += 1;
+        }
+        for (i, p) in parts.iter().enumerate() {
+            if let Some(v) = p {
+                sum[i] += v;
+                n[i] += 1;
+            }
+        }
+    }
+    (heard >= HEARD_FOR_SOUND).then(|| std::array::from_fn(|i| (n[i] > 0).then(|| sum[i] / n[i] as f64)))
+}
+
+/// The sounds with each part measured against the playlists' own spread of it (how many standard deviations from
+/// their mean): a mood every playlist has about as much of says nothing, a difference where they differ a lot says
+/// less than one where they hardly do. A part that does not vary is left out.
+fn standardised(sounds: &[Option<[Option<f64>; SOUND_PARTS]>]) -> Vec<Option<[Option<f64>; SOUND_PARTS]>> {
+    let mut spread = [None; SOUND_PARTS];
+    for (i, s) in spread.iter_mut().enumerate() {
+        let vals: Vec<f64> = sounds.iter().filter_map(|x| x.and_then(|x| x[i])).collect();
+        if vals.len() < 2 {
+            continue;
+        }
+        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+        let sd = (vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64).sqrt();
+        if sd > 1e-9 {
+            *s = Some((mean, sd));
+        }
+    }
+    sounds.iter().map(|x| x.map(|x| std::array::from_fn(|i| x[i].zip(spread[i]).map(|(v, (m, sd))| (v - m) / sd)))).collect()
+}
+
+/// How alike two standardised sounds are, 0..1: 1 the same, falling with their mean squared distance over the parts
+/// both have (two playlists a standard deviation apart in every part: about 0.14). 0 where either is not known.
+fn alike(a: Option<&[Option<f64>; SOUND_PARTS]>, b: Option<&[Option<f64>; SOUND_PARTS]>) -> f64 {
+    let (Some(a), Some(b)) = (a, b) else { return 0.0 };
+    let both: Vec<f64> = a.iter().zip(b).filter_map(|(x, y)| Some((x.as_ref()? - y.as_ref()?).powi(2))).collect();
+    if both.is_empty() {
+        return 0.0;
+    }
+    (-2.0 * both.iter().sum::<f64>() / both.len() as f64).exp()
 }
 
 /// The profiles without the keys found in one profile only.
@@ -696,7 +775,7 @@ mod tests {
             ("Evening".to_string(), lines(&[air1, air2, "Gone/01.mp3"]), 1),
             ("Party".to_string(), lines(&[kiara]), 0),
         ];
-        let i = build(&library(), &library(), &library(), &Rules::default(), &playlists);
+        let i = build(&library(), &library(), &library(), &Rules::default(), &playlists, &HashMap::new());
         let p = &i.playlists;
         assert_eq!((p.playlists, p.distinct_tracks, p.missing), (3, 4, 1));
         assert_eq!((p.library_tracks_in_playlists, p.albums_without_playlist), (3, 1), "only the untagged album is in none");
@@ -705,7 +784,7 @@ mod tests {
         // Music switched off, another folder's tracks only (prefixed, as the service reads them): none in a playlist,
         // the playlists themselves and how close they are as before.
         let other: Vec<TrackRow> = library().into_iter().map(|mut r| (r.rel = format!("1:{}", r.rel), r).1).collect();
-        let o = build(&library(), &other, &other, &Rules::default(), &playlists);
+        let o = build(&library(), &other, &other, &Rules::default(), &playlists, &HashMap::new());
         assert_eq!((o.playlists.library_tracks_in_playlists, o.playlists.albums_without_playlist, o.playlists.most_shared.len()), (0, o.library.albums, 0));
         assert_eq!((o.playlists.playlists, o.proximity.playlists.len()), (3, 0), "the playlists are still counted; the map has none");
         let x = &i.proximity;
@@ -725,7 +804,7 @@ mod tests {
             t("c/1", "Electronic; Polka", "Polka Band"),
         ];
         let pl = |name: &str, lines: &[&str]| (name.to_string(), lines.iter().map(|s| s.to_string()).collect::<Vec<_>>(), 0);
-        let p = proximity(&rows, &Rules::default(), &[pl("Deep", &["a/1", "a/2"]), pl("Night", &["b/1"]), pl("Odd", &["c/1"])]);
+        let p = proximity(&rows, &Rules::default(), &[pl("Deep", &["a/1", "a/2"]), pl("Night", &["b/1"]), pl("Odd", &["c/1"])], &HashMap::new());
         let link = |a, b| p.links.iter().find(|l| (l.a, l.b) == (a, b));
         let deep_night = link(0, 1).expect("same rare genre and artist");
         assert_eq!(deep_night.shared_tracks, 0);
@@ -738,6 +817,43 @@ mod tests {
         assert_eq!(p.playlists[0].focus, Some(1.0), "one distinctive genre");
         // Shares are plain: Electronic, in every playlist, still covers half of Deep's ground.
         assert_eq!(p.playlists[0].shares, BTreeMap::from([("Dub Techno".to_string(), 0.5), ("Electronic".to_string(), 0.5)]));
+    }
+
+    #[test]
+    fn playlists_that_share_nothing_sit_close_when_they_sound_alike() {
+        // Two calm playlists, two loud ones, no track, genre or artist in common; and one with too few tracks heard.
+        let fact = |rel: &str, energy: f64, dance: f64, bpm: f64, calm: f32| crate::crates::Facts {
+            rel: rel.into(),
+            energy: Some(energy),
+            danceability: Some(dance),
+            bpm: Some(bpm),
+            clap_moods: Some([calm, 1.0 - calm, 0.5, 0.5, 0.5]),
+            ..crate::crates::Facts::default()
+        };
+        let facts = vec![
+            fact("a/1", 20.0, 30.0, 80.0, 0.9),
+            fact("a/2", 25.0, 25.0, 85.0, 0.8),
+            fact("a/3", 22.0, 28.0, 78.0, 0.85),
+            fact("b/1", 21.0, 31.0, 82.0, 0.88),
+            fact("b/2", 24.0, 27.0, 84.0, 0.82),
+            fact("b/3", 19.0, 29.0, 79.0, 0.9),
+            fact("c/1", 90.0, 85.0, 128.0, 0.1),
+            fact("c/2", 88.0, 80.0, 126.0, 0.15),
+            fact("c/3", 92.0, 88.0, 130.0, 0.1),
+            fact("d/1", 85.0, 90.0, 125.0, 0.12),
+            fact("d/2", 91.0, 84.0, 128.0, 0.1),
+            fact("d/3", 89.0, 86.0, 127.0, 0.14),
+            fact("e/1", 50.0, 50.0, 100.0, 0.5),
+        ];
+        let by_line: HashMap<&str, &crate::crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
+        let lines = |p: &str, n: usize| (1..=n).map(|i| format!("{p}/{i}")).collect::<Vec<_>>();
+        let lists = vec![("Calm".into(), lines("a", 3), 0), ("Quiet".into(), lines("b", 3), 0), ("Loud".into(), lines("c", 3), 0), ("Club".into(), lines("d", 3), 0), ("One".into(), lines("e", 1), 0)];
+        let p = proximity(&[], &Rules::default(), &lists, &by_line);
+        let sound = |a, b| p.links.iter().find(|l| (l.a, l.b) == (a, b)).map_or(0.0, |l| l.sound);
+        assert!(sound(0, 1) > 0.8 && sound(2, 3) > 0.8, "alike: {} {}", sound(0, 1), sound(2, 3));
+        assert!(sound(0, 2) < 0.05 && sound(1, 3) < 0.05, "unlike: {} {}", sound(0, 2), sound(1, 3));
+        assert_eq!(sound(0, 4), 0.0, "one track heard: no sound known");
+        assert!(p.links.iter().all(|l| l.tracks == 0.0 && l.genre == 0.0 && l.artists == 0.0));
     }
 
     #[test]
@@ -754,7 +870,7 @@ mod tests {
         let lists = [pl("Roots", &["a/1", "a/2"]), pl("Mixed", &["b/1"]), pl("Other", &["c/1"])];
         let with = |extra: &str| {
             let rows = vec![t("a/1", "Roots Reggae"), t("a/2", extra), t("b/1", "Roots Reggae"), t("c/1", "Polka")];
-            proximity(&rows, &Rules::default(), &lists).links.iter().find(|l| (l.a, l.b) == (0, 1)).map(|l| l.genre).unwrap()
+            proximity(&rows, &Rules::default(), &lists, &HashMap::new()).links.iter().find(|l| (l.a, l.b) == (0, 1)).map(|l| l.genre).unwrap()
         };
         assert!((with("Ska") - with("Roots Reggae")).abs() < 1e-9, "Ska, in Roots only, changes nothing");
     }

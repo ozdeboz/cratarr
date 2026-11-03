@@ -153,6 +153,28 @@ fn watched(album: &serde_json::Value, artist: Option<&serde_json::Value>) -> Wat
     }
 }
 
+/// An album Lidarr wants (its Wanted), as Cratarr fetches it from Soulseek (0.15).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WantedAlbum {
+    /// Lidarr's id for it.
+    pub lidarr: i64,
+    pub album: String,
+    pub artist: String,
+    pub release_group: String,
+    /// The release Lidarr is set to (MusicBrainz's id); none where it names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+}
+
+/// An album of Lidarr's Wanted, where it has a release group.
+fn wanted_album(a: &serde_json::Value) -> Option<WantedAlbum> {
+    let w = watched(a, None);
+    let release = a["releases"].as_array().and_then(|r| r.iter().find(|r| r["monitored"].as_bool() == Some(true))).and_then(|r| r["foreignReleaseId"].as_str()).map(str::to_string);
+    Some(WantedAlbum { lidarr: a["id"].as_i64()?, album: w.album, artist: w.artist, release_group: w.release_group?, release, year: w.year })
+}
+
 /// What Want adds an album with (`settings::LidarrConfig`'s choices); a `None`: as the artists Lidarr has.
 #[derive(Debug, Clone, Default)]
 pub struct AddWith {
@@ -384,6 +406,24 @@ impl Lidarr {
         let looking: Vec<Watched> =
             missing.records.iter().map(|a| watched(a, None)).filter(|w| w.release_group.is_none() || !busy.contains(&w.release_group)).collect();
         Ok(Watching { more: missing.total.saturating_sub(missing.records.len()), fetching, looking })
+    }
+
+    /// What Lidarr wants and has not (its Wanted: monitored and missing), at most `limit`, newest first: each album with
+    /// the release Lidarr is set to (its monitored one), the reference a record fetched from Soulseek is judged by.
+    pub async fn wanted(&self, limit: usize) -> Result<Vec<WantedAlbum>> {
+        #[derive(Deserialize)]
+        struct Missing {
+            #[serde(default)]
+            records: Vec<serde_json::Value>,
+        }
+        let size = limit.to_string();
+        let missing: Missing = self
+            .get(
+                "/api/v1/wanted/missing",
+                &[("page", "1"), ("pageSize", size.as_str()), ("includeArtist", "true"), ("monitored", "true"), ("sortKey", "releaseDate"), ("sortDirection", "descending")],
+            )
+            .await?;
+        Ok(missing.records.iter().filter_map(wanted_album).collect())
     }
 
     /// Lidarr's queue, with each entry's album and artist.

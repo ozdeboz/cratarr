@@ -73,6 +73,9 @@ struct Search {
 #[serde(rename_all = "camelCase")]
 pub struct Transfer {
     pub id: String,
+    /// The file as its user shares it.
+    #[serde(default)]
+    pub filename: String,
     /// slskd's states as words ("Queued, Remotely", "InProgress", "Completed, Succeeded"…).
     pub state: String,
     #[serde(default)]
@@ -202,6 +205,36 @@ impl Slskd {
             bail!("slskd did not take the fetch");
         }
         Ok(batch)
+    }
+
+    /// Asks `user` for a whole folder's files in one batch, into its own folder (`cratarr/<batch>`): a record fetched
+    /// whole (0.15, Soulseek in Cratarr). The batch's id.
+    pub async fn fetch_many(&self, user: &str, files: &[Offered]) -> Result<String> {
+        let batch = uuid();
+        let listed: Vec<serde_json::Value> = files.iter().map(|f| json!({ "filename": f.filename, "size": f.size })).collect();
+        let body = json!({ "id": batch, "username": user, "files": listed, "options": { "destination": format!("{FOLDER}/{batch}") } });
+        let r = self.http.post(self.at("transfers/downloads/batches")).header("X-API-Key", &self.key).json(&body).send().await.context("slskd could not be reached")?;
+        let status = r.status();
+        if status.as_u16() == 404 {
+            bail!("{user} is offline");
+        }
+        if !status.is_success() {
+            bail!("slskd would not fetch them: {status} {}", r.text().await.unwrap_or_default());
+        }
+        let e: Enqueued = r.json().await.context("slskd's answer could not be read")?;
+        if let Some(f) = e.failures.first() {
+            bail!("{user} would not send them: {}", f.message);
+        }
+        if e.batch.is_none() {
+            bail!("slskd did not take the fetch");
+        }
+        Ok(batch)
+    }
+
+    /// A batch's transfers, as they are now.
+    pub async fn transfers(&self, batch: &str) -> Result<Vec<Transfer>> {
+        let b: Batch = self.get(&format!("transfers/downloads/batches/{batch}")).await?;
+        Ok(b.transfers.unwrap_or_default())
     }
 
     /// The fetch's transfer, as it is now.
