@@ -31,11 +31,11 @@ class PlaysTest {
     }
 
     @Test
-    fun thoseCarryingNoAccountTakeTheOneKnown() {
-        val was = listOf(play("a"), play("b", "bob"))
-        val now = Plays.stamped(was, "ann")
-        assertEquals(listOf("ann", "bob"), now.map { it.getString("account") })
-        assertEquals(listOf("a", "b"), now.map { it.getString("id") })
-        assertFalse("a copy", was[0].has("account"))
+    fun nobodySignedInIsAnAnswerNotASilence() {
+        assertTrue(Plays.signedOut(401, null))
+        assertTrue(Plays.signedOut(404, """{"error":"No one is signed in."}"""))
+        assertFalse("one user", Plays.signedOut(404, """{"error":"Signing in is off: there is one user."}"""))
+        assertFalse(Plays.signedOut(200, """{"name":"ann"}"""))
+        assertFalse("not reached", Plays.signedOut(502, null))
     }
 }

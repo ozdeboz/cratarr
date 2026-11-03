@@ -138,20 +138,22 @@ object Downloads {
         Kept.holdManual(context, held)
     }
 
-    /** The owner's downloads go; a track a kept item holds stays (decision 0038). */
+    /** The account's downloads go; a track a kept item or another account holds stays (decisions 0038, 0101). */
     fun remove(context: Context, ids: List<String>) = Kept.releaseManual(context, ids, all = false)
 
     fun removeAll(context: Context) = Kept.releaseManual(context, emptyList(), all = true)
 
-    /** The owner's downloads, for the page: each track as it was given, with `download` (its id, state, size). */
+    /** The account signed in's downloads, for the page (decision 0101: an account sees only what it holds): each track
+     *  as it was given, with `download` (its id, state, size). */
     fun list(context: Context): JSONObject {
         val found = mutableListOf<JSONObject>()
         var bytes = 0L
         val albums = Kept.albumIds(context)
-        val manual = Kept.manualKeys(context)
+        val held = Kept.heldHere(context)
         manager(context).downloadIndex.getDownloads().use { c ->
             while (c.moveToNext()) {
                 val d = c.download
+                val manual = held[d.request.id] ?: continue
                 val t = try {
                     JSONObject(String(d.request.data))
                 } catch (e: Exception) {
@@ -165,8 +167,8 @@ object Downloads {
                     Download.STATE_DOWNLOADING -> "downloading"
                     else -> "waiting"
                 }
-                // Downloaded once by the owner, or there only for what is synced (decision 0038).
-                t.put("manual", manual(d.request.id))
+                // Downloaded once by the account, or there only for what it syncs (decision 0038).
+                t.put("manual", manual)
                 t.put("download", JSONObject().put("id", d.request.id).put("state", state).put("bytes", d.bytesDownloaded).put("percent", d.percentDownloaded.toDouble()))
                 found.add(t)
                 bytes += d.bytesDownloaded

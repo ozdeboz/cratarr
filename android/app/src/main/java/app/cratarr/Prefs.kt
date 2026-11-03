@@ -230,19 +230,26 @@ class Prefs(context: Context) {
             p.edit().putBoolean(DEVICE_MUSIC_ASKED, value).apply()
         }
 
-    /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none): the one not playing, and local
-     *  mode's while it plays too, so it lasts a restart (Cratarr gives its own back). */
-    fun savedQueue(mode: String): String = p.getString(queueKey(mode), null).orEmpty()
+    /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none) for one account ([Who]'s key): the
+     *  one not playing, and local mode's while it plays too, so it lasts a restart (Cratarr gives its own back). */
+    fun savedQueue(mode: String, who: String): String = p.getString(queueKey(mode) + who, null).orEmpty()
 
-    fun saveQueue(mode: String, snapshot: String) {
-        p.edit().putString(queueKey(mode), snapshot).apply()
+    fun saveQueue(mode: String, snapshot: String, who: String) {
+        p.edit().putString(queueKey(mode) + who, snapshot).apply()
     }
 
-    /** Each mode's queue apart: a server's by its mode's name. */
+    /** Each mode's queue apart, and each account's (decision 0101): a server's by its mode's name. */
     private fun queueKey(mode: String) = when {
         mode == MODE_DEVICE -> DEVICE_QUEUE
         mode.startsWith(Servers.MODE_PREFIX) -> "${SERVER_QUEUE}$mode"
         else -> CRATARR_QUEUE
+    }
+
+    /** The mode an account ([Who]'s key) was last in, taken up at its next sign-in. */
+    fun modeOf(who: String): String = known(p.getString(MODE + who, null))
+
+    fun keepModeOf(who: String, mode: String) {
+        p.edit().putString(MODE + who, known(mode)).apply()
     }
 
     /** Automatic follows the owner's order of outputs (decision 0033, amended 2026-10-19: [Output.preferred]); off:

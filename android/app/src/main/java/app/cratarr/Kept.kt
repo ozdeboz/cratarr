@@ -3,11 +3,12 @@
  * item is followed: Cratarr says what it holds now (POST /api/kept, with the version last seen, so an unchanged item
  * costs a hash), its new tracks are downloaded and the ones that left it are removed, through the same download store
  * as the owner's own downloads (Downloads).
- * - A track goes only when nothing holds it: each download has its holders, `manual` (the owner's Download) and the
- *   kept items' keys. A download from before this, without holders, counts as the owner's.
- * - One storage budget (20 GB unless set; 0 is no limit). The owner's downloads count first and are never dropped;
- *   then the items, the newest kept first, each in its own order: what does not fit is left out, so the item kept
- *   longest ago shrinks first.
+ * - A track goes only when nothing holds it: each download has its holders, each an account's ([Who], decision 0101):
+ *   its `manual` (its Download) and its kept items' keys. A file two accounts hold is stored once; an account sees only
+ *   what it holds, and its items are asked after only while it is signed in (the others keep what they have).
+ * - One storage budget for the device (20 GB unless set; 0 is no limit). Every account's downloads count first and
+ *   are never dropped; then the items, the newest kept first, each in its own order: what does not fit is left out,
+ *   so the item kept longest ago shrinks first.
  * - Synced when the app starts, when an item is kept, when the settings change, and every few hours by WorkManager
  *   (KeptWorker), with the downloads' own rules: Wi-Fi unless mobile data is allowed, charging when asked.
  * All of it runs on one thread, so the lists are never changed at once from two places.
@@ -53,8 +54,14 @@ object Kept {
     /** Sync passes going on now (the report's `running`). */
     private val passes = java.util.concurrent.atomic.AtomicInteger(0)
 
-    /** A kept item, as stored: its tracks as Cratarr last said, and how many the budget left out. */
+    /** A holder of a download: [Who]'s key and what holds it ([MANUAL] or an item's key), apart by a tab. */
+    private fun held(who: String, what: String) = "$who\t$what"
+    private fun whoOf(holder: String) = holder.substringBefore('\t')
+    private fun isManual(holder: String) = holder.substringAfter('\t') == MANUAL
+
+    /** A kept item, as stored: whose it is, its tracks as Cratarr last said, and how many the budget left out. */
     private class Item(
+        val who: String,
         val kind: String,
         val source: String,
         val id: String,
@@ -66,14 +73,17 @@ object Kept {
         var overBudget: Int,
     ) {
         val key get() = "$kind:$source/$id"
+        /** Its hold on a download. */
+        val holder get() = "$who\t$key"
 
         fun json(): JSONObject = JSONObject()
-            .put("kind", kind).put("source", source).put("id", id).put("name", name).put("since", since)
+            .put("who", who).put("kind", kind).put("source", source).put("id", id).put("name", name).put("since", since)
             .put("version", version ?: JSONObject.NULL).put("tracks", tracks).put("error", error ?: JSONObject.NULL)
             .put("overBudget", overBudget)
 
         companion object {
             fun of(o: JSONObject) = Item(
+                o.optString("who"),
                 o.optString("kind"), o.optString("source"), o.optString("id"), o.optString("name"), o.optLong("since"),
                 o.optString("version").takeIf { o.has("version") && !o.isNull("version") && it.isNotEmpty() },
                 o.optJSONArray("tracks") ?: JSONArray(),
@@ -89,7 +99,7 @@ object Kept {
 
     private fun loadItems(context: Context): MutableList<Item> = try {
         val a = JSONArray(file(context, ITEMS_FILE).readText())
-        (0 until a.length()).map { Item.of(a.getJSONObject(it)) }.toMutableList()
+        (0 until a.length()).map { Item.of(a.getJSONObject(it)) }.filter { it.who.isNotEmpty() }.toMutableList()
     } catch (e: Exception) {
         mutableListOf()
     }
@@ -98,12 +108,12 @@ object Kept {
         file(context, ITEMS_FILE).writeText(JSONArray(items.map { it.json() }).toString())
     }
 
-    /** Each download's holders, by its id (`source/id`). */
+    /** Each download's holders ([held]), by its id (`source/id`). */
     private fun loadHolders(context: Context): MutableMap<String, MutableSet<String>> = try {
         val o = JSONObject(file(context, HOLDERS_FILE).readText())
         o.keys().asSequence().associateWith { k ->
             val a = o.getJSONArray(k)
-            (0 until a.length()).map { a.getString(it) }.toMutableSet()
+            (0 until a.length()).map { a.getString(it) }.filter { '\t' in it }.toMutableSet()
         }.toMutableMap()
     } catch (e: Exception) {
         mutableMapOf()
@@ -117,15 +127,16 @@ object Kept {
 
     // --- what the page and the other parts call ---
 
-    /** Keep an item, or not; then sync. */
+    /** Keep an item, or not, for the account signed in; then sync. */
     fun set(context: Context, kind: String, source: String, id: String, name: String, on: Boolean) {
         if (on && source == Previews.SOURCE) return
         val app = context.applicationContext
         worker.execute {
+            val who = Who.current(app)
             val items = loadItems(app)
             val key = "$kind:$source/$id"
-            items.removeAll { it.key == key }
-            if (on) items.add(Item(kind, source, id, name.ifEmpty { id }, System.currentTimeMillis(), null, JSONArray(), null, 0))
+            items.removeAll { it.who == who && it.key == key }
+            if (on) items.add(Item(who, kind, source, id, name.ifEmpty { id }, System.currentTimeMillis(), null, JSONArray(), null, 0))
             saveItems(app, items)
             syncHere(app, retryFailed = false)
         }
@@ -143,48 +154,81 @@ object Kept {
         worker.submit { syncHere(app, retryFailed = false) }.get(10, TimeUnit.MINUTES)
     }
 
-    /** The owner's Download: these tracks are held by `manual` from now on (Downloads.add calls it). */
+    /** The account's Download: these tracks are held by its `manual` from now on (Downloads.add calls it). */
     fun holdManual(context: Context, keys: List<String>) {
         val app = context.applicationContext
         worker.execute {
+            val mine = held(Who.current(app), MANUAL)
             val holders = loadHolders(app)
-            for (k in keys) holders.getOrPut(k) { mutableSetOf() }.add(MANUAL)
+            for (k in keys) holders.getOrPut(k) { mutableSetOf() }.add(mine)
             saveHolders(app, holders)
         }
     }
 
     /**
-     * The owner removes downloads: their `manual` hold goes; a track a kept item still holds stays (it is shown as
-     * kept), any other is removed.
+     * The account signed in removes downloads (all of its own with `all`): its `manual` hold goes; a track one of its
+     * kept items or another account still holds stays, any other is removed.
      */
     fun releaseManual(context: Context, keys: List<String>, all: Boolean) {
         val app = context.applicationContext
         worker.execute {
+            val mine = held(Who.current(app), MANUAL)
             val holders = loadHolders(app)
-            val targets = if (all) downloadedKeys(app) else keys
-            for (k in targets) {
-                val h = holders[k] ?: mutableSetOf()
-                h.remove(MANUAL)
-                if (h.isEmpty()) {
-                    holders.remove(k)
-                    DownloadService.sendRemoveDownload(app, CratarrDownloadService::class.java, k, false)
-                } else {
-                    holders[k] = h
-                }
-            }
-            saveHolders(app, holders)
+            val targets = if (all) holders.filterValues { mine in it }.keys.toList() else keys
+            for (k in targets) holders[k]?.remove(mine)
+            release(app, holders)
             onChange?.invoke()
         }
     }
 
     /**
-     * The downloads that are the owner's own Download once (held by `manual` alone), for the Downloads page's Downloaded
-     * once; one a synced item holds too shows under Synced only (the owner, 2026-10-24). One nothing holds is from
-     * before holders were kept, and so the owner's.
+     * An account's downloads all go from this device (decision 0101: "Remove this account's downloads" at its sign-out,
+     * This device's Remove, an account Cratarr removed): its holds and its kept items; a file another account holds
+     * stays.
      */
-    fun manualKeys(context: Context): (String) -> Boolean {
-        val holders = loadHolders(context.applicationContext)
-        return { key -> holders[key]?.let { it.isEmpty() || it == setOf(MANUAL) } ?: true }
+    fun releaseAccount(context: Context, who: String) {
+        val app = context.applicationContext
+        worker.execute {
+            saveItems(app, loadItems(app).filter { it.who != who })
+            val holders = loadHolders(app)
+            for (h in holders.values) h.removeAll { whoOf(it) == who }
+            release(app, holders)
+            onChange?.invoke()
+        }
+    }
+
+    /** The downloads nothing holds any more removed, and the holders kept. */
+    private fun release(app: Context, holders: MutableMap<String, MutableSet<String>>) {
+        for (k in downloadedKeys(app)) if (holders[k].isNullOrEmpty()) {
+            holders.remove(k)
+            DownloadService.sendRemoveDownload(app, CratarrDownloadService::class.java, k, false)
+        }
+        saveHolders(app, holders)
+    }
+
+    /**
+     * The account signed in's downloads, by id: whether each is its own Download once (held by its `manual` alone), for
+     * the Downloads page's Downloaded once; one its synced item holds too shows under Synced only (the owner,
+     * 2026-10-24). One it does not hold is not in the map.
+     */
+    fun heldHere(context: Context): Map<String, Boolean> {
+        val app = context.applicationContext
+        val who = Who.current(app)
+        val mine = held(who, MANUAL)
+        return loadHolders(app).mapNotNull { (k, h) ->
+            val its = h.filter { whoOf(it) == who }
+            if (its.isEmpty()) null else k to (its == listOf(mine))
+        }.toMap()
+    }
+
+    /** Each account's share of this device's downloads, in bytes (a file two hold counts in both), by its [Who] key. */
+    private fun shares(holders: Map<String, Set<String>>, downloads: Map<String, Download>): Map<String, Long> {
+        val out = mutableMapOf<String, Long>()
+        for ((k, h) in holders) {
+            val bytes = downloads[k]?.bytesDownloaded ?: continue
+            for (who in h.map(::whoOf).toSet()) out[who] = (out[who] ?: 0L) + bytes
+        }
+        return out
     }
 
     /** WorkManager's every few hours, with the downloads' rules as its constraints. */
@@ -214,17 +258,21 @@ object Kept {
         try {
             val prefs = Prefs(app)
             val server = prefs.serverUrl?.trimEnd('/')
+            val who = Who.current(app)
             val items = loadItems(app)
-            if (server != null && items.isNotEmpty()) ask(app, server, items)
+            // Only the account signed in's items are asked after (its session asks); the others keep what they have.
+            val ours = items.filter { it.who == who }
+            if (server != null && ours.isNotEmpty()) ask(app, server, ours)
 
-            // What is on the device now, and who holds it; a download without holders is the owner's.
+            // What is on the device now, and who holds it; a download without holders (just added, its hold on its
+            // way) is the account signed in's.
             val downloads = mutableMapOf<String, Download>()
             Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads[c.download.request.id] = c.download }
             val holders = loadHolders(app)
-            for (k in downloads.keys) if (holders[k].isNullOrEmpty()) holders[k] = mutableSetOf(MANUAL)
-            val manual = holders.filterValues { MANUAL in it }.keys
+            for (k in downloads.keys) if (holders[k].isNullOrEmpty()) holders[k] = mutableSetOf(held(who, MANUAL))
+            val manual = holders.filterValues { h -> h.any(::isManual) }.keys
 
-            // The budget: the owner's downloads first, then the items, the newest kept first, each in its order.
+            // The budget: every account's downloads first, then the items, the newest kept first, each in its order.
             val budget = prefs.syncBudgetGb.let { if (it <= 0) Long.MAX_VALUE else it * 1_000_000_000L }
             val copies = prefs.downloadQuality == Prefs.QUALITY_SMALLER
             var used = manual.sumOf { downloads[it]?.bytesDownloaded ?: 0L }
@@ -236,14 +284,16 @@ object Kept {
                     val t = item.tracks.optJSONObject(i) ?: continue
                     val k = keyOf(t)
                     if (Previews.isPreview(k)) continue
+                    // Another account's item holds only what is here already: nothing is fetched for it now.
+                    if (item.who != who && k !in downloads) continue
                     tracks[k] = t
-                    val held = wanted[k]
-                    if (held != null) {
-                        held.add(item.key)
+                    val holding = wanted[k]
+                    if (holding != null) {
+                        holding.add(item.holder)
                         continue
                     }
                     if (k in manual) {
-                        wanted[k] = mutableSetOf(item.key)
+                        wanted[k] = mutableSetOf(item.holder)
                         continue
                     }
                     val size = (if (copies) t.optLong("copy_size", -1) else t.optLong("size", -1)).takeIf { it > 0 }
@@ -251,7 +301,7 @@ object Kept {
                         ?: UNKNOWN_SIZE
                     if (used + size <= budget) {
                         used += size
-                        wanted[k] = mutableSetOf(item.key)
+                        wanted[k] = mutableSetOf(item.holder)
                     } else {
                         over++
                     }
@@ -259,9 +309,9 @@ object Kept {
                 item.overBudget = over
             }
 
-            // Holders as they are now: the owner's stay, the items' are what the budget gave.
+            // Holders as they are now: every account's own Downloads stay, the items' are what the budget gave.
             for (k in (holders.keys + wanted.keys).toSet()) {
-                val h = (holders[k]?.filter { it == MANUAL }?.toMutableSet() ?: mutableSetOf()).apply { addAll(wanted[k] ?: emptySet()) }
+                val h = (holders[k]?.filter(::isManual)?.toMutableSet() ?: mutableSetOf()).apply { addAll(wanted[k] ?: emptySet()) }
                 if (h.isEmpty()) {
                     holders.remove(k)
                     if (k in downloads) DownloadService.sendRemoveDownload(app, CratarrDownloadService::class.java, k, false)
@@ -366,7 +416,8 @@ object Kept {
 
     fun report(context: Context): JSONObject {
         val app = context.applicationContext
-        val items = worker.submit<List<Item>> { loadItems(app) }.get()
+        val who = Who.current(app)
+        val (items, holders) = worker.submit<Pair<List<Item>, Map<String, Set<String>>>> { loadItems(app).filter { it.who == who } to loadHolders(app) }.get()
         val downloads = mutableMapOf<String, Download>()
         Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads[c.download.request.id] = c.download }
         val manager = Downloads.manager(app)
@@ -421,9 +472,15 @@ object Kept {
             )
         }
         val budget = Prefs(app).syncBudgetGb
+        // Each account's share (decision 0101), only while one is signed in: signed out, nothing of any account shows.
+        val accounts = JSONArray()
+        if (who != Who.NONE) for ((w, bytes) in shares(holders, downloads)) {
+            if (w != Who.NONE) accounts.put(JSONObject().put("account", w.removePrefix("@")).put("bytes", bytes).put("here", w == who))
+        }
         return JSONObject()
             .put("type", "kept")
             .put("items", out)
+            .put("accounts", accounts)
             .put("used", downloads.values.sumOf { it.bytesDownloaded })
             .put("budget", if (budget <= 0) JSONObject.NULL else budget * 1_000_000_000L)
             .put("waiting", waiting ?: JSONObject.NULL)

@@ -4,6 +4,8 @@
  * leaves it), and never sent to Cratarr's server. The page's code for those servers (web/src/lib/servers) asks through
  * the app (`server-fetch`): its requests go out from here, so a page over https reaches a server on plain http at home,
  * no server has to allow the page's origin, and they carry nothing of Cratarr's own (no session, no cookie).
+ * Each Cratarr account has its own (decision 0101, [Who]), hidden while another is signed in; those added with nobody
+ * signed in are the device's no-account side's, so the app plays a server's music with no Cratarr account at all.
  */
 package app.cratarr
 
@@ -21,34 +23,38 @@ import java.security.SecureRandom
 
 object Servers {
     private const val TAG = "Servers"
-    /** Where they are kept, sealed (one JSON list). */
+    /** Where they are kept, sealed (one JSON object: each [Who] key's list). */
     private val sealed = Sealed("cratarr-servers", "servers")
     /** A mode's name for a server: `server:<its id>`. */
     const val MODE_PREFIX = "server:"
     /** The most of an answer read for the page. */
     private const val MOST = 32 * 1024 * 1024
 
-    /** Every server kept, with its sign-in (`{id, kind, name, url, user, userId?, secret, apiKey?, scrobbles?}`), in
-     *  the order they were added. None where they cannot be read (the keystore's key gone with a reset of the device's
-     *  lock): they are signed in to again. */
-    fun all(context: Context): JSONArray {
-        cached?.let { return JSONArray(it.toString()) }
-        val text = sealed.read(context) ?: return JSONArray()
+    /** Every server the one signed in now keeps ([Who]), with its sign-in (`{id, kind, name, url, user, userId?,
+     *  secret, apiKey?, scrobbles?}`), in the order they were added. None where they cannot be read (the keystore's
+     *  key gone with a reset of the device's lock): they are signed in to again. */
+    fun all(context: Context): JSONArray = everyone(context).optJSONArray(Who.current(context))?.let { JSONArray(it.toString()) } ?: JSONArray()
+
+    private fun everyone(context: Context): JSONObject {
+        cached?.let { return it }
+        val text = sealed.read(context) ?: return JSONObject()
         return try {
-            JSONArray(text).also { cached = JSONArray(it.toString()) }
+            JSONObject(text).also { cached = it }
         } catch (e: Exception) {
             Log.w(TAG, "the kept servers cannot be read: ${e.javaClass.simpleName}")
-            JSONArray()
+            JSONObject()
         }
     }
 
-    /** The list as last read or written, so the player's every track does not decrypt it again. */
+    /** Everyone's lists as last read or written, so the player's every track does not decrypt them again. */
     @Volatile
-    private var cached: JSONArray? = null
+    private var cached: JSONObject? = null
 
+    @Synchronized
     private fun write(context: Context, list: JSONArray) {
-        cached = JSONArray(list.toString())
-        sealed.write(context, list.toString())
+        val all = JSONObject(everyone(context).toString()).put(Who.current(context), list)
+        cached = all
+        sealed.write(context, all.toString())
     }
 
     fun find(context: Context, id: String): JSONObject? {
