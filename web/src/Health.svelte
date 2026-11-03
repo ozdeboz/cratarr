@@ -52,6 +52,12 @@
   });
   const LIBRARY = 'Library';
   const ACTIVITY = 'Activity';
+  /** Whether a row's line says how many already ("98 albums without a genre"): its value then says nothing more (the
+   *  owner, 2026-11-03: the same number twice per row is wrong). */
+  const saysCount = (p: ReturnType<typeof problems>[number], line: string | null) => {
+    const count = p.finding?.count ?? p.items.length;
+    return !!line && line.trim().split(/\s/)[0] === count.toLocaleString();
+  };
   /** How many, and how it stands where the server says ("3 missing"): the finding's count, else its items. */
   const countOf = (p: ReturnType<typeof problems>[number]) => {
     const count = p.finding?.count ?? p.items.length;
@@ -75,11 +81,12 @@
       {#each groups as g (g.area)}
         <Group title={g.area}>
           {#each g.problems as p (p.key)}
+            {@const line = p.name === p.title ? p.line : p.title}
             <Item
               lead={dotOf(p)}
               name={p.name}
-              line={p.name === p.title ? p.line : p.title}
-              value={countOf(p)}
+              {line}
+              value={saysCount(p, line) ? null : countOf(p)}
               open={panelBeside() && healthOf(panel.viewed) === p.key}
               onclick={() => viewPlaylist(HEALTH + p.key)}
             />
