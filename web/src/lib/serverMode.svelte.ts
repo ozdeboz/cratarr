@@ -172,3 +172,13 @@ export function askMix(source: string, track: string) {
       () => {},
     );
 }
+
+/** The panel's edit mode, saved to that server: its entries in their new order (those left out taken out), and its
+ *  new name where it changed. */
+export async function saveServerPlaylist(source: string, id: string, entries: string[] | null, name: string | null) {
+  const r = await readerOf(source);
+  if (entries) await r.keepPlaylist(id, entries);
+  if (name) await r.renamePlaylist(id, name);
+}
+export const createServerPlaylist = async (source: string, name: string) => (await readerOf(source)).createPlaylist(name, []);
+export const deleteServerPlaylist = async (source: string, id: string) => (await readerOf(source)).deletePlaylist(id);

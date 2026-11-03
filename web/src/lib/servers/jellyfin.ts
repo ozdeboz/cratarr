@@ -216,10 +216,13 @@ export function jellyfinServer(signIn: ServerSignIn, c: JellyfinClient, axios?: 
     async removeFromPlaylist(id, entries) {
       await j(playlists.removeItemFromPlaylist({ playlistId: id, entryIds: entries }));
     },
-    // Jellyfin moves one entry at a time: each to its new place, front to back.
-    async reorderPlaylist(id, order) {
-      const now = (await playlistTracks(id)).map((t) => t.entry ?? '');
-      if (order.length !== now.length || order.some((e) => !now.includes(e))) throw new ServerError('The playlist changed on the server meanwhile');
+    // Those left out taken out, then the rest moved one entry at a time, each to its new place, front to back.
+    async keepPlaylist(id, order) {
+      let now = (await playlistTracks(id)).map((t) => t.entry ?? '');
+      if (order.some((e) => !now.includes(e))) throw new ServerError('The playlist changed on the server meanwhile');
+      const gone = now.filter((e) => !order.includes(e));
+      if (gone.length) await j(playlists.removeItemFromPlaylist({ playlistId: id, entryIds: gone }));
+      now = now.filter((e) => order.includes(e));
       for (let i = 0; i < order.length; i++) {
         if (now[i] === order[i]) continue;
         await j(playlists.moveItem({ playlistId: id, itemId: order[i], newIndex: i }));

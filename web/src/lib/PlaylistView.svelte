@@ -105,7 +105,7 @@
     withoutFor,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
-  import { isServerSource, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
+  import { isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { BANDCAMP } from './bandcampPreview';
   import { DISCOVER, discoverArtistView } from './discoverArtist';
   import RowHeart from './RowHeart.svelte';
@@ -1853,7 +1853,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
   const newName = $derived(editing ? editing.name.trim() : '');
-  const nameChanged = $derived(!!editing && newName !== '' && newName !== id && !creating);
+  /** The name the edit mode starts from: a server's playlist's own (decision 0098), else its id (Cratarr's are by name). */
+  const editBase = $derived(serverList ? (serverListName ?? '') : id);
+  const nameChanged = $derived(!!editing && newName !== '' && newName !== editBase && !creating);
   // A crate's edit mode: the draft (kept, else the crate as saved, else empty; above), its size as the editor works it
   // out.
   let crateTotal = $state<number | null>(null);
@@ -1987,7 +1989,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   function startEdit() {
     if (!rows) return;
     navigator.vibrate?.(8);
-    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], name: id, saving: false };
+    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], name: editBase, saving: false };
   }
   const reorder = new Reorder(
     () => scroller,
@@ -2035,6 +2037,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (creating) return create();
     if (!editing || !rows) return;
     if (!tracksChanged && !nameChanged) return void (editing = null);
+    if (serverList) return saveOnServer(serverList.source, serverList.id);
     editing.saving = true;
     // Fixed now: once renamed, the panel follows the new name, and what changed would no longer show.
     const [from, to, renamed] = [id, newName, nameChanged];
@@ -2069,6 +2072,20 @@ ${r.album_artist ?? r.artist ?? ''}`;
       editing = null;
       saved++;
       refresh();
+    } catch (e) {
+      toast.fail(e, "The playlist wasn't saved");
+      if (editing) editing.saving = false;
+    }
+  }
+
+  /** A server's playlist (decision 0098; the owner, 2026-11-03: edited on that server): saved there, then read again. */
+  async function saveOnServer(source: string, playlist: string) {
+    if (!editing) return;
+    editing.saving = true;
+    try {
+      await saveServerPlaylist(source, playlist, tracksChanged ? editing.rows.map((x) => x.r.entry) : null, nameChanged ? newName : null);
+      editing = null;
+      saved++;
     } catch (e) {
       toast.fail(e, "The playlist wasn't saved");
       if (editing) editing.saving = false;
@@ -2313,6 +2330,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
         {:else if !album && !artist && !offServer && p && p.mine !== false}
           <button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>
+        {:else if serverList}
+          <button class="icon" aria-label={`Edit ${title}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>
         {/if}
         {#each barEnds as e (e.key)}{@render endButton(e, 24)}{/each}
       </div>

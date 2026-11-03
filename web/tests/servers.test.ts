@@ -58,16 +58,16 @@ test("a Subsonic album's tracks are read in the page's shape", async () => {
   assert.equal(tracks[0].duration_secs, 427);
 });
 
-test('a Subsonic playlist is reordered by writing it again whole, its songs in the new order', async () => {
+test('a Subsonic playlist is saved by writing it again whole, its songs in the new order, those left out gone', async () => {
   const s = subsonic({ getPlaylist: { playlist: { id: 'p1', name: 'P', songCount: 3, duration: 0, created: '', changed: '', entry: [{ id: 'a', title: 'A', isDir: false }, { id: 'b', title: 'B', isDir: false }, { id: 'c', title: 'C', isDir: false }] } }, createPlaylist: { playlist: { id: 'p1' } } });
   const server = subsonicServer(IN, s.fetcher);
   const { tracks } = await server.playlist('p1');
   assert.deepEqual(tracks.map((t) => t.entry), ['0', '1', '2']);
-  await server.reorderPlaylist('p1', ['2', '0', '1']);
+  await server.keepPlaylist('p1', ['2', '0']);
   const write = s.calls.find((u) => u.pathname.endsWith('createPlaylist.view'))!;
   assert.equal(write.searchParams.get('playlistId'), 'p1');
-  assert.deepEqual(write.searchParams.getAll('songId'), ['c', 'a', 'b']);
-  await assert.rejects(server.reorderPlaylist('p1', ['0', '1']), /changed on the server/);
+  assert.deepEqual(write.searchParams.getAll('songId'), ['c', 'a']);
+  await assert.rejects(server.keepPlaylist('p1', ['0', '7']), /changed on the server/);
 });
 
 test('a Subsonic server without similar songs has no mix, and is not asked again', async () => {
@@ -127,9 +127,11 @@ test("a Jellyfin's recently played albums come from its tracks, each album once,
   assert.deepEqual(albums.map((a) => a.id), ['b', 'a']);
 });
 
-test('a Jellyfin playlist is reordered by moving only the entries out of place', async () => {
-  const jf = jellyfin((c) => (path(c) === '/Playlists/p1/Items' ? { data: { Items: ['x', 'y', 'z'].map((e) => ({ Id: `t${e}`, PlaylistItemId: e })) } } : { status: 204 }));
-  await jellyfinServer(JIN, CLIENT, jf.instance).reorderPlaylist('p1', ['y', 'x', 'z']);
+test('a Jellyfin playlist is saved by taking out those left out, then moving only the entries out of place', async () => {
+  const jf = jellyfin((c) => (path(c) === '/Playlists/p1/Items' && c.method === 'get' ? { data: { Items: ['x', 'y', 'z', 'w'].map((e) => ({ Id: `t${e}`, PlaylistItemId: e })) } } : { status: 204 }));
+  await jellyfinServer(JIN, CLIENT, jf.instance).keepPlaylist('p1', ['y', 'x', 'z']);
+  const out = jf.calls.find((c) => c.method === 'delete')!;
+  assert.equal(new URL(out.url!).searchParams.get('entryIds'), 'w');
   const moves = jf.calls.filter((c) => path(c).includes('/Move/')).map(path);
   assert.deepEqual(moves, ['/Playlists/p1/Items/y/Move/0']);
 });

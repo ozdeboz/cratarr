@@ -92,8 +92,8 @@ export interface MusicServer {
   addToPlaylist(id: string, tracks: string[]): Promise<void>;
   /** The playlist's tracks at these entries taken out. */
   removeFromPlaylist(id: string, entries: string[]): Promise<void>;
-  /** The playlist's tracks in this order, by their entries, all of them. */
-  reorderPlaylist(id: string, entries: string[]): Promise<void>;
+  /** The playlist as these of its entries, in this order: those left out taken out (the panel's edit mode, saved). */
+  keepPlaylist(id: string, entries: string[]): Promise<void>;
   deletePlaylist(id: string): Promise<void>;
 
   /** The server's own mix from a track (the owner, 2026-11-03: Radio and Autoplay are "that server's own mix"); null

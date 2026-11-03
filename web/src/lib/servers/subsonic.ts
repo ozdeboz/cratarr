@@ -129,11 +129,11 @@ export function subsonicServer(signIn: ServerSignIn, fetcher?: typeof fetch): Mu
     async removeFromPlaylist(id, gone) {
       ok(await api.updatePlaylist({ playlistId: id, songIndexToRemove: gone.map(Number) }));
     },
-    // Subsonic has no move: the playlist is written again whole, its tracks in the new order (createPlaylist with its
-    // id replaces its songs).
-    async reorderPlaylist(id, order) {
+    // Subsonic has no move: the playlist is written again whole, its tracks in the new order, those left out gone
+    // (createPlaylist with its id replaces its songs). Its entries are places, so it must be as it was read.
+    async keepPlaylist(id, order) {
       const now = ok(await api.getPlaylist({ id })).playlist.entry ?? [];
-      if (order.length !== now.length) throw new ServerError('The playlist changed on the server meanwhile');
+      if (order.some((e) => !now[Number(e)])) throw new ServerError('The playlist changed on the server meanwhile');
       ok(await api.createPlaylist({ playlistId: id, songId: order.map((e) => now[Number(e)].id) }));
     },
     async deletePlaylist(id) {
