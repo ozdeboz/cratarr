@@ -1,5 +1,5 @@
-// Soulseek in Cratarr (decision 0099; the owner, 2026-11-03: on the Requests page): the records Lidarr wants, as
-// Cratarr searches and fetches them, read while the list shows (often while a search or a fetch is under way), and the
+// Soulseek in Cratarr (decision 0099 and its amendment; the owner, 2026-11-03: on the Requests page, a fetcher beside
+// Lidarr, never reading Lidarr's Wanted): the requests approved in Cratarr, as it searches and fetches them, read while the list shows (often while a search or a fetch is under way), and the
 // administrator's calls on them. Administrators' only, as the server's routes are.
 import { approveSoulseek, clearSoulseekPlaced, dropSoulseekItem, getSoulseek, soulseekNow } from './api';
 import type { SoulseekView } from './soulseekRules';

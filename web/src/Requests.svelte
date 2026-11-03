@@ -19,7 +19,7 @@
     return () => clearInterval(t);
   });
 
-  const lists = $derived(listsShown(answersRequests(), me.admin));
+  const lists = $derived(listsShown(answersRequests(), me.admin, requests.view?.fetchers ?? []));
   // Soulseek's line (decision 0099): how many found to tick, and fetching.
   $effect(() => {
     if (me.admin) void loadSoulseek();
@@ -43,7 +43,7 @@
       return [count(v.mine.length, 'request', 'requests'), pending ? `${pending} waiting` : null].filter(Boolean).join(' · ');
     }
     const w = requests.watching;
-    if (!v.fetcher) return 'Not connected';
+    if (!v.fetchers.includes('lidarr')) return 'Not connected';
     if (!w) return null;
     return [w.fetching.length ? `${w.fetching.length} fetching` : null, count(w.looking.length + w.more, 'not found yet', 'not found yet')].filter(Boolean).join(' · ');
   }

@@ -994,7 +994,8 @@ export type Values = Record<string, string | string[]>;
  *  they move in or are kept into it; `none`: as they are; `hr96`, `hr48`: up to 24-bit/96 or 48 kHz; `cd`: 16/44.1. */
 export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
 /** A library's own settings (decision 0034): its quality limit, its dot's colour and its name. */
-export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null };
+/** `fetcher`: an Incoming library's, whose records come into it (decision 0096: one Incoming library per fetcher). */
+export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null; fetcher?: Fetcher | null };
 export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
 
 export type LibraryUse = 'music' | 'incoming' | 'unused';
@@ -2091,7 +2092,10 @@ export type AlbumRequest = {
   album_state?: RequestedAlbum;
 };
 /** The Requests page: the account's own, everyone's waiting ones for those who answer them (else null). */
-export type RequestsView = { mine: AlbumRequest[]; waiting: AlbumRequest[] | null; may: Permissions; fetcher: boolean };
+/** `fetchers`: those connected, configured and answering (decision 0099's amendment: Lidarr and Soulseek siblings,
+ *  either or both); an approved request goes to each. */
+export type Fetcher = 'lidarr' | 'soulseek';
+export type RequestsView = { mine: AlbumRequest[]; waiting: AlbumRequest[] | null; may: Permissions; fetchers: Fetcher[] };
 /** An album Lidarr is looking for, or fetching (`done`, 0 to 1, and what it says of it). */
 export type WatchedAlbum = { album: string; artist: string; release_group: string | null; year: number | null; done: number | null; status: string | null };
 export type Watching = { fetching: WatchedAlbum[]; looking: WatchedAlbum[]; more: number };

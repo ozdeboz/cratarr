@@ -1,6 +1,6 @@
-// Soulseek in Cratarr (decision 0099), the page's rules, pure: what a record's row says where it stands, which can be
-// ticked, how the list groups, and what Fetch sends. The server searches Lidarr's Wanted by its release, finds folders
-// that hold every track, and fetches only what is ticked.
+// Soulseek in Cratarr (decision 0099 and its amendment), the page's rules, pure: what a record's row says where it
+// stands, which can be ticked, how the list groups, and what Fetch sends. The server searches the requests approved in
+// Cratarr by their release, finds folders that hold every track, and fetches only what is ticked.
 
 export type SoulseekState = 'waiting' | 'searching' | 'found' | 'approved' | 'fetching' | 'checking' | 'placed' | 'stuck';
 export type SoulseekFolder = { user: string; dir: string; format: string; lossless: boolean; free_slot: boolean; queue: number; speed: number; extra: number };

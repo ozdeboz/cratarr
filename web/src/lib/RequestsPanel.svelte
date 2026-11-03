@@ -197,7 +197,7 @@
     back={beside ? null : backOne}
     trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('requests') }]}
     here={L.name}
-    siblings={beside ? null : { menuLabel: 'Requests shows', options: listsShown(answersRequests(), me.admin).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
+    siblings={beside ? null : { menuLabel: 'Requests shows', options: listsShown(answersRequests(), me.admin, view?.fetchers ?? []).map((l) => ({ id: l.id, label: l.name })), chosen: L.id, onchoose: (id) => viewSibling(REQUESTS + id) }}
   />
 {/snippet}
 {#snippet glassExtra()}
@@ -234,7 +234,7 @@
     {:else if !view}
       <PageLoading />
     {:else if list === 'waiting'}
-      {#if !view.fetcher}<p class="note">Approved requests need Lidarr: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
+      {#if !view.fetchers.length}<p class="note">Approved requests need a fetcher, Lidarr or Soulseek: <a href={viewOn('settings', 'settings:connections')}>connect one</a>.</p>{/if}
       <Group>
         {#each waiting as r (r.id)}{@render row(r, true, true)}{:else}{#if !view.waiting?.length}<Item name="None waiting" />{/if}{/each}
       </Group>
@@ -280,7 +280,7 @@
             </Group>
           {/if}
         {/each}
-        {#if !slskItems.length}<Group><Item name="Nothing wanted" line="Lidarr's Wanted is read every six hours" /></Group>{/if}
+        {#if !slskItems.length}<Group><Item name="Nothing asked for" line="Requests you approve come here" /></Group>{/if}
       {/if}
     {:else if list === 'mine'}
       <Group>
@@ -289,7 +289,7 @@
         {/each}
       </Group>
     {:else if !requests.watching}
-      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetcher}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
+      {#if requests.watchError}<Notice text={requests.watchError} onretry={lookAtLidarr} />{:else if view.fetchers.includes('lidarr')}<PageLoading />{:else}<p class="note">Lidarr is not connected: <a href={viewOn('settings', 'settings:connections/lidarr')}>connect it</a>.</p>{/if}
     {:else}
       {@const w = requests.watching}
       {#if w.fetching.length}

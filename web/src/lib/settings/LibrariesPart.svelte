@@ -6,7 +6,7 @@
   import ChoiceRow from './ChoiceRow.svelte';
   import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { fileFacts, loadFileFacts, switchFileFacts } from '../fileFacts.svelte';
-  import { folderStatus, getCatalogue, type FolderStatus, type ServerLibrary } from '../api';
+  import { folderStatus, getCatalogue, type Fetcher, type FolderStatus, type ServerLibrary } from '../api';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
@@ -23,6 +23,20 @@
   // The choice sheets' choices: a use, a quality limit.
   const USE_OPTIONS = USES.map((x) => ({ value: x.id, label: x.label }));
   const QUALITY_OPTIONS = QUALITIES.map((q) => ({ value: q.id, label: q.label }));
+  // An Incoming library's fetcher (decision 0099's amendment; the owner, 2026-11-03: Lidarr and Soulseek siblings): whose
+  // records come into it, one library per fetcher (decision 0096), chosen here; another library that had it, none.
+  const FETCHER_OPTIONS: { value: 'none' | Fetcher; label: string }[] = [
+    { value: 'none', label: 'Nothing' },
+    { value: 'lidarr', label: 'Lidarr' },
+    { value: 'soulseek', label: 'Soulseek' },
+  ];
+  const fetcherLabel = (f: Fetcher | null | undefined) => FETCHER_OPTIONS.find((o) => o.value === (f ?? 'none'))!.label;
+  function setFetcher(l: Lib, v: 'none' | Fetcher) {
+    const f = v === 'none' ? null : v;
+    if (f) for (const x of libsOf(l.d)) if (x.id !== l.id && ed.policyOf(l.d, x.id).fetcher === f) ed.setPolicy(l.d, x.id, { fetcher: null });
+    ed.setPolicy(l.d, l.id, { fetcher: f });
+  }
+  let choosingFetcher = $state<Lib | null>(null);
   const useLabel = (id: string) => USES.find((u) => u.id === id)?.label ?? id;
   const qualityLabel = (id: string) => QUALITIES.find((q) => q.id === id)?.label ?? id;
   const FILE_FACTS_MORE =
@@ -193,6 +207,12 @@
       />
     {/if}
     {#if u === 'incoming'}
+      <Item
+        name="Fetched by"
+        more="Whose records come into this library: Lidarr's, or Soulseek's that Cratarr fetches. One library each."
+        value={fetcherLabel(pol.fetcher)}
+        onclick={() => (choosingFetcher = l)}
+      />
       <Item name="Dot colour" swatch={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onclick={() => (colouring = l)} />
     {/if}
   </Group>
@@ -425,6 +445,16 @@
 {#if choosingUse}
   {@const l = choosingUse}
   <ChoiceSheet title={`Use of ${l.name}`} options={USE_OPTIONS} value={ed.useOf(l.d, l.id)} onchange={(v) => ed.setUse(l.d, l.id, v)} onclose={() => (choosingUse = null)} />
+{/if}
+{#if choosingFetcher}
+  {@const l = choosingFetcher}
+  <ChoiceSheet
+    title={`What fetches into ${l.name}`}
+    options={FETCHER_OPTIONS}
+    value={ed.policyOf(l.d, l.id).fetcher ?? 'none'}
+    onchange={(v) => setFetcher(l, v)}
+    onclose={() => (choosingFetcher = null)}
+  />
 {/if}
 {#if choosingQuality}
   {@const l = choosingQuality}
