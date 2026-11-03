@@ -1,8 +1,11 @@
 // A track's file opened for the tape head's chunks (decision 0102, as amended): any stretch of it decoded on request,
-// 16-bit stereo interleaved, as the app's TapeDecoder reads (symphonia, through a5's Rust bridge; the page's as
-// WebAssembly once it is built). Until then, and for the tests, a plain WAV file opens here too.
+// 16-bit stereo interleaved, by the same decoder as the app's (a5's server/tape-decode, symphonia; the page's as
+// decode.wasm: no imports, the file's bytes copied into its memory, read on without seeking where it goes on). A plain
+// WAV file opens here too where the decoder cannot take a file.
 
 export type TapeDecoder = {
+  /** Which decoder opened it (the log's). */
+  by: 'decode.wasm' | 'wav';
   /** Frames a second. */
   rate: number;
   /** The track's length (frames). */
@@ -12,9 +15,61 @@ export type TapeDecoder = {
   close(): void;
 };
 
-/** Opens a file's bytes: the WebAssembly decoder's (when the page has it), else a WAV's own reading. */
-export function openDecoder(bytes: ArrayBuffer): TapeDecoder {
+/** decode.wasm's own calls (a5's). */
+type DecodeWasm = {
+  memory: WebAssembly.Memory;
+  alloc(len: number): number;
+  free(ptr: number, len: number): void;
+  open(ptr: number, len: number): number;
+  rate(h: number): number;
+  frames(h: number): number;
+  read(h: number, from: number, count: number): number;
+  read_len(): number;
+  close(h: number): void;
+};
+
+/** Opens a file's bytes with decode.wasm (`module`, compiled once), else as a WAV's own reading. */
+export async function openDecoder(bytes: ArrayBuffer, module: WebAssembly.Module | null): Promise<TapeDecoder> {
+  if (module) {
+    try {
+      return await decoded(bytes, module);
+    } catch (e) {
+      try {
+        return wav(bytes);
+      } catch {
+        throw e;
+      }
+    }
+  }
   return wav(bytes);
+}
+
+/** The file in decode.wasm: an instance of its own (a worker's), the bytes copied into its memory and opened there. */
+export async function decoded(bytes: ArrayBuffer, module: WebAssembly.Module): Promise<TapeDecoder> {
+  const x = (await WebAssembly.instantiate(module)).exports as unknown as DecodeWasm;
+  const len = bytes.byteLength;
+  const ptr = x.alloc(len);
+  new Uint8Array(x.memory.buffer, ptr, len).set(new Uint8Array(bytes));
+  // Open takes the room; where it cannot decode the file, the room is given back.
+  const h = x.open(ptr, len);
+  if (!h) {
+    x.free(ptr, len);
+    throw new Error('the decoder cannot read this file');
+  }
+  return {
+    by: 'decode.wasm',
+    rate: x.rate(h),
+    frames: Number(x.frames(h)),
+    read(frame, count) {
+      const p = x.read(h, frame, count);
+      const n = x.read_len();
+      // Valid until the next read: copied out (and so movable to the head).
+      return new Int16Array(x.memory.buffer.slice(p, p + n));
+    },
+    close() {
+      x.close(h);
+    },
+  };
 }
 
 /** A plain WAV (PCM of 8, 16, 24 or 32 bits, or 32-bit float; mono or stereo, of more channels the first two). */
@@ -58,6 +113,7 @@ export function wav(bytes: ArrayBuffer): TapeDecoder {
     }
   };
   return {
+    by: 'wav',
     rate,
     frames,
     read(frame, count) {

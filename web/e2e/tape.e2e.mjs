@@ -41,11 +41,30 @@ test('a track’s file opened whole by its workers', async () => {
     const error = await tape.load('t', wavUrl(30, 44100));
     // The loudness meter on the head's output from now on (it hears only what comes after it is there).
     window.t.loudness();
-    return { error, ready: tape.tape.ready, length: tape.tape.lengthMs };
+    return { error, ready: tape.tape.ready, length: tape.tape.lengthMs, by: tape.tape.by };
   });
   assert.equal(r.error, null);
   assert.equal(r.ready, 't');
   assert.ok(Math.abs(r.length - 30000) < 1);
+  assert.equal(r.by, 'decode.wasm', 'opened by the decoder the app has too');
+});
+
+test('a hold let go brakes to a stand, the engine saying where', async () => {
+  const r = await d.page.evaluate(async () => {
+    const { tape } = window.t;
+    window.endedWhy = null;
+    tape.start('t', 1000, { kind: 'hold', base: 2, top: 16, doubling: 500, sign: 1 }, 1, (why) => (window.endedWhy = why));
+    await new Promise((r) => setTimeout(r, 600));
+    const before = tape.heardSpeed();
+    tape.letGo(0, 300);
+    await new Promise((r) => setTimeout(r, 2500));
+    return { before, after: tape.heardSpeed(), standsAt: tape.tape.standsAt, heard: tape.heardMs() };
+  });
+  assert.ok(r.before >= 2, `holding: ${r.before}`);
+  assert.ok(Math.abs(r.after) < 0.01, `let go: ${r.after}`);
+  assert.ok(r.standsAt !== null && r.standsAt > 1000, `stands at ${r.standsAt}`);
+  assert.ok(Math.abs(r.heard - r.standsAt) < 5, `heard at ${r.heard}, standing at ${r.standsAt}`);
+  assert.equal(await stopped(), 'stopped');
 });
 
 test('forwards: heard from where it began, at its pace, and heard at all', async () => {

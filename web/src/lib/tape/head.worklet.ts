@@ -12,12 +12,38 @@ declare class AudioWorkletProcessor {
   readonly port: MessagePort;
 }
 
-/** A motion as the page sends it: a steady speed (× the track's, signed) until the engine's motions come (0102). */
-export type Motion = { kind: 'steady'; v: number };
-const speedOf = (m: Motion): ((tMs: number) => number) => {
-  const v = m.v;
-  return () => v;
+/** A motion as the page sends it, the engine's (tape.wasm, the rules crate's tape: a5's): a tap's, a hold's, or a
+ *  steady speed (× the track's, signed). */
+export type Motion =
+  | { kind: 'steady'; v: number }
+  | { kind: 'tap'; way: number; length: number; attack: number; release: number; floor: number; sign: number }
+  | { kind: 'hold'; base: number; top: number; doubling: number; sign: number };
+
+/** tape.wasm's own calls: a motion is a handle (0: no free slot), its speed over its own time. */
+type TapeWasm = {
+  motion_tap(way: number, length: number, attack: number, release: number, floor: number, sign: number): number;
+  motion_hold(base: number, top: number, doubling: number, sign: number): number;
+  motion_steady(v: number): number;
+  motion_let_go(h: number, atMs: number, to: number, brakeMs: number): void;
+  motion_speed(h: number, tMs: number): number;
+  motion_gone(h: number, tMs: number): number;
+  motion_stands_at(h: number): number;
+  motion_free(h: number): void;
 };
+let engine: TapeWasm | null = null;
+
+/** A motion made in the engine: its handle, or none where there is no engine (a steady speed reads on without one). */
+function made(m: Motion): number {
+  if (!engine) return 0;
+  switch (m.kind) {
+    case 'tap':
+      return engine.motion_tap(m.way, m.length, m.attack, m.release, m.floor, m.sign);
+    case 'hold':
+      return engine.motion_hold(m.base, m.top, m.doubling, m.sign);
+    case 'steady':
+      return engine.motion_steady(m.v);
+  }
+}
 
 /** Blocks between the marks sent to the page. */
 const MARKS_EVERY = 4;
@@ -31,6 +57,9 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
   private workers: { port: MessagePort; busy: boolean }[] = [];
   private pending: { frame: number; at: number; v: number }[] = [];
   private blocks = 0;
+  /** The reading's motion in the engine (0: none), and where in the track it began (ms). */
+  private motion = 0;
+  private fromMs = 0;
 
   constructor() {
     super();
@@ -39,6 +68,15 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
 
   private told(m: { type: string; [k: string]: unknown }) {
     switch (m.type) {
+      case 'engine':
+        void WebAssembly.instantiate(m.bytes as ArrayBuffer).then(
+          (r) => {
+            engine = r.instance.exports as unknown as TapeWasm;
+            this.port.postMessage({ type: 'engine', ready: true });
+          },
+          (e) => this.port.postMessage({ type: 'engine', ready: false, error: String(e) }),
+        );
+        break;
       case 'track':
         this.reader = null;
         this.chunks = new Chunks(m.frames as number);
@@ -55,18 +93,43 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
           return w;
         });
         break;
-      case 'start':
+      case 'start': {
         if (!this.chunks) return;
-        this.reader = new Reader({ chunks: this.chunks, rate: this.rate, outRate: sampleRate, fromMs: m.fromMs as number, speed: speedOf(m.motion as Motion), gain: m.gain as number });
+        this.letGoOfMotion();
+        const motion = m.motion as Motion;
+        const h = made(motion);
+        this.motion = h;
+        this.fromMs = m.fromMs as number;
+        const steady = motion.kind === 'steady' ? motion.v : 0;
+        const x = engine;
+        const speed = h && x ? (t: number) => x.motion_speed(h, t) : () => steady;
+        this.reader = new Reader({ chunks: this.chunks, rate: this.rate, outRate: sampleRate, fromMs: m.fromMs as number, speed, gain: m.gain as number });
         // Its first block's frame, taken as it fills it.
         this.began = -1;
         this.pending = [];
         this.dispatch();
         break;
+      }
+      // What changes a reading under way: its motion let go, braking from its own speed at `atMs` (now, by the frames
+      // it read, where none is given) to `to` × (the engine's brake, `brakeMs` at least); the page is told when (ms of
+      // its own time) and where in the track (ms) it will stand.
+      case 'let-go': {
+        if (!this.motion || !engine || !this.reader) return;
+        const at = typeof m.atMs === 'number' ? m.atMs : (this.reader.written * 1000) / sampleRate;
+        engine.motion_let_go(this.motion, at, m.to as number, m.brakeMs as number);
+        const when = engine.motion_stands_at(this.motion);
+        this.port.postMessage({ type: 'stands-at', when, place: when < 0 ? -1 : this.fromMs + engine.motion_gone(this.motion, when) });
+        break;
+      }
       case 'stop':
         this.reader?.stop();
         break;
     }
+  }
+
+  private letGoOfMotion() {
+    if (this.motion && engine) engine.motion_free(this.motion);
+    this.motion = 0;
   }
 
   /** Each idle worker given the nearest chunk wanted. */
@@ -86,6 +149,7 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
     this.port.postMessage({ type: 'ended', why });
     this.reader = null;
     this.pending = [];
+    this.letGoOfMotion();
   }
 
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {

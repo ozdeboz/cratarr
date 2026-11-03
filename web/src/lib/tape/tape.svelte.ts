@@ -3,12 +3,16 @@
 // audio worklet at the engine's speed either way ([start], lib/tape/head.worklet), where the sound heard is read off
 // the output's own timestamp through what each block was read from ([heardMs]), never the clock. Only in a browser:
 // in the app its own player plays.
+import tapeUrl from '../wasm/tape.wasm?url';
 import { Marks, WORKERS, type Ended, type Mark } from './head';
 import type { Motion } from './head.worklet';
 import workletUrl from './head.worklet.ts?worker&url';
 
-/** The track opened and ready to read (its id), the one whose file is on its way, and the opened one's length. */
-export const tape = $state({ ready: null as string | null, loading: null as string | null, lengthMs: null as number | null });
+export type { Motion };
+
+/** The track opened and ready to read (its id), the one whose file is on its way, and the opened one's length; where
+ *  a reading let go will stand (ms of the track; null before a let-go). */
+export const tape = $state({ ready: null as string | null, loading: null as string | null, lengthMs: null as number | null, standsAt: null as number | null, by: null as string | null });
 
 let ctx: AudioContext | null = null;
 let node: AudioWorkletNode | null = null;
@@ -25,11 +29,19 @@ async function head(): Promise<{ ctx: AudioContext; node: AudioWorkletNode; out:
   const n = new AudioWorkletNode(c, 'cratarr-tape-head', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
   const o = c.createGain();
   n.connect(o).connect(c.destination);
+  let engineReady: (ok: boolean) => void = () => {};
+  const engine = new Promise<boolean>((resolve) => (engineReady = resolve));
   n.port.onmessage = (e: MessageEvent) => {
     const m = e.data;
     if (m?.type === 'marks') for (const k of m.marks as Mark[]) marks?.add(k);
+    if (m?.type === 'stands-at') tape.standsAt = typeof m.place === 'number' && m.when >= 0 ? m.place : null;
     if (m?.type === 'ended') ended?.(m.why as Ended);
+    if (m?.type === 'engine') engineReady(m.ready === true);
   };
+  // The engine (tape.wasm), instantiated in the worklet from its bytes (no fetch there), there before any reading.
+  const bytes = await (await fetch(tapeUrl)).arrayBuffer();
+  n.port.postMessage({ type: 'engine', bytes }, [bytes]);
+  if (!(await engine)) throw new Error('the tape engine did not start');
   ctx = c;
   node = n;
   out = o;
@@ -62,7 +74,7 @@ export async function load(id: string, url: string): Promise<string | null> {
     const opened = await Promise.all(
       workers.map(
         (w, i) =>
-          new Promise<{ rate: number; frames: number }>((resolve, reject) => {
+          new Promise<{ rate: number; frames: number; by: string }>((resolve, reject) => {
             w.onmessage = (e: MessageEvent) => (e.data?.type === 'opened' ? resolve(e.data) : reject(new Error(e.data?.error ?? 'not opened')));
             const own = i === workers.length - 1 ? bytes : bytes.slice(0);
             w.postMessage({ type: 'open', id, bytes: own, port: channels[i].port2 }, [own, channels[i].port2]);
@@ -77,6 +89,7 @@ export async function load(id: string, url: string): Promise<string | null> {
     tape.ready = id;
     tape.loading = null;
     tape.lengthMs = (frames * 1000) / rate;
+    tape.by = opened[0].by;
     return null;
   } catch (e) {
     if (tape.loading === id) tape.loading = null;
@@ -92,9 +105,16 @@ export function start(id: string, fromMs: number, motion: Motion, gain: number, 
   if (tape.ready !== id || !ctx || !node) return false;
   void ctx.resume();
   marks?.clear();
+  tape.standsAt = null;
   ended = onEnded;
   node.port.postMessage({ type: 'start', fromMs, motion, gain });
   return true;
+}
+
+/** The reading's motion let go (now, by the frames the head read, unless `atMs` of its own time is given): it brakes
+ *  from its own speed to `to` × (`brakeMs` at least, the engine's brake); [tape]'s `standsAt` says where it will stand. */
+export function letGo(to: number, brakeMs: number, atMs?: number) {
+  node?.port.postMessage({ type: 'let-go', atMs, to, brakeMs });
 }
 
 /** The reading stopped, faded out first (no click). */
