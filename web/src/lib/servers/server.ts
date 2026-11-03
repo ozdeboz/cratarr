@@ -22,6 +22,9 @@ export type ServerSignIn = {
   secret: string;
   /** The secret is an OpenSubsonic API key, not a password. */
   apiKey?: boolean;
+  /** "This server scrobbles for me" (decision 0091, amended; off at the start): the device leaves its tracks'
+   *  scrobbles to the server, and only reports their plays to it. */
+  scrobbles?: boolean;
 };
 
 /** A track of the server's. `entry`: its place in a playlist, as that server names one (Jellyfin's playlist item id,
