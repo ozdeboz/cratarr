@@ -569,6 +569,8 @@ class PlayerService : MediaSessionService() {
                     hearing = player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Hearing(it, System.currentTimeMillis()) }
                     // A server's track (decision 0098): that server hears that it plays here.
                     hearing?.track?.let { t -> if (t.optString("source").startsWith(Servers.MODE_PREFIX)) Servers.playing(this@PlayerService, t.optString("source"), t.optString("id")) }
+                    // Now playing, from this device (decision 0091).
+                    hearing?.track?.let { t -> Scrobblers.playing(this@PlayerService, t) }
                 }
                 val h = hearing
                 val d = player.duration

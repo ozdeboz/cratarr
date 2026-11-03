@@ -9,9 +9,6 @@ package app.cratarr
 
 import android.content.Context
 import android.net.Uri
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import android.util.Base64
 import android.util.Log
 import androidx.media3.common.MediaItem
 import org.json.JSONArray
@@ -19,50 +16,26 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 object Servers {
     private const val TAG = "Servers"
-    /** The keystore's key for them. */
-    private const val KEY = "cratarr-servers"
-    /** Where they are kept, encrypted (one JSON list: base64 of the IV and the ciphertext). */
-    private const val STORE = "servers"
+    /** Where they are kept, sealed (one JSON list). */
+    private val sealed = Sealed("cratarr-servers", "servers")
     /** A mode's name for a server: `server:<its id>`. */
     const val MODE_PREFIX = "server:"
     /** The most of an answer read for the page. */
     private const val MOST = 32 * 1024 * 1024
-
-    private fun key(): SecretKey {
-        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (ks.getKey(KEY, null) as? SecretKey)?.let { return it }
-        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        gen.init(
-            KeyGenParameterSpec.Builder(KEY, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build(),
-        )
-        return gen.generateKey()
-    }
 
     /** Every server kept, with its sign-in (`{id, kind, name, url, user, userId?, secret, apiKey?, scrobbles?}`), in
      *  the order they were added. None where they cannot be read (the keystore's key gone with a reset of the device's
      *  lock): they are signed in to again. */
     fun all(context: Context): JSONArray {
         cached?.let { return JSONArray(it.toString()) }
-        val kept = Prefs.shared(context).getString(STORE, null) ?: return JSONArray()
+        val text = sealed.read(context) ?: return JSONArray()
         return try {
-            val raw = Base64.decode(kept, Base64.NO_WRAP)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, raw, 0, 12))
-            JSONArray(String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)).also { cached = JSONArray(it.toString()) }
+            JSONArray(text).also { cached = JSONArray(it.toString()) }
         } catch (e: Exception) {
             Log.w(TAG, "the kept servers cannot be read: ${e.javaClass.simpleName}")
             JSONArray()
@@ -75,10 +48,7 @@ object Servers {
 
     private fun write(context: Context, list: JSONArray) {
         cached = JSONArray(list.toString())
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val out = cipher.iv + cipher.doFinal(list.toString().toByteArray(Charsets.UTF_8))
-        Prefs.shared(context).edit().putString(STORE, Base64.encodeToString(out, Base64.NO_WRAP)).apply()
+        sealed.write(context, list.toString())
     }
 
     fun find(context: Context, id: String): JSONObject? {

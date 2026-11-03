@@ -4,6 +4,7 @@
 // players by name (0.13). A browser that cannot play here with no player chosen has nowhere to play (lib/player/port). The player shows each the same way: the queue the page holds is
 // presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
 // other side, which plays from there, and the side that played stops.
+import { playedHere, playingHere } from './scrobbles.svelte';
 import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
 import { isServerSource, serverAlbumView } from './serverMode.svelte';
@@ -127,10 +128,22 @@ if (typeof window !== 'undefined') {
 }
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+/** A play of this browser's as it is scrobbled from here (decision 0091), its id its report's. */
+const asScrobble = (h: Hearing, id: string) => ({
+  id,
+  at: Math.floor(h.started / 1000),
+  artist: h.track.artist ?? '',
+  title: h.track.name,
+  album: h.track.album ?? null,
+  duration_secs: h.length,
+});
 function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
   const account = accountKey();
+  const id = reportId();
+  // From each device (decision 0091): the play counted is scrobbled from here too, by the same id.
+  if (counts && h.track.artist) playedHere(asScrobble(h, id));
   unsent.push({
-    id: reportId(),
+    id,
     source: h.track.source,
     track: h.track.id,
     at: h.started,
@@ -166,7 +179,10 @@ $effect.root(() => {
       hearing = null;
     }
     if (!t) return;
-    hearing ??= { at, track: t, started: Date.now(), heard: 0, length: null, counted: false };
+    if (!hearing) {
+      hearing = { at, track: t, started: Date.now(), heard: 0, length: null, counted: false };
+      if (t.artist) playingHere(asScrobble(hearing, ''));
+    }
     hearing.heard = Math.max(hearing.heard, local.position);
     hearing.length = local.duration ?? hearing.length;
     const d = local.duration;

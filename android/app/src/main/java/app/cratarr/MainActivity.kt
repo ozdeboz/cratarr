@@ -181,6 +181,16 @@ class MainActivity : AppCompatActivity() {
         val data = intent.data ?: return null
         if (data.scheme != "cratarr" || data.host != "connected") return null
         val service = data.pathSegments.firstOrNull()?.takeIf { it.matches(Regex("[a-z]+")) } ?: return null
+        // This device's Last.fm (decision 0091): its token back, traded for the session here, off the main thread; the
+        // server's own sign-in never brings one.
+        data.getQueryParameter("token")?.takeIf { service == "lastfm" }?.let { token ->
+            val app = applicationContext
+            lifecycleScope.launch {
+                val why = withContext(Dispatchers.IO) { Scrobblers.lastFmBack(app, token) }
+                page?.postMessage(Scrobblers.here(app).toString())
+                why?.let { openAt = connectedAt(service, it) }
+            }
+        }
         return connectedAt(service, data.getQueryParameter(if (service == "spotify") "spotify_error" else "scrobble"))
     }
 
@@ -267,6 +277,7 @@ class MainActivity : AppCompatActivity() {
         // The network as it changes (0.9.15): the page knows it is out of reach without waiting for an answer.
         network = NetState.Watch(this) { page?.postMessage(it.toString()) }
         Plays.onPlayedHere = { runOnUiThread { page?.postMessage(Plays.playedHere(this).toString()) } }
+        Scrobblers.onChanged = { runOnUiThread { page?.postMessage(Scrobblers.here(this).toString()) } }
         // The device's music changed (decision 0052): the page asks for it again when it shows it.
         contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
@@ -509,6 +520,21 @@ class MainActivity : AppCompatActivity() {
                     if (prefs.mode == Servers.MODE_PREFIX + id) switchMode(Prefs.MODE_CRATARR)
                     tellServers(reply)
                 }
+            }
+            // Scrobbling from the device (decision 0091): this device's listening services, sealed here; the account's
+            // way and tracking as the page read them; Last.fm's sign-in opened in the browser, back by the app's link.
+            "scrobblers" -> when (message.optString("op")) {
+                "list" -> reply.postMessage(Scrobblers.here(this).toString())
+                "keep" -> {
+                    Scrobblers.keepListenBrainz(this, message.optString("token"), message.optString("name"))
+                    reply.postMessage(Scrobblers.here(this).toString())
+                }
+                "lastfm" -> openOutside(Scrobblers.lastFmStart(this, message.optString("key"), message.optString("secret")))
+                "forget" -> {
+                    Scrobblers.forget(this, message.optString("service"))
+                    reply.postMessage(Scrobblers.here(this).toString())
+                }
+                "way" -> Scrobblers.setWay(this, message.optString("way"), message.optBoolean("tracking", true))
             }
             // A request of the page's for one of them, sent from here (Servers.fetch), its answer back by its id.
             "server-fetch" -> lifecycleScope.launch {

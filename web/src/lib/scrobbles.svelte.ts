@@ -31,6 +31,16 @@ export const scrobbling = $state({
 });
 
 /** The way read again (and, through the server, its services' state is the Listening services' own). */
+// Read once the page has an account, and what waits from before sent then.
+if (typeof window !== 'undefined')
+  queueMicrotask(() =>
+    import('./account').then(({ whenAccount }) =>
+      whenAccount.add(() => {
+        void readWay().then(send);
+        readHere();
+      }),
+    ),
+  );
 export async function readWay() {
   try {
     const r = (await getScrobbles()) as { way?: Way };
@@ -71,6 +81,15 @@ function shown(k: Kept) {
     lastfm: k.lastfm ? { name: k.lastfm.name, broken: k.lastfm.broken ?? null } : null,
   };
 }
+// The app sends from its own player: it learns the way and the tracking as they are read or change here.
+if (inApp)
+  $effect.root(() => {
+    $effect(() => {
+      const way = scrobbling.way;
+      const tracking = mine.tracking;
+      if (way) toApp({ type: 'scrobblers', op: 'way', way, tracking });
+    });
+  });
 if (inApp) onApp('scrobblers', (m) => ((scrobbling.here = (m.here as typeof scrobbling.here) ?? { listenbrainz: null, lastfm: null }), (scrobbling.queued = Number(m.queued) || 0)));
 
 /** This device's sign-ins read (the app's, or this browser's). */
