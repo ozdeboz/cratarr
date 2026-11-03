@@ -32,6 +32,9 @@ importers:
       greet-by-time:
         specifier: 1.0.1
         version: 1.0.1
+      spark-md5:
+        specifier: 3.0.2
+        version: 3.0.2
       subsonic-api:
         specifier: 3.4.1
         version: 3.4.1
@@ -48,6 +51,9 @@ importers:
       '@types/d3-zoom':
         specifier: 3.0.8
         version: 3.0.8
+      '@types/spark-md5':
+        specifier: 3.0.5
+        version: 3.0.5
       svelte:
         specifier: ^5.57.2
         version: 5.57.2
@@ -230,6 +236,9 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/spark-md5@3.0.5':
+    resolution: {integrity: sha512-lWf05dnD42DLVKQJZrDHtWFidcLrHuip01CtnC2/S6AMhX4t9ZlEUj4iuRlAnts0PQk7KESOqKxeGE/b6sIPGg==}
 
   '@xyflow/svelte@1.7.0':
     resolution: {integrity: sha512-Q80coEUlaf/x20dMtTZYd5VinJrkqr8H5sS2zp7rFS6RmHF8JB5akV6Qy5mvIb23tWfHPS3hMovbbzN6u/4ppw==}
@@ -589,6 +598,9 @@ packages:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
+  spark-md5@3.0.2:
+    resolution: {integrity: sha512-wcFzz9cDfbuqe0FZzfi2or1sgyIrsDwmPwfZC4hiNidPdPINjeUwNfv5kldczoEAcjl9Y1L3SM7Uz2PUEQzxQw==}
+
   subsonic-api@3.4.1:
     resolution: {integrity: sha512-Kx6Jchv5vCiG0IYRc/aWjv8cxkjLQFztdtindb+WAbkR7zBUwDt45HmXnSUgg4/D2eUW5HWu9qoiJVpK3VS6Zg==}
     engines: {node: '>=18'}
@@ -785,6 +797,8 @@ snapshots:
       '@types/d3-selection': 3.0.11
 
   '@types/estree@1.0.9': {}
+
+  '@types/spark-md5@3.0.5': {}
 
   '@xyflow/svelte@1.7.0(svelte@5.57.2)':
     dependencies:
@@ -1107,6 +1121,8 @@ snapshots:
       mri: 1.2.0
 
   source-map-js@1.2.2: {}
+
+  spark-md5@3.0.2: {}
 
   subsonic-api@3.4.1: {}
 
