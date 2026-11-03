@@ -46,7 +46,8 @@ queue back, paused. Downloads are kept per server.
 **Settings:** the device's own (output, Start and stop, the tape, levelling) shared across modes; Home and appearance
 per mode.
 
-**In the car:** Android Auto browses the mode the app is in; modes are switched on the device.
+**In the car:** Android Auto browses the mode the app is in; modes are switched on the device. (The app has no browse
+tree yet, only its media session, which shows and steers what plays in any mode: this holds once the car browses.)
 
 **Not in 0.15:** another Cratarr server as a mode (the owner, 2026-11-03).
 

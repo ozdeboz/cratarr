@@ -3,7 +3,8 @@
 // playlist, Home's rows and search read it here; its covers come through the app (`/__server/cover/…`, with the
 // sign-in it keeps), as the player's streams do, so no address with a sign-in in it is ever on the page.
 
-import type { AlbumView, ArtistView, ListedAlbum, PlaylistRow, TrackState } from './api';
+import type { AlbumView, ArtistView, ListedAlbum, PlaylistRow, SearchKind, ServerSearch, TrackState } from './api';
+import { albumSubject, artistSubject } from './panel.svelte';
 import { isFavorite, setFavorite } from './favourites.svelte';
 import { appInfo, inApp } from './app.svelte';
 import { localMode } from './deviceMusic.svelte';
@@ -182,3 +183,32 @@ export async function saveServerPlaylist(source: string, id: string, entries: st
 }
 export const createServerPlaylist = async (source: string, name: string) => (await readerOf(source)).createPlaylist(name, []);
 export const deleteServerPlaylist = async (source: string, id: string) => (await readerOf(source)).deletePlaylist(id);
+
+/** The global search in a server's mode: that server's albums, artists and tracks, as Cratarr's search answers (each
+ *  item viewed as Cratarr's are: an album or an artist in the panel, a track on its album). Nothing beyond them. */
+export async function serverSearch(source: string, q: string, kinds: SearchKind[], limit: number): Promise<ServerSearch> {
+  const want = (k: SearchKind) => !kinds.length || kinds.includes(k);
+  const r = await (await readerOf(source)).search(q, limit);
+  const albums = r.albums.map((a) => listed(source, a));
+  const albumItems = albums.map((a) => ({ kind: 'album', subject: albumSubject(source, a.id), title: a.title, sub: a.artist, cover: serverAlbumCoverUrl(source, a.id), artist: a.artist, id: a.id, score: 1, matched: [] }));
+  const artistItems = r.artists.map((a) => ({ kind: 'artist', subject: artistSubject(source, a.name), title: a.name, sub: null, cover: a.cover ? serverCoverUrl(source, a.cover) : null, score: 1, matched: [] }));
+  const trackItems = starred(source, r.tracks).map((t) => ({
+    kind: 'track',
+    subject: t.album_id ? albumSubject(source, t.album_id) : '',
+    title: t.name,
+    sub: [t.artist, t.album].filter(Boolean).join(' · '),
+    cover: t.album_id ? serverAlbumCoverUrl(source, t.album_id) : null,
+    artist: t.artist,
+    album: t.album,
+    album_id: t.album_id,
+    duration_secs: t.duration_secs,
+    track: t.id,
+    score: 1,
+    matched: [],
+  }));
+  const groups: ServerSearch['groups'] = {};
+  if (want('artist') && artistItems.length) groups.artist = { total: artistItems.length, items: artistItems };
+  if (want('album') && albumItems.length) groups.album = { total: albumItems.length, items: albumItems };
+  if (want('track') && trackItems.length) groups.track = { total: trackItems.length, items: trackItems };
+  return { q, groups, top: [...artistItems.slice(0, 2), ...albumItems.slice(0, 3), ...trackItems.slice(0, 5)] };
+}

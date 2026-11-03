@@ -4,7 +4,7 @@ import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
-import { isServerSource, serverAlbumCoverUrl } from './serverMode.svelte';
+import { isServerSource, serverAlbumCoverUrl, serverMode, serverSearch, serverSource } from './serverMode.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
@@ -2288,6 +2288,9 @@ export type ServerSearch = {
  *  next page, decision 0076; a server before 0.9.13 answers from the start again). */
 /** `without`: the libraries switched off (the owner, 2026-11-02: "Only what's switched on", its counts too). */
 export const search = (q: string, kinds: SearchKind[] = [], limit = 20, offset = 0, without?: string[]) => {
+  // A server's mode (decision 0098): that server's search.
+  const server = serverMode();
+  if (server) return serverSearch(serverSource(server.id), q, kinds, limit);
   const u = new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit), ...(offset ? { offset: String(offset) } : {}) });
   for (const w of without ?? []) u.append('without', w);
   return quietly<ServerSearch>(`/api/search?${u}`);
