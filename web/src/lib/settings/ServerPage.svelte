@@ -24,12 +24,14 @@
   <Item name="Kind" value={KIND_NAMES[server.kind]} />
   <Item name="Signed in as" value={server.user || (server.apiKey ? 'An API key' : '')} />
 </Group>
-<Group
-  more={server.kind === 'jellyfin'
-    ? 'On where this Jellyfin tells ListenBrainz or Last.fm what you play itself (its plugin). Off, this device does. Either way a play is sent once.'
-    : 'On where this server tells ListenBrainz or Last.fm what you play itself (Navidrome, Gonic and Airsonic-Advanced can, set up there). Off, this device does. Either way a play is sent once.'}
->
-  <Item name="This server scrobbles for me" toggle={{ checked: !!server.scrobbles, onchange: (on) => keepServer({ ...server, scrobbles: on }) }} />
+<Group>
+  <Item
+    name="This server scrobbles for me"
+    more={server.kind === 'jellyfin'
+      ? 'On where this Jellyfin tells ListenBrainz or Last.fm what you play itself (its plugin). Off, this device does. Either way a play is sent once.'
+      : 'On where this server tells ListenBrainz or Last.fm what you play itself (Navidrome, Gonic and Airsonic-Advanced can, set up there). Off, this device does. Either way a play is sent once.'}
+    toggle={{ checked: !!server.scrobbles, onchange: (on) => keepServer({ ...server, scrobbles: on }) }}
+  />
 </Group>
 <Group>
   <Item name={`Remove ${server.name}`} kind="danger" onclick={() => (removing = true)} />
