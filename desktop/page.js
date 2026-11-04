@@ -18,8 +18,9 @@ const path = require('node:path');
 /** Cratarr's own, never the page's: its API, Subsonic's, the sign-in, the guest page, the device's covers. */
 const CRATARRS = ['/api', '/rest', '/signin', '/signout', '/guest', '/__device'];
 
-/** A page's build ({version, build}: its release X.Y.Z and its main script's hash), from a `build.json` or the health
- *  check's `web`; null when it says no release or no build. */
+/** A page's build ({version, build}: its release X.Y.Z and an id made from its files, the same for two builds of one
+ *  commit, compared as it is), from a `build.json` or the health check's `web`; null when it says no release or no
+ *  build. */
 function buildOf(o) {
   if (!o || typeof o !== 'object') return null;
   const { version, build } = o;
