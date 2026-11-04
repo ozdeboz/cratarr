@@ -478,11 +478,36 @@ impl UserData {
         };
         let (ids, dates, shares, seen) = (has("playlist_entry_id")?, has("playlist_entry")?, has("playlist_shared")?, has("playlist_seen")?);
         let aliases = has("playlist_alias")?;
-        let mut came = 0;
+        // The migration report's part (decision 0101): every table's rows before and after, what found no match.
+        let rows = |table: &str, exists: bool| -> Result<i64> {
+            Ok(if exists { tx.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))? } else { 0 })
+        };
+        let old: Vec<(&str, i64)> = vec![
+            ("playlist_entry_id", rows("playlist_entry_id", ids)?),
+            ("playlist_entry", rows("playlist_entry", dates)?),
+            ("playlist_shared", rows("playlist_shared", shares)?),
+            ("playlist_seen", rows("playlist_seen", seen)?),
+            ("playlist_alias", rows("playlist_alias", aliases)?),
+        ];
+        let logged: i64 = tx.query_row("SELECT count(*) FROM change_log WHERE kind = 'playlist'", [], |r| r.get(0))?;
+        let hearts = |db: &Transaction<'_>| -> Result<i64> { Ok(db.query_row("SELECT count(*) FROM annotation WHERE kind = 'playlist'", [], |r| r.get(0))?) };
+        let hearts_before = hearts(&tx)?;
+        let (mut came, mut lines_in, mut tracked, mut moved_hearts) = (0usize, 0usize, 0usize, 0usize);
+        let (mut no_track, mut left_out): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        let mut per_owner: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         for (owner, wanted, lines, stamp) in found {
             if taken(&tx, owner, wanted, None)? {
                 tracing::warn!("playlist {wanted} of {owner:?}: another has its name but for the case; left out");
+                left_out.push(old_key(owner, wanted));
                 continue;
+            }
+            lines_in += lines.len();
+            for line in lines {
+                if tracks.get(line).cloned().flatten().is_some() {
+                    tracked += 1;
+                } else {
+                    no_track.push(line.clone());
+                }
             }
             let key = old_key(owner, wanted);
             let (created, changed) = if seen {
@@ -545,7 +570,8 @@ impl UserData {
             if aliases {
                 tx.execute("INSERT OR IGNORE INTO playlist_moved (old, id) SELECT old, ?2 FROM playlist_alias WHERE name = ?1", params![key, id])?;
             }
-            tx.execute("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'playlist' AND item = ?1", params![key, id])?;
+            moved_hearts += tx.execute("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'playlist' AND item = ?1", params![key, id])?;
+            *per_owner.entry(owner.clone()).or_default() += 1;
             came += 1;
         }
         // The change log named playlists by their old keys: what devices kept of them is read again (each starts fresh
@@ -566,6 +592,35 @@ impl UserData {
              DROP TABLE IF EXISTS playlist_alias;",
         )?;
         tx.execute("INSERT INTO playlist_import (one, at, found) VALUES (1, ?1, ?2)", params![now(), came as i64])?;
+        // The report's part, last in the import's transaction.
+        let count = |table: &str| -> Result<i64> { Ok(tx.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?) };
+        let mut tables = vec![
+            serde_json::json!({ "name": "playlist", "before": 0, "after": count("playlist")? }),
+            serde_json::json!({ "name": "playlist_item", "before": 0, "after": count("playlist_item")? }),
+            serde_json::json!({ "name": "playlist_moved", "before": 0, "after": count("playlist_moved")? }),
+        ];
+        tables.extend(old.iter().map(|(name, before)| serde_json::json!({ "name": name, "before": before, "after": 0 })));
+        tables.push(serde_json::json!({ "name": "change_log (playlists)", "before": logged, "after": 0 }));
+        tables.push(serde_json::json!({ "name": "annotation (playlist favourites)", "before": hearts_before, "after": hearts(&tx)? }));
+        let unmatched = |what: &str, all: &[String]| serde_json::json!({ "what": what, "count": all.len(), "sample": all.iter().take(10).collect::<Vec<_>>() });
+        let stray: Vec<String> = {
+            let mut st = tx.prepare("SELECT item FROM annotation WHERE kind = 'playlist' AND item NOT LIKE 'pl-%'")?;
+            st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?
+        };
+        let report = serde_json::json!({
+            "tables": tables,
+            "unmatched": [
+                unmatched("lines naming no track's file (kept, missing)", &no_track),
+                unmatched("playlists left out (another has the name but for the case)", &left_out),
+                unmatched("favourites of no playlist brought in", &stray),
+            ],
+            "playlists": came,
+            "per_owner": per_owner,
+            "lines": lines_in,
+            "lines_with_a_track": tracked,
+            "favourites_moved": moved_hearts,
+        });
+        super::put_migration_part(&tx, "playlists", &report)?;
         tx.commit()?;
         Ok(came)
     }
@@ -582,6 +637,33 @@ impl UserData {
         )?;
         let rows = st.query_map([owner], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The owner's entries there now without a track, by playlist: (playlist name, entry, line). What the minute pass
+    /// gives a track once the catalogue knows its line's file (one written before the catalogue read it, at the
+    /// import of a library not read yet).
+    pub fn untracked_entries(&self, owner: &str) -> Result<Vec<(String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT p.name, i.entry, i.line FROM playlist_item i JOIN playlist p ON p.id = i.playlist
+             WHERE p.owner = ?1 AND p.gone IS NULL AND i.n IS NOT NULL AND i.track IS NULL",
+        )?;
+        let rows = st.query_map([owner], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Entries given the tracks their lines name now (`found`: playlist name, entry, track). Their lines stay as they
+    /// are, so nothing about the playlist changes for anyone.
+    pub fn give_tracks(&self, owner: &str, found: &[(String, String, String)]) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut n = 0;
+        for (name, entry, track) in found {
+            let Some(p) = named(&tx, owner, name)? else { continue };
+            n += tx.execute("UPDATE playlist_item SET track = ?3 WHERE playlist = ?1 AND entry = ?2 AND track IS NULL", params![p.id, entry, track])?;
+        }
+        tx.commit()?;
+        Ok(n)
     }
 
     /// Entries led to where their track's file is now (`relinks`: playlist name, entry, the new line), each playlist
@@ -726,6 +808,14 @@ mod tests {
         assert_eq!(e.gone["e-x"].after.as_deref(), Some("e-a"), "and the one removed");
         assert_eq!(dates[0], Some(100), "when it came");
         assert_eq!(dates[1], None, "a line its file gained elsewhere: no date, as before");
+        // The migration report's part (decision 0101): the tables before and after, what found no match.
+        let report = u.migration_report().unwrap().remove("playlists").expect("its part").1;
+        assert_eq!((report["playlists"].as_u64(), report["lines"].as_u64(), report["favourites_moved"].as_u64()), (Some(2), Some(3), Some(1)));
+        let table = |name: &str| report["tables"].as_array().unwrap().iter().find(|t| t["name"] == name).cloned().unwrap();
+        assert_eq!((table("playlist_entry_id")["before"].as_i64(), table("playlist_entry_id")["after"].as_i64()), (Some(2), Some(0)));
+        assert_eq!(table("playlist")["after"].as_i64(), Some(2));
+        assert_eq!(report["unmatched"][0]["count"].as_u64(), Some(3), "no line names a track's file here");
+        assert_eq!(report["per_owner"]["ann"].as_u64(), Some(1));
         let (chill, _) = u.playlist("", "Chill").unwrap().unwrap();
         assert_eq!((chill.created, chill.shared), (60, false), "no dates kept: its file's");
         // What knew them by their keys knows them by their ids.

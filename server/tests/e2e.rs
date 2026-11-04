@@ -142,6 +142,102 @@ fn temp(name: &str) -> PathBuf {
     d
 }
 
+/// Every audio file under `dir`, relative to it, sorted.
+fn audio_under(dir: &Path) -> Vec<String> {
+    fn walk(root: &Path, at: &Path, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(at).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else if p.extension().is_some_and(|x| x == "flac" || x == "mp3") {
+                out.push(p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// The 0.16 first start's migration of 0.15's playlists (decision 0101 points 12 and 28), rehearsed on the fixture
+/// library: the `.m3u` files of Music's playlist folder and an account's folder there, one line naming a file that is
+/// gone, and 0.15's user data beside them (shared, seen, an old name). Brought into the database once, by their new ids,
+/// their copies written out, the gone line kept missing, the report saying so; a restart brings nothing in again.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
+    let root = temp("playlists");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    let files = audio_under(&music);
+    let folder = music.to_string_lossy().to_string();
+    let lists = music.join(".playlists");
+    std::fs::create_dir_all(lists.join("ann")).unwrap();
+    std::fs::write(lists.join("Mix.m3u"), format!("#EXTM3U\n../{}\n../{}\n../Gone/01 Gone.flac\n", files[0], files[1])).unwrap();
+    std::fs::write(lists.join("ann").join("Evening.m3u"), format!("../../{}\n", files[2])).unwrap();
+    {
+        let ud = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+        ud.execute_batch(
+            "CREATE TABLE playlist_shared (playlist TEXT PRIMARY KEY, at INTEGER NOT NULL);
+             INSERT INTO playlist_shared VALUES ('ann/Evening', 1);
+             CREATE TABLE playlist_alias (old TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL);
+             INSERT INTO playlist_alias VALUES ('Old Mix', 'Mix', 1);
+             CREATE TABLE playlist_seen (name TEXT PRIMARY KEY, print TEXT NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL);
+             INSERT INTO playlist_seen VALUES ('Mix', '', 100, 200);",
+        )
+        .unwrap();
+    }
+    let settings = json!({
+        "version": 3,
+        "music_folder": folder,
+        "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": { "music": [folder] }, "values": { "folders": [folder] } }],
+    });
+    std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+
+    // Brought in by their new ids, another's shared one too, as it was.
+    let view = s.get("/api/state").await;
+    let list = view["playlists"].as_array().cloned().unwrap_or_default();
+    let mix = list.iter().find(|p| p["name"] == "Mix").cloned().expect("Mix brought in");
+    let evening = list.iter().find(|p| p["name"] == "Evening").cloned().expect("ann's shared Evening brought in");
+    let id = mix["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("pl-") && id.len() == 15, "its own id: {id}");
+    assert_eq!((evening["owner"].as_str(), evening["shared"].as_bool(), evening["mine"].as_bool()), (Some("ann"), Some(true), Some(false)));
+    // 0.15's keys lead to the ids, the old name too.
+    let moved = s.get("/api/playlists/moved").await;
+    assert_eq!((moved["Mix"].as_str(), moved["Old Mix"].as_str()), (Some(id.as_str()), Some(id.as_str())));
+    assert_eq!(moved["ann/Evening"], evening["id"]);
+    // The gone line kept, missing; the others its tracks.
+    let rows = s.get(&format!("/api/playlists/{id}/rows")).await;
+    let rows = rows["rows"].as_array().cloned().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.iter().map(|r| r["missing"].as_bool().unwrap()).collect::<Vec<_>>(), [false, false, true]);
+    // The copies, beside the database, never read back.
+    assert_eq!(std::fs::read_to_string(data.join("playlists").join("Mix.m3u")).unwrap(), format!("{}\n{}\nGone/01 Gone.flac\n", files[0], files[1]));
+    assert!(data.join("playlists").join("ann").join("Evening.m3u").is_file());
+    // The report: what came, what found no match.
+    let report = s.get("/api/admin/migration").await;
+    let part = &report["parts"]["playlists"];
+    assert_eq!((part["playlists"].as_u64(), part["lines"].as_u64()), (Some(2), Some(4)), "{part}");
+    let at = part["at"].as_i64().unwrap();
+    s.stop();
+
+    // Started again: nothing is brought in twice.
+    let s = Server::start(&data).await;
+    let again = s.get("/api/admin/migration").await;
+    assert_eq!(again["parts"]["playlists"]["at"].as_i64(), Some(at), "once");
+    let view = s.get("/api/state").await;
+    let list = view["playlists"].as_array().cloned().unwrap_or_default();
+    assert_eq!(list.iter().filter(|p| p["name"] == "Mix").count(), 1);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn types_and_years_into_the_files_end_to_end() {
