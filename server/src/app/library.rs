@@ -143,6 +143,35 @@ impl Active {
     }
 }
 
+/// The user data's keys for the catalogue its track ids are of, and the highest id given out (0101).
+const CATALOGUE_KEY: &str = "catalogue";
+const TOP_KEY: &str = "catalogue_top";
+
+/// What the user data remembers of the catalogue, against the catalogue open now.
+#[derive(Debug, PartialEq, Eq)]
+enum Ids {
+    /// Nothing yet (a first start, or 0.16's): this one is remembered.
+    Remember,
+    Same,
+    /// Another catalogue: the ids the user data holds are not this one's.
+    Lost,
+}
+
+fn ids_state(remembered: Option<&str>, generation: &str) -> Ids {
+    match remembered {
+        None => Ids::Remember,
+        Some(g) if g == generation => Ids::Same,
+        Some(_) => Ids::Lost,
+    }
+}
+
+/// A fresh start of lost track ids: where the new ids begin, and what still names an old track (rows per table).
+#[derive(Debug, serde::Serialize)]
+pub struct FreshIds {
+    pub from: i64,
+    pub references: Vec<(String, u64)>,
+}
+
 pub struct Library {
     live: std::sync::RwLock<Arc<Vec<Arc<Active>>>>,
     data_dir: Option<String>,
@@ -234,6 +263,20 @@ impl Library {
         let folders = derive_folders(&active, last_music.as_deref());
         let db = data_dir.as_ref().map(|d| PathBuf::from(d).join("catalogue.sqlite"));
         let catalogue = Arc::new(Catalogue::open(db.as_deref(), catalogue_folders(&folders))?);
+        // The catalogue's track ids are the truth (0101, the owner 2026-11-04): the user data remembers which catalogue
+        // its ids are of, and the highest id given out. Another catalogue (a lost one made anew) gives no ids until it is
+        // restored from the backup or an administrator starts afresh (`fresh_track_ids`).
+        match ids_state(playlists_db.meta(CATALOGUE_KEY)?.as_deref(), &catalogue.generation()) {
+            Ids::Remember => playlists_db.set_meta(CATALOGUE_KEY, &catalogue.generation())?,
+            Ids::Same => {}
+            Ids::Lost => {
+                tracing::error!("catalogue: its track ids were lost (catalogue.sqlite made anew): no ids until it is restored or started afresh");
+                catalogue.set_ids_lost(true);
+            }
+        }
+        if !catalogue.ids_lost() {
+            playlists_db.set_meta(TOP_KEY, &catalogue.top_track().to_string())?;
+        }
         let store = music_store(&playlists_db, &catalogue, data_dir.as_deref(), folders.music.as_deref()).await;
         Ok(Arc::new(Self {
             live: std::sync::RwLock::new(Arc::new(active)),
@@ -321,6 +364,24 @@ impl Library {
 
     pub(super) fn set_tag_rules(&self, rules: crate::catalogue::Rules) {
         *self.tag_rules.write().unwrap_or_else(|p| p.into_inner()) = rules;
+    }
+
+    /// Starts the track ids afresh after they were lost (the owner's choice for a lost catalogue.sqlite, 0101): the new
+    /// catalogue's ids become the truth, numbered from the next million above every old id the user data remembers or
+    /// names (an old id then names a missing track, never another one); what names an old track is counted. Blocking;
+    /// the administrators' (the API's guard).
+    pub fn fresh_track_ids(&self) -> Result<FreshIds> {
+        let ud = &self.playlists_db;
+        let (references, named) = ud.track_references()?;
+        let remembered: i64 = ud.meta(TOP_KEY)?.and_then(|v| v.parse().ok()).unwrap_or(0);
+        let floor = (remembered.max(named) / 1_000_000 + 1) * 1_000_000;
+        self.catalogue.number_above(floor)?;
+        ud.set_meta(CATALOGUE_KEY, &self.catalogue.generation())?;
+        ud.set_meta(TOP_KEY, &floor.to_string())?;
+        self.catalogue.set_ids_lost(false);
+        self.catalogue.poke();
+        tracing::warn!("catalogue: track ids started afresh from {}", floor + 1);
+        Ok(FreshIds { from: floor + 1, references: references.into_iter().map(|(table, rows)| (table.to_string(), rows)).collect() })
     }
 
     pub fn catalogue(&self) -> Arc<Catalogue> {
@@ -512,6 +573,14 @@ impl Library {
 #[cfg(test)]
 mod switched_off_tests {
     use super::*;
+
+    /// 0101: the user data remembers which catalogue its ids are of; another one is lost ids.
+    #[test]
+    fn which_catalogue_the_ids_are_of() {
+        assert_eq!(ids_state(None, "g1"), Ids::Remember);
+        assert_eq!(ids_state(Some("g1"), "g1"), Ids::Same);
+        assert_eq!(ids_state(Some("g1"), "g2"), Ids::Lost);
+    }
 
     #[test]
     fn a_library_switched_off_leaves_out_the_folders_only_it_keeps() {

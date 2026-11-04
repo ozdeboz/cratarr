@@ -460,6 +460,9 @@ pub struct Catalogue {
     worked: std::sync::atomic::AtomicU64,
     /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
     facts: Mutex<Option<KeptFacts>>,
+    /// Its track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while the user
+    /// data remembers another. No ids are given out meanwhile (`identify`).
+    ids_lost: std::sync::atomic::AtomicBool,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
     file: Option<PathBuf>,
 }
@@ -502,6 +505,7 @@ impl Catalogue {
             reread: Default::default(),
             worked: Default::default(),
             facts: Mutex::default(),
+            ids_lost: Default::default(),
             file: file.map(Path::to_path_buf),
         };
         // A better reader may read what an older one could not.
@@ -535,6 +539,33 @@ impl Catalogue {
     /// Which catalogue this is: set when it is made, the same for as long as its track ids are.
     pub fn generation(&self) -> String {
         self.meta(GENERATION).unwrap_or_default()
+    }
+
+    /// Whether its track ids were lost (`set_ids_lost`): no ids are given out until it is restored or started afresh.
+    pub fn ids_lost(&self) -> bool {
+        self.ids_lost.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_ids_lost(&self, lost: bool) {
+        self.ids_lost.store(lost, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The highest track id it gave out. Blocking.
+    pub fn top_track(&self) -> i64 {
+        let db = self.db();
+        let seq: Option<i64> = db.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'tracks'", [], |r| r.get(0)).optional().ok().flatten();
+        let max: Option<i64> = db.query_row("SELECT MAX(id) FROM tracks", [], |r| r.get(0)).ok().flatten();
+        seq.unwrap_or(0).max(max.unwrap_or(0))
+    }
+
+    /// Its next tracks numbered above `floor` (a fresh start after lost ids: an old id then names a missing track, never
+    /// another one). Blocking.
+    pub fn number_above(&self, floor: i64) -> Result<()> {
+        let db = self.db();
+        if db.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'tracks'", [floor])? == 0 {
+            db.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('tracks', ?1)", [floor])?;
+        }
+        Ok(())
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -1617,6 +1648,10 @@ impl Catalogue {
     /// files nobody claimed within `GONE_KEEP_SECS`, and trashed files whose trash was emptied, retire their ids.
     /// Returns (moves recognised, new ids). Blocking.
     pub fn identify(&self) -> Result<(usize, usize)> {
+        // Its ids lost: nothing given out, nothing retired, until it is restored or started afresh (0101).
+        if self.ids_lost() {
+            return Ok((0, 0));
+        }
         let now = now();
         let folders = self.folders();
         let mut db = self.db();
@@ -3551,6 +3586,25 @@ mod tests {
         assert_eq!(cat.identify().unwrap(), (1, 0), "recognised as the retired track: no new id");
         assert_eq!(cat.track_of(0, "Elsewhere/1-01 Uno.mp3"), Some(one));
         assert!(!retired(&cat, one), "back in use");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Lost track ids (0101, the owner): nothing is given out while they are lost; started afresh, the new ids come above
+    /// the floor, so an old id names no new track.
+    #[test]
+    fn lost_ids_give_nothing_out_and_a_fresh_start_numbers_above_the_old() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.set_ids_lost(true);
+        assert_eq!(cat.identify().unwrap(), (0, 0), "lost: no ids");
+        assert_eq!(cat.track_of(0, "A - B (2020)/01 One.mp3"), None);
+        cat.number_above(2_000_000).unwrap();
+        cat.set_ids_lost(false);
+        assert_eq!(cat.identify().unwrap(), (0, 2));
+        assert!(cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap() > 2_000_000, "above every old id");
+        assert!(cat.top_track() > 2_000_000);
         std::fs::remove_dir_all(&d).ok();
     }
 

@@ -550,6 +550,22 @@ fn lidarr_root_finding(root: &str, roots: &[String], incoming: &str, folders: &[
     Some(f)
 }
 
+/// The catalogue's track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while
+/// the user data remembers another. No new ids until it is restored from the nightly backup, or an administrator starts
+/// afresh (`POST /api/catalogue/fresh-ids`).
+pub fn track_ids(lost: bool) -> Option<Finding> {
+    if !lost {
+        return None;
+    }
+    let mut f = finding("library", "library:ids-lost", Level::Critical, 1, "The track ids were lost");
+    f.detail = Some(
+        "catalogue.sqlite was made anew, so no new track ids are given out. Restore it from the nightly backup, or start the \
+         track ids afresh: what named an old track then shows it missing."
+            .into(),
+    );
+    Some(f)
+}
+
 /// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
 fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let Some(serve) = served else { return Ok(Vec::new()) };
@@ -710,7 +726,8 @@ impl App {
                 off.push((id, name, artist, line));
             }
         }
-        let mut out = library(&rows, &off, &discs);
+        let mut out: Vec<Finding> = track_ids(served.catalogue().ids_lost()).into_iter().collect();
+        out.extend(library(&rows, &off, &discs));
         out.extend(self.check_incomplete(&served).await?);
         out.extend(self.check_references(&served).await?);
         // Each kind of word the Catalogue sheet writes (0.15, decision 0097): the records whose files differ.

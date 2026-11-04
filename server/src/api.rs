@@ -329,6 +329,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
+            // Lost track ids started afresh (0101, the owner: a lost catalogue.sqlite stops Cratarr until this or a restore).
+            .route("/api/catalogue/fresh-ids", post(catalogue_fresh_ids))
             .route("/api/health/report", get(health_report))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
@@ -4334,6 +4336,13 @@ async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::cat
     let c = app.library.catalogue();
     let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(status.map_err(ToggleError::from)?))
+}
+
+/// Lost track ids started afresh (`Library::fresh_track_ids`): where the new ids begin and what still names old tracks.
+async fn catalogue_fresh_ids(State(app): State<Arc<App>>) -> Result<Json<crate::app::FreshIds>, ApiError> {
+    let lib = app.library.clone();
+    let fresh = tokio::task::spawn_blocking(move || lib.fresh_track_ids()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(fresh.map_err(ToggleError::from)?))
 }
 
 /// The files with a problem: 500 of each kind at most (`Catalogue::problems`), so each kind's Health panel lists its own.
