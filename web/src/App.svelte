@@ -30,6 +30,8 @@
   import { later } from './lib/later.svelte';
   // What changed elsewhere while away, read again (decision 0087).
   import './lib/changes.svelte';
+  // The person's preferences on their account (decision 0101 point 14).
+  import './lib/accountPrefs.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
   import Visuals from './lib/visuals/Visuals.svelte';

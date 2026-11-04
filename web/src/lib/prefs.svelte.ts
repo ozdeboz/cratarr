@@ -528,9 +528,21 @@ export const DEFAULTS: Prefs = {
 };
 
 function read(): Prefs {
+  let kept: string | null = null;
+  try {
+    kept = localStorage.getItem(KEY);
+  } catch {
+    /* defaults */
+  }
+  return parse(kept);
+}
+
+/** The preferences in `kept` (JSON: this device's copy, or one of them from the account, `fromSaved`), each as
+ *  understood: one missing, or not understood, is its default. */
+function parse(kept: string | null): Prefs {
   const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {} } as Prefs;
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
+    const saved = JSON.parse(kept ?? 'null');
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
@@ -691,6 +703,10 @@ function read(): Prefs {
 }
 
 export const prefs = $state<Prefs>(read());
+
+/** One preference as kept elsewhere (the account's, lib/accountPrefs), as understood; not understood, or none
+ *  (`undefined`): its default. */
+export const fromSaved = <K extends keyof Prefs>(key: K, value: unknown): Prefs[K] => parse(JSON.stringify({ [key]: value }))[key];
 
 /** Back to the default look; the followed source and the pins are not display matters and stay. */
 export function resetPrefs() {

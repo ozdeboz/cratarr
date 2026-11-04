@@ -1283,6 +1283,16 @@ export type Me = {
   sessions?: UserSession[];
 };
 export const getMe = () => quietly<Me>('/api/me');
+/** A preference kept on the account (decision 0101 point 14, lib/accountPrefs): its value, and when it was changed
+ *  (epoch ms). */
+export type HeldPreference = { value: unknown; changed: number };
+/** The account's preferences, those the server holds. */
+export const getPreferences = () => quietly<{ values: Record<string, HeldPreference> }>('/api/me/preferences').then((r) => r.values);
+/** A preference as changed on this device at `changed`: the server keeps it if that is later than what it holds (per
+ *  preference the latest change wins, the whole value; one ahead of its clock counts as now), and answers what it
+ *  holds then. */
+export const putPreference = (key: string, value: unknown, changed: number) =>
+  quietly<HeldPreference>(`/api/me/preferences/${key}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, changed }) });
 /** What this server can do (0.11, lib/capabilities): the names of what it has configured and what its code supports. */
 export const getCapabilities = () => quietly<import('./generated/Capabilities').Capabilities>('/api/capabilities');
 /** Ends one of one's own sign-ins, or takes one of one's own devices away. */
