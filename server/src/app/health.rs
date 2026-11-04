@@ -475,9 +475,6 @@ fn replaces(v: &super::incoming::VerdictView) -> bool {
 
 /// Where a verdict's other copy is, for an item's line: Music, else its library as named.
 fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums::LibraryView]) -> &'a str {
-    if v.replaceable {
-        return "Music";
-    }
     v.library_id.as_ref().and_then(|id| libraries.iter().find(|l| &l.id == id)).map_or("another library", |l| l.name.as_str())
 }
 
@@ -1255,8 +1252,23 @@ mod tests {
             why: String::new(),
             library_id: library_id.map(Into::into),
             replaceable,
+            replaceable_into: if replaceable { library_id.map(Into::into).into_iter().collect() } else { Vec::new() },
         };
-        let libraries = [crate::app::albums::LibraryView { id: "new".into(), name: "New music".into(), use_: "incoming", colour: None, quality: crate::settings::Quality::None }];
+        let library = |id: &str, name: &str, kind: &'static str| crate::app::albums::LibraryView {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            fetcher: None,
+            owner: None,
+            mine: false,
+            colour: None,
+            quality: crate::settings::Quality::None,
+            seen: true,
+            seen_why: None,
+            naming: None,
+        };
+        // Libraries are equal (0101 point 1): a main library is named by its own name, as any other.
+        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming")];
         assert!(replaces(&v("upgrade", Some("music"), true)));
         assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
         assert!(!replaces(&v("duplicate", Some("music"), true)));

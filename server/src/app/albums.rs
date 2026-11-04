@@ -12,19 +12,32 @@ use super::library::epoch_now;
 use crate::settings::Quality;
 use crate::source;
 
-/// A used library of a server, as the page shows it.
+/// A used library of a server, as the page shows it (0101 point 1: no roles; the list's order is the default, the
+/// first main library taking every fallback).
 #[derive(Debug, Clone, Serialize)]
 pub struct LibraryView {
     pub id: String,
-    /// As its server calls it.
+    /// As its server calls it, or its own name.
     pub name: String,
-    /// "music" or "incoming" (decision 0009).
-    #[serde(rename = "use")]
-    pub use_: &'static str,
-    /// The dot on its albums; none for the primary (Music).
+    /// "main", "incoming" or "own" (someone's own music, 0101 point 2).
+    pub kind: &'static str,
+    /// An Incoming library's fetcher: "lidarr", "soulseek" or "uploads".
+    pub fetcher: Option<String>,
+    /// Own music's account; none for another kind, or once its account was removed (an ownerless library).
+    pub owner: Option<String>,
+    /// The viewer's own music.
+    pub mine: bool,
+    /// The dot on its albums: every library has one (the page shows it while the viewer has two or more on).
     pub colour: Option<String>,
     /// Its quality limit on the way in (decision 0096's amendment).
     pub quality: Quality,
+    /// Whether Cratarr sees its files, and why not.
+    pub seen: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seen_why: Option<String>,
+    /// A main library's naming template (Keep and Move rename by the target's); none: the Music naming.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub naming: Option<String>,
 }
 
 /// An album that has an album of another library matched to it (the inverse of an Incoming album's verdict).
@@ -61,6 +74,12 @@ pub struct AlbumsSourceView {
     pub waiting: BTreeMap<String, Waiting>,
     /// The albums Cratarr can delete.
     pub deletable: Vec<String>,
+    /// The Incoming albums the viewer may Keep (0101 point 2: an administrator every one; a user their own requests,
+    /// once own music is in).
+    pub keepable: Vec<String>,
+    /// Per Incoming album, where Keep puts it by default (0101 point 2: the requester's own music, else the first main
+    /// library).
+    pub keep_to: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,17 +116,33 @@ impl App {
                         let roles = &a.cfg.libraries;
                         libraries
                             .iter()
-                            .map(|l| LibraryView {
-                                id: l.clone(),
-                                name: a.placement.libraries.iter().find(|p| &p.id == l).map_or_else(|| l.clone(), |p| p.name.clone()),
-                                use_: if roles.music.contains(l) { "music" } else { "incoming" },
-                                colour: roles.colour_of(l),
-                                quality: roles.quality_of(l),
+                            .map(|l| {
+                                let placed = a.placement.libraries.iter().find(|p| &p.id == l);
+                                let seen = placed.is_some_and(|p| !p.folders.is_empty());
+                                LibraryView {
+                                    id: l.clone(),
+                                    name: placed.map_or_else(|| l.clone(), |p| p.name.clone()),
+                                    kind: if roles.music.contains(l) { "main" } else { "incoming" },
+                                    fetcher: roles.policies.get(l).and_then(|p| p.fetcher.clone()),
+                                    owner: None,
+                                    mine: false,
+                                    colour: roles.colour_of(l),
+                                    quality: roles.quality_of(l),
+                                    seen,
+                                    seen_why: (!seen).then(|| "Cratarr can't see its files".to_string()),
+                                    naming: None,
+                                }
                             })
                             .collect()
                     })
                     .unwrap_or_default();
                 let music_albums: &[source::Album] = c.map_or(&[], |c| c.albums.as_slice());
+                // Keep's albums and where each goes by default: the first main library (own music comes with 0101's own
+                // music; only administrators keep until then).
+                let keepable: Vec<String> = i.iter().flat_map(|i| i.albums.iter().map(|al| al.id.clone())).collect();
+                let first_main = active.as_ref().and_then(|a| a.cfg.libraries.music.first().cloned());
+                let keep_to: BTreeMap<String, String> =
+                    first_main.map(|m| keepable.iter().map(|id| (id.clone(), m.clone())).collect()).unwrap_or_default();
                 let verdicts = i.map(|i| i.verdicts.clone()).unwrap_or_default();
                 let albums: Vec<source::Album> = music_albums.iter().cloned().chain(i.iter().flat_map(|i| i.albums.iter().cloned())).collect();
                 AlbumsSourceView {
@@ -125,6 +160,8 @@ impl App {
                         .into_iter()
                         .chain(music_albums.iter().filter(|_| music_deletable).filter(|a| a.path.is_some()).map(|a| a.id.clone()))
                         .collect(),
+                    keepable,
+                    keep_to,
                     libraries,
                     library_info,
                     id,
@@ -212,7 +249,15 @@ mod tests {
     }
 
     fn verdict(kind: &'static str, library: &str, dir: &str) -> VerdictView {
-        VerdictView { kind, library: dir.into(), why: String::new(), library_id: Some(library.into()), replaceable: library == "music" }
+        let replaceable = library == "music";
+        VerdictView {
+            kind,
+            library: dir.into(),
+            why: String::new(),
+            library_id: Some(library.into()),
+            replaceable,
+            replaceable_into: if replaceable { vec![library.into()] } else { Vec::new() },
+        }
     }
 
     #[test]

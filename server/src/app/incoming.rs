@@ -160,8 +160,12 @@ pub struct VerdictView {
     /// The library that album is in (its id, as `library_info` has it); none when no used library of the server lies
     /// in its folder.
     pub library_id: Option<String>,
-    /// That album is in Music, so Replace can put this one in its place; one in another library is only told.
+    /// That album is in the first main library, so Replace can put this one in its place; one in another library is
+    /// only told (Replace into any main library comes next, 0101 point 2).
+    #[serde(skip)]
     pub replaceable: bool,
+    /// The main libraries Replace can put this one into, in its other copy's place (0101 point 2).
+    pub replaceable_into: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -225,7 +229,9 @@ fn verdicts(
             Verdict::Duplicate { library, why } => Some((f, "duplicate", index.albums[library].0.clone(), why)),
         });
         let Some((folder, kind, library, why)) = found else { continue };
-        out.insert(a.id.clone(), VerdictView { kind, library, why, library_id: library_in(folder), replaceable: folder == 0 });
+        let library_id = library_in(folder);
+        let replaceable_into = if folder == 0 { library_id.clone().into_iter().collect() } else { Vec::new() };
+        out.insert(a.id.clone(), VerdictView { kind, library, why, library_id, replaceable: folder == 0, replaceable_into });
     }
     out
 }

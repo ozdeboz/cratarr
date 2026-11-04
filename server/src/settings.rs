@@ -110,13 +110,15 @@ impl Roles {
         }
     }
 
-    /// The dot of `library`'s albums: none for a Music library (the primary is the norm), else its own colour or the
-    /// palette's, in the order of the used libraries.
+    /// The dot of `library`'s albums (0101 point 1: every library has one; the page shows it while the viewer has two
+    /// or more on): its own colour, else the palette's in turn, Incoming's first (as before) and the main libraries'
+    /// after them. None for a library not in use.
     pub fn colour_of(&self, library: &str) -> Option<String> {
-        if self.music.iter().any(|m| m == library) {
-            return None;
-        }
-        let i = self.incoming.iter().position(|l| l == library)?;
+        let i = self
+            .incoming
+            .iter()
+            .position(|l| l == library)
+            .or_else(|| self.music.iter().position(|l| l == library).map(|m| self.incoming.len() + m))?;
         Some(self.policies.get(library).and_then(|p| p.colour.clone()).unwrap_or_else(|| PALETTE[i % PALETTE.len()].to_string()))
     }
 
@@ -496,7 +498,7 @@ mod tests {
         let mut r = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()], ..Roles::default() };
         assert_eq!(r.quality_of("m"), Quality::Cd);
         assert_eq!(r.quality_of("i1"), Quality::None);
-        assert_eq!(r.colour_of("m"), None);
+        assert_eq!(r.colour_of("m").as_deref(), Some(PALETTE[2]), "a main library has one too, after Incoming's");
         assert_eq!(r.colour_of("i1").as_deref(), Some(PALETTE[0]));
         assert_eq!(r.colour_of("i2").as_deref(), Some(PALETTE[1]));
         assert_eq!(r.colour_of("unused"), None);
