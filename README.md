@@ -27,8 +27,7 @@ run). Make it before the server can be reached from outside your home.
 
 The Android app and the desktop app are built from [android/](android) and [desktop/](desktop) (each folder says how);
 give them your server's address. Once releases are published, each will carry a ready image (amd64 and arm64,
-`ghcr.io/ozdeboz/cratarr`), the Android app, the desktop app for Linux (also from an APT repository) and
-`SHA256SUMS` of them all.
+`ghcr.io/ozdeboz/cratarr`), the Android app and `SHA256SUMS` of them all; the desktop app is built where it is used.
 
 ## What it does
 
@@ -169,8 +168,9 @@ few settings Settings can change later (what Settings saves wins):
 - **Web**: every page of Cratarr. It plays by itself, and over HTTPS it installs as an app.
 - **Android**: [android/](android), a thin app around Cratarr's pages that plays the music itself (built from its folder;
   its APK will come with each release). It also plays the phone's own music (Local mode, [0052](docs/decisions/0052-local-library.md)).
-- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own, for Linux (an APT repository once releases
-  are published). A Windows installer is prepared but not yet built or tried.
+- **Desktop**: [desktop/](desktop), Cratarr's pages in a window of their own, for Linux, built from its folder and
+  installed with apt; it carries its own copy of the page. A Windows installer can be built the same way but has not
+  been built or tried.
 - **Subsonic apps**: point them at Cratarr's address and sign in with your Cratarr account.
 - **Kodi**: added in Settings → Players, it becomes one of Cratarr's players over Kodi's own remote control ("Allow
   remote control via HTTP"), with nothing installed on Kodi.

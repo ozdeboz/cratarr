@@ -214,7 +214,8 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0077: Macros are the rack's face; the dice play the face](0077-macros-the-racks-face.md): accepted. Every level of a
   rack has a few macros that reach one level down, and the dice roll macros only; supersedes 0057's Track Look.
 - [0078: A desktop app: Cratarr's pages in a window of their own, Linux first](0078-a-desktop-app.md): accepted. A thin
-  Electron app shows the server's pages in a window of its own, Linux first as a .deb from an APT repository.
+  Electron app shows the server's pages in a window of its own, Linux first as a .deb; amended 2026-11-04: it carries
+  its own copy of the page, and is built and installed locally, never published.
 - [0079: Listening along: following another listener, asking for a track, and a guest
   page](0079-follow-and-queue-requests.md): accepted. One may follow another user's player, opted in, from anywhere,
   kept in step by Cratarr; followers and guests at home ask for tracks the leader accepts or declines.

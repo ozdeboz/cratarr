@@ -5,6 +5,9 @@
 - Date: 2026-10-29
 - Builds on: 0031 (the Android app, thin at first), 0033 (a page is a player while it is open), 0.9.8 (Downloads in
   the installed page)
+- Amended 2026-11-04 (the owner): the app carries its own copy of the page (0085, step 1), and it is built and installed
+  locally, never published ("not GitHub pages, local only"); the desktop app is the ThinkPad session's since that day.
+  See the two amendments below.
 
 ## Context
 
@@ -29,6 +32,13 @@ and the page plays as in a browser. Linux first, as a .deb from an APT repositor
 updates itself.**
 
 - Nothing of the web app is built in. The pages come from the server, so the app follows each server's version.
+  *Amended 2026-11-04: the app carries its own copy of the page, as the Android app does (0085, step 1;
+  `desktop/page.js`), answered on the server's address in place of the server's page files, so cookies, the session
+  and the secure context stay the server's. Which copy, as Android's BundledPage: the server's release newer, or the
+  same release built again, the server's; older, or the same build, or the server not heard from, the app's. Beyond
+  Android's: Vite's fingerprinted files are the app's wherever it has them, and with the server's copy chosen but
+  out of reach (no answer, an error page), the app's opens: a blank window never. What the page stores is kept for
+  good (the shell asks `navigator.storage.persist()` and grants it).*
 - The server's address is asked once, on the app's one page of its own; the health check (`/api/health`, open to
   all) tells a Cratarr server from anything else. **Change server…** (the window's menu, shown with Alt, and the
   tray's) asks again; the app then starts afresh with it.
@@ -47,6 +57,11 @@ updates itself.**
   fullscreen, keep the screen on and choose a speaker; nothing else (no camera, microphone or location).
 
 ## Distribution
+
+*Amended 2026-11-04 (the owner: "not GitHub pages, local only"): the desktop app is not published. It is built where it
+is used, from the repository at a release's version, and installed with apt from its `.deb`; no APT repository, no
+GitHub Pages, no updater, and the release workflow builds no desktop app. What follows was the plan of 2026-10-29,
+never run (no tag was pushed).*
 
 The owner, 2026-10-29: conventional open-source workflows only, nothing of the house's
 own.
