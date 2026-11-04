@@ -309,3 +309,7 @@ by a later record that says so in its header. A new decision takes the next numb
   made where it is heard, from the track decoded in memory (the playing track only), the engine's arithmetic in the
   rules crate (0101); a streamed track's file fetched whole as it starts; the app and the page together; the server's
   wind, rewind and brake streams retired.
+- [0103: Cratarr peers](0103-cratarr-peers.md): accepted, step 1 for 0.18; a friend's Cratarr as a library of your own
+  server through a peer account and its key, its catalogue mirrored with its analysis, its streams relayed; read-only,
+  dimmed while away, your plays and favourites kept by your own ids. Reverses "modes only" for Cratarr peers; Jellyfin
+  and Navidrome stay modes. Then playlists, offline, a bounded cache and a record shown once; iroh after a trial.
