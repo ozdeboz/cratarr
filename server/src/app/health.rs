@@ -237,6 +237,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "server:slow" => ("Responses", "slow"),
         "server:settings-file" => ("Settings file", "unreadable"),
         "servers:lidarr" => ("Lidarr", "unreachable"),
+        "library:ids-lost" => ("Track ids", "lost"),
         "requests:waiting" => ("Requests", "waiting"),
         "words:genre" => ("Genres", "differ in the files"),
         "words:style" => ("Styles", "differ in the files"),
@@ -554,7 +555,8 @@ pub fn track_ids(lost: bool) -> Option<Finding> {
     if !lost {
         return None;
     }
-    let mut f = finding("library", "library:ids-lost", Level::Critical, 1, "The track ids were lost");
+    // No count: they are lost or not ("Track ids · lost"; the page leaves a 0 out).
+    let mut f = finding("library", "library:ids-lost", Level::Critical, 0, "The track ids were lost");
     f.detail = Some(
         "catalogue.sqlite was made anew, so no new track ids are given out. Restore it from the nightly backup, or start the \
          track ids afresh: what named an old track then shows it missing."

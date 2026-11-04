@@ -785,6 +785,9 @@ export const undo = (tokens: string[]) => post<{ redo: string[]; restored: strin
 
 
 export const createPlaylist = (name: string) => post<{ playlist: string } & Undo>('/api/playlists', { name });
+/** The track ids started afresh, the catalogue lost (decision 0101): the first new id, and the rows of each table that
+ *  still name old tracks (shown missing from now on). An administrator's. */
+export const freshTrackIds = () => post<{ from: number; references: [string, number][] }>('/api/catalogue/fresh-ids', {});
 /** What 0.15 knew each playlist this account sees by (its name, `owner/name` another's) and its id since (decision
  *  0101). */
 export const getMovedPlaylists = () => quietly<Record<string, string>>('/api/playlists/moved');
