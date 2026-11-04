@@ -13,11 +13,13 @@ import { local } from './localPlayer.svelte';
 import { playsHere } from './output.svelte';
 import { REOPEN, visuals } from './visuals/shown.svelte';
 
-/** This page's build: its script's name (`index-<hash>.js`); none in development. */
+/** This page's build: its entry script's name (`main-<hash>.js`, the build's input named `main` since the guest page
+ *  came, 0.9.19; looking for `index-` it found none, and no page looked for a new build since, 2026-11-04); none in
+ *  development. */
 const own =
   typeof document === 'undefined'
     ? null
-    : ([...document.querySelectorAll<HTMLScriptElement>('script[type=module][src]')].map((s) => s.src.split('/').pop() ?? '').find((n) => n.startsWith('index-')) ?? null);
+    : ([...document.querySelectorAll<HTMLScriptElement>('script[type=module][src]')].map((s) => s.src.split('/').pop() ?? '').find((n) => n.startsWith('main-')) ?? null);
 
 /** How often it looks, at most. */
 const EVERY = 5 * 60_000;
@@ -35,7 +37,7 @@ async function look(now = false) {
   looked = Date.now();
   try {
     const page = await (await fetch('/', { cache: 'no-store' })).text();
-    served = page.match(/assets\/(index-[\w-]+\.js)/)?.[1] ?? null;
+    served = page.match(/assets\/(main-[\w-]+\.js)/)?.[1] ?? null;
   } catch {
     // Out of reach: the next look.
   }
