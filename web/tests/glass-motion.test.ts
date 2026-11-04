@@ -73,12 +73,14 @@ test('the glass parts take no Svelte transition that sizes them, and their motio
   const animated = [
     ...motion.matchAll(/\.animate\(\s*\[([\s\S]*?)\],/g),
     ...motion.matchAll(/\bbegin\(\s*[\w.]+,\s*\[([\s\S]*?)\],/g),
-    ...motion.matchAll(/\bframes = ([\s\S]*?\]);\r?\n/g),
+    ...motion.matchAll(/\bframes(?:: Keyframe\[\])? = ([\s\S]*?\]);\r?\n/g),
+    ...motion.matchAll(/\bframes\.splice\([^{]*(\{[^}]*\})\)/g),
   ];
   assert.ok(animated.length >= 4, 'its moves found');
   for (const frames of animated) {
     for (const k of frames[1].matchAll(/([a-zA-Z]+):/g)) {
-      assert.ok(['clipPath', 'opacity', 'translate', 'inset'].includes(k[1]), `glassMotion animates ${k[1]}`);
+      // `offset` is where a keyframe lies in the move, not a property moved.
+      assert.ok(['clipPath', 'opacity', 'translate', 'inset', 'offset'].includes(k[1]), `glassMotion animates ${k[1]}`);
     }
   }
 });
