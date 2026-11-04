@@ -296,6 +296,16 @@ impl UserData {
         Ok(Some((p, lines)))
     }
 
+    /// The tracks of a playlist's entries there now, in order (decision 0101 point 11; none for one whose line never
+    /// named a track's file).
+    pub fn playlist_tracks(&self, owner: &str, name: &str) -> Result<Option<Vec<Option<String>>>> {
+        let db = self.db();
+        let Some(p) = named(&db, owner, name)? else { return Ok(None) };
+        let mut st = db.prepare_cached("SELECT track FROM playlist_item WHERE playlist = ?1 AND n IS NOT NULL ORDER BY n")?;
+        let rows = st.query_map([&p.id], |r| r.get::<_, Option<String>>(0))?;
+        Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
+    }
+
     /// A playlist's entries by their ids (decision 0087), and when each one there came (epoch s; none for one held
     /// before the dates were kept), in order.
     pub fn playlist_entries(&self, owner: &str, name: &str) -> Result<Option<(Entries, Vec<Option<i64>>)>> {

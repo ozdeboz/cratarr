@@ -2318,6 +2318,25 @@ impl PlaylistService {
             row.added = added.get(i).copied().flatten();
             row.entry_id = ids.get(i).cloned();
         }
+        // A missing entry the catalogue has no file of any more, by what its track was (decision 0101 point 11).
+        if rows.iter().any(|row| row.missing && row.name.is_none()) {
+            let tracks = r.store.tracks(&r.name).await?;
+            let wanted: Vec<(usize, i64)> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.missing && row.name.is_none())
+                .filter_map(|(i, _)| Some((i, tracks.get(i)?.as_deref()?.strip_prefix(crate::serve::ids::SONG)?.parse().ok()?)))
+                .collect();
+            let cat = self.lib.catalogue();
+            let found = tokio::task::spawn_blocking(move || wanted.into_iter().filter_map(|(i, t)| Some((i, cat.remembered(t)?))).collect::<Vec<_>>())
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            for (i, was) in found {
+                let row = &mut rows[i];
+                (row.name, row.artist, row.album) = (was.title, row.artist.take().or(was.artist), row.album.take().or(was.album));
+                row.duration_secs = row.duration_secs.or(was.duration_ms.map(|ms| ms as f64 / 1000.0));
+            }
+        }
         // The user's plays of each track, as the user data keeps them.
         if let Some(serve) = self.served.clone()
             && let Some(me) = serve.current_user()

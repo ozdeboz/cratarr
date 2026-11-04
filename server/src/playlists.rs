@@ -511,6 +511,15 @@ impl Store {
         self.ask(move |db, owner| db.playlist_entries(owner, &name)).await?.ok_or(StoreError::Unknown)
     }
 
+    /// The tracks of a playlist's entries, in order (decision 0101 point 11): what a missing one was.
+    pub async fn tracks(&self, id: &str) -> Result<Vec<Option<String>>, StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Unknown);
+        }
+        let name = id.to_string();
+        self.ask(move |db, owner| db.playlist_tracks(owner, &name)).await?.ok_or(StoreError::Unknown)
+    }
+
     /// A playlist as its text (`text_of`), for its copies and its undo; `None` when there is no such playlist.
     pub async fn text(&self, id: &str) -> Option<String> {
         self.entries(id).await.ok().map(|lines| text_of(&lines))
