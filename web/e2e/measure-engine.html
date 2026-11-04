@@ -150,12 +150,17 @@
       log.started = new Date().toISOString();
     }
     running = true;
+    // Sound against the clock from its first sound on (the wait before it is the time to first sound, not a gap).
+    last = null;
     const t0 = performance.now();
     if (mode === 'plain') {
       el.srcObject = null;
       el.src = trackUrl;
       el.loop = true;
-      el.onplaying = () => log.firstSoundMs ??= Math.round(performance.now() - t0);
+      el.onplaying = () => {
+        log.firstSoundMs ??= Math.round(performance.now() - t0);
+        last ??= { wall: performance.now(), heard: heard() };
+      };
       await el.play();
     } else {
       const error = await tape.load('measure', trackUrl);
@@ -174,13 +179,14 @@
       headFrom(0);
       const first = () => {
         if (!running) return;
-        if (tape.heardMs() !== undefined && tape.heardMs() > 0) log.firstSoundMs = Math.round(performance.now() - t0);
-        else setTimeout(first, 10);
+        if (tape.heardMs() !== undefined && tape.heardMs() > 0) {
+          log.firstSoundMs = Math.round(performance.now() - t0);
+          last = { wall: performance.now(), heard: heard() };
+        } else setTimeout(first, 10);
       };
       first();
     }
     session();
-    last = { wall: performance.now(), heard: 0 };
     clock = setInterval(sample, SAMPLE_MS);
     keep();
   }
