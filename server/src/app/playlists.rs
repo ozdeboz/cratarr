@@ -1134,9 +1134,10 @@ mod undo_tests {
         let (d1, s1) = service_with(Some(one.clone())).await;
         let (d2, s2) = service_with(Some(other)).await;
         s1.create("Chill").await.unwrap();
-        one.userdata.set_playlist_shared("Chill", true).unwrap();
+        let chill = s1.id_of_name("Chill").unwrap();
+        one.userdata.set_playlist_shared(&chill, true).unwrap();
         let (d3, none) = service().await;
-        assert!(s1.shared_keys().contains("Chill"), "shared in its own library");
+        assert!(s1.shared_keys().contains(&chill), "shared in its own library");
         assert!(s2.shared_keys().is_empty(), "the other library shares nothing");
         assert!(none.shared_keys().is_empty(), "nor does a service without one");
         for d in [d1, d2, d3] {
@@ -1154,18 +1155,21 @@ mod undo_tests {
         assert_eq!(ann.entries("Chill").await.unwrap(), ["A/1.mp3"], "Music-relative, as everyone's");
         // The first administrator's are as they were: hers is not among them, and one of the same name is another.
         s.create("Chill").await.unwrap();
-        let mine: Vec<(String, bool)> = s.view(None).await.unwrap().into_iter().map(|p| (p.id, p.mine)).collect();
-        assert_eq!(mine, [("Chill".to_string(), true)]);
+        let shown: Vec<(String, bool)> = s.view(None).await.unwrap().into_iter().map(|p| (p.name, p.mine)).collect();
+        assert_eq!(shown, [("Chill".to_string(), true)]);
         assert!(s.entries("Chill").await.unwrap().is_empty());
-        // Keys tell them apart in Cratarr's own records; Cratarr's own work covers every account's.
+        // Ids tell them apart everywhere (decision 0101); Cratarr's own work covers every account's.
         let top = s.lib.store_for(None).unwrap();
-        assert_eq!((top.key("Chill"), ann.key("Chill")), ("Chill".to_string(), "ann/Chill".to_string()));
-        assert_eq!((ann.name_of_key("ann/Chill"), ann.name_of_key("Chill"), top.name_of_key("ann/Chill")), (Some("Chill"), None, None));
+        let (mine, hers) = (top.key("Chill"), ann.key("Chill"));
+        assert!(mine != hers && crate::userdata::playlists::is_id(&mine) && crate::userdata::playlists::is_id(&hers));
+        assert_eq!((ann.name_of_key(&hers), ann.name_of_key(&mine), top.name_of_key(&hers)), (Some("Chill".to_string()), None, None));
         let all: Vec<String> = s.lib.all_stores().iter().map(|st| st.key("Chill")).collect();
-        assert_eq!(all, ["Chill", "ann/Chill"]);
-        // Another's, not shared, is as if there were none; and it is never another's to change.
+        assert_eq!(all, [mine.clone(), hers.clone()]);
+        // Another's, not shared, is as if there were none, by its id or by name; and it is never another's to change.
+        assert!(matches!(s.reach(&hers), Err(ToggleError::UnknownPlaylist)));
         assert!(matches!(s.reach("ann/Chill"), Err(ToggleError::UnknownPlaylist)));
-        assert!(matches!(s.set_shared("ann/Chill", true), Err(ToggleError::UnknownPlaylist)));
+        assert!(matches!(s.set_shared(&hers, true), Err(ToggleError::UnknownPlaylist)));
+        assert_eq!(s.reach(&mine).unwrap().name, "Chill", "one's own by its id");
         std::fs::remove_dir_all(d.parent().unwrap()).ok();
     }
 
@@ -1739,7 +1743,9 @@ impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>, served: Option<Arc<crate::serve::Serve>>) -> Self {
         let crate_stores = CrateStores::new(lib.data_dir());
         let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json")), served.clone()));
-        Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default(), fits: FitsKept::default(), served }
+        let s = Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default(), fits: FitsKept::default(), served };
+        s.spoken_to_ids();
+        s
     }
 
     /// Cratarr's own library, as the services built on this one (Play On, Playing, Insights) read it.
@@ -2002,7 +2008,7 @@ impl PlaylistService {
     }
 
     /// Every playlist, marked where it holds `entry` (the playing track's line), with its links.
-    /// The asking account's own, and the ones others share (decision 0051), by the ids it knows them by.
+    /// The asking account's own, and the ones others share (decision 0051), each by its id (decision 0101).
     pub(super) async fn view(&self, entry: Option<&str>) -> Result<Vec<PlaylistView>> {
         let Ok(own) = self.lib.store_for(asking_account(self.served.as_deref()).as_deref()) else { return Ok(Vec::new()) };
         let shared = self.shared_keys();
@@ -2010,22 +2016,17 @@ impl PlaylistService {
         let (mut links, mut spoken) = (self.sync.links(), self.sync.spoken());
         let mine = owner_name(self.served.as_deref(), own.account());
         for p in &mut list {
-            let key = own.key(&p.id);
-            // Kept in step with other servers: the first administrator's only.
+            // Kept in step with other servers (by its name there): the first administrator's only.
             if own.account().is_none() {
-                p.links = links.remove(&p.id).unwrap_or_default();
+                p.links = links.remove(&p.name).unwrap_or_default();
             }
-            p.spoken = spoken.remove(&key).unwrap_or_default();
-            (p.owner, p.shared, p.mine) = (mine.clone(), shared.contains(&key), true);
+            p.spoken = spoken.remove(&p.id).unwrap_or_default();
+            (p.owner, p.shared, p.mine) = (mine.clone(), shared.contains(&p.id), true);
         }
         for store in self.others(&own) {
-            if !shared.iter().any(|k| store.name_of_key(k).is_some()) {
-                continue;
-            }
             let owner = owner_name(self.served.as_deref(), store.account());
             for mut p in store.view(entry).await? {
-                if shared.contains(&store.key(&p.id)) {
-                    p.id = format!("{owner}/{}", p.name);
+                if shared.contains(&p.id) {
                     (p.owner, p.shared, p.mine) = (owner.clone(), true, false);
                     list.push(p);
                 }
@@ -2046,21 +2047,26 @@ impl PlaylistService {
         serve.userdata.shared_playlists().inspect_err(|e| tracing::warn!("the shared playlists not read: {e:#}")).unwrap_or_default()
     }
 
-    /// `id` as the asking account names it (decision 0051), to read: its own playlist by name, or another's shared
-    /// one as `owner/name` (one not shared is as if there were none).
+    /// `id` to read, as the asking account may (decision 0051): a playlist's id (decision 0101), its own or another's
+    /// shared one (one not shared is as if there were none); else a name: its own playlist by name, another's as
+    /// `owner/name` (by-name asks: Play On's, a Subsonic id from before 0.16).
     pub fn reach(&self, id: &str) -> Result<Reached, ToggleError> {
         let me = asking_account(self.served.as_deref());
-        let (account, name) = match id.split_once('/') {
-            Some((owner, name)) => (account_of(self.served.as_deref(), owner), name),
-            None => (me.clone(), id),
+        let found = if crate::userdata::playlists::is_id(id) { self.lib.playlists_db().playlist_by_id(id)? } else { None };
+        let (account, name) = match found {
+            Some(p) => ((!p.owner.is_empty()).then_some(p.owner), p.name),
+            None => match id.split_once('/') {
+                Some((owner, name)) => (account_of(self.served.as_deref(), owner), name.to_string()),
+                None => (me.clone(), id.to_string()),
+            },
         };
         let store = self.lib.store_for(account.as_deref())?;
-        let shared = self.shared_keys().contains(&store.key(name));
+        let shared = self.shared_keys().contains(&store.key(&name));
         let mine = account == me;
         if !mine && !shared {
             return Err(ToggleError::UnknownPlaylist);
         }
-        Ok(Reached { owner: owner_name(self.served.as_deref(), store.account()), store, name: name.to_string(), shared, mine })
+        Ok(Reached { owner: owner_name(self.served.as_deref(), store.account()), store, name, shared, mine })
     }
 
     /// `id` to change: the asking account's own only (another's shared one is played and copied).
@@ -2078,15 +2084,7 @@ impl PlaylistService {
         let mut out = own.lines_of_all().await?;
         let shared = self.shared_keys();
         for store in self.others(&own) {
-            if !shared.iter().any(|k| store.name_of_key(k).is_some()) {
-                continue;
-            }
-            let owner = owner_name(self.served.as_deref(), store.account());
-            for (name, changed, lines) in store.lines_of_all().await? {
-                if shared.contains(&store.key(&name)) {
-                    out.push((format!("{owner}/{name}"), changed, lines));
-                }
-            }
+            out.extend(store.lines_of_all().await?.into_iter().filter(|(id, _, _)| shared.contains(id)));
         }
         Ok(out)
     }
@@ -2130,31 +2128,58 @@ impl PlaylistService {
     /// `name`, or the first free one after it ("Evening 2") among the asking account's own playlists.
     pub async fn free_own_name(&self, name: &str) -> Result<String, ToggleError> {
         let own = self.lib.store_for(asking_account(self.served.as_deref()).as_deref())?;
-        let taken: HashSet<String> = own.view(None).await?.into_iter().map(|p| p.id.to_lowercase()).collect();
+        let taken: HashSet<String> = own.view(None).await?.into_iter().map(|p| p.name.to_lowercase()).collect();
         Ok(crate::playlists::free_name(name, |n| taken.contains(&n.to_lowercase())))
     }
 
-    /// A copy of a playlist (another's shared one, or one's own) among one's own, under a free name. Returns its name
-    /// and the undo token.
+    /// A copy of a playlist (another's shared one, or one's own) among one's own, under a free name. Returns its id and
+    /// the undo token.
     pub async fn copy(&self, id: &str) -> Result<(String, Option<String>), ToggleError> {
         let from = self.reach(id)?;
         let entries = from.store.entries(&from.name).await?;
         let own = self.lib.store_for(asking_account(self.served.as_deref()).as_deref())?;
-        let taken: HashSet<String> = own.view(None).await?.into_iter().map(|p| p.id.to_lowercase()).collect();
+        let taken: HashSet<String> = own.view(None).await?.into_iter().map(|p| p.name.to_lowercase()).collect();
         let name = crate::playlists::free_name(&from.name, |n| taken.contains(&n.to_lowercase()));
         let undo = self.create_with(&name, &entries).await?;
-        Ok((name, undo))
+        Ok((own.key(&name), undo))
     }
 
-    /// A playlist id the asking account would know a key by (`Store::key`): its own by name, another's as `owner/name`.
-    pub fn id_of_key(&self, key: &str) -> String {
-        let me = asking_account(self.served.as_deref());
-        match self.lib.store_for(me.as_deref()).ok().and_then(|own| own.name_of_key(key).map(str::to_string)) {
-            Some(name) => name,
-            None => match key.split_once('/') {
-                Some((account, name)) => format!("{account}/{name}"),
-                None => format!("{}/{key}", owner_name(self.served.as_deref(), None)),
-            },
+    /// The names of the asking account's own playlists.
+    pub async fn own_names(&self) -> Result<Vec<String>, ToggleError> {
+        Ok(self.own_store()?.view(None).await?.into_iter().map(|p| p.name).collect())
+    }
+
+    /// The id of the asking account's own playlist of that name (decision 0101): what a made, copied or renamed playlist
+    /// is answered by.
+    pub fn id_of_name(&self, name: &str) -> Result<String, ToggleError> {
+        Ok(self.own_store()?.key(name))
+    }
+
+    /// The id a key 0.15 knew a playlist by leads to (its name, `owner/name` another's, a name it had before a
+    /// rename): what a page or a Subsonic client kept of it.
+    pub fn moved(&self, old: &str) -> Option<String> {
+        self.lib.playlists_db().moved_playlist(old).ok().flatten()
+    }
+
+    /// Every key 0.15 knew a playlist the asking account sees by, and the id it leads to (`GET /api/playlists/moved`):
+    /// never another's not shared.
+    pub fn all_moved(&self) -> Result<HashMap<String, String>, ToggleError> {
+        let mut all = self.lib.playlists_db().playlists_moved()?;
+        all.retain(|_, id| self.reach(id).is_ok());
+        Ok(all)
+    }
+
+    /// The spoken names 0.15 kept by a playlist's key, moved to its id (decision 0101): at the start, until none are
+    /// left (one whose playlist is not brought in yet waits for it).
+    fn spoken_to_ids(&self) {
+        for (old, names) in self.sync.spoken() {
+            if crate::userdata::playlists::is_id(&old) {
+                continue;
+            }
+            let Some(id) = self.moved(&old) else { continue };
+            if let Err(e) = self.sync.set_spoken(&id, &names).and_then(|_| self.sync.set_spoken(&old, &[])) {
+                tracing::warn!("the spoken names of {old} not moved to its id: {e:#}");
+            }
         }
     }
 
@@ -2162,8 +2187,10 @@ impl PlaylistService {
     /// Its tracks are chosen as for any play (app::play::by_name).
     pub async fn spoken(&self, said: &str) -> Result<Option<String>, ToggleError> {
         let list = self.view(None).await?;
-        let named: Vec<crate::voice::Named> = list.iter().map(|p| crate::voice::Named { name: &p.id, spoken: &p.spoken }).collect();
-        Ok(crate::voice::find(crate::voice::spoken_name(said), &named).map(str::to_string))
+        let named: Vec<crate::voice::Named> = list.iter().map(|p| crate::voice::Named { name: &p.name, spoken: &p.spoken }).collect();
+        // By its name, and back to its id: one's own first, before another's of that name.
+        let found = crate::voice::find(crate::voice::spoken_name(said), &named);
+        Ok(found.and_then(|n| list.iter().find(|p| p.name == n)).map(|p| p.id.clone()))
     }
 
     /// Set the other names a playlist is spoken as. Blank ones are dropped. Returns the undo token (none when nothing
@@ -3769,14 +3796,10 @@ impl PlaylistService {
     /// (the OpenSubsonic playlists, decision 0030).
     pub async fn snapshot(&self) -> Result<Vec<(String, Vec<String>, usize)>, ToggleError> {
         let Ok(own) = self.own_store() else { return Ok(Vec::new()) };
-        let mut out = own.snapshot().await?;
+        let mut out: Vec<(String, Vec<String>, usize)> = own.snapshot().await?.into_iter().map(|(n, l, d)| (own.key(&n), l, d)).collect();
         let shared = self.shared_keys();
         for store in self.others(&own) {
-            if !shared.iter().any(|k| store.name_of_key(k).is_some()) {
-                continue;
-            }
-            let owner = owner_name(self.served.as_deref(), store.account());
-            out.extend(store.snapshot().await?.into_iter().filter(|(n, _, _)| shared.contains(&store.key(n))).map(|(n, l, d)| (format!("{owner}/{n}"), l, d)));
+            out.extend(store.snapshot().await?.into_iter().map(|(n, l, d)| (store.key(&n), l, d)).filter(|(id, _, _)| shared.contains(id)));
         }
         Ok(out)
     }
@@ -4236,10 +4259,6 @@ impl PlaylistService {
         if !fit.is_empty() {
             crates.set_fit(&new, fit).await?;
             crates.set_fit(&old, crates::Fit::default()).await?;
-        }
-        // Subsonic clients keep a playlist's id (`pl-` and its name) across a rename (decision 0030); it stays shared.
-        if let Some(serve) = self.served.clone() {
-            serve.playlist_renamed(&store.key(from), &store.key(to));
         }
         Ok(())
     }

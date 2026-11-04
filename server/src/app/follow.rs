@@ -351,13 +351,14 @@ mod tests {
         let (store, j) = (Store::new(d.0.join("Music")), Journal::open(None).unwrap());
         let id = j.record(100, &adopted()).unwrap();
         let entry = j.get(id).unwrap().unwrap();
-        assert_eq!(apply(&[&store], &d.folders(), &j, &entry).await.unwrap(), vec!["Mix".to_string()]);
+        // The playlists changed, by their ids (decision 0101).
+        assert_eq!(apply(&[&store], &d.folders(), &j, &entry).await.unwrap(), vec![store.key("Mix")]);
         assert_eq!(d.read("Mix"), ["A/01.mp3", "X - New (2020)/02.flac", "B/01.mp3", "X - New (2020)/01.flac"]);
         assert!(apply(&[&store], &d.folders(), &j, &entry).await.unwrap().is_empty(), "once");
         assert!(j.pending(PLAYLISTS, 0).unwrap().is_empty());
         j.mark_undone(id, 200).unwrap();
         let entry = j.get(id).unwrap().unwrap();
-        assert_eq!(undo(&[&store], &d.folders(), &j, &entry).await.unwrap(), vec!["Mix".to_string()]);
+        assert_eq!(undo(&[&store], &d.folders(), &j, &entry).await.unwrap(), vec![store.key("Mix")]);
         assert_eq!(d.read("Mix"), ["A/01.mp3", "../incoming/X/New/02.flac", "B/01.mp3", "../incoming/X/New/01.flac"]);
         assert!(undo(&[&store], &d.folders(), &j, &entry).await.unwrap().is_empty(), "once");
     }
@@ -389,7 +390,7 @@ mod tests {
         d.write("Mix", &["A/01.mp3"]);
         let (store, j) = (Store::new(d.0.join("Music")), Journal::open(None).unwrap());
         let id = j.record(100, &rejected()).unwrap();
-        let plan: Removed = [("Mix".to_string(), vec![(0, "../incoming/X/New/01.flac".to_string())])].into();
+        let plan: Removed = [(store.key("Mix"), vec![(0, "../incoming/X/New/01.flac".to_string())])].into();
         j.done(id, PLAYLISTS_PLAN, 100, &serde_json::to_value(&plan).unwrap()).unwrap();
         apply(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
         assert_eq!(d.read("Mix"), ["A/01.mp3"]);

@@ -393,6 +393,11 @@ impl Library {
         })
     }
 
+    /// Where the playlists are kept (the user data): a playlist by its id.
+    pub(super) fn playlists_db(&self) -> &Arc<crate::userdata::UserData> {
+        &self.playlists_db
+    }
+
     /// The Music folder's playlists, if one is set.
     pub(super) fn store_opt(&self) -> Option<Arc<Store>> {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).1.clone()

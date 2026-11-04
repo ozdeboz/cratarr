@@ -65,7 +65,6 @@ CREATE TABLE IF NOT EXISTS bookmark (
   created INTEGER NOT NULL, changed INTEGER NOT NULL, changed_by TEXT,
   PRIMARY KEY (user, item)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS bookmark_pid ON bookmark (pid);
-CREATE TABLE IF NOT EXISTS playlist_alias (old TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS visual_snapshot (
   user TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, created INTEGER NOT NULL, picture TEXT,
   PRIMARY KEY (user, id));
@@ -451,7 +450,7 @@ pub struct Starred {
     pub user: String,
     /// `song`, `album`, `artist` or `playlist`.
     pub kind: &'static str,
-    /// Their ids (a playlist's: its name).
+    /// Their ids.
     pub items: Vec<String>,
     pub on: bool,
 }
@@ -1712,36 +1711,6 @@ impl UserData {
         Ok(self.db().execute("DELETE FROM visual_snapshot WHERE user = ?1 AND id = ?2", params![user, id])? > 0)
     }
 
-    /// A playlist was renamed: its old names lead to the new one. A Subsonic playlist's id is `pl-` and its name, and
-    /// clients keep the id across a rename (Symfonium asks for it again straight after renaming).
-    pub fn playlist_renamed(&self, from: &str, to: &str) -> Result<()> {
-        let at = now();
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        tx.execute("UPDATE playlist_alias SET name = ?2, at = ?3 WHERE name = ?1", params![from, to, at])?;
-        tx.execute("INSERT OR REPLACE INTO playlist_alias (old, name, at) VALUES (?1, ?2, ?3)", params![from, to, at])?;
-        tx.execute("DELETE FROM playlist_alias WHERE old = ?1", [to])?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// The playlist an old name leads to, if it was renamed.
-    pub fn playlist_alias(&self, old: &str) -> Result<Option<String>> {
-        Ok(self.db().query_row("SELECT name FROM playlist_alias WHERE old = ?1", [old], |r| r.get(0)).optional()?)
-    }
-
-    /// A new playlist took a name: it no longer leads elsewhere.
-    pub fn playlist_made(&self, name: &str) -> Result<()> {
-        self.db().execute("DELETE FROM playlist_alias WHERE old = ?1", [name])?;
-        Ok(())
-    }
-
-    /// A playlist is gone: none of its old names leads anywhere.
-    pub fn playlist_gone(&self, name: &str) -> Result<()> {
-        self.db().execute("DELETE FROM playlist_alias WHERE name = ?1 OR old = ?1", [name])?;
-        Ok(())
-    }
-
     /// Every song a user has played at least once (a crate's unplayed tracks are the others).
     pub fn played(&self, user: &str) -> Result<std::collections::HashSet<String>> {
         let db = self.db();
@@ -2545,22 +2514,6 @@ mod tests {
         u.delete_bookmark("me", "tr-9").unwrap();
         assert!(u.bookmarks("me").unwrap().is_empty());
         assert_eq!(u.bookmarks("you").unwrap().len(), 1);
-    }
-
-    #[test]
-    fn a_renamed_playlist_is_found_by_its_old_names() {
-        let u = UserData::open(None).unwrap();
-        u.playlist_renamed("Test", "Testttt").unwrap();
-        u.playlist_renamed("Testttt", "Trip").unwrap();
-        assert_eq!(u.playlist_alias("Test").unwrap().as_deref(), Some("Trip"), "a chain leads to the name now");
-        assert_eq!(u.playlist_alias("Testttt").unwrap().as_deref(), Some("Trip"));
-        u.playlist_renamed("Trip", "Test").unwrap();
-        assert_eq!(u.playlist_alias("Test").unwrap(), None, "its own name again");
-        assert_eq!(u.playlist_alias("Trip").unwrap().as_deref(), Some("Test"));
-        u.playlist_made("Trip").unwrap();
-        assert_eq!(u.playlist_alias("Trip").unwrap(), None, "a new playlist takes the name back");
-        u.playlist_gone("Test").unwrap();
-        assert_eq!(u.playlist_alias("Testttt").unwrap(), None, "gone with it");
     }
 
     #[test]

@@ -3,9 +3,11 @@
 //! Subsonic dates in tables beside them; `import_playlists` brings them in once, those tables folded in. The store
 //! (`crate::playlists::Store`) writes a `.m3u` copy out after each change and never reads one back.
 //!
-//! A playlist is addressed by its owner and its name, unique per owner whatever the case. Every write matches the new
-//! lines to the entries kept (crate::playlist_ops: by order and content), so an entry keeps its id and when it came,
-//! and is logged (decision 0087) in the same transaction.
+//! A playlist is known by its id everywhere outside its store (the API, Subsonic, the change log, favourites, its
+//! spoken names), so a rename changes nothing there; its store addresses it by its owner and its name, unique per
+//! owner whatever the case. The keys 0.15 knew it by (its name, `owner/name` another's) lead to its id
+//! (`playlist_moved`). Every write matches the new lines to the entries kept (crate::playlist_ops: by order and
+//! content), so an entry keeps its id and when it came, and is logged (decision 0087) in the same transaction.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,6 +34,9 @@ CREATE TABLE IF NOT EXISTS playlist_item (
   playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER, line TEXT NOT NULL, added INTEGER,
   placed INTEGER NOT NULL DEFAULT 0, gone INTEGER, after TEXT, PRIMARY KEY (playlist, entry)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS playlist_item_gone ON playlist_item (gone);
+-- The keys 0.15 knew a playlist by (its name; `owner/name` another account's; a Subsonic id's name from before a
+-- rename), each leading to its id.
+CREATE TABLE IF NOT EXISTS playlist_moved (old TEXT PRIMARY KEY, id TEXT NOT NULL) WITHOUT ROWID;
 -- When the `.m3u` files were brought in (epoch s), and how many playlists came: once.
 CREATE TABLE IF NOT EXISTS playlist_import (one INTEGER PRIMARY KEY CHECK (one = 1), at INTEGER NOT NULL, found INTEGER NOT NULL);
 ";
@@ -48,15 +53,14 @@ pub struct Playlist {
     pub changed: i64,
 }
 
-/// A playlist's key in Cratarr's own records (`Store::key`): its name in the first administrator's playlists,
-/// `owner/name` in another's.
-pub fn key_of(owner: &str, name: &str) -> String {
+/// The key 0.15 knew a playlist by: its name in the first administrator's playlists, `owner/name` in another's.
+fn old_key(owner: &str, name: &str) -> String {
     if owner.is_empty() { name.to_string() } else { format!("{owner}/{name}") }
 }
 
-/// The owner and the name a key is of (`key_of`'s inverse): neither an account's name nor a playlist's holds a "/".
-pub fn of_key(key: &str) -> (&str, &str) {
-    key.split_once('/').unwrap_or(("", key))
+/// Whether `id` has the shape of a playlist's id (`new_id`).
+pub fn is_id(id: &str) -> bool {
+    id.strip_prefix("pl-").is_some_and(|h| h.len() == 12 && h.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// A playlist's id: `pl-` and 12 hex digits from the system's random source.
@@ -91,6 +95,12 @@ const COLUMNS: &str = "id, owner, name, shared, created, changed";
 
 fn playlist_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Playlist> {
     Ok(Playlist { id: r.get(0)?, owner: r.get(1)?, name: r.get(2)?, shared: r.get::<_, i64>(3)? != 0, created: r.get(4)?, changed: r.get(5)? })
+}
+
+/// A playlist by its id, there now or set aside.
+fn by_id(conn: &Connection, id: &str) -> Result<Option<(Playlist, bool)>> {
+    let mut st = conn.prepare_cached(&format!("SELECT {COLUMNS}, gone IS NOT NULL FROM playlist WHERE id = ?1"))?;
+    Ok(st.query_row([id], |r| Ok((playlist_row(r)?, r.get::<_, bool>(6)?))).optional()?)
 }
 
 /// The owner's playlist of that name, there now.
@@ -173,20 +183,16 @@ fn keep(tx: &Transaction<'_>, id: &str, e: &Entries, added: &HashMap<String, Opt
     Ok(())
 }
 
-/// Whether the playlist a key is of is shared: the one there now, else the last one of that key gone (its going is
-/// logged as it was).
-fn shared_key(conn: &Connection, key: &str) -> Result<bool> {
-    let (owner, name) = of_key(key);
-    let mut st =
-        conn.prepare_cached("SELECT shared FROM playlist WHERE owner = ?1 AND name = ?2 ORDER BY gone IS NOT NULL, gone DESC LIMIT 1")?;
-    Ok(st.query_row(params![owner, name], |r| r.get::<_, i64>(0)).optional()?.is_some_and(|s| s != 0))
+/// Whose a playlist is (by its id): an account's name, '' the first administrator's.
+pub(super) fn owner_of(conn: &Connection, id: &str) -> Result<Option<String>> {
+    Ok(by_id(conn, id)?.map(|(p, _)| p.owner))
 }
 
-/// A playlist's change logged (decision 0087): seen by others while it is shared (`shared`: its sharing changed, so
-/// others see that).
-pub(super) fn log_playlist(conn: &Connection, key: &str, op: Op, shared: bool) -> Result<()> {
-    let shared = shared || shared_key(conn, key)?;
-    offline::log(conn, of_key(key).0, offline::ChangeKind::Playlist, key, op, shared)
+/// A playlist's change logged by its id (decision 0087), under its owner: seen by others while it is shared, or went
+/// shared (`shared`: its sharing changed, so others see that).
+pub(super) fn log_playlist(conn: &Connection, id: &str, op: Op, shared: bool) -> Result<()> {
+    let Some((p, _)) = by_id(conn, id)? else { return Ok(()) };
+    offline::log(conn, &p.owner, offline::ChangeKind::Playlist, id, op, shared || p.shared)
 }
 
 /// The lines of a playlist written into `tx`, its entries matched (or given: `given`), while it holds `expected`.
@@ -212,7 +218,7 @@ fn write(
     keep(tx, &p.id, &e, &added, at)?;
     if e.lines() != before {
         tx.execute("UPDATE playlist SET changed = ?2 WHERE id = ?1", params![p.id, at])?;
-        log_playlist(tx, &key_of(owner, name), Op::Changed, false)?;
+        log_playlist(tx, &p.id, Op::Changed, false)?;
     }
     Ok(Written::Done { before })
 }
@@ -237,6 +243,30 @@ impl UserData {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT DISTINCT owner FROM playlist WHERE gone IS NULL ORDER BY owner")?;
         Ok(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A playlist by its id, while it is there.
+    pub fn playlist_by_id(&self, id: &str) -> Result<Option<Playlist>> {
+        Ok(by_id(&self.db(), id)?.filter(|(_, gone)| !gone).map(|(p, _)| p))
+    }
+
+    /// The id of the owner's playlist of that name: the one there now, else the last one of that name set aside.
+    pub fn playlist_id(&self, owner: &str, name: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id FROM playlist WHERE owner = ?1 AND name = ?2 ORDER BY gone IS NOT NULL, gone DESC LIMIT 1")?;
+        Ok(st.query_row(params![owner, name], |r| r.get(0)).optional()?)
+    }
+
+    /// The id a key 0.15 knew a playlist by leads to (`playlist_moved`).
+    pub fn moved_playlist(&self, old: &str) -> Result<Option<String>> {
+        Ok(self.db().prepare_cached("SELECT id FROM playlist_moved WHERE old = ?1")?.query_row([old], |r| r.get(0)).optional()?)
+    }
+
+    /// Every key 0.15 knew a playlist by and the id it leads to: for what a page kept of them.
+    pub fn playlists_moved(&self) -> Result<HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT old, id FROM playlist_moved")?;
+        Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The owner's playlist of that name and its lines.
@@ -291,12 +321,12 @@ impl UserData {
         Ok(w)
     }
 
-    /// A new playlist of the owner's holding `lines`; false when another has the name (whatever the case).
-    pub fn create_playlist(&self, owner: &str, name: &str, lines: &[String]) -> Result<bool> {
+    /// A new playlist of the owner's holding `lines`: its id; none when another has the name (whatever the case).
+    pub fn create_playlist(&self, owner: &str, name: &str, lines: &[String]) -> Result<Option<String>> {
         let mut db = self.db();
         let tx = db.transaction()?;
         if taken(&tx, owner, name, None)? {
-            return Ok(false);
+            return Ok(None);
         }
         let (id, at) = (new_id(), now());
         tx.execute(
@@ -307,7 +337,7 @@ impl UserData {
         e.matched(lines, now_ms(), crate::playlist_ops::new_id);
         keep(&tx, &id, &e, &HashMap::new(), at)?;
         tx.commit()?;
-        Ok(true)
+        Ok(Some(id))
     }
 
     /// The owner's playlist `from` named `to` (a rename keeps everything else).
@@ -358,48 +388,42 @@ impl UserData {
         Ok(Named::Done(lines))
     }
 
-    /// The playlists their owners share with everyone (decision 0051), by their keys (`Store::key`).
+    /// The playlists their owners share with everyone (decision 0051), by their ids.
     pub fn shared_playlists(&self) -> Result<HashSet<String>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT owner, name FROM playlist WHERE shared = 1 AND gone IS NULL")?;
-        let rows = st.query_map([], |r| Ok(key_of(&r.get::<_, String>(0)?, &r.get::<_, String>(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let mut st = db.prepare_cached("SELECT id FROM playlist WHERE shared = 1 AND gone IS NULL")?;
+        Ok(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Shares a playlist (by its key) or stops; whether that changed anything. Logged (decision 0087): shared, everyone
-    /// sees it come; no longer, its owner sees it changed (the others are told it is gone: `playlist_gone_for`). A
-    /// playlist deleted (unshared as it goes) is not logged back.
-    pub fn set_playlist_shared(&self, key: &str, on: bool) -> Result<bool> {
+    /// Shares a playlist (by its id, there or set aside: unshared as it goes) or stops; whether that changed anything.
+    /// Logged (decision 0087): shared, everyone sees it come; no longer, its owner sees it changed (the others are told it
+    /// is gone: `playlist_gone_for`). A playlist deleted is not logged back.
+    pub fn set_playlist_shared(&self, id: &str, on: bool) -> Result<bool> {
         let db = self.db();
-        let (owner, name) = of_key(key);
-        // The one there now, else the last one gone by that name (unshared as it goes).
-        let id: Option<String> = db
-            .query_row(
-                "SELECT id FROM playlist WHERE owner = ?1 AND name = ?2 ORDER BY gone IS NOT NULL, gone DESC LIMIT 1",
-                params![owner, name],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let Some(id) = id else { return Ok(false) };
         let n = db.execute("UPDATE playlist SET shared = ?2 WHERE id = ?1 AND shared <> ?2", params![id, on])?;
         let deleted = db
             .prepare_cached("SELECT 1 FROM change_log WHERE kind = 'playlist' AND item = ?1 AND op = 'deleted' AND seen_by = ''")?
-            .exists([key])?;
+            .exists([id])?;
         if n > 0 && !deleted {
-            log_playlist(&db, key, Op::Changed, on)?;
+            log_playlist(&db, id, Op::Changed, on)?;
         }
         Ok(n > 0)
     }
 
-    /// Whether a playlist (by its key) is shared.
-    pub fn is_playlist_shared(&self, key: &str) -> Result<bool> {
-        shared_key(&self.db(), key)
+    /// Whether a playlist (by its id) is shared, or went shared.
+    pub fn is_playlist_shared(&self, id: &str) -> Result<bool> {
+        Ok(by_id(&self.db(), id)?.is_some_and(|(p, _)| p.shared))
     }
 
-    /// A playlist came (`Op::Changed`: made, renamed to it, brought back) or went (deleted, renamed away), by its key;
-    /// `shared`: others saw it.
-    pub fn playlist_changed(&self, key: &str, op: Op, shared: bool) -> Result<()> {
-        log_playlist(&self.db(), key, op, shared)
+    /// Whose a playlist is (by its id): an account's name, '' the first administrator's.
+    pub fn playlist_owner(&self, id: &str) -> Result<Option<String>> {
+        owner_of(&self.db(), id)
+    }
+
+    /// A playlist came (`Op::Changed`: made, renamed, brought back) or went (deleted), by its id; `shared`: others saw
+    /// it.
+    pub fn playlist_changed(&self, id: &str, op: Op, shared: bool) -> Result<()> {
+        log_playlist(&self.db(), id, op, shared)
     }
 
     /// Whether the `.m3u` files were brought in already.
@@ -421,13 +445,14 @@ impl UserData {
             Ok(tx.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?.exists([table])?)
         };
         let (ids, dates, shares, seen) = (has("playlist_entry_id")?, has("playlist_entry")?, has("playlist_shared")?, has("playlist_seen")?);
+        let aliases = has("playlist_alias")?;
         let mut came = 0;
         for (owner, wanted, lines, stamp) in found {
             if taken(&tx, owner, wanted, None)? {
                 tracing::warn!("playlist {wanted} of {owner:?}: another has its name but for the case; left out");
                 continue;
             }
-            let key = key_of(owner, wanted);
+            let key = old_key(owner, wanted);
             let (created, changed) = if seen {
                 tx.query_row("SELECT created, changed FROM playlist_seen WHERE name = ?1", [&key], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?
@@ -482,13 +507,31 @@ impl UserData {
                 added.insert(x.id.clone(), at);
             }
             keep(&tx, &id, &e, &added, now())?;
+            // The key it was known by, and a Subsonic id's names from before its renames, lead to it; a favourite of it
+            // is of its id.
+            tx.execute("INSERT OR REPLACE INTO playlist_moved (old, id) VALUES (?1, ?2)", params![key, id])?;
+            if aliases {
+                tx.execute("INSERT OR IGNORE INTO playlist_moved (old, id) SELECT old, ?2 FROM playlist_alias WHERE name = ?1", params![key, id])?;
+            }
+            tx.execute("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'playlist' AND item = ?1", params![key, id])?;
             came += 1;
+        }
+        // The change log named playlists by their old keys: what devices kept of them is read again (each starts fresh
+        // at 0.16 anyway, decision 0101).
+        let last: Option<i64> = tx.query_row("SELECT max(rev) FROM change_log", [], |r| r.get(0))?;
+        tx.execute("DELETE FROM change_log WHERE kind = 'playlist'", [])?;
+        if let Some(last) = last {
+            tx.execute(
+                "INSERT INTO change_log_floor (one, rev) VALUES (1, ?1) ON CONFLICT (one) DO UPDATE SET rev = max(rev, excluded.rev)",
+                [last],
+            )?;
         }
         tx.execute_batch(
             "DROP TABLE IF EXISTS playlist_entry_id;
              DROP TABLE IF EXISTS playlist_entry;
              DROP TABLE IF EXISTS playlist_shared;
-             DROP TABLE IF EXISTS playlist_seen;",
+             DROP TABLE IF EXISTS playlist_seen;
+             DROP TABLE IF EXISTS playlist_alias;",
         )?;
         tx.execute("INSERT INTO playlist_import (one, at, found) VALUES (1, ?1, ?2)", params![now(), came as i64])?;
         tx.commit()?;
@@ -515,9 +558,10 @@ mod tests {
     #[test]
     fn a_write_keeps_each_entrys_id_and_date_and_is_logged() {
         let u = UserData::open(None).unwrap();
-        assert!(u.create_playlist("", "Evening", &v(&["a", "b"])).unwrap());
-        assert!(!u.create_playlist("", "evening", &[]).unwrap(), "one name per owner, whatever the case");
-        assert!(u.create_playlist("ann", "Evening", &[]).unwrap(), "another's is another");
+        let id = u.create_playlist("", "Evening", &v(&["a", "b"])).unwrap().unwrap();
+        assert!(is_id(&id), "{id}");
+        assert!(u.create_playlist("", "evening", &[]).unwrap().is_none(), "one name per owner, whatever the case");
+        assert!(u.create_playlist("ann", "Evening", &[]).unwrap().is_some(), "another's is another");
         let (first, dates) = u.playlist_entries("", "Evening").unwrap().unwrap();
         assert_eq!((first.lines(), dates.iter().all(Option::is_some)), (v(&["a", "b"]), true));
         // b first, a gone, c new: b keeps its id and its date.
@@ -527,8 +571,8 @@ mod tests {
         assert!(again.gone.contains_key(&first.live[0].id), "a is remembered as removed");
         assert_eq!(u.write_playlist("", "Evening", Some(&v(&["a"])), &[]).unwrap(), Written::Stale, "not over an edit it has not seen");
         assert_eq!(u.write_playlist("", "Morning", None, &[]).unwrap(), Written::Unknown);
-        let logged: i64 = u.db().query_row("SELECT count(*) FROM change_log WHERE item = 'Evening'", [], |r| r.get(0)).unwrap();
-        assert_eq!(logged, 1, "its change logged, once per item");
+        let logged: i64 = u.db().query_row("SELECT count(*) FROM change_log WHERE item = ?1 AND account = ''", [&id], |r| r.get(0)).unwrap();
+        assert_eq!(logged, 1, "its change logged by its id, once, under its owner");
     }
 
     #[test]
@@ -540,11 +584,13 @@ mod tests {
         assert_eq!(u.rename_playlist("", "Evening", "MORNING").unwrap(), Named::Taken);
         assert_eq!(u.rename_playlist("", "Evening", "EVENING").unwrap(), Named::Done(v(&["a"])), "its own name in other capitals");
         assert_eq!(u.playlist("", "EVENING").unwrap().unwrap().0.id, id);
-        assert!(u.set_playlist_shared("EVENING", true).unwrap());
-        assert_eq!(u.shared_playlists().unwrap(), ["EVENING".to_string()].into());
+        assert!(u.set_playlist_shared(&id, true).unwrap());
+        assert_eq!(u.shared_playlists().unwrap(), [id.clone()].into());
         assert_eq!(u.delete_playlist("", "EVENING").unwrap(), Some((v(&["a"]), true)));
-        assert!(u.is_playlist_shared("EVENING").unwrap(), "it went shared");
+        assert!(u.is_playlist_shared(&id).unwrap(), "it went shared");
         assert!(u.playlist("", "EVENING").unwrap().is_none());
+        assert!(u.playlist_by_id(&id).unwrap().is_none(), "set aside");
+        assert_eq!(u.playlist_id("", "EVENING").unwrap().as_deref(), Some(id.as_str()), "the one set aside");
         assert_eq!(u.restore_playlist("", "EVENING").unwrap(), Named::Done(v(&["a"])));
         assert_eq!(u.playlist("", "EVENING").unwrap().unwrap().0.id, id, "the same playlist back");
         assert_eq!(u.restore_playlist("", "EVENING").unwrap(), Named::Taken, "there again: none brought back over it");
@@ -567,7 +613,11 @@ mod tests {
                  INSERT INTO playlist_entry_id VALUES ('ann/Evening', 'e-x', NULL, 'X/1.mp3', 0, 7, 'e-a');
                  INSERT INTO playlist_entry VALUES ('ann/Evening', 'A/1.mp3', 0, 100);
                  INSERT INTO playlist_shared VALUES ('ann/Evening', 1);
-                 INSERT INTO playlist_seen VALUES ('ann/Evening', '', 10, 20);",
+                 INSERT INTO playlist_seen VALUES ('ann/Evening', '', 10, 20);
+                 CREATE TABLE playlist_alias (old TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL);
+                 INSERT INTO playlist_alias VALUES ('Calm', 'Chill', 1);
+                 INSERT INTO annotation (user, item, kind, starred) VALUES ('me', 'Chill', 'playlist', 1);
+                 INSERT INTO change_log (account, kind, item, op, at) VALUES ('', 'playlist', 'Chill', 'changed', 1);",
             )
             .unwrap();
         }
@@ -586,6 +636,12 @@ mod tests {
         assert_eq!(dates[1], None, "a line its file gained elsewhere: no date, as before");
         let (chill, _) = u.playlist("", "Chill").unwrap().unwrap();
         assert_eq!((chill.created, chill.shared), (60, false), "no dates kept: its file's");
+        // What knew them by their keys knows them by their ids.
+        let moved = u.playlists_moved().unwrap();
+        assert_eq!((moved["Chill"].as_str(), moved["Calm"].as_str(), moved["ann/Evening"].as_str()), (chill.id.as_str(), chill.id.as_str(), p.id.as_str()));
+        assert_eq!(u.starred("me", super::super::Kind::Playlist).unwrap(), [chill.id.clone()], "a favourite of its id");
+        let logged: i64 = u.db().query_row("SELECT count(*) FROM change_log WHERE kind = 'playlist'", [], |r| r.get(0)).unwrap();
+        assert_eq!(logged, 0, "the change log's old keys gone: devices read the playlists again");
         assert!(!u.db().prepare("SELECT 1 FROM sqlite_master WHERE name = 'playlist_entry_id'").unwrap().exists([]).unwrap(), "the old tables go");
     }
 }
