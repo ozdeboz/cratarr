@@ -426,6 +426,120 @@ Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre
 MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
 six genres are drawn, each its own colour (the palette's categorical order), the rest no territory.
 
+## The track map (explored 2026-11-04)
+
+The owner, 2026-11-04, after a screenshot of Kima Hub's vibe map: "I really like this concept." Every track in the
+library drawn as a point, close to the tracks it sounds and feels like, so the library can be seen and walked through.
+Insights › Map (0065) draws the playlists today, with genre territories (0.9.8); `plans.md`'s "One similarity" entry
+already names "the closeness graph" as what is left. Not decided and not being built: each step below becomes a
+decision when the owner takes it up. When: first "probably 0.17 work" (the owner, 2026-11-04), then, the same night,
+"the least important" of the ideas: 0.17 took others (the runway above), and the map comes later.
+
+**Learned from Kima Hub** (github.com/Chevron7Locked/kima-hub, GPL-3.0, read 2026-11-04;
+`backend/src/services/matching/map.ts`, `mapLayout.ts`, `mapCompute.ts`): the map's neighbours are its similar-tracks
+formula's own (15 per track), laid out by UMAP in 3-D from a start on the data's main axes with a fixed seed; the
+library is laid out once, when its analysis has settled; after that each new track is placed among the others by
+umap-learn's transform rule and nothing that has a place moves; a full layout again only when the formula's version
+changes. Colour comes from turning the map onto calm–energetic and sad–happy, averaged over each track's 50 nearest.
+Its weak spot: it never lays out again for growth, so a library that changes a lot drifts away from its first layout.
+
+### What holds the map together
+
+- **One similarity.** The map's neighbours come from `similarity` (server/src/similarity.rs), the radio's and Sounds
+  like's own signals, so tracks drawn together are tracks the radio would play together.
+- **A real map** (the owner, 2026-10-26, of the playlists' map: "no node movement, a real map"). Positions are stored
+  on the server. Nothing moves except in a redraw the owner asks for, and a redraw is turned to fit the last one, so
+  places stay where they were remembered (the "mental map", Misue et al. 1995).
+- **The map is for looking, the similarity for choosing.** Distances across a UMAP map are not reliable (Chari &
+  Pachter 2023; Distill's "How to Use t-SNE Effectively"): what plays (Song Path, Blend, a region's crate) is chosen by
+  the similarity, with the map only saying where to look.
+- **The server works it out, the page only draws it** (as Kima, as the playlists' map).
+
+### Steps, each useful on its own
+
+**0. Spike, nothing for the page.** On the dev instance, from production's data (0093):
+- The 15 nearest neighbours of each track with a sound vector (AudioMuse's 200 numbers, 0054, plus feel and genres
+  as `similarity` weighs them). Time and memory measured on the server (one core, lowest priority) and on a desktop
+  beside AudioMuse. Scoring every pair of 30,000 tracks is about 450 million pairs; if it is too slow, an approximate
+  index (HNSW, Malkov & Yashunin) or NN-descent (Dong et al. 2011, what umap-learn uses).
+- UMAP layouts in 2-D and 3-D, written to a file and drawn as still pictures, with the genre territories over them,
+  beside AudioMuse's own map (`app_map.py`) as a baseline. The owner looks at them.
+- How stable it is: the same layout with five seeds, and with 2 % of the tracks taken out, each turned onto the first
+  (orthogonal Procrustes, Schönemann 1966). Two numbers: how many of each track's 15 neighbours on the map stay the
+  same, and how far points move after turning. They decide whether turning is enough or a redraw must start from the
+  old places (below).
+- The layout code: umap-learn's method (McInnes et al. 2018) step for step, as Kima did in about 600 lines; a Rust
+  crate if one is sound and deterministic. Kima's code may be adapted with credit (GPL-3.0 into AGPL-3.0, 0029).
+
+**1. The map, stored.** Server only.
+- The catalogue keeps each track's place (x, y, and z if 3-D), whether it was laid out or placed, and the layout it
+  belongs to; a layout keeps its version, seed, date, size and colour frame. `MAP_VERSION` is raised when the
+  arithmetic changes, as `READER_VERSION` is for tags.
+- First layout once the analysis has settled. A new track with a sound vector is placed at once: it starts at the mean
+  of its neighbours' places and is settled among them, the others fixed (umap-learn's *Transforming new data*).
+- A track with no sound vector yet (new music before AudioMuse's next pass) gets a provisional place near its
+  album's and artist's tracks, marked as such, and moves to its real place once AudioMuse has heard it.
+- A gone track keeps its place until the owner has reviewed it in Health (the owner, 2026-11-04: missing tracks are
+  for manual review only).
+- **Redraw, only when asked.** Health says how much of the map was placed since it was drawn ("4,100 of 35,800 tracks
+  placed since the map was drawn"), and offers Redraw once 20 % of it was placed after the layout. A redraw starts
+  from the old places (the idea of umap-learn's *AlignedUMAP*; Kobak & Linderman 2021: the start decides the big
+  shape), is turned onto the old layout, and the old layout is kept for Undo (0026).
+- `GET /api/map`: places, colour and the few fields a point needs, compact.
+
+**2. Tracks on Insights › Map.** Tracks beside Playlists. 2-D first, drawn in WebGL (the visuals' engine, 0057) so
+30,000+ points stay smooth on a tablet; 3-D later.
+- Colour by feel (Kima's turn onto calm–energetic and sad–happy), by genre territories (lib/territories, drawn around
+  tracks instead of playlists), by energy, era, or listening.
+- Each mood's or genre's name at its densest pocket. Search flies to a track; the playing track is marked; tap opens
+  the track's card.
+
+**3. Tools on the map**, each its own step. First Song Path and Layers; the others after:
+- **A region is a crate.** Drawn around part of the map, it is an unsaved crate (0061), and can be kept; a kept one
+  keeps the region, so new tracks placed inside it join.
+- **Every queue on the map.** Cratarr holds the queues (0033): each player's queue drawn as a line from track to track
+  (Kima draws only its own), so listening along (0079) and sync play's groups can be seen.
+- **Song Path.** Two tracks, and a path of tracks between them: evenly spaced steps along the way, each filled by the
+  closest unplayed track by the similarity, an artist never twice in a row; as a queue, a playlist or a crate. Cratarr's
+  own tempo and key could keep the steps smooth.
+- **Blend.** "Like these, not like those": 0088's Sounds like seeds with a "not like" side, as a crate rule.
+- **Layers.** What was played over the period; parts of the library never visited; Incoming albums placed where they
+  would land, before Keep; each user's own music (0084).
+- **Words.** CLAP text search lighting up a region (already "Yes, later", design talk first). Needs CLAP's text model:
+  on a desktop with AudioMuse, or on the server within its memory (to measure).
+- **A visual.** A module that flies the map to the playing track.
+
+### Not taken
+
+- Downloading music for the map or for Discover (nothing reaches the library without being heard first: Incoming, 0013).
+- A redraw nobody asked for.
+- Map distances choosing music.
+
+### Decided (the owner, 2026-11-04)
+
+- **2-D first**, 3-D later. The spike still makes a 3-D layout to look at.
+- **A provisional place** for a track with no sound vector yet: near its album's and artist's tracks, marked
+  provisional, moved to its real place once AudioMuse has heard it.
+- **Redraw offered at 20 %**: once a fifth of the map's tracks were placed after its layout. Never by itself.
+- **A region crate keeps the region**: new tracks placed inside it join.
+- **First tools: Song Path and Layers.** Region crates, queues on the map, Blend, words and the visual wait.
+- **Where the neighbour pass runs: measured first.** The spike times it on the server and on a desktop; the server
+  if it fits at lowest priority within its memory limit, else the desktop beside AudioMuse.
+
+### Sources
+
+- McInnes, Healy & Melville, *UMAP* (arXiv 1802.03426); umap-learn's documentation: *Transforming new data*,
+  *AlignedUMAP*, *Parametric UMAP*, *Reproducibility*.
+- Kobak & Linderman, *Initialization is critical for preserving global data structure in both t-SNE and UMAP* (Nature
+  Biotechnology, 2021).
+- Schönemann, *A generalized solution of the orthogonal Procrustes problem* (Psychometrika, 1966).
+- Misue, Eades, Lai & Sugiyama, *Layout adjustment and the mental map* (1995).
+- Chari & Pachter, *The specious art of single-cell genomics* (PLOS Comp. Biol., 2023); Wattenberg, Viégas & Johnson,
+  *How to Use t-SNE Effectively* (Distill, 2016).
+- Dong, Charikar & Li, *NN-Descent* (WWW 2011); Malkov & Yashunin, *HNSW* (arXiv 1603.09320).
+- Pampalk, *Islands of Music* (2001): the classic music-library map.
+- Kima Hub's map code (above); AudioMuse-AI's `app_map.py`.
+
 ## Parked
 
 Liked, not taken up:
