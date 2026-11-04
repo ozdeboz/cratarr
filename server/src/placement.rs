@@ -107,6 +107,17 @@ pub async fn place(source: &dyn Source, folders: &[String], settings: &crate::se
                 }
             }
         }
+        // A folder of Cratarr's own with nothing in it yet (a new main library, someone's own music): no track says where
+        // it is, but its path is Cratarr's, so music can be added to it.
+        if found.is_empty() && source.paths_are_cratarrs() {
+            for root in &own {
+                let folder = root.trim_end_matches('/').to_string();
+                if Path::new(&folder).is_dir() {
+                    roots.push(FolderRoot { folder: folder.clone(), root: root.clone() });
+                    found.push(folder);
+                }
+            }
+        }
         let name = settings.name_of(&lib.id).unwrap_or(lib.name);
         placed.push(PlacedLibrary { id: lib.id, name, folders: found, paths: lib.paths, read_only: false });
     }
@@ -278,6 +289,24 @@ mod tests {
         assert_eq!(found, vec![("incoming", vec![folders[1].clone()]), ("music", vec![folders[0].clone()]), ("empty", vec![])]);
         std::fs::remove_dir_all(&m).ok();
         std::fs::remove_dir_all(&inc).ok();
+    }
+
+    #[tokio::test]
+    async fn an_empty_folder_of_cratarrs_own_is_where_it_is_and_another_servers_is_nowhere() {
+        let empty = std::env::temp_dir().join(format!("cratarr-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).unwrap();
+        let path = empty.display().to_string();
+        let gone = format!("{path}-gone");
+        let values: crate::source::Values = [("folders".to_string(), serde_json::json!([path, gone]))].into();
+        let own = (crate::source::cratarr::KIND.connect)(&values, false).unwrap();
+        let p = place(&*own, std::slice::from_ref(&path), &Default::default()).await.unwrap();
+        assert_eq!(p.libraries[0].folders, std::slice::from_ref(&path), "nothing in it yet: music can be added to it");
+        assert_eq!(p.root(&path), Some(format!("{path}/").as_str()));
+        assert!(p.libraries[1].folders.is_empty(), "a folder that is not there stays unseen");
+        let library = Library { id: "l".into(), name: "L".into(), paths: vec![path.clone()] };
+        let other = Fake(vec![(library, vec![])], vec![("l".into(), path.clone())]);
+        assert!(place(&other, std::slice::from_ref(&path), &Default::default()).await.unwrap().libraries[0].folders.is_empty());
+        std::fs::remove_dir_all(&empty).ok();
     }
 
     #[tokio::test]

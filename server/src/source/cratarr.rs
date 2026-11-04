@@ -285,6 +285,10 @@ impl Source for CratarrSource {
         Box::pin(async move { Ok(vec![library_id.to_string()]) })
     }
 
+    fn paths_are_cratarrs(&self) -> bool {
+        true
+    }
+
     // --- What plays and the commands: Cratarr's own players (Play On, decision 0031), the one it follows. ---
 
     fn now_playing(&self) -> Fut<'_, Option<super::Playing>> {
