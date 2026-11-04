@@ -16,6 +16,7 @@
 
 pub mod offline;
 pub mod overrides;
+pub mod playlists;
 pub mod scrobbles;
 pub mod tags;
 pub mod words;
@@ -49,7 +50,6 @@ CREATE TABLE IF NOT EXISTS app_queue (
   user TEXT NOT NULL, client TEXT NOT NULL, songs TEXT NOT NULL, current INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, PRIMARY KEY (user, client)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS playlist_seen (name TEXT PRIMARY KEY, print TEXT NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
   name TEXT NOT NULL, album_artist TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
@@ -66,9 +66,6 @@ CREATE TABLE IF NOT EXISTS bookmark (
   PRIMARY KEY (user, item)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS bookmark_pid ON bookmark (pid);
 CREATE TABLE IF NOT EXISTS playlist_alias (old TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS playlist_entry (
-  playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER NOT NULL, added INTEGER NOT NULL,
-  PRIMARY KEY (playlist, entry, n)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS visual_snapshot (
   user TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, created INTEGER NOT NULL, picture TEXT,
   PRIMARY KEY (user, id));
@@ -78,7 +75,6 @@ CREATE TABLE IF NOT EXISTS visual_rating (
 CREATE TABLE IF NOT EXISTS visual_thumb (user TEXT NOT NULL, at INTEGER NOT NULL, thumb TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS visual_limits (
   user TEXT PRIMARY KEY, version INTEGER NOT NULL, limits TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS playlist_shared (playlist TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS user_settings (user TEXT PRIMARY KEY, version INTEGER NOT NULL, settings TEXT NOT NULL, at INTEGER NOT NULL);
 -- Every track heard (decision 0064): only added to, kept forever. `event`: the player's own id for it, so a report sent
 -- again is one row.
@@ -659,6 +655,8 @@ impl UserData {
         // Offline writes (0.12, decision 0087): what is counted and made once, kept 30 days.
         conn.execute_batch(offline::SCHEMA).context("keeping the plays counted and the changes made")?;
         offline::migrate(&conn).context("bringing the change log up to date")?;
+        // The playlists (0.16, decision 0101): in the database, their `.m3u` files brought in once by the store.
+        conn.execute_batch(playlists::SCHEMA).context("creating the playlists' tables")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
@@ -1723,15 +1721,6 @@ impl UserData {
         tx.execute("UPDATE playlist_alias SET name = ?2, at = ?3 WHERE name = ?1", params![from, to, at])?;
         tx.execute("INSERT OR REPLACE INTO playlist_alias (old, name, at) VALUES (?1, ?2, ?3)", params![from, to, at])?;
         tx.execute("DELETE FROM playlist_alias WHERE old = ?1", [to])?;
-        tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1", [to])?;
-        tx.execute("UPDATE playlist_entry SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
-        // Its entry ids go with it (decision 0087).
-        tx.execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [to])?;
-        tx.execute("UPDATE playlist_entry_id SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
-        tx.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [to])?;
-        tx.execute("UPDATE playlist_shared SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
-        // Logged again now its sharing moved with it (the store logged it before), so those it is shared with see it.
-        offline::log_playlist(&tx, to, offline::Op::Changed, false)?;
         tx.commit()?;
         Ok(())
     }
@@ -1747,71 +1736,10 @@ impl UserData {
         Ok(())
     }
 
-    /// A playlist is gone: none of its old names leads anywhere, and it is no longer shared.
+    /// A playlist is gone: none of its old names leads anywhere.
     pub fn playlist_gone(&self, name: &str) -> Result<()> {
         self.db().execute("DELETE FROM playlist_alias WHERE name = ?1 OR old = ?1", [name])?;
-        self.db().execute("DELETE FROM playlist_entry WHERE playlist = ?1", [name])?;
-        self.db().execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [name])?;
-        self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [name])?;
         Ok(())
-    }
-
-    /// The playlists their owners share with everyone (decision 0051), by their keys (`Store::key`).
-    pub fn shared_playlists(&self) -> Result<std::collections::HashSet<String>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT playlist FROM playlist_shared")?;
-        Ok(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// Shares a playlist (by its key) or stops; whether that changed anything. Logged (decision 0087): shared, everyone
-    /// sees it come; no longer, its owner sees it changed (the others are told it is gone: `playlist_gone_for`). A
-    /// playlist deleted (unshared as it goes) is not logged back.
-    pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<bool> {
-        let db = self.db();
-        let n = if on {
-            db.execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?
-        } else {
-            db.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?
-        };
-        let deleted = db
-            .prepare_cached("SELECT 1 FROM change_log WHERE kind = 'playlist' AND item = ?1 AND op = 'deleted' AND seen_by = ''")?
-            .exists([playlist])?;
-        if n > 0 && !deleted {
-            offline::log_playlist(&db, playlist, offline::Op::Changed, on)?;
-        }
-        Ok(n > 0)
-    }
-
-    /// A playlist was written (every write: the store tells it, `playlists::on_write`): an entry that came now dates
-    /// from now, one that went is forgotten. Entries are told apart as "the n-th copy of a line", so taking out an
-    /// earlier copy hands the later one its date: only repeats are touched by that. Entries a playlist held before
-    /// this was kept have no date (Added order puts them first, in file order).
-    pub fn entries_written(&self, playlist: &str, before: &[String], after: &[String]) -> Result<()> {
-        let (was, now_keys) = (occurrences(before), occurrences(after));
-        let at = now();
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        for (entry, n) in was.iter().filter(|k| !now_keys.contains(k)) {
-            tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1 AND entry = ?2 AND n = ?3", params![playlist, entry, *n as i64])?;
-        }
-        for (entry, n) in now_keys.iter().filter(|k| !was.contains(k)) {
-            tx.execute(
-                "INSERT OR REPLACE INTO playlist_entry (playlist, entry, n, added) VALUES (?1, ?2, ?3, ?4)",
-                params![playlist, entry, *n as i64, at],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// When each of a playlist's entries came (epoch seconds), in order; `None` for one held before dates were kept.
-    pub fn entries_added(&self, playlist: &str, entries: &[String]) -> Result<Vec<Option<i64>>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT added FROM playlist_entry WHERE playlist = ?1 AND entry = ?2 AND n = ?3")?;
-        occurrences(entries)
-            .iter()
-            .map(|(entry, n)| Ok(st.query_row(params![playlist, entry, *n as i64], |r| r.get::<_, i64>(0)).optional()?))
-            .collect()
     }
 
     /// Every song a user has played at least once (a crate's unplayed tracks are the others).
@@ -1866,20 +1794,6 @@ impl UserData {
             }
         }
         Ok(out)
-    }
-
-    /// When a playlist was first seen and last seen changed (epoch seconds), given what it holds now (`print`): the
-    /// files keep no such dates, and Subsonic clients compare `changed` to know when to read a playlist again.
-    pub fn playlist_seen(&self, name: &str, print: &str) -> Result<(i64, i64)> {
-        let at = now();
-        let db = self.db();
-        db.execute(
-            "INSERT INTO playlist_seen (name, print, created, changed) VALUES (?1, ?2, ?3, ?3)
-             ON CONFLICT (name) DO UPDATE SET changed = CASE WHEN playlist_seen.print = excluded.print THEN playlist_seen.changed ELSE excluded.changed END,
-               print = excluded.print",
-            params![name, print, at],
-        )?;
-        Ok(db.query_row("SELECT created, changed FROM playlist_seen WHERE name = ?1", [name], |r| Ok((r.get(0)?, r.get(1)?)))?)
     }
 
     /// An album's review (promoted or rejected from Incoming) as asked by its id, and the undo key of what was done.
@@ -2078,19 +1992,6 @@ impl UserData {
     }
 }
 
-/// Each entry as "the n-th copy of this line" (from 0), in order.
-fn occurrences(entries: &[String]) -> Vec<(String, usize)> {
-    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    entries
-        .iter()
-        .map(|e| {
-            let n = seen.entry(e.as_str()).or_default();
-            *n += 1;
-            (e.clone(), *n - 1)
-        })
-        .collect()
-}
-
 /// An album asked for (decision 0070), as kept.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Request {
@@ -2212,25 +2113,6 @@ mod tests {
         let asked = |since| u.original_years_asked(since).unwrap().into_iter().collect::<std::collections::BTreeSet<_>>();
         assert_eq!(asked(50), ["rel-a".to_string(), "rel-b".to_string()].into());
         assert_eq!(asked(200), ["rel-a".to_string()].into(), "one MusicBrainz knew no year for, asked again later");
-    }
-
-    #[test]
-    fn entries_date_from_the_write_that_brought_them() {
-        let u = UserData::open(None).unwrap();
-        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        // Held before dates were kept: no date.
-        assert_eq!(u.entries_added("p", &v(&["a", "b"])).unwrap(), vec![None, None]);
-        u.entries_written("p", &v(&["a", "b"]), &v(&["a", "b", "c", "a"])).unwrap();
-        let got = u.entries_added("p", &v(&["a", "b", "c", "a"])).unwrap();
-        assert_eq!((got[0], got[1]), (None, None), "a and b were there before");
-        assert!(got[2].is_some() && got[3].is_some(), "c and the second a came now");
-        // A copy taken out is forgotten; renamed, the dates go with the playlist; gone, they go.
-        u.entries_written("p", &v(&["a", "b", "c", "a"]), &v(&["a", "b", "c"])).unwrap();
-        assert_eq!(u.entries_added("p", &v(&["a", "a"])).unwrap()[1], None, "the second a is gone");
-        u.playlist_renamed("p", "q").unwrap();
-        assert!(u.entries_added("q", &v(&["c"])).unwrap()[0].is_some());
-        u.playlist_gone("q").unwrap();
-        assert_eq!(u.entries_added("q", &v(&["c"])).unwrap(), vec![None]);
     }
 
     #[test]

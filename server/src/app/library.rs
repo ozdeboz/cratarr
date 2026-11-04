@@ -151,6 +151,8 @@ pub struct Library {
     folders: std::sync::RwLock<(Folders, Option<Arc<Store>>)>,
     /// The other accounts' playlists (decision 0051), by account, as opened (each in the Music folder of its day).
     account_stores: std::sync::RwLock<std::collections::HashMap<String, Arc<Store>>>,
+    /// Where the playlists are kept (decision 0101): the user data.
+    playlists_db: Arc<crate::userdata::UserData>,
     /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
     catalogue: Arc<Catalogue>,
     /// One change to the servers at a time, so two pages (or the background placement retry) cannot interleave.
@@ -177,17 +179,39 @@ struct Watch {
 
 /// A library scan at the same progress this long has stopped.
 const STALL_SECS: i64 = 10 * 60;
+/// Where the playlists' `.m3u` copies are written (decision 0101): `playlists` in Cratarr's data folder.
+fn playlist_copies(data_dir: Option<&str>) -> Option<PathBuf> {
+    data_dir.map(|d| PathBuf::from(d).join("playlists"))
+}
+
+/// The first administrator's playlists over the Music folder (none without one), its `.m3u` files brought in first
+/// (once). Ones that could not be brought in are tried again at the next start: the store opens meanwhile, so the rest
+/// of Cratarr does.
+async fn music_store(db: &Arc<crate::userdata::UserData>, data_dir: Option<&str>, music: Option<&str>) -> Option<Arc<Store>> {
+    let music = music?;
+    let out = playlist_copies(data_dir);
+    match Store::in_music(db.clone(), music, out.clone()).await {
+        Ok(s) => Some(Arc::new(s)),
+        Err(e) => {
+            tracing::error!("the playlists in {music} could not be brought in: {e:#}");
+            Some(Arc::new(Store::open(db.clone(), None, music, out)))
+        }
+    }
+}
+
 /// A "stopped processing" notice that nothing confirmed again is dropped after this long.
 const STUCK_SECS: i64 = 30 * 60;
 
 impl Library {
     /// `last_music`: where the Music libraries were last found (or CRATARR_PLAYLIST_DIR), used until a server answers.
+    /// `playlists_db`: where the playlists are kept (the user data).
     pub(super) async fn new(
         data_dir: Option<String>,
         last_music: Option<String>,
         sources: Vec<SourceConfig>,
         tag_rules: crate::catalogue::Rules,
         naming: Option<String>,
+        playlists_db: Arc<crate::userdata::UserData>,
     ) -> Result<Arc<Self>> {
         let naming = naming.and_then(|t| {
             t.parse::<Template>().inspect_err(|e| tracing::warn!("the saved naming template is not usable ({e}); using the library's")).ok()
@@ -210,12 +234,13 @@ impl Library {
         let folders = derive_folders(&active, last_music.as_deref());
         let db = data_dir.as_ref().map(|d| PathBuf::from(d).join("catalogue.sqlite"));
         let catalogue = Arc::new(Catalogue::open(db.as_deref(), catalogue_folders(&folders))?);
-        let store = folders.music.as_ref().map(|m| Arc::new(Store::in_music(m)));
+        let store = music_store(&playlists_db, data_dir.as_deref(), folders.music.as_deref()).await;
         Ok(Arc::new(Self {
             live: std::sync::RwLock::new(Arc::new(active)),
             data_dir,
             folders: std::sync::RwLock::new((folders, store)),
             account_stores: std::sync::RwLock::default(),
+            playlists_db,
             catalogue,
             changing: Mutex::new(()),
             tag_rules: std::sync::RwLock::new(tag_rules),
@@ -377,50 +402,36 @@ impl Library {
         self.store_opt().ok_or(ToggleError::NoMusicFolder)
     }
 
-    /// One account's playlists (decision 0051): the first administrator's (`None`) are the Music folder's, as they
-    /// were before accounts; another's are in a folder of its own in the playlist folder.
+    /// One account's playlists (decision 0051): the first administrator's (`None`) are the ones kept before accounts;
+    /// another's are its own, their copies in a folder of their own.
     pub(super) fn store_for(&self, account: Option<&str>) -> Result<Arc<Store>, ToggleError> {
         let top = self.store()?;
         let Some(account) = account else { return Ok(top) };
-        if !top.in_playlist_dir() {
-            return Err(ToggleError::Refused("Other users' playlists need the playlist folder (.playlists) in Music.".into()));
-        }
         if !crate::playlists::account_folder_ok(account) {
             return Err(ToggleError::Refused(format!("{account} cannot name a folder for its playlists.")));
         }
         if let Some(s) = self.account_stores.read().unwrap_or_else(|p| p.into_inner()).get(account).filter(|s| s.base() == top.base()) {
             return Ok(s.clone());
         }
-        let s = Arc::new(Store::of_account(top.base(), account));
+        let s = Arc::new(Store::open(self.playlists_db.clone(), Some(account), top.base(), playlist_copies(self.data_dir.as_deref())));
         self.account_stores.write().unwrap_or_else(|p| p.into_inner()).insert(account.to_string(), s.clone());
         Ok(s)
     }
 
     /// Every account's playlists, for Cratarr's own work over all of them (albums that move, dead entries): the first
-    /// administrator's, and each other account's that has its folder.
+    /// administrator's, and each other account's that has any.
     pub(super) fn all_stores(&self) -> Vec<Arc<Store>> {
         let Some(top) = self.store_opt() else { return Vec::new() };
         let mut out = vec![top.clone()];
-        if !top.in_playlist_dir() {
-            return out;
-        }
         let first = crate::serve::instance().and_then(|s| s.users.owner());
-        let Ok(dirs) = std::fs::read_dir(top.dir()) else { return out };
-        let mut accounts: Vec<String> = dirs
-            .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|a| crate::playlists::account_folder_ok(a) && Some(a) != first.as_ref())
-            .collect();
-        accounts.sort();
-        out.extend(accounts.iter().filter_map(|a| self.store_for(Some(a)).ok()));
+        let accounts = self.playlists_db.playlist_owners().inspect_err(|e| tracing::warn!("the playlists' owners not read: {e:#}")).unwrap_or_default();
+        out.extend(
+            accounts
+                .iter()
+                .filter(|a| !a.is_empty() && Some(*a) != first.as_ref())
+                .filter_map(|a| self.store_for(Some(a)).ok()),
+        );
         out
-    }
-
-    /// Open the Music folder's playlists again (after they moved into `.playlists`).
-    pub(super) fn reopen_store(&self) {
-        let mut slot = self.folders.write().unwrap_or_else(|p| p.into_inner());
-        slot.1 = slot.0.music.as_ref().map(|m| Arc::new(Store::in_music(m)));
     }
 
     /// Where Cratarr keeps its own files (none: in memory only).
@@ -443,9 +454,14 @@ impl Library {
             tracing::info!("music folder {:?}, incoming folders {:?}", folders.music, folders.incoming);
             let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&folders));
             tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            let store = if folders.music != old.music {
+                Some(music_store(&self.playlists_db, self.data_dir.as_deref(), folders.music.as_deref()).await)
+            } else {
+                None
+            };
             let mut slot = self.folders.write().unwrap_or_else(|p| p.into_inner());
-            if folders.music != old.music {
-                slot.1 = folders.music.as_ref().map(|m| Arc::new(Store::in_music(m)));
+            if let Some(store) = store {
+                slot.1 = store;
             }
             slot.0 = folders;
         }

@@ -1,6 +1,5 @@
-//! Playlist sync (decisions 0012, 0014): each playlist is one `.m3u` file in `Music/.playlists`, out of the media
-//! server's reach (it skips hidden folders), and has an editable copy in accounts on the server, each kept in step both
-//! ways. Nothing is set per playlist but whether it is shared:
+//! Playlist sync (decisions 0012, 0014): each playlist is kept in Cratarr's own database (decision 0101), out of the
+//! media server's reach, and has an editable copy in accounts on the server, each kept in step both ways. Nothing is set per playlist but whether it is shared:
 //! - **your account** (per server: its setting, else the server's administrator) has every playlist, and every
 //!   playlist made there (in Finamp) comes into Cratarr;
 //! - **a shared playlist** is in every account; someone else taking it out of their account takes it out for them
@@ -13,11 +12,11 @@
 //! Every step is safe to repeat and to interrupt (the next pass finishes or undoes it, never guesses):
 //! - a link is matched by the server copy's id, and remembers both agreed names, so a rename made on either side is
 //!   told apart from a deletion even when the pass that carried it out was cut short;
-//! - a rename made in Cratarr is recorded before the file is renamed;
+//! - a rename made in Cratarr is recorded before the playlist is renamed;
 //! - a listing on either side that suddenly lacks most linked playlists is not believed (no mass deletion);
-//! - a file edited while a pass merged is left for the next pass;
+//! - a playlist edited while a pass merged is left for the next pass;
 //! - a server copy made but not yet remembered is found again by its name, not made twice;
-//! - a file deleted because its server copy went can be restored in Cratarr;
+//! - a playlist deleted because its server copy went can be restored in Cratarr;
 //! - one playlist's problem is its own: the others go on, and the page shows it on that playlist's copy.
 
 use std::collections::{BTreeSet, HashMap};
@@ -455,21 +454,20 @@ impl SyncService {
         Ok(())
     }
 
-    /// Adopt the playlists in Music (decision 0014), once: each is copied into `.playlists` (unless already there);
-    /// the file in Music, which the server imported, is retired once the playlist's copy in your account exists.
+    /// Adopt the playlists in Music (decision 0014), once: the store brought them in (decision 0101); each file in
+    /// Music, which the server imported, is retired once the playlist's copy in your account exists.
     async fn adopt(&self) -> Result<()> {
         if self.state.meta(ADOPTED).is_some() {
             return Ok(());
         }
         let Some(music) = self.lib.music() else { return Ok(()) };
         let m = PathBuf::from(&music);
-        let names = blocking(move || crate::playlists::adopt_into_playlist_dir(&m)).await??;
+        let names = blocking(move || crate::playlists::music_playlists(&m)).await??;
         for name in &names {
             self.state.put_retire(name, name)?;
         }
         self.state.set_meta(ADOPTED, &epoch_now().to_string())?;
-        self.lib.reopen_store();
-        tracing::info!("adopted {} playlist(s) from Music into {}", names.len(), crate::playlists::PLAYLIST_DIR);
+        tracing::info!("adopted {} playlist(s) from Music", names.len());
         Ok(())
     }
 
@@ -1358,15 +1356,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn files_that_suddenly_vanished_do_not_delete_the_server_copies() {
+    async fn playlists_that_suddenly_went_do_not_delete_the_server_copies() {
         let (d, cat, store) = library();
         let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
         for n in ["A1", "A2", "A3", "A4"] {
             store.create(n).await.unwrap();
         }
         run(&store, &cat, &srv, &state).await.unwrap();
+        // Gone from under the links at once, as a store opened before its playlists were brought in shows them.
         for n in ["A1", "A2", "A3"] {
-            std::fs::remove_file(d.join(format!("{n}.m3u"))).unwrap();
+            store.delete(n).await.unwrap();
         }
         assert!(run(&store, &cat, &srv, &state).await.is_err());
         assert_eq!(srv.lists.lock().unwrap().len(), 4);

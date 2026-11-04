@@ -3712,7 +3712,7 @@ mod tests {
         static N: AtomicU64 = AtomicU64::new(0);
         let d = std::env::temp_dir().join(format!("cratarr-playon-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
-        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None).await.unwrap();
+        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap())).await.unwrap();
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));

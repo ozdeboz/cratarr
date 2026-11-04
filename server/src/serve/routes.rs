@@ -551,7 +551,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             for (name, lines, _) in all {
                 let lines = serve.held.shown(&held_key(&service, &name)?, lines);
                 let songs = shown_songs(serve, &lines).await?;
-                out.push(playlist_json(serve, &service, &name, &lines, &songs)?);
+                out.push(playlist_json(&service, &name, &songs)?);
             }
             Ok(Answer::Json(json!({ "playlists": { "playlist": out } })))
         }
@@ -561,7 +561,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let lines = serve.held.shown(&held_key(&service, &name)?, lines);
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
-            let mut body = playlist_json(serve, &service, &name, &lines, &songs)?;
+            let mut body = playlist_json(&service, &name, &songs)?;
             // Asked by a name it had: answered under that id, the one the client keeps (its next listing has the new).
             body["id"] = p.get("id").unwrap_or_default().into();
             body["entry"] = serde_json::to_value(&songs)?;
@@ -596,7 +596,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let lines = service.entries(&name).await.map_err(toggle_failed)?;
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
-            let mut body = playlist_json(serve, &service, &name, &lines, &songs)?;
+            let mut body = playlist_json(&service, &name, &songs)?;
             body["entry"] = serde_json::to_value(&songs)?;
             Ok(Answer::Json(json!({ "playlist": body })))
         }
@@ -742,11 +742,9 @@ async fn lines_of_songs(serve: &Arc<Serve>, songs: &[String]) -> Result<Vec<Stri
 
 /// A playlist as OpenSubsonic shows it (`id`: as the asking account knows it): whose it is, shared (`public`) or not,
 /// and read-only when it is another's (decision 0051).
-fn playlist_json(serve: &Serve, service: &crate::app::PlaylistService, id: &str, lines: &[String], songs: &[Song]) -> Result<Value, Failed> {
-    use md5::Digest;
+fn playlist_json(service: &crate::app::PlaylistService, id: &str, songs: &[Song]) -> Result<Value, Failed> {
     let r = service.reach(id).map_err(toggle_failed)?;
-    let print = format!("{:x}", md5::Md5::digest(lines.join("\n").as_bytes()));
-    let (created, changed) = serve.userdata.playlist_seen(&r.key(), &print)?;
+    let (created, changed) = r.store.dates(&r.name).unwrap_or_default();
     let mut v = json!({
         "id": super::playlists::id_of(id), "name": r.name, "owner": r.owner, "public": r.shared,
         "songCount": songs.len(), "duration": songs.iter().map(|s| s.duration).sum::<u64>(),

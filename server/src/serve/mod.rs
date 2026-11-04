@@ -52,29 +52,14 @@ static INSTANCE: std::sync::OnceLock<Arc<Serve>> = std::sync::OnceLock::new();
 
 pub fn set_instance(serve: Arc<Serve>) {
     let _ = INSTANCE.set(serve);
-    // Every playlist write: when its entries came is kept (the panel's Added order), and the change logged (decision
-    // 0087).
-    crate::playlists::on_write(Box::new(|id, before, after| {
+    // A playlist made, renamed, deleted or brought back: logged (decision 0087; its writes are logged as they are
+    // written); one shared that goes (deleted, renamed away), told to the others as gone.
+    crate::playlists::on_named(Box::new(|id, there, shared| {
         let Some(s) = instance() else { return };
-        if let Err(e) = s.userdata.entries_written(id, before, after) {
-            tracing::warn!("playlist {id}: when its entries came not kept: {e:#}");
-        }
-        // Its lines keep their entry ids through Cratarr's own edits (decision 0087).
-        if let Err(e) = s.userdata.entries_of(id, after) {
-            tracing::warn!("playlist {id}: its entry ids not kept: {e:#}");
-        }
-        if let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::Changed) {
-            tracing::warn!("playlist {id}: its change not logged: {e:#}");
-        }
-    }));
-    // A playlist made, renamed, deleted or brought back: logged (decision 0087); one shared that goes (deleted, renamed
-    // away), told to the others as gone.
-    crate::playlists::on_named(Box::new(|id, there| {
-        let Some(s) = instance() else { return };
-        if !there && s.userdata.is_playlist_shared(id).unwrap_or(false) {
+        if !there && shared {
             s.playlist_gone_for_others(id);
         }
-        if let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::of(there)) {
+        if let Err(e) = s.userdata.playlist_changed(id, crate::userdata::offline::Op::of(there), shared) {
             tracing::warn!("playlist {id}: its change not logged: {e:#}");
         }
     }));
