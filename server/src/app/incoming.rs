@@ -596,6 +596,12 @@ impl IncomingService {
         self.lib.is_main(folder)
     }
 
+    /// The catalogue folders that libraries switched off (`source/library`) leave out: those no library switched on
+    /// keeps (`Library::folders_off`), for Subsonic's music folders.
+    pub fn folders_off(&self, without: &[String]) -> Vec<i64> {
+        self.lib.folders_off(without)
+    }
+
     /// The main libraries whose albums can be deleted, by server and library id: Cratarr writes in their folder (each
     /// library's trash is its own; 0101 point 1: main libraries are equal).
     pub(super) async fn main_deletable(&self) -> std::collections::HashSet<(String, String)> {

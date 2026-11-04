@@ -101,6 +101,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/not-artist/{key}", delete(crate_not_artist_back))
         .route("/api/excluded", get(excluded).post(exclude).delete(include_again))
         .route("/api/me/excluded-artists", get(excluded_artists))
+        // The person's preferences on the account (decision 0101 point 14).
+        .route("/api/me/preferences", get(my_preferences))
+        .route("/api/me/preferences/{key}", put(set_my_preference))
         .route("/api/me/taste/fits", post(taste_fits))
         .route("/api/me/excluded-artists/{key}", put(exclude_artist).delete(include_artist))
         .route(
@@ -4580,6 +4583,45 @@ async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<std
 }
 
 /// The asking account and Cratarr's own library, for Discover (decision 0069).
+/// The signed-in account's library and name, for its preferences.
+fn preferrer(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: preferences are an account's own.".into()))?;
+    Ok((serve, account))
+}
+
+/// The person's preferences on their account (decision 0101 point 14): `{values: {<key>: {value, changed}}}`, the keys
+/// it holds.
+async fn my_preferences(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = preferrer(&ctx)?;
+    let values = tokio::task::spawn_blocking(move || serve.userdata.preferences(&account))
+        .await
+        .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
+        .map_err(ToggleError::from)?;
+    Ok(Json(json!({ "values": values })))
+}
+
+/// A preference as a device changed it: its whole value and when (epoch ms, the device's clock).
+#[derive(Deserialize)]
+struct PreferenceBody {
+    value: serde_json::Value,
+    changed: i64,
+}
+
+/// A preference changed on a device: kept when that change is later than the kept one (the latest wins, the whole
+/// value). Answers what is kept afterwards, `{value, changed}`; an unknown key or a value of the wrong shape: 400.
+async fn set_my_preference(ctx: Ctx, Path(key): Path<String>, Json(b): Json<PreferenceBody>) -> Result<Json<crate::userdata::preferences::Preference>, ApiError> {
+    if let Some(why) = crate::userdata::preferences::refusal(&key, &b.value) {
+        return Err(ToggleError::BadSettings(why).into());
+    }
+    let (serve, account) = preferrer(&ctx)?;
+    let kept = tokio::task::spawn_blocking(move || serve.userdata.set_preference(&account, &key, &b.value, b.changed))
+        .await
+        .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
+        .map_err(ToggleError::from)?;
+    Ok(Json(kept))
+}
+
 fn discoverer(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: Discover is an account's own.".into()))?;

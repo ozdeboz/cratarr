@@ -169,6 +169,8 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
     - The foundation: 0100's records, the stable ids with the rehearsed migration, playlists in the database, equal
       libraries, own music. It runs on staging with a copy of production's data.
     - The devices: the index, each account's device data, crates and Radio offline. Then 0.16.
+    - Uploads (5) and the allocation with the disk's floor (4) go in the second preview, not the first (the owner,
+      2026-11-04).
 27. **The rules crate moves first, proved unchanged.**
     - Before the first preview, every built-in and saved crate's tracks and Radio's picks (same seed) are compared
       before and after the move, on production's copy.

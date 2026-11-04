@@ -204,6 +204,16 @@ fn folder_of(p: &Params) -> Option<i64> {
     p.number("musicFolderId").filter(|n| *n > 0).map(|n| n - 1)
 }
 
+/// The catalogue folders `user` has switched off (decision 0101 point 14: the libraries switched off, kept on the
+/// account), left out of their music folders.
+fn hidden_folders(serve: &Serve, user: &str) -> Vec<i64> {
+    let hidden = serve.userdata.hidden_libraries(user).unwrap_or_default();
+    if hidden.is_empty() {
+        return Vec::new();
+    }
+    serve.incoming().map(|i| i.folders_off(&hidden)).unwrap_or_default()
+}
+
 pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, headers: &HeaderMap) -> Result<Answer, Failed> {
     let s = serve.clone();
     let me = user.name.clone();
@@ -216,19 +226,25 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             { "name": "playbackReport", "versions": [1] },
         ] }))),
         // Its roles as its permissions say (decision 0051): keeping tracks offline, playlists, public share links.
-        "getUser" => Ok(Answer::Json(json!({ "user": {
-            "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
-            "downloadRole": user.permissions.offline, "playlistRole": user.permissions.playlists, "coverArtRole": true,
-            "commentRole": false, "podcastRole": false, "shareRole": user.permissions.links, "jukeboxRole": false,
-            "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
-            "folder": (0..serve.catalogue().folders().len()).map(|i| i + 1).collect::<Vec<_>>(),
-        } }))),
+        "getUser" => {
+            let off = hidden_folders(serve, &user.name);
+            Ok(Answer::Json(json!({ "user": {
+                "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
+                "downloadRole": user.permissions.offline, "playlistRole": user.permissions.playlists, "coverArtRole": true,
+                "commentRole": false, "podcastRole": false, "shareRole": user.permissions.links, "jukeboxRole": false,
+                "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
+                "folder": (0..serve.catalogue().folders().len() as i64).filter(|i| !off.contains(i)).map(|i| i + 1).collect::<Vec<_>>(),
+            } })))
+        }
         "getMusicFolders" => {
+            // Only those the user has on (decision 0101 points 1 and 14).
+            let off = hidden_folders(serve, &me);
             let folders: Vec<Value> = serve
                 .catalogue()
                 .folders()
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| !off.contains(&(*i as i64)))
                 .map(|(i, f)| json!({ "id": i + 1, "name": f.file_name().map_or_else(|| f.display().to_string(), |n| n.to_string_lossy().to_string()) }))
                 .collect();
             Ok(Answer::Json(json!({ "musicFolders": { "musicFolder": folders } })))

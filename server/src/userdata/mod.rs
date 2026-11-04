@@ -17,6 +17,7 @@
 pub mod offline;
 pub mod overrides;
 pub mod playlists;
+pub mod preferences;
 pub mod scrobbles;
 pub mod tags;
 pub mod words;
@@ -444,6 +445,8 @@ pub struct UserData {
     db: Mutex<Connection>,
     /// Every change of favourites, as `set_starred` makes it (`subscribe_starred`).
     starred: tokio::sync::broadcast::Sender<Starred>,
+    /// Every kept change of a preference (`subscribe_preferences`).
+    preferences: tokio::sync::broadcast::Sender<preferences::PreferenceChanged>,
 }
 
 /// A change of favourites (stars) as `set_starred` made it, whichever way it came: a page, a Subsonic app, Home
@@ -705,6 +708,8 @@ impl UserData {
         offline::migrate(&conn).context("bringing the change log up to date")?;
         // The playlists (0.16, decision 0101): in the database, their `.m3u` files brought in once by the store.
         conn.execute_batch(playlists::SCHEMA).context("creating the playlists' tables")?;
+        // The person's preferences on the account (0.16, decision 0101 point 14).
+        conn.execute_batch(preferences::SCHEMA).context("creating the preferences' table")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
@@ -718,7 +723,7 @@ impl UserData {
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
-        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
+        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0 })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
