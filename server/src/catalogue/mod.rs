@@ -1,6 +1,7 @@
 //! The catalogue (decision 0008): every audio file in the playlist folder and the extra folders, its tags as stored,
-//! and each server's id for it. Derived data in one SQLite file in the data folder (or in memory without one):
-//! deleting it costs only a refill.
+//! and each server's id for it, in one SQLite file in the data folder (or in memory without one). Its track ids are the
+//! truth everything else names (0101): a lost file is restored from the nightly backup, never made anew in passing (a new
+//! one gives out no ids until an administrator starts them afresh; `Library::fresh_track_ids`).
 //!
 //! Passes run in the background (`run`): walk the folders (size and modification time decide what changed), read
 //! the tags of new and changed files a batch at a time, then ask every server for its tracks (paged, then only what
