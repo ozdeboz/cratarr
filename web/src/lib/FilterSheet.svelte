@@ -134,8 +134,8 @@
 
   // A use by the icon of the page that shows it (Collection shows Music, Incoming its own), so a chip needs no second
   // word; the word is still there for screen readers.
-  const USE_ICON = { music: 'library', incoming: 'incoming' } as const;
-  const USE_WORD: Record<LibraryUse, string> = { music: 'Music', incoming: 'Incoming', unused: 'Not used' };
+  const USE_ICON = { main: 'library', incoming: 'incoming' } as const;
+  const USE_WORD: Record<LibraryUse, string> = { main: 'Main library', incoming: 'Incoming', unused: 'Not used' };
 
   const cards = $derived(
     known.list.map((s) => {
@@ -147,7 +147,7 @@
       const libraries = (view?.server_libraries ?? []).map((l) => ({
         id: l.id,
         name: l.name,
-        use: (view!.libraries.music.includes(l.id) ? 'music' : view!.libraries.incoming.includes(l.id) ? 'incoming' : 'unused') as LibraryUse,
+        use: (view!.libraries.find((x) => x.id === l.id)?.kind ?? 'unused') as LibraryUse,
       }));
       const name = own ?? (twin ? `${s.label} (${s.id})` : s.label);
       return { id: s.id, name: settingsKnown ? name : '', said: name, kind: own ? s.label : null, playing: s.playing, libraries };

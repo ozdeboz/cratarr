@@ -39,6 +39,9 @@
     ed.setPolicy(l.d, l.id, { fetcher: f });
   }
   let choosingFetcher = $state<Lib | null>(null);
+  // An Incoming library's Add to by default (0101 point 2): one of its server's main libraries, the first unless chosen.
+  let choosingAddTo = $state<Lib | null>(null);
+  const mainsOf = (d: Draft) => libsOf(d).filter((x) => ed.useOf(d, x.id) === 'main');
   const useLabel = (id: string) => USES.find((u) => u.id === id)?.label ?? id;
   const qualityLabel = (id: string) => QUALITIES.find((q) => q.id === id)?.label ?? id;
   // The Catalogue's words (decision 0097): what is written into the files, in its sheet; sources and spellings, a page
@@ -49,7 +52,8 @@
     const on = (words.value?.kinds ?? []).filter((k) => k.write && k.kind !== 'year').map((k) => (k.kind === 'type' ? 'Types and years' : KIND_NAMES[k.kind]));
     return on.length ? on.join(', ') : 'Nothing';
   });
-  const USE_MORE = 'Music: the playlists and the tracks that can go in them. Incoming: new music waiting to be heard.';
+  const USE_MORE =
+    "Main library: the household's music, every one equal; the first in this list is where music goes when nothing else is said. Incoming: new music waiting to be heard and added.";
   const QUALITY_MORE =
     "As albums move into this library or are kept into it, only lossless files above the limit are converted, to FLAC at the limit; lossy files and those within it stay as they are. Sync and Export don't follow it.";
   const TAGS_MORE =
@@ -119,7 +123,7 @@
       const u = ed.useOf(d, l.id);
       const problem = l.folders.length
         ? l.read_only && u !== 'unused'
-          ? `Cratarr can't write here, so ${u === 'music' ? 'playlists can’t be saved' : 'albums can’t be deleted'}. Mount it writable and give Cratarr's user write access.`
+          ? `Cratarr can't write here, so records can’t be ${u === 'main' ? 'added or deleted' : 'deleted'}. Mount it writable and give Cratarr's user write access.`
           : null
         : u !== 'unused'
           ? `Cratarr can't see these files.${l.paths.length ? ` Mount ${ed.kindOf(d)?.label ?? d.kind}'s folder ${l.paths.join(', ')} into Cratarr and restart it.` : ''}`
@@ -231,6 +235,16 @@
         value={fetcherLabel(pol.fetcher)}
         onclick={() => (choosingFetcher = l)}
       />
+      {#if mainsOf(l.d).length > 1}
+        <Item
+          name="Adds to"
+          more="Where its records go when they're added and nothing else is said. Someone's own request goes to their own music."
+          value={mainsOf(l.d).find((m) => m.id === pol.keep_to)?.name ?? mainsOf(l.d)[0].name}
+          onclick={() => (choosingAddTo = l)}
+        />
+      {/if}
+    {/if}
+    {#if u !== 'unused'}
       <Item name="Dot colour" swatch={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onclick={() => (colouring = l)} />
     {/if}
   </Group>
@@ -300,8 +314,8 @@
     />
   </Group>
 {:else}
-  {#if ed.drafts.some((d) => d.enabled && d.view) && !ed.drafts.some((d) => d.enabled && d.libraries.music.length)}
-    <Group><Item lead="warn" name="Choose a Music library" /></Group>
+  {#if ed.drafts.some((d) => d.enabled && d.view) && !ed.drafts.some((d) => d.enabled && d.libraries.some((l) => l.kind === 'main'))}
+    <Group><Item lead="warn" name="Choose a main library" /></Group>
   {/if}
   {#each ed.drafts.filter((d) => d.enabled) as d (d)}
     <Group title={serverLabel(d)}>
@@ -310,9 +324,9 @@
       {:else}
         {#each libsOf(d) as l (l.id)}
           {@const u = ed.useOf(d, l.id)}
-          {@const colour = u === 'incoming' ? ed.policyOf(d, l.id).colour : null}
+          {@const colour = u !== 'unused' ? ed.policyOf(d, l.id).colour : null}
           <Item
-            lead={colour ?? (libsOf(d).some((x) => ed.useOf(d, x.id) === 'incoming' && ed.policyOf(d, x.id).colour) ? '' : null)}
+            lead={colour ?? (libsOf(d).some((x) => ed.useOf(d, x.id) !== 'unused' && ed.policyOf(d, x.id).colour) ? '' : null)}
             name={l.name}
             line={l.problem ?? [useLabel(u), l.where, l.status].filter(Boolean).join(' · ')}
             tone={l.problem ? 'warn' : null}
@@ -329,7 +343,7 @@
   {/each}
 
   {#if ed.namingInUse}
-    <Group title="Music">
+    <Group title="Main libraries">
       <Item
         name="Names"
         line={ed.naming}
@@ -474,6 +488,17 @@
     value={ed.policyOf(l.d, l.id).fetcher ?? 'none'}
     onchange={(v) => setFetcher(l, v)}
     onclose={() => (choosingFetcher = null)}
+  />
+{/if}
+{#if choosingAddTo}
+  {@const l = choosingAddTo}
+  {@const mains = mainsOf(l.d)}
+  <ChoiceSheet
+    title={`Where ${l.name} adds to`}
+    options={mains.map((m) => ({ value: m.id, label: m.name }))}
+    value={ed.policyOf(l.d, l.id).keep_to ?? mains[0]?.id}
+    onchange={(v) => ed.setPolicy(l.d, l.id, { keep_to: v === mains[0]?.id ? null : v })}
+    onclose={() => (choosingAddTo = null)}
   />
 {/if}
 {#if choosingQuality}

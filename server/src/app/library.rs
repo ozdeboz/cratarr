@@ -15,7 +15,7 @@ use super::ToggleError;
 use crate::catalogue::Catalogue;
 use crate::placement::{self, Placement};
 use crate::playlists::Store;
-use crate::settings::{Folders, SourceConfig};
+use crate::settings::{Folders, Libraries, LibraryKind, LibrarySetting, Quality, SourceConfig};
 use crate::source::{self, Source};
 
 /// One enabled source, for the page's source picker.
@@ -67,8 +67,8 @@ pub(super) fn derive_folders(live: &[Arc<Active>], last_music: Option<&str>) -> 
             .collect()
     };
     let up: Vec<&Arc<Active>> = live.iter().filter(|a| a.source.is_some()).collect();
-    let main = up.iter().flat_map(|a| found(a, &a.cfg.libraries.music)).collect();
-    let incoming = up.iter().flat_map(|a| found(a, &a.cfg.libraries.incoming)).collect();
+    let main = up.iter().flat_map(|a| found(a, &a.main())).collect();
+    let incoming = up.iter().flat_map(|a| found(a, &a.incoming())).collect();
     folders_of(main, incoming, last_music)
 }
 
@@ -92,9 +92,8 @@ fn folders_of(main: Vec<String>, incoming: Vec<String>, last_music: Option<&str>
 /// `derive_folders` finds them) is switched off; a folder none of them keeps stays.
 pub(super) fn folders_switched_off(a: &Active, without: &[String]) -> Vec<String> {
     let off = |library: &str| without.iter().any(|k| k.strip_prefix(a.cfg.id.as_str()).and_then(|r| r.strip_prefix('/')) == Some(library));
-    let used = a.cfg.libraries.music.iter().chain(&a.cfg.libraries.incoming);
     let (mut on, mut out) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
-    for l in used.filter_map(|id| a.placement.libraries.iter().find(|l| &l.id == id)) {
+    for l in a.libraries().iter().filter_map(|u| a.placement.libraries.iter().find(|l| l.id == u.id)) {
         let side = if off(&l.id) { &mut out } else { &mut on };
         side.extend(l.folders.iter().cloned());
     }
@@ -109,7 +108,57 @@ pub(super) struct Active {
     pub(super) error: Option<String>,
 }
 
+/// A library in use (0101 point 1), as every reader takes it (`Active::libraries`). `owner`: own music's account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Used {
+    pub(super) id: String,
+    pub(super) kind: LibraryKind,
+    pub(super) owner: Option<String>,
+}
+
 impl Active {
+    /// The libraries in use, in order: the settings' list, then (Cratarr's own source) each account's own music (0101
+    /// point 9, from the own-music folder). What a library is, every reader asks here, never the list itself.
+    pub(super) fn libraries(&self) -> Vec<Used> {
+        self.cfg.libraries.0.iter().map(|l| Used { id: l.id.clone(), kind: l.kind, owner: None }).collect()
+    }
+
+    /// The ids of the libraries of `kind`, in order.
+    pub(super) fn of(&self, kind: LibraryKind) -> Vec<String> {
+        self.libraries().into_iter().filter(|u| u.kind == kind).map(|u| u.id).collect()
+    }
+
+    /// The main libraries' ids, in order: the first takes every fallback (0101 point 1).
+    pub(super) fn main(&self) -> Vec<String> {
+        self.of(LibraryKind::Main)
+    }
+
+    /// The Incoming libraries' ids, in order.
+    pub(super) fn incoming(&self) -> Vec<String> {
+        self.of(LibraryKind::Incoming)
+    }
+
+    /// What library `id` is; none for one not in use.
+    pub(super) fn kind_of(&self, id: &str) -> Option<LibraryKind> {
+        self.libraries().into_iter().find(|u| u.id == id).map(|u| u.kind)
+    }
+
+    /// Whether library `id` is in use.
+    pub(super) fn used(&self, id: &str) -> bool {
+        self.kind_of(id).is_some()
+    }
+
+    /// The quality limit a move into `library` follows: its own, else its kind's; none for one not in use.
+    pub(super) fn quality_of(&self, library: &str) -> Quality {
+        self.cfg.libraries.get(library).and_then(|l| l.quality).or_else(|| self.kind_of(library).map(LibraryKind::quality)).unwrap_or(Quality::None)
+    }
+
+    /// The dot of `library`'s albums (`settings::colour_among`).
+    pub(super) fn colour_of(&self, library: &str) -> Option<String> {
+        let used = self.libraries();
+        crate::settings::colour_among(used.iter().map(|u| (u.id.as_str(), u.kind)), library, self.cfg.libraries.get(library).and_then(|l| l.colour.as_deref()))
+    }
+
     pub(super) async fn start(cfg: SourceConfig, folders: &[String]) -> Self {
         if !cfg.enabled {
             return Self { cfg, source: None, placement: Placement::default(), error: None };
@@ -261,13 +310,11 @@ impl Library {
         for s in sources {
             active.push(Active::start(s, &places).await);
         }
-        // First run: no Music library chosen yet, so the libraries found in CRATARR_PLAYLIST_DIR are Music (shown so on
-        // the Settings page, kept once saved).
-        if let Some(m) = last_music.as_deref().filter(|_| active.iter().all(|a| a.cfg.libraries.music.is_empty())) {
+        // First run: no library chosen yet on any server, so every library each one has is a main library (0101 point
+        // 1), in its order (shown so on the Settings page, kept once saved).
+        if active.iter().all(|a| a.cfg.libraries.0.is_empty()) {
             for a in active.iter_mut().filter(|a| a.source.is_some()) {
-                let incoming = a.cfg.libraries.incoming.clone();
-                a.cfg.libraries.music =
-                    a.placement.libraries_in(m).map(|l| l.id.clone()).filter(|id| !incoming.contains(id)).collect();
+                a.cfg.libraries = Libraries(a.placement.libraries.iter().map(|l| LibrarySetting::new(l.id.clone(), LibraryKind::Main)).collect());
             }
         }
         let active: Vec<Arc<Active>> = active.into_iter().map(Arc::new).collect();
@@ -410,9 +457,19 @@ impl Library {
         self.live().iter().any(|a| a.cfg.enabled && a.cfg.kind == kind)
     }
 
+    /// The libraries of the settings' list that their server, answering, does not list (`source/library`): the
+    /// migration report's (decision 0101).
+    pub fn unlisted_libraries(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for a in self.live().iter().filter(|a| a.source.is_some() && !a.placement.libraries.is_empty()) {
+            out.extend(a.libraries().into_iter().filter(|u| !a.placement.libraries.iter().any(|p| p.id == u.id)).map(|u| format!("{}/{}", a.cfg.id, u.id)));
+        }
+        out
+    }
+
     /// Some enabled server has an Incoming library: the header's `incoming` and the capability list's.
     pub(super) fn incoming_on(&self) -> bool {
-        self.live().iter().any(|a| a.cfg.enabled && !a.cfg.libraries.incoming.is_empty())
+        self.live().iter().any(|a| a.cfg.enabled && !a.incoming().is_empty())
     }
 
     /// The ids of Cratarr's own libraries (sources of its own kind): where its favourites are.
@@ -474,7 +531,7 @@ impl Library {
     pub(super) fn music_name(&self) -> Option<String> {
         let music = self.music()?;
         self.connected().iter().find_map(|(a, _)| {
-            a.placement.libraries.iter().find(|l| a.cfg.libraries.music.contains(&l.id) && l.folders.contains(&music)).map(|l| l.name.clone())
+            a.placement.libraries.iter().find(|l| a.kind_of(&l.id) == Some(LibraryKind::Main) && l.folders.contains(&music)).map(|l| l.name.clone())
         })
     }
 
@@ -567,7 +624,7 @@ impl Library {
         let unplaced = |a: &Active| {
             a.source.is_some()
                 && (a.placement.libraries.is_empty()
-                    || a.cfg.libraries.music.iter().any(|id| {
+                    || a.main().iter().any(|id| {
                         a.placement.libraries.iter().find(|l| &l.id == id).is_none_or(|l| l.folders.is_empty())
                     }))
         };
@@ -644,8 +701,11 @@ mod switched_off_tests {
             read_only: false,
         };
         let mut cfg = SourceConfig { id: "jf".into(), kind: "jellyfin".into(), enabled: true, libraries: Default::default(), values: Default::default() };
-        cfg.libraries.music = vec!["m".into()];
-        cfg.libraries.incoming = vec!["in".into(), "both".into()];
+        cfg.libraries = Libraries(vec![
+            LibrarySetting::new("m", LibraryKind::Main),
+            LibrarySetting::new("in", LibraryKind::Incoming),
+            LibrarySetting::new("both", LibraryKind::Incoming),
+        ]);
         let placement = Placement {
             roots: Vec::new(),
             libraries: vec![placed("m", &["/music"]), placed("in", &["/incoming"]), placed("both", &["/incoming", "/new"]), placed("unused", &["/films"])],

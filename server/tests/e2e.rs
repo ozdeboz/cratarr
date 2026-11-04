@@ -225,6 +225,12 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     let part = &report["parts"]["playlists"];
     assert_eq!((part["playlists"].as_u64(), part["lines"].as_u64()), (Some(2), Some(4)), "{part}");
     let at = part["at"].as_i64().unwrap();
+    // The libraries' roles became the list (0101 point 1), the file 0.16's, every library listed by its server.
+    let libraries = &report["parts"]["libraries"];
+    assert_eq!((libraries["tables"][0]["before"].as_u64(), libraries["tables"][2]["after"].as_u64()), (Some(1), Some(1)), "{libraries}");
+    assert_eq!(libraries["unmatched"][1]["count"].as_u64(), Some(0), "{libraries}");
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(data.join("settings.json")).unwrap()).unwrap();
+    assert_eq!((file["version"].as_u64(), file["sources"][0]["libraries"].clone()), (Some(4), json!([{ "id": folder, "kind": "main" }])));
     s.stop();
 
     // Started again: nothing is brought in twice.

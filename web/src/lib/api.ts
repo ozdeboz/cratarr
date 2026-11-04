@@ -996,17 +996,27 @@ export type SourceStatus = {
 
 export type Values = Record<string, string | string[]>;
 
-/** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
-/** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
 /** A library's quality limit on the way in (decision 0096's amendment): lossless files above it become FLAC at it as
  *  they move in or are kept into it; `none`: as they are; `hr96`, `hr48`: up to 24-bit/96 or 48 kHz; `cd`: 16/44.1. */
 export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
-/** A library's own settings (decision 0034): its quality limit, its dot's colour and its name. */
-/** `fetcher`: an Incoming library's, whose records come into it (decision 0096: one Incoming library per fetcher). */
-export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null; fetcher?: Fetcher | null };
-export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
+/** A library in use, as Settings keeps it (decision 0101 point 1: no roles), in the list's order: the first main library
+ *  takes every fallback. A main library is the household's music, every one equal; an Incoming one, a fetcher's new
+ *  music waiting to be heard and added. Own music is no setting (its folder's, 0101 point 9). Its own settings
+ *  (decision 0034): its quality limit, its dot's colour and its name; an Incoming library's fetcher, whose records come
+ *  into it (decision 0096: one Incoming library per fetcher), and where Add to puts them by default (`keep_to`, a main
+ *  library; none: the first; 0101 point 2). */
+export type LibrarySetting = {
+  id: string;
+  kind: 'main' | 'incoming';
+  quality?: Quality;
+  colour?: string | null;
+  name?: string | null;
+  fetcher?: Fetcher | null;
+  keep_to?: string | null;
+};
 
-export type LibraryUse = 'music' | 'incoming' | 'unused';
+/** A server library as Settings uses it: its kind in the list, or not in it. */
+export type LibraryUse = LibrarySetting['kind'] | 'unused';
 
 /** A server's music library and where Cratarr sees its files. */
 export type ServerLibrary = {
@@ -1020,7 +1030,8 @@ export type ServerLibrary = {
   read_only: boolean;
 };
 
-export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: Roles; values: Values };
+/** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
+export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: LibrarySetting[]; values: Values };
 
 export type SourceView = SourceConfig & {
   label: string;
@@ -1030,7 +1041,7 @@ export type SourceView = SourceConfig & {
   choices: Record<string, Choice[]>;
   server_libraries: ServerLibrary[];
   error: string | null;
-  /** Each used library's settings as they apply (its own, else its use's and the palette's). */
+  /** Each used library's settings as they apply (its own, else its kind's and the palette's). */
   policies?: Record<string, { quality: Quality; colour: string | null }>;
 };
 
@@ -1325,7 +1336,7 @@ export const putMySettings = (base: number, settings: Record<string, unknown>) =
 /** Each server's own name and libraries, and what each library is used as, for everyone (the filter): the part of the
  *  server's settings that is not its administrators' alone. */
 export type LibrariesView = {
-  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: { music: string[]; incoming: string[] } }[];
+  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: LibrarySetting[] }[];
 };
 export const getLibraries = () => quietly<LibrariesView>('/api/libraries');
 /** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it). */

@@ -1004,11 +1004,11 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
 }
 
 /// The quality limit of the library whose folder is `root`: as Cratarr's own source has it (its libraries are its
-/// folders); CD format, Music's by its use, while none is found there (as a move's `quality_in`).
+/// folders); CD format, a main library's by its kind, while none is found there (as a move's `quality_in`).
 fn quality_at(saved: Option<&crate::settings::Saved>, root: &Path) -> crate::settings::Quality {
     saved
         .and_then(|s| s.sources.iter().find(|c| c.enabled && c.kind == crate::source::cratarr::KIND.id))
-        .and_then(|c| c.libraries.music.iter().chain(&c.libraries.incoming).find(|l| Path::new(l.as_str()) == root).map(|l| c.libraries.quality_of(l)))
+        .and_then(|c| c.libraries.0.iter().find(|l| Path::new(l.id.as_str()) == root).map(|l| c.libraries.quality_of(&l.id)))
         .unwrap_or(crate::settings::Quality::Cd)
 }
 
@@ -1095,15 +1095,18 @@ mod tests {
 
     #[test]
     fn a_track_is_converted_to_its_librarys_limit() {
-        use crate::settings::{LibraryPolicy, Quality, Roles, Saved, SourceConfig};
-        let roles = Roles { music: vec!["/music".into()], incoming: vec!["/incoming".into(), "/hires".into()], ..Roles::default() };
-        let mut saved = Saved {
-            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: roles, values: Default::default() }],
+        use crate::settings::{Libraries, LibraryKind, LibrarySetting, Quality, Saved, SourceConfig};
+        let libraries = Libraries(vec![
+            LibrarySetting::new("/music", LibraryKind::Main),
+            LibrarySetting::new("/incoming", LibraryKind::Incoming),
+            LibrarySetting { quality: Some(Quality::Hr96), ..LibrarySetting::new("/hires", LibraryKind::Incoming) },
+        ]);
+        let saved = Saved {
+            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values: Default::default() }],
             ..Default::default()
         };
-        saved.sources[0].libraries.policies.insert("/hires".into(), LibraryPolicy { quality: Some(Quality::Hr96), ..Default::default() });
-        assert_eq!(quality_at(Some(&saved), Path::new("/music")), Quality::Cd, "Music's by its use");
-        assert_eq!(quality_at(Some(&saved), Path::new("/incoming")), Quality::None, "Incoming's by its use: as it is");
+        assert_eq!(quality_at(Some(&saved), Path::new("/music")), Quality::Cd, "a main library's by its kind");
+        assert_eq!(quality_at(Some(&saved), Path::new("/incoming")), Quality::None, "Incoming's by its kind: as it is");
         assert_eq!(quality_at(Some(&saved), Path::new("/hires")), Quality::Hr96);
         assert_eq!(quality_at(Some(&saved), Path::new("/elsewhere")), Quality::Cd);
         assert_eq!(quality_at(None, Path::new("/incoming")), Quality::Cd, "nothing saved: CD format");

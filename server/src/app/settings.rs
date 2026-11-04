@@ -41,8 +41,8 @@ pub struct SourceView {
     pub secrets_set: Vec<String>,
     pub status: Status,
     pub choices: BTreeMap<String, Vec<Choice>>,
-    /// What its libraries are used for, as saved.
-    pub libraries: settings::Roles,
+    /// Its libraries in use, in order, as saved (0101 point 1).
+    pub libraries: settings::Libraries,
     /// Its music libraries and where Cratarr sees their files (decision 0009).
     pub server_libraries: Vec<placement::PlacedLibrary>,
     /// Each used library's quality limit and colour as they apply (its own, else its use's and the palette's;
@@ -56,7 +56,7 @@ pub struct SourceView {
 #[derive(Debug, Clone, Serialize)]
 pub struct EffectivePolicy {
     pub quality: settings::Quality,
-    /// None for a Music library (the primary).
+    /// Its dot (every library has one, 0101 point 1).
     pub colour: Option<String>,
 }
 
@@ -273,10 +273,9 @@ impl SettingsService {
             server_libraries: Vec::new(),
             policies: cfg
                 .libraries
-                .music
+                .0
                 .iter()
-                .chain(&cfg.libraries.incoming)
-                .map(|l| (l.clone(), EffectivePolicy { quality: cfg.libraries.quality_of(l), colour: cfg.libraries.colour_of(l) }))
+                .map(|l| (l.id.clone(), EffectivePolicy { quality: cfg.libraries.quality_of(&l.id), colour: cfg.libraries.colour_of(&l.id) }))
                 .collect(),
             error,
         };
@@ -443,12 +442,13 @@ impl SettingsService {
                 if !st.connected {
                     return Err(bad(st.error.unwrap_or_else(|| "not connected".into())));
                 }
-                // Its Music libraries checked when they or the source changed, not on every save: a Music folder out of
-                // reach for a while (unmounted) must not stop the trash days or the naming from being saved (2026-11-02).
+                // Its main libraries checked when they or the source changed, not on every save: a main library's folder
+                // out of reach for a while (unmounted) must not stop the trash days or the naming from being saved
+                // (2026-11-02).
                 let as_saved = saved.iter().any(|s| s.id == a.cfg.id && s.kind == a.cfg.kind && s.libraries == a.cfg.libraries && s.values == a.cfg.values);
-                for id in a.cfg.libraries.music.iter().filter(|_| !as_saved) {
+                for id in a.main().iter().filter(|_| !as_saved) {
                     match a.placement.libraries.iter().find(|l| &l.id == id) {
-                        None => return Err(bad("a Music library is no longer on the server".into())),
+                        None => return Err(bad("a main library is no longer on the server".into())),
                         Some(l) if l.folders.is_empty() => {
                             return Err(ToggleError::BadSettings(format!("Cratarr can't see the files of {}", l.name)));
                         }

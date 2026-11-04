@@ -241,18 +241,14 @@ fn verdicts(
 }
 
 /// The used library of a server whose files lie in a catalogue folder (its id), if any.
-fn library_in(roles: &settings::Roles, placement: &crate::placement::Placement, folder: &std::path::Path) -> Option<String> {
-    placement
-        .libraries
-        .iter()
-        .find(|l| roles.music.iter().chain(&roles.incoming).any(|r| r == &l.id) && l.folders.iter().any(|f| std::path::Path::new(f) == folder))
-        .map(|l| l.id.clone())
+fn library_in(a: &Active, folder: &std::path::Path) -> Option<String> {
+    a.placement.libraries.iter().find(|l| a.used(&l.id) && l.folders.iter().any(|f| std::path::Path::new(f) == folder)).map(|l| l.id.clone())
 }
 
 /// The quality limit of the used library in a catalogue folder: its own (a Music library set to none keeps hi-res
 /// files as they are); CD format, Music's by its use, while no library is found there.
-fn quality_in(roles: &settings::Roles, placement: &crate::placement::Placement, folder: &std::path::Path) -> settings::Quality {
-    library_in(roles, placement, folder).map_or(settings::Quality::Cd, |l| roles.quality_of(&l))
+fn quality_in(a: &Active, folder: &std::path::Path) -> settings::Quality {
+    library_in(a, folder).map_or(settings::Quality::Cd, |l| a.quality_of(&l))
 }
 
 /// The catalogue's album directory behind a server path (the server's paths and Cratarr's differ in front).
@@ -459,7 +455,7 @@ impl IncomingService {
             for view in &mut sources {
                 // Each pair's library by this server's ids (the page names it so).
                 let a = live.iter().find(|a| a.cfg.id == view.id);
-                let library_of = |f: i64| a.and_then(|a| library_in(&a.cfg.libraries, &a.placement, folders.get(f as usize)?));
+                let library_of = |f: i64| a.and_then(|a| library_in(a, folders.get(f as usize)?));
                 view.verdicts = verdicts(&view.albums, &libraries, mains, &incoming, library_of);
                 let mut deletable = Vec::new();
                 for a in &view.albums {
@@ -607,7 +603,7 @@ impl IncomingService {
     pub(super) async fn main_deletable(&self) -> std::collections::HashSet<(String, String)> {
         let mut out = std::collections::HashSet::new();
         for a in self.lib.live().iter() {
-            for id in &a.cfg.libraries.music {
+            for id in &a.main() {
                 let folder = a.placement.libraries.iter().find(|l| &l.id == id).and_then(|l| l.folders.first());
                 if let Some(f) = folder
                     && self.can_write(std::path::Path::new(f)).await
@@ -909,7 +905,7 @@ impl IncomingService {
     fn keep_target(&self, source_id: &str, to: Option<&str>) -> Result<(i64, settings::Quality), ToggleError> {
         let live = self.lib.live();
         let a = live.iter().find(|a| a.cfg.id == source_id).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
-        let main = &a.cfg.libraries.music;
+        let main = a.main();
         let to = match to {
             Some(t) if main.iter().any(|m| m == t) => t,
             Some(_) => return Err(ToggleError::Refused("Keep puts an album into a main library".into())),
@@ -923,7 +919,7 @@ impl IncomingService {
     fn quality_at(&self, source_id: &str, folder: i64) -> settings::Quality {
         let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
         match (live.iter().find(|a| a.cfg.id == source_id), usize::try_from(folder).ok().and_then(|f| folders.get(f))) {
-            (Some(a), Some(f)) => quality_in(&a.cfg.libraries, &a.placement, f),
+            (Some(a), Some(f)) => quality_in(a, f),
             _ => settings::Quality::Cd,
         }
     }
@@ -951,7 +947,7 @@ impl IncomingService {
     fn library_name(&self, source_id: &str, folder: i64) -> String {
         let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
         let named = live.iter().find(|a| a.cfg.id == source_id).and_then(|a| {
-            let id = library_in(&a.cfg.libraries, &a.placement, folders.get(usize::try_from(folder).ok()?)?)?;
+            let id = library_in(a, folders.get(usize::try_from(folder).ok()?)?)?;
             a.placement.libraries.iter().find(|l| l.id == id).map(|l| l.name.clone())
         });
         named.unwrap_or_else(|| "that library".into())
@@ -1005,11 +1001,10 @@ impl IncomingService {
     fn target_of(&self, source_id: &str, library: &str) -> Result<(i64, settings::Quality), ToggleError> {
         let live = self.lib.live();
         let a = live.iter().find(|a| a.cfg.id == source_id).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
-        let roles = &a.cfg.libraries;
-        if !roles.music.iter().chain(&roles.incoming).any(|l| l == library) {
+        if !a.used(library) {
             return Err(ToggleError::Refused("that library is not used".into()));
         }
-        Ok((self.folder_of(a, library)?, roles.quality_of(library)))
+        Ok((self.folder_of(a, library)?, a.quality_of(library)))
     }
 
     /// The catalogue folder a library of a server lies in (its first folder).
@@ -1461,9 +1456,9 @@ impl IncomingService {
         self.lib
             .connected()
             .into_iter()
-            .filter(|(a, _)| !a.cfg.libraries.incoming.is_empty())
+            .filter(|(a, _)| !a.incoming().is_empty())
             .map(|(a, s)| {
-                let ids = a.cfg.libraries.incoming.clone();
+                let ids = a.incoming();
                 (a, s, ids)
             })
             .collect()
@@ -1599,12 +1594,19 @@ mod tests {
         assert!(!v.contains_key("i3"));
     }
 
+    /// A server whose libraries in use are `libraries`, placed as `placement`.
+    fn active(libraries: &[(&str, settings::LibraryKind)], placement: crate::placement::Placement) -> Active {
+        let libraries = settings::Libraries(libraries.iter().map(|(id, k)| settings::LibrarySetting::new(*id, *k)).collect());
+        let cfg = settings::SourceConfig { id: "jf".into(), kind: "jellyfin".into(), enabled: true, libraries, values: Default::default() };
+        Active { cfg, source: None, placement, error: None }
+    }
+
     #[test]
     fn a_folder_is_named_by_the_used_library_whose_files_lie_there() {
-        let roles = settings::Roles { music: vec!["m".into()], incoming: vec!["i".into()], ..settings::Roles::default() };
         let placed = |id: &str, folder: &str| crate::placement::PlacedLibrary { id: id.into(), name: id.into(), folders: vec![folder.into()], paths: Vec::new(), read_only: false };
         let placement = crate::placement::Placement { roots: Vec::new(), libraries: vec![placed("m", "/music"), placed("unused", "/incoming"), placed("i", "/incoming")] };
-        let at = |folder: &str| library_in(&roles, &placement, std::path::Path::new(folder));
+        let a = active(&[("m", settings::LibraryKind::Main), ("i", settings::LibraryKind::Incoming)], placement);
+        let at = |folder: &str| library_in(&a, std::path::Path::new(folder));
         assert_eq!(at("/music").as_deref(), Some("m"));
         assert_eq!(at("/incoming").as_deref(), Some("i"), "a library not used is passed over");
         assert_eq!(at("/elsewhere"), None);
@@ -1612,18 +1614,18 @@ mod tests {
 
     #[test]
     fn keep_follows_the_music_librarys_own_quality_limit() {
-        let mut roles = settings::Roles { music: vec!["m".into()], ..settings::Roles::default() };
         let placement = crate::placement::Placement {
             roots: Vec::new(),
             libraries: vec![crate::placement::PlacedLibrary { id: "m".into(), name: "Music".into(), folders: vec!["/music".into()], paths: Vec::new(), read_only: false }],
         };
+        let mut a = active(&[("m", settings::LibraryKind::Main)], placement);
         let music = std::path::Path::new("/music");
-        assert_eq!(quality_in(&roles, &placement, music), settings::Quality::Cd, "Music's by its use");
-        roles.policies.insert("m".into(), settings::LibraryPolicy { quality: Some(settings::Quality::None), ..Default::default() });
-        assert_eq!(quality_in(&roles, &placement, music), settings::Quality::None, "set to none: hi-res files stay as they are");
-        roles.policies.insert("m".into(), settings::LibraryPolicy { quality: Some(settings::Quality::Hr96), ..Default::default() });
-        assert_eq!(quality_in(&roles, &placement, music), settings::Quality::Hr96);
-        assert_eq!(quality_in(&roles, &placement, std::path::Path::new("/elsewhere")), settings::Quality::Cd);
+        assert_eq!(quality_in(&a, music), settings::Quality::Cd, "a main library's by its kind");
+        a.cfg.libraries.0[0].quality = Some(settings::Quality::None);
+        assert_eq!(quality_in(&a, music), settings::Quality::None, "set to none: hi-res files stay as they are");
+        a.cfg.libraries.0[0].quality = Some(settings::Quality::Hr96);
+        assert_eq!(quality_in(&a, music), settings::Quality::Hr96);
+        assert_eq!(quality_in(&a, std::path::Path::new("/elsewhere")), settings::Quality::Cd);
     }
 
     #[test]

@@ -71,8 +71,8 @@ impl Placement {
 ///
 /// A mount may be a library's own folder (`/music`) or a parent of several (`/media`): the library's own folder
 /// inside it (`/media/Music`) comes from the folders the server reports for the library (`library_roots`).
-/// A library given a name of its own (`roles`, Settings) is named so (the owner, 2026-11-02).
-pub async fn place(source: &dyn Source, folders: &[String], roles: &crate::settings::Roles) -> Result<Placement> {
+/// A library given a name of its own (`settings`, as Settings keeps it) is named so (the owner, 2026-11-02).
+pub async fn place(source: &dyn Source, folders: &[String], settings: &crate::settings::Libraries) -> Result<Placement> {
     let libraries: Vec<Library> = source.libraries().await?;
     // Each mount the server's tracks were found in, with the server's path for it.
     let mut mounts: Vec<FolderRoot> = Vec::new();
@@ -112,7 +112,7 @@ pub async fn place(source: &dyn Source, folders: &[String], roles: &crate::setti
                 }
             }
         }
-        let name = roles.name_of(&lib.id).unwrap_or(lib.name);
+        let name = settings.name_of(&lib.id).unwrap_or(lib.name);
         placed.push(PlacedLibrary { id: lib.id, name, folders: found, paths: lib.paths, read_only: false });
     }
     Ok(Placement { roots, libraries: placed })
@@ -314,9 +314,9 @@ mod tests {
         let bare = Fake(src.0.clone(), vec![]);
         assert_eq!(place(&bare, &[m.clone()], &Default::default()).await.unwrap().libraries[0].folders, vec![m.clone()]);
         // A library given a name of its own is named so; the others keep the server's.
-        let mut roles = crate::settings::Roles::default();
-        roles.policies.insert("incoming".into(), crate::settings::LibraryPolicy { name: Some("Vinyl rips".into()), ..Default::default() });
-        let named = place(&src, &[m.clone()], &roles).await.unwrap();
+        use crate::settings::{Libraries, LibraryKind, LibrarySetting};
+        let libraries = Libraries(vec![LibrarySetting { name: Some("Vinyl rips".into()), ..LibrarySetting::new("incoming", LibraryKind::Incoming) }]);
+        let named = place(&src, &[m.clone()], &libraries).await.unwrap();
         assert_eq!((named.libraries[0].name.as_str(), named.libraries[1].name.as_str()), (src.0[0].0.name.as_str(), "Vinyl rips"));
         std::fs::remove_dir_all(&media).ok();
     }

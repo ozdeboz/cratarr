@@ -991,8 +991,8 @@ impl App {
         let (Some(cfg), Some(client)) = (cfg.filter(|c| c.enabled), client) else { return Ok(None) };
         let live = self.library.live();
         let incoming = live.iter().find_map(|a| {
-            let (id, _) = a.cfg.libraries.policies.iter().find(|(id, p)| p.fetcher.as_deref() == Some("lidarr") && a.cfg.libraries.incoming.contains(id))?;
-            a.placement.libraries.iter().find(|l| &l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
+            let id = a.cfg.libraries.fetched_by("lidarr")?;
+            a.placement.libraries.iter().find(|l| l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
         });
         let Some((name, folders)) = incoming else { return Ok(None) };
         let roots = client.options().await?.roots;

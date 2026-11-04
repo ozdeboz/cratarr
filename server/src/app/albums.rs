@@ -113,7 +113,6 @@ impl App {
                 let library_info = active
                     .as_ref()
                     .map(|a| {
-                        let roles = &a.cfg.libraries;
                         libraries
                             .iter()
                             .map(|l| {
@@ -122,12 +121,12 @@ impl App {
                                 LibraryView {
                                     id: l.clone(),
                                     name: placed.map_or_else(|| l.clone(), |p| p.name.clone()),
-                                    kind: if roles.music.contains(l) { "main" } else { "incoming" },
-                                    fetcher: roles.policies.get(l).and_then(|p| p.fetcher.clone()),
+                                    kind: a.kind_of(l).unwrap_or(crate::settings::LibraryKind::Incoming).as_str(),
+                                    fetcher: a.cfg.libraries.get(l).and_then(|s| s.fetcher.clone()),
                                     owner: None,
                                     mine: false,
-                                    colour: roles.colour_of(l),
-                                    quality: roles.quality_of(l),
+                                    colour: a.colour_of(l),
+                                    quality: a.quality_of(l),
                                     seen,
                                     seen_why: (!seen).then(|| "Cratarr can't see its files".to_string()),
                                     naming: None,
@@ -140,7 +139,7 @@ impl App {
                 // Keep's albums and where each goes by default: the first main library (own music comes with 0101's own
                 // music; only administrators keep until then).
                 let keepable: Vec<String> = i.iter().flat_map(|i| i.albums.iter().map(|al| al.id.clone())).collect();
-                let first_main = active.as_ref().and_then(|a| a.cfg.libraries.music.first().cloned());
+                let first_main = active.as_ref().and_then(|a| a.main().into_iter().next());
                 let keep_to: BTreeMap<String, String> =
                     first_main.map(|m| keepable.iter().map(|id| (id.clone(), m.clone())).collect()).unwrap_or_default();
                 let verdicts = i.map(|i| i.verdicts.clone()).unwrap_or_default();

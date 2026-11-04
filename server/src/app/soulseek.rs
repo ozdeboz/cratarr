@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use super::track_fetch::{ReleaseTrack, ReleaseView};
 use crate::slskd::{Answer, Offered, Slskd};
 
-/// The fetcher's name in a library's policy (`settings::LibraryPolicy::fetcher`).
+/// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
 pub const FETCHER: &str = "soulseek";
 /// Between two searches: gentle with Soulseek.
 const PACE: Duration = Duration::from_secs(5);
@@ -462,7 +462,7 @@ fn library() -> Result<PathBuf> {
 /// `library` in these settings.
 fn library_in(saved: &crate::settings::Saved) -> Option<PathBuf> {
     let c = saved.sources.iter().find(|c| c.enabled && c.kind == crate::source::cratarr::KIND.id)?;
-    c.libraries.incoming.iter().find(|l| c.libraries.policies.get(*l).and_then(|p| p.fetcher.as_deref()) == Some(FETCHER)).map(PathBuf::from)
+    c.libraries.fetched_by(FETCHER).map(PathBuf::from)
 }
 
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
@@ -985,14 +985,18 @@ mod tests {
 
     #[test]
     fn the_library_is_the_incoming_one_whose_fetcher_is_soulseek() {
-        use crate::settings::{LibraryPolicy, Roles, Saved, SourceConfig};
-        let roles = Roles { music: vec!["/music".into()], incoming: vec!["/lidarr".into(), "/soulseek".into()], ..Roles::default() };
+        use crate::settings::{Libraries, LibraryKind, LibrarySetting, Saved, SourceConfig};
+        let libraries = Libraries(vec![
+            LibrarySetting::new("/music", LibraryKind::Main),
+            LibrarySetting::new("/lidarr", LibraryKind::Incoming),
+            LibrarySetting::new("/soulseek", LibraryKind::Incoming),
+        ]);
         let mut saved = Saved {
-            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: roles, values: Default::default() }],
+            sources: vec![SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries, values: Default::default() }],
             ..Default::default()
         };
         assert_eq!(library_in(&saved), None, "none chosen: none");
-        saved.sources[0].libraries.policies.insert("/soulseek".into(), LibraryPolicy { fetcher: Some(FETCHER.into()), ..Default::default() });
+        saved.sources[0].libraries.0[2].fetcher = Some(FETCHER.into());
         assert_eq!(library_in(&saved), Some(PathBuf::from("/soulseek")));
     }
 
