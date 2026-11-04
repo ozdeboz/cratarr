@@ -72,7 +72,9 @@ export type Event =
   /** A new queue; `play`: it plays at once. */
   | { kind: 'new-queue'; play: boolean }
   /** The queue grew at its end (Autoplay's or Radio's picks came in). */
-  | { kind: 'grew' };
+  | { kind: 'grew' }
+  /** A queue entry chosen: a cut there, as a seek is (no skip's wind-down). */
+  | { kind: 'jump'; track: number };
 
 /** A place in a track: its start, its very end (backwards play going on into it), [FROM_END_MS] before its end (where
  *  the knob at L plays a track from, 0.12.4), or ms in. */
@@ -127,6 +129,7 @@ export type DeckWasm = {
   deck_knob(h: number): number;
   deck_tape(h: number): number;
   deck_tape_way(h: number): number;
+  deck_plays(h: number): number;
   deck_free(h: number): void;
 };
 
@@ -185,6 +188,8 @@ export function eventCode(e: Event): [number, number, number] {
       return [13, e.play ? 1 : 0, 0];
     case 'grew':
       return [14, 0, 0];
+    case 'jump':
+      return [15, e.track, 0];
   }
 }
 
@@ -236,6 +241,8 @@ export type Machine = {
   tape(): TapeIs;
   /** The tape's way (standing: the knob's). */
   way(): Way;
+  /** Whether the deck ends up playing: what the page shows as playing (a pause's brake: not; a turn's: yes). */
+  plays(): boolean;
   free(): void;
 };
 
@@ -257,6 +264,7 @@ export function machine(x: DeckWasm, knob: Knob): Machine | null {
     knob: () => (x.deck_knob(h) === 1 ? 'L' : 'R'),
     tape: () => TAPE[x.deck_tape(h)] ?? 'standing',
     way: () => WAY[x.deck_tape_way(h)] ?? 'forwards',
+    plays: () => x.deck_plays(h) === 1,
     free: () => x.deck_free(h),
   };
 }

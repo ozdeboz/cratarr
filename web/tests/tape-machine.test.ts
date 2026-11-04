@@ -119,3 +119,24 @@ test('when a motion has done what it is for: a tap at its length, a spin-up at i
   assert.equal(x.motion_done_at(hold), x.motion_stands_at(hold));
   for (const h of [tap, rise, hold]) x.motion_free(h);
 });
+
+test('a queue entry chosen is a cut while playing; nothing for one outside the queue', () => {
+  const { m, run } = playing(ON, MID);
+  assert.deepEqual(run({ kind: 'jump', track: 0 }), [{ do: 'go-to', track: 0, at: { at: 'start' } }, { do: 'play', way: 'forwards' }]);
+  assert.deepEqual(run({ kind: 'jump', track: 7 }), []);
+  assert.equal(m.tape(), 'playing');
+  m.free();
+});
+
+test('what the page shows as playing: a pause\'s brake not, a turn\'s brake yes', () => {
+  const a = playing(ON, MID);
+  assert.equal(a.m.plays(), true);
+  a.run({ kind: 'pause' });
+  assert.equal(a.m.plays(), false);
+  a.m.free();
+  const b = playing(ON, MID);
+  b.run({ kind: 'turn', knob: 'L' });
+  assert.equal(b.m.tape(), 'braking-to-stand');
+  assert.equal(b.m.plays(), true);
+  b.m.free();
+});
