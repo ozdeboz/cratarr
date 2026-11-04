@@ -15,7 +15,8 @@ use crate::journal::fingerprint;
 use crate::m3u;
 use crate::playlist_ops::Entries;
 use crate::userdata::UserData;
-use crate::userdata::playlists::{Named, Playlist, Written};
+use crate::catalogue::Catalogue;
+use crate::userdata::playlists::{Named, Playlist, Tracks, Written};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PlaylistView {
@@ -282,6 +283,8 @@ pub fn text_of(lines: &[String]) -> String {
 
 pub struct Store {
     db: Arc<UserData>,
+    /// The library's files, whose tracks the entries are (decision 0101 point 11).
+    cat: Arc<Catalogue>,
     /// Whose playlists (decision 0051): another account's; `None`: the first administrator's.
     account: Option<String>,
     /// The Music folder: entries are relative to it.
@@ -307,9 +310,10 @@ pub fn on_named(told: OnNamed) {
 
 impl Store {
     /// One account's playlists (`None`: the first administrator's), their entries relative to `base` (Music).
-    pub fn open(db: Arc<UserData>, account: Option<&str>, base: impl Into<PathBuf>, out: Option<PathBuf>) -> Self {
+    pub fn open(db: Arc<UserData>, cat: Arc<Catalogue>, account: Option<&str>, base: impl Into<PathBuf>, out: Option<PathBuf>) -> Self {
         Self {
             db,
+            cat,
             account: account.map(str::to_string),
             base: base.into(),
             out,
@@ -320,11 +324,11 @@ impl Store {
 
     /// The first administrator's playlists over the Music folder, their `.m3u` files brought in first (once:
     /// `import`).
-    pub async fn in_music(db: Arc<UserData>, music: impl Into<PathBuf>, out: Option<PathBuf>) -> Result<Self> {
+    pub async fn in_music(db: Arc<UserData>, cat: Arc<Catalogue>, music: impl Into<PathBuf>, out: Option<PathBuf>) -> Result<Self> {
         let music = music.into();
-        let (d, m, o) = (db.clone(), music.clone(), out.clone());
-        tokio::task::spawn_blocking(move || import(&d, &m, o.as_deref())).await??;
-        Ok(Self::open(db, None, music, out))
+        let (d, c, m, o) = (db.clone(), cat.clone(), music.clone(), out.clone());
+        tokio::task::spawn_blocking(move || import(&d, &c, &m, o.as_deref())).await??;
+        Ok(Self::open(db, cat, None, music, out))
     }
 
     /// Tests: the playlists of `dir`'s `.m3u` files, entries relative to it, in a database of their own, their copies
@@ -333,8 +337,9 @@ impl Store {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         let db = Arc::new(UserData::open(None).expect("an in-memory database"));
-        import(&db, &dir, Some(&dir)).expect("the playlists brought in");
-        Self::open(db, None, dir.clone(), Some(dir))
+        let cat = Arc::new(Catalogue::open(None, vec![dir.clone()]).expect("an in-memory catalogue"));
+        import(&db, &cat, &dir, Some(&dir)).expect("the playlists brought in");
+        Self::open(db, cat, None, dir.clone(), Some(dir))
     }
 
     pub fn base(&self) -> &Path {
@@ -434,8 +439,10 @@ impl Store {
     }
 
     /// Re-check every playlist's dead entries against the library (files appear and disappear without the
-    /// playlist changing). Meant to run every minute or so in the background.
+    /// playlist changing), an entry whose file went led first to where its track's file is now (`follow_tracks`).
+    /// Meant to run every minute or so in the background.
     pub async fn refresh_dead(&self) {
+        self.follow_tracks().await;
         let Ok(lists) = self.all().await else { return };
         let dir = self.base.clone();
         let counted = tokio::task::spawn_blocking(move || {
@@ -447,6 +454,41 @@ impl Store {
         cache.clear();
         for (id, print, n) in counted {
             cache.insert(id, (print, n));
+        }
+    }
+
+    /// Entries whose file went, led to where their track's file is now (decision 0101 point 11: an entry is its
+    /// track; a file renamed or moved where Cratarr did not move it, a copy of the record playing now), each such
+    /// playlist's copy written out again.
+    async fn follow_tracks(&self) {
+        let _one_writer = self.write.lock().await;
+        let (db, cat, owner, base) = (self.db.clone(), self.cat.clone(), self.owner(), self.base.clone());
+        let done = tokio::task::spawn_blocking(move || -> Result<Vec<(String, Vec<String>)>> {
+            let mut moves = Vec::new();
+            for (name, entry, line, track) in db.tracked_entries(&owner)? {
+                if entry_exists(&base, &line) {
+                    continue;
+                }
+                let Some(n) = track.strip_prefix(crate::serve::ids::SONG).and_then(|n| n.parse::<i64>().ok()) else { continue };
+                let Some(now) = cat.file_of(n).and_then(|(folder, rel)| cat.line_of(folder, &rel)) else { continue };
+                if now != line {
+                    moves.push((name, entry, now));
+                }
+            }
+            if moves.is_empty() {
+                return Ok(Vec::new());
+            }
+            db.relink_playlists(&owner, &moves)
+        })
+        .await;
+        match done {
+            Ok(Ok(changed)) => {
+                for (name, lines) in changed {
+                    self.write_out(&name, Some(&lines)).await;
+                }
+            }
+            Ok(Err(e)) => tracing::warn!("playlists: entries not led to their tracks' files: {e:#}"),
+            Err(e) => tracing::warn!("playlists: entries not led to their tracks' files: {e}"),
         }
     }
 
@@ -482,8 +524,8 @@ impl Store {
     /// The playlist's lines become `lines` while it holds `expected` (`None`: whatever it holds), its copy written out.
     /// The caller holds the write lock. `None`: it no longer held `expected`, and nothing was written.
     async fn put(&self, id: &str, expected: Option<Vec<String>>, lines: Vec<String>) -> Result<Option<Edited>, StoreError> {
-        let (name, l) = (id.to_string(), lines.clone());
-        match self.ask(move |db, owner| db.write_playlist(owner, &name, expected.as_deref(), &l)).await? {
+        let (name, l, cat) = (id.to_string(), lines.clone(), self.cat.clone());
+        match self.ask(move |db, owner| db.write_playlist(owner, &name, expected.as_deref(), &l, &tracks_of(&cat, &l))).await? {
             Written::Unknown => Err(StoreError::Unknown),
             Written::Stale => Ok(None),
             Written::Done { before } => Ok(Some(self.written(id, before, lines).await)),
@@ -555,8 +597,9 @@ impl Store {
         }
         let _one_writer = self.write.lock().await;
         let (name, expected, e, account, ops) = (id.to_string(), expected.to_vec(), e.clone(), account.to_string(), ops.to_vec());
-        let after = e.lines();
-        match self.ask(move |db, owner| db.write_playlist_entries(owner, &name, &expected, &e, &account, &ops)).await? {
+        let (after, cat) = (e.lines(), self.cat.clone());
+        let tracks = move |lines: &[String]| tracks_of(&cat, lines);
+        match self.ask(move |db, owner| db.write_playlist_entries(owner, &name, &expected, &e, &account, &ops, &tracks(&e.lines()))).await? {
             Written::Unknown => Err(StoreError::Unknown),
             Written::Stale => Ok(None),
             Written::Done { before } => Ok(Some(self.written(id, before, after).await)),
@@ -775,7 +818,7 @@ impl Store {
         }
         let _one_writer = self.write.lock().await;
         let n = name.to_string();
-        if self.ask(move |db, owner| db.create_playlist(owner, &n, &[])).await?.is_none() {
+        if self.ask(move |db, owner| db.create_playlist(owner, &n, &[], &Tracks::new())).await?.is_none() {
             return Err(StoreError::Exists);
         }
         self.write_out(name, Some(&[])).await;
@@ -928,16 +971,28 @@ fn read_folder(dir: &Path, owner: &str, prefix: &str, out: &mut Vec<(String, Str
     Ok(())
 }
 
+/// The tracks `lines` name now (decision 0101 point 11), each line once. Blocking.
+fn tracks_of(cat: &Catalogue, lines: &[String]) -> Tracks {
+    let mut out = Tracks::new();
+    for line in lines {
+        if !out.contains_key(line) {
+            out.insert(line.clone(), cat.track_of_line(line));
+        }
+    }
+    out
+}
+
 /// The playlists' `.m3u` files brought into the database (0.16, decision 0101), once: the first time the Music folder
-/// is known. Each is then written out as its copy into `out`. The files stay where they are, never read again.
-/// Blocking.
-pub fn import(db: &UserData, music: &Path, out: Option<&Path>) -> Result<()> {
+/// is known, each line as the track it names. Each is then written out as its copy into `out`. The files stay where
+/// they are, never read again. Blocking.
+pub fn import(db: &UserData, cat: &Catalogue, music: &Path, out: Option<&Path>) -> Result<()> {
     // Not there yet (a share not mounted): brought in once it is, never as if it held none.
     if db.playlists_imported()? || !music.is_dir() {
         return Ok(());
     }
     let found = files_of(music)?;
-    let came = db.import_playlists(&found)?;
+    let lines: Vec<String> = found.iter().flat_map(|(_, _, lines, _)| lines.iter().cloned()).collect();
+    let came = db.import_playlists(&found, &tracks_of(cat, &lines))?;
     tracing::info!("{came} playlist(s) brought into the database from {}", music.display());
     let Some(out) = out else { return Ok(()) };
     for owner in db.playlist_owners()? {
@@ -1125,11 +1180,12 @@ B/2.mp3
         d.write(".playlists/ann/Evening.m3u", "../../A/1.mp3\n");
         d.write("Chill.m3u", "A/1.mp3\n");
         let (db, out) = (Arc::new(UserData::open(None).unwrap()), d.0.join("copies"));
-        let s = Store::in_music(db.clone(), &d.0, Some(out.clone())).await.unwrap();
+        let cat = Arc::new(Catalogue::open(None, vec![d.0.clone()]).unwrap());
+        let s = Store::in_music(db.clone(), cat.clone(), &d.0, Some(out.clone())).await.unwrap();
         let v = s.view(Some("A/1.mp3")).await.unwrap();
         assert_eq!(v.iter().map(|p| (p.name.as_str(), p.member, p.count, p.dead)).collect::<Vec<_>>(), [("Chill", true, 1, 1)]);
         assert_eq!(s.entries("Chill").await.unwrap(), ["A/1.mp3", "gone/2.mp3"], "Music-relative, as before");
-        let ann = Store::open(db.clone(), Some("ann"), &d.0, Some(out.clone()));
+        let ann = Store::open(db.clone(), cat.clone(), Some("ann"), &d.0, Some(out.clone()));
         assert_eq!(ann.entries("Evening").await.unwrap(), ["A/1.mp3"], "another account's, from its folder");
         // Written out as copies; the files stay as they were and are never read again.
         assert_eq!(std::fs::read_to_string(out.join("Chill.m3u")).unwrap(), "A/1.mp3\ngone/2.mp3\n");
@@ -1138,19 +1194,44 @@ B/2.mp3
         assert_eq!(std::fs::read_to_string(out.join("Chill.m3u")).unwrap(), "A/1.mp3\ngone/2.mp3\nB/3.mp3\n");
         assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
         d.write(".playlists/Chill.m3u", "../B/9.mp3\n");
-        let again = Store::in_music(db, &d.0, Some(out)).await.unwrap();
+        let again = Store::in_music(db, cat, &d.0, Some(out)).await.unwrap();
         assert_eq!(again.entries("Chill").await.unwrap(), ["A/1.mp3", "gone/2.mp3", "B/3.mp3"], "brought in once");
         assert_eq!(music_playlists(&d.0).unwrap(), ["Chill"], "Music's own copies, by name");
+    }
+
+    #[tokio::test]
+    async fn each_entry_is_the_track_its_line_names_and_stays_it_when_its_file_goes() {
+        let d = Dir::new();
+        d.touch("A/1.mp3");
+        let cat = Arc::new(Catalogue::open(None, vec![d.0.clone()]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let track = cat.track_of_line("A/1.mp3").expect("the record's track");
+        let db = Arc::new(UserData::open(None).unwrap());
+        let s = Store::open(db.clone(), cat, None, &d.0, None);
+        s.create("Mix").await.unwrap();
+        s.set_member("Mix", "A/1.mp3", true).await.unwrap();
+        s.set_member("Mix", "Gone/2.mp3", true).await.unwrap();
+        let tracked = |db: &UserData| db.tracked_entries("").unwrap().into_iter().map(|(_, _, l, t)| (l, t)).collect::<Vec<_>>();
+        assert_eq!(tracked(&db), [("A/1.mp3".to_string(), track.clone())], "a line no file is at is no track's");
+        // Its file gone: the entry stays that track's, missing (decision 0101 point 11).
+        std::fs::remove_file(d.0.join("A/1.mp3")).unwrap();
+        s.set_member("Mix", "C/3.mp3", true).await.unwrap();
+        s.refresh_dead().await;
+        assert_eq!(tracked(&db), [("A/1.mp3".to_string(), track)]);
+        assert_eq!(s.view(None).await.unwrap()[0].dead, 3);
     }
 
     #[tokio::test]
     async fn a_music_folder_not_there_yet_brings_nothing_in_until_it_is() {
         let d = Dir::new();
         let db = Arc::new(UserData::open(None).unwrap());
-        Store::in_music(db.clone(), d.0.join("not mounted"), None).await.unwrap();
+        let cat = Arc::new(Catalogue::open(None, vec![d.0.clone()]).unwrap());
+        Store::in_music(db.clone(), cat.clone(), d.0.join("not mounted"), None).await.unwrap();
         assert!(!db.playlists_imported().unwrap(), "never as if it held none");
         d.write("Chill.m3u", "A/1.mp3\n");
-        let s = Store::in_music(db.clone(), &d.0, None).await.unwrap();
+        let s = Store::in_music(db.clone(), cat, &d.0, None).await.unwrap();
         assert_eq!(s.entries("Chill").await.unwrap(), ["A/1.mp3"]);
     }
 

@@ -7,7 +7,9 @@
 //! spoken names), so a rename changes nothing there; its store addresses it by its owner and its name, unique per
 //! owner whatever the case. The keys 0.15 knew it by (its name, `owner/name` another's) lead to its id
 //! (`playlist_moved`). Every write matches the new lines to the entries kept (crate::playlist_ops: by order and
-//! content), so an entry keeps its id and when it came, and is logged (decision 0087) in the same transaction.
+//! content), so an entry keeps its id and when it came, and is logged (decision 0087) in the same transaction. An
+//! entry is the record's track (decision 0101 point 11), its line where its file was last seen: one whose file went is
+//! kept, missing, with its track, and leads to the track's file again where it is found (`relink_playlists`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -26,12 +28,13 @@ CREATE TABLE IF NOT EXISTS playlist (
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, shared INTEGER NOT NULL DEFAULT 0,
   created INTEGER NOT NULL, changed INTEGER NOT NULL, gone INTEGER) WITHOUT ROWID;
 CREATE UNIQUE INDEX IF NOT EXISTS playlist_named ON playlist (owner, name) WHERE gone IS NULL;
--- Its entries by their entry ids (crate::playlist_ops): the place (`n`, none once removed), the line (Music-relative),
--- when it came (epoch s; none for one held before the dates were kept), when it was last placed (an add or a move,
+-- Its entries by their entry ids (crate::playlist_ops): the place (`n`, none once removed), the line (Music-relative:
+-- where its file was last seen), its track (the record's track id as served, `tr-N`, decision 0101: whichever copy
+-- plays; none while no file of it was ever found), when it came (epoch s; none for one held before the dates were kept), when it was last placed (an add or a move,
 -- epoch ms; 0 for a line given its id by Cratarr), and once removed when (`gone`, epoch ms) and the entry before it
 -- then (`after`).
 CREATE TABLE IF NOT EXISTS playlist_item (
-  playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER, line TEXT NOT NULL, added INTEGER,
+  playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER, line TEXT NOT NULL, track TEXT, added INTEGER,
   placed INTEGER NOT NULL DEFAULT 0, gone INTEGER, after TEXT, PRIMARY KEY (playlist, entry)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS playlist_item_gone ON playlist_item (gone);
 -- The keys 0.15 knew a playlist by (its name; `owner/name` another account's; a Subsonic id's name from before a
@@ -130,9 +133,19 @@ fn lines_of(conn: &Connection, id: &str) -> Result<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// A playlist's entries as kept, and when each came.
-fn entries_of(conn: &Connection, id: &str) -> Result<(Entries, HashMap<String, Option<i64>>)> {
-    let mut st = conn.prepare_cached("SELECT entry, n, line, added, placed, gone, after FROM playlist_item WHERE playlist = ?1")?;
+/// What a playlist's rows keep beside its entries, by entry id: when each came, and its track.
+#[derive(Default)]
+struct Kept {
+    added: HashMap<String, Option<i64>>,
+    tracks: HashMap<String, Option<String>>,
+}
+
+/// The tracks lines name now (`Store`'s catalogue's answer), by line; a line not in it names none.
+pub type Tracks = HashMap<String, Option<String>>;
+
+/// A playlist's entries as kept, and when each came and its track.
+fn entries_of(conn: &Connection, id: &str) -> Result<(Entries, Kept)> {
+    let mut st = conn.prepare_cached("SELECT entry, n, line, added, placed, gone, after, track FROM playlist_item WHERE playlist = ?1")?;
     let rows = st.query_map([id], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -142,12 +155,14 @@ fn entries_of(conn: &Connection, id: &str) -> Result<(Entries, HashMap<String, O
             r.get::<_, i64>(4)?,
             r.get::<_, Option<i64>>(5)?,
             r.get::<_, Option<String>>(6)?,
+            r.get::<_, Option<String>>(7)?,
         ))
     })?;
-    let (mut live, mut e, mut added) = (Vec::new(), Entries::default(), HashMap::new());
+    let (mut live, mut e, mut kept) = (Vec::new(), Entries::default(), Kept::default());
     for row in rows {
-        let (entry, n, line, came, placed, gone, after) = row?;
-        added.insert(entry.clone(), came);
+        let (entry, n, line, came, placed, gone, after, track) = row?;
+        kept.added.insert(entry.clone(), came);
+        kept.tracks.insert(entry.clone(), track);
         match (n, gone) {
             (_, Some(at)) => {
                 e.gone.insert(entry, Gone { line, after, at });
@@ -161,24 +176,27 @@ fn entries_of(conn: &Connection, id: &str) -> Result<(Entries, HashMap<String, O
     }
     live.sort_by_key(|(n, _)| *n);
     e.live = live.into_iter().map(|(_, x)| x).collect();
-    Ok((e, added))
+    Ok((e, kept))
 }
 
 /// A playlist's entries kept as `e` has them: its rows replaced. An entry new to it came now (`at`, epoch s), one it
-/// kept keeps its date.
-fn keep(tx: &Transaction<'_>, id: &str, e: &Entries, added: &HashMap<String, Option<i64>>, at: i64) -> Result<()> {
+/// kept keeps its date. Its track is the one its line names now (`tracks`), else the one it had (its file gone, it is
+/// that track's still).
+fn keep(tx: &Transaction<'_>, id: &str, e: &Entries, kept: &Kept, tracks: &Tracks, at: i64) -> Result<()> {
     tx.execute("DELETE FROM playlist_item WHERE playlist = ?1", [id])?;
     let mut st = tx.prepare_cached(
-        "INSERT INTO playlist_item (playlist, entry, n, line, added, placed, gone, after) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO playlist_item (playlist, entry, n, line, track, added, placed, gone, after) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?;
+    let had = |entry: &str| kept.tracks.get(entry).cloned().flatten();
     for (n, x) in e.live.iter().enumerate() {
-        let came = added.get(&x.id).copied().unwrap_or(Some(at));
+        let came = kept.added.get(&x.id).copied().unwrap_or(Some(at));
         let placed = e.placed.get(&x.id).copied().unwrap_or(0);
-        st.execute(params![id, x.id, n as i64, x.line, came, placed, Option::<i64>::None, Option::<String>::None])?;
+        let track = tracks.get(&x.line).cloned().flatten().or_else(|| had(&x.id));
+        st.execute(params![id, x.id, n as i64, x.line, track, came, placed, Option::<i64>::None, Option::<String>::None])?;
     }
     for (entry, g) in &e.gone {
-        let came = added.get(entry).copied().flatten();
-        st.execute(params![id, entry, Option::<i64>::None, g.line, came, 0i64, g.at, g.after])?;
+        let came = kept.added.get(entry).copied().flatten();
+        st.execute(params![id, entry, Option::<i64>::None, g.line, had(entry), came, 0i64, g.at, g.after])?;
     }
     Ok(())
 }
@@ -203,9 +221,10 @@ fn write(
     expected: Option<&[String]>,
     lines: &[String],
     given: Option<&Entries>,
+    tracks: &Tracks,
 ) -> Result<Written> {
     let Some(p) = named(tx, owner, name)? else { return Ok(Written::Unknown) };
-    let (mut e, added) = entries_of(tx, &p.id)?;
+    let (mut e, kept) = entries_of(tx, &p.id)?;
     let before = e.lines();
     if expected.is_some_and(|x| x != before.as_slice()) {
         return Ok(Written::Stale);
@@ -215,7 +234,7 @@ fn write(
         None => e.matched(lines, now_ms(), crate::playlist_ops::new_id),
     }
     let at = now();
-    keep(tx, &p.id, &e, &added, at)?;
+    keep(tx, &p.id, &e, &kept, tracks, at)?;
     if e.lines() != before {
         tx.execute("UPDATE playlist SET changed = ?2 WHERE id = ?1", params![p.id, at])?;
         log_playlist(tx, &p.id, Op::Changed, false)?;
@@ -282,16 +301,17 @@ impl UserData {
     pub fn playlist_entries(&self, owner: &str, name: &str) -> Result<Option<(Entries, Vec<Option<i64>>)>> {
         let db = self.db();
         let Some(p) = named(&db, owner, name)? else { return Ok(None) };
-        let (e, added) = entries_of(&db, &p.id)?;
-        let dates = e.live.iter().map(|x| added.get(&x.id).copied().flatten()).collect();
+        let (e, kept) = entries_of(&db, &p.id)?;
+        let dates = e.live.iter().map(|x| kept.added.get(&x.id).copied().flatten()).collect();
         Ok(Some((e, dates)))
     }
 
-    /// The playlist's lines become `lines`, only while it holds `expected` (`None`: whatever it holds).
-    pub fn write_playlist(&self, owner: &str, name: &str, expected: Option<&[String]>, lines: &[String]) -> Result<Written> {
+    /// The playlist's lines become `lines` (their tracks `tracks`), only while it holds `expected` (`None`: whatever it
+    /// holds).
+    pub fn write_playlist(&self, owner: &str, name: &str, expected: Option<&[String]>, lines: &[String], tracks: &Tracks) -> Result<Written> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let w = write(&tx, owner, name, expected, lines, None)?;
+        let w = write(&tx, owner, name, expected, lines, None, tracks)?;
         tx.commit()?;
         Ok(w)
     }
@@ -307,10 +327,11 @@ impl UserData {
         e: &Entries,
         account: &str,
         ops: &[(String, Option<String>)],
+        tracks: &Tracks,
     ) -> Result<Written> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let w = write(&tx, owner, name, Some(expected), &e.lines(), Some(e))?;
+        let w = write(&tx, owner, name, Some(expected), &e.lines(), Some(e), tracks)?;
         if matches!(w, Written::Done { .. }) {
             let mut st = tx.prepare_cached("INSERT OR IGNORE INTO playlist_op (account, op_id, at, why) VALUES (?1, ?2, ?3, ?4)")?;
             for (op, why) in ops {
@@ -321,8 +342,9 @@ impl UserData {
         Ok(w)
     }
 
-    /// A new playlist of the owner's holding `lines`: its id; none when another has the name (whatever the case).
-    pub fn create_playlist(&self, owner: &str, name: &str, lines: &[String]) -> Result<Option<String>> {
+    /// A new playlist of the owner's holding `lines` (their tracks `tracks`): its id; none when another has the name
+    /// (whatever the case).
+    pub fn create_playlist(&self, owner: &str, name: &str, lines: &[String], tracks: &Tracks) -> Result<Option<String>> {
         let mut db = self.db();
         let tx = db.transaction()?;
         if taken(&tx, owner, name, None)? {
@@ -335,7 +357,7 @@ impl UserData {
         )?;
         let mut e = Entries::default();
         e.matched(lines, now_ms(), crate::playlist_ops::new_id);
-        keep(&tx, &id, &e, &HashMap::new(), at)?;
+        keep(&tx, &id, &e, &Kept::default(), tracks, at)?;
         tx.commit()?;
         Ok(Some(id))
     }
@@ -435,7 +457,7 @@ impl UserData {
     /// last changed (epoch s). What was kept beside the files goes with them: each line's entry id, when it came, the
     /// sharing, and the Subsonic dates. Those tables go. Returns how many playlists came; none when they were brought
     /// in already.
-    pub fn import_playlists(&self, found: &[(String, String, Vec<String>, i64)]) -> Result<usize> {
+    pub fn import_playlists(&self, found: &[(String, String, Vec<String>, i64)], tracks: &Tracks) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
         if tx.prepare_cached("SELECT 1 FROM playlist_import")?.exists([])? {
@@ -506,7 +528,7 @@ impl UserData {
                 *n += 1;
                 added.insert(x.id.clone(), at);
             }
-            keep(&tx, &id, &e, &added, now())?;
+            keep(&tx, &id, &e, &Kept { added, tracks: HashMap::new() }, tracks, now())?;
             // The key it was known by, and a Subsonic id's names from before its renames, lead to it; a favourite of it
             // is of its id.
             tx.execute("INSERT OR REPLACE INTO playlist_moved (old, id) VALUES (?1, ?2)", params![key, id])?;
@@ -539,6 +561,44 @@ impl UserData {
     }
 }
 
+impl UserData {
+    /// The owner's entries there now that have a track, by playlist: (playlist name, entry, line, track). What the
+    /// minute pass looks at where a line's file went (`relink_playlists`).
+    pub fn tracked_entries(&self, owner: &str) -> Result<Vec<(String, String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT p.name, i.entry, i.line, i.track FROM playlist_item i JOIN playlist p ON p.id = i.playlist
+             WHERE p.owner = ?1 AND p.gone IS NULL AND i.n IS NOT NULL AND i.track IS NOT NULL",
+        )?;
+        let rows = st.query_map([owner], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Entries led to where their track's file is now (`relinks`: playlist name, entry, the new line), each playlist
+    /// changed and logged once. Returns the names of the playlists changed, with their lines now.
+    pub fn relink_playlists(&self, owner: &str, relinks: &[(String, String, String)]) -> Result<Vec<(String, Vec<String>)>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut changed: Vec<String> = Vec::new();
+        for (name, entry, line) in relinks {
+            let Some(p) = named(&tx, owner, name)? else { continue };
+            let n = tx.execute("UPDATE playlist_item SET line = ?3 WHERE playlist = ?1 AND entry = ?2 AND n IS NOT NULL", params![p.id, entry, line])?;
+            if n > 0 && !changed.contains(&p.id) {
+                tx.execute("UPDATE playlist SET changed = ?2 WHERE id = ?1", params![p.id, now()])?;
+                log_playlist(&tx, &p.id, Op::Changed, false)?;
+                changed.push(p.id.clone());
+            }
+        }
+        let mut out = Vec::new();
+        for id in changed {
+            let name: String = tx.query_row("SELECT name FROM playlist WHERE id = ?1", [&id], |r| r.get(0))?;
+            out.push((name, lines_of(&tx, &id)?));
+        }
+        tx.commit()?;
+        Ok(out)
+    }
+}
+
 /// Removed entries forgotten past their time (`cut`, epoch ms), and playlists set aside then.
 pub(super) fn forget_old(tx: &Transaction<'_>, cut_ms: i64) -> Result<usize> {
     let mut n = tx.execute("DELETE FROM playlist_item WHERE gone < ?1", [cut_ms])?;
@@ -555,22 +615,44 @@ mod tests {
         x.iter().map(|s| s.to_string()).collect()
     }
 
+    /// Lines that name no track.
+    fn none() -> Tracks {
+        Tracks::new()
+    }
+
+    #[test]
+    fn an_entry_is_its_track_kept_when_its_file_goes_and_led_to_where_it_is_now() {
+        let u = UserData::open(None).unwrap();
+        let tracks: Tracks = [("A/1.mp3".to_string(), Some("tr-1".to_string()))].into();
+        u.create_playlist("", "Evening", &v(&["A/1.mp3", "B/2.mp3"]), &tracks).unwrap();
+        let tracked = |u: &UserData| u.tracked_entries("").unwrap().into_iter().map(|(n, _, l, t)| (n, l, t)).collect::<Vec<_>>();
+        assert_eq!(tracked(&u), [("Evening".to_string(), "A/1.mp3".to_string(), "tr-1".to_string())], "a line with no track's file is none's");
+        // Its file gone (its line names no track now): still that track's.
+        u.write_playlist("", "Evening", None, &v(&["A/1.mp3", "B/2.mp3", "C/3.mp3"]), &none()).unwrap();
+        let kept = u.tracked_entries("").unwrap();
+        assert_eq!(kept.len(), 1, "it keeps its track");
+        // Its track's file found elsewhere: the entry leads there, its playlist changed once.
+        let changed = u.relink_playlists("", &[("Evening".into(), kept[0].1.clone(), "A2/1.mp3".into())]).unwrap();
+        assert_eq!(changed, [("Evening".to_string(), v(&["A2/1.mp3", "B/2.mp3", "C/3.mp3"]))]);
+        assert_eq!(tracked(&u)[0].1, "A2/1.mp3");
+    }
+
     #[test]
     fn a_write_keeps_each_entrys_id_and_date_and_is_logged() {
         let u = UserData::open(None).unwrap();
-        let id = u.create_playlist("", "Evening", &v(&["a", "b"])).unwrap().unwrap();
+        let id = u.create_playlist("", "Evening", &v(&["a", "b"]), &none()).unwrap().unwrap();
         assert!(is_id(&id), "{id}");
-        assert!(u.create_playlist("", "evening", &[]).unwrap().is_none(), "one name per owner, whatever the case");
-        assert!(u.create_playlist("ann", "Evening", &[]).unwrap().is_some(), "another's is another");
+        assert!(u.create_playlist("", "evening", &[], &none()).unwrap().is_none(), "one name per owner, whatever the case");
+        assert!(u.create_playlist("ann", "Evening", &[], &none()).unwrap().is_some(), "another's is another");
         let (first, dates) = u.playlist_entries("", "Evening").unwrap().unwrap();
         assert_eq!((first.lines(), dates.iter().all(Option::is_some)), (v(&["a", "b"]), true));
         // b first, a gone, c new: b keeps its id and its date.
-        assert_eq!(u.write_playlist("", "Evening", Some(&v(&["a", "b"])), &v(&["b", "c"])).unwrap(), Written::Done { before: v(&["a", "b"]) });
+        assert_eq!(u.write_playlist("", "Evening", Some(&v(&["a", "b"])), &v(&["b", "c"]), &none()).unwrap(), Written::Done { before: v(&["a", "b"]) });
         let (again, _) = u.playlist_entries("", "Evening").unwrap().unwrap();
         assert_eq!(again.live[0].id, first.live[1].id);
         assert!(again.gone.contains_key(&first.live[0].id), "a is remembered as removed");
-        assert_eq!(u.write_playlist("", "Evening", Some(&v(&["a"])), &[]).unwrap(), Written::Stale, "not over an edit it has not seen");
-        assert_eq!(u.write_playlist("", "Morning", None, &[]).unwrap(), Written::Unknown);
+        assert_eq!(u.write_playlist("", "Evening", Some(&v(&["a"])), &[], &none()).unwrap(), Written::Stale, "not over an edit it has not seen");
+        assert_eq!(u.write_playlist("", "Morning", None, &[], &none()).unwrap(), Written::Unknown);
         let logged: i64 = u.db().query_row("SELECT count(*) FROM change_log WHERE item = ?1 AND account = ''", [&id], |r| r.get(0)).unwrap();
         assert_eq!(logged, 1, "its change logged by its id, once, under its owner");
     }
@@ -578,8 +660,8 @@ mod tests {
     #[test]
     fn renamed_deleted_and_brought_back_it_keeps_its_id_and_entries() {
         let u = UserData::open(None).unwrap();
-        u.create_playlist("", "Evening", &v(&["a"])).unwrap();
-        u.create_playlist("", "Morning", &[]).unwrap();
+        u.create_playlist("", "Evening", &v(&["a"]), &none()).unwrap();
+        u.create_playlist("", "Morning", &[], &none()).unwrap();
         let id = u.playlist("", "Evening").unwrap().unwrap().0.id;
         assert_eq!(u.rename_playlist("", "Evening", "MORNING").unwrap(), Named::Taken);
         assert_eq!(u.rename_playlist("", "Evening", "EVENING").unwrap(), Named::Done(v(&["a"])), "its own name in other capitals");
@@ -625,8 +707,8 @@ mod tests {
             ("ann".to_string(), "Evening".to_string(), v(&["A/1.mp3", "B/2.mp3"]), 50),
             (String::new(), "Chill".to_string(), v(&["A/1.mp3"]), 60),
         ];
-        assert_eq!(u.import_playlists(&found).unwrap(), 2);
-        assert_eq!(u.import_playlists(&found).unwrap(), 0, "once");
+        assert_eq!(u.import_playlists(&found, &none()).unwrap(), 2);
+        assert_eq!(u.import_playlists(&found, &none()).unwrap(), 0, "once");
         let (p, lines) = u.playlist("ann", "Evening").unwrap().unwrap();
         assert_eq!((p.shared, p.created, p.changed, lines), (true, 10, 20, v(&["A/1.mp3", "B/2.mp3"])));
         let (e, dates) = u.playlist_entries("ann", "Evening").unwrap().unwrap();
