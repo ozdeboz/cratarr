@@ -14,8 +14,12 @@
 // of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
+import { untrack } from 'svelte';
 import { perAccount, whenAccount } from './account';
 import { playback } from './deviceLog';
+import * as tapeHead from './tape/tape.svelte';
+import type { Motion as TapeMotion } from './tape/tape.svelte';
+import { refusedText } from './tape/words';
 import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
@@ -876,7 +880,8 @@ function tick() {
   settleTape();
   local.paused = tape.quietPause ? false : (tape.committed ?? audio.paused);
   const w = where(tape.heldAt ?? audio.currentTime);
-  if (w && tape.rewinding) local.position = tape.rewindPos ?? local.position;
+  if (headWind) local.position = headPlace(headWind);
+  else if (w && tape.rewinding) local.position = tape.rewindPos ?? local.position;
   else if (w) {
     if (w.seg.index !== local.index) {
       // Repeat one: the stream went on to the next track by itself; back to the start of this one. (Next and previous
@@ -1489,7 +1494,7 @@ function hand(op: string, args: Record<string, unknown> = {}) {
 /** The position now, to the frame (the visuals' beats, decision 0046), where `local.position` moves four times a
  *  second: counted on from the playing player's last report, or read from this page's own audio. */
 export function positionNow(): number {
-  if (!handed()) return tape.rewindPos ?? where()?.offset ?? local.position;
+  if (!handed()) return headWind ? headPlace(headWind) : (tape.rewindPos ?? where()?.offset ?? local.position);
   if (deck) return deckPlace(deck);
   if (tape.glide) return local.position;
   const p = (reported.positionMs + sinceReport()) / 1000;
@@ -2373,6 +2378,7 @@ export function setSnippetDuck(v: number) {
 function applyVolume() {
   if (audio) audio.volume = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * snippetDuck * rampGain;
   clipVolume();
+  if (headWind) tapeHead.setGain(headGain(headWind.gainDb));
 }
 
 // --- Start and stop (Settings › This device; the owner, 2026-10-25) ---
@@ -2943,6 +2949,7 @@ const holdFor = (dir: 1 | -1): HoldWind => holdWind(prefs.startStop, dir, Math.m
  *  clock through its way's speed, else the track's own as measured on its element (lib/player/heard); null where this
  *  page plays nothing here, or before it has been heard long enough to measure. */
 export function heardDeckSpeed(now = performance.now()): number | null {
+  if (headWind) return tapeHead.heardSpeed() ?? null;
   const w = tape.rewinding;
   if (w && w.at !== null) {
     const s = heardSpeed(w.clip, now);
@@ -3645,6 +3652,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
 }
 /** Ends a wind under way (nothing where none is). */
 function endRewind() {
+  if (headWind) headEnd();
   const w = tape.rewinding;
   if (!w) return;
   if (w.handArmed) disarm(w.handArmed);
@@ -4471,3 +4479,130 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
 }
 
 if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) lockScreenActions();
+
+// --- The tape on the page's own head (decision 0102) ---
+// The playing track's file fetched whole as it starts and read by the head (lib/tape) at any speed either way, the
+// track's own player waiting paused, handed back to where the head was heard. What a press does, the deck's state
+// machine says (0102, amended 2026-11-04: one pure machine in the rules crate, a5's, carried out here and in the app);
+// this is what carries its outcomes out: a motion started on the head ([headStart]), followed ([headStep]), let go,
+// handed back ([headFinish]) or dropped ([headEnd]). Until the machine is here, the server's wind streams as before.
+
+/** A wind on the head: its track (its place in the queue and its key), where it began (s), its motion, when it began
+ *  (the clock's ms, for its length only), when it is over (ms in; null: at an edge, or at its let-go's arrival), what
+ *  follows it (where it was last heard, s, and whether it stopped at an edge), and its hold while held. */
+type HeadWind = {
+  index: number;
+  key: string;
+  fromSecs: number;
+  motion: TapeMotion;
+  t0: number;
+  endsAtMs: number | null;
+  then: (atSecs: number, edge: boolean) => void;
+  held: { dir: 1 | -1; letGo: boolean } | null;
+  gainDb: number;
+};
+let headWind: HeadWind | null = null;
+let headTimer: ReturnType<typeof setInterval> | null = null;
+/** How long after a wind's end (on its clock) it is heard there: the output's own delay (the app's HEARD_AFTER_MS). */
+const HEAD_HEARD_AFTER_MS = 300;
+const HEAD_STEP_MS = 40;
+
+/** A track's key on the head, and the file it reads: Cratarr's own tracks only (never a preview, the device's or another
+ *  server's music). */
+const headKey = (t: LocalTrack | undefined) => (t && windable(t) ? `${t.source}/${t.id}` : null);
+const headFile = (t: LocalTrack) => `/api/file/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}`;
+
+// The playing track's file fetched for the head as it starts (the playing track only, the owner's choice). Only in a
+// browser: in the app its own player has its own head.
+$effect.root(() => {
+  $effect(() => {
+    if (inApp || !audio) return;
+    const t = local.queue[local.index];
+    const key = headKey(t);
+    if (!key || !t) return;
+    untrack(() => void headLoad(key, headFile(t)));
+  });
+});
+async function headLoad(key: string, url: string) {
+  const error = await tapeHead.load(key, url);
+  if (error) playback('warn', 'tape head: the track not loaded', { key, error });
+}
+
+/** The head's gain for a wind: the page's volume and the track's level, times the wind's own (dB). */
+function headGain(gainDb: number): number {
+  const page = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * snippetDuck;
+  return Math.max(0, page * (level ? (told?.level ?? 1) : 1) * 10 ** (gainDb / 20));
+}
+
+/** Where the head is heard now, s into its track; where it began until it has been heard. */
+const headPlace = (w: HeadWind) => (tapeHead.heardMs() ?? w.fromSecs * 1000) / 1000;
+
+/**
+ * The head reads the playing track from `fromSecs` by `motion` at the wind's `gainDb`, the track's own player waiting
+ * paused; over at `endsAtMs` ms in (null: at its let-go's arrival, or at an edge of the track), then `then` with where it
+ * was last heard. False where the head has no file of the playing track yet (the server's stream then).
+ */
+function headStart(fromSecs: number, motion: TapeMotion, gainDb: number, endsAtMs: number | null, then: HeadWind['then'], held: HeadWind['held'] = null): boolean {
+  if (!audio || headWind || tape.rewinding) return false;
+  const key = headKey(local.queue[local.index]);
+  if (!key || tapeHead.tape.ready !== key) return false;
+  const w: HeadWind = { index: local.index, key, fromSecs, motion, t0: performance.now(), endsAtMs, then, held, gainDb };
+  if (!tapeHead.start(key, fromSecs * 1000, motion, headGain(gainDb), (why) => headWind === w && headFinish(w, why !== 'stopped'))) return false;
+  headWind = w;
+  audio.pause();
+  tape.committed = false;
+  local.paused = false;
+  local.position = fromSecs;
+  rewindNow.on = true;
+  windAsked(false);
+  playback('info', 'tape head: a wind', { from_s: Math.round(fromSecs * 10) / 10, kind: motion.kind, ends_at_ms: endsAtMs });
+  headTimer = setInterval(() => headStep(w), HEAD_STEP_MS);
+  return true;
+}
+
+/** Each step while a head wind runs: where it is heard shown; a hold's speed for the deck; over once its end (or its
+ *  let-go's arrival) has been heard. */
+function headStep(w: HeadWind) {
+  if (headWind !== w) return;
+  local.position = headPlace(w);
+  if (w.held) {
+    holdNow.on = true;
+    holdNow.speed = Math.abs(tapeHead.heardSpeed() ?? 0);
+    holdNow.dir = w.held.dir;
+    holdNow.held = !w.held.letGo;
+    holdNow.top = FLIGHT_TOP;
+  }
+  const elapsed = performance.now() - w.t0;
+  if (w.endsAtMs !== null && elapsed >= w.endsAtMs + HEAD_HEARD_AFTER_MS) return headFinish(w, false);
+  if (w.held?.letGo && tapeHead.arrived()) return headFinish(w, false);
+}
+
+/** The head wind over: the head stopped, the track's own player put where the head was last heard, what follows. */
+function headFinish(w: HeadWind, edge: boolean) {
+  if (headWind !== w) return;
+  const at = Math.max(0, headPlace(w));
+  headEnd();
+  playback('info', 'tape head: the wind over', { at_s: Math.round(at * 10) / 10, edge });
+  w.then(at, edge);
+}
+
+/** The head wind dropped where it is, nothing following it (a press taking over). */
+function headEnd() {
+  headWind = null;
+  if (headTimer) clearInterval(headTimer);
+  headTimer = null;
+  tapeHead.stop();
+  holdNow.on = false;
+  tape.holding = null;
+  rewindNow.on = false;
+  windAsked(false);
+  tape.committed = null;
+  sought.n++;
+}
+
+// The app's own head could not sound a wind (a5's `tape` message): the knob stays as turned, and the deck says why.
+if (inApp)
+  onApp('tape', (m) => {
+    const text = refusedText(m.refused, m.way);
+    if (text) toast.show({ text });
+  });
