@@ -1689,12 +1689,28 @@ export type ShelfSource = {
 
 /** A used library of a server (decision 0034): the dot on its albums (none for the primary, Music), and its quality
  *  limit on the way in. */
-export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; quality: Quality };
+/** A used library of a server, as the page shows it (decision 0101 point 1: no roles; the list's order is the default,
+ *  the first main library taking every fallback): a main library, an Incoming (its fetcher's), or someone's own music
+ *  (`owner`; `mine`: the viewer's). `seen`: whether Cratarr sees its files (`seen_why` when not). `naming`: a main
+ *  library's template, Keep and Move renaming by the target's. */
+export type LibraryInfo = {
+  id: string;
+  name: string;
+  kind: 'main' | 'incoming' | 'own';
+  fetcher: 'lidarr' | 'soulseek' | 'uploads' | null;
+  owner: string | null;
+  mine: boolean;
+  colour: string | null;
+  quality: Quality;
+  seen: boolean;
+  seen_why?: string;
+  naming?: string;
+};
 
-/** An album of a library other than Music, as it stands to the other used libraries (decision 0034, Music's first): an
- *  upgrade of an album there, or a duplicate. `library` is that album's folder, `library_id` the library it is in;
- *  `replaceable` only when it is in Music (Replace is Music's alone). */
-export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable: boolean };
+/** An album as it stands to the other used libraries (decision 0034): an upgrade of an album there, or a duplicate.
+ *  `library` is that album's folder, `library_id` the library it is in; `replaceable_into` the main libraries it can
+ *  replace the other copy in (decision 0101 point 2). */
+export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable_into: string[] };
 
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
@@ -1706,6 +1722,9 @@ export type AlbumsSource = ShelfSource & {
    *  duplicates it. */
   waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
   deletable: string[];
+  /** The Incoming albums the viewer may Keep, and where each goes by default (decision 0101 point 2). */
+  keepable: string[];
+  keep_to: Record<string, string>;
 };
 export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: string | null };
 

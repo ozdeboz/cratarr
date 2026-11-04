@@ -17,21 +17,23 @@
     /** The libraries it can move into. */
     targets: LibraryInfo[];
     replaceable: boolean;
+    /** The main library its Replace puts it in: the other copy's (decision 0101 point 2). */
+    replaceInto: LibraryInfo | null;
     deletable: boolean;
     job: number | null;
   };
 
-  /** For an album of the Library's list. One already in Music (an upgrade or a duplicate) does not move there again:
-   *  an upgrade replaces. Verdicts compare against every library now (2026-11-02, decision 0096's 0.13 fixes): only a
-   *  pair in Music replaces (`replaceable`), and only then is Music no target for a move. */
+  /** For an album of the Library's list. One whose other copy is in a main library (an upgrade or a duplicate) does
+   *  not move there again: an upgrade replaces it there (`replaceable_into`, decision 0101 point 2: any main library). */
   export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
     const deletable = s.deletable.includes(a.id);
     const verdict = s.verdicts[a.id];
-    const inMusic = !!verdict?.replaceable;
+    const into = verdict?.replaceable_into ?? [];
     return {
       from: s.library_info.find((l) => l.id === a.library) ?? null,
-      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(inMusic && l.use === 'music')) : [],
-      replaceable: deletable && verdict?.kind === 'upgrade' && inMusic,
+      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !into.includes(l.id)) : [],
+      replaceable: deletable && verdict?.kind === 'upgrade' && into.length > 0,
+      replaceInto: s.library_info.find((l) => l.id === into[0]) ?? null,
       deletable,
       job: jobs.of(s.id, a.id)?.id ?? null,
     };
@@ -400,7 +402,7 @@
   // svelte-ignore state_referenced_locally
   const fromName = offer?.from?.name ?? 'Incoming';
   // svelte-ignore state_referenced_locally
-  const primary = offer?.from?.use === 'music';
+  const primary = offer?.from?.kind === 'main';
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
@@ -681,7 +683,7 @@
       {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
     {/if}
   {:else if e === 'replaceIn'}
-    {#if me.admin && offer && offer.job === null && offer.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
+    {#if me.admin && offer && offer.job === null && offer.replaceable}<MenuEntry icon="swap" label={`Replace in ${offer.replaceInto?.name ?? music}`} onclick={askReplace} />{/if}
   {:else if e === 'removeResume'}
     {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
   {:else if e === 'deleteAlbum'}

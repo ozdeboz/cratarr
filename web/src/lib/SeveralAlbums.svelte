@@ -106,7 +106,7 @@
     const by = new Map<string, (Ticked & { to: LibraryInfo; primary: boolean })[]>();
     if (me.admin)
       for (const x of offers)
-        if (x.o && x.o.job === null) for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.use === 'music' }]);
+        if (x.o && x.o.job === null) for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.kind === 'main' }]);
     return [...by].map(([name, them]) => ({ name, them }));
   });
 
@@ -134,7 +134,7 @@
   }
 
   function askDelete() {
-    const them = deletable.map((x) => ({ source: x.s.id, id: x.a.id, title: x.a.title, primary: x.o!.from?.use === 'music' }));
+    const them = deletable.map((x) => ({ source: x.s.id, id: x.a.id, title: x.a.title, primary: x.o!.from?.kind === 'main' }));
     const days = library.view?.trash_days ?? 14;
     const music = library.view?.music ?? 'Music';
     const inMusic = them.filter((x) => x.primary).length;
