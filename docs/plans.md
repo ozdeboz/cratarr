@@ -77,6 +77,22 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   device, and crates and the queue on the device** (offline first's fourth and fifth steps, one version: the owner,
   2026-11-02, "17 sounds like 16 work"); settled in [0101](decisions/0101-own-music-one-track-id-library-on-the-device.md). Then all servers in one library, on the device (below), as a view over the
   modes' indexes.
+- **0.17: seven ideas from reading Kima Hub** (the owner, 2026-11-04, picked one by one; Kima Hub,
+  github.com/Chevron7Locked/kima-hub, GPL-3.0):
+  - **Library safety.** A missing track waits in Health for the owner's call (moved, replaced or really gone) instead
+    of being retired after a day; recognised moves stay automatic. Nothing is retired when more than a tenth of the
+    library, and at least ten tracks, goes missing at once: that is a dropped mount, not a deletion.
+  - **Requests and fetches that survive a restart.** The intake's searches and fetches and the bulk queue (0080) are
+    kept on disk, one row per track and step. A source that refuses for its rate limit pauses alone until its deadline
+    (no attempt used, nothing marked failed) instead of failing the job.
+  - **QR pairing.** An app pairs by scanning a short-lived code on the page, and gets a key of its own (0043, 0051).
+  - **The update check.** The server asks GitHub for releases once a day; a dot on the version opens that release's
+    What's New.
+  - **Whole-stack health.** `/api/health` fails when a part Cratarr needs is broken (which parts count: to design).
+  - **An untagged album identified by vote:** the release that more than half of its songs' AcoustID answers agree on.
+  - **Soulseek searches that start simple** (with Soulseek in Cratarr, below): artist and title first, then the title,
+    album and title, then all; classical titles without movement and catalogue numbers.
+  The track map (below) comes after these: the least important of the ideas (the owner, 2026-11-04).
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
 - **Offline first** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the apps carry their
