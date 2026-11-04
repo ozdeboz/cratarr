@@ -55,7 +55,7 @@
   const USE_MORE =
     "Main library: the household's music, every one equal; the first in this list is where music goes when nothing else is said. Incoming: new music waiting to be heard and added.";
   const QUALITY_MORE =
-    "As albums move into this library or are kept into it, only lossless files above the limit are converted, to FLAC at the limit; lossy files and those within it stay as they are. Sync and Export don't follow it.";
+    "As albums move into this library or are added to it, only lossless files above the limit are converted, to FLAC at the limit; lossy files and those within it stay as they are. Sync and Export don't follow it.";
   const TAGS_MORE =
     'How tags with several artists or genres in one value are read. The files are never changed: this is only how Cratarr reads them.\n\nArtist separators: "&", "," and "feat." are never split on, as they are part of credits.';
 
@@ -222,7 +222,7 @@
       <!-- Four steps, so the choice sheet (the owner, 2026-11-02: a quality limit in place of CD format or as it is). -->
       <Item
         name="Quality limit"
-        line="Lossless files above it become FLAC on a move or Keep"
+        line="Lossless files above it become FLAC as they come in"
         more={QUALITY_MORE}
         value={qualityLabel(pol.quality)}
         onclick={() => (choosingQuality = l)}

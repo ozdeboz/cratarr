@@ -51,8 +51,8 @@
   <!-- Cratarr's own: its intake card, checks on top, tracks under (lib/IntakeCard). -->
   {#if source === 'cratarr'}<IntakeCard {source} {album} />{/if}
   <!-- What its tags would get before it comes in: reviewed on the sheet, written as a run (decision 0092, 0.14). -->
-  {#if offers('intake_check') && source === 'cratarr'}<button class="act" onclick={() => openRecordPlan('intake', album)}>Before Keep<Icon name="chevronRight" size={18} /></button>{/if}
-  <button class="act" onclick={() => (menu = true)}>Keep, replace or delete<Icon name="chevronRight" size={18} /></button>
+  {#if offers('intake_check') && source === 'cratarr'}<button class="act" onclick={() => openRecordPlan('intake', album)}>Before adding<Icon name="chevronRight" size={18} /></button>{/if}
+  <button class="act" onclick={() => (menu = true)}>Add, replace or delete<Icon name="chevronRight" size={18} /></button>
   {#if menu}
     <AlbumMenu
       {source}

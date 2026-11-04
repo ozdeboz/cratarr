@@ -96,11 +96,11 @@ function tell(ended: Job[]) {
   }
   const done = ended.filter((j) => j.undo);
   if (!done.length) return;
-  const verb = done.every((j) => j.action === 'keep') ? 'Kept' : done.every((j) => j.action === 'replace') ? 'Replaced' : 'Moved';
+  const verb = done.every((j) => j.action === 'keep') ? 'Added' : done.every((j) => j.action === 'replace') ? 'Replaced' : 'Moved';
   const what = done.length === 1 ? done[0].title : `${done.length} albums`;
   withUndo(
-    `${verb} ${what} ${verb === 'Moved' ? 'into' : 'in'} Music.`,
+    `${verb} ${what}.`,
     done.map((j) => j.undo),
-    { undone: `${what} ${done.length === 1 ? 'is' : 'are'} back in Incoming.`, after: () => jobs.finished++ },
+    { undone: `${what} ${done.length === 1 ? 'is' : 'are'} back where ${done.length === 1 ? 'it was' : 'they were'}.`, after: () => jobs.finished++ },
   );
 }
