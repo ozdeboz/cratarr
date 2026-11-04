@@ -90,7 +90,9 @@
     const own = local.queue.filter((t) => !t.lane);
     const first = own[0];
     if (first?.album_id && own.every((t) => t.album_id === first.album_id)) return albumSubject(first.source, first.album_id);
-    if (shownPlaylists().some((p) => p.id === from)) return from;
+    // The playlist it came from, by its id or by its name (a queue keeps the name it was played under).
+    const pl = shownPlaylists().find((p) => p.id === from || p.name === from);
+    if (pl) return pl.id;
     const c = queueCrate(from);
     return c ? CRATE + c : null;
   });

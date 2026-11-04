@@ -290,7 +290,7 @@
                 : artist.name
               : multi
               ? `${ids.length} playlists`
-              : id,
+              : (shownPlaylists().find((x) => x.id === id)?.name ?? id),
   );
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
   const p = $derived(plain || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
@@ -1583,14 +1583,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const name = making.name.trim();
     try {
       await favouritesSaved();
-      const { added, undo } = await crateToPlaylist(crate, name, prefs.source || undefined, withoutFor(crate));
+      // Its id as the server made it (its name today), followed and viewed.
+      const { added, undo, playlist } = await crateToPlaylist(crate, name, prefs.source || undefined, withoutFor(crate));
       withUndo(`Made ${name}: ${added} ${added === 1 ? 'track' : 'tracks'}.`, [undo], {
-        after: (undone) => (undone ? followDelete(name) : followCreate(name)),
+        after: (undone) => (undone ? followDelete(playlist) : followCreate(playlist)),
       });
       making = null;
       refresh();
       loadCrates();
-      viewOver(name);
+      viewOver(playlist);
     } catch (e) {
       toast.fail(e, "The playlist wasn't made");
       if (making) making.saving = false;
@@ -1865,7 +1866,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
   const newName = $derived(editing ? editing.name.trim() : '');
   /** The name the edit mode starts from: a server's playlist's own (decision 0098), else its id (Cratarr's are by name). */
-  const editBase = $derived(serverList ? (serverListName ?? '') : id);
+  const editBase = $derived(serverList ? (serverListName ?? '') : (shownPlaylists().find((x) => x.id === id)?.name ?? id));
   const nameChanged = $derived(!!editing && newName !== '' && newName !== editBase && !creating);
   // A crate's edit mode: the draft (kept, else the crate as saved, else empty; above), its size as the editor works it
   // out.
@@ -2034,11 +2035,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (!editing || !name || editing.saving) return;
     editing.saving = true;
     try {
-      const { undo } = await createPlaylist(name);
-      withUndo(`Created ${name}.`, [undo], { after: (undone) => (undone ? followDelete(name) : followCreate(name)) });
+      // Its id as the server made it (its name today), followed and viewed.
+      const { undo, playlist } = await createPlaylist(name);
+      withUndo(`Created ${name}.`, [undo], { after: (undone) => (undone ? followDelete(playlist) : followCreate(playlist)) });
       editing = null;
       await refresh();
-      viewPlaylist(name);
+      viewPlaylist(playlist);
     } catch (e) {
       toast.fail(e, "The playlist wasn't made");
       if (editing) editing.saving = false;
@@ -2074,11 +2076,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
             )
           ).undo,
         );
-      // Last: the writes above still name it as it was. The panel's view follows the new name.
-      if (renamed) tokens.push(await renameEverywhere(from, to));
+      // Last: the writes above still name it as it was. The panel's view follows its id as the server says it now.
+      let now = from;
+      if (renamed) {
+        const r = await renameEverywhere(from, to);
+        tokens.push(r.undo);
+        now = r.id;
+      }
       // One Undo for both (the rename undone first, then the tracks under the old name).
       withUndo(`Saved ${to}.`, tokens, {
-        after: (undone) => renamed && (undone ? followRename(to, from) : followRename(from, to)),
+        after: (undone) => renamed && (undone ? followRename(now, from) : followRename(from, now)),
       });
       editing = null;
       saved++;

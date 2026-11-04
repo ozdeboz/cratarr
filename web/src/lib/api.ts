@@ -2606,7 +2606,9 @@ export type Proximity = {
   /** `focus`: how concentrated its genres are, 0..1 (null without genre tags). */
   /** `shares` (0.9.8): each genre's share of its tracks' genres (the rules' aliases applied, 0.05 and up), for the
    *  Map's genre territories. */
-  playlists: { name: string; tracks: number; genres: string[]; focus: number | null; shares?: Record<string, number> }[];
+  /** Each playlist by its name, and by its id where the server says it (0.16: a playlist's id apart from its name; today
+   *  the two are the same, lib/insights's `pidOf`). */
+  playlists: { id?: string; name: string; tracks: number; genres: string[]; focus: number | null; shares?: Record<string, number> }[];
   links: {
     a: number;
     b: number;

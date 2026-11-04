@@ -15,7 +15,7 @@
   const near = $derived(i >= 0 ? insights.closest(i) : []);
 </script>
 
-<div class="about" aria-label={`About ${pid}`}>
+<div class="about" aria-label={`About ${pt?.name ?? pid}`}>
   {#if !pt}
     <!-- Failed: said, never the loader for ever (the owner, 2026-11-02: an error is never empty nor endless). -->
     {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else if insights.error}<Notice text={insights.error} onretry={() => insights.load()} />{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}

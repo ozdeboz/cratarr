@@ -260,13 +260,14 @@
 
   async function rename() {
     const to = nameField.trim();
-    if (!one || !to || to === one.id || working) return;
+    if (!one || !to || to === one.name || working) return;
     working = true;
     try {
       const from = one.id;
-      const undo = await renameEverywhere(from, to);
-      withUndo(`Renamed ${one.name} to ${to}.`, [undo], { after: (undone) => (undone ? followRename(to, from) : followRename(from, to)) });
-      onrenamed?.(from, to);
+      // The id it has now, as the server says (its name today; with 0.16's ids, the same id).
+      const { undo, id } = await renameEverywhere(from, to);
+      withUndo(`Renamed ${one.name} to ${to}.`, [undo], { after: (undone) => (undone ? followRename(id, from) : followRename(from, id)) });
+      onrenamed?.(from, id);
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');
