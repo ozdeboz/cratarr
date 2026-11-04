@@ -3,6 +3,7 @@ import type { WorkRef } from "./WorkRef";
 
 /**
  * The work an album's track performs (0.12, decision 0086; an album's rows' `work`): the work that holds it and its
- * number there, where MusicBrainz says.
+ * number there, where MusicBrainz says. A classical record's tracks only (0.13: MusicBrainz has works for almost every
+ * song, so a soundtrack listed its songs as works).
  */
 export type RowWork = { mbid: string, title: string, parent?: WorkRef, part_number?: number, };
