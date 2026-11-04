@@ -39,6 +39,9 @@ const QUIET: Duration = Duration::from_secs(35);
 const WIND_COUNTED: Duration = Duration::from_secs(2);
 /// Changes reaching the webhooks within this long go out as one.
 const SETTLE: Duration = Duration::from_millis(300);
+/// A player back without its queue plays on only if it was heard this recently (an app updated, or crashed and started
+/// again); gone longer, its queue comes back paused (the owner, 2026-11-04).
+const PLAY_ON_WITHIN: Duration = Duration::from_secs(5 * 60);
 /// How long a webhook may take to answer.
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1010,6 +1013,8 @@ struct Entry {
     offline_since: Option<SystemTime>,
     ended: Option<(&'static str, SystemTime)>,
     seen: SystemTime,
+    /// When its last report came (a connection is not one): whether it plays on when it comes back ([`PLAY_ON_WITHIN`]).
+    reported: SystemTime,
     /// When it was last heard from, for the lease.
     heard: Instant,
     /// Cratarr's ids of the track that plays, looked up when it changes, with that track (`source`, `id`): shown only
@@ -1096,6 +1101,7 @@ impl Entry {
             offline_since: None,
             ended: None,
             seen: SystemTime::now(),
+            reported: UNIX_EPOCH,
             heard: Instant::now(),
             ids: (None, TrackIds::default()),
             album_ids: HashMap::new(),
@@ -1526,6 +1532,10 @@ struct Saved {
     position_ms: u64,
     #[serde(default)]
     playing: bool,
+    /// When it was last heard (epoch s): a player gone longer than [`PLAY_ON_WITHIN`] gets its queue back paused, after a
+    /// restart too. None kept (before 0.15): long ago.
+    #[serde(default)]
+    heard_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1616,6 +1626,7 @@ impl PlayOn {
                 e.report.entry = s.entry;
                 e.report.position_ms = s.position_ms;
                 e.report.playing = s.playing;
+                e.reported = UNIX_EPOCH + Duration::from_secs(s.heard_at);
                 e.queue = s.queue;
                 if e.queue.id.is_empty() && !e.queue.tracks.is_empty() {
                     (e.queue.id, e.queue.name) = (super::queue::new_entry(), name_of(&e.queue.tracks));
@@ -1879,7 +1890,8 @@ impl PlayOn {
                         let v = e.view(n, false);
                         let (queue, owner, kept) = (e.queue.clone(), e.owner.clone(), e.kept.clone());
                         let (following, follow_spans) = (e.following.clone(), e.follow_spans.clone());
-                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner, shared: e.shared, kept, following, follow_spans })
+                        let heard_at = e.reported.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, heard_at, owner, shared: e.shared, kept, following, follow_spans })
                     })
                     .collect();
                 drop(me);
@@ -2181,18 +2193,23 @@ impl PlayOn {
             return Ok(());
         }
         e.device = None;
+        // When it last reported, before this report: a player gone longer does not play on by itself.
+        let last_heard = std::mem::replace(&mut e.reported, SystemTime::now());
         e.seen = SystemTime::now();
         e.heard = Instant::now();
         // Back without a queue (the app was updated, or killed): it gets its queue back where it was, playing on if it
-        // played (the owner's wish, 2026-10-15), else paused.
+        // played (the owner's wish, 2026-10-15) and was heard within [`PLAY_ON_WITHIN`] (the owner, 2026-11-04: an app
+        // killed while it played stayed "playing" for good, and the next start of it played by itself, in the salon at
+        // night), else paused.
         let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty() && e.kind != PlayerKind::Kodi;
-        let given = came_back_empty.then(|| (e.queue.tracks.len(), before.playing));
+        let plays_on = before.playing && last_heard.elapsed().is_ok_and(|gone| gone <= PLAY_ON_WITHIN);
+        let given = came_back_empty.then(|| (e.queue.tracks.len(), plays_on));
         let give_back = came_back_empty.then(|| {
             // A version of its own: what the player was told before (its group, as it connected, carries the queue's
             // version too) must not count as having this queue (the tablet's queue was taken as empty at 00:36,
             // 2026-10-18, by a report with its group's version).
             e.queue.version += 1;
-            let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
+            let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !plays_on);
             let (queue_id, queue_name) = ((!e.queue.id.is_empty()).then(|| e.queue.id.clone()), (!e.queue.name.is_empty()).then(|| e.queue.name.clone()));
             Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused, queue_id, queue_name }
         });
@@ -3821,6 +3838,31 @@ mod tests {
         let back = told(&mut again);
         let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
         assert_eq!((play["tracks"].as_array().unwrap().len(), play["index"].as_u64()), (2, Some(1)));
+    }
+
+    #[tokio::test]
+    async fn a_player_gone_long_gets_its_queue_back_paused_and_one_just_gone_plays_on() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let page = p.connect_browser("tablet", Some("tab-1")).unwrap();
+        p.command("tablet", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
+        p.report("tablet", Report { index: 0, playing: true, ..Report::default() }).unwrap();
+        // Killed while it played (no pause reported), and back at once: it plays on (an update, a crash and restart).
+        drop(page);
+        let mut again = p.connect_browser("tablet", Some("tab-1")).unwrap();
+        said(&mut again);
+        p.report("tablet", Report { index: -1, ..Report::default() }).unwrap();
+        let play = told(&mut again).into_iter().find(|m| m["command"] == "play").expect("its queue given back");
+        assert_eq!(play["paused"].as_bool(), None, "just gone: playing on");
+        p.report("tablet", Report { index: 0, playing: true, ..Report::default() }).unwrap();
+        // Killed while it played, and back only an hour later (the salon at night, 2026-11-04): paused, where it was.
+        drop(again);
+        p.entries().get_mut("tablet").unwrap().reported = SystemTime::now() - Duration::from_secs(3_600);
+        let mut later = p.connect_browser("tablet", Some("tab-1")).unwrap();
+        said(&mut later);
+        p.report("tablet", Report { index: -1, ..Report::default() }).unwrap();
+        let play = told(&mut later).into_iter().find(|m| m["command"] == "play").expect("its queue given back");
+        assert_eq!(play["paused"].as_bool(), Some(true), "gone long: paused");
     }
 
     #[tokio::test]
