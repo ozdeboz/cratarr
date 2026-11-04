@@ -24,14 +24,18 @@
   };
 
   /** For an album of the Library's list. One whose other copy is in a main library (an upgrade or a duplicate) does
-   *  not move there again: an upgrade replaces it there (`replaceable_into`, decision 0101 point 2: any main library). */
+   *  not move there again: an upgrade replaces it there (`replaceable_into`, decision 0101 point 2: any main library).
+   *  An Incoming album's Keep goes first where it goes by default (`keep_to`: the requester's own music, else the
+   *  first main library), the others after it in the list's order. */
   export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
     const deletable = s.deletable.includes(a.id);
     const verdict = s.verdicts[a.id];
     const into = verdict?.replaceable_into ?? [];
+    const keepTo = s.keep_to[a.id];
+    const targets = deletable ? s.library_info.filter((l) => l.id !== a.library && !into.includes(l.id)) : [];
     return {
       from: s.library_info.find((l) => l.id === a.library) ?? null,
-      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !into.includes(l.id)) : [],
+      targets: [...targets.filter((l) => l.id === keepTo), ...targets.filter((l) => l.id !== keepTo)],
       replaceable: deletable && verdict?.kind === 'upgrade' && into.length > 0,
       replaceInto: s.library_info.find((l) => l.id === into[0]) ?? null,
       deletable,
