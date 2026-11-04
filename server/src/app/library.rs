@@ -187,14 +187,14 @@ fn playlist_copies(data_dir: Option<&str>) -> Option<PathBuf> {
 /// The first administrator's playlists over the Music folder (none without one), its `.m3u` files brought in first
 /// (once). Ones that could not be brought in are tried again at the next start: the store opens meanwhile, so the rest
 /// of Cratarr does.
-async fn music_store(db: &Arc<crate::userdata::UserData>, data_dir: Option<&str>, music: Option<&str>) -> Option<Arc<Store>> {
+async fn music_store(db: &Arc<crate::userdata::UserData>, cat: &Arc<Catalogue>, data_dir: Option<&str>, music: Option<&str>) -> Option<Arc<Store>> {
     let music = music?;
     let out = playlist_copies(data_dir);
-    match Store::in_music(db.clone(), music, out.clone()).await {
+    match Store::in_music(db.clone(), cat.clone(), music, out.clone()).await {
         Ok(s) => Some(Arc::new(s)),
         Err(e) => {
             tracing::error!("the playlists in {music} could not be brought in: {e:#}");
-            Some(Arc::new(Store::open(db.clone(), None, music, out)))
+            Some(Arc::new(Store::open(db.clone(), cat.clone(), None, music, out)))
         }
     }
 }
@@ -234,7 +234,7 @@ impl Library {
         let folders = derive_folders(&active, last_music.as_deref());
         let db = data_dir.as_ref().map(|d| PathBuf::from(d).join("catalogue.sqlite"));
         let catalogue = Arc::new(Catalogue::open(db.as_deref(), catalogue_folders(&folders))?);
-        let store = music_store(&playlists_db, data_dir.as_deref(), folders.music.as_deref()).await;
+        let store = music_store(&playlists_db, &catalogue, data_dir.as_deref(), folders.music.as_deref()).await;
         Ok(Arc::new(Self {
             live: std::sync::RwLock::new(Arc::new(active)),
             data_dir,
@@ -418,7 +418,7 @@ impl Library {
         if let Some(s) = self.account_stores.read().unwrap_or_else(|p| p.into_inner()).get(account).filter(|s| s.base() == top.base()) {
             return Ok(s.clone());
         }
-        let s = Arc::new(Store::open(self.playlists_db.clone(), Some(account), top.base(), playlist_copies(self.data_dir.as_deref())));
+        let s = Arc::new(Store::open(self.playlists_db.clone(), self.catalogue.clone(), Some(account), top.base(), playlist_copies(self.data_dir.as_deref())));
         self.account_stores.write().unwrap_or_else(|p| p.into_inner()).insert(account.to_string(), s.clone());
         Ok(s)
     }
@@ -460,7 +460,7 @@ impl Library {
             let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&folders));
             tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
             let store = if folders.music != old.music {
-                Some(music_store(&self.playlists_db, self.data_dir.as_deref(), folders.music.as_deref()).await)
+                Some(music_store(&self.playlists_db, &self.catalogue, self.data_dir.as_deref(), folders.music.as_deref()).await)
             } else {
                 None
             };

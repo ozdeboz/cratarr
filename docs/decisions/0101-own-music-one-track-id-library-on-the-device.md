@@ -255,3 +255,33 @@ memory, with the engine's arithmetic in the rules crate. So:
 - **29's scope** is this record, 0100 and 0102.
 - **27's move:** the tape engine's arithmetic joins the rules crate after Radio's picker, proved the same way, on the
   server's tests.
+
+## Amended 2026-11-04: a track is the record's track (the owner, in a5's session)
+
+11's "a track's key" with 0100's copies: **one id per track of the record, whichever copy plays.** Playlists, plays,
+favourites and every other reference point at the record's track; a copy (Music, someone's own music, an Incoming
+upgrade) is only files of it, the best one playing. So the id never splits between copies, and Replace keeps it by
+handing the record's track a new file.
+
+## Amended 2026-11-04: what point 11 meets in the code (a5's survey, trunk 96ed26062)
+
+- **Songs are served by the catalogue's own track id already** (`tr-<tracks.id>`, since 0030). Keep, Move, Cratarr's tag
+  edits, conversions, Delete's Undo and Replace keep it. So songs' served ids do not switch in 0.16; what changes:
+  - **The catalogue's ids become the truth.** catalogue.sqlite was called disposable: a new file renumbers every
+    track and every outside `tr-N` (AudioMuse's export, Home Assistant, apps) quietly points elsewhere. It is in the
+    nightly backup already; from 0.16 it is never rebuilt on its own, and a lost one is restored, not renumbered.
+  - **A gone track keeps what it was** (title, artist, album, MusicBrainz ids) instead of its tags being deleted at
+    retirement, so a missing entry shows and relinks (11's third point).
+  - **A single track's Better copy hands its id over** as Replace does.
+  - **A copy takes the record's track ids** (the amendment above): a second copy's files are the same tracks.
+- **Albums are tag hashes** (`al-…`, a folder prefix outside the first library): they become 0100's records, one id
+  whatever the copies; the prefixes go.
+- **Libraries are positions in a list** (the catalogue's folder ids, Subsonic's music folder ids, the journal's and
+  conversion jobs' folders): they get ids of their own (point 1: libraries without roles).
+- **Playlists and crates name tracks by path lines:** playlists become tracks in 632's stage 2 (point 12); crates' left
+  out and excluded lines the same way.
+- **The migration** (21) rewrites album ids to records, library positions to their ids and lines to tracks, in one
+  transaction with its report; songs' ids stay as they are.
+
+The order: the lookups for playlists' stage 2 (`track_by_path`, `track_of_line`); the catalogue's ids as the truth;
+libraries with ids; records and copies; then the migration, rehearsed on staging (24).

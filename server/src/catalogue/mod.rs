@@ -1739,6 +1739,23 @@ impl Catalogue {
             .flatten()
     }
 
+    /// A file's stable track id as served (`tr-N`, 0101): the record's track, whichever copy the file is (amended
+    /// 2026-11-04), by the library it is in (its root as set) and its path there. None: no file there with a track yet,
+    /// or no such library in use. Blocking.
+    #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, 632's stage 2)
+    pub fn track_by_path(&self, folder: &str, rel: &str) -> Option<String> {
+        let at = self.folders().iter().position(|f| f.as_path() == std::path::Path::new(folder))?;
+        self.track_of(at as i64, rel).map(crate::serve::ids::song)
+    }
+
+    /// The stable track id a playlist line names, as served: where the line points ([`Self::place_of_line`]), then that
+    /// file's track. Blocking.
+    #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, 632's stage 2)
+    pub fn track_of_line(&self, line: &str) -> Option<String> {
+        let (folder, rel) = self.place_of_line(line)?;
+        self.track_of(folder, &rel).map(crate::serve::ids::song)
+    }
+
     /// The track a server's item id stands for (decision 0012), when the item is linked to a file the catalogue
     /// counts. Cratarr's own source (decision 0032) needs no links: its ids are the track ids. Blocking.
     pub fn track_of_source(&self, source: &str, item: &str) -> Option<i64> {
@@ -3400,6 +3417,32 @@ mod tests {
         assert_eq!(cat.line_of(7, "A/01.mp3"), None, "no such folder");
         assert_eq!(cat.path_of_line(&lines[0]), Some(inc.join("X/New/01.flac")));
         assert_eq!(cat.lines_of("jf", &["i1".to_string()]).unwrap(), [lines[0].clone()].into_iter().collect());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The stable track ids (0101): a file's, by its library's root and its path there, and a playlist line's, as
+    /// served; none for a file with no track, a library not in use, or a line in no folder.
+    #[test]
+    fn a_file_and_a_line_give_their_stable_track_id() {
+        let root = music();
+        let (m, inc) = (root.join("Music"), root.join("lidarr-music"));
+        std::fs::create_dir_all(m.join("A")).unwrap();
+        std::fs::create_dir_all(inc.join("X/New")).unwrap();
+        std::fs::write(m.join("A/01.mp3"), "a").unwrap();
+        std::fs::write(inc.join("X/New/01.flac"), "x").unwrap();
+        let cat = Catalogue::open(None, vec![m.clone(), inc.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, other) = (cat.track_of(0, "A/01.mp3").unwrap(), cat.track_of(1, "X/New/01.flac").unwrap());
+        let song = crate::serve::ids::song;
+        assert_eq!(cat.track_by_path(&m.to_string_lossy(), "A/01.mp3"), Some(song(one)));
+        assert_eq!(cat.track_by_path(&inc.to_string_lossy(), "X/New/01.flac"), Some(song(other)));
+        assert_eq!(cat.track_by_path(&m.to_string_lossy(), "A/02.mp3"), None, "no such file");
+        assert_eq!(cat.track_by_path(&root.join("elsewhere").to_string_lossy(), "A/01.mp3"), None, "no such library");
+        assert_eq!(cat.track_of_line("A/01.mp3"), Some(song(one)));
+        assert_eq!(cat.track_of_line("../lidarr-music/X/New/01.flac"), Some(song(other)));
+        assert_eq!(cat.track_of_line("../elsewhere/01.flac"), None);
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -422,8 +422,8 @@ mod tests {
         let fav = item_id("track", "cratarr", "tr-1");
         u.mark_changed("me", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 1
         u.mark_changed("you", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 2
-        let evening = u.create_playlist("", "Evening", &[]).unwrap().unwrap();
-        let morning = u.create_playlist("you", "Morning", &[]).unwrap().unwrap();
+        let evening = u.create_playlist("", "Evening", &[], &Default::default()).unwrap().unwrap();
+        let morning = u.create_playlist("you", "Morning", &[], &Default::default()).unwrap().unwrap();
         u.playlist_changed(&evening, Op::Changed, false).unwrap(); // 3: the first administrator's
         u.playlist_changed(&morning, Op::Changed, false).unwrap(); // 4
         u.excluded_changed("me", "tracks").unwrap(); // 5
@@ -455,7 +455,7 @@ mod tests {
     fn a_shared_playlist_gone_from_sight_is_deleted_for_each_other_account_alone() {
         let u = UserData::open(None).unwrap();
         let all = ChangeKind::ALL;
-        let morning = u.create_playlist("you", "Morning", &[]).unwrap().unwrap();
+        let morning = u.create_playlist("you", "Morning", &[], &Default::default()).unwrap().unwrap();
         u.set_playlist_shared(&morning, true).unwrap(); // 1
         // Unshared: its owner sees it changed; "me" and "them" each see it deleted, under its own row.
         assert!(u.set_playlist_shared(&morning, false).unwrap()); // 2: the owner's
@@ -475,8 +475,8 @@ mod tests {
     fn a_refused_operation_is_kept_with_why() {
         let u = UserData::open(None).unwrap();
         let ops = [("op-1".to_string(), None), ("op-2".to_string(), Some("not found".to_string()))];
-        u.create_playlist("", "Evening", &[]).unwrap();
-        u.write_playlist_entries("", "Evening", &[], &crate::playlist_ops::Entries::default(), "me", &ops).unwrap();
+        u.create_playlist("", "Evening", &[], &Default::default()).unwrap();
+        u.write_playlist_entries("", "Evening", &[], &crate::playlist_ops::Entries::default(), "me", &ops, &Default::default()).unwrap();
         let got = u.ops_applied("me", &["op-1".into(), "op-2".into(), "op-3".into()]).unwrap();
         assert_eq!(got, [("op-1".to_string(), None), ("op-2".to_string(), Some("not found".to_string()))].into());
         assert!(u.ops_applied("you", &["op-1".to_string()]).unwrap().is_empty(), "per account");

@@ -2,12 +2,12 @@
 //!
 //! - Keep and Replace move files into Music: every playlist line naming a moved file names its new place. Undo puts
 //!   the lines back.
-//! - Delete takes the album's tracks out of every playlist (the server copies follow through the sync). Where each
-//!   line stood is recorded first, so a retry after a crash removes the same lines and Undo puts them back there.
+//! - Delete leaves them: each entry is its track's (decision 0101 point 11), kept as missing until a file of it is
+//!   there again (its Undo, an upgrade); nothing is taken out, so nothing is put back.
 //!
 //! Safe to repeat: what is done (and undone) is recorded per event in the journal.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -19,13 +19,8 @@ use crate::playlists::Store;
 
 /// The handler name in the journal; its result is the playlists it changed.
 pub(super) const PLAYLISTS: &str = "playlists";
-/// Where a deleted album's lines stood, recorded before they are taken out.
-const PLAYLISTS_PLAN: &str = "playlists-plan";
 /// The lines are back after an Undo.
 const PLAYLISTS_UNDONE: &str = "playlists-undone";
-
-/// Per playlist: the lines taken out, each with its position.
-type Removed = BTreeMap<String, Vec<(usize, String)>>;
 
 /// A catalogue file as a playlist line: relative to the Music folder (folder 0), "../" for files outside it.
 fn line_of(folders: &[PathBuf], (folder, rel): &(i64, String)) -> Option<String> {
@@ -86,54 +81,6 @@ fn renamed(entries: &[String], map: &HashMap<String, String>) -> Option<Vec<Stri
     entries.iter().any(|e| map.contains_key(e)).then(|| entries.iter().map(|e| map.get(e).unwrap_or(e).clone()).collect())
 }
 
-/// Every line in an album folder, per playlist, with its position.
-fn lines_under(playlists: &[(String, Vec<String>, usize)], album: &str) -> Removed {
-    let prefix = format!("{album}/");
-    playlists
-        .iter()
-        .filter_map(|(id, lines, _)| {
-            let found: Vec<(usize, String)> =
-                lines.iter().enumerate().filter(|(_, l)| l.starts_with(&prefix)).map(|(i, l)| (i, l.clone())).collect();
-            (!found.is_empty()).then(|| (id.clone(), found))
-        })
-        .collect()
-}
-
-/// `entries` without these lines (every copy); `None` when none are there.
-fn without(entries: &[String], lines: &[(usize, String)]) -> Option<Vec<String>> {
-    let gone: HashSet<&str> = lines.iter().map(|(_, l)| l.as_str()).collect();
-    entries.iter().any(|e| gone.contains(e.as_str())).then(|| entries.iter().filter(|e| !gone.contains(e.as_str())).cloned().collect())
-}
-
-/// `entries` with the taken-out lines back where they stood (at the end when the playlist got shorter). A line
-/// already there again is not added twice; `None` when nothing is put back.
-fn put_back(entries: &[String], lines: &[(usize, String)]) -> Option<Vec<String>> {
-    let there: HashSet<&str> = entries.iter().map(String::as_str).collect();
-    let mut back: Vec<&(usize, String)> = lines.iter().filter(|(_, l)| !there.contains(l.as_str())).collect();
-    if back.is_empty() {
-        return None;
-    }
-    back.sort_by_key(|(at, _)| *at);
-    let mut out = entries.to_vec();
-    for (at, line) in back {
-        out.insert((*at).min(out.len()), line.clone());
-    }
-    Some(out)
-}
-
-fn read<T: serde::de::DeserializeOwned>(journal: &Journal, id: i64, handler: &str) -> Option<T> {
-    journal.result(id, handler).ok().flatten().and_then(|v| serde_json::from_value(v).ok())
-}
-
-/// Every account's playlists (decision 0051), as one list by their keys (`Store::key`).
-async fn snapshot_of(stores: &[&Store]) -> Result<Vec<(String, Vec<String>, usize)>> {
-    let mut out = Vec::new();
-    for store in stores {
-        out.extend(store.snapshot().await?.into_iter().map(|(n, l, d)| (store.key(&n), l, d)));
-    }
-    Ok(out)
-}
-
 /// `edit` on every account's playlists (by key); the keys of those it changed.
 async fn edit_all(stores: &[&Store], edit: impl Fn(&str, &[String]) -> Option<Vec<String>>) -> Result<Vec<String>> {
     let mut changed = Vec::new();
@@ -151,21 +98,8 @@ async fn apply(stores: &[&Store], folders: &[PathBuf], journal: &Journal, entry:
         return Ok(Vec::new());
     }
     let changed = match &entry.event {
-        Event::AlbumRejected { folder, dir, .. } => {
-            let plan: Removed = match read(journal, entry.id, PLAYLISTS_PLAN) {
-                Some(p) => p,
-                None => {
-                    let album = line_of(folders, &(*folder, dir.clone()));
-                    let plan = match album {
-                        Some(a) => lines_under(&snapshot_of(stores).await?, &a),
-                        None => Removed::new(), // the folder is no longer in use
-                    };
-                    journal.done(entry.id, PLAYLISTS_PLAN, epoch_now(), &serde_json::to_value(&plan)?)?;
-                    plan
-                }
-            };
-            edit_all(stores, |id, entries| without(entries, plan.get(id)?)).await?
-        }
+        // Its tracks stay, missing (decision 0101 point 11).
+        Event::AlbumRejected { .. } => Vec::new(),
         event => {
             let map = renames(event, folders, false);
             edit_all(stores, |_, entries| renamed(entries, &map)).await?
@@ -181,11 +115,8 @@ async fn undo(stores: &[&Store], folders: &[PathBuf], journal: &Journal, entry: 
         return Ok(Vec::new());
     }
     let changed = match &entry.event {
-        // The plan, not the result: a crash may have cut `apply` short after some lines went.
-        Event::AlbumRejected { .. } => match read::<Removed>(journal, entry.id, PLAYLISTS_PLAN) {
-            Some(plan) => edit_all(stores, |id, entries| put_back(entries, plan.get(id)?)).await?,
-            None => return Ok(Vec::new()),
-        },
+        // Nothing was taken out: its tracks play again as their files come back.
+        Event::AlbumRejected { .. } => Vec::new(),
         event => {
             if journal.result(entry.id, PLAYLISTS)?.is_none() {
                 return Ok(Vec::new()); // nothing was renamed
@@ -364,40 +295,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_deleted_albums_tracks_leave_every_playlist_and_come_back_where_they_were() {
+    async fn a_deleted_albums_tracks_stay_in_every_playlist_missing_and_undo_changes_nothing() {
         let d = Dir::new("delete");
-        d.write("Mix", &["A/01.mp3", "../incoming/X/New/02.flac", "B/01.mp3", "../incoming/X/New/01.flac", "../incoming/X/Newer/01.flac"]);
+        let lines = ["A/01.mp3", "../incoming/X/New/02.flac", "B/01.mp3", "../incoming/X/New/01.flac"];
+        d.write("Mix", &lines);
         let (store, j) = (Store::new(d.0.join("Music")), Journal::open(None).unwrap());
         let id = j.record(100, &rejected()).unwrap();
-        let entry = j.get(id).unwrap().unwrap();
-        apply(&[&store], &d.folders(), &j, &entry).await.unwrap();
-        assert_eq!(d.read("Mix"), ["A/01.mp3", "B/01.mp3", "../incoming/X/Newer/01.flac"], "only that album's folder");
-        // Edited meanwhile: the lines come back at their old positions, as far as the playlist reaches.
-        store.set_member("Mix", "C/01.mp3", true).await.unwrap();
+        assert!(apply(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap().is_empty());
+        assert_eq!(d.read("Mix"), lines, "each entry stays its track's (decision 0101 point 11)");
         j.mark_undone(id, 200).unwrap();
-        undo(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
-        assert_eq!(
-            d.read("Mix"),
-            ["A/01.mp3", "../incoming/X/New/02.flac", "B/01.mp3", "../incoming/X/New/01.flac", "../incoming/X/Newer/01.flac", "C/01.mp3"]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_delete_cut_short_removes_the_planned_lines_and_undo_still_works() {
-        let d = Dir::new("crash");
-        // As if a crash came after the plan was recorded and the line taken out, before the done row: the retry reads
-        // the plan, not the file (which no longer shows where the line stood).
-        d.write("Mix", &["A/01.mp3"]);
-        let (store, j) = (Store::new(d.0.join("Music")), Journal::open(None).unwrap());
-        let id = j.record(100, &rejected()).unwrap();
-        let plan: Removed = [(store.key("Mix"), vec![(0, "../incoming/X/New/01.flac".to_string())])].into();
-        j.done(id, PLAYLISTS_PLAN, 100, &serde_json::to_value(&plan).unwrap()).unwrap();
-        apply(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
-        assert_eq!(d.read("Mix"), ["A/01.mp3"]);
-        assert!(j.pending(PLAYLISTS, 0).unwrap().is_empty());
-        j.mark_undone(id, 200).unwrap();
-        undo(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
-        assert_eq!(d.read("Mix"), ["../incoming/X/New/01.flac", "A/01.mp3"]);
+        assert!(undo(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap().is_empty());
+        assert_eq!(d.read("Mix"), lines);
     }
 
     #[test]
@@ -421,13 +329,5 @@ mod tests {
         let back = renames(&event, &folders, true);
         assert_eq!(back.get("X - Up/01.flac").map(String::as_str), Some("X - Up/01.mp3"), "to the old file");
         assert_eq!(back.get("X - Up/99.flac").map(String::as_str), Some("../incoming/X/Up/99.flac"), "a new track goes back to Incoming");
-    }
-
-    #[test]
-    fn lines_go_back_in_order_and_are_never_doubled() {
-        let lines = vec![(0, "a".to_string()), (2, "c".to_string()), (9, "z".to_string())];
-        assert_eq!(put_back(&["b".into(), "d".into()], &lines).unwrap(), ["a", "b", "c", "d", "z"]);
-        assert_eq!(put_back(&["a".into(), "c".into(), "z".into()], &lines), None);
-        assert_eq!(without(&["b".into()], &lines), None);
     }
 }
