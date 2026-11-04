@@ -358,10 +358,6 @@ impl Store {
         self.db.playlist_id(&self.owner(), name).ok().flatten().unwrap_or_else(|| name.to_string())
     }
 
-    /// The name of this store's playlist a key (its id) is of, while it is there; `None` for another store's.
-    pub fn name_of_key(&self, key: &str) -> Option<String> {
-        self.db.playlist_by_id(key).ok().flatten().filter(|p| p.owner == self.owner()).map(|p| p.name)
-    }
 
     /// The database's answer, its work done off the async threads.
     async fn ask<T: Send + 'static>(&self, f: impl FnOnce(&UserData, &str) -> Result<T> + Send + 'static) -> Result<T> {

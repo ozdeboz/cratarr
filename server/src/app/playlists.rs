@@ -1162,7 +1162,6 @@ mod undo_tests {
         let top = s.lib.store_for(None).unwrap();
         let (mine, hers) = (top.key("Chill"), ann.key("Chill"));
         assert!(mine != hers && crate::userdata::playlists::is_id(&mine) && crate::userdata::playlists::is_id(&hers));
-        assert_eq!((ann.name_of_key(&hers), ann.name_of_key(&mine), top.name_of_key(&hers)), (Some("Chill".to_string()), None, None));
         let all: Vec<String> = s.lib.all_stores().iter().map(|st| st.key("Chill")).collect();
         assert_eq!(all, [mine.clone(), hers.clone()]);
         // Another's, not shared, is as if there were none, by its id or by name; and it is never another's to change.
@@ -1744,7 +1743,7 @@ impl PlaylistService {
         let crate_stores = CrateStores::new(lib.data_dir());
         let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json")), served.clone()));
         let s = Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default(), fits: FitsKept::default(), served };
-        s.spoken_to_ids();
+        s.moved_to_ids();
         s
     }
 
@@ -2169,9 +2168,10 @@ impl PlaylistService {
         Ok(all)
     }
 
-    /// The spoken names 0.15 kept by a playlist's key, moved to its id (decision 0101): at the start, until none are
-    /// left (one whose playlist is not brought in yet waits for it).
-    fn spoken_to_ids(&self) {
+    /// What 0.15 kept by a playlist's key moves to its id (decision 0101), at the start, until none is left (one whose
+    /// playlist is not brought in yet waits for it): its spoken names, and its suggestions' crate (`like:list:<key>`,
+    /// in its owner's crates: what was turned down there and its fit).
+    fn moved_to_ids(&self) {
         for (old, names) in self.sync.spoken() {
             if crate::userdata::playlists::is_id(&old) {
                 continue;
@@ -2181,6 +2181,39 @@ impl PlaylistService {
                 tracing::warn!("the spoken names of {old} not moved to its id: {e:#}");
             }
         }
+        let moved = self.lib.playlists_db().playlists_moved().unwrap_or_default();
+        let mut crates = Vec::new();
+        for (old, id) in moved {
+            // The crate was named by the playlist as its owner knew it: its name.
+            let Some(owner) = self.lib.playlists_db().playlist_owner(&id).ok().flatten() else { continue };
+            let name = old.split_once('/').map_or(old.as_str(), |(_, n)| n).to_string();
+            let Ok(store) = self.crate_stores.of((!owner.is_empty()).then_some(owner.as_str())) else { continue };
+            let like = |key: &str| format!("{}{}{key}", crates::LIKE, crates::LIST);
+            crates.push((store, like(&name), like(&id)));
+        }
+        if crates.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            for (store, old, new) in crates {
+                let moved = async {
+                    let left = store.left_out(&old).await?;
+                    if !left.is_empty() {
+                        store.set_left_out(&new, left).await?;
+                        store.set_left_out(&old, crates::LeftOut::default()).await?;
+                    }
+                    let fit = store.fit(&old).await?;
+                    if !fit.is_empty() {
+                        store.set_fit(&new, fit).await?;
+                        store.set_fit(&old, crates::Fit::default()).await?;
+                    }
+                    anyhow::Ok(())
+                };
+                if let Err(e) = moved.await {
+                    tracing::warn!("{old}: what was turned down for it not moved to {new}: {e:#}");
+                }
+            }
+        });
     }
 
     /// The playlist meant by what was said (decision 0015), by its name or one it is spoken as; none when nothing fits.
@@ -4257,19 +4290,7 @@ impl PlaylistService {
             store.rename(from, to).await?;
         }
         self.tell_sources(store, vec![(from.to_string(), PlaylistChange::Deleted), (to.to_string(), PlaylistChange::Created)]);
-        // Its suggestions keep what was turned down for it (`crates::playlist_crate`'s left-out list).
-        let crates = self.own_crates()?;
-        let (old, new) = (format!("{}{}{from}", crates::LIKE, crates::LIST), format!("{}{}{to}", crates::LIKE, crates::LIST));
-        let left = crates.left_out(&old).await?;
-        if !left.is_empty() {
-            crates.set_left_out(&new, left).await?;
-            crates.set_left_out(&old, crates::LeftOut::default()).await?;
-        }
-        let fit = crates.fit(&old).await?;
-        if !fit.is_empty() {
-            crates.set_fit(&new, fit).await?;
-            crates.set_fit(&old, crates::Fit::default()).await?;
-        }
+        // Its id stays, and with it its suggestions' crate (`like:list:<id>`) and what was turned down for it there.
         Ok(())
     }
 
