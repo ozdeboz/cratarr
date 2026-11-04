@@ -323,7 +323,19 @@ impl SyncService {
     pub(super) fn links(&self) -> HashMap<String, Vec<LinkView>> {
         let last = self.last.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let owners = self.owners.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        let targets = self.state.targets().unwrap_or_default();
+        // A copy on a server switched off is not waiting for anything: left out (the owner, 2026-11-04: every playlist
+        // said "Waiting to sync" for a Jellyfin switched off for good). One switched on but not answering still waits.
+        let on: std::collections::HashSet<String> = self.lib.live().iter().filter(|a| a.cfg.enabled).map(|a| a.cfg.id.clone()).collect();
+        let targets: Vec<_> = self
+            .state
+            .targets()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| match &t.kind {
+                Kind::User { source, .. } => on.contains(source),
+                Kind::Shared => true,
+            })
+            .collect();
         // Which copies exist: every account's links, read once.
         let mut made: std::collections::HashSet<(String, String, String)> = Default::default();
         let accounts: BTreeSet<(String, String)> = targets
