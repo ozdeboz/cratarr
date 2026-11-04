@@ -481,7 +481,7 @@ impl Serve {
         let id = song.to_string();
         let found = tokio::task::spawn_blocking(move || lib.file_of(&id)).await??;
         let folders = self.catalogue().folders();
-        Ok(found.and_then(|(folder, rel)| folders.get(folder as usize).map(|root| root.join(rel))))
+        Ok(found.and_then(|(folder, rel)| folders.get(folder).map(|root| root.join(rel))))
     }
 
     /// The album an art id (an album's, a song's or an artist's, maybe with a fingerprint after `_`) stands for, and the

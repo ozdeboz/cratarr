@@ -197,7 +197,10 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 20] = [
+const ADDED_COLUMNS: [(&str, &str); 21] = [
+    // 0101 point 1 (the owner, 2026-11-04): a folder's id for life, kept while it is parked under a negative id, so it
+    // comes back as itself (`set_folders`).
+    ("folders", "home INTEGER"),
     // 0101 point 11: what a track was, kept as it retires (its tags go with its file): a missing entry shows it, and a
     // file that is it again takes the id back. Its last path, its length, and its title, artist, album and MusicBrainz
     // recording as tagged.
@@ -237,7 +240,7 @@ const ADDED_COLUMNS: [(&str, &str); 20] = [
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
 struct KeptFacts {
     changes: u64,
-    folders: Vec<PathBuf>,
+    folders: InUse,
     built: i64,
     words: i64,
     /// The classical marks as read (0.10): a mark reads them again at once.
@@ -446,10 +449,63 @@ impl ServedRow {
     }
 }
 
+/// The folders in use, by their ids for life (0101 point 1, the owner 2026-11-04): a folder keeps its id while it is
+/// used and takes it again when it comes back; a new one takes an id never given before. So nothing that names a folder
+/// by its id (served album ids, Subsonic's music folders, the journal, queued conversions) changes when libraries come
+/// and go. The lowest id in use is the folder playlist lines are made from (Music's, 0, since the first start).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InUse(std::collections::BTreeMap<i64, PathBuf>);
+
+impl InUse {
+    /// A folder by its id.
+    pub fn get(&self, id: i64) -> Option<&PathBuf> {
+        self.0.get(&id)
+    }
+
+    /// Each folder with its id, by id.
+    pub fn iter(&self) -> impl Iterator<Item = (i64, &PathBuf)> {
+        self.0.iter().map(|(id, p)| (*id, p))
+    }
+
+    /// The folders' ids, in order.
+    pub fn ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.0.keys().copied()
+    }
+
+    /// The folders' paths, by id.
+    pub fn paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.0.values()
+    }
+
+    /// The id of the folder at `path`.
+    pub fn id_of(&self, path: &Path) -> Option<i64> {
+        self.0.iter().find(|(_, p)| p.as_path() == path).map(|(id, _)| *id)
+    }
+
+    /// The folder playlist lines are made from, and its id: the lowest in use.
+    pub fn first(&self) -> Option<(i64, &PathBuf)> {
+        self.0.iter().next().map(|(id, p)| (*id, p))
+    }
+
+    /// How many folders are in use.
+    pub fn count(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl FromIterator<(i64, PathBuf)> for InUse {
+    fn from_iter<T: IntoIterator<Item = (i64, PathBuf)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+/// The meta key of the highest folder id ever given (`set_folders`).
+const FOLDER_TOP: &str = "folder_top";
+
 pub struct Catalogue {
     db: Mutex<Connection>,
-    /// Index = folder id; 0 is the playlist folder.
-    folders: RwLock<Vec<PathBuf>>,
+    /// The folders in use, by their ids for life.
+    folders: RwLock<InUse>,
     progress: Mutex<Progress>,
     /// Asks the background loop for a pass now (settings changed, a playlist was edited…).
     poke: tokio::sync::Notify,
@@ -488,6 +544,8 @@ impl Catalogue {
             }
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track);")?;
+        // A folder in use before ids for life: its place is its id from now on.
+        conn.execute_batch("UPDATE folders SET home = id WHERE id >= 0 AND home IS NULL;")?;
         fill_meters(&conn).context("working out the time signatures")?;
         // Once: the tags no query reads go, the unnamed ones (lyrics, pictures' text: 63,000 rows of 455,000 here) and the
         // index by name and value (73 MB of a 200 MB catalogue), so what is read fits in a small container's memory.
@@ -500,7 +558,7 @@ impl Catalogue {
         move_analysis_shapes(&conn)?;
         let cat = Self {
             db: Mutex::new(conn),
-            folders: RwLock::new(Vec::new()),
+            folders: RwLock::new(InUse::default()),
             progress: Mutex::default(),
             poke: Default::default(),
             reread: Default::default(),
@@ -573,7 +631,7 @@ impl Catalogue {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub fn folders(&self) -> Vec<PathBuf> {
+    pub fn folders(&self) -> InUse {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
@@ -584,21 +642,29 @@ impl Catalogue {
             let mut q = db.prepare(&format!("SELECT folder, count(*) FROM files WHERE {PRESENT} GROUP BY folder"))?;
             q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u64)))?.collect::<rusqlite::Result<_>>()?
         };
-        Ok(self.folders().into_iter().enumerate().map(|(i, p)| (p, counts.get(&(i as i64)).copied().unwrap_or(0))).collect())
+        Ok(self.folders().iter().map(|(id, p)| (p.clone(), counts.get(&id).copied().unwrap_or(0))).collect())
     }
 
-    /// Use these folders (index = id). A folder whose path changed keeps its rows when the same files are there under
-    /// the new path (a mount moved, say `/music` to `/media/Music`), and nothing is read again.
+    /// Use these folders, each by its id for life (0101 point 1, the owner 2026-11-04): a folder in use keeps its id, one
+    /// that comes back takes its own id again, and a new one takes an id never given before (`InUse`). A folder whose
+    /// path changed keeps its id and rows when the same files are there under the new path (a mount moved, say `/music`
+    /// to `/media/Music`), and nothing is read again.
     ///
     /// A folder that is no longer in use is parked, not forgotten: its rows (files, tags, links to the servers' ids)
-    /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, at any place
-    /// in the list, with its files where they were, it picks them up again: the same ids, only changed files read
-    /// again. A source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked
-    /// folders are forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path.
+    /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, with its files
+    /// where they were, it picks them up again under its own id: the same track ids, only changed files read again. A
+    /// source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked folders are
+    /// forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path.
     pub fn set_folders(&self, folders: Vec<PathBuf>) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let wanted: Vec<String> = folders.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let mut wanted: Vec<String> = Vec::new();
+        for p in &folders {
+            let p = p.to_string_lossy().into_owned();
+            if !wanted.contains(&p) {
+                wanted.push(p);
+            }
+        }
         let same_files = |id: i64, at: &str| -> Result<bool> {
             let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND gone_at IS NULL AND trashed IS NULL LIMIT 20")?;
             let rels: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -611,33 +677,36 @@ impl Catalogue {
             tx.execute("UPDATE folders SET id = ?2 WHERE id = ?1", params![from, to])?;
             Ok(())
         };
-        let known = |tx: &rusqlite::Transaction| -> Result<Vec<(i64, String)>> {
-            let mut st = tx.prepare("SELECT id, path FROM folders")?;
-            Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        // Each folder known: its id now (negative: parked), its path, its id for life.
+        let known = |tx: &rusqlite::Transaction| -> Result<Vec<(i64, String, Option<i64>)>> {
+            let mut st = tx.prepare("SELECT id, path, home FROM folders")?;
+            Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?)
         };
         let now_s = now();
-        // 1. Every folder in use that is not where it is wanted steps aside (parked), freeing its place.
-        let mut lowest = known(&tx)?.iter().map(|(id, _)| *id).min().unwrap_or(0).min(0);
+        // The highest id ever given: a new folder's is above it, so no id names two folders over time.
+        let given: Option<i64> = tx.query_row("SELECT value FROM meta WHERE key = ?1", [FOLDER_TOP], |r| r.get::<_, String>(0)).optional()?.and_then(|v| v.parse().ok());
+        let mut top = known(&tx)?.iter().flat_map(|(id, _, home)| [Some(*id), *home]).flatten().chain(given).max().unwrap_or(-1);
+        // 1. Every folder in use that is no longer wanted steps aside (parked), its id for life kept.
+        let mut lowest = known(&tx)?.iter().map(|(id, _, _)| *id).min().unwrap_or(0).min(0);
         let mut stepped: Vec<i64> = Vec::new();
-        for (id, path) in known(&tx)? {
-            if id < 0 || wanted.get(id as usize) == Some(&path) {
+        for (id, path, _) in known(&tx)? {
+            if id < 0 || wanted.contains(&path) {
                 continue;
             }
             lowest -= 1;
             rekey(id, lowest)?;
             stepped.push(lowest);
         }
-        // 2. Each wanted folder takes the rows kept under its path (parked a while, or only just stepped aside), when its
-        //    files are still there; else the rows of a folder that stepped aside and whose files are here now (a mount
-        //    that moved, say `/music` to `/media/Music`).
+        // 2. Each wanted folder not in use takes the rows kept under its path (parked a while, or only just stepped
+        //    aside), when its files are still there; else the rows of a folder that stepped aside and whose files are
+        //    here now (a mount that moved). Either comes back under its own id; anything else is new, with a new id.
         let mut forget: Vec<i64> = Vec::new();
-        for (i, path) in wanted.iter().enumerate() {
-            let i = i as i64;
+        for path in &wanted {
             let rows = known(&tx)?;
-            if rows.iter().any(|(id, p)| *id == i && p == path) {
+            if rows.iter().any(|(id, p, _)| *id >= 0 && p == path) {
                 continue;
             }
-            let own = rows.iter().find(|(id, p)| *id < 0 && p == path).map(|(id, _)| *id);
+            let own = rows.iter().find(|(id, p, _)| *id < 0 && p == path).map(|(id, _, _)| *id);
             let taken = match own {
                 Some(p) if same_files(p, path)? => Some(p),
                 Some(p) => {
@@ -651,7 +720,7 @@ impl Catalogue {
                 None => {
                     let mut moved = None;
                     for &p in &stepped {
-                        let unclaimed = rows.iter().any(|(id, q)| *id == p && !wanted.contains(q));
+                        let unclaimed = rows.iter().any(|(id, q, _)| *id == p && !wanted.contains(q));
                         if unclaimed && same_files(p, path)? {
                             moved = Some(p);
                             break;
@@ -660,21 +729,35 @@ impl Catalogue {
                     moved
                 }
             };
-            if let Some(p) = taken {
-                rekey(p, i)?;
-                tx.execute("UPDATE folders SET path = ?2 WHERE id = ?1", params![i, path])?;
-                tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
-                stepped.retain(|s| *s != p);
-                tracing::info!("catalogue: {path} is in use again, with its rows");
-                // Links may have gone stale while it was away: every server lists its tracks again.
-                tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
+            // Its own id again where it has one that no folder in use holds (a folder parked before ids for life has
+            // none); else a new one.
+            let home = taken
+                .and_then(|p| rows.iter().find(|(id, _, _)| *id == p).and_then(|(_, _, home)| *home))
+                .filter(|h| *h >= 0 && !rows.iter().any(|(id, _, _)| id == h));
+            let id = home.unwrap_or_else(|| {
+                top += 1;
+                top
+            });
+            match taken {
+                Some(p) => {
+                    rekey(p, id)?;
+                    tx.execute("UPDATE folders SET path = ?2, home = ?1 WHERE id = ?1", params![id, path])?;
+                    tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
+                    stepped.retain(|s| *s != p);
+                    tracing::info!("catalogue: {path} is in use again, with its rows");
+                    // Links may have gone stale while it was away: every server lists its tracks again.
+                    tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
+                }
+                None => {
+                    tx.execute("INSERT INTO folders (id, path, home) VALUES (?1, ?2, ?1)", params![id, path])?;
+                }
             }
         }
         // 3. What stepped aside and was not taken is parked, from now on; parked too long, it is forgotten.
         for p in &stepped {
             tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)", params![format!("parked:{p}"), now_s.to_string()])?;
         }
-        for (p, path) in known(&tx)?.into_iter().filter(|(id, _)| *id < 0) {
+        for (p, path, _) in known(&tx)?.into_iter().filter(|(id, _, _)| *id < 0) {
             let since: i64 = tx
                 .query_row("SELECT value FROM meta WHERE key = ?1", [format!("parked:{p}")], |r| r.get::<_, String>(0))
                 .optional()?
@@ -700,13 +783,11 @@ impl Catalogue {
             // Its links to the servers' tracks went with it: every server lists all its tracks again on the next pass.
             tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
         }
-        let wanted: HashMap<i64, String> = wanted.into_iter().enumerate().map(|(i, p)| (i as i64, p)).collect();
-        for (id, path) in &wanted {
-            tx.execute("INSERT OR REPLACE INTO folders (id, path) VALUES (?1, ?2)", params![id, path])?;
-        }
+        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![FOLDER_TOP, top.to_string()])?;
+        let in_use: InUse = known(&tx)?.into_iter().filter(|(id, _, _)| *id >= 0).map(|(id, path, _)| (id, PathBuf::from(path))).collect();
         tx.commit()?;
         drop(db);
-        *self.folders.write().unwrap_or_else(|p| p.into_inner()) = folders;
+        *self.folders.write().unwrap_or_else(|p| p.into_inner()) = in_use;
         self.poke.notify_one();
         Ok(())
     }
@@ -743,11 +824,11 @@ impl Catalogue {
     /// Walk every folder and record what is new, changed or gone. Returns problems (unreadable folders). Blocking.
     pub fn walk_all(&self) -> Vec<String> {
         let mut problems = Vec::new();
-        for (id, folder) in self.folders().into_iter().enumerate() {
-            match walk::walk_with_covers(&folder) {
+        for (id, folder) in self.folders().iter() {
+            match walk::walk_with_covers(folder) {
                 Ok((found, covers, skipped)) => {
                     self.work(1);
-                    if let Err(e) = self.record_walk(id as i64, &found).and_then(|()| self.record_covers(id as i64, &covers)) {
+                    if let Err(e) = self.record_walk(id, &found).and_then(|()| self.record_covers(id, &covers)) {
                         problems.push(format!("{}: {e:#}", folder.display()));
                     }
                     if skipped > 0 {
@@ -852,10 +933,10 @@ impl Catalogue {
         let folders = self.folders();
         let mut todo = Vec::new();
         for path in paths {
-            let Some((folder, rel)) = folders.iter().enumerate().find_map(|(i, root)| {
+            let Some((folder, rel)) = folders.iter().find_map(|(id, root)| {
                 let rel = path.strip_prefix(root).ok()?;
                 let rel: Vec<&str> = rel.components().filter_map(|c| c.as_os_str().to_str()).collect();
-                (!rel.is_empty()).then(|| (i as i64, rel.join("/")))
+                (!rel.is_empty()).then(|| (id, rel.join("/")))
             }) else {
                 continue;
             };
@@ -899,7 +980,7 @@ impl Catalogue {
         let results: Vec<(i64, String, Result<(tags::FileTags, Option<(tags::Issue, String)>)>)> = todo
             .into_iter()
             .map(|(folder, rel)| {
-                let r = match folders.get(folder as usize) {
+                let r = match folders.get(folder) {
                     Some(root) => tags::read(&root.join(&rel)),
                     None => Err(anyhow::anyhow!("unknown folder")),
                 };
@@ -1095,7 +1176,7 @@ impl Catalogue {
         Ok(facts)
     }
 
-    fn read_crate_facts(&self, folders: &[PathBuf]) -> Result<Vec<crate::crates::Facts>> {
+    fn read_crate_facts(&self, folders: &InUse) -> Result<Vec<crate::crates::Facts>> {
         let db = self.db();
         type Place = (i64, String);
         // Every file present, newest first, with its track (the one similarity finds a file by it, heard or not), its
@@ -1277,18 +1358,19 @@ impl Catalogue {
     /// climbs out of it.
     pub fn path_of_line(&self, line: &str) -> Option<PathBuf> {
         let (folder, rel) = self.place_of_line(line)?;
-        Some(self.folders().get(usize::try_from(folder).ok()?)?.join(rel))
+        Some(self.folders().get(folder)?.join(rel))
     }
 
-    /// Where a playlist line points: (folder, rel). Lines are relative to the Music folder (folder 0); a line for a file
-    /// in another folder climbs out of it ("../lidarr-music/X/01.flac", an Incoming track). None for a line that lands
-    /// in no folder of the catalogue.
+    /// Where a playlist line points: (folder, rel). Lines are relative to the Music folder (the first in use,
+    /// `InUse::first`); a line for a file in another folder climbs out of it ("../lidarr-music/X/01.flac", an Incoming
+    /// track). None for a line that lands in no folder of the catalogue.
     pub fn place_of_line(&self, line: &str) -> Option<(i64, String)> {
-        if !line.starts_with("../") {
-            return Some((0, line.to_string()));
-        }
         let folders = self.folders();
-        let mut target = folders.first()?.clone();
+        let (first, root) = folders.first()?;
+        if !line.starts_with("../") {
+            return Some((first, line.to_string()));
+        }
+        let mut target = root.clone();
         for part in line.split('/') {
             match part {
                 ".." => {
@@ -1300,9 +1382,9 @@ impl Catalogue {
                 p => target.push(p),
             }
         }
-        folders.iter().enumerate().skip(1).find_map(|(i, f)| {
+        folders.iter().filter(|(id, _)| *id != first).find_map(|(id, f)| {
             let rel = target.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
-            (!rel.is_empty()).then_some((i as i64, rel))
+            (!rel.is_empty()).then_some((id, rel))
         })
     }
 
@@ -1616,14 +1698,14 @@ impl Catalogue {
         })?;
         rows.map(|r| {
             let (folder, rel, kind, detail) = r?;
-            Ok(Problem { folder: folders.get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default(), rel, kind, detail })
+            Ok(Problem { folder: folders.get(folder).map(|p| p.display().to_string()).unwrap_or_default(), rel, kind, detail })
         })
         .collect()
     }
 
     /// The problems of these files of a folder (0.14, a record's own Health): those that have one, in their order.
     pub fn problems_in(&self, folder: i64, rels: &[String]) -> Result<Vec<Problem>> {
-        let path = self.folders().get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default();
+        let path = self.folders().get(folder).map(|p| p.display().to_string()).unwrap_or_default();
         let db = self.db();
         let mut st = db.prepare_cached(&format!("SELECT issue, issue_detail FROM files WHERE folder = ?1 AND rel = ?2 AND issue IS NOT NULL AND {PRESENT}"))?;
         let mut out = Vec::new();
@@ -1770,7 +1852,7 @@ impl Catalogue {
             let mut st = tx.prepare("SELECT DISTINCT folder, trashed FROM files WHERE trashed IS NOT NULL")?;
             let trashed: Vec<(i64, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
             for (folder, token) in trashed {
-                let still = folders.get(folder as usize).is_some_and(|f| f.join(crate::trash::TRASH_DIR).join(&token).exists());
+                let still = folders.get(folder).is_some_and(|f| f.join(crate::trash::TRASH_DIR).join(&token).exists());
                 if !still {
                     let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND trashed = ?2")?;
                     let rels: Vec<String> = st.query_map(params![folder, token], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -1898,8 +1980,8 @@ impl Catalogue {
     /// or no such library in use. Blocking.
     #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, 632's stage 2)
     pub fn track_by_path(&self, folder: &str, rel: &str) -> Option<String> {
-        let at = self.folders().iter().position(|f| f.as_path() == std::path::Path::new(folder))?;
-        self.track_of(at as i64, rel).map(crate::serve::ids::song)
+        let at = self.folders().id_of(std::path::Path::new(folder))?;
+        self.track_of(at, rel).map(crate::serve::ids::song)
     }
 
     /// The stable track id a playlist line names, as served: where the line points ([`Self::place_of_line`]), then that
@@ -1955,11 +2037,11 @@ impl Catalogue {
         .flatten()
     }
 
-    /// Where a file is in the catalogue's terms: its library (the folders' index) and its path there; None outside them.
+    /// Where a file is in the catalogue's terms: its folder's id and its path there; None outside them.
     pub fn place_of_path(&self, path: &Path) -> Option<(i64, String)> {
-        self.folders().iter().enumerate().find_map(|(i, f)| {
+        self.folders().iter().find_map(|(i, f)| {
             let rel = path.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
-            (!rel.is_empty()).then_some((i as i64, rel))
+            (!rel.is_empty()).then_some((i, rel))
         })
     }
 
@@ -2073,7 +2155,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, given, heard) = row?;
-            if let Some(dir) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) {
+            if let Some(dir) = folders.get(folder) {
                 out.push((folder, rel.clone(), dir.join(&rel), given, heard));
             }
         }
@@ -2279,7 +2361,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, size, mtime) = row?;
-            if let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) {
+            if let Some(root) = folders.get(folder) {
                 let path = root.join(&rel);
                 out.push((folder, rel, path, size, mtime));
             }
@@ -2347,7 +2429,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, size, mtime) = row?;
-            let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) else { continue };
+            let Some(root) = folders.get(folder) else { continue };
             out.push((folder, rel.clone(), root.join(&rel), size, mtime));
         }
         Ok(out)
@@ -2382,7 +2464,7 @@ impl Catalogue {
 
     /// A present file's path, size and mtime (an analysis worked out when it is asked for). Blocking.
     pub fn file_to_analyse(&self, folder: i64, rel: &str) -> Option<(PathBuf, u64, i64)> {
-        let root = usize::try_from(folder).ok().and_then(|i| self.folders().get(i).cloned())?;
+        let root = self.folders().get(folder).cloned()?;
         let (size, mtime): (i64, i64) = self
             .db()
             .query_row(&format!("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
@@ -2413,7 +2495,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, size, mtime) = row?;
-            let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) else { continue };
+            let Some(root) = folders.get(folder) else { continue };
             out.push((folder, rel.clone(), root.join(&rel), size, mtime));
         }
         Ok(out)
@@ -2476,11 +2558,10 @@ impl Catalogue {
         let folders = self
             .folders()
             .iter()
-            .enumerate()
             .map(|(i, p)| {
                 Ok(FolderStatus {
                     path: p.display().to_string(),
-                    files: count(&format!("SELECT COUNT(*) FROM files WHERE folder = ?1 AND {PRESENT}"), &[&(i as i64)])?,
+                    files: count(&format!("SELECT COUNT(*) FROM files WHERE folder = ?1 AND {PRESENT}"), &[&i])?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2513,11 +2594,12 @@ impl Catalogue {
 }
 
 /// A file's playlist line among these folders (see `Catalogue::line_of`).
-fn line_in(folders: &[PathBuf], folder: i64, rel: &str) -> Option<String> {
-    if folder == 0 {
+fn line_in(folders: &InUse, folder: i64, rel: &str) -> Option<String> {
+    let (first, root) = folders.first()?;
+    if folder == first {
         return Some(rel.to_string());
     }
-    crate::playlists::relative_to(folders.first()?, &folders.get(usize::try_from(folder).ok()?)?.join(rel))
+    crate::playlists::relative_to(root, &folders.get(folder)?.join(rel))
 }
 
 /// Where a server's paths lie in each folder: the prefix to strip, per folder id. Found from the catalogue's own
@@ -2538,7 +2620,7 @@ impl Roots {
         // Unknown so far: strip leading folders until the rest is a catalogued file.
         let absolute = norm.starts_with('/');
         let segs: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
-        for folder in 0..cat.folders().len() as i64 {
+        for folder in cat.folders().ids() {
             for i in 0..segs.len().saturating_sub(1) {
                 let rel = segs[i..].join("/");
                 if crate::placement::safe_relative(&rel) && cat.has_file(folder, &rel) {
@@ -2563,7 +2645,7 @@ async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -
     let last_pass: i64 = cat.meta(&format!("pass:{id}")).and_then(|v| v.parse().ok()).unwrap_or(0);
     // Also when the folders changed since the last full listing: a folder added later (Lidarr's, 2026-10-14) got
     // only the tracks the server changed since, and its older ones stayed unplayable until the next day's listing.
-    let folders = cat.folders().iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join("
+    let folders = cat.folders().paths().map(|f| f.display().to_string()).collect::<Vec<_>>().join("
 ");
     let full = started - last_full >= FULL_EVERY_SECS || cat.meta(&format!("full-folders:{id}")).as_deref() != Some(&folders);
     let since = (!full).then_some(last_pass);
@@ -3941,6 +4023,38 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// 0101 point 1 (the owner, 2026-11-04): a folder keeps its id for life. A folder added, wherever it is asked for in
+    /// the list, takes a new id and moves no other; one taken out moves no other either; the ids and the tracks under
+    /// them stay put, so what names a folder by its id (album ids, Subsonic's folders, the journal) never points
+    /// elsewhere.
+    #[test]
+    fn a_folder_keeps_its_id_for_life_whatever_comes_and_goes() {
+        let (a, b, c) = (music(), music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let in_b = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
+        let ids = |cat: &Catalogue| [&a, &b, &c].map(|p| cat.folders().id_of(p));
+        // Asked for first, the new one still comes after the others.
+        cat.set_folders(vec![c.clone(), a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        assert_eq!(ids(&cat), [Some(0), Some(1), Some(2)]);
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(in_b), "b's tracks where they were");
+        // The first taken out: no other moves up into its place.
+        cat.set_folders(vec![b.clone(), c.clone()]).unwrap();
+        assert_eq!(ids(&cat), [None, Some(1), Some(2)]);
+        assert_eq!(cat.folders().first().map(|(id, _)| id), Some(1), "lines start from the first in use");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(in_b));
+        // And back: its own id again.
+        cat.set_folders(vec![a.clone(), b.clone(), c.clone()]).unwrap();
+        assert_eq!(ids(&cat), [Some(0), Some(1), Some(2)]);
+        assert_eq!(cat.status().unwrap().files, 6);
+        for d in [&a, &b, &c] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     #[test]
     fn changing_a_folder_drops_only_its_rows() {
         let (a, b) = (music(), music());
@@ -4019,19 +4133,22 @@ mod tests {
         assert_eq!(cat.status().unwrap().files, 2, "only the folder in use counts");
         assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), None);
         assert_eq!(cat.track_of_source("cratarr", &own), None, "a parked track does not play");
-        // Back, even at another place in the list: the same track id, and the servers list again.
+        // Back, whatever its place in the list asked: under its own folder id, with the same track id, and the servers
+        // list again.
         cat.set_folders(vec![b.clone(), a.clone()]).unwrap();
-        assert_eq!(cat.track_of(0, "A - B (2020)/01 One.mp3"), Some(one), "the same id after the break");
+        assert_eq!(cat.folders().id_of(&b), Some(1), "its own id for life");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "the same id after the break");
         assert_eq!(cat.meta("full-folders:jf"), None, "links checked again after a break");
         assert_eq!(cat.status().unwrap().files, 4);
-        // Parked, then other files at that path: forgotten.
+        // Parked, then other files at that path: forgotten, and back as a new folder with an id never given before.
         cat.set_folders(vec![a.clone()]).unwrap();
         std::fs::remove_dir_all(&b).unwrap();
         std::fs::create_dir_all(b.join("X")).unwrap();
         std::fs::write(b.join("X/other.mp3"), "x").unwrap();
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
         cat.walk_all();
-        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), None, "those files are gone: their rows with them");
+        assert_eq!(cat.folders().id_of(&b), Some(2), "its old id is never given again");
+        assert_eq!(cat.track_of(2, "A - B (2020)/01 One.mp3"), None, "those files are gone: their rows with them");
         assert_eq!(cat.status().unwrap().files, 3);
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();

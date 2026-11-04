@@ -282,6 +282,12 @@ handing the record's track a new file.
   whatever the copies; the prefixes go.
 - **Libraries are positions in a list** (the catalogue's folder ids, Subsonic's music folder ids, the journal's and
   conversion jobs' folders): they get ids of their own (point 1: libraries without roles).
+  - Done 2026-11-04 (the owner, over a shortcut that kept positions and only ever appended: "is it worth to take the
+    shortcut if we want a truly robust and coherent architecture?"): **each catalogue folder keeps one id for life.** A
+    folder in use keeps its id, one that comes back takes its own again, a moved mount keeps its id under its new path,
+    and a new folder takes an id never given before. Today's positions became the ids, so no data moved. The served
+    album ids, Subsonic's music folders, the journal's Undo and queued conversions keep naming the same folder whatever
+    is added or removed; a folder's id says nothing of its kind (main, own, Incoming go by what the library is).
 - **Playlists and crates name tracks by path lines:** playlists become tracks in 632's stage 2 (point 12); crates' left
   out and excluded lines the same way.
 - **The migration** (21) rewrites album ids to records, library positions to their ids and lines to tracks, in one

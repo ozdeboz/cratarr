@@ -1487,7 +1487,7 @@ async fn album_lines(served: Option<Arc<crate::serve::Serve>>, cat: Arc<crate::c
 /// crate draws from both; an Incoming song's line climbs out of Music, `Catalogue::line_of`). Blocking.
 fn songs_by_line(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue) -> HashMap<String, crate::serve::library::RelSong> {
     let mut out = HashMap::new();
-    for folder in 0..cat.folders().len() as i64 {
+    for folder in cat.folders().ids() {
         for (rel, song) in serve.library.songs_by_rel(folder).unwrap_or_default() {
             if let Some(line) = cat.line_of(folder, &rel) {
                 out.insert(line, song);
@@ -2453,7 +2453,7 @@ impl PlaylistService {
             let folders = c.folders();
             let place = |line: &str| {
                 let (folder, rel) = c.place_of_line(line)?;
-                Some((folders.get(usize::try_from(folder).ok()?)?.clone(), rel))
+                Some((folders.get(folder)?.clone(), rel))
             };
             crate::export::plan(lists, place, |rels| {
                 let rows = c.line_rows("", rels)?;
@@ -2501,7 +2501,7 @@ impl PlaylistService {
                 .zip(rows)
                 .map(|((label, place), row)| {
                     let (folder, rel) = place.ok_or(label)?;
-                    let path = folders.get(folder as usize).ok_or_else(|| rel.clone())?.join(&rel);
+                    let path = folders.get(folder).ok_or_else(|| rel.clone())?.join(&rel);
                     let (format, kbps) = c.format_of(folder, &rel);
                     Ok((path, rel, export_facts(row, format, kbps)))
                 })

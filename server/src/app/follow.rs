@@ -8,12 +8,12 @@
 //! Safe to repeat: what is done (and undone) is recorded per event in the journal.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
 
 use super::library::{Library, epoch_now};
+use crate::catalogue::InUse;
 use crate::journal::{Entry, Event, Journal};
 use crate::playlists::Store;
 
@@ -22,14 +22,14 @@ pub(super) const PLAYLISTS: &str = "playlists";
 /// The lines are back after an Undo.
 const PLAYLISTS_UNDONE: &str = "playlists-undone";
 
-/// A catalogue file as a playlist line: relative to the Music folder (folder 0), "../" for files outside it.
-fn line_of(folders: &[PathBuf], (folder, rel): &(i64, String)) -> Option<String> {
-    let folder = folders.get(usize::try_from(*folder).ok()?)?;
-    super::sync::relative_to(folders.first()?, &folder.join(rel))
+/// A catalogue file as a playlist line: relative to the Music folder (the first in use), "../" for files outside it.
+fn line_of(folders: &InUse, (folder, rel): &(i64, String)) -> Option<String> {
+    let folder = folders.get(*folder)?;
+    super::sync::relative_to(folders.first()?.1, &folder.join(rel))
 }
 
 /// The lines an album action renames, `back` for its Undo. Empty for a Delete.
-fn renames(event: &Event, folders: &[PathBuf], back: bool) -> HashMap<String, String> {
+fn renames(event: &Event, folders: &InUse, back: bool) -> HashMap<String, String> {
     let line = |at: &(i64, String)| line_of(folders, at);
     let mut out = HashMap::new();
     let mut add = |from: Option<String>, to: Option<String>| {
@@ -93,7 +93,7 @@ async fn edit_all(stores: &[&Store], edit: impl Fn(&str, &[String]) -> Option<Ve
 
 /// React to an album action in every account's playlists. Returns the playlists that changed, by key (none when it
 /// was already handled).
-async fn apply(stores: &[&Store], folders: &[PathBuf], journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
+async fn apply(stores: &[&Store], folders: &InUse, journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
     if journal.result(entry.id, PLAYLISTS)?.is_some() {
         return Ok(Vec::new());
     }
@@ -110,7 +110,7 @@ async fn apply(stores: &[&Store], folders: &[PathBuf], journal: &Journal, entry:
 }
 
 /// Put back what `apply` did, once the action is undone. Returns the playlists that changed.
-async fn undo(stores: &[&Store], folders: &[PathBuf], journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
+async fn undo(stores: &[&Store], folders: &InUse, journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
     if journal.result(entry.id, PLAYLISTS_UNDONE)?.is_some() {
         return Ok(Vec::new());
     }
@@ -216,6 +216,8 @@ impl Follow {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::journal::TrackMove;
 
@@ -228,8 +230,8 @@ mod tests {
             std::fs::create_dir_all(d.join("Music")).unwrap();
             Self(d)
         }
-        fn folders(&self) -> Vec<PathBuf> {
-            vec![self.0.join("Music"), self.0.join("incoming")]
+        fn folders(&self) -> InUse {
+            [(0, self.0.join("Music")), (1, self.0.join("incoming"))].into_iter().collect()
         }
         fn write(&self, name: &str, lines: &[&str]) {
             std::fs::write(self.0.join("Music").join(format!("{name}.m3u")), lines.join("\n") + "\n").unwrap();
@@ -310,7 +312,7 @@ mod tests {
 
     #[test]
     fn a_replacement_takes_over_the_old_files_lines_and_undo_gives_them_back() {
-        let folders = vec![PathBuf::from("/m/Music"), PathBuf::from("/m/incoming")];
+        let folders: InUse = [(0, PathBuf::from("/m/Music")), (1, PathBuf::from("/m/incoming"))].into_iter().collect();
         let event = Event::AlbumReplaced {
             source: "jellyfin".into(),
             album_id: "a".into(),

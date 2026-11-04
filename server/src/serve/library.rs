@@ -749,7 +749,7 @@ impl Library {
         let songs = format!(
             "catalogue {} {} {} rules {:x} files {}",
             cat.generation(),
-            cat.folders().len(),
+            cat.folders().count(),
             format!("{} originals {}", self.added_print(), self.originals_print()),
             {
                 use md5::Digest;
@@ -767,15 +767,15 @@ impl Library {
     pub fn build_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules, print: &str) -> Result<(bool, usize)> {
         let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
         let reader = cat.reader();
-        let count = cat.folders().len() as i64;
-        let folders = (0..count)
-            .map(|folder| {
+        let folders = cat
+            .folders()
+            .iter()
+            .map(|(folder, root)| {
                 let rows = match &reader {
                     Some(c) => crate::catalogue::served_rows(c, folder)?,
                     None => cat.served_rows(folder)?,
                 };
-                let root = cat.folders().get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default();
-                Ok(FolderRows { folder, root, rows })
+                Ok(FolderRows { folder, root: root.display().to_string(), rows })
             })
             .collect::<Result<Vec<_>>>()?;
         let covers = match &reader {
@@ -1048,7 +1048,7 @@ impl Library {
     /// again. Blocking.
     pub fn update_files(&self, cat: &crate::catalogue::Catalogue, rules: &Rules, paths: &[std::path::PathBuf]) -> Result<usize> {
         let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
-        let roots_now: Vec<(i64, String)> = cat.folders().iter().enumerate().map(|(i, p)| (i as i64, p.display().to_string())).collect();
+        let roots_now: Vec<(i64, String)> = cat.folders().iter().map(|(i, p)| (i, p.display().to_string())).collect();
         if self.built_context().as_deref() != Some(context(&cat.generation(), &roots_now, rules)?.as_str()) {
             return Ok(0);
         }
@@ -2433,7 +2433,7 @@ mod tests {
             .db()
             .query_row("SELECT folder, rel FROM songs WHERE album_id = (SELECT id FROM albums ORDER BY song_count DESC LIMIT 1) LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();
-        let path = cat.folders()[folder as usize].join(&rel);
+        let path = cat.folders().get(folder).unwrap().join(&rel);
         let t = std::time::Instant::now();
         let n = lib.update_files(&cat, &Rules::default(), &[path]).unwrap();
         println!("one album's folder built again: {n} folders in {:?}", t.elapsed());

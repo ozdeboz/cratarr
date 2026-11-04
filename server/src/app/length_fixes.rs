@@ -61,7 +61,7 @@ pub fn of_finding(key: &str) -> Result<Vec<Fix>> {
 /// The file a song is.
 fn file_of(served: &Serve, song: &str) -> Result<Option<(i64, String, PathBuf, String, String)>> {
     let Some((folder, rel, album, title)) = served.library.song_file(song)? else { return Ok(None) };
-    let dir = usize::try_from(folder).ok().and_then(|i| served.catalogue().folders().get(i).cloned()).context("its folder is not in use")?;
+    let dir = served.catalogue().folders().get(folder).cloned().context("its folder is not in use")?;
     Ok(Some((folder, rel.clone(), dir.join(&rel), album, title)))
 }
 

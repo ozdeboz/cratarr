@@ -1443,7 +1443,7 @@ async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>) -> 
     let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
         let track = cat.track_of_source(&source, &id)?;
         let (folder, rel) = cat.file_of(track)?;
-        let root = cat.folders().get(folder as usize)?.clone();
+        let root = cat.folders().get(folder)?.clone();
         let path = root.join(&rel);
         let meta = std::fs::metadata(&path).ok();
         let modified = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());

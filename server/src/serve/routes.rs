@@ -233,7 +233,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 "downloadRole": user.permissions.offline, "playlistRole": user.permissions.playlists, "coverArtRole": true,
                 "commentRole": false, "podcastRole": false, "shareRole": user.permissions.links, "jukeboxRole": false,
                 "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
-                "folder": (0..serve.catalogue().folders().len() as i64).filter(|i| !off.contains(i)).map(|i| i + 1).collect::<Vec<_>>(),
+                "folder": serve.catalogue().folders().ids().filter(|i| !off.contains(i)).map(|i| i + 1).collect::<Vec<_>>(),
             } })))
         }
         "getMusicFolders" => {
@@ -243,8 +243,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 .catalogue()
                 .folders()
                 .iter()
-                .enumerate()
-                .filter(|(i, _)| !off.contains(&(*i as i64)))
+                .filter(|(i, _)| !off.contains(i))
                 .map(|(i, f)| json!({ "id": i + 1, "name": f.file_name().map_or_else(|| f.display().to_string(), |n| n.to_string_lossy().to_string()) }))
                 .collect();
             Ok(Answer::Json(json!({ "musicFolders": { "musicFolder": folders } })))

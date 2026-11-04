@@ -41,7 +41,7 @@ impl InsightsService {
             Some((a, _)) => super::library::folders_switched_off(a, without).into_iter().map(std::path::PathBuf::from).collect(),
             None => Vec::new(),
         };
-        Some(self.lib.catalogue().folders().iter().enumerate().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i as i64).collect())
+        Some(self.lib.catalogue().folders().iter().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i).collect())
     }
 
     pub(super) fn new(lib: Arc<Library>, playlists: Arc<super::playlists::PlaylistService>) -> Self {
@@ -72,11 +72,11 @@ impl InsightsService {
                 v.sort();
                 v
             }
-            None => (0..folders.len() as i64).collect(),
+            None => folders.ids().collect(),
         };
         let incoming_paths = self.lib.folders().incoming;
         let incoming: std::collections::HashSet<i64> =
-            folders.iter().enumerate().filter(|(_, f)| incoming_paths.iter().any(|p| std::path::Path::new(p) == f.as_path())).map(|(i, _)| i as i64).collect();
+            folders.iter().filter(|(_, f)| incoming_paths.iter().any(|p| std::path::Path::new(p) == f.as_path())).map(|(i, _)| i).collect();
         // The overview's figures from Cratarr's own library and the asking account's plays and stars, where it is open.
         let served = self.playlists.served();
         // Whose plays: the request's account, read here (the blocking task below is not the request's).

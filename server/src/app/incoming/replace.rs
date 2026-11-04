@@ -310,8 +310,8 @@ impl IncomingService {
     /// The album Replace takes the place of: its main library's catalogue folder and its folder there. Only an album
     /// matched in a main library is replaced (one matched in another library is only told).
     async fn replaced_copy(&self, at: &Located) -> Result<(i64, String), ToggleError> {
-        let (libraries, mains, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        verdicts(std::slice::from_ref(&at.album), &libraries, mains, &incoming, |_| None)
+        let (libraries, main, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        verdicts(std::slice::from_ref(&at.album), &libraries, &main, &incoming, |_| None)
             .remove(&at.album.id)
             .and_then(|v| Some((v.main_folder?, v.library)))
             .ok_or_else(|| ToggleError::Refused(format!("{} is not in a main library", at.album.title)))

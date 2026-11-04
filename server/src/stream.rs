@@ -413,7 +413,7 @@ pub fn locate(cat: &crate::catalogue::Catalogue, source: &str, item: &str) -> Op
     let track = cat.track_of_source(source, item)?;
     let (folder, rel) = cat.file_of(track)?;
     let duration_ms = cat.duration_of(folder, &rel);
-    let path = cat.folders().get(folder as usize)?.join(rel);
+    let path = cat.folders().get(folder)?.join(rel);
     let kind = match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
         Some("flac") => Some(Kind::Flac),
         Some("mp3") => Some(Kind::Mp3),
@@ -430,7 +430,7 @@ pub fn locate_through(cat: &crate::catalogue::Catalogue, items: &[(String, Strin
     let folders = cat.folders();
     cat.files_of_sources(&asked)
         .into_iter()
-        .map_while(|(folder, rel, duration_ms)| Some((folders.get(usize::try_from(folder).ok()?)?.join(rel), duration_ms)))
+        .map_while(|(folder, rel, duration_ms)| Some((folders.get(folder)?.join(rel), duration_ms)))
         .collect()
 }
 

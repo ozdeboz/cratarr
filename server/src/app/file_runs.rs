@@ -719,7 +719,7 @@ pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
         let entry = app.journal.get(id)?.filter(|e| e.applied).context("That is no longer kept")?;
         let status = moved_status(app, id, entry.at, &entry.event, entry.undone);
         let folders = app.library.catalogue().folders();
-        let place = |(f, rel): &(i64, String)| folders.get(*f as usize).map_or_else(|| rel.clone(), |root| root.join(rel).display().to_string());
+        let place = |(f, rel): &(i64, String)| folders.get(*f).map_or_else(|| rel.clone(), |root| root.join(rel).display().to_string());
         let (album, title, before, after) = match &entry.event {
             Event::AlbumAdopted { album_id, title, from_dir, to_dir, .. } => (album_id, title, vec![place(from_dir)], vec![place(to_dir)]),
             Event::AlbumReplaced { album_id, title, .. } => (album_id, title, Vec::new(), Vec::new()),

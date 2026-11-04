@@ -866,7 +866,7 @@ impl PlayingService {
         let (cat, source, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
         let place = tokio::task::spawn_blocking(move || {
             let (folder, rel) = cat.file_of(cat.track_of_source(&source, &item)?)?;
-            Some((cat.folders().get(usize::try_from(folder).ok()?)?.clone(), rel))
+            Some((cat.folders().get(folder)?.clone(), rel))
         })
         .await
         .ok()

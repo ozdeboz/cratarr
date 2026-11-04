@@ -16,7 +16,6 @@
 //! background, one page after the other with a pause between them, so the server goes on answering everyone else.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -280,12 +279,12 @@ fn parts(path: &str) -> Vec<String> {
 
 impl AlbumPlaces {
     /// `places`: (album id, catalogue folder, path in it); `roots`: the catalogue's folders as Cratarr sees them.
-    pub fn new(places: Vec<(String, i64, String)>, roots: &[PathBuf]) -> Self {
+    pub fn new(places: Vec<(String, i64, String)>, roots: &crate::catalogue::InUse) -> Self {
         let mut by_leaf: HashMap<String, Vec<(String, Vec<String>, usize)>> = HashMap::new();
         for (id, folder, dir) in places {
             let own = parts(&dir);
             // An album lying loose in a catalogue folder has no folder of its own to be found by.
-            let (Some(leaf), Some(root)) = (own.last().cloned(), roots.get(folder as usize)) else { continue };
+            let (Some(leaf), Some(root)) = (own.last().cloned(), roots.get(folder)) else { continue };
             let mut all = parts(&root.to_string_lossy());
             let n = own.len();
             all.extend(own);
@@ -765,6 +764,8 @@ pub async fn undo(State(serve): State<Arc<Serve>>, axum::Json(w): axum::Json<Who
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::catalogue::{Catalogue, Rules, ServedRow};
     use crate::serve::library::FolderRows;
@@ -804,7 +805,7 @@ mod tests {
 
     #[test]
     fn albums_are_found_by_the_folders_they_share_with_the_servers_path() {
-        let roots = vec![PathBuf::from("/media/Music"), PathBuf::from("/media/lidarr-music")];
+        let roots: crate::catalogue::InUse = [(0, PathBuf::from("/media/Music")), (1, PathBuf::from("/media/lidarr-music"))].into_iter().collect();
         let places = AlbumPlaces::new(
             vec![
                 ("al-music".into(), 0, "Björk/Homogenic (1997)".into()),

@@ -441,7 +441,7 @@ impl Library {
             return Vec::new();
         }
         let off: Vec<std::path::PathBuf> = self.connected().into_iter().flat_map(|(a, _)| folders_switched_off(&a, without)).map(std::path::PathBuf::from).collect();
-        self.catalogue().folders().iter().enumerate().filter(|(_, f)| off.contains(f)).map(|(i, _)| i as i64).collect()
+        self.catalogue().folders().iter().filter(|(_, f)| off.contains(f)).map(|(i, _)| i).collect()
     }
 
     pub(super) fn connected(&self) -> Vec<(Arc<Active>, Arc<dyn Source>)> {
@@ -456,17 +456,17 @@ impl Library {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).0.music.clone()
     }
 
-    /// How many of the catalogue's folders, from the first, are the main libraries' (0101 point 1: main libraries are
-    /// equal, and the catalogue lists theirs first, the first main library's at 0).
-    pub(super) fn main_folders(&self) -> usize {
+    /// The catalogue's folders that are the main libraries', by their ids (0101 point 1: main libraries are equal; a
+    /// folder's id says nothing of its kind).
+    pub(super) fn main_folders(&self) -> Vec<i64> {
         let f = self.folders();
         let main: Vec<&std::path::Path> = f.music.iter().chain(&f.more_main).map(std::path::Path::new).collect();
-        self.catalogue.folders().iter().take_while(|p| main.contains(&p.as_path())).count()
+        self.catalogue.folders().iter().filter(|(_, p)| main.contains(&p.as_path())).map(|(id, _)| id).collect()
     }
 
     /// Whether the catalogue's folder `folder` is a main library's: Keep's target, Replace's, out of Lidarr's reach.
     pub(super) fn is_main(&self, folder: i64) -> bool {
-        usize::try_from(folder).is_ok_and(|f| f < self.main_folders())
+        self.main_folders().contains(&folder)
     }
 
     /// The name of the library the Music folder belongs to, as its server calls it: what Keep and Replace say they
@@ -606,7 +606,7 @@ mod switched_off_tests {
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
         let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
-        assert_eq!(lib.main_folders(), 1);
+        assert_eq!(lib.main_folders(), [0]);
         assert!(lib.is_main(0));
         assert!(!lib.is_main(1) && !lib.is_main(-1), "no folder there");
         let _ = std::fs::remove_dir_all(&d);
