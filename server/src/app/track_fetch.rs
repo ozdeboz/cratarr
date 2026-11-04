@@ -866,6 +866,9 @@ struct Added {
     added: String,
     /// The track it replaced, in the trash.
     trashed: Option<String>,
+    /// The replaced file's track, handed to the new one and back by Undo (0101 point 11).
+    #[serde(default)]
+    track: Option<i64>,
 }
 
 fn undo_file(id: &str) -> Result<PathBuf> {
@@ -948,6 +951,8 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     let ext = source.extension().and_then(|x| x.to_str()).unwrap_or("flac").to_ascii_lowercase();
     let name = name_like(&neighbour.file, t.position, &t.title, &ext);
     let dest = album_dir.join(&name);
+    // The replaced file's track, handed to the new one (0101 point 11: a better copy keeps the id, as Replace does).
+    let handed = replaced.and_then(|r| s.catalogue().place_of_path(&r.path)).and_then(|(f, rel)| s.catalogue().track_of(f, &rel));
     // The replaced track to the trash first: the new one may take its name.
     let now = super::moment::now_secs();
     let trashed = match replaced {
@@ -982,7 +987,12 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         tracing::warn!("track fetch: the cover not put inside {}: {e:#}", dest.display());
     }
     let id = now.to_string() + &new_id()[..4];
-    let undo = Added { root: root.clone(), added: rel_of(&root, &dest)?, trashed };
+    if let Some(track) = handed
+        && let Err(e) = s.catalogue().hand_over(&dest, track)
+    {
+        tracing::warn!("track fetch: {} not handed its track: {e:#}", dest.display());
+    }
+    let undo = Added { root: root.clone(), added: rel_of(&root, &dest)?, trashed, track: handed };
     let file = undo_file(&id)?;
     std::fs::create_dir_all(file.parent().context("no folder")?)?;
     std::fs::write(&file, serde_json::to_vec(&undo)?)?;
@@ -1059,12 +1069,19 @@ pub fn undo_at(file: &Path) -> Result<()> {
         let now = super::moment::now_secs();
         crate::trash::trash_file(&a.root, &a.added, now)?;
         let mut changed = vec![a.root.join(&a.added)];
+        let served = crate::serve::instance();
         if let Some(tok) = &a.trashed {
-            let back = crate::trash::restore_file(&a.root, tok)?;
-            changed.push(a.root.join(back));
+            let back = a.root.join(crate::trash::restore_file(&a.root, tok)?);
+            // The track back to the file it was (0101 point 11).
+            if let (Some(s), Some(track)) = (&served, a.track)
+                && let Err(e) = s.catalogue().hand_over(&back, track)
+            {
+                tracing::warn!("track fetch undo: {} not handed its track back: {e:#}", back.display());
+            }
+            changed.push(back);
         }
         std::fs::remove_file(file).ok();
-        if let Some(s) = crate::serve::instance() {
+        if let Some(s) = served {
             s.reread(&changed);
             s.catalogue().poke();
         }
