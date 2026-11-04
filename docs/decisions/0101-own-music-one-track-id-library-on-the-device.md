@@ -267,6 +267,17 @@ favourites and every other reference point at the record's track; a copy (Music,
 upgrade) is only files of it, the best one playing. So the id never splits between copies, and Replace keeps it by
 handing the record's track a new file.
 
+## Amended 2026-11-04: how a record's copies behave (the owner, by question, in 632's session)
+
+- **The same record is the same tracks.** Two folders are one record only when their tracklists match. A deluxe edition
+  with bonus tracks is a record of its own.
+- **Which copy plays:** the viewer's own music first, even at a lower quality; else the best quality among the libraries
+  they have on. A copy in a library switched off never plays.
+- **An Incoming copy** plays only when picked in the record's menu: the kept copy plays until it is added or replaced.
+- **Delete names the copy:** with two copies the menu says "Delete from Music", "Delete from Your music". The record
+  stays while one copy is left.
+- **In lists** a record shows once, with a dot for each library that holds a copy.
+
 ## Amended 2026-11-04: what point 11 meets in the code (a5's survey, trunk 96ed26062)
 
 - **Songs are served by the catalogue's own track id already** (`tr-<tracks.id>`, since 0030). Keep, Move, Cratarr's tag
