@@ -13,7 +13,7 @@ export type KeptItem = {
   key: string;
   kind: KeptKind;
   source: string;
-  /** An album's or a crate's id, a playlist's name, an artist's name. */
+  /** An album's or a crate's id, a playlist's id (its name today), an artist's name. */
   id: string;
   /** Shown in the sheet. */
   name: string;

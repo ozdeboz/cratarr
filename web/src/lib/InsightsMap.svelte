@@ -6,7 +6,7 @@
   // (lib/territories), which genres they show (ticked, up to MAX_GENRES, each its colour), and one shown alone. Full
   // screen (its panel's bar) lays it over everything; its corner, Esc or the browser's own leaving ends it.
   import { type Signal } from './api';
-  import { insights, mapFull, plural } from './insights.svelte';
+  import { insights, mapFull, pidOf, plural } from './insights.svelte';
   import { GENRE_PALETTE, genreRanking, MAX_GENRES, sharesOf, TERRITORIES } from './territories';
   import ChoiceSheet from './settings/ChoiceSheet.svelte';
   import Group from './settings/Group.svelte';
@@ -31,7 +31,7 @@
   /** What the menu shows for a playlist: the live counts when the shell has them. */
   const menuPlaylist = (name: string) => {
     const known = live.view?.playlists.find((x) => x.id === name);
-    const point = data?.proximity.playlists.find((x) => x.name === name);
+    const point = data?.proximity.playlists.find((x) => pidOf(x) === name);
     return known ?? { id: name, name, count: point?.tracks ?? 0, dead: 0 };
   };
 
@@ -157,11 +157,11 @@
             bind:groups
             territories={drawn}
             {solo}
-            onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
+            onmenu={(i, anchor) => (menu = { name: pidOf(shown.playlists[i]), anchor })}
           />
         {/key}
         {#if me}
-          <button class="corner" onclick={() => viewOver(me.name)}><Icon name="squareArrowOutUpRight" size={18} /><span>View {me.name}</span></button>
+          <button class="corner" onclick={() => viewOver(pidOf(me))}><Icon name="squareArrowOutUpRight" size={18} /><span>View {me.name}</span></button>
         {/if}
         <!-- The legend explains the graph: always at hand, in the graph's corner. -->
         <button class="corner legend-btn" onclick={() => (legendOpen = true)}><Icon name="info" size={18} /><span>Legend</span></button>

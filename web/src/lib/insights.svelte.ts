@@ -16,7 +16,7 @@ class InsightsStore {
     if (!this.data) return null;
     const p = this.data.proximity;
     const index = new Map<number, number>();
-    p.playlists.forEach((x, i) => !this.removed.includes(x.name) && index.set(i, index.size));
+    p.playlists.forEach((x, i) => !this.removed.includes(pidOf(x)) && index.set(i, index.size));
     const playlists = p.playlists.filter((_, i) => index.has(i));
     const links = p.links.filter((l) => index.has(l.a) && index.has(l.b)).map((l) => ({ ...l, a: index.get(l.a)!, b: index.get(l.b)! }));
     return { playlists, links };
@@ -50,9 +50,9 @@ class InsightsStore {
     );
   }
 
-  /** A playlist's place in the shown data, or -1. */
-  indexOf(name: string) {
-    return this.shown?.playlists.findIndex((p) => p.name === name) ?? -1;
+  /** A playlist's place in the shown data (by its id), or -1. */
+  indexOf(id: string) {
+    return this.shown?.playlists.findIndex((p) => pidOf(p) === id) ?? -1;
   }
 
   /** A playlist's closest playlists under the current signals, closest first, with what they share. */
@@ -78,9 +78,12 @@ class InsightsStore {
       }));
   }
 
+  /** A rename followed (its id from `from` to `to`; lib/follow): the name too, while the id is the name. */
   renamed(from: string, to: string) {
-    const point = this.data?.proximity.playlists.find((x) => x.name === from);
-    if (point) point.name = to;
+    const point = this.data?.proximity.playlists.find((x) => pidOf(x) === from);
+    if (!point) return;
+    if (point.id) point.id = to;
+    else point.name = to;
   }
   deleted(id: string) {
     this.removed = [...this.removed, id];
@@ -89,6 +92,9 @@ class InsightsStore {
     this.removed = this.removed.filter((x) => x !== id);
   }
 }
+
+/** An Insights playlist's id: the server's where it says one, else its name (the id today). */
+export const pidOf = (p: { id?: string; name: string }) => p.id ?? p.name;
 
 export const insights = new InsightsStore();
 
