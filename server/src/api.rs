@@ -4583,10 +4583,15 @@ async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<std
 }
 
 /// The asking account and Cratarr's own library, for Discover (decision 0069).
-/// The signed-in account's library and name, for its preferences.
+/// The signed-in account's library and name, for its preferences. With sign-in off and no account at all, the install's
+/// one user, kept as "" (the page's own key there), so the page needs no case of its own.
 fn preferrer(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
     let serve = ctx.serve()?;
-    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: preferences are an account's own.".into()))?;
+    let account = match ctx.account() {
+        Some(a) => a,
+        None if !serve.sign_in_required() => String::new(),
+        None => return Err(ToggleError::Refused("Sign in first: preferences are an account's own.".into()).into()),
+    };
     Ok((serve, account))
 }
 
