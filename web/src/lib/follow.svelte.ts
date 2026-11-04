@@ -22,8 +22,14 @@ export async function renameEverywhere(from: string, to: string): Promise<{ undo
  *  the id stayed. */
 export function followRename(from: string, to: string) {
   if (from === to) return;
-  // A pinned playlist stays pinned, in its place; a viewed one stays viewed; its heart and Insights follow.
+  // A pinned playlist stays pinned, in its place; a viewed one stays viewed; its heart, its suggestions' view (its
+  // crate `like:list:<id>`) and Insights follow.
   prefs.pinned = prefs.pinned.map((x) => (x === from ? to : x));
+  const [was, now] = [`like:list:${from}`, `like:list:${to}`];
+  if (prefs.crateViews[was] !== undefined) {
+    const { [was]: view, ...rest } = prefs.crateViews;
+    prefs.crateViews = { ...rest, [now]: view };
+  }
   playlistRenamed(from, to);
   selectRenamed(from, to);
   playlistFavoriteRenamed(from, to);
