@@ -255,3 +255,10 @@ memory, with the engine's arithmetic in the rules crate. So:
 - **29's scope** is this record, 0100 and 0102.
 - **27's move:** the tape engine's arithmetic joins the rules crate after Radio's picker, proved the same way, on the
   server's tests.
+
+## Amended 2026-11-04: a track is the record's track (the owner, in a5's session)
+
+11's "a track's key" with 0100's copies: **one id per track of the record, whichever copy plays.** Playlists, plays,
+favourites and every other reference point at the record's track; a copy (Music, someone's own music, an Incoming
+upgrade) is only files of it, the best one playing. So the id never splits between copies, and Replace keeps it by
+handing the record's track a new file.
