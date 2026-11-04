@@ -353,7 +353,7 @@ impl IncomingService {
     pub async fn cancel(&self, id: u64) -> Result<(), super::ToggleError> {
         let job = self.queue.get(id).ok_or_else(|| super::ToggleError::Refused("that conversion is over".into()))?;
         if job.swap.is_some() || !matches!(job.state, State::Waiting | State::Converting) {
-            return Err(super::ToggleError::Refused(format!("{} is already going into Music", job.album.title)));
+            return Err(super::ToggleError::Refused(format!("{} is already going into {}", job.album.title, self.library_name(&job.source, job.target))));
         }
         self.queue.change(|jobs| jobs.list.retain(|j| j.id != id));
         if job.state == State::Waiting

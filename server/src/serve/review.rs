@@ -1,8 +1,8 @@
 //! Reviewing Incoming albums by Cratarr's album id (decision 0030), for Home Assistant's voice commands: promote
-//! (Incoming's Keep: into Music) and reject (Incoming's Delete: to the trash, and Lidarr stops fetching it), each
-//! undoable through Incoming's own undo, which is what "take that back" calls. Incoming itself works by the media
-//! server's album; the album is found there by its folder, as Incoming finds its own (the server's path ends with the
-//! album's folder). Incoming's behaviour is unchanged.
+//! (Incoming's Keep: into a main library, `?to=` or the server's first) and reject (Incoming's Delete: to the trash,
+//! and Lidarr stops fetching it), each undoable through Incoming's own undo, which is what "take that back" calls.
+//! Incoming itself works by the media server's album; the album is found there by its folder, as Incoming finds its
+//! own (the server's path ends with the album's folder). Incoming's behaviour is unchanged.
 
 use std::sync::Arc;
 
@@ -81,7 +81,12 @@ fn answer(name: &str, artist: &str, review: &str, changed: bool) -> Response {
     axum::Json(json!({ "name": name, "album_artist": artist, "review": review, "changed": changed })).into_response()
 }
 
-async fn act(serve: Arc<Serve>, id: String, wanted: &'static str) -> Response {
+/// Whether a catalogue folder is a main library's (0101 point 1); while Incoming is not up, the first's alone.
+fn in_main(serve: &Serve, folder: i64) -> bool {
+    serve.incoming().map_or(folder == 0, |i| i.in_main(folder))
+}
+
+async fn act(serve: Arc<Serve>, id: String, wanted: &'static str, to: Option<String>) -> Response {
     if let Ok(Some(done)) = serve.userdata.review(&id) {
         if done.state == wanted {
             return answer(&done.name, &done.album_artist, wanted, false);
@@ -93,7 +98,7 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str) -> Response {
         Ok(None) => return fail(StatusCode::NOT_FOUND, "no such album"),
         Err(r) => return r,
     };
-    if folder == 0 {
+    if in_main(&serve, folder) {
         return fail(StatusCode::CONFLICT, format!("{name} is in the library, not in Incoming"));
     }
     let Some(incoming) = serve.incoming().cloned() else { return fail(StatusCode::SERVICE_UNAVAILABLE, "Incoming is not ready yet") };
@@ -101,7 +106,7 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str) -> Response {
         return fail(StatusCode::CONFLICT, format!("{name} is not in Incoming"));
     };
     let undo = if wanted == PROMOTED {
-        match incoming.keep(&source, &server_album, None).await {
+        match incoming.keep(&source, &server_album, to.as_deref(), None).await {
             // A Keep that waits for its conversion gets its undo key when the job is done: remember the job's album.
             Ok(k) => Some(k.undo.unwrap_or_else(|| format!("{JOB}{server_album}"))),
             Err(e) => return fail(StatusCode::CONFLICT, e.to_string()),
@@ -120,12 +125,19 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str) -> Response {
     answer(&name, &artist, wanted, true)
 }
 
-async fn promote(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
-    act(serve, id, PROMOTED).await
+/// Where promote keeps an album (0101 point 2): a main library's id; none, the server's first main library.
+#[derive(serde::Deserialize, Default)]
+struct PromoteTo {
+    #[serde(default)]
+    to: Option<String>,
+}
+
+async fn promote(State(serve): State<Arc<Serve>>, Path(id): Path<String>, Query(q): Query<PromoteTo>) -> Response {
+    act(serve, id, PROMOTED, q.to).await
 }
 
 async fn reject(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
-    act(serve, id, REJECTED).await
+    act(serve, id, REJECTED, None).await
 }
 
 /// Takes a promote or reject back: Incoming undoes the Keep or the Delete, and the album is unreviewed again.
@@ -134,7 +146,7 @@ async fn unreview(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Re
         Ok(Some(r)) => r,
         Ok(None) => {
             return match find(&serve, &id).await {
-                Ok(Some((name, artist, _, folder, _))) if folder > 0 => answer(&name, &artist, UNREVIEWED, false),
+                Ok(Some((name, artist, _, folder, _))) if !in_main(&serve, folder) => answer(&name, &artist, UNREVIEWED, false),
                 Ok(Some((name, _, _, _, _))) => fail(StatusCode::CONFLICT, format!("{name} is in the library, not in Incoming")),
                 Ok(None) => fail(StatusCode::NOT_FOUND, "no such album"),
                 Err(r) => r,

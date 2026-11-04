@@ -42,9 +42,11 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
    (into their own music only); every other library stays the administrators'.
    - Move to… between main libraries renames by the target's template and applies the target's quality limit, as
      Keep does: one plan, one Undo.
-   - Keep (`/api/library/albums/{album}/promote`, serve/review.rs) takes a target library. Today it has none. The
-     default is Incoming's setting, or the requester's own music for a user's request. Replace works into any main
-     library alike, with the target's naming and limit.
+   - Keep (`/api/library/albums/{album}/promote`, serve/review.rs) takes a target library. Since 2026-11-04 it and
+     Incoming's Keep take `to`, a main library's id; without one, the server's first main library until Incoming's
+     setting and own music are in. The default is Incoming's setting, or the requester's own music for a user's
+     request. Replace works into any main library alike (the one its other copy is in), with the target's naming and
+     limit.
 3. **Already stored.** The duplicate and better-copy checks run against every library, switched on or not. A better
    copy is fetched as "another copy" of the same record (0100; below). What a request for an album already stored
    does is settled below: a shared-block copy into the requester's own music.

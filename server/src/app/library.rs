@@ -456,6 +456,19 @@ impl Library {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).0.music.clone()
     }
 
+    /// How many of the catalogue's folders, from the first, are the main libraries' (0101 point 1: main libraries are
+    /// equal, and the catalogue lists theirs first, the first main library's at 0).
+    pub(super) fn main_folders(&self) -> usize {
+        let f = self.folders();
+        let main: Vec<&std::path::Path> = f.music.iter().chain(&f.more_main).map(std::path::Path::new).collect();
+        self.catalogue.folders().iter().take_while(|p| main.contains(&p.as_path())).count()
+    }
+
+    /// Whether the catalogue's folder `folder` is a main library's: Keep's target, Replace's, out of Lidarr's reach.
+    pub(super) fn is_main(&self, folder: i64) -> bool {
+        usize::try_from(folder).is_ok_and(|f| f < self.main_folders())
+    }
+
     /// The name of the library the Music folder belongs to, as its server calls it: what Keep and Replace say they
     /// put albums in. None while no server says (or Cratarr does not see its files).
     pub(super) fn music_name(&self) -> Option<String> {
@@ -584,6 +597,20 @@ impl Library {
 #[cfg(test)]
 mod switched_off_tests {
     use super::*;
+
+    /// 0101 point 1: a main library's folder is one of the catalogue's first ones, the main libraries' (Keep's and
+    /// Replace's targets, out of Lidarr's reach); while no server has answered, the last main folder stands in.
+    #[tokio::test]
+    async fn the_main_libraries_folders_are_the_catalogues_first() {
+        let d = std::env::temp_dir().join(format!("cratarr-mains-{}", std::process::id()));
+        std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
+        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
+        assert_eq!(lib.main_folders(), 1);
+        assert!(lib.is_main(0));
+        assert!(!lib.is_main(1) && !lib.is_main(-1), "no folder there");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     /// 0101 point 1: several main libraries, the first taking every fallback, each folder once, a main library's never
     /// again as Incoming's; the catalogue's folders the main ones' first, in order.

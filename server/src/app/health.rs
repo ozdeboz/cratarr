@@ -468,10 +468,10 @@ fn agreed_total(totals: &[u32]) -> u32 {
     by.iter().rev().find(|(_, n)| **n >= 2).map_or(0, |(t, _)| *t)
 }
 
-/// A better copy Replace can take: an upgrade of Music's album (`incoming`'s upgrades; any other verdict is an album in
-/// two libraries at once).
+/// A better copy Replace can take: an upgrade of a main library's album (`incoming`'s upgrades; any other verdict is an
+/// album in two libraries at once).
 fn replaces(v: &super::incoming::VerdictView) -> bool {
-    v.kind == "upgrade" && v.replaceable
+    v.kind == "upgrade" && v.main_folder.is_some()
 }
 
 /// Where a verdict's other copy is, for an item's line: Music, else its library as named.
@@ -1253,7 +1253,7 @@ mod tests {
             library: "Arp/Zebra".into(),
             why: String::new(),
             library_id: library_id.map(Into::into),
-            replaceable,
+            main_folder: replaceable.then_some(0),
             replaceable_into: if replaceable { library_id.map(Into::into).into_iter().collect() } else { Vec::new() },
         };
         let library = |id: &str, name: &str, kind: &'static str| crate::app::albums::LibraryView {

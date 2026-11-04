@@ -622,26 +622,25 @@ pub fn runs(app: &super::App, since: i64) -> Result<Vec<Status>> {
     let mut out: Vec<Status> = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.values().cloned().collect()).unwrap_or_default();
     out.retain(|s| s.state != "done");
     let mut kept: Vec<Status> = app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
-    kept.extend(app.journal.album_events_since(since)?.iter().filter(|(id, ..)| !out.iter().any(|s| s.id == format!("{MOVE}{id}"))).map(|(id, at, e, undone)| moved_status(*id, *at, e, *undone)));
+    kept.extend(app.journal.album_events_since(since)?.iter().filter(|(id, ..)| !out.iter().any(|s| s.id == format!("{MOVE}{id}"))).map(|(id, at, e, undone)| moved_status(app, *id, *at, e, *undone)));
     kept.sort_by(|a, b| b.at.cmp(&a.at));
     out.extend(kept);
     Ok(out)
 }
 
-/// What an album action is called on the list, and its title.
-fn named(e: &crate::journal::Event) -> (&'static str, String) {
+/// What an album action is called on the list, and its title (a keep or a move as Incoming names it as it goes).
+fn named(app: &super::App, e: &crate::journal::Event) -> (&'static str, String) {
     use crate::journal::Event;
     match e {
-        Event::AlbumAdopted { title, to_dir, .. } if to_dir.0 == 0 => ("keep", format!("Kept into Music: {title}")),
-        Event::AlbumAdopted { title, .. } => ("move", format!("Moved: {title}")),
+        Event::AlbumAdopted { source, title, from_dir, to_dir, .. } => app.incoming.adopted_named(source, from_dir.0, to_dir.0, title),
         Event::AlbumReplaced { title, .. } => ("replace", format!("Replaced: {title}")),
         Event::AlbumRejected { title, .. } => ("delete", format!("Deleted: {title}")),
     }
 }
 
 /// An album action's status, from the journal.
-fn moved_status(id: i64, at: i64, e: &crate::journal::Event, undone: bool) -> Status {
-    let (what, title) = named(e);
+fn moved_status(app: &super::App, id: i64, at: i64, e: &crate::journal::Event, undone: bool) -> Status {
+    let (what, title) = named(app, e);
     Status { id: format!("{MOVE}{id}"), what: what.into(), title, state: "done", done: 1, of: 1, failed: Vec::new(), at: Some(at), undo: Some(format!("{MOVE}{id}")), undone, albums: 1 }
 }
 
@@ -718,7 +717,7 @@ pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
     if let Some(id) = token.strip_prefix(MOVE).and_then(|n| n.parse::<i64>().ok()) {
         use crate::journal::Event;
         let entry = app.journal.get(id)?.filter(|e| e.applied).context("That is no longer kept")?;
-        let status = moved_status(id, entry.at, &entry.event, entry.undone);
+        let status = moved_status(app, id, entry.at, &entry.event, entry.undone);
         let folders = app.library.catalogue().folders();
         let place = |(f, rel): &(i64, String)| folders.get(*f as usize).map_or_else(|| rel.clone(), |root| root.join(rel).display().to_string());
         let (album, title, before, after) = match &entry.event {
@@ -744,7 +743,7 @@ pub async fn undo(app: &Arc<super::App>, token: &str, albums: Option<Vec<String>
         app.incoming.undo(key).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let id: i64 = key.parse().context("Not an album action")?;
         let entry = app.journal.get(id)?.context("That is no longer kept")?;
-        let status = moved_status(id, entry.at, &entry.event, true);
+        let status = moved_status(app, id, entry.at, &entry.event, true);
         tell(&status);
         return Ok(status);
     }

@@ -102,7 +102,7 @@ impl App {
             }
         }
         let live = self.library.connected();
-        let music_deletable = self.incoming.music_deletable().await;
+        let main_deletable = self.incoming.main_deletable().await;
         let mut sources: Vec<AlbumsSourceView> = ids
             .into_iter()
             .map(|id| {
@@ -158,7 +158,13 @@ impl App {
                         .map(|i| i.deletable.clone())
                         .unwrap_or_default()
                         .into_iter()
-                        .chain(music_albums.iter().filter(|_| music_deletable).filter(|a| a.path.is_some()).map(|a| a.id.clone()))
+                        .chain(
+                            music_albums
+                                .iter()
+                                .filter(|a| a.library.as_ref().is_some_and(|l| main_deletable.iter().any(|(s, m)| s == &id && m == l)))
+                                .filter(|a| a.path.is_some())
+                                .map(|a| a.id.clone()),
+                        )
                         .collect(),
                     keepable,
                     keep_to,
@@ -249,14 +255,14 @@ mod tests {
     }
 
     fn verdict(kind: &'static str, library: &str, dir: &str) -> VerdictView {
-        let replaceable = library == "music";
+        let main_folder = (library == "music").then_some(0);
         VerdictView {
             kind,
             library: dir.into(),
             why: String::new(),
             library_id: Some(library.into()),
-            replaceable,
-            replaceable_into: if replaceable { vec![library.into()] } else { Vec::new() },
+            main_folder,
+            replaceable_into: if main_folder.is_some() { vec![library.into()] } else { Vec::new() },
         }
     }
 

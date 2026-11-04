@@ -3814,6 +3814,16 @@ struct KeepYear {
     year: Option<String>,
 }
 
+/// Where Keep puts an album (0101 point 2): a main library's id, else the server's first main library (`keep_to`);
+/// and the year when the album's tags lack it.
+#[derive(Deserialize, Default)]
+struct KeepInto {
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    year: Option<String>,
+}
+
 /// Where a move goes (decision 0034): a library's id, and the year when the album's tags lack it.
 #[derive(Deserialize)]
 struct MoveTo {
@@ -3837,18 +3847,18 @@ async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(St
 async fn keep_preview(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
-    Query(q): Query<KeepYear>,
+    Query(q): Query<KeepInto>,
 ) -> Result<Json<crate::app::KeepPreview>, ApiError> {
-    Ok(Json(app.incoming.keep_preview(&source, &album, q.year.as_deref()).await?))
+    Ok(Json(app.incoming.keep_preview(&source, &album, q.to.as_deref(), q.year.as_deref()).await?))
 }
 
 async fn keep_incoming(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
-    body: Option<Json<KeepYear>>,
+    body: Option<Json<KeepInto>>,
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
-    let year = body.map(|Json(b)| b).unwrap_or_default().year;
-    Ok(Json(app.incoming.keep(&source, &album, year.as_deref()).await?))
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    Ok(Json(app.incoming.keep(&source, &album, b.to.as_deref(), b.year.as_deref()).await?))
 }
 
 async fn replace_preview(

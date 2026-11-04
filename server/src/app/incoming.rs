@@ -45,7 +45,7 @@ struct PlayData {
 #[derive(Debug, Serialize)]
 pub struct KeepPreview {
     pub title: String,
-    /// The album's new folder in Music, when it can be named.
+    /// The album's new folder in its target library, when it can be named.
     pub folder: Option<String>,
     /// How many files move (music and others).
     pub files: usize,
@@ -69,9 +69,9 @@ pub enum KeepRefused {
 /// View album): a server gives a moved file a new item, so a kept album has a new id once the server has it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlbumFate {
-    /// In Music: its id now.
+    /// In its new library: its id now.
     Moved(String),
-    /// In Music, but the server has not added it yet (its title).
+    /// In its new library, but the server has not added it yet (its title).
     NotYet(String),
     /// Deleted (its title).
     Deleted(String),
@@ -160,10 +160,10 @@ pub struct VerdictView {
     /// The library that album is in (its id, as `library_info` has it); none when no used library of the server lies
     /// in its folder.
     pub library_id: Option<String>,
-    /// That album is in the first main library, so Replace can put this one in its place; one in another library is
-    /// only told (Replace into any main library comes next, 0101 point 2).
+    /// The catalogue folder of the main library that album is in: Replace puts this one in its place there (0101 point
+    /// 2); none for another library's, only told.
     #[serde(skip)]
-    pub replaceable: bool,
+    pub main_folder: Option<i64>,
     /// The main libraries Replace can put this one into, in its other copy's place (0101 point 2).
     pub replaceable_into: Vec<String>,
 }
@@ -201,17 +201,20 @@ pub struct LidarrView {
 }
 
 /// Each album already in another used library, by album id: an upgrade of it or a duplicate. Against every other
-/// library (decision 0034), Music first, never its own; one whose folder Cratarr cannot see, against Music alone (in
-/// its own library it would be found as itself). `libraries`: each library's index by catalogue folder (0: Music);
-/// `library_in`: the library id of a folder. The album's release group comes from the catalogue, matched by the end of
-/// its folder path (the server's paths and Cratarr's differ in front).
+/// library (decision 0034), the main libraries first, never its own; one whose folder Cratarr cannot see, against the
+/// main libraries alone (in its own library it would be found as itself). `libraries`: each library's index by
+/// catalogue folder, the `mains` main libraries' first (0101 point 1); `library_in`: the library id of a folder. The
+/// album's release group comes from the catalogue, matched by the end of its folder path (the server's paths and
+/// Cratarr's differ in front).
 fn verdicts(
     albums: &[source::Album],
     libraries: &[crate::incoming::LibraryIndex],
+    mains: usize,
     incoming: &[IncomingDir],
     library_in: impl Fn(i64) -> Option<String>,
 ) -> BTreeMap<String, VerdictView> {
     use crate::incoming::{AlbumFacts, Verdict, quality_of};
+    let mains = mains as i64;
     let mut out = BTreeMap::new();
     for a in albums {
         let own = a.path.as_deref().and_then(|p| incoming_dir(incoming, p));
@@ -222,7 +225,7 @@ fn verdicts(
             tracks: a.tracks,
             quality: quality_of(a.format.as_deref(), a.bitrate_kbps),
         };
-        let mut others = libraries.iter().enumerate().map(|(f, index)| (f as i64, index)).filter(|(f, _)| own.map_or(*f == 0, |d| *f != d.folder));
+        let mut others = libraries.iter().enumerate().map(|(f, index)| (f as i64, index)).filter(|(f, _)| own.map_or(*f < mains, |d| *f != d.folder));
         let found = others.find_map(|(f, index)| match index.classify(&facts) {
             Verdict::New => None,
             Verdict::Upgrade { library, why } => Some((f, "upgrade", index.albums[library].0.clone(), why)),
@@ -230,8 +233,9 @@ fn verdicts(
         });
         let Some((folder, kind, library, why)) = found else { continue };
         let library_id = library_in(folder);
-        let replaceable_into = if folder == 0 { library_id.clone().into_iter().collect() } else { Vec::new() };
-        out.insert(a.id.clone(), VerdictView { kind, library, why, library_id, replaceable: folder == 0, replaceable_into });
+        let main_folder = (folder < mains).then_some(folder);
+        let replaceable_into = if main_folder.is_some() { library_id.clone().into_iter().collect() } else { Vec::new() };
+        out.insert(a.id.clone(), VerdictView { kind, library, why, library_id, main_folder, replaceable_into });
     }
     out
 }
@@ -265,18 +269,19 @@ const INDEX_SECS: i64 = 300;
 /// More than any incoming queue should hold; the page shows them all.
 const INCOMING_LIMIT: usize = 1000;
 
-/// Each library's index by catalogue folder (0: Music) plus the incoming albums' release groups by folder, read
-/// together from the catalogue.
+/// Each library's index by catalogue folder, the `mains` main libraries' first (0101 point 1), plus the other folders'
+/// albums with their release groups, read together from the catalogue.
 struct Owned {
     built: i64,
     libraries: Arc<Vec<crate::incoming::LibraryIndex>>,
+    mains: usize,
     incoming: Arc<Vec<IncomingDir>>,
 }
 
-/// An album directory under an Incoming folder, as the catalogue knows it.
+/// An album directory under a catalogue folder, as the catalogue knows it.
 #[derive(Debug, Clone)]
 struct IncomingDir {
-    /// Catalogue folder id (1 and up are Incoming).
+    /// Catalogue folder id (the main libraries' come first, 0101 point 1).
     folder: i64,
     dir: String,
     release_group: Option<String>,
@@ -449,13 +454,13 @@ impl IncomingService {
         for view in &mut sources {
             view.lacks = view.albums.iter().filter_map(|a| Some((a.id.clone(), lacking.get(&a.id)?.clone()))).collect();
         }
-        if let Some((libraries, incoming)) = self.owned_index().await {
+        if let Some((libraries, mains, incoming)) = self.owned_index().await {
             let (folders, live) = (self.lib.catalogue().folders(), self.lib.live());
             for view in &mut sources {
                 // Each pair's library by this server's ids (the page names it so).
                 let a = live.iter().find(|a| a.cfg.id == view.id);
                 let library_of = |f: i64| a.and_then(|a| library_in(&a.cfg.libraries, &a.placement, folders.get(f as usize)?));
-                view.verdicts = verdicts(&view.albums, &libraries, &incoming, library_of);
+                view.verdicts = verdicts(&view.albums, &libraries, mains, &incoming, library_of);
                 let mut deletable = Vec::new();
                 for a in &view.albums {
                     let folder = a.path.as_deref().and_then(|p| incoming_dir(&incoming, p)).and_then(|d| folders.get(d.folder as usize));
@@ -485,20 +490,20 @@ impl IncomingService {
         ok
     }
 
-    /// Each library's index (by catalogue folder, 0: Music) and the incoming release groups, read from the catalogue at
-    /// most every `INDEX_SECS`.
-    async fn owned_index(&self) -> Option<(Arc<Vec<crate::incoming::LibraryIndex>>, Arc<Vec<IncomingDir>>)> {
+    /// Each library's index (by catalogue folder), how many of them, from the first, are the main libraries', and the
+    /// other folders' albums with their release groups, read from the catalogue at most every `INDEX_SECS`.
+    async fn owned_index(&self) -> Option<(Arc<Vec<crate::incoming::LibraryIndex>>, usize, Arc<Vec<IncomingDir>>)> {
         let mut owned = self.owned.lock().await;
         if let Some(o) = owned.as_ref().filter(|o| epoch_now() - o.built < INDEX_SECS) {
-            return Some((o.libraries.clone(), o.incoming.clone()));
+            return Some((o.libraries.clone(), o.mains, o.incoming.clone()));
         }
-        let c = self.lib.catalogue();
+        let (c, mains) = (self.lib.catalogue(), self.lib.main_folders());
         let read = tokio::task::spawn_blocking(move || -> Result<(Vec<crate::incoming::LibraryIndex>, Vec<IncomingDir>)> {
             use crate::incoming::{AlbumFacts, LibraryIndex, quality_of};
             let (mut libraries, mut incoming) = (Vec::new(), Vec::new());
             for id in 0..c.folders().len() as i64 {
                 let found = c.album_facts(id)?;
-                if id > 0 {
+                if id >= mains as i64 {
                     incoming.extend(found.iter().map(|f| IncomingDir { folder: id, dir: f.dir.clone(), release_group: f.release_group.clone() }));
                 }
                 let library = found
@@ -521,8 +526,8 @@ impl IncomingService {
         .await;
         match read {
             Ok(Ok((libraries, incoming))) => {
-                let o = Owned { built: epoch_now(), libraries: Arc::new(libraries), incoming: Arc::new(incoming) };
-                let out = (o.libraries.clone(), o.incoming.clone());
+                let o = Owned { built: epoch_now(), libraries: Arc::new(libraries), mains, incoming: Arc::new(incoming) };
+                let out = (o.libraries.clone(), o.mains, o.incoming.clone());
                 *owned = Some(o);
                 Some(out)
             }
@@ -586,10 +591,26 @@ impl IncomingService {
         self.delete_listed(source_id, album).await
     }
 
-    /// Whether Music's albums can be deleted: Cratarr writes in Music (its trash is its own).
-    pub(super) async fn music_deletable(&self) -> bool {
-        let Some(music) = self.lib.catalogue().folders().first().cloned() else { return false };
-        self.can_write(&music).await
+    /// Whether a catalogue folder is a main library's (0101 point 1): not Incoming's.
+    pub fn in_main(&self, folder: i64) -> bool {
+        self.lib.is_main(folder)
+    }
+
+    /// The main libraries whose albums can be deleted, by server and library id: Cratarr writes in their folder (each
+    /// library's trash is its own; 0101 point 1: main libraries are equal).
+    pub(super) async fn main_deletable(&self) -> std::collections::HashSet<(String, String)> {
+        let mut out = std::collections::HashSet::new();
+        for a in self.lib.live().iter() {
+            for id in &a.cfg.libraries.music {
+                let folder = a.placement.libraries.iter().find(|l| &l.id == id).and_then(|l| l.folders.first());
+                if let Some(f) = folder
+                    && self.can_write(std::path::Path::new(f)).await
+                {
+                    out.insert((a.cfg.id.clone(), id.clone()));
+                }
+            }
+        }
+        out
     }
 
     /// Delete a listed album of any used library (decision 0034): into that library's own trash (each library keeps
@@ -604,7 +625,7 @@ impl IncomingService {
         }
         // Write-ahead: the journal knows what is about to happen before it does (the token is known up front), so a
         // crash in between is finished or forgotten by `reconcile`, never lost. Lidarr hears of it once applied, and only
-        // for an album that leaves an Incoming folder (Music stays out of it).
+        // for an album that leaves an Incoming folder (the main libraries stay out of it).
         let now = epoch_now();
         let token = crate::trash::token(now, &dir.dir);
         let event = Event::AlbumRejected {
@@ -614,7 +635,7 @@ impl IncomingService {
             folder: dir.folder,
             dir: dir.dir.clone(),
             token: token.clone(),
-            release_group: if dir.folder != 0 { dir.release_group.clone() } else { None },
+            release_group: if self.lib.is_main(dir.folder) { None } else { dir.release_group.clone() },
         };
         // Deleting the album that plays: the player stops first (a player going on with an item the server then drops
         // reports on it, which Jellyfin refuses; decision 0013). Nothing is played after: it is gone.
@@ -667,7 +688,8 @@ impl IncomingService {
                     let root = self.lib.catalogue().folders().get(*folder as usize).cloned();
                     root.is_some_and(|r| crate::trash::holds(&r, token))
                 }
-                // Keep: it happened when any file reached Music; then it is finished forward (the moves repeat safely).
+                // Keep: it happened when any file reached its target; then it is finished forward (the moves repeat
+                // safely).
                 Event::AlbumAdopted { moves, .. } => {
                     let folders = self.lib.catalogue().folders();
                     moves.iter().any(|m| folders.get(m.to.0 as usize).is_some_and(|f| f.join(&m.to.1).is_file()))
@@ -749,18 +771,25 @@ impl IncomingService {
         Ok(title.clone())
     }
 
-    /// Find a listed album on disk, in any of the catalogue's folders (Music's too).
+    /// Find a listed album on disk, in any of the catalogue's folders (the main libraries' too).
     async fn locate_listed(&self, source_id: &str, album: source::Album) -> Result<Located, ToggleError> {
         let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
-        let (libraries, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        let music: Vec<IncomingDir> = libraries
-            .first()
-            .into_iter()
-            .flat_map(|m| &m.albums)
-            .map(|(dir, f)| IncomingDir { folder: 0, dir: dir.clone(), release_group: f.release_group.clone() })
+        let (libraries, mains, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        // A main library's album in its own library's folder where the listing says which: two main libraries can each
+        // hold a folder of that name.
+        let own = album.library.as_deref().and_then(|l| {
+            let live = self.lib.live();
+            self.folder_of(live.iter().find(|a| a.cfg.id == source_id)?, l).ok()
+        });
+        let main: Vec<IncomingDir> = libraries
+            .iter()
+            .take(mains)
+            .enumerate()
+            .filter(|(f, _)| own.is_none_or(|o| o == *f as i64))
+            .flat_map(|(f, m)| m.albums.iter().map(move |(dir, facts)| IncomingDir { folder: f as i64, dir: dir.clone(), release_group: facts.release_group.clone() }))
             .collect();
         let dir = incoming_dir(&incoming, &path)
-            .or_else(|| incoming_dir(&music, &path))
+            .or_else(|| incoming_dir(&main, &path))
             .cloned()
             .ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
         let root = self.lib.catalogue().folders().get(dir.folder as usize).cloned().ok_or_else(|| ToggleError::Refused("that folder is not in use any more".into()))?;
@@ -780,7 +809,7 @@ impl IncomingService {
             .cloned()
             .ok_or_else(|| ToggleError::Refused("that album is no longer in Incoming".into()))?;
         let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
-        let (_, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        let (_, _, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
         let dir = incoming_dir(&incoming, &path)
             .cloned()
             .ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
@@ -794,9 +823,11 @@ impl IncomingService {
         Ok(Located { source: source_id.to_string(), album, dir, root })
     }
 
-    /// Work out Keep for an album: its new names, or why not. Reads the disk and the catalogue; changes nothing.
-    async fn plan_keep(&self, at: &Located, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
-        let music = PathBuf::from(self.lib.music().ok_or_else(|| ToggleError::Refused("no Music library is set".into()))?);
+    /// Work out Keep for an album into the main library in catalogue folder `target`: its new names, or why not. Reads
+    /// the disk and the catalogue; changes nothing.
+    async fn plan_keep(&self, at: &Located, target: i64, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
+        let music = self.root_of(target)?;
+        let name = self.library_name(&at.source, target);
         let (c, folder, dir, root, music_, year, template) =
             (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string), self.lib.template());
         let plan = tokio::task::spawn_blocking(move || -> Result<Result<crate::incoming::KeepPlan, KeepRefused>> {
@@ -811,9 +842,7 @@ impl IncomingService {
             let plan = crate::incoming::plan_keep(&template, &music_files, &others, year.as_deref())
                 .map(|p| crate::incoming::follow_spelling(p, |parent| crate::incoming::folders_in(&music_, parent)));
             Ok(match plan {
-                Ok(plan) if music_.join(&plan.folder).exists() => {
-                    Err(KeepRefused::Other(format!("Music already has a folder named {}", plan.folder)))
-                }
+                Ok(plan) if music_.join(&plan.folder).exists() => Err(KeepRefused::Other(format!("{name} already has a folder named {}", plan.folder))),
                 Ok(plan) => Ok(plan),
                 Err(crate::incoming::KeepRefusal::NeedsYear) => Err(KeepRefused::NeedsYear),
                 Err(e) => Err(KeepRefused::Other(e.to_string())),
@@ -824,11 +853,13 @@ impl IncomingService {
         Ok((music, plan))
     }
 
-    /// What Keep would do with an album (decision 0013), for the page to show before asking. Changes nothing.
-    pub async fn keep_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
+    /// What Keep would do with an album (decision 0013) into `to` (`keep_target`), for the page to show before asking.
+    /// Changes nothing.
+    pub async fn keep_preview(&self, source_id: &str, album_id: &str, to: Option<&str>, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate(source_id, album_id).await?;
-        let (_, plan) = self.plan_keep(&at, year).await?;
-        let convert = self.to_convert(&at, self.music_quality(source_id)).await.len();
+        let (target, quality) = self.keep_target(source_id, to)?;
+        let (_, plan) = self.plan_keep(&at, target, year).await?;
+        let convert = self.to_convert(&at, quality).await.len();
         let acquisition = self.acquisition().is_some();
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
@@ -854,30 +885,76 @@ impl IncomingService {
         .unwrap_or_default()
     }
 
-    /// Keep (decision 0013): move a new album from Incoming into Music, named per the library's template. Write-ahead
-    /// like Delete; the files and catalogue rows move (track ids kept); Lidarr stops fetching it, and the moved
-    /// files' new server items get the old ones' play data (handlers). Undo puts it all back.
-    /// Lossless files above Music's quality limit are converted first, in the queue: the plan is checked now, so a
-    /// refusal shows at once.
-    pub async fn keep(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+    /// Keep (decision 0013): move a new album from Incoming into a main library (`to`, else the server's first; 0101
+    /// point 2), named per the library's template. Write-ahead like Delete; the files and catalogue rows move (track
+    /// ids kept); Lidarr stops fetching it, and the moved files' new server items get the old ones' play data
+    /// (handlers). Undo puts it all back.
+    /// Lossless files above the target's quality limit are converted first, in the queue: the plan is checked now, so
+    /// a refusal shows at once.
+    pub async fn keep(&self, source_id: &str, album_id: &str, to: Option<&str>, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
-        self.move_located(source_id, at, 0, self.music_quality(source_id), year).await
+        let (target, quality) = self.keep_target(source_id, to)?;
+        self.move_located(source_id, at, target, quality, year).await
     }
 
-    /// The quality limit of the Music library on a server (Keep's target), as a move into it has it (`target_of`).
-    fn music_quality(&self, source_id: &str) -> settings::Quality {
+    /// Keep's target (0101 point 2): `to`, a main library of the server, else its first main library (the page's
+    /// `keep_to`); as `target_of` has it.
+    fn keep_target(&self, source_id: &str, to: Option<&str>) -> Result<(i64, settings::Quality), ToggleError> {
+        let live = self.lib.live();
+        let a = live.iter().find(|a| a.cfg.id == source_id).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
+        let main = &a.cfg.libraries.music;
+        let to = match to {
+            Some(t) if main.iter().any(|m| m == t) => t,
+            Some(_) => return Err(ToggleError::Refused("Keep puts an album into a main library".into())),
+            None => main.first().map(String::as_str).ok_or_else(|| ToggleError::Refused("no main library is set".into()))?,
+        };
+        self.target_of(source_id, to)
+    }
+
+    /// The quality limit of a server's used library in catalogue folder `folder`, as a move into it has it
+    /// (`target_of`): Replace's target's.
+    fn quality_at(&self, source_id: &str, folder: i64) -> settings::Quality {
         let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
-        match (live.iter().find(|a| a.cfg.id == source_id), folders.first()) {
-            (Some(a), Some(music)) => quality_in(&a.cfg.libraries, &a.placement, music),
+        match (live.iter().find(|a| a.cfg.id == source_id), usize::try_from(folder).ok().and_then(|f| folders.get(f))) {
+            (Some(a), Some(f)) => quality_in(&a.cfg.libraries, &a.placement, f),
             _ => settings::Quality::Cd,
         }
     }
 
-    /// Move (decision 0034): an album of any used library into another of its server; Keep is the move into Music.
-    /// The target's policies apply on the way in: its naming (Music: the template; another library: the album's
-    /// folder as it is) and its quality limit (lossless files above it converted first, in the queue). `album` is the
-    /// listed album (Music's or another library's).
+    /// The catalogue's folder `folder`, as a root on disk.
+    fn root_of(&self, folder: i64) -> Result<PathBuf, ToggleError> {
+        usize::try_from(folder)
+            .ok()
+            .and_then(|f| self.lib.catalogue().folders().get(f).cloned())
+            .ok_or_else(|| ToggleError::Refused("that library's folder is not in use".into()))
+    }
+
+    /// What a move of `title` from catalogue folder `from` into `to` is called on Health's list of changes, and its
+    /// title there: a keep into a main library, by its name (0101 point 2), else a move.
+    pub(super) fn adopted_named(&self, source_id: &str, from: i64, to: i64, title: &str) -> (&'static str, String) {
+        if self.lib.is_main(to) && !self.lib.is_main(from) {
+            ("keep", format!("Kept into {}: {title}", self.library_name(source_id, to)))
+        } else {
+            ("move", format!("Moved: {title}"))
+        }
+    }
+
+    /// What a server calls its used library in catalogue folder `folder`, for what Keep, Move and Replace say; else
+    /// "that library".
+    fn library_name(&self, source_id: &str, folder: i64) -> String {
+        let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
+        let named = live.iter().find(|a| a.cfg.id == source_id).and_then(|a| {
+            let id = library_in(&a.cfg.libraries, &a.placement, folders.get(usize::try_from(folder).ok()?)?)?;
+            a.placement.libraries.iter().find(|l| l.id == id).map(|l| l.name.clone())
+        });
+        named.unwrap_or_else(|| "that library".into())
+    }
+
+    /// Move (decision 0034): an album of any used library into another of its server; Keep is the move into a main
+    /// library. The target's policies apply on the way in: its naming (a main library: the template; another library:
+    /// the album's folder as it is) and its quality limit (lossless files above it converted first, in the queue).
+    /// `album` is the listed album (a main library's or another library's).
     pub async fn move_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(&album.id)?;
         let at = self.locate_listed(source_id, album).await?;
@@ -894,7 +971,7 @@ impl IncomingService {
         let (target, quality) = self.target_of(source_id, to)?;
         let (_, plan) = self.plan_move(&at, target, year).await?;
         let convert = self.to_convert(&at, quality).await.len();
-        let acquisition = self.acquisition().is_some() && at.dir.folder != 0;
+        let acquisition = self.acquisition().is_some() && !self.lib.is_main(at.dir.folder);
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
             Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition },
@@ -917,7 +994,8 @@ impl IncomingService {
         self.keep_now(&at, target, year, Vec::new(), None).await
     }
 
-    /// A library of a server as Cratarr's catalogue folder (0: the Music folder), and its quality limit.
+    /// A library of a server as Cratarr's catalogue folder (a main library's too: its own, 0101 point 1), and its
+    /// quality limit.
     fn target_of(&self, source_id: &str, library: &str) -> Result<(i64, settings::Quality), ToggleError> {
         let live = self.lib.live();
         let a = live.iter().find(|a| a.cfg.id == source_id).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
@@ -925,23 +1003,24 @@ impl IncomingService {
         if !roles.music.iter().chain(&roles.incoming).any(|l| l == library) {
             return Err(ToggleError::Refused("that library is not used".into()));
         }
-        let quality = roles.quality_of(library);
-        if roles.music.iter().any(|l| l == library) {
-            return Ok((0, quality));
-        }
+        Ok((self.folder_of(a, library)?, roles.quality_of(library)))
+    }
+
+    /// The catalogue folder a library of a server lies in (its first folder).
+    fn folder_of(&self, a: &Active, library: &str) -> Result<i64, ToggleError> {
         let placed = a.placement.libraries.iter().find(|l| l.id == library).and_then(|l| l.folders.first()).ok_or_else(|| ToggleError::Refused("Cratarr cannot see that library's files".into()))?;
         let folders = self.lib.catalogue().folders();
         let i = folders.iter().position(|f| f == &PathBuf::from(placed)).ok_or_else(|| ToggleError::Refused("that library's folder is not in use yet".into()))?;
-        Ok((i as i64, quality))
+        Ok(i as i64)
     }
 
-    /// Work out a move's names, or why not: into Music by the template (Keep's plan), into another library as the album's
-    /// folder is. Reads the disk and the catalogue; changes nothing.
+    /// Work out a move's names, or why not: into a main library by the template (Keep's plan), into another library as
+    /// the album's folder is. Reads the disk and the catalogue; changes nothing.
     async fn plan_move(&self, at: &Located, target: i64, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
-        if target == 0 {
-            return self.plan_keep(at, year).await;
+        if self.lib.is_main(target) {
+            return self.plan_keep(at, target, year).await;
         }
-        let root = self.lib.catalogue().folders().get(target as usize).cloned().ok_or_else(|| ToggleError::Refused("that library's folder is not in use".into()))?;
+        let root = self.root_of(target)?;
         let (from, dir, to_root) = (at.root.clone(), at.dir.dir.clone(), root.clone());
         let plan = tokio::task::spawn_blocking(move || {
             if to_root.join(&dir).exists() {
@@ -965,7 +1044,7 @@ impl IncomingService {
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
-        let (what, title) = if target == 0 { ("keep", format!("Kept into Music: {}", at.album.title)) } else { ("move", format!("Moved: {}", at.album.title)) };
+        let (what, title) = self.adopted_named(&at.source, at.dir.folder, target, &at.album.title);
         let run = super::file_runs::track(what, title);
         let done = self.keep_moving(at, target, year, converted, job).await;
         match &done {
@@ -1033,9 +1112,9 @@ impl IncomingService {
             from_dir: (at.dir.folder, at.dir.dir.clone()),
             to_dir: (target, plan.folder.clone()),
             moves,
-            // Lidarr stops fetching an album that leaves a folder it fetches into: an Incoming one (Music stays out of
-            // it); with no release group it is not asked.
-            release_group: if at.dir.folder != 0 { at.dir.release_group.clone() } else { None },
+            // Lidarr stops fetching an album that leaves a folder it fetches into: an Incoming one (the main libraries
+            // stay out of it); with no release group it is not asked.
+            release_group: if self.lib.is_main(at.dir.folder) { None } else { at.dir.release_group.clone() },
             converted,
         };
         let now = epoch_now();
@@ -1481,18 +1560,37 @@ mod tests {
         let incoming = [dir(1, "Arp/Zebra"), dir(2, "Arp - Zebra")];
         let albums = [album("i1", "/data/lidarr/Arp/Zebra", "MP3"), album("i2", "/data/new/Arp - Zebra", "FLAC"), album("i3", "/elsewhere/Zebra", "FLAC")];
         let libraries = [LibraryIndex::new(Vec::new()), LibraryIndex::new(vec![owned("Arp/Zebra", Quality::Lossy { kbps: 320 })]), LibraryIndex::new(vec![owned("Arp - Zebra", Quality::Lossless)])];
-        let v = verdicts(&albums, &libraries, &incoming, |f| Some(format!("lib{f}")));
-        let said = |id: &str| (v[id].kind, v[id].library.as_str(), v[id].library_id.as_deref(), v[id].replaceable);
-        assert_eq!(said("i1"), ("duplicate", "Arp - Zebra", Some("lib2"), false), "the other Incoming library's, not Replace's");
-        assert_eq!(said("i2"), ("upgrade", "Arp/Zebra", Some("lib1"), false));
-        assert!(!v.contains_key("i3"), "one whose folder Cratarr cannot see is held against Music alone (it could be either copy)");
+        let v = verdicts(&albums, &libraries, 1, &incoming, |f| Some(format!("lib{f}")));
+        let said = |id: &str| (v[id].kind, v[id].library.as_str(), v[id].library_id.as_deref(), v[id].main_folder);
+        assert_eq!(said("i1"), ("duplicate", "Arp - Zebra", Some("lib2"), None), "the other Incoming library's, not Replace's");
+        assert_eq!(said("i2"), ("upgrade", "Arp/Zebra", Some("lib1"), None));
+        assert!(!v.contains_key("i3"), "one whose folder Cratarr cannot see is held against the main libraries alone (it could be either copy)");
         // In Music too: Music's copy comes first, and Replace can take it.
         let libraries = [LibraryIndex::new(vec![owned("Arp/Zebra (1999)", Quality::Lossy { kbps: 128 })]), LibraryIndex::new(vec![owned("Arp/Zebra", Quality::Lossy { kbps: 320 })]), LibraryIndex::new(vec![owned("Arp - Zebra", Quality::Lossless)])];
-        let v = verdicts(&albums, &libraries, &incoming, |f| Some(format!("lib{f}")));
-        let said = |id: &str| (v[id].kind, v[id].library.as_str(), v[id].library_id.as_deref(), v[id].replaceable);
-        assert_eq!(said("i1"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), true));
-        assert_eq!(said("i2"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), true));
-        assert_eq!(said("i3"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), true));
+        let v = verdicts(&albums, &libraries, 1, &incoming, |f| Some(format!("lib{f}")));
+        let said = |id: &str| (v[id].kind, v[id].library.as_str(), v[id].library_id.as_deref(), v[id].main_folder);
+        assert_eq!(said("i1"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), Some(0)));
+        assert_eq!(said("i2"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), Some(0)));
+        assert_eq!(said("i3"), ("upgrade", "Arp/Zebra (1999)", Some("lib0"), Some(0)));
+        assert_eq!(v["i1"].replaceable_into, ["lib0"]);
+    }
+
+    /// 0101 point 2: main libraries are equal. An album in the second main library is Replace's there, and one whose
+    /// folder Cratarr cannot see is held against every main library.
+    #[test]
+    fn an_album_in_any_main_library_can_be_replaced_there() {
+        // Two main libraries (folders 0 and 1), the album in the second; Incoming at folder 2.
+        let incoming = [dir(2, "Arp/Zebra")];
+        let albums = [album("i1", "/data/lidarr/Arp/Zebra", "FLAC"), album("i3", "/elsewhere/Zebra", "FLAC")];
+        let libraries = [LibraryIndex::new(Vec::new()), LibraryIndex::new(vec![owned("Arp/Zebra (1999)", Quality::Lossy { kbps: 128 })]), LibraryIndex::new(vec![owned("Arp/Zebra", Quality::Lossless)])];
+        let v = verdicts(&albums, &libraries, 2, &incoming, |f| Some(format!("lib{f}")));
+        assert_eq!((v["i1"].kind, v["i1"].main_folder), ("upgrade", Some(1)));
+        assert_eq!(v["i1"].replaceable_into, ["lib1"]);
+        assert_eq!(v["i3"].main_folder, Some(1), "held against the second main library too");
+        // With one main library, that folder is another library: told, not Replace's.
+        let v = verdicts(&albums, &libraries, 1, &incoming, |f| Some(format!("lib{f}")));
+        assert_eq!((v["i1"].main_folder, v["i1"].replaceable_into.is_empty()), (None, true));
+        assert!(!v.contains_key("i3"));
     }
 
     #[test]
