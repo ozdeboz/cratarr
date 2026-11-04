@@ -104,8 +104,55 @@ the other's peer.
 
 ## The page and the app
 
-632's part: a peer's dot and switches, dimmed while away, what a peer track's menus offer, Settings' add-a-peer flow,
-and what 0098 and 0085 mean for them. To come.
+A friend's library is no mode (0098): it sits in Cratarr's own mode beside your libraries, and the mode switcher lists
+no peers. The page shows only what can be upheld (0085's rule), so what a peer track offers follows what that friend
+allows.
+
+- **One more library.** The Library's list carries it as any other (LibraryInfo `kind` "peer"): its name (the friend's
+  server's own, changeable when it is added), its colour, and what the friend allows (keep offline, ask for albums,
+  share links). Its dot marks its records, tracks and search results while the viewer has two or more libraries on
+  (0101 point 1), and its name stands in a record's About: your server · ● its name.
+- **Switches.** Each user switches it on or off for themselves, as any library, in the libraries-off kept on their
+  account (0101 point 14), so Subsonic apps, the page and the app agree. A new peer's library starts on for everyone,
+  as any library an administrator adds (the owner, 2026-11-04); nothing is seeded off.
+- **Away.** While the friend's server does not answer, the list says so (`seen` false, `seen_why` "<name> is not
+  answering"), and the page:
+  - dims its records and tracks wherever they show, as music out of reach shows away from Cratarr (lib/away);
+  - leaves them out of what plays, with a word only when everything chosen was theirs;
+  - marks its chip in the Filter sheet "Away";
+  - keeps them in playlists, crates and favourites (nothing is retired while away). Health's libraries say since when.
+- **What a friend's record or track offers.** Play, queue, Radio and Sounds like from it, favourite and rate, its
+  About, its artist and its record. Never the Edit sheet, words or covers into files, fixes, conversion, Keep, Move,
+  Copy, Replace or Delete: it is read-only, so it is no target either. Share only where that friend allows share links.
+  Step 2 adds:
+  - its playlists and crates;
+  - Download to this device, only where the friend allows keep offline;
+  - "Ask <name> for it", only where they allow asking for albums;
+  - for a record at several places, each copy with its dot in the menu, your own first.
+- **Adding a friend, administrators only**, with Settings' own groups, rows and sheets (no new patterns):
+  - *Your side*, Settings › Libraries › Add a library › A friend's Cratarr: their address and the key they gave. Cratarr
+    then checks it and shows what it found before anything is added: their server's name, the libraries they share and
+    what they allow. Then its name and colour, as any library's. Its page shows:
+    - whether it answers, its last sync, and its records and tracks;
+    - what the friend allows, read from them and not set here;
+    - Remove, which asks once: its tracks go; your favourites and plays of them stay, by id.
+  - *The friend's side*, Settings › Users › Add › A peer account: its name, the libraries it sees, and its switches:
+    - main libraries on; Incoming and each user's own music off;
+    - keep offline, ask for albums and share links on.
+    The key shows once with a Copy, as an API key does (0.13). The account's page shows when it last synced and
+    streamed, and Remove, which ends the link.
+  - *A user's own music*: their own Settings › Account has "Friends' servers may see my music", off by default. Only
+    then can an administrator switch it on for a peer.
+- **The app.** The same page, with nothing native of its own.
+  - The device's index (0101 point 16) carries a peer's records as it does any library's, switched-off ones hidden.
+  - Offline, a friend's tracks are "Not on this device" unless kept there (step 2, where the friend allows), and the
+    offline search covers them.
+  - Play On, groups and Home Assistant need nothing new, since your server relays the stream. The tape engine (0102)
+    plays it as it plays any stream.
+
+What the server gives the page for it: LibraryInfo `kind` "peer" with what the friend allows (keep offline, ask for
+albums, share links); away as `seen` false and `seen_why`; and the per-user switch "Friends' servers may see my music"
+on the account, which the peer accounts' own-music switches obey.
 
 ## Consequences
 
