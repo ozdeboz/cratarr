@@ -37,6 +37,7 @@ import { armSlot } from './player/armSlot';
 import { windBound } from './player/windBound';
 import { brakeGain, curveSpeed, letGoPlans, releaseOf, takeBack, type LetGo, type Place } from './player/letGo';
 import { afterLetGo, holdInReverse, knobFor, letGoTo, notSounding, skipWay } from './player/knob';
+import { resumePlace } from './player/resumePlace';
 import { drivenHold, NO_DRIVEN_HOLD, NO_OWN_RAMP, NO_PENDING_NEXT, ownRamp, pendingNext, type DrivenHold, type OwnRamp, type PendingNext } from './player/tapeParts';
 import { due, entered, NO_DEADLINES, type Deadlines } from './player/graces';
 import { brakeLengthMs, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
@@ -779,12 +780,26 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
     playback('warn', 'track failed', { track: t.id, source: t.source, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), ms: ms?.readyState ?? null, sb: !!sb, mime });
     local.error = e instanceof Error ? e.message : String(e);
     errorIndex = index;
-    // Skip what cannot play, as a player does, unless it was the only thing.
+    // Skip what cannot play, as a player does. The queue's last (or only) track ends the stream there instead: the one
+    // before it plays out and the queue ends, or, playing itself, it stands (the 0.15 desktop app, 2026-11-04: a failed
+    // resume stalled silent with its clock counting on, and never moved on).
     if (index < local.queue.length - 1) {
       lastAppended = index;
       // Placed already (it failed midway): that segment becomes the empty one, not a second segment for the track.
       if (placedSegment) placedSegment.length = 0;
       else segments.push({ index, start: streamEnd, length: 0, told: null });
+    } else {
+      lastAppended = index;
+      if (index === local.index) {
+        audio?.pause();
+        local.starting = false;
+      }
+      try {
+        while (sb?.updating) await waitUpdate();
+        if (ms?.readyState === 'open') ms.endOfStream();
+      } catch {
+        /* the stream went meanwhile */
+      }
     }
   } finally {
     // Not when a newer append is under way (this one was cut).
@@ -796,10 +811,12 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
 async function fresh(index: number, from = 0, play = true) {
   if (!audio) return;
   if (tape.rewinding && !tape.rewindFetch) endRewind();
-  // A position at or past the track's end (a resume Cratarr reckoned on while the player was away; it once asked for
-  // 36 minutes into a track of 2:23, 2026-10-24) starts the track from the top: the stream cannot begin past its end.
-  const length = local.queue[index]?.duration_secs;
-  if (!(from >= 0) || (length && from >= length - 1)) from = 0;
+  // A place at or past the track's end: the track was over while the player was away (lib/player/resumePlace), so the
+  // next one plays from its start, or the queue's last stands at its own.
+  const r = resumePlace(index, from, local.queue[index]?.duration_secs, local.queue.length, local.repeat, play);
+  if (r.index !== index) return fresh(r.index, r.from, r.play);
+  from = r.from;
+  play = r.play;
   const gen = ++generation;
   streamFrom = { index, from };
   fetching?.abort();
@@ -853,6 +870,13 @@ function purged() {
   else cutFrom(seg.index);
 }
 
+/** How far into its track the stream is, never before its start nor past its end (a stream that ran on past a track's
+ *  known length with nothing after it plays nothing: the clock stands at the end, 0.15's 4:45 of 4:24). */
+function inTrack(w: { seg: Segment; offset: number }): number {
+  const end = w.seg.length ?? w.seg.told;
+  return Math.max(0, end !== null ? Math.min(w.offset, end) : w.offset);
+}
+
 /** Which segment the stream is in now, and how far into its track. */
 function where(t = audio?.currentTime ?? 0): { seg: Segment; offset: number } | null {
   if (!audio) return null;
@@ -885,7 +909,7 @@ function tick() {
       nextRound();
       fill();
     }
-    local.position = tape.rewindPos ?? Math.max(0, w.offset);
+    local.position = tape.rewindPos ?? inTrack(w);
     local.duration = w.seg.length ?? w.seg.told;
   }
   if (local.error && local.index > errorIndex && !audio.paused) local.error = null;
@@ -1115,7 +1139,12 @@ if (audio) {
     playback('warn', 'stalled', { index: local.index, at: Math.round(el.currentTime * 10) / 10, buffered });
     if (buffered === 0) fallBack('stalled with nothing in');
   });
-  el.addEventListener('waiting', () => playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 }));
+  el.addEventListener('waiting', () => {
+    playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 });
+    // Asked to play and no sound flowing: shown as not sounding yet, its clock standing, until it plays (the truth rule;
+    // the 0.15 desktop app, 2026-11-04, showed Pause with its clock counting and no sound at all).
+    if (!el.paused && !tape.rewinding) local.starting = true;
+  });
   el.addEventListener('playing', () => {
     local.starting = false;
     // Sounding: no rest of the tape's to show any more.
@@ -1488,7 +1517,10 @@ function hand(op: string, args: Record<string, unknown> = {}) {
 /** The position now, to the frame (the visuals' beats, decision 0046), where `local.position` moves four times a
  *  second: counted on from the playing player's last report, or read from this page's own audio. */
 export function positionNow(): number {
-  if (!handed()) return tape.rewindPos ?? where()?.offset ?? local.position;
+  if (!handed()) {
+    const w = where();
+    return tape.rewindPos ?? (w ? inTrack(w) : local.position);
+  }
   if (deck) return deckPlace(deck);
   if (tape.glide) return local.position;
   const p = (reported.positionMs + sinceReport()) / 1000;
