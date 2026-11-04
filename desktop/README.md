@@ -1,14 +1,22 @@
 # Cratarr for the desktop
 
 A thin app around Cratarr's pages, so a computer can be a Cratarr player that starts at login and keeps playing with
-its window closed (decision [0078](../docs/decisions/0078-a-desktop-app.md)). On Linux it comes as a `.deb` for Ubuntu,
-Linux Mint and Debian, from an APT repository so it updates with the system. A Windows installer that updates itself
-is prepared (`npm run dist:win`, the release workflow's Windows job) but has not been built or tried yet.
+its window closed (decision [0078](../docs/decisions/0078-a-desktop-app.md)). On Linux it is a `.deb` for Ubuntu,
+Linux Mint and Debian, built where it is used: it is not published (the owner, 2026-11-04: local only). A Windows
+installer can be built the same way (`npm run dist:win`) but has not been built or tried yet.
 
 ## What it does
 
-- Shows the Cratarr server's pages; the page plays, as in a browser. The server's address is asked once; **Change
-  server…** (in the window's menu, shown with Alt, and in the tray) asks again.
+- Shows Cratarr's page on the server's address; the page plays, as in a browser. The server's address is asked once;
+  **Change server…** (in the window's menu, shown with Alt, and in the tray) asks again.
+- Carries its own copy of the page (decision 0085, step 1, as the Android app does): it answers on the server's address
+  in place of the server's page files, so the window opens at once, and with the server out of reach too, never
+  blank. Which copy, by the two builds (`build.json`; the server's from its health check, every ten minutes and on
+  waking): the server's release newer, or the same release built again, the server's; otherwise the app's. The API,
+  the streams and the sign-in always go to the server, and so do the backdrops' and skies' pictures (kept by the
+  page's service worker once seen).
+- Keeps what the page stores on the computer (its last copies, its downloads, the library's index) for good: a browser
+  lets go of a site's storage when the disk runs low, the app asks for it to be kept.
 - Plays without a first click, and keeps its timers with its window hidden, so music sent from another player sounds
   at once.
 - Closing the window leaves it in the tray, still playing and still a player; **Quit** ends it. **Start at login**
@@ -20,59 +28,45 @@ is prepared (`npm run dist:win`, the release workflow's Windows job) but has not
 
 ## Installing
 
-Ubuntu, Linux Mint, Debian: from the APT repository, so the Update Manager (or `apt upgrade`) brings each release. The
-repository is made by the first published release; until then, build the `.deb` as below and install it with `apt
-install ./dist/cratarr-desktop_<version>_amd64.deb`.
+Build the `.deb` (below), then install it:
 
 ```sh
-sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://ozdeboz.github.io/cratarr/apt/cratarr-archive-keyring.gpg | sudo tee /etc/apt/keyrings/cratarr.gpg > /dev/null
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/cratarr.gpg] https://ozdeboz.github.io/cratarr/apt stable main" | sudo tee /etc/apt/sources.list.d/cratarr.list
-sudo apt update && sudo apt install cratarr-desktop
+sudo apt install ./desktop/dist/cratarr-desktop_<version>_amd64.deb
 ```
 
-Windows: not yet. The release workflow has a job for `Cratarr-Setup-<version>.exe`, an installer that would update
-itself from the releases (unsigned, so Windows would ask once before it runs), but it has not been built or tried.
-
-Each release's `SHA256SUMS` holds its files' checksums.
-
-## Releasing
-
-A version tag builds the app with the rest of the release (`.github/workflows/release.yml`): the `.deb` and the
-installer join the GitHub release, the APT repository on GitHub Pages is made anew, and `SHA256SUMS` comes last. Each
-is built at the release's version, so apt and the updater see every release as newer. A hotfix's tag (`v0.9.15-1`)
-is built as 0.9.15 with the hotfix's number as its build number: the `.deb`'s revision (`0.9.15-1`, which apt sees
-above 0.9.15; built as the tag says, it would carry `0.9.15~1`, below it) and Windows' file version.
-
-Once, before the first release:
-
-1. The APT repository's signing key: `desktop/make-apt-key.sh`, run on your own computer with gpg and gh signed in as
-   the repository's owner. It sets the secret `APT_SIGNING_KEY`, writes a backup to keep in your password manager, and
-   shows the key's fingerprint, which the repository's page shows too.
-2. GitHub Pages: Settings → Pages → Source: GitHub Actions; then Settings → Environments → github-pages → let tags
-   `v*` deploy.
-3. If you like, the secret `CRATARR_HOUSE_PATTERNS`: your own host names and domains, as comma-separated regular
-   expressions, which the build's check refuses too.
+A copy already running is told to quit and starts again from the new files, as hidden as it was. Each Cratarr
+release, the app is built again at its version and installed the same way: there is no APT repository and no
+updater.
 
 ## Building
 
-Node 24 and npm (not pnpm: pnpm 10 skips Electron's download).
+Node 24 and npm (not pnpm: pnpm 10 skips Electron's download; if npm skips it too, `node node_modules/electron/install.js`
+fetches it). The page the app carries is the web app's build of the same release: build it first.
 
 ```sh
+(cd web && corepack pnpm install --frozen-lockfile && corepack pnpm build)   # web/dist, the page the app carries
 cd desktop
 npm ci
-npm start           # runs it; the web app's icons are copied in first
+npm start           # runs it; the web app's icons and page are copied in first
+npm test            # which page answers, and how (page.js)
 npm run dist        # on Linux: dist/cratarr-desktop_<version>_amd64.deb
-npm run dist:win    # on Windows: dist/Cratarr-Setup-<version>.exe, with latest.yml and its blockmap for the updater
+npm run dist:win    # on Windows: dist/Cratarr-Setup-<version>.exe
 npm run check       # the check each build runs first: no private IP address or home-network host name in the app
 ```
+
+Without a page of the same release in `web/dist`, the app is built without one and says so (it then shows the
+server's page, as before); `CRATARR_PAGE=required npm run dist` makes that a failure.
 
 The `.deb` depends on electron-builder's list plus what Electron needs that it leaves out: the sound library
 (`libasound2t64` from Ubuntu 24.04, `libasound2` before) and `libgbm1`.
 
 ## Files
 
-- `main.js`: the window, the tray and the menus, Start at login, the server's address, Windows' updates.
+- `main.js`: the window, the tray and the menus, Start at login, the server's address; the page's requests, answered by
+  the app's own page or sent on to the server, and the server's page as its health check tells it.
+- `page.js`: the app's own copy of the page, which copy answers and how (`page.test.js`: `npm test`).
+- `copy-page.js`: the web app's build (`web/dist`, without the backdrops and skies) copied into `page/`, which the
+  package carries as `resources/page`; only a build of the app's own release.
 - `preload.js`: `window.CratarrDesktop` for the page (the app's version, the computer's name); the address page's two
   questions.
 - `setup.html`: the address page, the app's one page of its own.
@@ -84,7 +78,5 @@ The `.deb` depends on electron-builder's list plus what Electron needs that it l
   session and as hidden as it was.
 - `check-deb.js`: after the packages are made, each `.deb`'s list read; any entry writable by group or others stops
   the build. `npm run dist` builds under `umask 022`.
-- `check-no-house.js`: the check before each build; a house's own names come from `CRATARR_HOUSE_PATTERNS`, so they
-  never sit in this repository.
-- `apt-repo.sh`: the APT repository from a `.deb`, signed, as the release workflow deploys it to GitHub Pages.
-- `make-apt-key.sh`: the repository's signing key, made once by its owner.
+- `check-no-house.js`: the check before each build; a house's own names come from `CRATARR_HOUSE_PATTERNS` (an
+  environment variable where the build runs), so they never sit in this repository.

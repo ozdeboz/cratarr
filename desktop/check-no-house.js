@@ -1,7 +1,7 @@
 // Before a build (the owner, 2026-10-29: no hard-coded IP addresses or other house-specific endpoints in builds): the
 // app's own files, as they go into the package, may hold no private IPv4 address and no host name only a home network
 // resolves. A house's own names (its machines, its domains) come from CRATARR_HOUSE_PATTERNS, comma-separated regular
-// expressions set where the build runs (a repository secret), so they never sit in this public repository. A hit is
+// expressions set where the build runs (an environment variable), so they never sit in this public repository. A hit is
 // named by file and line only: a public build's log shows no more of it.
 'use strict';
 
@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 /** What the package takes of this folder besides the icons (package.json's build.files). */
-const FILES = ['main.js', 'preload.js', 'setup.html', 'package.json'];
+const FILES = ['main.js', 'page.js', 'preload.js', 'setup.html', 'package.json'];
 const PATTERNS = [
   // RFC 1918's ranges and link-local; RFC 5737's documentation ones (192.0.2.0/24 and the like) are fine.
   /\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3})\b/,
