@@ -74,7 +74,10 @@ export type Event =
   /** The queue grew at its end (Autoplay's or Radio's picks came in). */
   | { kind: 'grew' }
   /** A queue entry chosen: a cut there, as a seek is (no skip's wind-down). */
-  | { kind: 'jump'; track: number };
+  | { kind: 'jump'; track: number }
+  /** At rest at once from anything, the knob untouched: a plain toggle, or a move to another device (every play
+   *  effect bypassed). */
+  | { kind: 'stop' };
 
 /** A place in a track: its start, its very end (backwards play going on into it), [FROM_END_MS] before its end (where
  *  the knob at L plays a track from, 0.12.4), or ms in. */
@@ -190,6 +193,8 @@ export function eventCode(e: Event): [number, number, number] {
       return [14, 0, 0];
     case 'jump':
       return [15, e.track, 0];
+    case 'stop':
+      return [16, 0, 0];
   }
 }
 

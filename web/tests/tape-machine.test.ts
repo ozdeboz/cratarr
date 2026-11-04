@@ -140,3 +140,23 @@ test('what the page shows as playing: a pause\'s brake not, a turn\'s brake yes'
   assert.equal(b.m.plays(), true);
   b.m.free();
 });
+
+test('Stop: at rest at once from anything, the knob untouched; standing, nothing more', () => {
+  const { m, run } = playing(ON, MID);
+  run({ kind: 'hold-start', way: 'forwards' });
+  assert.deepEqual(run({ kind: 'stop' }), [{ do: 'stand' }]);
+  assert.equal(m.tape(), 'standing');
+  assert.equal(m.knob(), 'R');
+  assert.deepEqual(run({ kind: 'stop' }), []);
+  m.free();
+});
+
+test('a play during a pause\'s brake turns it back up there, to 1x', () => {
+  const { m, run } = playing(ON, MID);
+  run({ kind: 'pause' });
+  assert.deepEqual(run({ kind: 'play' }), [{ do: 'let-go', toOne: true }]);
+  assert.equal(m.tape(), 'braking-to-one');
+  assert.equal(m.plays(), true);
+  assert.deepEqual(run({ kind: 'done' }), [{ do: 'play', way: 'forwards' }]);
+  m.free();
+});
