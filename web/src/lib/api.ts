@@ -785,6 +785,9 @@ export const undo = (tokens: string[]) => post<{ redo: string[]; restored: strin
 
 
 export const createPlaylist = (name: string) => post<{ playlist: string } & Undo>('/api/playlists', { name });
+/** What 0.15 knew each playlist this account sees by (its name, `owner/name` another's) and its id since (decision
+ *  0101). */
+export const getMovedPlaylists = () => quietly<Record<string, string>>('/api/playlists/moved');
 
 /** What to export (decision 0007): playlists by name, with their tracks or not, the tracks in one folder or the
  *  library's, and the playlists as they are or combined into one of this name. */
@@ -919,7 +922,7 @@ export const similarCrates = (id: string) => quietly<Alike[]>(`/api/crates/${enc
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>
-  laterJson<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to }, () => ({ playlist: to, undo: null }));
+  laterJson<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to }, () => ({ playlist: id, undo: null }));
 export const deletePlaylist = (id: string) =>
   request<{ deleted: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** Shares one's own playlist with the other users, or stops (decision 0051): they see it, play it and copy it. */

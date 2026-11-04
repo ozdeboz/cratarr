@@ -15,7 +15,7 @@ use crate::journal::fingerprint;
 use crate::m3u;
 use crate::playlist_ops::Entries;
 use crate::userdata::UserData;
-use crate::userdata::playlists::{Named, Playlist, Written, key_of};
+use crate::userdata::playlists::{Named, Playlist, Written};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PlaylistView {
@@ -295,9 +295,9 @@ pub struct Store {
     write: Mutex<()>,
 }
 
-/// Told when a playlist comes (`true`: made, renamed to, brought back) or goes (deleted, renamed away), by its key, and
-/// whether others see it (shared): the change log (decision 0087). Its writes are logged as they are written. Set once
-/// at start.
+/// Told when a playlist comes (`true`: made, renamed, brought back) or goes (deleted), by its key (its id), and whether
+/// others see it (shared): the change log (decision 0087). Its writes are logged as they are written. Set once at
+/// start.
 pub type OnNamed = Box<dyn Fn(&str, bool, bool) + Send + Sync>;
 static ON_NAMED: std::sync::OnceLock<OnNamed> = std::sync::OnceLock::new();
 
@@ -351,18 +351,16 @@ impl Store {
         self.account.clone().unwrap_or_default()
     }
 
-    /// A playlist's key in Cratarr's own records (when its entries came, its old names): its name in the first
-    /// administrator's playlists, `account/name` in another's.
-    pub fn key(&self, id: &str) -> String {
-        key_of(&self.owner(), id)
+    /// A playlist's key in Cratarr's own records and to every client (the change log, favourites, its spoken names,
+    /// what a move of its tracks left): its id (decision 0101), which a rename keeps; the one of that name there now,
+    /// else the last set aside. A name no playlist ever had is its own key (nothing is kept for it).
+    pub fn key(&self, name: &str) -> String {
+        self.db.playlist_id(&self.owner(), name).ok().flatten().unwrap_or_else(|| name.to_string())
     }
 
-    /// The name of this store's playlist a key is of (`key`'s inverse); `None` for another store's.
-    pub fn name_of_key<'a>(&self, key: &'a str) -> Option<&'a str> {
-        match &self.account {
-            Some(a) => key.strip_prefix(a.as_str())?.strip_prefix('/'),
-            None => (!key.contains('/')).then_some(key),
-        }
+    /// The name of this store's playlist a key (its id) is of, while it is there; `None` for another store's.
+    pub fn name_of_key(&self, key: &str) -> Option<String> {
+        self.db.playlist_by_id(key).ok().flatten().filter(|p| p.owner == self.owner()).map(|p| p.name)
     }
 
     /// The database's answer, its work done off the async threads.
@@ -418,7 +416,7 @@ impl Store {
                     member: entry.is_some_and(|t| lines.iter().any(|l| l == t)),
                     count: lines.len().saturating_sub(dead),
                     dead,
-                    id: p.name.clone(),
+                    id: p.id,
                     name: p.name,
                     links: Vec::new(),
                     spoken: Vec::new(),
@@ -432,11 +430,11 @@ impl Store {
         Ok(out)
     }
 
-    /// Every playlist's lines (library-relative) and when it last changed (epoch seconds), by name.
+    /// Every playlist's lines (library-relative) and when it last changed (epoch seconds), by its id, in name order.
     pub async fn lines_of_all(&self) -> Result<Vec<(String, i64, Vec<String>)>> {
-        let mut out: Vec<(String, i64, Vec<String>)> = self.all().await?.into_iter().map(|(p, lines)| (p.name, p.changed, lines)).collect();
-        out.sort_by_key(|(name, _, _)| name.to_lowercase());
-        Ok(out)
+        let mut all = self.all().await?;
+        all.sort_by_key(|(p, _)| p.name.to_lowercase());
+        Ok(all.into_iter().map(|(p, lines)| (p.id, p.changed, lines)).collect())
     }
 
     /// Re-check every playlist's dead entries against the library (files appear and disappear without the
@@ -509,7 +507,7 @@ impl Store {
         self.entries(id).await
     }
 
-    /// Tells `on_named` that playlist `id` came (`true`) or went, shared or not.
+    /// Tells `on_named` that playlist `id` (its name) came (`true`) or went, shared or not, by its key.
     fn named(&self, id: &str, there: bool, shared: bool) {
         if let Some(told) = ON_NAMED.get() {
             told(&self.key(id), there, shared);
@@ -781,7 +779,7 @@ impl Store {
         }
         let _one_writer = self.write.lock().await;
         let n = name.to_string();
-        if !self.ask(move |db, owner| db.create_playlist(owner, &n, &[])).await? {
+        if self.ask(move |db, owner| db.create_playlist(owner, &n, &[])).await?.is_none() {
             return Err(StoreError::Exists);
         }
         self.write_out(name, Some(&[])).await;
@@ -806,8 +804,8 @@ impl Store {
         };
         self.write_out(from, None).await;
         self.write_out(to, Some(&lines)).await;
+        // Its id stays: to everyone who sees it, it changed.
         let shared = self.shared(to).await;
-        self.named(from, false, shared);
         self.named(to, true, shared);
         Ok(())
     }
@@ -1041,14 +1039,17 @@ mod tests {
         d.write(".hidden.m3u", "A/1.mp3\n");
         d.write("Love.bak.m3u", "A/1.mp3\n");
         std::fs::create_dir(d.0.join("Some Album (2020)")).unwrap();
-        let v = d.store().view(Some("A/1.mp3")).await.unwrap();
+        let s = d.store();
+        let v = s.view(Some("A/1.mp3")).await.unwrap();
+        // Each by its own id (decision 0101), name-sorted.
         assert_eq!(
             v,
             vec![
-                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0, links: Vec::new(), spoken: Vec::new(), owner: String::new(), shared: false, mine: true },
-                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0, links: Vec::new(), spoken: Vec::new(), owner: String::new(), shared: false, mine: true },
+                PlaylistView { id: s.key("Analogic"), name: "Analogic".into(), member: false, count: 1, dead: 0, links: Vec::new(), spoken: Vec::new(), owner: String::new(), shared: false, mine: true },
+                PlaylistView { id: s.key("chill"), name: "chill".into(), member: true, count: 2, dead: 0, links: Vec::new(), spoken: Vec::new(), owner: String::new(), shared: false, mine: true },
             ]
         );
+        assert!(v.iter().all(|p| crate::userdata::playlists::is_id(&p.id)));
     }
 
     #[tokio::test]
@@ -1382,7 +1383,7 @@ Alb (2020)/01 A - One.mp3
         let s = d.store();
         s.create("Late Night").await.unwrap();
         assert_eq!(d.read("Late Night.m3u"), "");
-        assert!(s.view(None).await.unwrap().iter().any(|p| p.id == "Late Night"));
+        assert!(s.view(None).await.unwrap().iter().any(|p| p.name == "Late Night"));
         assert!(matches!(s.create("old").await, Err(StoreError::Exists)));
         assert!(matches!(s.create("OLD").await, Err(StoreError::Exists)), "whatever the case");
         assert_eq!(s.entries("old").await.unwrap(), ["A/1.mp3"]);
@@ -1433,7 +1434,7 @@ Alb (2020)/01 A - One.mp3
         assert!(matches!(s.rename("c", "bad/name").await, Err(StoreError::BadName)));
         assert!(matches!(s.rename("nope", "z").await, Err(StoreError::Unknown)));
         assert!(matches!(s.rename("../c", "z").await, Err(StoreError::Unknown)));
-        let names: Vec<String> = s.view(None).await.unwrap().into_iter().map(|p| p.id).collect();
+        let names: Vec<String> = s.view(None).await.unwrap().into_iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["b", "c"]);
     }
 

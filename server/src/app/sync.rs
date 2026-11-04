@@ -1235,8 +1235,8 @@ mod tests {
     /// is its error.
     async fn run(store: &Store, cat: &Arc<Catalogue>, srv: &Fake, state: &SyncState) -> Result<()> {
         let linked: Vec<String> = state.targets().unwrap().into_iter().map(|t| t.playlist).collect();
-        for p in store.view(None).await.unwrap().into_iter().filter(|p| !linked.contains(&p.id)) {
-            let t = Target { playlist: p.id, kind: me(), copy: None };
+        for p in store.view(None).await.unwrap().into_iter().filter(|p| !linked.contains(&p.name)) {
+            let t = Target { playlist: p.name, kind: me(), copy: None };
             state.put_target(&t).unwrap();
         }
         let undone = sync_server(store, cat.clone(), srv, state, "srv", "me", true, Verify::None).await?;

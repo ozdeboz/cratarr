@@ -91,6 +91,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/like-curve", get(like_curve).post(like_curve_within))
         .route("/api/tempo", post(tempo_of).put(adjust_tempo))
         .route("/api/playlists/stats", get(playlist_stats))
+        .route("/api/playlists/moved", get(playlists_moved))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/crates/{id}/favourites", put(crate_favourites))
         .route("/api/crates/{id}/favourite-albums", put(crate_favourite_albums))
@@ -2321,6 +2322,12 @@ async fn adjust_tempo(State(app): State<Arc<App>>, Json(b): Json<TempoBody>) -> 
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.
+/// What 0.15 knew each playlist the asking account sees by (its name, `owner/name` another's, a name before a rename),
+/// and its id since (decision 0101): for what a page kept of them.
+async fn playlists_moved(State(app): State<Arc<App>>) -> Result<Json<std::collections::HashMap<String, String>>, ApiError> {
+    Ok(Json(app.playlists.all_moved()?))
+}
+
 async fn playlist_stats(State(app): State<Arc<App>>) -> Result<Json<std::collections::BTreeMap<String, crate::app::PlaylistStats>>, ApiError> {
     Ok(Json(app.playlists.playlist_stats().await?))
 }
@@ -2615,7 +2622,7 @@ async fn crate_playlist(
     Json(req): Json<CratePlaylistRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let (added, undo) = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name, &req.without).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "added": added, "undo": undo }))))
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": app.playlists.id_of_name(&req.name)?, "added": added, "undo": undo }))))
 }
 
 /// Which playlists are favourites (by name), as Finamp's playlist hearts (decision 0023).
@@ -3970,7 +3977,7 @@ struct RenameRequest {
 
 async fn create_playlist(State(app): State<Arc<App>>, Json(req): Json<NameRequest>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let undo = app.playlists.create(&req.name).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "undo": undo }))))
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": app.playlists.id_of_name(&req.name)?, "undo": undo }))))
 }
 
 #[derive(Deserialize)]
@@ -3986,13 +3993,14 @@ async fn share_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Jso
 
 /// A copy of a playlist (another's shared one, or one's own) among one's own, under a free name.
 async fn copy_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let (name, undo) = app.playlists.copy(&id).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "playlist": name, "undo": undo }))))
+    let (copy, undo) = app.playlists.copy(&id).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": copy, "undo": undo }))))
 }
 
 async fn rename_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<RenameRequest>) -> Result<Json<serde_json::Value>, ApiError> {
     let undo = app.playlists.rename(&id, &req.to).await?;
-    Ok(Json(json!({ "playlist": req.to, "undo": undo })))
+    // Its id, which the rename kept (decision 0101).
+    Ok(Json(json!({ "playlist": app.playlists.id_of_name(&req.to)?, "undo": undo })))
 }
 
 async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {

@@ -1,9 +1,10 @@
 // What the page keeps by a playlist's id follows it when it is renamed, deleted or made (and when one of those is
 // undone or redone, decision 0026): the pin, the panel's view, Select's ticks, the heart, Insights. Renaming goes through
-// here: the server renames it (its file and its copies), then the page follows the id the server answers with. A
-// playlist's id is its name today (its owner's too for another's shared one), so a rename moves it; with 0.16's ids
-// (decision 0101: playlists in the database) the id stays and there is nothing to follow.
-import { renamePlaylist } from './api';
+// here: the server renames it (and its copies), then the page follows the id the server answers with: a playlist's id
+// is its own since 0.16 (decision 0101: playlists in the database), so the id stays and there is nothing to follow.
+// What the page kept by the keys 0.15 knew playlists by (their names, `owner/name` another's) follows them to their ids
+// once (`followMoved`).
+import { getMovedPlaylists, renamePlaylist } from './api';
 import { playlistFavoriteRenamed } from './favourites.svelte';
 import { insights } from './insights.svelte';
 import { playlistDeleted, playlistRenamed } from './panel.svelte';
@@ -27,6 +28,21 @@ export function followRename(from: string, to: string) {
   selectRenamed(from, to);
   playlistFavoriteRenamed(from, to);
   insights.renamed(from, to);
+}
+
+/** What the page kept by the keys 0.15 knew playlists by follows them to their ids (decision 0101), as the server says
+ *  where each leads: on the Playlists page's first showing in a page's life (a key followed once is not kept any more,
+ *  so a later showing changes nothing). */
+let movedAsked = false;
+export async function followMoved() {
+  if (movedAsked) return;
+  movedAsked = true;
+  const moved = await getMovedPlaylists().catch(() => null);
+  if (!moved) {
+    movedAsked = false;
+    return;
+  }
+  for (const [old, id] of Object.entries(moved)) followRename(old, id);
 }
 
 /** A playlist went (deleted, or a new one's undo): the panel and Select let it go, Insights leaves it out. */

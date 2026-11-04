@@ -161,11 +161,6 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// Whose a playlist key is (`Store::key`): its account's folder, '' the first administrator's.
-fn owner_of_key(key: &str) -> &str {
-    key.split_once('/').map_or("", |(account, _)| account)
-}
-
 /// A change logged in `conn` (inside the caller's transaction, where it has one): the item's earlier row replaced, a
 /// new rev handed out.
 pub(super) fn log(conn: &Connection, account: &str, kind: ChangeKind, item: &str, op: Op, shared: bool) -> Result<()> {
@@ -176,14 +171,15 @@ pub(super) fn log(conn: &Connection, account: &str, kind: ChangeKind, item: &str
     Ok(())
 }
 
-/// A shared playlist gone from the sight of `others` (unshared, deleted, renamed away): a `deleted` for each of them
-/// alone, by its key (each reads it as `owner/name`).
-pub(super) fn log_gone_for(conn: &Connection, key: &str, others: &[String]) -> Result<()> {
+/// A shared playlist gone from the sight of `others` (unshared, deleted): a `deleted` for each of them alone, by its id,
+/// under its owner.
+pub(super) fn log_gone_for(conn: &Connection, id: &str, others: &[String]) -> Result<()> {
+    let owner = super::playlists::owner_of(conn, id)?.unwrap_or_default();
     let mut st = conn.prepare_cached(
         "INSERT OR REPLACE INTO change_log (account, kind, item, op, at, shared, seen_by) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
     )?;
     for other in others.iter().filter(|o| !o.is_empty()) {
-        st.execute(params![owner_of_key(key), ChangeKind::Playlist.as_str(), key, Op::Deleted.as_str(), super::now_ms(), other])?;
+        st.execute(params![owner, ChangeKind::Playlist.as_str(), id, Op::Deleted.as_str(), super::now_ms(), other])?;
     }
     Ok(())
 }
@@ -202,10 +198,10 @@ impl UserData {
         Ok(out)
     }
 
-    /// A shared playlist (by its key) gone from the sight of `others`, the accounts other than its owner: each is
-    /// told it as deleted (decision 0087).
-    pub fn playlist_gone_for(&self, key: &str, others: &[String]) -> Result<()> {
-        log_gone_for(&self.db(), key, others)
+    /// A shared playlist (by its id) gone from the sight of `others`, the accounts other than its owner: each is told
+    /// it as deleted (decision 0087).
+    pub fn playlist_gone_for(&self, id: &str, others: &[String]) -> Result<()> {
+        log_gone_for(&self.db(), id, others)
     }
 
     /// The change log's counter now: the rev of its last change.
@@ -426,21 +422,22 @@ mod tests {
         let fav = item_id("track", "cratarr", "tr-1");
         u.mark_changed("me", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 1
         u.mark_changed("you", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 2
-        u.create_playlist("you", "Morning", &[]).unwrap();
-        u.playlist_changed("Evening", Op::Changed, false).unwrap(); // 3: the first administrator's
-        u.playlist_changed("you/Morning", Op::Changed, false).unwrap(); // 4
+        let evening = u.create_playlist("", "Evening", &[]).unwrap().unwrap();
+        let morning = u.create_playlist("you", "Morning", &[]).unwrap().unwrap();
+        u.playlist_changed(&evening, Op::Changed, false).unwrap(); // 3: the first administrator's
+        u.playlist_changed(&morning, Op::Changed, false).unwrap(); // 4
         u.excluded_changed("me", "tracks").unwrap(); // 5
         let (rev, got, more) = changes(u.changes_since(Some(0), "me", "", &all, 10).unwrap());
         assert_eq!(rev, 5);
         assert!(!more);
         assert_eq!(
             got,
-            vec![(1, "favourite", fav.clone(), "changed"), (3, "playlist", "Evening".into(), "changed"), (5, "excluded", "tracks".into(), "changed")]
+            vec![(1, "favourite", fav.clone(), "changed"), (3, "playlist", evening.clone(), "changed"), (5, "excluded", "tracks".into(), "changed")]
         );
         // Shared, another's playlist is seen; its sharing taken back is seen too, once.
-        u.set_playlist_shared("you/Morning", true).unwrap(); // 6
+        u.set_playlist_shared(&morning, true).unwrap(); // 6
         let (_, got, _) = changes(u.changes_since(Some(5), "me", "", &all, 10).unwrap());
-        assert_eq!(got, vec![(6, "playlist", "you/Morning".into(), "changed")]);
+        assert_eq!(got, vec![(6, "playlist", morning.clone(), "changed")]);
         // Only the latest change of an item is kept: unstarred, the star's row goes.
         u.mark_changed("me", ChangeKind::Favourite, &fav, Op::Deleted, 200).unwrap(); // 7
         let (rev, got, _) = changes(u.changes_since(Some(0), "me", "", &[ChangeKind::Favourite], 10).unwrap());
@@ -458,20 +455,20 @@ mod tests {
     fn a_shared_playlist_gone_from_sight_is_deleted_for_each_other_account_alone() {
         let u = UserData::open(None).unwrap();
         let all = ChangeKind::ALL;
-        u.create_playlist("you", "Morning", &[]).unwrap();
-        u.set_playlist_shared("you/Morning", true).unwrap(); // 1
+        let morning = u.create_playlist("you", "Morning", &[]).unwrap().unwrap();
+        u.set_playlist_shared(&morning, true).unwrap(); // 1
         // Unshared: its owner sees it changed; "me" and "them" each see it deleted, under its own row.
-        assert!(u.set_playlist_shared("you/Morning", false).unwrap()); // 2: the owner's
-        u.playlist_gone_for("you/Morning", &["me".to_string(), "them".to_string()]).unwrap(); // 3, 4
+        assert!(u.set_playlist_shared(&morning, false).unwrap()); // 2: the owner's
+        u.playlist_gone_for(&morning, &["me".to_string(), "them".to_string()]).unwrap(); // 3, 4
         let (_, got, _) = changes(u.changes_since(Some(0), "me", "", &all, 10).unwrap());
-        assert_eq!(got, vec![(3, "playlist", "you/Morning".into(), "deleted")]);
+        assert_eq!(got, vec![(3, "playlist", morning.clone(), "deleted")]);
         let (_, got, _) = changes(u.changes_since(Some(0), "you", "you", &all, 10).unwrap());
-        assert_eq!(got, vec![(2, "playlist", "you/Morning".into(), "changed")]);
+        assert_eq!(got, vec![(2, "playlist", morning.clone(), "changed")]);
         // Edited since, unshared: the others' deletes stay.
-        u.playlist_changed("you/Morning", Op::Changed, false).unwrap(); // 5
+        u.playlist_changed(&morning, Op::Changed, false).unwrap(); // 5
         let (_, got, _) = changes(u.changes_since(Some(0), "them", "them", &all, 10).unwrap());
-        assert_eq!(got, vec![(4, "playlist", "you/Morning".into(), "deleted")]);
-        assert!(!u.set_playlist_shared("you/Morning", false).unwrap(), "not shared: nothing to stop");
+        assert_eq!(got, vec![(4, "playlist", morning.clone(), "deleted")]);
+        assert!(!u.set_playlist_shared(&morning, false).unwrap(), "not shared: nothing to stop");
     }
 
     #[test]

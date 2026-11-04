@@ -557,7 +557,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         }
         "getPlaylist" => {
             let service = playlist_service(serve)?;
-            let (name, lines) = playlist_named(serve, &service, p.get("id")).await?;
+            let (name, lines) = playlist_named(&service, p.get("id")).await?;
             let lines = serve.held.shown(&held_key(&service, &name)?, lines);
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
@@ -573,7 +573,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let name = match p.get("playlistId") {
                 // With an id: the playlist's songs become these (lines of missing files stay).
                 Some(id) => {
-                    let (name, lines) = playlist_named(serve, &service, Some(id)).await?;
+                    let (name, lines) = playlist_named(&service, Some(id)).await?;
                     // Its songs replaced: an emptying held for it comes to the same.
                     serve.held.take(&held_key(&service, &name)?);
                     let shown = shown_flags(serve, &lines).await?;
@@ -586,11 +586,10 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 }
                 None => {
                     let wanted = p.get("name").filter(|n| !n.trim().is_empty()).ok_or_else(|| missing("name"))?;
-                    let taken: Vec<String> = service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).collect();
+                    let taken = service.own_names().await.map_err(toggle_failed)?;
                     let name = super::playlists::new_name(wanted, &taken);
                     service.create_with(&name, &add).await.map_err(toggle_failed)?;
-                    serve.userdata.playlist_made(&held_key(&service, &name)?)?;
-                    name
+                    service.id_of_name(&name).map_err(toggle_failed)?
                 }
             };
             let lines = service.entries(&name).await.map_err(toggle_failed)?;
@@ -602,11 +601,12 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         }
         "updatePlaylist" => {
             let service = playlist_service(serve)?;
-            let (name, _) = playlist_named(serve, &service, p.get("playlistId")).await?;
+            let (name, _) = playlist_named(&service, p.get("playlistId")).await?;
             let key = held_key(&service, &name)?;
             let remove: Vec<usize> = p.all("songIndexToRemove").iter().filter_map(|i| i.trim().parse().ok()).collect();
             let add = lines_of_songs(serve, &p.all("songIdToAdd")).await?;
-            let renamed = p.get("name").filter(|n| !n.trim().is_empty() && *n != name);
+            let current = service.reach(&name).map_err(toggle_failed)?.name;
+            let renamed = p.get("name").filter(|n| !n.trim().is_empty() && *n != current);
             if !remove.is_empty() || !add.is_empty() {
                 let lines = service.entries(&name).await.map_err(toggle_failed)?;
                 let emptied = serve.held.take(&key).filter(|e| e.before == lines).map(|e| e.after);
@@ -622,10 +622,9 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 write_held(&service, &name, serve.held.take(&key)).await;
             }
             if let Some(wanted) = renamed {
-                let taken: Vec<String> =
-                    service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).filter(|n| *n != name).collect();
+                let taken: Vec<String> = service.own_names().await.map_err(toggle_failed)?.into_iter().filter(|n| *n != current).collect();
                 let new_name = super::playlists::new_name(wanted, &taken);
-                if new_name != name {
+                if new_name != current {
                     service.rename(&name, &new_name).await.map_err(toggle_failed)?;
                 }
             }
@@ -633,11 +632,9 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         }
         "deletePlaylist" => {
             let service = playlist_service(serve)?;
-            let (name, _) = playlist_named(serve, &service, p.get("id")).await?;
-            let key = held_key(&service, &name)?;
-            serve.held.take(&key);
+            let (name, _) = playlist_named(&service, p.get("id")).await?;
+            serve.held.take(&held_key(&service, &name)?);
             service.delete(&name).await.map_err(toggle_failed)?;
-            serve.userdata.playlist_gone(&key)?;
             Ok(Answer::Json(json!({})))
         }
         _ => Err(Failed(501, format!("{method} is not implemented"))),
@@ -686,14 +683,13 @@ async fn write_held(service: &crate::app::PlaylistService, name: &str, held: Opt
     }
 }
 
-/// The playlist a client means by an id, with its lines: by its name, else by a name it had (clients keep a playlist's
-/// id across a rename).
-async fn playlist_named(serve: &Serve, service: &crate::app::PlaylistService, id: Option<&str>) -> Result<(String, Vec<String>), Failed> {
+/// The playlist a client means by an id, with its lines: by its id; one kept from before 0.16 by the name it had then,
+/// else (renamed since: clients keep a playlist's id across a rename) by where that name leads.
+async fn playlist_named(service: &crate::app::PlaylistService, id: Option<&str>) -> Result<(String, Vec<String>), Failed> {
     let name = playlist_name(id)?;
     match service.entries(&name).await {
         Err(crate::app::ToggleError::UnknownPlaylist) => {
-            let was = held_key(service, &name)?;
-            let now = service.id_of_key(&serve.userdata.playlist_alias(&was)?.ok_or_else(|| not_found("Playlist"))?);
+            let now = service.moved(&name).ok_or_else(|| not_found("Playlist"))?;
             let lines = service.entries(&now).await.map_err(toggle_failed)?;
             Ok((now, lines))
         }
@@ -746,7 +742,7 @@ fn playlist_json(service: &crate::app::PlaylistService, id: &str, songs: &[Song]
     let r = service.reach(id).map_err(toggle_failed)?;
     let (created, changed) = r.store.dates(&r.name).unwrap_or_default();
     let mut v = json!({
-        "id": super::playlists::id_of(id), "name": r.name, "owner": r.owner, "public": r.shared,
+        "id": r.key(), "name": r.name, "owner": r.owner, "public": r.shared,
         "songCount": songs.len(), "duration": songs.iter().map(|s| s.duration).sum::<u64>(),
         "created": api::iso(created), "changed": api::iso(changed), "readonly": !r.mine,
     });

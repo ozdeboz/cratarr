@@ -256,24 +256,17 @@ impl Serve {
         self.playlists.get()
     }
 
-    /// A playlist was renamed (every rename goes through the playlist service, which tells this): its old ids keep
-    /// leading to it, as Subsonic clients keep a playlist's id across a rename.
-    /// A shared playlist (by its key) gone from the others' sight (unshared, deleted, renamed away): every account but
-    /// its owner is told it as deleted (decision 0087).
+    /// A shared playlist (by its id) gone from the others' sight (unshared, deleted): every account but its owner is
+    /// told it as deleted (decision 0087).
     pub fn playlist_gone_for_others(&self, key: &str) {
-        let owner = match key.split_once('/') {
-            Some((account, _)) => Some(account.to_string()),
-            None => self.users.owner(),
+        // Its owner's account: another's by its name, '' the first administrator's.
+        let owner = match self.userdata.playlist_owner(key).ok().flatten() {
+            Some(account) if !account.is_empty() => Some(account),
+            _ => self.users.owner(),
         };
         let others: Vec<String> = self.users.names().into_iter().filter(|n| Some(n) != owner.as_ref()).collect();
         if let Err(e) = self.userdata.playlist_gone_for(key, &others) {
             tracing::warn!("playlist {key}: its going not logged for the others: {e:#}");
-        }
-    }
-
-    pub fn playlist_renamed(&self, from: &str, to: &str) {
-        if let Err(e) = self.userdata.playlist_renamed(from, to) {
-            tracing::warn!("subsonic: the rename of {from} to {to} not kept: {e:#}");
         }
     }
 

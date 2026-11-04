@@ -78,7 +78,7 @@ pub async fn read(app: &Arc<App>, serve: Arc<crate::serve::Serve>, since: Option
                         rev: c.rev,
                         kind: c.kind.as_str().to_string(),
                         // A playlist is logged by its key; the asking account names it its own way.
-                        id: if c.kind == ChangeKind::Playlist { app.playlists.id_of_key(&c.item) } else { c.item },
+                        id: c.item,
                         op: c.op.as_str().to_string(),
                     })
                     .collect(),
