@@ -95,7 +95,7 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
          FROM albums a JOIN songs s ON s.album_id = a.id ORDER BY a.n, s.disc_no, s.track_no, s.rel",
     )?;
     let rows = st.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?))
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?))
     })?;
     let none: Vec<String> = Vec::new();
     for row in rows {
@@ -106,7 +106,7 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
         let Some(words) = stored.records.get(&album) else { continue };
         let Some(root) = roots.get(folder) else { continue };
         let has = values.get(&(folder, rel.clone())).and_then(|v| v.get(field)).unwrap_or(&none);
-        let Some((before, after, from)) = file_plan(has, words.of_track(&crate::serve::ids::song(song), kind)) else { continue };
+        let Some((before, after, from)) = file_plan(has, words.of_track(&song, kind)) else { continue };
         if !p.records.iter().any(|r| r.album == album) {
             p.records.push(RunRecord { album: album.clone(), title, artist });
         }
@@ -181,6 +181,26 @@ mod tests {
 
     fn w(word: &str, sources: &[Source]) -> Word {
         Word { word: word.into(), sources: sources.to_vec() }
+    }
+
+    /// A song's id is its text ("tr-1"): read as a number, every plan failed, and with it Health's library check.
+    #[test]
+    fn a_plan_reads_the_library_it_is_for() {
+        let dir = std::env::temp_dir().join(format!("cratarr-file-words-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("A")).unwrap();
+        std::fs::write(dir.join("A/1.mp3"), b"x").unwrap();
+        let cat = std::sync::Arc::new(crate::catalogue::Catalogue::open(None, vec![dir.clone()]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(cat);
+        serve.refresh().unwrap();
+        assert_eq!(serve.library.db().query_row("SELECT count(*) FROM songs", [], |r| r.get::<_, i64>(0)).unwrap(), 1, "a song to read");
+        for kind in crate::app::words::store::KINDS {
+            assert!(proposal(&serve, kind, None).unwrap().files.is_empty(), "no words stored: nothing to write");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
