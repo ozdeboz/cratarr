@@ -93,6 +93,20 @@ impl UserData {
         Ok(value.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default())
     }
 
+    /// `library` (`source/library`) switched off for each of `accounts`, beside what they have off: a library that starts
+    /// off for them (0101 point 6: someone's own music, at its making). Only then: one switched on again stays on.
+    /// Blocking.
+    pub fn switch_library_off(&self, accounts: &[String], library: &str) -> Result<()> {
+        for account in accounts {
+            let mut off = self.hidden_libraries(account)?;
+            if !off.iter().any(|k| k == library) {
+                off.push(library.to_string());
+                self.set_preference(account, HIDDEN_LIBRARIES, &serde_json::json!(off), super::now_ms())?;
+            }
+        }
+        Ok(())
+    }
+
     /// Every kept change of a preference from now on, whoever's.
     pub fn subscribe_preferences(&self) -> tokio::sync::broadcast::Receiver<PreferenceChanged> {
         self.preferences.subscribe()
@@ -104,6 +118,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// 0101 point 6: someone's own music starts off for the others, beside what they have off; only at its making.
+    #[test]
+    fn a_library_switched_off_for_others_joins_what_they_have_off() {
+        let u = UserData::open(None).unwrap();
+        u.set_preference("ann", HIDDEN_LIBRARIES, &json!(["cratarr/x"]), 1).unwrap();
+        u.switch_library_off(&["ann".to_string(), "bo".to_string()], "cratarr//own/cy").unwrap();
+        assert_eq!(u.hidden_libraries("ann").unwrap(), ["cratarr/x", "cratarr//own/cy"]);
+        assert_eq!(u.hidden_libraries("bo").unwrap(), ["cratarr//own/cy"]);
+        let changed = u.preferences("bo").unwrap()[HIDDEN_LIBRARIES].changed;
+        u.switch_library_off(&["bo".to_string()], "cratarr//own/cy").unwrap();
+        assert_eq!(u.preferences("bo").unwrap()[HIDDEN_LIBRARIES].changed, changed, "already off: nothing changes");
+    }
 
     /// 0101 point 14: per preference the latest change wins, the whole value; a tie keeps what is kept; each account's
     /// own; a clock ahead counts as now; a kept change is told, a refused one is not.

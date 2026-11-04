@@ -98,18 +98,18 @@
     onedit(them);
   }
 
-  // What their libraries allow (administrators): a job in the conversion queue only Cancel, else Move and Delete.
+  // What their libraries allow, by what the server says of each: a job in the conversion queue (administrators) only
+  // Cancel, else Add to, Move and Delete.
   const converting = $derived(me.admin ? offers.filter((x) => x.o?.job != null) : []);
-  const deletable = $derived(me.admin ? offers.filter((x) => x.o && x.o.job === null && x.o.deletable) : []);
+  const deletable = $derived(offers.filter((x) => x.o && x.o.job === null && x.o.deletable));
   /** One of them on its way into `to`: `add`, an Incoming record's (or one into own music), else a move. */
   type Moving = Ticked & { to: LibraryInfo; primary: boolean; add: boolean };
   /** Each library they can move into (by its name, whichever server's), with the albums that can. */
   const moves = $derived.by(() => {
     const by = new Map<string, Moving[]>();
-    if (me.admin)
-      for (const x of offers)
-        if (x.o && x.o.job === null)
-          for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.kind === 'main', add: adds(x.o.from, t) }]);
+    for (const x of offers)
+      if (x.o && x.o.job === null)
+        for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.kind === 'main', add: adds(x.o.from, t) }]);
     // Added where every one of them is (lib/AlbumMenu `adds`), else moved.
     return [...by].map(([name, them]) => ({ name, them, adding: them.every((y) => y.add) }));
   });

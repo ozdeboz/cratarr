@@ -1015,8 +1015,8 @@ export type LibrarySetting = {
   keep_to?: string | null;
 };
 
-/** A server library as Settings uses it: its kind in the list, or not in it. */
-export type LibraryUse = LibrarySetting['kind'] | 'unused';
+/** A server library as it is used: its kind in the list, someone's own music, or not used. */
+export type LibraryUse = LibrarySetting['kind'] | 'own' | 'unused';
 
 /** A server's music library and where Cratarr sees its files. */
 export type ServerLibrary = {
@@ -1336,7 +1336,7 @@ export const putMySettings = (base: number, settings: Record<string, unknown>) =
 /** Each server's own name and libraries, and what each library is used as, for everyone (the filter): the part of the
  *  server's settings that is not its administrators' alone. */
 export type LibrariesView = {
-  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: LibrarySetting[] }[];
+  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: (Pick<LibrarySetting, 'id'> & { kind: LibrarySetting['kind'] | 'own' })[] }[];
 };
 export const getLibraries = () => quietly<LibrariesView>('/api/libraries');
 /** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it). */

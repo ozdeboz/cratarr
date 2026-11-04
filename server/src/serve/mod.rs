@@ -195,13 +195,21 @@ impl Serve {
         // one when the directory was unreachable. Cratarr's own account of the same name (not from the directory) is that
         // account.
         let account = |a: &str, said: Option<ldap::Said>| match said {
-            Some(said) => match self.users.from_directory(a, said.admin, said.display_name.as_deref()) {
-                Ok(u) => u.active.then_some(u.name),
-                Err(e) => {
-                    tracing::warn!(target: "signin", user = %a, "the account from the directory could not be kept: {e:#}");
-                    None
+            Some(said) => {
+                let new = self.users.get(a).is_none();
+                match self.users.from_directory(a, said.admin, said.display_name.as_deref()) {
+                    Ok(u) => {
+                        if new {
+                            self.others_own_off(&u.name);
+                        }
+                        u.active.then_some(u.name)
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: "signin", user = %a, "the account from the directory could not be kept: {e:#}");
+                        None
+                    }
                 }
-            },
+            }
             None => self.users.get(a).filter(|u| u.active).map(|u| u.name),
         };
         if let Some(account) = self.directory.sign_in(name, password, &account, now()).await {
@@ -226,6 +234,28 @@ impl Serve {
         }
     }
 
+
+    /// The own-music folder as Settings keeps it (0101 point 9).
+    pub fn own_music(&self) -> Option<PathBuf> {
+        let dir = self.data_dir.as_ref()?;
+        let saved = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok()).ok().flatten()?;
+        saved.sources.iter().find_map(|s| s.own_music())
+    }
+
+    /// Everyone else's own music switched off for `account`, new here (0101 point 6: others' start off).
+    pub fn others_own_off(&self, account: &str) {
+        let Some(own) = self.own_music() else { return };
+        for folder in std::fs::read_dir(own).map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>()).unwrap_or_default() {
+            let Some(name) = folder.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+            if !folder.is_dir() || name.starts_with('.') || name == account {
+                continue;
+            }
+            let key = format!("{}/{}", crate::source::cratarr::KIND.id, folder.display());
+            if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &key) {
+                tracing::warn!("{name}'s music not switched off for {account}: {e:#}");
+            }
+        }
+    }
 
     /// Whether every request needs a sign-in now (decision 0043): when switched on, and once there is an account to
     /// sign in with.

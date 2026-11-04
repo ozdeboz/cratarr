@@ -241,6 +241,7 @@ async fn create_user(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<
     match serve.users.create(&b.name, &b.password, b.admin) {
         Ok(u) => {
             tracing::info!(target: "signin", user = %u.name, admin = u.admin, "account made");
+            serve.others_own_off(&u.name);
             axum::Json(view(&serve, &u, None)).into_response()
         }
         Err(r) => refusal(r),

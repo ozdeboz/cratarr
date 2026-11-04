@@ -47,7 +47,7 @@ fn on_path(_: &Fix) -> bool {
 fn title_of(kind: &str) -> String {
     match kind.split_once(':') {
         Some((FIX, finding)) => super::health::name_of(finding).to_string(),
-        _ => "Before Keep".to_string(),
+        _ => "Before adding".to_string(),
     }
 }
 
@@ -283,7 +283,7 @@ mod tests {
         };
         let mut p = Proposal {
             kind: "intake:al-1".into(),
-            title: "Before Keep".into(),
+            title: "Before adding".into(),
             records: vec![RunRecord { album: "al-1".into(), title: "A".into(), artist: "B".into() }, RunRecord { album: "al-2".into(), title: "C".into(), artist: "D".into() }],
             files: vec![
                 file("al-1", vec![("date".into(), s(&["1998"])), ("genre".into(), s(&["Rock"]))]),

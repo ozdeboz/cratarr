@@ -291,9 +291,11 @@ impl SettingsService {
         }
         match placed {
             Ok(p) => {
-                let files = self.files.clone();
+                let (files, own) = (self.files.clone(), cfg.own_music());
                 view.server_libraries = tokio::task::spawn_blocking(move || {
                     let mut libs = p.libraries;
+                    // Own music is no setting of a library: its folder's (0101 point 9).
+                    libs.retain(|l| own.is_none() || std::path::Path::new(&l.id).parent() != own.as_deref());
                     for l in &mut libs {
                         l.read_only = !l.folders.is_empty() && !l.folders.iter().all(|f| files.can_write(std::path::Path::new(f)));
                     }

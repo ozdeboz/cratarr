@@ -29,6 +29,20 @@ fn yes() -> bool {
     true
 }
 
+/// Cratarr's own source's value for the own-music folder (0101 point 9): one administrator's setting, a subfolder per
+/// account in it.
+pub const OWN_MUSIC: &str = "own_music";
+
+/// The viewer's own music, as it is named (the owner, 2026-11-04); anyone else's is "<account>'s music".
+pub const YOUR_MUSIC: &str = "Your music";
+
+impl SourceConfig {
+    /// The own-music folder: Cratarr's own source's, where one is set.
+    pub fn own_music(&self) -> Option<std::path::PathBuf> {
+        (self.kind == crate::source::cratarr::KIND.id).then(|| source::text(&self.values, OWN_MUSIC).map(std::path::PathBuf::from)).flatten()
+    }
+}
+
 /// A library of a server as Cratarr uses it (0101 point 1: no roles), with its own settings (decision 0034). The list's
 /// order is the default: the first main library takes every fallback. A library not in the list is not used.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,14 +370,16 @@ pub struct Folders {
     pub music: Option<String>,
     /// The other main libraries' folders, in the list's order (0101 point 1: main libraries are equal).
     pub more_main: Vec<String>,
+    /// Each account's own music (0101 point 9).
+    pub own: Vec<String>,
     /// Where the Incoming libraries' files are, when Cratarr can see them.
     pub incoming: Vec<String>,
 }
 
 impl Folders {
-    /// The main libraries' first, in order, then Incoming's: the catalogue's folders.
+    /// The main libraries' first, in order, then own music's and Incoming's: the catalogue's folders.
     pub fn all(&self) -> Vec<String> {
-        self.music.iter().chain(&self.more_main).chain(&self.incoming).cloned().collect()
+        self.music.iter().chain(&self.more_main).chain(&self.own).chain(&self.incoming).cloned().collect()
     }
 }
 
@@ -546,6 +562,7 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
         let own_folders = d.kind == crate::source::cratarr::KIND.id;
         d.values.retain(|k, v| {
             (own_folders && k == "folders" && v.is_array())
+                || (own_folders && k == OWN_MUSIC && v.is_string())
                 || fields.iter().any(|f| {
                     f.key == k
                         && match f.kind {
@@ -554,6 +571,16 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
                         }
                 })
         });
+        // The own-music folder holds a subfolder per account: never inside a library's folder, nor around one (two libraries
+        // over the same files).
+        if let Some(own) = d.own_music() {
+            if !own.is_absolute() {
+                return Err(ChangeError::Invalid(format!("{}: the own-music folder must be a whole path", d.id)));
+            }
+            if source::list(&d.values, "folders").iter().any(|c| own.starts_with(c) || Path::new(c).starts_with(&own)) {
+                return Err(ChangeError::Invalid(format!("{}: the own-music folder can't lie in a library's folder or hold one", d.id)));
+            }
+        }
         let prev = saved.iter().find(|s| s.id == d.id && s.kind == d.kind);
         // The libraries in use, in order (0101 point 1): each once, one kind each; own music is no setting (its folder's,
         // 0101 point 9).
@@ -717,6 +744,26 @@ mod tests {
         // Only as a list, and only Cratarr's own: another kind's undeclared values still go.
         let out = merge(&[], vec![own(serde_json::json!("/music"))]).unwrap();
         assert!(out[0].values.get("folders").is_none());
+    }
+
+    #[test]
+    fn the_own_music_folder_is_kept_and_checked() {
+        let own = |folder: &str| SourceConfig {
+            id: "cratarr".into(),
+            kind: crate::source::cratarr::KIND.id.into(),
+            enabled: true,
+            libraries: Libraries::default(),
+            values: [("folders".to_string(), serde_json::json!(["/music", "/media/x"])), (OWN_MUSIC.to_string(), serde_json::json!(folder))].into_iter().collect(),
+        };
+        let out = merge(&[], vec![own("/own")]).unwrap();
+        assert_eq!(out[0].own_music(), Some(std::path::PathBuf::from("/own")));
+        assert_eq!(merge(&[], vec![own(" ")]).unwrap()[0].own_music(), None, "blank: none");
+        assert!(merge(&[], vec![own("own")]).is_err(), "a whole path");
+        assert!(merge(&[], vec![own("/music/own")]).is_err(), "not inside a library");
+        assert!(merge(&[], vec![own("/media")]).is_err(), "not around one");
+        let mut other = jf("jf", "http://a", Some("k"));
+        other.values.insert(OWN_MUSIC.into(), "/own".into());
+        assert_eq!(merge(&[], vec![other]).unwrap()[0].own_music(), None, "Cratarr's own source's only");
     }
 
     #[test]

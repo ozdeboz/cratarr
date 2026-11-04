@@ -206,6 +206,16 @@ fn folder_of(p: &Params) -> Option<i64> {
 
 /// The catalogue folders `user` has switched off (decision 0101 point 14: the libraries switched off, kept on the
 /// account), left out of their music folders.
+/// A music folder's name for `user`: own music by whose it is (0101 point 9), any other by its folder.
+fn folder_name(folder: &std::path::Path, own: Option<&std::path::Path>, user: &str) -> String {
+    let name = folder.file_name().map_or_else(|| folder.display().to_string(), |n| n.to_string_lossy().to_string());
+    match own {
+        Some(_) if folder.parent() == own && name == user => crate::settings::YOUR_MUSIC.to_string(),
+        Some(_) if folder.parent() == own => format!("{name}'s music"),
+        _ => name,
+    }
+}
+
 fn hidden_folders(serve: &Serve, user: &str) -> Vec<i64> {
     let hidden = serve.userdata.hidden_libraries(user).unwrap_or_default();
     if hidden.is_empty() {
@@ -239,12 +249,13 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "getMusicFolders" => {
             // Only those the user has on (decision 0101 points 1 and 14).
             let off = hidden_folders(serve, &me);
+            let own = serve.own_music();
             let folders: Vec<Value> = serve
                 .catalogue()
                 .folders()
                 .iter()
                 .filter(|(i, _)| !off.contains(i))
-                .map(|(i, f)| json!({ "id": i + 1, "name": f.file_name().map_or_else(|| f.display().to_string(), |n| n.to_string_lossy().to_string()) }))
+                .map(|(i, f)| json!({ "id": i + 1, "name": folder_name(f, own.as_deref(), &me) }))
                 .collect();
             Ok(Answer::Json(json!({ "musicFolders": { "musicFolder": folders } })))
         }

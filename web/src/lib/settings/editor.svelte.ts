@@ -59,7 +59,7 @@ export const count = (n: number) => n.toLocaleString();
 export const downloadedSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
 export const since = (epoch: number) => new Date(epoch * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-export const USES: { id: LibraryUse; label: string }[] = [
+export const USES: { id: Exclude<LibraryUse, 'own'>; label: string }[] = [
   { id: 'main', label: 'Main library' },
   { id: 'incoming', label: 'Incoming' },
   { id: 'unused', label: 'Not used' },
@@ -360,11 +360,11 @@ class SettingsEditor {
   libraryOrder = (d: Draft): string[] =>
     d.kind === 'cratarr' && Array.isArray(d.values.folders) ? (d.values.folders as string[]) : (d.view?.server_libraries.map((l) => l.id) ?? []);
 
-  useOf = (d: Draft, id: string): LibraryUse => d.libraries.find((l) => l.id === id)?.kind ?? 'unused';
+  useOf = (d: Draft, id: string): Exclude<LibraryUse, 'own'> => d.libraries.find((l) => l.id === id)?.kind ?? 'unused';
 
   /** A library's settings while it is not used, for this visit: switched on again, it has them back. */
   private setAside = new Map<string, LibrarySetting>();
-  setUse = (d: Draft, id: string, use: LibraryUse) => {
+  setUse = (d: Draft, id: string, use: Exclude<LibraryUse, 'own'>) => {
     const was = d.libraries.find((l) => l.id === id);
     if (use === 'unused') {
       if (was) this.setAside.set(`${d.id}/${id}`, was);

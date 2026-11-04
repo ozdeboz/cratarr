@@ -68,6 +68,9 @@
     Array.isArray(d.values.folders) ? (d.values.folders as string[]) : (d.view?.server_libraries.map((l) => l.id) ?? []);
   const folderName = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
   let browsing = $state<Draft | null>(null);
+  // The own-music folder (decision 0101 point 9): one setting, a subfolder per account in it, made at its first use.
+  let browsingOwn = $state<Draft | null>(null);
+  const ownOf = (d: Draft) => (typeof d.values.own_music === 'string' ? d.values.own_music.trim() : '');
 
   function addFolder(d: Draft, path: string) {
     const now = chosenOf(d);
@@ -338,6 +341,12 @@
         {#if d.kind === 'cratarr'}<Item name="Add folder" kind="add" onclick={() => (browsing = d)} />{/if}
       {/if}
     </Group>
+    {#if d.kind === 'cratarr'}
+      <Group title="Own music" more="Everyone's own music: a folder for each person lies in this one, made the first time something is added to it. Keep it outside the folders above.">
+        <Item name="Folder" value={ownOf(d) || 'Not set'} onclick={() => (browsingOwn = d)} />
+        {#if ownOf(d)}<Item name="No own music" kind="danger" onclick={() => (d.values.own_music = '')} />{/if}
+      </Group>
+    {/if}
   {:else}
     <Group><Item name="Add a server under Connections first" /></Group>
   {/each}
@@ -423,6 +432,17 @@
 {#if browsing}
   {@const d = browsing}
   <FolderBrowser chosen={chosenOf(d)} onadd={(p) => addFolder(d, p)} onclose={() => (browsing = null)} />
+{/if}
+{#if browsingOwn}
+  {@const d = browsingOwn}
+  <FolderBrowser
+    chosen={ownOf(d) ? [ownOf(d)] : []}
+    onadd={(p) => {
+      d.values.own_music = p;
+      browsingOwn = null;
+    }}
+    onclose={() => (browsingOwn = null)}
+  />
 {/if}
 {#if typing}
   {@const t = typing}

@@ -50,7 +50,7 @@ function libraryGroup(): ControlGroup[] {
       controls: used.map((l) => ({
         kind: 'toggle',
         name: l.name,
-        line: kindOf(l.id) === 'incoming' ? 'Incoming' : 'Main library',
+        line: ({ incoming: 'Incoming', own: 'Own music', main: 'Main library' } as const)[kindOf(l.id) ?? 'main'],
         get: () => libraryShown(sid, l.id),
         set: (v: boolean) => showLibrary(sid, l.id, v),
         disabled: on === 1 && libraryShown(sid, l.id),

@@ -142,6 +142,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
+        // Asked of everyone: who may is the record's own (0101 point 2).
+        .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
+        .route("/api/albums/{source}/{album}/delete", post(delete_album))
         // Classical (0.10): its composers, a composer's records, a track's other versions; everyone's.
         .route("/api/classical/composers", get(classical_composers))
         .route("/api/classical/composers/{key}", get(classical_composer))
@@ -258,8 +261,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
-            .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
-            .route("/api/albums/{source}/{album}/delete", post(delete_album))
             .route("/api/albums/duplicates", get(album_duplicates))
             .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
             .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
@@ -4267,7 +4268,15 @@ async fn libraries(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value
     let sources: Vec<serde_json::Value> = v
         .sources
         .iter()
-        .map(|s| json!({ "id": s.id, "label": s.label, "status": { "server_name": s.status.server_name }, "server_libraries": s.server_libraries, "libraries": s.libraries }))
+        .map(|s| {
+            // Beside the settings' list, each account's own music (0101 point 9), named for whoever asks.
+            let own = app.own_music_seen(&s.id);
+            let listed = serde_json::to_value(&s.libraries).unwrap_or_default();
+            let libraries: Vec<serde_json::Value> = listed.as_array().cloned().unwrap_or_default().into_iter().chain(own.iter().map(|(id, _, mine)| json!({ "id": id, "kind": "own", "mine": mine }))).collect();
+            let found = serde_json::to_value(&s.server_libraries).unwrap_or_default();
+            let server_libraries: Vec<serde_json::Value> = found.as_array().cloned().unwrap_or_default().into_iter().chain(own.iter().map(|(id, name, _)| json!({ "id": id, "name": name }))).collect();
+            json!({ "id": s.id, "label": s.label, "status": { "server_name": s.status.server_name }, "server_libraries": server_libraries, "libraries": libraries })
+        })
         .collect();
     Ok(Json(json!({ "sources": sources })))
 }

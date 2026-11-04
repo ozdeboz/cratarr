@@ -17,8 +17,7 @@
   import { activeConditions, filterChange, filterOf, filtersOn, hiddenLibraries, inView, resetFilter, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
   import { startCrate, withoutFor } from './crates.svelte';
-  import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
-  import { me } from './me.svelte';
+  import { filterList, getCrateAxes, getLibraries, getStatus, type LibrariesView, type LibraryUse } from './api';
   import Icon from './Icon.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import MarkLoader from './MarkLoader.svelte';
@@ -112,12 +111,12 @@
   // Each server's own name and its libraries, as Settings → Libraries reads them. The cards show without them until
   // they come: the list of servers alone is enough to choose one, but unnamed (not its kind first, then its own name
   // over the kind: the owner, 2026-10-24). `settingsKnown`: read, or could not be (then the kind is the name).
-  // (An administrator reads them from the server's settings; anyone else from the libraries, decision 0051.)
+  // (Everyone reads them from the libraries, decision 0051: someone's own music is there, not in the settings.)
   let settings = $state<LibrariesView | null>(null);
   let settingsKnown = $state(false);
   $effect(() => {
     let gone = false;
-    (me.admin ? getSettings() : getLibraries()).then(
+    getLibraries().then(
       (s) => {
         if (gone) return;
         settings = s;
@@ -134,8 +133,8 @@
 
   // A use by the icon of the page that shows it (Collection shows Music, Incoming its own), so a chip needs no second
   // word; the word is still there for screen readers.
-  const USE_ICON = { main: 'library', incoming: 'incoming' } as const;
-  const USE_WORD: Record<LibraryUse, string> = { main: 'Main library', incoming: 'Incoming', unused: 'Not used' };
+  const USE_ICON = { main: 'library', incoming: 'incoming', own: 'user' } as const;
+  const USE_WORD: Record<LibraryUse, string> = { main: 'Main library', incoming: 'Incoming', own: 'Own music', unused: 'Not used' };
 
   const cards = $derived(
     known.list.map((s) => {

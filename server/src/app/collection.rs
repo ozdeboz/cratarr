@@ -145,9 +145,9 @@ impl CollectionService {
         self.lib
             .connected()
             .into_iter()
-            .filter(|(a, _)| !a.main().is_empty())
+            .filter(|(a, _)| !a.kept().is_empty())
             .map(|(a, s)| {
-                let ids = a.main();
+                let ids = a.kept();
                 (a, s, ids)
             })
             .collect()

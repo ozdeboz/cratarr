@@ -591,9 +591,9 @@ impl IncomingService {
         self.delete_listed(source_id, album).await
     }
 
-    /// Whether a catalogue folder is a main library's (0101 point 1): not Incoming's.
+    /// Whether a catalogue folder's records are kept (a main library's or own music's): not Incoming's.
     pub fn in_main(&self, folder: i64) -> bool {
-        self.lib.is_main(folder)
+        self.lib.is_kept(folder)
     }
 
     /// The catalogue folders that libraries switched off (`source/library`) leave out: those no library switched on
@@ -602,12 +602,12 @@ impl IncomingService {
         self.lib.folders_off(without)
     }
 
-    /// The main libraries whose albums can be deleted, by server and library id: Cratarr writes in their folder (each
-    /// library's trash is its own; 0101 point 1: main libraries are equal).
-    pub(super) async fn main_deletable(&self) -> std::collections::HashSet<(String, String)> {
+    /// The kept libraries whose albums can be deleted, by server and library id: Cratarr writes in their folder (each
+    /// library's trash is its own; 0101 point 1: main libraries are equal). Whose to delete they are is the view's.
+    pub(super) async fn kept_deletable(&self) -> std::collections::HashSet<(String, String)> {
         let mut out = std::collections::HashSet::new();
         for a in self.lib.live().iter() {
-            for id in &a.main() {
+            for id in &a.kept() {
                 let folder = a.placement.libraries.iter().find(|l| &l.id == id).and_then(|l| l.folders.first());
                 if let Some(f) = folder
                     && self.can_write(std::path::Path::new(f)).await
@@ -641,7 +641,7 @@ impl IncomingService {
             folder: dir.folder,
             dir: dir.dir.clone(),
             token: token.clone(),
-            release_group: if self.lib.is_main(dir.folder) { None } else { dir.release_group.clone() },
+            release_group: if self.lib.is_kept(dir.folder) { None } else { dir.release_group.clone() },
         };
         // Deleting the album that plays: the player stops first (a player going on with an item the server then drops
         // reports on it, which Jellyfin refuses; decision 0013). Nothing is played after: it is gone.
@@ -907,10 +907,10 @@ impl IncomingService {
     fn keep_target(&self, source_id: &str, to: Option<&str>) -> Result<(i64, settings::Quality), ToggleError> {
         let live = self.lib.live();
         let a = live.iter().find(|a| a.cfg.id == source_id).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
-        let main = a.main();
+        let (main, kept) = (a.main(), a.kept());
         let to = match to {
-            Some(t) if main.iter().any(|m| m == t) => t,
-            Some(_) => return Err(ToggleError::Refused("Keep puts an album into a main library".into())),
+            Some(t) if kept.iter().any(|m| m == t) => t,
+            Some(_) => return Err(ToggleError::Refused("An album is added to a main library or someone's own music".into())),
             None => main.first().map(String::as_str).ok_or_else(|| ToggleError::Refused("no main library is set".into()))?,
         };
         self.target_of(source_id, to)
@@ -934,8 +934,8 @@ impl IncomingService {
     /// What a move of `title` from catalogue folder `from` into `to` is called on Health's list of changes, and its
     /// title there: a keep into a main library, by its name (0101 point 2), else a move.
     pub(super) fn adopted_named(&self, source_id: &str, from: i64, to: i64, title: &str) -> (&'static str, String) {
-        if self.lib.is_main(to) && !self.lib.is_main(from) {
-            ("keep", format!("Kept into {}: {title}", self.library_name(source_id, to)))
+        if self.lib.is_kept(to) && !self.lib.is_kept(from) {
+            ("keep", format!("Added to {}: {title}", self.library_name(source_id, to)))
         } else {
             ("move", format!("Moved: {title}"))
         }
@@ -972,7 +972,7 @@ impl IncomingService {
         let (target, quality) = self.target_of(source_id, to)?;
         let (_, plan) = self.plan_move(&at, target, year).await?;
         let convert = self.to_convert(&at, quality).await.len();
-        let acquisition = self.acquisition().is_some() && !self.lib.is_main(at.dir.folder);
+        let acquisition = self.acquisition().is_some() && !self.lib.is_kept(at.dir.folder);
         Ok(match plan {
             Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
             Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition },
@@ -1015,7 +1015,7 @@ impl IncomingService {
     /// Work out a move's names, or why not: into a main library by the template (Keep's plan), into another library as
     /// the album's folder is. Reads the disk and the catalogue; changes nothing.
     async fn plan_move(&self, at: &Located, target: i64, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
-        if self.lib.is_main(target) {
+        if self.lib.is_kept(target) {
             return self.plan_keep(at, target, year).await;
         }
         let root = self.root_of(target)?;
@@ -1112,7 +1112,7 @@ impl IncomingService {
             moves,
             // Lidarr stops fetching an album that leaves a folder it fetches into: an Incoming one (the main libraries
             // stay out of it); with no release group it is not asked.
-            release_group: if self.lib.is_main(at.dir.folder) { None } else { at.dir.release_group.clone() },
+            release_group: if self.lib.is_kept(at.dir.folder) { None } else { at.dir.release_group.clone() },
             converted,
         };
         let now = epoch_now();

@@ -7,6 +7,7 @@
   import { untrack } from 'svelte';
   import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
   import { jobs } from './jobs.svelte';
+  import { me } from './me.svelte';
 
   /** What an album's library allows (decision 0034): moves into the server's other used libraries, Replace for an
    *  upgrade, Delete; each only when Cratarr can write the album's folder, and with a job in the conversion queue only
@@ -36,9 +37,20 @@
     const verdict = s.verdicts[a.id];
     const into = verdict?.replaceable_into ?? [];
     const keepTo = s.keep_to[a.id];
-    const targets = deletable ? s.library_info.filter((l) => l.id !== a.library && !into.includes(l.id)) : [];
+    const from = s.library_info.find((l) => l.id === a.library) ?? null;
+    const others = s.library_info.filter((l) => l.id !== a.library && !into.includes(l.id));
+    // An Incoming record is added where it goes by default; by an administrator also to a main library or their own
+    // music (decision 0101 point 2). A kept one moves between an administrator's libraries, never into or out of own
+    // music: that would be a copy (the owner, 2026-11-04), which comes with records and copies.
+    const targets = !deletable
+      ? []
+      : from?.kind === 'incoming'
+        ? others.filter((l) => s.keepable.includes(a.id) && (l.id === keepTo || (me.admin && (l.kind === 'main' || l.mine))))
+        : me.admin && from?.kind !== 'own'
+          ? others.filter((l) => l.kind !== 'own')
+          : [];
     return {
-      from: s.library_info.find((l) => l.id === a.library) ?? null,
+      from,
       targets: [...targets.filter((l) => l.id === keepTo), ...targets.filter((l) => l.id !== keepTo)],
       replaceable: deletable && verdict?.kind === 'upgrade' && into.length > 0,
       replaceInto: s.library_info.find((l) => l.id === into[0]) ?? null,
@@ -120,7 +132,6 @@
   import Meter from './Meter.svelte';
   import { progressOf, tasks } from './tasks.svelte';
   import { withUndo } from './undo.svelte';
-  import { me } from './me.svelte';
   import { can, findsTracks, offers } from './capabilities.svelte';
 
   type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
@@ -688,7 +699,7 @@
       <MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />
     {/if}
   {:else if e === 'moveTo'}
-    {#if me.admin && offer && offer.job === null}
+    {#if offer && offer.job === null}
       {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`${adds(offer.from, t) ? 'Add' : 'Move'} to ${t.name}`} onclick={() => askMove(t)} />{/each}
     {/if}
   {:else if e === 'replaceIn'}
@@ -696,7 +707,7 @@
   {:else if e === 'removeResume'}
     {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
   {:else if e === 'deleteAlbum'}
-    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label={`Delete ${word}`} danger onclick={() => (ask = 'delete')} />{/if}
+    {#if offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label={`Delete ${word}`} danger onclick={() => (ask = 'delete')} />{/if}
   {/if}
 {/snippet}
 
