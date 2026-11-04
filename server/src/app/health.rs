@@ -519,6 +519,37 @@ fn name_static(name: &str) -> &'static str {
     }
 }
 
+/// Whether two paths name one folder as two containers mount it: the same, or the longer ending with the shorter at
+/// a folder's edge (Lidarr's `/data/media/lidarr-music`, Cratarr's `/media/lidarr-music`: the paths differ in front, as
+/// lib/incoming's `incoming_dir` has it).
+fn same_folder(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_end_matches('/'), b.trim_end_matches('/'));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    long == short || (long.ends_with(short) && (short.starts_with('/') || long.as_bytes()[long.len() - short.len() - 1] == b'/'))
+}
+
+/// Lidarr's root folder `root` (one of `roots`, its root folders) as against `folders`, those of `incoming` (Lidarr's
+/// Incoming library): none when it is one of them. Else where it is dealt with: Connections' Lidarr page, choosing
+/// the root folder that is Incoming's where Lidarr has one, else adding one in Lidarr.
+fn lidarr_root_finding(root: &str, roots: &[String], incoming: &str, folders: &[String]) -> Option<Finding> {
+    if folders.iter().any(|f| same_folder(root, f)) {
+        return None;
+    }
+    let mut f = finding("servers", "servers:lidarr-root", Level::Warning, 1, format!("Lidarr adds albums outside {incoming}"));
+    f.thing = Some("Lidarr".into());
+    f.state = Some(format!("outside {incoming}"));
+    let shown = root.trim_end_matches('/');
+    f.detail = Some(match roots.iter().find(|r| folders.iter().any(|x| same_folder(r, x))) {
+        Some(fit) => format!("Its root folder is {shown}, not {incoming}'s folder, so what it fetches skips Incoming. Choose {} as its root folder.", fit.trim_end_matches('/')),
+        None => format!("Its root folder is {shown}, and none of its root folders is {incoming}'s folder. Add that folder in Lidarr, then choose it here."),
+    });
+    f.open = Some(Open { page: "settings", switch: None, thing: Some("lidarr") });
+    Some(f)
+}
+
 /// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
 fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Finding>> {
     let Some(serve) = served else { return Ok(Vec::new()) };
@@ -930,8 +961,30 @@ impl App {
             f.detail = l.error.clone();
             f.open = settings();
             out.push(f);
+        } else if let Some(f) = self.check_lidarr_root().await? {
+            out.push(f);
         }
         Ok(out)
+    }
+
+    /// Lidarr's root folder (0101 point 10: Connections' choice, else its artists', else its first) against the folder
+    /// of Lidarr's Incoming, the library it fetches into: what it fetches comes to Incoming only from there. Nothing to
+    /// say while Lidarr is off or no library is Lidarr's.
+    async fn check_lidarr_root(&self) -> anyhow::Result<Option<Finding>> {
+        let (cfg, client) = self.incoming.lidarr_state();
+        let (Some(cfg), Some(client)) = (cfg.filter(|c| c.enabled), client) else { return Ok(None) };
+        let live = self.library.live();
+        let incoming = live.iter().find_map(|a| {
+            let (id, _) = a.cfg.libraries.policies.iter().find(|(id, p)| p.fetcher.as_deref() == Some("lidarr") && a.cfg.libraries.incoming.contains(id))?;
+            a.placement.libraries.iter().find(|l| &l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
+        });
+        let Some((name, folders)) = incoming else { return Ok(None) };
+        let roots = client.options().await?.roots;
+        let root = match cfg.root_folder.clone() {
+            Some(r) => Some(r),
+            None => client.artists_root().await?,
+        };
+        Ok(root.and_then(|root| lidarr_root_finding(&root, &roots, &name, &folders)))
     }
 
     /// Cratarr's own players: a sound held back, and one of the app's not heard from for a day (but within a month:
@@ -1037,6 +1090,24 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lidarr_adding_outside_its_incoming_is_said_with_the_root_folder_to_choose() {
+        // The containers see one folder by different paths.
+        assert!(same_folder("/data/media/lidarr-music/", "/media/lidarr-music"));
+        assert!(same_folder("/media/lidarr-music", "/media/lidarr-music/"));
+        assert!(!same_folder("/data/media/lidarr-music", "/media/music"), "another folder");
+        assert!(!same_folder("/data/media/old-lidarr-music", "lidarr-music"), "only at a folder's edge");
+        let (incoming, folders) = ("Lidarr", vec!["/media/lidarr-music".to_string()]);
+        let roots = vec!["/data/media/Music/".to_string(), "/data/media/lidarr-music/".to_string()];
+        assert_eq!(lidarr_root_finding("/data/media/lidarr-music/", &roots, incoming, &folders), None, "into its Incoming");
+        let f = lidarr_root_finding("/data/media/Music/", &roots, incoming, &folders).unwrap();
+        assert_eq!((f.key.as_str(), f.level), ("servers:lidarr-root", Level::Warning));
+        assert_eq!(f.open, Some(Open { page: "settings", switch: None, thing: Some("lidarr") }), "Connections' Lidarr page");
+        assert!(f.detail.as_deref().unwrap().ends_with("Choose /data/media/lidarr-music as its root folder."), "{:?}", f.detail);
+        let none = lidarr_root_finding("/data/media/Music/", &roots[..1], incoming, &folders).unwrap();
+        assert!(none.detail.unwrap().contains("Add that folder in Lidarr"), "Lidarr has no root folder there");
+    }
 
     #[test]
     fn counts_are_grouped_by_thousands() {

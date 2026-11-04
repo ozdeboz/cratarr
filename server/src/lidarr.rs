@@ -222,6 +222,16 @@ impl Lidarr {
         Ok(())
     }
 
+    /// The root folder Lidarr adds an album's artist to when none is chosen in Connections: its artists' (the first
+    /// one's, as Want takes), else its first root folder; none when it has neither.
+    pub async fn artists_root(&self) -> Result<Option<String>> {
+        let artists: Vec<serde_json::Value> = self.get("/api/v1/artist", &[]).await?;
+        if let Some(root) = artists.first().and_then(|a| a["rootFolderPath"].as_str()) {
+            return Ok(Some(root.to_string()));
+        }
+        Ok(self.options().await?.roots.into_iter().next())
+    }
+
     /// Lidarr's quality and metadata profiles and its root folders, by id and name.
     pub async fn options(&self) -> Result<Options> {
         #[derive(Deserialize)]
