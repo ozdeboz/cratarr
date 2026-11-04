@@ -14,12 +14,19 @@ export type { Motion };
  *  a reading let go will stand (ms of the track; null before a let-go). */
 export const tape = $state({ ready: null as string | null, loading: null as string | null, lengthMs: null as number | null, standsAt: null as number | null, by: null as string | null });
 
+/** A reading's let-go as the head took it (its motion's ms, the speed it brakes to, the brake's least length): carried
+ *  on into the next track with the motion. */
+export type LetGo = { atMs: number; to: number; brakeMs: number };
+let letGone: LetGo | null = null;
+/** The context's frame a let-go reading reaches its stand (or its new speed) at the ear; null before. */
+let arrivedFrame: number | null = null;
+
 let ctx: AudioContext | null = null;
 let node: AudioWorkletNode | null = null;
 let out: GainNode | null = null;
 let workers: Worker[] = [];
 let marks: Marks | null = null;
-let ended: ((why: Ended) => void) | null = null;
+let ended: ((why: Ended, motionMs: number) => void) | null = null;
 
 /** The head's context and its worklet, made once (a context starts suspended until a press resumes it). */
 async function head(): Promise<{ ctx: AudioContext; node: AudioWorkletNode; out: GainNode }> {
@@ -34,12 +41,18 @@ async function head(): Promise<{ ctx: AudioContext; node: AudioWorkletNode; out:
   n.port.onmessage = (e: MessageEvent) => {
     const m = e.data;
     if (m?.type === 'marks') for (const k of m.marks as Mark[]) marks?.add(k);
-    if (m?.type === 'stands-at') tape.standsAt = typeof m.place === 'number' && m.when >= 0 ? m.place : null;
-    if (m?.type === 'ended') ended?.(m.why as Ended);
+    if (m?.type === 'stands-at') {
+      tape.standsAt = typeof m.place === 'number' && m.when >= 0 ? m.place : null;
+      if (letGone && typeof m.atMs === 'number') letGone.atMs = m.atMs;
+    }
+    if (m?.type === 'arrived' && typeof m.frame === 'number') arrivedFrame = m.frame;
+    if (m?.type === 'ended') ended?.(m.why as Ended, typeof m.motionMs === 'number' ? m.motionMs : 0);
     if (m?.type === 'engine') engineReady(m.ready === true);
   };
-  // The engine (tape.wasm), instantiated in the worklet from its bytes (no fetch there), there before any reading.
+  // The engine (tape.wasm), instantiated in the worklet from its bytes (no fetch there), there before any reading; and
+  // here too, for what a let-go would come to before it is made ([landingIf]).
   const bytes = await (await fetch(tapeUrl)).arrayBuffer();
+  mine = (await WebAssembly.instantiate(bytes.slice(0))).instance.exports as unknown as Engine;
   n.port.postMessage({ type: 'engine', bytes }, [bytes]);
   if (!(await engine)) throw new Error('the tape engine did not start');
   ctx = c;
@@ -99,22 +112,87 @@ export async function load(id: string, url: string): Promise<string | null> {
 
 /**
  * Reads the opened track from `fromMs` at `motion` (the engine's) at `gain`; `onEnded` once it stopped (by [stop], or
- * at either end of the track). False where the track is not ready.
+ * at either end of the track), with where its motion had got (its ms). `carried`: a motion carried on from the track
+ * before, from that ms of it, let go there already or not. False where the track is not ready.
  */
-export function start(id: string, fromMs: number, motion: Motion, gain: number, onEnded: (why: Ended) => void): boolean {
+export function start(
+  id: string,
+  fromMs: number,
+  motion: Motion,
+  gain: number,
+  onEnded: (why: Ended, motionMs: number) => void,
+  carried?: { motionAt: number; letGo: LetGo | null },
+): boolean {
   if (tape.ready !== id || !ctx || !node) return false;
   void ctx.resume();
   marks?.clear();
   tape.standsAt = null;
+  arrivedFrame = null;
+  letGone = carried?.letGo ?? null;
   ended = onEnded;
-  node.port.postMessage({ type: 'start', fromMs, motion, gain });
+  node.port.postMessage({ type: 'start', fromMs, motion, gain, motionAt: carried?.motionAt ?? 0, letGo: carried?.letGo ?? undefined });
   return true;
 }
 
 /** The reading's motion let go (now, by the frames the head read, unless `atMs` of its own time is given): it brakes
- *  from its own speed to `to` × (`brakeMs` at least, the engine's brake); [tape]'s `standsAt` says where it will stand. */
+ *  from its own speed to `to` × (`brakeMs` at least, the engine's brake); [tape]'s `standsAt` says where it will stand,
+ *  [arrived] when it is heard there. */
 export function letGo(to: number, brakeMs: number, atMs?: number) {
+  letGone = { atMs: atMs ?? -1, to, brakeMs };
+  arrivedFrame = null;
   node?.port.postMessage({ type: 'let-go', atMs, to, brakeMs });
+}
+
+/** The reading's let-go as the head took it, for carrying it on into the next track; none before one. */
+export const letGoMade = (): LetGo | null => (letGone && letGone.atMs >= 0 ? { ...letGone } : null);
+
+/** Whether a let-go reading is heard at its stand (or its new speed) by now: the ear's frame, not the clock's. */
+export function arrived(): boolean {
+  const p = played();
+  return arrivedFrame !== null && p !== null && p >= arrivedFrame;
+}
+
+/** Its gain from now on (the page's volume, ducking, the track's level), followed without a click. */
+export function setGain(gain: number) {
+  node?.port.postMessage({ type: 'gain', gain });
+}
+
+/** tape.wasm's calls, here as in the worklet (lib/tape/head.worklet). */
+type Engine = {
+  motion_tap(way: number, length: number, attack: number, release: number, floor: number, sign: number): number;
+  motion_hold(base: number, top: number, doubling: number, sign: number): number;
+  motion_steady(v: number): number;
+  motion_let_go(h: number, atMs: number, to: number, brakeMs: number): void;
+  motion_speed(h: number, tMs: number): number;
+  motion_gone(h: number, tMs: number): number;
+  motion_stands_at(h: number): number;
+  motion_free(h: number): void;
+};
+let mine: Engine | null = null;
+
+/**
+ * Where a reading would stand were its motion let go at `motionMs` (to `to` ×, `brakeMs` at least), and when (its
+ * motion's ms): the engine asked here, on a motion of the same shape, nothing changed in the reading. The reading began
+ * at `fromMs` of the track at its motion's `motionAt`. None without the engine yet.
+ */
+export function landingIf(motion: Motion, motionAt: number, fromMs: number, motionMs: number, to: number, brakeMs: number): { place: number; when: number } | null {
+  const x = mine;
+  if (!x) return null;
+  const h =
+    motion.kind === 'tap'
+      ? x.motion_tap(motion.way, motion.length, motion.attack, motion.release, motion.floor, motion.sign)
+      : motion.kind === 'hold'
+        ? x.motion_hold(motion.base, motion.top, motion.doubling, motion.sign)
+        : x.motion_steady(motion.v);
+  if (!h) return null;
+  try {
+    x.motion_let_go(h, motionMs, to, brakeMs);
+    const when = x.motion_stands_at(h);
+    if (when < 0) return null;
+    return { place: fromMs + x.motion_gone(h, when) - x.motion_gone(h, motionAt), when };
+  } finally {
+    x.motion_free(h);
+  }
 }
 
 /** The reading stopped, faded out first (no click). */

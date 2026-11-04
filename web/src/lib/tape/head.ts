@@ -188,7 +188,9 @@ export type Ended = 'stopped' | 'start' | 'end';
 export class Reader {
   private readonly chunks: Chunks;
   private readonly speed: (tMs: number) => number;
-  private readonly gain: number;
+  /** The gain asked for, and the one sounding: it follows the asked one over FADE_MS, so a change never clicks. */
+  private gainWanted: number;
+  private gainNow: number;
   private readonly rate: number;
   private readonly outRate: number;
   private readonly ratio: number;
@@ -213,7 +215,8 @@ export class Reader {
   constructor(o: { chunks: Chunks; rate: number; outRate: number; fromMs: number; speed: (tMs: number) => number; gain: number }) {
     this.chunks = o.chunks;
     this.speed = o.speed;
-    this.gain = o.gain;
+    this.gainWanted = o.gain;
+    this.gainNow = o.gain;
     this.rate = o.rate;
     this.outRate = o.outRate;
     this.ratio = o.rate / o.outRate;
@@ -229,6 +232,16 @@ export class Reader {
   /** Fades out and ends. */
   stop() {
     this.stopping = true;
+  }
+
+  /** Its gain from now on (the page's volume, ducking and the track's level), reached over FADE_MS. */
+  setGain(g: number) {
+    this.gainWanted = g;
+  }
+
+  /** Its own time (ms): what its motion's speed is asked at. */
+  get ms(): number {
+    return (this.written * 1000) / this.outRate;
   }
 
   private held(j: number, c: number): number | undefined {
@@ -297,7 +310,11 @@ export class Reader {
       } else if (this.present < 1) {
         this.present = Math.min(1, this.present + this.fadeStep);
       }
-      const g = (this.gain * Math.max(0, this.fade) * shape * bySpeed * this.present) / 32768;
+      if (this.gainNow !== this.gainWanted) {
+        const d = this.gainWanted - this.gainNow;
+        this.gainNow = Math.abs(d) <= this.fadeStep ? this.gainWanted : this.gainNow + Math.sign(d) * this.fadeStep;
+      }
+      const g = (this.gainNow * Math.max(0, this.fade) * shape * bySpeed * this.present) / 32768;
       left[f] = Math.max(-1, Math.min(1, (l ?? 0) * g));
       right[f] = Math.max(-1, Math.min(1, (r ?? 0) * g));
       this.at += sv * this.ratio;

@@ -107,3 +107,58 @@ test('past the track’s end it ends, and says so', async () => {
   });
   assert.equal(why, 'end');
 });
+
+test('its gain followed while it reads, without starting again', async () => {
+  const r = await d.page.evaluate(async () => {
+    const { tape, loudness } = window.t;
+    window.endedWhy = null;
+    tape.start('t', 3000, { kind: 'steady', v: 1 }, 1, (w) => (window.endedWhy = w));
+    await new Promise((r) => setTimeout(r, 600));
+    const full = loudness();
+    tape.setGain(0.25);
+    await new Promise((r) => setTimeout(r, 400));
+    return { full, quarter: loudness() };
+  });
+  assert.ok(r.full > 0.05, `full: ${r.full}`);
+  assert.ok(Math.abs(r.quarter / r.full - 0.25) < 0.05, `a quarter: ${r.quarter} of ${r.full}`);
+  assert.equal(await stopped(), 'stopped');
+});
+
+test('a hold carried on from a track before starts where its motion had got', async () => {
+  const r = await d.page.evaluate(async () => {
+    const { tape } = window.t;
+    const hold = { kind: 'hold', base: 2, top: 16, doubling: 500, sign: 1 };
+    window.endedWhy = null;
+    tape.start('t', 1000, hold, 1, (w) => (window.endedWhy = w), { motionAt: 2000, letGo: null });
+    await new Promise((r) => setTimeout(r, 400));
+    return tape.heardSpeed();
+  });
+  // Two seconds into a hold doubling every half second from 2×: at its top.
+  assert.equal(r, 16, `carried on: ${r}`);
+  assert.equal(await stopped(), 'stopped');
+});
+
+test('a let-go says when it is heard arrived, standing where the engine foretold', async () => {
+  const r = await d.page.evaluate(async () => {
+    const { tape } = window.t;
+    const hold = { kind: 'hold', base: 2, top: 16, doubling: 500, sign: 1 };
+    window.endedWhy = null;
+    tape.start('t', 1000, hold, 1, (w) => (window.endedWhy = w));
+    await new Promise((r) => setTimeout(r, 500));
+    const made = tape.letGoMade();
+    tape.letGo(0, 300);
+    await new Promise((r) => setTimeout(r, 100));
+    const lg = tape.letGoMade();
+    const foretold = lg && tape.landingIf(hold, 0, 1000, lg.atMs, 0, 300);
+    let arrived = false;
+    for (let i = 0; i < 100 && !(arrived = tape.arrived()); i++) await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 200));
+    return { made, lg, foretold, standsAt: tape.tape.standsAt, arrived, heard: tape.heardMs() };
+  });
+  assert.equal(r.made, null, 'none before a let-go');
+  assert.ok(r.lg && r.lg.atMs > 0, `the let-go as the head took it: ${JSON.stringify(r.lg)}`);
+  assert.ok(r.arrived, 'arrived');
+  assert.ok(Math.abs(r.foretold.place - r.standsAt) < 1, `foretold ${r.foretold?.place}, standing ${r.standsAt}`);
+  assert.ok(Math.abs(r.heard - r.standsAt) < 5, `heard at ${r.heard}`);
+  assert.equal(await stopped(), 'stopped');
+});
