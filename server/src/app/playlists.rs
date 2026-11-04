@@ -3705,10 +3705,12 @@ impl PlaylistService {
                         Err(e) => tracing::warn!("source {} has no details for {folder:?}: {e:#}", a.cfg.id),
                     }
                 }
-                // Every account's playlists that hold it, by their keys.
+                // Every account's playlists that hold it, as the page shows them: by name, another account's as
+                // `account/name`.
                 let mut lines = Vec::new();
                 for store in &stores {
-                    lines.extend(store.lines_in_folder(folder).await?.into_iter().map(|(name, n)| (store.key(&name), n)));
+                    let shown = |name: String| store.account().map_or_else(|| name.clone(), |a| format!("{a}/{name}"));
+                    lines.extend(store.lines_in_folder(folder).await?.into_iter().map(|(name, n)| (shown(name), n)));
                 }
                 albums.push(build_view(folder, files, cover, &known, lines));
             }
@@ -4196,25 +4198,33 @@ impl PlaylistService {
         Ok(self.keep_texts(vec![edit]))
     }
 
-    /// The server (`want`, else the first connected) a playlist favourite is kept on.
-    fn favourites_source(&self, want: Option<&str>) -> Result<Arc<dyn source::Source>, ToggleError> {
+    /// The server (`want`, else the first connected) a playlist favourite is kept on, and whether it keeps them by the
+    /// playlists' ids (Cratarr's own, decision 0101), not by its copies' names (a media server's).
+    fn favourites_source(&self, want: Option<&str>) -> Result<(Arc<dyn source::Source>, bool), ToggleError> {
         let sources = self.lib.connected();
         want.and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
             .or_else(|| sources.first())
-            .map(|(_, s)| s.clone())
+            .map(|(a, s)| (s.clone(), a.cfg.kind == crate::source::cratarr::KIND.id))
             .ok_or_else(|| ToggleError::Refused("No server is connected.".into()))
     }
 
-    /// Which playlists (by name) are favourites, as Finamp's playlist hearts (decision 0023).
+    /// Which playlists (by id) are favourites, as Finamp's playlist hearts (decision 0023); a media server's by its
+    /// copies' names, one's own of those names.
     pub async fn favorites(&self, want: Option<&str>) -> Result<std::collections::BTreeMap<String, bool>, ToggleError> {
-        let s = self.favourites_source(want)?;
-        s.playlist_favorites().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+        let (s, by_id) = self.favourites_source(want)?;
+        let hearts = s.playlist_favorites().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
+        if by_id {
+            return Ok(hearts);
+        }
+        let own = self.own_store()?;
+        Ok(hearts.into_iter().map(|(name, on)| (own.key(&name), on)).collect())
     }
 
-    /// Makes a playlist a favourite or not (every copy on the server).
+    /// Makes a playlist (by id) a favourite or not (every copy on the server).
     pub async fn set_favorite(&self, id: &str, want: Option<&str>, on: bool) -> Result<(), ToggleError> {
-        let s = self.favourites_source(want)?;
-        s.set_playlist_favorite(id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+        let (s, by_id) = self.favourites_source(want)?;
+        let held = if by_id { id.to_string() } else { self.reach(id)?.name };
+        s.set_playlist_favorite(&held, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
     /// A new playlist holding these entries, in order (a playlist made from the queue, decision 0019). Returns the

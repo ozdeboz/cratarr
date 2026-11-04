@@ -237,7 +237,9 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
   // id, several as their tracks, each once, in their order (the owner, 2026-10-23: a playlist's and a multi-select's
   // Play and Shuffle too).
   const { playCollection } = await import('./play.svelte');
-  if (ids.length === 1) return playCollection({ kind: 'playlist', id: ids[0] }, mode, ids[0]);
+  // The queue is named by the playlists' names, never their ids (decision 0101: an id is its own, `pl-` and digits).
+  const nameOf = (id: string) => shownPlaylists().find((p) => p.id === id)?.name ?? id;
+  if (ids.length === 1) return playCollection({ kind: 'playlist', id: ids[0] }, mode, nameOf(ids[0]));
   let source = '';
   const seen = new Set<string>();
   const all: string[] = [];
@@ -247,7 +249,7 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
     for (const t of r.ids) if (!seen.has(t)) seen.add(t) && all.push(t);
   }
   if (!all.length) throw new Error('None of their tracks can be found.');
-  await playCollection({ kind: 'tracks', source, ids: all }, mode, ids.join(', '));
+  await playCollection({ kind: 'tracks', source, ids: all }, mode, ids.map(nameOf).join(', '));
 }
 
 /** Plays a playlist from one of its tracks (a tap on a row of its view, decision 0023): these tracks from `index`, here

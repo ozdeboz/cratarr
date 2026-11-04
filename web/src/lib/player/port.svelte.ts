@@ -293,7 +293,9 @@ const here: PlayerPort = {
       .filter((r) => r.id && !r.missing)
       .map((r) => ({ source, id: r.id!, name: r.name ?? '', artist: r.artist, album: r.album, album_id: null }));
     if (!named.length) throw new Error('None of its tracks can be found.');
-    here.playTracks(named, mode, id, source);
+    // The queue named by the playlist's name (its id is its own, decision 0101).
+    const name = (localState.view?.playlists ?? live.view?.playlists ?? []).find((p) => p.id === id)?.name ?? id;
+    here.playTracks(named, mode, name, source);
   },
   playTracks(tracks, how, name, _source, index = 0) {
     if (how === 'next' || how === 'last') enqueue(tracks, how);
