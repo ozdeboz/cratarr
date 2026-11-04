@@ -151,6 +151,16 @@
   const onward = (x: HealthItem) =>
     x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => viewOver(x.playlist!) } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  /** When its domain was last checked: the time today, else its day and time. */
+  const checkedAt = (t: number) => {
+    const d = new Date(t * 1000);
+    return d.toDateString() === new Date().toDateString()
+      ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  };
+  /** A check that could not be made (the server's `<domain>:check`): what went wrong is said in the panel itself, not
+   *  only behind its (i) (the owner, 2026-11-04: it said that the library could not be checked, and nothing more). */
+  const unchecked = $derived(!!f && f.key === `${f.domain}:check`);
   const clock = (ms: number | null) => (ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms / 1000) % 60)).padStart(2, '0')}` : '');
 
   /** Tracks are looked for here: an administrator, where the server can. */
@@ -457,9 +467,14 @@
       <!-- How it stands, and what it means behind its (i). -->
       <p class="state" class:urgent={p.urgent}>
         <Icon name={p.icon} size={20} />
-        <span>{f ? LEVEL[f.level] : p.urgent ? 'Critical' : 'Warning'}{#if f?.since}<span class="muted"> · since {since(f.since)}</span>{/if}</span>
-        {#if f?.detail || p.hint}<MoreInfo label={p.name} text={(f?.detail ?? p.hint)!} />{/if}
+        <span
+          >{f ? LEVEL[f.level] : p.urgent ? 'Critical' : 'Warning'}{#if f?.since}<span class="muted"> · since {since(f.since)}</span>{/if}{#if f && health.checked[f.domain]}<span
+              class="muted"> · checked {checkedAt(health.checked[f.domain])}</span
+            >{/if}</span
+        >
+        {#if (f?.detail && !unchecked) || p.hint}<MoreInfo label={p.name} text={(f?.detail ?? p.hint)!} />{/if}
       </p>
+      {#if unchecked && f?.detail}<Notice text={f.detail} />{/if}
       <!-- How much. -->
       {#if f && f.of && !record}
         <div class="meter" role="meter" aria-valuemin="0" aria-valuemax={f.of} aria-valuenow={f.count} aria-label={p.title}>

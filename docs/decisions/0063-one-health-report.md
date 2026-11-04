@@ -57,3 +57,20 @@ read its last hour there ("23 slow answers in the last hour"), so what comes and
 
 **Amended 2026-10-23 (the owner):** Home's tile is *System status*, not Needs you; the level the owner must act on is
 *critical* (`critical`), not `needs_you`.
+
+**Amended 2026-11-04 (the owner, for 0.16): broken or blind.** The owner's report on 0.15: a panel said only that "the
+library could not be checked", nothing of which library, when, or why, and such a thing is critical, not a warning.
+Asked which rule decides, the owner chose *broken or blind*:
+
+- `critical`: the music can't play right, or Cratarr can't see. Files that can't be read, are cut off or break off; a
+  check that could not run (`<domain>:check`); settings that can't be saved; a server out of reach.
+- `warning`: something is wrong but the music plays. Data that is incomplete (no year, genre, album artist, tags or
+  cover; tracks missing; lengths guessed), what retries by itself (a connection, MusicBrainz's too; a conversion), and
+  decisions waiting on the owner (better copies, records in two libraries at once).
+- `info`: worth knowing, as before.
+
+So a missing cover (critical since 2026-10-25), better copies and duplicates waiting, and MusicBrainz failing become
+warnings, and a check that could not run becomes critical. A finding's panel says when its domain was last checked
+(the report's `checked`), and a check that could not run says what went wrong in the panel itself, not only behind its
+(i).
+
