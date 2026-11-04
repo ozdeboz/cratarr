@@ -4,8 +4,8 @@
 // the output's own timestamp through what each block was read from ([heardMs]), never the clock. Only in a browser:
 // in the app its own player plays.
 import tapeUrl from '../wasm/tape.wasm?url';
-import { Marks, WORKERS, type Ended, type Mark } from './head';
-import type { Motion } from './head.worklet';
+import { Marks, WORKERS, madeIn, type Ended, type Mark, type Motion, type TapeWasm } from './head';
+import type { DeckWasm } from './deck';
 import workletUrl from './head.worklet.ts?worker&url';
 
 export type { Motion };
@@ -18,8 +18,10 @@ export const tape = $state({ ready: null as string | null, loading: null as stri
  *  on into the next track with the motion. */
 export type LetGo = { atMs: number; to: number; brakeMs: number };
 let letGone: LetGo | null = null;
-/** The context's frame a let-go reading reaches its stand (or its new speed) at the ear; null before. */
-let arrivedFrame: number | null = null;
+/** What a reading is told once it is heard to have done what it is for (a tap landed, a spin-up at its speed, a let-go
+ *  at its new speed), and the timer to the ear's frame it is heard at. */
+let onDone: (() => void) | null = null;
+let doneTimer: ReturnType<typeof setTimeout> | null = null;
 
 let ctx: AudioContext | null = null;
 let node: AudioWorkletNode | null = null;
@@ -27,6 +29,19 @@ let out: GainNode | null = null;
 let workers: Worker[] = [];
 let marks: Marks | null = null;
 let ended: ((why: Ended, motionMs: number) => void) | null = null;
+
+/** tape.wasm's bytes and its instance here (the deck's machine, and what a let-go would come to), made once. */
+let bytesMade: Promise<ArrayBuffer> | null = null;
+let mine: (TapeWasm & DeckWasm) | null = null;
+const engineBytes = () => (bytesMade ??= fetch(tapeUrl).then((r) => r.arrayBuffer()));
+
+/** The engine on the page's own thread: the deck's machine is in it (lib/tape/deck). */
+export async function engine(): Promise<TapeWasm & DeckWasm> {
+  if (mine) return mine;
+  const bytes = await engineBytes();
+  mine ??= (await WebAssembly.instantiate(bytes.slice(0))).instance.exports as unknown as TapeWasm & DeckWasm;
+  return mine;
+}
 
 /** The head's context and its worklet, made once (a context starts suspended until a press resumes it). */
 async function head(): Promise<{ ctx: AudioContext; node: AudioWorkletNode; out: GainNode }> {
@@ -37,7 +52,7 @@ async function head(): Promise<{ ctx: AudioContext; node: AudioWorkletNode; out:
   const o = c.createGain();
   n.connect(o).connect(c.destination);
   let engineReady: (ok: boolean) => void = () => {};
-  const engine = new Promise<boolean>((resolve) => (engineReady = resolve));
+  const worklet = new Promise<boolean>((resolve) => (engineReady = resolve));
   n.port.onmessage = (e: MessageEvent) => {
     const m = e.data;
     if (m?.type === 'marks') for (const k of m.marks as Mark[]) marks?.add(k);
@@ -45,16 +60,16 @@ async function head(): Promise<{ ctx: AudioContext; node: AudioWorkletNode; out:
       tape.standsAt = typeof m.place === 'number' && m.when >= 0 ? m.place : null;
       if (letGone && typeof m.atMs === 'number') letGone.atMs = m.atMs;
     }
-    if (m?.type === 'arrived' && typeof m.frame === 'number') arrivedFrame = m.frame;
+    if (m?.type === 'done' && typeof m.frame === 'number') doneHeardAt(m.frame);
     if (m?.type === 'ended') ended?.(m.why as Ended, typeof m.motionMs === 'number' ? m.motionMs : 0);
     if (m?.type === 'engine') engineReady(m.ready === true);
   };
   // The engine (tape.wasm), instantiated in the worklet from its bytes (no fetch there), there before any reading; and
-  // here too, for what a let-go would come to before it is made ([landingIf]).
-  const bytes = await (await fetch(tapeUrl)).arrayBuffer();
-  mine = (await WebAssembly.instantiate(bytes.slice(0))).instance.exports as unknown as Engine;
+  // here too (the deck's machine, what a let-go would come to: [landingIf]).
+  await engine();
+  const bytes = (await engineBytes()).slice(0);
   n.port.postMessage({ type: 'engine', bytes }, [bytes]);
-  if (!(await engine)) throw new Error('the tape engine did not start');
+  if (!(await worklet)) throw new Error('the tape engine did not start');
   ctx = c;
   node = n;
   out = o;
@@ -112,7 +127,8 @@ export async function load(id: string, url: string): Promise<string | null> {
 
 /**
  * Reads the opened track from `fromMs` at `motion` (the engine's) at `gain`; `onEnded` once it stopped (by [stop], or
- * at either end of the track), with where its motion had got (its ms). `carried`: a motion carried on from the track
+ * at either end of the track), with where its motion had got (its ms); `done` once it is heard to have done what it is
+ * for (a tap landed, a spin-up at its speed, a let-go at its new speed). `carried`: a motion carried on from the track
  * before, from that ms of it, let go there already or not. False where the track is not ready.
  */
 export function start(
@@ -121,13 +137,15 @@ export function start(
   motion: Motion,
   gain: number,
   onEnded: (why: Ended, motionMs: number) => void,
+  done: () => void,
   carried?: { motionAt: number; letGo: LetGo | null },
 ): boolean {
   if (tape.ready !== id || !ctx || !node) return false;
   void ctx.resume();
   marks?.clear();
   tape.standsAt = null;
-  arrivedFrame = null;
+  doneOff();
+  onDone = done;
   letGone = carried?.letGo ?? null;
   ended = onEnded;
   node.port.postMessage({ type: 'start', fromMs, motion, gain, motionAt: carried?.motionAt ?? 0, letGo: carried?.letGo ?? undefined });
@@ -136,39 +154,45 @@ export function start(
 
 /** The reading's motion let go (now, by the frames the head read, unless `atMs` of its own time is given): it brakes
  *  from its own speed to `to` × (`brakeMs` at least, the engine's brake); [tape]'s `standsAt` says where it will stand,
- *  [arrived] when it is heard there. */
+ *  and the reading's `done` is told when it is heard at its new speed. */
 export function letGo(to: number, brakeMs: number, atMs?: number) {
   letGone = { atMs: atMs ?? -1, to, brakeMs };
-  arrivedFrame = null;
+  if (doneTimer) clearTimeout(doneTimer);
+  doneTimer = null;
   node?.port.postMessage({ type: 'let-go', atMs, to, brakeMs });
 }
 
 /** The reading's let-go as the head took it, for carrying it on into the next track; none before one. */
 export const letGoMade = (): LetGo | null => (letGone && letGone.atMs >= 0 ? { ...letGone } : null);
 
-/** Whether a let-go reading is heard at its stand (or its new speed) by now: the ear's frame, not the clock's. */
-export function arrived(): boolean {
-  const p = played();
-  return arrivedFrame !== null && p !== null && p >= arrivedFrame;
+/** The reading's `done` told when the ear reaches the context's `frame` (the output's own timestamp, not the clock). */
+function doneHeardAt(frame: number) {
+  if (doneTimer) clearTimeout(doneTimer);
+  const wait = () => {
+    const p = played();
+    if (!ctx || p === null || p >= frame) {
+      doneTimer = null;
+      const d = onDone;
+      onDone = null;
+      d?.();
+      return;
+    }
+    doneTimer = setTimeout(wait, Math.max(1, ((frame - p) * 1000) / ctx.sampleRate));
+  };
+  wait();
+}
+
+/** Nothing more told of the reading's done. */
+function doneOff() {
+  if (doneTimer) clearTimeout(doneTimer);
+  doneTimer = null;
+  onDone = null;
 }
 
 /** Its gain from now on (the page's volume, ducking, the track's level), followed without a click. */
 export function setGain(gain: number) {
   node?.port.postMessage({ type: 'gain', gain });
 }
-
-/** tape.wasm's calls, here as in the worklet (lib/tape/head.worklet). */
-type Engine = {
-  motion_tap(way: number, length: number, attack: number, release: number, floor: number, sign: number): number;
-  motion_hold(base: number, top: number, doubling: number, sign: number): number;
-  motion_steady(v: number): number;
-  motion_let_go(h: number, atMs: number, to: number, brakeMs: number): void;
-  motion_speed(h: number, tMs: number): number;
-  motion_gone(h: number, tMs: number): number;
-  motion_stands_at(h: number): number;
-  motion_free(h: number): void;
-};
-let mine: Engine | null = null;
 
 /**
  * Where a reading would stand were its motion let go at `motionMs` (to `to` ×, `brakeMs` at least), and when (its
@@ -178,12 +202,7 @@ let mine: Engine | null = null;
 export function landingIf(motion: Motion, motionAt: number, fromMs: number, motionMs: number, to: number, brakeMs: number): { place: number; when: number } | null {
   const x = mine;
   if (!x) return null;
-  const h =
-    motion.kind === 'tap'
-      ? x.motion_tap(motion.way, motion.length, motion.attack, motion.release, motion.floor, motion.sign)
-      : motion.kind === 'hold'
-        ? x.motion_hold(motion.base, motion.top, motion.doubling, motion.sign)
-        : x.motion_steady(motion.v);
+  const h = madeIn(x, motion);
   if (!h) return null;
   try {
     x.motion_let_go(h, motionMs, to, brakeMs);
@@ -195,8 +214,9 @@ export function landingIf(motion: Motion, motionAt: number, fromMs: number, moti
   }
 }
 
-/** The reading stopped, faded out first (no click). */
+/** The reading stopped, faded out first (no click); nothing more told of it. */
 export function stop() {
+  doneOff();
   node?.port.postMessage({ type: 'stop' });
 }
 

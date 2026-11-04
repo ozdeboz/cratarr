@@ -2,7 +2,7 @@
 // app's reader thread does it. It keeps the playing track's chunks itself and hands each one it wants to an idle
 // decoding worker (lib/tape/decoder.worker, over the ports it was given), and tells the page what each block was read
 // from (its marks) and when a reading ended. Its motion is the engine's speed, ms of its own time in.
-import { Chunks, Reader, type Chunk, type Ended } from './head';
+import { Chunks, Reader, madeIn, type Chunk, type Ended, type Motion, type TapeWasm } from './head';
 
 // The worklet's own scope (not in the DOM's types).
 declare const sampleRate: number;
@@ -12,38 +12,10 @@ declare class AudioWorkletProcessor {
   readonly port: MessagePort;
 }
 
-/** A motion as the page sends it, the engine's (tape.wasm, the rules crate's tape: a5's): a tap's, a hold's, or a
- *  steady speed (× the track's, signed). */
-export type Motion =
-  | { kind: 'steady'; v: number }
-  | { kind: 'tap'; way: number; length: number; attack: number; release: number; floor: number; sign: number }
-  | { kind: 'hold'; base: number; top: number; doubling: number; sign: number };
-
-/** tape.wasm's own calls: a motion is a handle (0: no free slot), its speed over its own time. */
-type TapeWasm = {
-  motion_tap(way: number, length: number, attack: number, release: number, floor: number, sign: number): number;
-  motion_hold(base: number, top: number, doubling: number, sign: number): number;
-  motion_steady(v: number): number;
-  motion_let_go(h: number, atMs: number, to: number, brakeMs: number): void;
-  motion_speed(h: number, tMs: number): number;
-  motion_gone(h: number, tMs: number): number;
-  motion_stands_at(h: number): number;
-  motion_free(h: number): void;
-};
 let engine: TapeWasm | null = null;
 
 /** A motion made in the engine: its handle, or none where there is no engine (a steady speed reads on without one). */
-function made(m: Motion): number {
-  if (!engine) return 0;
-  switch (m.kind) {
-    case 'tap':
-      return engine.motion_tap(m.way, m.length, m.attack, m.release, m.floor, m.sign);
-    case 'hold':
-      return engine.motion_hold(m.base, m.top, m.doubling, m.sign);
-    case 'steady':
-      return engine.motion_steady(m.v);
-  }
-}
+const made = (m: Motion): number => (engine ? madeIn(engine, m) : 0);
 
 /** Blocks between the marks sent to the page. */
 const MARKS_EVERY = 4;
@@ -58,13 +30,14 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
   private pending: { frame: number; at: number; v: number }[] = [];
   private blocks = 0;
   /** The reading's motion in the engine (0: none); where in the track it began (ms), at which of its motion's ms (a
-   *  motion carried on from the track before starts part-way); the motion's ms it arrives at once let go (-1: not let
-   *  go), and whether the page was told. */
+   *  motion carried on from the track before starts part-way); the motion's ms it has done what it is for at (a tap
+   *  landed, a spin-up at its speed, a let-go at its new speed; -1: never, a hold or a steady not let go), and whether
+   *  the page was told. */
   private motion = 0;
   private fromMs = 0;
   private motionAt = 0;
-  private arriveAt = -1;
-  private arrivedTold = false;
+  private doneAt = -1;
+  private doneTold = false;
 
   constructor() {
     super();
@@ -106,14 +79,11 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
         this.motion = h;
         this.fromMs = m.fromMs as number;
         this.motionAt = typeof m.motionAt === 'number' ? m.motionAt : 0;
-        this.arriveAt = -1;
-        this.arrivedTold = false;
+        this.doneTold = false;
         // A motion carried on from the track before, let go there: let go the same here.
         const lg = m.letGo as { atMs: number; to: number; brakeMs: number } | undefined;
-        if (h && engine && lg) {
-          engine.motion_let_go(h, lg.atMs, lg.to, lg.brakeMs);
-          this.arriveAt = engine.motion_stands_at(h);
-        }
+        if (h && engine && lg) engine.motion_let_go(h, lg.atMs, lg.to, lg.brakeMs);
+        this.doneAt = h && engine ? engine.motion_done_at(h) : -1;
         const steady = motion.kind === 'steady' ? motion.v : 0;
         const x = engine;
         const t0 = this.motionAt;
@@ -133,7 +103,8 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
         const at = typeof m.atMs === 'number' ? m.atMs : this.motionAt + this.reader.ms;
         engine.motion_let_go(this.motion, at, m.to as number, m.brakeMs as number);
         const when = engine.motion_stands_at(this.motion);
-        this.arriveAt = when;
+        this.doneAt = engine.motion_done_at(this.motion);
+        this.doneTold = false;
         const gone = when < 0 ? 0 : engine.motion_gone(this.motion, when) - engine.motion_gone(this.motion, this.motionAt);
         this.port.postMessage({ type: 'stands-at', when, atMs: at, place: when < 0 ? -1 : this.fromMs + gone });
         break;
@@ -182,10 +153,10 @@ class TapeHeadProcessor extends AudioWorkletProcessor {
     const why = r.fill(out[0], out[1]);
     const m = r.marks.last();
     if (m) this.pending.push({ frame: this.began + m.frame, at: m.at, v: m.v });
-    // Let go and arrived (at its stand, or at the speed it was let go to): the page told the frame it reaches the ear at.
-    if (this.arriveAt >= 0 && !this.arrivedTold && this.motionAt + r.ms >= this.arriveAt) {
-      this.arrivedTold = true;
-      this.port.postMessage({ type: 'arrived', frame: this.began + r.written });
+    // Done what it is for (landed, at its speed, at its let-go's): the page told the frame it reaches the ear at.
+    if (this.doneAt >= 0 && !this.doneTold && this.motionAt + r.ms >= this.doneAt) {
+      this.doneTold = true;
+      this.port.postMessage({ type: 'done', frame: this.began + r.written });
     }
     this.dispatch();
     if (why) this.ended(why);

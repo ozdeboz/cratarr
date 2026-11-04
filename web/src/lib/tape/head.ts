@@ -15,6 +15,47 @@
 // The page's output runs at its own rate (the context's), the track at its own: a frame given is `rate / outRate` of
 // the track's at speed 1; times are the output's.
 
+/** A motion as the page sends it, the engine's (tape.wasm, the rules crate's tape: a5's): a tap's, a hold's (flown
+ *  from 1×, or spun up from a stand over `attack` ms), a spin-up from a stand to `v` × over `attack` ms, or a steady
+ *  speed (× the track's, signed). */
+export type Motion =
+  | { kind: 'steady'; v: number }
+  | { kind: 'rise'; v: number; attack: number }
+  | { kind: 'tap'; way: number; length: number; attack: number; release: number; floor: number; sign: number }
+  | { kind: 'hold'; base: number; top: number; doubling: number; sign: number }
+  | { kind: 'hold-from-still'; base: number; top: number; doubling: number; attack: number; sign: number };
+
+/** tape.wasm's own calls: a motion is a handle (0: no free slot), its speed over its own time. */
+export type TapeWasm = {
+  motion_tap(way: number, length: number, attack: number, release: number, floor: number, sign: number): number;
+  motion_hold(base: number, top: number, doubling: number, sign: number): number;
+  motion_steady(v: number): number;
+  motion_rise(v: number, attack: number): number;
+  motion_hold_from_still(base: number, top: number, doubling: number, attack: number, sign: number): number;
+  motion_let_go(h: number, atMs: number, to: number, brakeMs: number): void;
+  motion_speed(h: number, tMs: number): number;
+  motion_gone(h: number, tMs: number): number;
+  motion_stands_at(h: number): number;
+  motion_done_at(h: number): number;
+  motion_free(h: number): void;
+};
+
+/** A motion made in the engine `x`: its handle (0: no free slot). */
+export function madeIn(x: TapeWasm, m: Motion): number {
+  switch (m.kind) {
+    case 'tap':
+      return x.motion_tap(m.way, m.length, m.attack, m.release, m.floor, m.sign);
+    case 'hold':
+      return x.motion_hold(m.base, m.top, m.doubling, m.sign);
+    case 'hold-from-still':
+      return x.motion_hold_from_still(m.base, m.top, m.doubling, m.attack, m.sign);
+    case 'rise':
+      return x.motion_rise(m.v, m.attack);
+    case 'steady':
+      return x.motion_steady(m.v);
+  }
+}
+
 /** Frames a chunk (Mixxx's 8192: about 0.19 s at 44.1 kHz). */
 export const CHUNK = 8192;
 /** Chunks kept (about 45 s, 8 MB at 16-bit stereo). */

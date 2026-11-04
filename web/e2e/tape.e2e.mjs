@@ -22,7 +22,7 @@ const reading = (fromMs, v, ms) =>
     async ({ fromMs, v, ms }) => {
       const { tape } = window.t;
       window.endedWhy = null;
-      const ok = tape.start('t', fromMs, { kind: 'steady', v }, 1, (why) => (window.endedWhy = why));
+      const ok = tape.start('t', fromMs, { kind: 'steady', v }, 1, (why) => (window.endedWhy = why), () => (window.doneHeard = true));
       await new Promise((r) => setTimeout(r, ms));
       return { ok, heard: tape.heardMs(), speed: tape.heardSpeed(), loud: window.t.loudness() };
     },
@@ -53,7 +53,7 @@ test('a hold let go brakes to a stand, the engine saying where', async () => {
   const r = await d.page.evaluate(async () => {
     const { tape } = window.t;
     window.endedWhy = null;
-    tape.start('t', 1000, { kind: 'hold', base: 2, top: 16, doubling: 500, sign: 1 }, 1, (why) => (window.endedWhy = why));
+    tape.start('t', 1000, { kind: 'hold', base: 2, top: 16, doubling: 500, sign: 1 }, 1, (why) => (window.endedWhy = why), () => (window.doneHeard = true));
     await new Promise((r) => setTimeout(r, 600));
     const before = tape.heardSpeed();
     tape.letGo(0, 300);
@@ -101,7 +101,7 @@ test('past the track’s end it ends, and says so', async () => {
   const why = await d.page.evaluate(async () => {
     const { tape } = window.t;
     window.endedWhy = null;
-    tape.start('t', 29_700, { kind: 'steady', v: 1 }, 1, (w) => (window.endedWhy = w));
+    tape.start('t', 29_700, { kind: 'steady', v: 1 }, 1, (w) => (window.endedWhy = w), () => (window.doneHeard = true));
     for (let i = 0; i < 80 && !window.endedWhy; i++) await new Promise((r) => setTimeout(r, 25));
     return window.endedWhy;
   });
@@ -112,7 +112,7 @@ test('its gain followed while it reads, without starting again', async () => {
   const r = await d.page.evaluate(async () => {
     const { tape, loudness } = window.t;
     window.endedWhy = null;
-    tape.start('t', 3000, { kind: 'steady', v: 1 }, 1, (w) => (window.endedWhy = w));
+    tape.start('t', 3000, { kind: 'steady', v: 1 }, 1, (w) => (window.endedWhy = w), () => (window.doneHeard = true));
     await new Promise((r) => setTimeout(r, 600));
     const full = loudness();
     tape.setGain(0.25);
@@ -129,7 +129,7 @@ test('a hold carried on from a track before starts where its motion had got', as
     const { tape } = window.t;
     const hold = { kind: 'hold', base: 2, top: 16, doubling: 500, sign: 1 };
     window.endedWhy = null;
-    tape.start('t', 1000, hold, 1, (w) => (window.endedWhy = w), { motionAt: 2000, letGo: null });
+    tape.start('t', 1000, hold, 1, (w) => (window.endedWhy = w), () => (window.doneHeard = true), { motionAt: 2000, letGo: null });
     await new Promise((r) => setTimeout(r, 400));
     return tape.heardSpeed();
   });
@@ -138,27 +138,58 @@ test('a hold carried on from a track before starts where its motion had got', as
   assert.equal(await stopped(), 'stopped');
 });
 
-test('a let-go says when it is heard arrived, standing where the engine foretold', async () => {
+test('a let-go says when it is heard done, standing where the engine foretold', async () => {
   const r = await d.page.evaluate(async () => {
     const { tape } = window.t;
     const hold = { kind: 'hold', base: 2, top: 16, doubling: 500, sign: 1 };
     window.endedWhy = null;
-    tape.start('t', 1000, hold, 1, (w) => (window.endedWhy = w));
+    window.doneHeard = false;
+    tape.start('t', 1000, hold, 1, (w) => (window.endedWhy = w), () => (window.doneHeard = true));
     await new Promise((r) => setTimeout(r, 500));
     const made = tape.letGoMade();
+    const heldDone = window.doneHeard;
     tape.letGo(0, 300);
     await new Promise((r) => setTimeout(r, 100));
     const lg = tape.letGoMade();
     const foretold = lg && tape.landingIf(hold, 0, 1000, lg.atMs, 0, 300);
-    let arrived = false;
-    for (let i = 0; i < 100 && !(arrived = tape.arrived()); i++) await new Promise((r) => setTimeout(r, 30));
+    for (let i = 0; i < 100 && !window.doneHeard; i++) await new Promise((r) => setTimeout(r, 30));
+    const done = window.doneHeard;
     await new Promise((r) => setTimeout(r, 200));
-    return { made, lg, foretold, standsAt: tape.tape.standsAt, arrived, heard: tape.heardMs() };
+    return { made, heldDone, lg, foretold, standsAt: tape.tape.standsAt, done, heard: tape.heardMs() };
   });
   assert.equal(r.made, null, 'none before a let-go');
+  assert.equal(r.heldDone, false, 'a hold is never done by itself');
   assert.ok(r.lg && r.lg.atMs > 0, `the let-go as the head took it: ${JSON.stringify(r.lg)}`);
-  assert.ok(r.arrived, 'arrived');
+  assert.ok(r.done, 'done');
   assert.ok(Math.abs(r.foretold.place - r.standsAt) < 1, `foretold ${r.foretold?.place}, standing ${r.standsAt}`);
   assert.ok(Math.abs(r.heard - r.standsAt) < 5, `heard at ${r.heard}`);
+  assert.equal(await stopped(), 'stopped');
+});
+
+test('a spin-up from a stand is heard done at its speed, and a tap when it lands', async () => {
+  const r = await d.page.evaluate(async () => {
+    const { tape } = window.t;
+    const wait = async (ms) => {
+      const t0 = performance.now();
+      for (let i = 0; i < 200 && !window.doneHeard; i++) await new Promise((r) => setTimeout(r, 20));
+      return window.doneHeard ? performance.now() - t0 : null;
+    };
+    window.doneHeard = false;
+    tape.start('t', 2000, { kind: 'rise', v: 1, attack: 400 }, 1, (w) => (window.endedWhy = w), () => (window.doneHeard = true));
+    const rose = await wait();
+    const riseSpeed = tape.heardSpeed();
+    tape.stop();
+    await new Promise((r) => setTimeout(r, 100));
+    window.doneHeard = false;
+    // 3 s of track over 1 s, landing still.
+    tape.start('t', 2000, { kind: 'tap', way: 3000, length: 1000, attack: 200, release: 200, floor: 0, sign: 1 }, 1, (w) => (window.endedWhy = w), () => (window.doneHeard = true));
+    const tapped = await wait();
+    await new Promise((r) => setTimeout(r, 150));
+    return { rose, riseSpeed, tapped, heard: tape.heardMs() };
+  });
+  assert.ok(r.rose !== null && r.rose >= 350, `the spin-up done after its attack: ${r.rose}`);
+  assert.ok(Math.abs(r.riseSpeed - 1) < 0.01, `at 1x: ${r.riseSpeed}`);
+  assert.ok(r.tapped !== null && r.tapped >= 900, `the tap done as it lands: ${r.tapped}`);
+  assert.ok(Math.abs(r.heard - 5000) < 30, `landed 3 s on: ${r.heard}`);
   assert.equal(await stopped(), 'stopped');
 });

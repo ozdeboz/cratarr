@@ -4547,7 +4547,8 @@ function headStart(fromSecs: number, motion: TapeMotion, gainDb: number, endsAtM
   const key = headKey(local.queue[local.index]);
   if (!key || tapeHead.tape.ready !== key) return false;
   const w: HeadWind = { index: local.index, key, fromSecs, motion, t0: performance.now(), endsAtMs, then, held, gainDb };
-  if (!tapeHead.start(key, fromSecs * 1000, motion, headGain(gainDb), (why) => headWind === w && headFinish(w, why !== 'stopped'))) return false;
+  const over = (edge: boolean) => headWind === w && headFinish(w, edge);
+  if (!tapeHead.start(key, fromSecs * 1000, motion, headGain(gainDb), (why) => over(why !== 'stopped'), () => over(false))) return false;
   headWind = w;
   audio.pause();
   tape.committed = false;
@@ -4574,7 +4575,6 @@ function headStep(w: HeadWind) {
   }
   const elapsed = performance.now() - w.t0;
   if (w.endsAtMs !== null && elapsed >= w.endsAtMs + HEAD_HEARD_AFTER_MS) return headFinish(w, false);
-  if (w.held?.letGo && tapeHead.arrived()) return headFinish(w, false);
 }
 
 /** The head wind over: the head stopped, the track's own player put where the head was last heard, what follows. */
