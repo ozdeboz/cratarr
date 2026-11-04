@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS app_queue (
   user TEXT NOT NULL, client TEXT NOT NULL, songs TEXT NOT NULL, current INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, PRIMARY KEY (user, client)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
+-- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `tracks`,
+-- `records`, `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
+CREATE TABLE IF NOT EXISTS migration_report (part TEXT PRIMARY KEY, at INTEGER NOT NULL, report TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
   name TEXT NOT NULL, album_artist TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
@@ -641,7 +644,51 @@ fn imported_of(r: &rusqlite::Row) -> rusqlite::Result<Imported> {
     })
 }
 
+/// One part of the 0.16 first start's migration report (decision 0101: rehearsed on staging, the report compared with
+/// production's copy), written in the caller's transaction where it has one, last in it. Every part reads alike: a common
+/// core, `tables` (`[{name, before, after}]`, each table's rows) and `unmatched` (`[{what, count, sample}]`, what found no
+/// match, with up to ten samples), the part's own fields beside them. Written again, a part replaces itself.
+pub(crate) fn put_migration_part(conn: &Connection, part: &str, report: &serde_json::Value) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO migration_report (part, at, report) VALUES (?1, ?2, ?3)",
+        params![part, now(), report.to_string()],
+    )?;
+    Ok(())
+}
+
 impl UserData {
+    /// A part of the migration report (`put_migration_part`), in a transaction of its own.
+    pub fn set_migration_part(&self, part: &str, report: &serde_json::Value) -> Result<()> {
+        put_migration_part(&self.db(), part, report)
+    }
+
+    /// Fields added to a part of the migration report written before (what a later step of it found); none: nothing.
+    pub fn add_to_migration_part(&self, part: &str, fields: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+        let db = self.db();
+        let Some(text) = db.query_row("SELECT report FROM migration_report WHERE part = ?1", [part], |r| r.get::<_, String>(0)).optional()? else {
+            return Ok(());
+        };
+        let mut report: serde_json::Value = serde_json::from_str(&text)?;
+        if let Some(map) = report.as_object_mut() {
+            map.extend(fields.clone());
+        }
+        db.execute("UPDATE migration_report SET report = ?2 WHERE part = ?1", params![part, report.to_string()])?;
+        Ok(())
+    }
+
+    /// Every part of the migration report, by part: when it ran (epoch s) and what it found.
+    pub fn migration_report(&self) -> Result<std::collections::BTreeMap<String, (i64, serde_json::Value)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT part, at, report FROM migration_report")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = std::collections::BTreeMap::new();
+        for row in rows {
+            let (part, at, report) = row?;
+            out.insert(part, (at, serde_json::from_str(&report).unwrap_or(serde_json::Value::Null)));
+        }
+        Ok(out)
+    }
+
     /// `file`: the database; `None` keeps it in memory.
     pub fn open(file: Option<&Path>) -> Result<Self> {
         let conn = crate::db::open(file)?;

@@ -2172,14 +2172,27 @@ impl PlaylistService {
     /// playlist is not brought in yet waits for it): its spoken names, and its suggestions' crate (`like:list:<key>`,
     /// in its owner's crates: what was turned down there and its fit).
     fn moved_to_ids(&self) {
+        let db = self.lib.playlists_db().clone();
+        // What moved, added to the migration report's playlists part (decision 0101) where anything did.
+        let told = |db: &crate::userdata::UserData, field: &str, n: usize| {
+            let fields = serde_json::Map::from_iter([(field.to_string(), serde_json::json!(n))]);
+            if let Err(e) = db.add_to_migration_part("playlists", &fields) {
+                tracing::warn!("the migration report: {field} not kept: {e:#}");
+            }
+        };
+        let mut spoken = 0;
         for (old, names) in self.sync.spoken() {
             if crate::userdata::playlists::is_id(&old) {
                 continue;
             }
             let Some(id) = self.moved(&old) else { continue };
-            if let Err(e) = self.sync.set_spoken(&id, &names).and_then(|_| self.sync.set_spoken(&old, &[])) {
-                tracing::warn!("the spoken names of {old} not moved to its id: {e:#}");
+            match self.sync.set_spoken(&id, &names).and_then(|_| self.sync.set_spoken(&old, &[])) {
+                Ok(()) => spoken += 1,
+                Err(e) => tracing::warn!("the spoken names of {old} not moved to its id: {e:#}"),
             }
+        }
+        if spoken > 0 {
+            told(&db, "spoken_names_moved", spoken);
         }
         let moved = self.lib.playlists_db().playlists_moved().unwrap_or_default();
         let mut crates = Vec::new();
@@ -2195,23 +2208,29 @@ impl PlaylistService {
             return;
         }
         tokio::spawn(async move {
+            let mut suggestions = 0;
             for (store, old, new) in crates {
                 let moved = async {
-                    let left = store.left_out(&old).await?;
+                    let (left, fit) = (store.left_out(&old).await?, store.fit(&old).await?);
+                    let any = !left.is_empty() || !fit.is_empty();
                     if !left.is_empty() {
                         store.set_left_out(&new, left).await?;
                         store.set_left_out(&old, crates::LeftOut::default()).await?;
                     }
-                    let fit = store.fit(&old).await?;
                     if !fit.is_empty() {
                         store.set_fit(&new, fit).await?;
                         store.set_fit(&old, crates::Fit::default()).await?;
                     }
-                    anyhow::Ok(())
+                    anyhow::Ok(any)
                 };
-                if let Err(e) = moved.await {
-                    tracing::warn!("{old}: what was turned down for it not moved to {new}: {e:#}");
+                match moved.await {
+                    Ok(true) => suggestions += 1,
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("{old}: what was turned down for it not moved to {new}: {e:#}"),
                 }
+            }
+            if suggestions > 0 {
+                told(&db, "suggestion_crates_moved", suggestions);
             }
         });
     }

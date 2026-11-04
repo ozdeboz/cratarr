@@ -1687,12 +1687,11 @@ export type ShelfSource = {
   library_info?: LibraryInfo[];
 };
 
-/** A used library of a server (decision 0034): the dot on its albums (none for the primary, Music), and its quality
- *  limit on the way in. */
 /** A used library of a server, as the page shows it (decision 0101 point 1: no roles; the list's order is the default,
  *  the first main library taking every fallback): a main library, an Incoming (its fetcher's), or someone's own music
- *  (`owner`; `mine`: the viewer's). `seen`: whether Cratarr sees its files (`seen_why` when not). `naming`: a main
- *  library's template, Keep and Move renaming by the target's. */
+ *  (`owner`; `mine`: the viewer's). `colour`: the dot on its albums (decision 0034); `quality`: its limit on the way in.
+ *  `seen`: whether Cratarr sees its files (`seen_why` when not). `naming`: a main library's template, Keep and Move
+ *  renaming by the target's. */
 export type LibraryInfo = {
   id: string;
   name: string;

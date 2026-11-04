@@ -331,6 +331,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/catalogue", get(catalogue_status))
             // Lost track ids started afresh (0101, the owner: a lost catalogue.sqlite stops Cratarr until this or a restore).
             .route("/api/catalogue/fresh-ids", post(catalogue_fresh_ids))
+            // The 0.16 first start's migration report (decision 0101), every part.
+            .route("/api/admin/migration", get(migration_report))
             .route("/api/health/report", get(health_report))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
@@ -4346,6 +4348,24 @@ async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::cat
     let c = app.library.catalogue();
     let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(status.map_err(ToggleError::from)?))
+}
+
+/// The 0.16 first start's migration report (decision 0101's rehearsal: compared with production's copy), by part:
+/// each when it ran (epoch s) and what it found (its `tables`, its `unmatched`, its own fields). None ran: no parts.
+async fn migration_report(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(serve) = app.served.clone() else { return Ok(Json(json!({ "parts": {} }))) };
+    let parts = tokio::task::spawn_blocking(move || serve.userdata.migration_report()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    let parts: serde_json::Map<String, serde_json::Value> = parts
+        .map_err(ToggleError::from)?
+        .into_iter()
+        .map(|(part, (at, mut report))| {
+            if let Some(m) = report.as_object_mut() {
+                m.insert("at".into(), json!(at));
+            }
+            (part, report)
+        })
+        .collect();
+    Ok(Json(json!({ "parts": parts })))
 }
 
 /// Lost track ids started afresh (`Library::fresh_track_ids`): where the new ids begin and what still names old tracks.
