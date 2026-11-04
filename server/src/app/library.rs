@@ -67,12 +67,23 @@ pub(super) fn derive_folders(live: &[Arc<Active>], last_music: Option<&str>) -> 
             .collect()
     };
     let up: Vec<&Arc<Active>> = live.iter().filter(|a| a.source.is_some()).collect();
-    let music = up.iter().flat_map(|a| found(a, &a.cfg.libraries.music)).next().or_else(|| last_music.map(str::to_string));
-    let mut incoming: Vec<String> =
-        up.iter().flat_map(|a| found(a, &a.cfg.libraries.incoming)).filter(|f| Some(f) != music.as_ref()).collect();
+    let main = up.iter().flat_map(|a| found(a, &a.cfg.libraries.music)).collect();
+    let incoming = up.iter().flat_map(|a| found(a, &a.cfg.libraries.incoming)).collect();
+    folders_of(main, incoming, last_music)
+}
+
+/// The catalogue's folders from the main and Incoming libraries' (0101 point 1: several main libraries, equal, the
+/// first taking every fallback; `last_music` stands in while none has answered): each folder once, a main library's
+/// never again as Incoming's.
+fn folders_of(main: Vec<String>, incoming: Vec<String>, last_music: Option<&str>) -> Folders {
+    let mut seen = std::collections::HashSet::new();
+    let main: Vec<String> = main.into_iter().filter(|f| seen.insert(f.clone())).collect();
+    let music = main.first().cloned().or_else(|| last_music.map(str::to_string));
+    let more_main: Vec<String> = main.into_iter().filter(|f| Some(f) != music.as_ref()).collect();
+    let mut incoming: Vec<String> = incoming.into_iter().filter(|f| Some(f) != music.as_ref() && !more_main.contains(f)).collect();
     incoming.sort();
     incoming.dedup();
-    Folders { music, incoming }
+    Folders { music, more_main, incoming }
 }
 
 /// The folders a server's libraries switched off leave out (decision 0024, amended 2026-10-23: a crate draws from
@@ -573,6 +584,20 @@ impl Library {
 #[cfg(test)]
 mod switched_off_tests {
     use super::*;
+
+    /// 0101 point 1: several main libraries, the first taking every fallback, each folder once, a main library's never
+    /// again as Incoming's; the catalogue's folders the main ones' first, in order.
+    #[test]
+    fn several_main_libraries_come_first_each_folder_once() {
+        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let f = folders_of(v(&["/m1", "/m2", "/m1"]), v(&["/i2", "/m2", "/i1"]), None);
+        assert_eq!(f.music.as_deref(), Some("/m1"));
+        assert_eq!(f.more_main, v(&["/m2"]));
+        assert_eq!(f.incoming, v(&["/i1", "/i2"]));
+        assert_eq!(f.all(), v(&["/m1", "/m2", "/i1", "/i2"]));
+        let f = folders_of(Vec::new(), v(&["/i1"]), Some("/old"));
+        assert_eq!(f.music.as_deref(), Some("/old"), "no main library has answered: the last one stands in");
+    }
 
     /// 0101: the user data remembers which catalogue its ids are of; another one is lost ids.
     #[test]

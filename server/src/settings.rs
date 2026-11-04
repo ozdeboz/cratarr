@@ -226,16 +226,19 @@ impl Default for Saved {
 /// Cratarr's folders, as found behind the libraries in use (decision 0009).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Folders {
-    /// Holds the playlists and the music that can go in them.
+    /// The first main library's folder (0101 point 1: the list's first takes every fallback): playlists' lines are made
+    /// from it (the catalogue's folder 0).
     pub music: Option<String>,
+    /// The other main libraries' folders, in the list's order (0101 point 1: main libraries are equal).
+    pub more_main: Vec<String>,
     /// Where the Incoming libraries' files are, when Cratarr can see them.
     pub incoming: Vec<String>,
 }
 
 impl Folders {
-    /// Music first, then incoming: the catalogue's folders.
+    /// The main libraries' first, in order, then Incoming's: the catalogue's folders.
     pub fn all(&self) -> Vec<String> {
-        self.music.iter().chain(&self.incoming).cloned().collect()
+        self.music.iter().chain(&self.more_main).chain(&self.incoming).cloned().collect()
     }
 }
 

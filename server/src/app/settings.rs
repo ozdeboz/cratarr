@@ -458,21 +458,7 @@ impl SettingsService {
             }
             next.push(Arc::new(a));
         }
-        let mut music_folders: Vec<String> = next
-            .iter()
-            .filter(|a| a.source.is_some())
-            .flat_map(|a| {
-                a.cfg.libraries.music.iter().filter_map(|id| a.placement.libraries.iter().find(|l| &l.id == id)?.folders.first().cloned())
-            })
-            .collect();
-        music_folders.sort();
-        music_folders.dedup();
-        if music_folders.len() > 1 {
-            return Err(ToggleError::BadSettings(format!(
-                "the Music libraries are in different folders ({}); playlists live in one",
-                music_folders.join(", ")
-            )));
-        }
+        // Several main libraries in folders of their own are fine (0101 point 1: equal; playlists live in the database).
         let music_folder = derive_folders(&next, self.lib.music().as_deref()).music;
         let to_save = settings::Saved {
             sources: merged,
