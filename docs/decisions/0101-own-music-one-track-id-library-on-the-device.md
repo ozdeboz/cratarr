@@ -9,8 +9,8 @@
   (Cratarr's own records)
 - Changes: 0084 (where a user's request lands, uploads land in an Incoming, who may Keep, a user who leaves), 0085's
   step 5 (Radio's picker joins the rules crate)
-- Open: where 632's recommendations meet earlier decisions, settled later (the owner: "Defer conflicts for later"; the
-  last section)
+- Settled: where 632's recommendations met earlier decisions (deferred 2026-11-03, settled by the owner 2026-11-04 by
+  question set; the last section). Changes 0084 there too (own music in the off-site backup).
 
 ## Context
 
@@ -47,12 +47,12 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
      library alike, with the target's naming and limit.
 3. **Already stored.** The duplicate and better-copy checks run against every library, switched on or not. A better
    copy is fetched as "another copy" of the same record (0100; below). What a request for an album already stored
-   does is open (below).
+   does is settled below: a shared-block copy into the requester's own music.
 4. **Room.** An allocation per user and a floor for the disk, with Health saying when the floor is reached, and a Keep
-   or an upload over the allocation refused with the reason. Their defaults and whom the floor stops are open (below).
+   or an upload over the allocation refused with the reason. Their defaults and whom the floor stops: settled below.
 5. **Uploads are a fetcher of their own** (changes 0084: not straight into one's own music). They land in an Incoming
    of their own beside Lidarr's and Soulseek's, and their Keep defaults to the uploader's own music. They are checked
-   and matched, then given the target's naming and limit at Keep. Their size is open (below).
+   and matched, then given the target's naming and limit at Keep. Their size: settled below.
 6. **No private own music.** As 0084 has it: everyone may switch anyone's own music on, and others' start off.
 7. **A user who leaves** (Remove, 0051). Their own music stays as an ownerless library that counts against nobody;
    Restore gives it back.
@@ -63,7 +63,7 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
    empty. Playlists, plays and favourites stay with their accounts. An open request keeps its requester as its Keep
    default.
 9. **Own music's folder:** one administrator's setting, with a subfolder per account made at its first use. On a NAS it
-   sits beside Music, mounted into the container. Whether it joins the off-site backup is open (below).
+   sits beside Music, mounted into the container. It joins the off-site backup (settled below).
 10. **Lidarr.**
     - Health says when Lidarr's root folder isn't the folder of Lidarr's Incoming. The root folder is Connections'
       choice, else its artists'. The fix sets Connections' root folder to Incoming's one, where Lidarr has it.
@@ -109,7 +109,7 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
       A play with nobody signed in is counted on the device, and scrobbled only by the no-account side's own services.
     - A Play On play is the sender's account's, and Home Assistant's are its key's account's. Plays made by hand on a
       shared player count to the account signed in there; guests have no account. Who scrobbles a Play On play for an
-      account its player does not hold is open (below).
+      account its player does not hold: settled below.
 
 ### Offline
 
@@ -205,30 +205,43 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
   - the new database file in the nightly backup.
 - Other Subsonic apps and Kodi see a fresh library once; Cratarr's own devices start fresh once.
 
-## Open: where the recommendations meet earlier decisions (for later)
+## Settled: where the recommendations met earlier decisions
 
 The owner, 2026-11-03: "Defer conflicts for later". 632's recommendations for the last three groups were made without
-0084, 0085 and 0091 at hand. Where they differ, both sides stay here until the owner settles them, before the part is
-built.
+0084, 0085 and 0091 at hand. Both sides stood here until the owner settled them, by question set, on 2026-11-04.
 
 - **Approval.** 0084: a user's want goes in by itself while they have room in their allocation, with no approval. This
   record's question 2 spoke of an approved request (0070's approval; 0099's amendment: Soulseek takes only approved
   Requests).
+  - Settled: **as 0084 has it.** A user's request is approved by itself while their room holds it. The account's
+    "auto-approve" permission goes; "may request" stays. Out of room, the request waits in Requests for an
+    administrator's yes, saying their room is full; approved, it goes over their allocation.
 - **A request for an album already stored.**
   - 0084: it is put into the requester's own music as a shared-block copy, with no fetch and no space.
   - The recommendation: it shows "In <library>" in place of Want, and Want stays only for a better copy.
+  - Settled: **as 0084 has it,** a shared-block copy (the NAS's volume is btrfs). One record, two copies (a copy: one
+    folder of the record's audio files), listed once. The record's tags and cover are written into **every** copy's
+    files; a file written takes room of its own.
 - **Room.**
   - 0084: 100 GB per user by default, shared-block copies free. Below 200 GB free, only users' wants and uploads
     pause, the owner's own fetches go on, and the owner is told through Home Assistant.
   - The recommendation: no allocation by default, and the floor stops all fetching and uploads.
+  - Settled: **0084's numbers,** set per user on the account page. A request counts against its user's room from when
+    it lands in Incoming; rejecting or deleting it frees the room.
 - **Uploads' size.** 0084: resumable pieces, no cap per upload. The recommendation: one album at a time.
+  - Settled: **as 0084 has it.** Each record found in an upload is its own item in Uploads' Incoming, with its checks.
 - **Own music in the off-site backup.**
   - 0084: not backed up, so uploads that exist nowhere else are lost with the NAS (the owner's choice).
   - The recommendation: own music's folder joins the off-site copy.
+  - Settled: **it joins the off-site copy** (changes 0084), beside Music's mirror, a change in the NAS's repository at
+    the release. Shared-block copies of records in Music's mirror are left out (Cratarr keeps their list for the
+    backup); a copy whose original leaves Music is its own from then on, and backed up.
 - **A Play On play for an account its player does not hold.**
   - 0091: the player it plays on scrobbles, never the device that started it.
   - With sign-ins per account on the device (15), that player may not hold the sender's sign-in. The recommendation:
     the sending device scrobbles it then.
+  - Settled: **as 0091 has it.** Only the player scrobbles: such a play counts in Cratarr but is not scrobbled, unless
+    that account scrobbles through the server.
 - **How the app runs the rules crate.** *Settled 2026-11-03 (the owner, in claude-db's session): as 0085 has it.*
   - 0085: natively, through UniFFI (the desktop app natively).
   - The recommendation: one WebAssembly build for the page and the app, native only if it misses the budget.

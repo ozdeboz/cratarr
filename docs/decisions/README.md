@@ -302,7 +302,7 @@ by a later record that says so in its header. A new decision takes the next numb
   accepted, for 0.16; libraries in list order, requests through Incoming into one's own music, the catalogue's track id
   served once switched, downloads with a holder per account and caches hidden at sign-out, the whole index with vectors
   and fits offline, Radio's picker in the rules crate; one migration at first start, rehearsed; two previews. Where it
-  meets 0084, 0085 and 0091, open for later.
+  met 0084, 0085 and 0091, settled by the owner 2026-11-04.
   Amended 2026-11-03: 0102's tape engine joins 0.16 and the rules crate's move.
 - [0102: The tape engine on the device](0102-the-tape-engine-on-the-device.md): accepted, for 0.16; every wind's sound
   made where it is heard, from the track decoded in memory (the playing track only), the engine's arithmetic in the
