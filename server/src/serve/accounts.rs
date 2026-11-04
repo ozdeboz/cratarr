@@ -81,6 +81,7 @@ fn devices_of(serve: &Serve, user: &str) -> Vec<serde_json::Value> {
 fn view(serve: &Serve, u: &User, current: Option<&str>) -> serde_json::Value {
     json!({
         "name": u.name, "display_name": u.display_name, "admin": u.admin, "active": u.active, "directory": u.directory, "permissions": u.permissions,
+        "own_library": serve.own_music().map(|o| o.join(&u.name)).filter(|p| p.is_dir()).map(|p| p.display().to_string()),
         "app_password": !u.password.is_empty(), "devices": devices_of(serve, &u.name), "sessions": sessions_of(serve, &u.name, current),
     })
 }

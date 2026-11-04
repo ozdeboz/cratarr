@@ -1344,7 +1344,7 @@ export const setAppPassword = (password: string) =>
   request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
 /** Every user, for the administrators' Users panel: their profile, permissions, devices, sign-ins. `directory`: an
  *  account from the directory (its name and role set there); else Cratarr's own (decision 0051, amended 2026-10-19). */
-export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[] };
+export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null };
 export const getUsers = () => request<{ users: User[] }>('/api/users').then((r) => r.users);
 const putJson = (url: string, body: unknown) => request<void>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const userUrl = (name: string, what: string) => `/api/users/${encodeURIComponent(name)}/${what}`;
@@ -2480,6 +2480,8 @@ export const moveAlbum = (source: string, album: string, to: string, year?: stri
   });
 /** Delete an album of any library, into that library's trash (Undo brings it back). */
 export const deleteAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, { method: 'POST' });
+/** Delete an album of someone's own music from the Users panel: an administrator's, only there. */
+export const deleteOwnAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete-own`, { method: 'POST' });
 
 /** What Replace would do with an upgrade: the album in Music it replaces, how many of its tracks the new files take
  * over, new tracks, and where it goes; or why not (`unmatched`: old tracks without a match, by title). */

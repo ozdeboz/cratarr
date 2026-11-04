@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::incoming::VerdictView;
 use super::{App, KeepPreview, KeepResult, ToggleError};
-use super::library::epoch_now;
+use super::library::{Active, epoch_now};
 use crate::settings::{LibraryKind, Quality, YOUR_MUSIC};
 use crate::source;
 
@@ -24,8 +24,9 @@ fn may_delete(kind: Option<LibraryKind>, mine: bool, admin: bool) -> bool {
 
 /// Why a record may not move, if so. Out of Incoming it is added: to where it goes by default, or by an administrator to
 /// a main library or their own music. Between other libraries only an administrator moves one, and into or out of own
-/// music it would be a copy (the owner, 2026-11-04), which comes with records and copies.
-fn move_refused(from: Option<LibraryKind>, to: Option<LibraryKind>, admin: bool, keepable: bool, default: bool, viewers_own: bool) -> Option<&'static str> {
+/// music it would be a copy (the owner, 2026-11-04), which comes with records and copies; but the music of someone who
+/// left (`left`) moves into a main library, as the account's page asks (0101 point 7).
+fn move_refused(from: Option<LibraryKind>, to: Option<LibraryKind>, admin: bool, keepable: bool, default: bool, viewers_own: bool, left: bool) -> Option<&'static str> {
     if from == Some(LibraryKind::Incoming) {
         if !keepable {
             return Some("That isn't yours to add");
@@ -34,6 +35,9 @@ fn move_refused(from: Option<LibraryKind>, to: Option<LibraryKind>, admin: bool,
     }
     if !admin {
         return Some("Moving between libraries is the administrators'");
+    }
+    if left && to == Some(LibraryKind::Main) {
+        return None;
     }
     (from == Some(LibraryKind::Own) || to == Some(LibraryKind::Own) || viewers_own).then_some("A copy into or out of own music isn't here yet")
 }
@@ -117,7 +121,19 @@ pub struct AlbumsView {
     pub music: Option<String>,
 }
 
+/// Someone's own music before its first use, as the list shows it: there to add to, its folder made then.
+fn own_to_be(a: &Active, id: String, name: String, owner: String, mine: bool) -> LibraryView {
+    let used = a.libraries();
+    let colour = crate::settings::colour_among(used.iter().map(|u| (u.id.as_str(), u.kind)).chain([(id.as_str(), LibraryKind::Own)]), &id, None);
+    LibraryView { id, name, kind: "own", fetcher: None, owner: Some(owner), mine, colour, quality: LibraryKind::Own.quality(), seen: true, seen_why: None, naming: None }
+}
+
 impl App {
+    /// Whether `account` is one here, not removed (0101 point 7: its own music stays, ownerless and no target).
+    fn account_on(&self, account: &str) -> bool {
+        self.served.as_ref().is_none_or(|s| s.users.get(account).is_some_and(|u| u.active))
+    }
+
     /// Every server with used libraries (or only `want`): all their albums in one list, with their facts.
     pub async fn albums(&self, want: Option<&str>) -> AlbumsView {
         let (collection, incoming) = tokio::join!(self.collection.list(want), self.incoming.list(want));
@@ -141,7 +157,7 @@ impl App {
                 let i = incoming.sources.iter().find(|s| s.id == id);
                 let active = live.iter().find(|(a, _)| a.cfg.id == id).map(|(a, _)| a.clone());
                 let libraries: Vec<String> = c.iter().flat_map(|c| c.libraries.clone()).chain(i.iter().flat_map(|i| i.libraries.clone())).collect();
-                let library_info = active
+                let mut library_info: Vec<LibraryView> = active
                     .as_ref()
                     .map(|a| {
                         let used = a.libraries();
@@ -150,7 +166,7 @@ impl App {
                             .map(|l| {
                                 let placed = a.placement.libraries.iter().find(|p| &p.id == l);
                                 let seen = placed.is_some_and(|p| !p.folders.is_empty());
-                                let owner = used.iter().find(|u| &u.id == l).and_then(|u| u.owner.clone());
+                                let owner = used.iter().find(|u| &u.id == l).and_then(|u| u.owner.clone()).filter(|o| self.account_on(o));
                                 let mine = owner.is_some() && owner == viewer;
                                 LibraryView {
                                     id: l.clone(),
@@ -169,9 +185,7 @@ impl App {
                             .collect();
                         // The viewer's own music before its first use: there to add to, its folder made then.
                         if let Some((v, id)) = viewer.as_ref().and_then(|v| Some((v, a.own_of(v)?))).filter(|(_, id)| !info.iter().any(|l| &l.id == id)) {
-                            let colour = crate::settings::colour_among(used.iter().map(|u| (u.id.as_str(), u.kind)).chain([(id.as_str(), LibraryKind::Own)]), &id, None);
-                            let quality = LibraryKind::Own.quality();
-                            info.push(LibraryView { id, name: YOUR_MUSIC.to_string(), kind: "own", fetcher: None, owner: Some(v.clone()), mine: true, colour, quality, seen: true, seen_why: None, naming: None });
+                            info.push(own_to_be(a, id, YOUR_MUSIC.to_string(), v.clone(), true));
                         }
                         info
                     })
@@ -191,10 +205,19 @@ impl App {
                     .filter_map(|al| {
                         let a = active.as_ref()?;
                         let set = al.library.as_deref().and_then(|l| a.cfg.libraries.get(l)).and_then(|l| l.keep_to.clone());
-                        let to = requester(al).and_then(|r| a.own_of(r)).or(set).or_else(|| first_main.clone())?;
+                        let to = requester(al).filter(|r| self.account_on(r)).and_then(|r| a.own_of(r)).or(set).or_else(|| first_main.clone())?;
                         Some((al.id.clone(), to))
                     })
                     .collect();
+                // A requester's own music before its first use: there to add to.
+                if let Some(a) = active.as_ref() {
+                    for to in keep_to.values() {
+                        if !library_info.iter().any(|l| &l.id == to) && !a.used(to) {
+                            let account = std::path::Path::new(to).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                            library_info.push(own_to_be(a, to.clone(), format!("{account}'s music"), account, false));
+                        }
+                    }
+                }
                 let may_delete_in = |l: &str| {
                     let Some(a) = active.as_ref() else { return false };
                     let mine = viewer.is_some() && a.libraries().iter().any(|u| u.id == l && u.owner == viewer);
@@ -263,6 +286,18 @@ impl App {
         self.incoming.delete_listed(source, a).await
     }
 
+    /// Delete an album of someone's own music from the Users panel: an administrator's, only there (the owner, 2026-11-04:
+    /// "not anywhere else than in a control panel").
+    pub async fn delete_own_album(&self, source: &str, album: &str) -> Result<super::DeleteResult, ToggleError> {
+        let (_, a) = self.listed_album(source, album).await?;
+        let live = self.library.live();
+        let own = a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.kind_of(l)) == Some(LibraryKind::Own);
+        if !own {
+            return Err(ToggleError::Refused("That is no one's own music".into()));
+        }
+        self.incoming.delete_listed(source, a).await
+    }
+
     /// Where a move of `a` goes, if the viewer may: `to`, someone's own music made now if this is its first use.
     async fn move_target(&self, source: &str, s: &AlbumsSourceView, a: &source::Album, to: &str) -> Result<String, ToggleError> {
         let live = self.library.live();
@@ -271,7 +306,9 @@ impl App {
         let viewers_own = viewer.as_ref().and_then(|v| on.own_of(v)).as_deref() == Some(to);
         let default = s.keep_to.get(&a.id).map(String::as_str) == Some(to);
         let from = a.library.as_deref().and_then(|l| on.kind_of(l));
-        if let Some(why) = move_refused(from, on.kind_of(to), crate::serve::access::administering(), s.keepable.contains(&a.id), default, viewers_own) {
+        let owner = on.libraries().into_iter().find(|u| a.library.as_deref() == Some(u.id.as_str())).and_then(|u| u.owner);
+        let left = owner.is_some_and(|o| !self.account_on(&o));
+        if let Some(why) = move_refused(from, on.kind_of(to), crate::serve::access::administering(), s.keepable.contains(&a.id), default, viewers_own, left) {
             return Err(ToggleError::Refused(why.into()));
         }
         if on.used(to) {
@@ -351,20 +388,24 @@ mod tests {
         use LibraryKind::{Incoming, Main, Own};
         let inc = Some(Incoming);
         // A user: their own requests, where they go by default, and nothing else.
-        assert_eq!(move_refused(inc, Some(Own), false, true, true, true), None);
-        assert!(move_refused(inc, Some(Main), false, true, false, false).is_some(), "not into a main library");
-        assert!(move_refused(inc, Some(Own), false, false, false, true).is_some(), "not another's request");
-        assert!(move_refused(Some(Main), Some(Main), false, false, false, false).is_some());
+        assert_eq!(move_refused(inc, Some(Own), false, true, true, true, false), None);
+        assert!(move_refused(inc, Some(Main), false, true, false, false, false).is_some(), "not into a main library");
+        assert!(move_refused(inc, Some(Own), false, false, false, true, false).is_some(), "not another's request");
+        assert!(move_refused(Some(Main), Some(Main), false, false, false, false, false).is_some());
         // An administrator: a main library, their own music, or the default (a requester's own music).
-        assert_eq!(move_refused(inc, Some(Main), true, true, false, false), None);
-        assert_eq!(move_refused(inc, None, true, true, false, true), None, "their own music before its first use");
-        assert_eq!(move_refused(inc, None, true, true, true, false), None, "a requester's before its first use");
-        assert!(move_refused(inc, Some(Own), true, true, false, false).is_some(), "not just anyone's own music");
-        assert_eq!(move_refused(Some(Main), Some(Main), true, false, false, false), None);
+        assert_eq!(move_refused(inc, Some(Main), true, true, false, false, false), None);
+        assert_eq!(move_refused(inc, None, true, true, false, true, false), None, "their own music before its first use");
+        assert_eq!(move_refused(inc, None, true, true, true, false, false), None, "a requester's before its first use");
+        assert!(move_refused(inc, Some(Own), true, true, false, false, false).is_some(), "not just anyone's own music");
+        assert_eq!(move_refused(Some(Main), Some(Main), true, false, false, false, false), None);
         // Into or out of own music it would be a copy.
-        assert!(move_refused(Some(Main), Some(Own), true, false, false, false).is_some());
-        assert!(move_refused(Some(Main), None, true, false, false, true).is_some());
-        assert!(move_refused(Some(Own), Some(Main), true, false, false, false).is_some());
+        assert!(move_refused(Some(Main), Some(Own), true, false, false, false, false).is_some());
+        assert!(move_refused(Some(Main), None, true, false, false, true, false).is_some());
+        assert!(move_refused(Some(Own), Some(Main), true, false, false, false, false).is_some());
+        // The music of someone who left moves into a main library, by an administrator.
+        assert_eq!(move_refused(Some(Own), Some(Main), true, false, false, false, true), None);
+        assert!(move_refused(Some(Own), Some(Main), false, false, false, false, true).is_some());
+        assert!(move_refused(Some(Own), Some(Own), true, false, false, false, true).is_some());
     }
 
     fn album(id: &str, library: &str, path: &str) -> source::Album {

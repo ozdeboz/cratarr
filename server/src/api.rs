@@ -261,6 +261,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
+            .route("/api/albums/{source}/{album}/delete-own", post(delete_own_album))
             .route("/api/albums/duplicates", get(album_duplicates))
             .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
             .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
@@ -3840,6 +3841,11 @@ struct MoveTo {
 
 async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     Ok(Json(app.delete_album(&source, &album).await?))
+}
+
+/// An album of someone's own music deleted from the Users panel (the administrators' only way, the owner, 2026-11-04).
+async fn delete_own_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+    Ok(Json(app.delete_own_album(&source, &album).await?))
 }
 
 async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<MoveTo>) -> Result<Json<crate::app::KeepPreview>, ApiError> {
