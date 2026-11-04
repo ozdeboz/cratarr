@@ -48,6 +48,12 @@
      has its band (the owner, 2026-10-25: by a third or a half, "whatever rounds well"): beside it 8 px (was 12), above
      and below it 6 px (was 8; half would leave the band 2 px from the bar). */
   --gutter-x: 8px;
+  /* A glass part's measures, the top-left's and the top-right's alike (lib/NavigationControls, lib/ContentControls; the
+     owner, 2026-11-04: the magnifier sat 4 px further in than back, "not enough is shared"): its round buttons, the
+     glass's room round them, its round ends. */
+  --glass-button: 44px;
+  --glass-pad: 2px;
+  --glass-round: 26px;
   --gutter-y: 6px;
   --float-blur: blur(16px) saturate(1.4);
   /* The room the floating glass row takes over a page's or a panel's top (App's .page-row): what is under it starts
@@ -95,6 +101,39 @@
 
 *::-webkit-scrollbar {
   display: none;
+}
+
+/* A glass part (lib/glassMotion: the lead, lib/NavigationControls, and the pill, lib/ContentControls) draws nothing
+   itself: its layers do, under what it holds. The thin glass (`glass`, what an extension is), the main glass over it
+   (`main`, where a part has one), and the shade (the ring and the shadow). One set of rules for every part, so no two
+   drift apart (the owner, 2026-11-04). */
+.glass-part {
+  position: relative;
+  isolation: isolate;
+}
+
+.glass-part > :is(.glass, .shade, .main) {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: var(--glass-round);
+  pointer-events: none;
+}
+
+.glass-part > .glass {
+  background: var(--float-thin-bg);
+  -webkit-backdrop-filter: var(--float-thin-blur);
+  backdrop-filter: var(--float-thin-blur);
+}
+
+.glass-part > .main {
+  background: var(--float-bg);
+  -webkit-backdrop-filter: var(--float-blur);
+  backdrop-filter: var(--float-blur);
+}
+
+.glass-part > .shade {
+  box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
 }
 
 /* A row's piece there is no room for (lib/glassRow: one decision for the whole row). */

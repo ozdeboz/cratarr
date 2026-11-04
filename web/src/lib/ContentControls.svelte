@@ -269,8 +269,8 @@
     seen.observe(p);
     return () => seen.disconnect();
   });
-  /** The lens and the pill's own room, beside the field. */
-  const LENS = 52;
+  /** The lens and the pill's own room, beside the field: app.css's --glass-button and twice --glass-pad. */
+  const LENS = 48;
   /** The field's least: the room the buttons it replaces took. */
   const fieldLeast = $derived(Math.max(folded - LENS, 140));
   /** Short of room the field gives way first, down to this, before the title is cut (the owner, 2026-11-02: "title
@@ -302,7 +302,7 @@
 </script>
 
 <span class="pill-row" bind:this={row}>
-  <div class="pill" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
+  <div class="pill glass-part" role="toolbar" aria-label="The page's tools" bind:this={pill} {@attach glassPart({ radius: 26 })}>
     <span class="shade" aria-hidden="true"></span><span class="glass" aria-hidden="true"></span><span class="main" aria-hidden="true"></span>
     <!-- Everywhere, while a search finds something there: the pill's extension (the owner, 2026-11-03: "thin glass, one
          part"), its thin back layer stretched from under the main glass's round end, as back's is for a title
@@ -433,60 +433,33 @@
     color: var(--accent-ink);
   }
 
-  /* A dark round-ended pill as Symfonium's, a little see-through and blurring what is under it: its glass and its shade
-     are layers under its buttons (lib/glassMotion moves them), the pill itself drawing nothing. */
+  /* A dark round-ended pill as Symfonium's, a little see-through and blurring what is under it: its layers are app.css's
+     .glass-part (the thin glass the extension is, the main glass over it behind the pill's own buttons, the shade),
+     moved by lib/glassMotion, the pill itself drawing nothing. */
   .pill {
-    position: relative;
-    isolation: isolate;
     display: flex;
     /* It may be narrower than its buttons want (the open field gives first): it ran past the window's edge. */
     min-width: 0;
-    padding: 2px;
+    padding: var(--glass-pad);
   }
 
-  .pill > .glass,
-  .pill > .shade,
-  .pill > .main {
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    border-radius: 26px;
-    pointer-events: none;
-  }
-
-  /* The back layer, the thin glass the extension is; the main glass over it behind the pill's own buttons. */
-  .pill > .glass {
-    background: var(--float-thin-bg);
-    -webkit-backdrop-filter: var(--float-thin-blur);
-    backdrop-filter: var(--float-thin-blur);
-  }
-
-  .pill > .main {
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
-  }
-
-  /* The globe on the extension: the main glass from past it (the pill's 2 px and its 48 px button). */
+  /* The globe on the extension: the main glass from past it (the pill's room and its button). */
   .pill:has(> .globe) > .main {
-    left: 50px;
+    left: calc(var(--glass-pad) + var(--glass-button));
   }
 
-  .pill > .shade {
-    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
-  }
-
-  /* Round, never squeezed by a narrow row (the owner, 2026-11-02: no button out of shape): the field gives first, then
-     the title beside back (lib/NavigationControls). */
+  /* Round as back is (lib/NavigationControls; the owner, 2026-11-04: the magnifier sat further in than back), never
+     squeezed by a narrow row (the owner, 2026-11-02: no button out of shape): the field gives first, then the title
+     beside back. */
   button {
     display: grid;
     flex: none;
     place-items: center;
-    width: 48px;
-    height: 44px;
+    width: var(--glass-button);
+    height: var(--glass-button);
     padding: 0;
     border: 0;
-    border-radius: 22px;
+    border-radius: calc(var(--glass-button) / 2);
     background: none;
     color: inherit;
     cursor: pointer;
