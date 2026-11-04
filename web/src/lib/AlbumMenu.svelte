@@ -23,9 +23,13 @@
     job: number | null;
   };
 
+  /** Its move into `to` as the menus say it (the owner, 2026-11-04): an Incoming record, or one into someone's own music,
+   *  is added to it ("Add to Your music", "Add to Music"); one between main libraries moves. */
+  export const adds = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind === 'incoming' || to.kind === 'own';
+
   /** For an album of the Library's list. One whose other copy is in a main library (an upgrade or a duplicate) does
    *  not move there again: an upgrade replaces it there (`replaceable_into`, decision 0101 point 2: any main library).
-   *  An Incoming album's Keep goes first where it goes by default (`keep_to`: the requester's own music, else the
+   *  An Incoming album's Add to goes first where it goes by default (`keep_to`: the requester's own music, else the
    *  first main library), the others after it in the list's order. */
   export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
     const deletable = s.deletable.includes(a.id);
@@ -416,6 +420,7 @@
   let ask = $state<false | Ask | 'really'>(false);
   /** The move's library. */
   let to = $state<LibraryInfo | null>(null);
+  const adding = $derived(!!to && adds(offer?.from ?? null, to));
   let keep = $state<KeepPreview | null>(null);
   let swap = $state<ReplacePreview | null>(null);
   /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
@@ -561,8 +566,8 @@
     act(async () => {
       if (!to) return;
       const name = to.name;
-      moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `Moved ${a.title} to ${name}.`);
-    }, `Could not move the ${word}`);
+      moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `${adding ? 'Added' : 'Moved'} ${a.title} to ${name}.`);
+    }, `Could not ${adding ? 'add' : 'move'} the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
@@ -684,7 +689,7 @@
     {/if}
   {:else if e === 'moveTo'}
     {#if me.admin && offer && offer.job === null}
-      {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
+      {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`${adds(offer.from, t) ? 'Add' : 'Move'} to ${t.name}`} onclick={() => askMove(t)} />{/each}
     {/if}
   {:else if e === 'replaceIn'}
     {#if me.admin && offer && offer.job === null && offer.replaceable}<MenuEntry icon="swap" label={`Replace in ${offer.replaceInto?.name ?? music}`} onclick={askReplace} />{/if}
@@ -729,17 +734,17 @@
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
       {:else if keep.refused}
-        <p class="ask">Can't move {a.title}: {keep.refused.detail}</p>
+        <p class="ask">Can't {adding ? 'add' : 'move'} {a.title}: {keep.refused.detail}</p>
       {:else}
         <p class="ask">
-          Move {a.title} into {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
+          {adding ? 'Add' : 'Move'} {a.title} {adding ? 'to' : 'into'} {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
             {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
       <div class="actions">
         {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>Move to {to?.name}</button>
+          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{adding ? 'Add' : 'Move'} to {to?.name}</button>
         {/if}
         <button onclick={onclose}>Cancel</button>
       </div>
