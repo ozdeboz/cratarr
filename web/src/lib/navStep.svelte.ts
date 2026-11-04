@@ -40,15 +40,23 @@ export function leaveOnArrival(leave: Leave, moved = false, until?: string) {
 /** How soon a step that moved nothing (what it opens shows already: an album viewed under the player) lets the player
  *  go all the same. */
 const STILL_MS = 150;
-/** From the player over the page: it closes once what was opened shows (it covered it meanwhile), or at once where that
- *  shows already. */
+/** How long the player waits at most for what it opened to show: past it, it goes all the same (the owner, 2026-11-03:
+ *  after Go to album the player did not even close). */
+const PLAYER_MS = 1000;
+/** From the player over the page: it closes once what was opened shows (it covered it meanwhile), at once where that
+ *  shows already, and in any case within PLAYER_MS: a panel slow to say it shows (still reading, or one that cannot)
+ *  never keeps the player over what it sent you to. */
 export function leavePlayer() {
   leaveOnArrival({ player: true });
+  const go = () => {
+    if (pending?.leave.player) pending = { ...pending, leave: { ...pending.leave, player: false } };
+    for (const f of letGo) f({ player: true });
+  };
   setTimeout(() => {
     if (!pending || pending.to || !pending.leave.player) return;
-    pending = { ...pending, leave: { ...pending.leave, player: false } };
-    for (const f of letGo) f({ player: true });
+    go();
   }, STILL_MS);
+  setTimeout(go, PLAYER_MS);
 }
 
 if (typeof window !== 'undefined') {

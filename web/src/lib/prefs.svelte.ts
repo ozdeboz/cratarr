@@ -1,6 +1,7 @@
 // Display preferences: per browser, kept in localStorage (which may be unavailable; then defaults apply and nothing
 // is remembered). Server-wide settings live on the server, see Settings.svelte.
 
+import { HOME_LISTS, type HomeList } from './servers/server';
 import { inApp, toApp } from './app.svelte';
 import { RECORD_ORDER_KEYS, type CrateView, type RecordOrder } from './crateRecords';
 import { LIST_WIDTHS } from './pageView.svelte';
@@ -187,6 +188,9 @@ export type Prefs = {
   /** One's own crates on Home (Settings › Home, 0.9.3; the owner, 2026-10-25): each a section of its own, a shelf of its
    *  albums, ordered and switched in Home's sections list. */
   homeCrates: boolean;
+  /** Home in a server's mode, per server (decision 0098; the owner, 2026-11-03: "only Home per mode"): its rows switched
+   *  on, in their order, by the server's id on this device; absent: all five, as they come. */
+  serverHome: Record<string, HomeList[]>;
   profileFoldAt: number;
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
@@ -236,7 +240,7 @@ export type Prefs = {
   insightsPeriod: 'week' | 'month' | 'year' | 'all';
   /** Listening's own sections (its second row): what was heard, or the taste it makes. */
   listeningView: 'history' | 'profile';
-  signals: { tracks: boolean; genre: boolean; artists: boolean };
+  signals: { tracks: boolean; genre: boolean; artists: boolean; sound: boolean };
   /** Genre territories on Insights' Map (the owner, 2026-10-24: a switch, off until turned on). */
   mapTerritories: boolean;
   /** The genres the Map's territories show, in the order ticked (their colours follow it); null: the most shared six. */
@@ -464,6 +468,7 @@ export const DEFAULTS: Prefs = {
   visualsAutoRun: 'fixed',
   flowBackdrop: 'wall',
   homeCrates: false,
+  serverHome: {},
   levelling: true,
   levelUnknown: 'typical',
   waveLevel: 'difference',
@@ -483,7 +488,7 @@ export const DEFAULTS: Prefs = {
   tracksCount: 'listed',
   insightsPeriod: 'all',
   listeningView: 'history',
-  signals: { tracks: true, genre: true, artists: true },
+  signals: { tracks: true, genre: true, artists: true, sound: true },
   mapTerritories: false,
   mapGenres: null,
   playerWidth: 400,
@@ -584,6 +589,9 @@ function read(): Prefs {
       if (typeof saved.visualsAutoStart === 'string' && saved.visualsAutoStart) p.visualsAutoStart = saved.visualsAutoStart;
       if (saved.visualsAutoRun === 'fixed' || saved.visualsAutoRun === 'track') p.visualsAutoRun = saved.visualsAutoRun;
       if (typeof saved.homeCrates === 'boolean') p.homeCrates = saved.homeCrates;
+      if (saved.serverHome && typeof saved.serverHome === 'object')
+        for (const [id, rows] of Object.entries(saved.serverHome as Record<string, unknown>))
+          if (Array.isArray(rows)) p.serverHome[id] = rows.filter((x): x is HomeList => HOME_LISTS.includes(x as HomeList));
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Array.isArray(saved.homeParts) && saved.homeParts.join(',') !== HOME_BEFORE)
         p.homeParts = saved.homeParts.filter(
@@ -667,7 +675,7 @@ function read(): Prefs {
       if (typeof saved.mapTerritories === 'boolean') p.mapTerritories = saved.mapTerritories;
       if (Array.isArray(saved.mapGenres) && saved.mapGenres.every((g: unknown) => typeof g === 'string')) p.mapGenres = saved.mapGenres;
       if (saved.signals && typeof saved.signals === 'object') {
-        for (const k of ['tracks', 'genre', 'artists'] as const) {
+        for (const k of ['tracks', 'genre', 'artists', 'sound'] as const) {
           if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];
         }
       }

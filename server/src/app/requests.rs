@@ -58,8 +58,9 @@ pub struct Listing {
     pub mine: Vec<View>,
     pub waiting: Option<Vec<View>>,
     pub may: Permissions,
-    /// A fetcher is connected (Lidarr, switched on).
-    pub fetcher: bool,
+    /// The fetchers connected, set up and switched on (decision 0099's amendment, the owner 2026-11-03: Lidarr and
+    /// Soulseek siblings, either or both): "lidarr", "soulseek". An approved request goes to each.
+    pub fetchers: Vec<&'static str>,
 }
 
 /// What the signed-in account may do with requests: its permissions, an administrator's all (signed in as one, not
@@ -146,19 +147,44 @@ async fn ask_for(app: &super::App, serve: &Serve, account: &str, s: Asked) -> Re
     Ok(r)
 }
 
-/// An approved request handed to the fetcher; what it said (or why it could not), kept on the request.
+/// The fetchers connected, Lidarr's given (`lidarr`): in the order the page lists them.
+async fn connected(lidarr: bool) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if lidarr {
+        out.push("lidarr");
+    }
+    if super::soulseek::connected().await {
+        out.push("soulseek");
+    }
+    out
+}
+
+/// An approved request handed to every fetcher connected (decision 0099's amendment): Lidarr told to want it, Soulseek
+/// woken to take it in (it reads the approved Requests itself; one without a release group it cannot judge); what each
+/// said (or why it could not), kept on the request.
 async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
-    let said = match fetcher(app) {
-        None => "Not handed over: Lidarr is not connected, or is switched off".to_string(),
-        Some(f) => match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
+    let lidarr = fetcher(app);
+    let soulseek = super::soulseek::connected().await;
+    let mut said = Vec::new();
+    if let Some(f) = lidarr {
+        said.push(match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
             Ok(said) => said,
             Err(e) => {
                 // In the log too (0.9.6: a Lidarr timeout the owner saw left no trace to follow).
                 tracing::warn!("request {}: not handed to Lidarr: {e:#}", r.id);
-                format!("Not handed over: {e:#}")
+                format!("Not handed over to Lidarr: {e:#}")
             }
-        },
-    };
+        });
+    }
+    if soulseek {
+        said.push(if r.release_group.is_some() {
+            super::soulseek::wake();
+            "Soulseek searches for it".to_string()
+        } else {
+            "Not handed over to Soulseek: no release group to judge it by".to_string()
+        });
+    }
+    let said = if said.is_empty() { "Not handed over: no fetcher is connected, or they are switched off".to_string() } else { said.join("; ") };
     if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
         tracing::warn!("request {}: what the fetcher said was not kept: {e:#}", r.id);
     }
@@ -226,7 +252,8 @@ pub async fn list(app: &super::App, serve: &Serve, account: &str) -> Result<List
         Some(w) => Some(views(f.as_deref(), lib.as_deref(), w).await),
         None => None,
     };
-    Ok(Listing { mine, waiting, may, fetcher: f.is_some() })
+    let fetchers = connected(f.is_some()).await;
+    Ok(Listing { mine, waiting, may, fetchers })
 }
 
 /// The account's requests by their suggestion's key, for Discover's cards: the newest of each album, with its state.

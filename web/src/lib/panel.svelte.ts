@@ -44,6 +44,16 @@ export function artistOf(viewed: string | null): { source: string; name: string;
   return at > 0 && at < rest.length - 1 ? { source: rest.slice(0, at), name: rest.slice(at + 1), tracks } : null;
 }
 
+/** A server's playlist in its mode (decision 0098): `server-playlist:<source>/<id>`, as an album is named. */
+const SERVER_PLAYLIST = 'server-playlist:';
+export const serverPlaylistSubject = (source: string, id: string) => `${SERVER_PLAYLIST}${source}/${id}`;
+export function serverPlaylistOf(viewed: string | null): { source: string; id: string } | null {
+  if (!viewed?.startsWith(SERVER_PLAYLIST)) return null;
+  const rest = viewed.slice(SERVER_PLAYLIST.length);
+  const at = rest.lastIndexOf('/');
+  return at > 0 && at < rest.length - 1 ? { source: rest.slice(0, at), id: rest.slice(at + 1) } : null;
+}
+
 /** A crate, its builder, an album or an artist: a subject of one, without tabs (decision 0025). */
 /** A playlist being made: the panel's edit mode, with no playlist yet (New playlist, as `crate-new` is New crate). */
 export const NEW_PLAYLIST = 'playlist-new';
@@ -198,7 +208,13 @@ function guard() {
   const has = !!history.state?.panelGuard;
   if (want && !has) {
     at = key();
-    history.pushState({ ...(history.state ?? {}), panelGuard: true, trail, pk: at }, '', location.href);
+    // Over the player's own step (App: the player over everything, which a panel opened from it leaves): in its place,
+    // not on it, so the player closing takes no step back over the panel (the owner, 2026-11-03: Go to album from the
+    // player closed the album it opened, and showed the page).
+    const { player, ...rest } = (history.state ?? {}) as Record<string, unknown>;
+    const st = { ...rest, panelGuard: true, trail, pk: at };
+    if (player) history.replaceState(st, '', location.href);
+    else history.pushState(st, '', location.href);
   }
   else if (!want && has && !dropping) {
     dropping = [];

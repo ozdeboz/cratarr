@@ -11,7 +11,7 @@
   import { port } from './player/port.svelte';
   import { prefs } from './prefs.svelte';
   import { ramping, tapeDir } from './ramping.svelte';
-  import { deckSpeed, turnTape, windable } from './localPlayer.svelte';
+  import { deckSpeed, heardDeckSpeed, turnTape, windable } from './localPlayer.svelte';
   import { drivenName, playOn } from './playOn.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
   import { DECK_H, DECK_W, deckScale, hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
@@ -70,6 +70,10 @@
     // The app's deck says its speed (0.9.14-2): that, as it is.
     const said = port().holdsQueue ? deckSpeed(now) : null;
     if (said !== null) return said;
+    // This page's own: as heard, measured on its sound's clock (2026-11-03, the owner: "No guessing anywhere"); the
+    // shapes below only before it has been heard long enough, or for a player driven from here.
+    const heard = heardDeckSpeed(now);
+    if (heard !== null) return heard;
     if (rewinding) return speed * 0.85 + moved * 0.15;
     if (ramping.dir) {
       if (mode !== 'vinyl') return 1;

@@ -63,8 +63,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   chosen by its tracks, every file gated), into Incoming for the intake card; Lidarr keeps watching artists and
   grabbing torrents. Cratarr's mode is Cratarr's own library, its libraries still
   switched on and off within it; each other server (a Jellyfin, a Subsonic server) is a mode of its own, with its
-  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. Wants the
-  owner's design choices first.
+  library and playlists, search and Cratarr's players, but no crates, Discover, Insights or Requests. The owner's
+  design choices: [0098](decisions/0098-modes-per-server.md) (2026-11-03: in the app, as Local; no second Cratarr
+  server in 0.15).
   With it, rhythm (the owner, 2026-11-02): four on the floor as a score (the share of beats a kick lands on, in the sub
   and bass bands' percussive hits, against the strikes between them) and the time signature from Beat this!'s
   downbeats (4/4, 3/4; odd meters less sure); measured in the analysis from then on, the library measured again at
@@ -74,7 +75,7 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
   sound alike; a switch beside shared tracks, genre and artists.
 - **0.16: each user's own music** ([0084](decisions/0084-each-users-own-music.md)), **the whole library's index on the
   device, and crates and the queue on the device** (offline first's fourth and fifth steps, one version: the owner,
-  2026-11-02, "17 sounds like 16 work"). Then all servers in one library, on the device (below), as a view over the
+  2026-11-02, "17 sounds like 16 work"); settled in [0101](decisions/0101-own-music-one-track-id-library-on-the-device.md). Then all servers in one library, on the device (below), as a view over the
   modes' indexes.
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.

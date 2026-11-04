@@ -70,6 +70,9 @@ object Downloads {
             .setReadTimeoutMs(60_000)
             .setAllowCrossProtocolRedirects(true)
         return ResolvingDataSource.Factory(http) { spec ->
+            // A server's track (decision 0098): its stand-in address made its stream here, with the kept sign-in, and
+            // nothing of Cratarr's with it.
+            Servers.resolve(app, spec.uri)?.let { return@Factory spec.withUri(it) }
             val uri = Reach.rewrite(app, spec.uri)
             val signed = spec.withUri(uri)
             // The session, and Play On's connection id (decision 0045), as the app's own requests carry them.
@@ -107,7 +110,7 @@ object Downloads {
     /** The owner's downloads: tracks as the page describes them, in the quality the settings say. */
     fun add(context: Context, tracks: JSONArray) {
         val prefs = Prefs(context)
-        val server = prefs.serverUrl?.trimEnd('/') ?: return
+        val server = prefs.serverUrl?.trimEnd('/')
         val copies = prefs.downloadQuality == Prefs.QUALITY_SMALLER
         // The order they were given in, kept: an album's tracks list as the album runs.
         val added = System.currentTimeMillis() * 1000
@@ -117,9 +120,13 @@ object Downloads {
             if (t.optString("source").isEmpty() || t.optString("id").isEmpty()) continue
             val key = keyOf(t)
             if (Previews.isPreview(key)) continue
-            // Another quality is another file: kept under its own name, so the two never mix.
-            val stored = if (copies) "$key#opus" else key
-            val uri = Uri.parse("$server/api/file/$key" + if (copies) "?as=opus" else "")
+            // A server's track (decision 0098, kept per server): its file as that server has it, under its stand-in
+            // address, never with its sign-in. Cratarr's: another quality is another file, kept under its own name.
+            val source = t.optString("source")
+            val ours = !source.startsWith(Servers.MODE_PREFIX)
+            if (ours && server == null) continue
+            val stored = if (copies && ours) "$key#opus" else key
+            val uri = if (ours) Uri.parse("$server/api/file/$key" + if (copies) "?as=opus" else "") else Servers.streamUri(source.removePrefix(Servers.MODE_PREFIX), t.optString("id"))
             val request = DownloadRequest.Builder(key, uri)
                 .setCustomCacheKey(stored)
                 .setData(JSONObject(t.toString()).apply { remove("entry"); remove("asked_by"); put("added", added + i) }.toString().toByteArray())

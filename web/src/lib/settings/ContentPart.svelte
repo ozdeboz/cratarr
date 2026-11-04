@@ -11,6 +11,13 @@
   import Item from './Item.svelte';
   import OrderList from './OrderList.svelte';
   import { localMode } from '../deviceMusic.svelte';
+  import { serverMode } from '../serverMode.svelte';
+  import { HOME_LIST_NAMES, HOME_LISTS, type HomeList } from '../servers/server';
+
+  // A server's mode (decision 0098; the owner, 2026-11-03: Home per mode): its Home is that server's rows, switched on
+  // and ordered here for it alone.
+  const server = $derived(serverMode());
+  const serverItems = HOME_LISTS.map((id) => ({ id, label: HOME_LIST_NAMES[id] }));
   import { LOCAL_PARTS } from '../localHome.svelte';
   import { offerReset } from './reset.svelte';
   import { contentItems, HOME, PROFILES } from './resetItems.svelte';
@@ -50,6 +57,12 @@
   }
 </script>
 
+{#if server}
+  {@const s = server}
+  <Group title="Home" more={`In ${s.name}'s mode, Home is its own lists.`}>
+    <OrderList items={serverItems} on={prefs.serverHome[s.id] ?? HOME_LISTS} label="Home's rows" onchange={(on: HomeList[]) => (prefs.serverHome[s.id] = on)} />
+  </Group>
+{:else}
 <Group title="Home" more="The first is the flow at the top, so it is one made of albums: Music for the moment, New for you, Blast from the past, Grave digging or Favourite albums.">
   {#snippet tail()}
     <OrderReset items={contentItems} section={HOME} label="Home" />
@@ -64,6 +77,8 @@
     unavailable={localMode() ? { has: (id) => !LOCAL_PARTS.includes(id), note: 'Needs your server' } : null}
   />
 </Group>
+
+{/if}
 
 <Group title="Music profiles">
   {#snippet tail()}

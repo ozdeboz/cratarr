@@ -6,8 +6,22 @@ import { copyLine, type Candidate, type Intake, type IntakeItem, type IntakeStat
 
 /** States still under way: the list is asked again while any is. */
 const UNDER_WAY: ReadonlySet<IntakeState> = new Set(['queued', 'searching', 'approved', 'fetching', 'checking']);
-/** States that are over: Clear finished takes them. */
-const OVER: ReadonlySet<IntakeState> = new Set(['none', 'failed', 'added', 'refused']);
+/** States that are over: Clear finished takes them. Not found is not (0.15: looked for again later, longer apart). */
+const OVER: ReadonlySet<IntakeState> = new Set(['failed', 'added', 'refused']);
+/** Where Search now is offered: not found, or gone wrong (0.15: the server looks for it again at once). */
+export const searchable = (item: IntakeItem) => item.state === 'none' || item.state === 'failed' || item.state === 'refused';
+
+/** When it is looked for again, said as a wait from `now` (epoch s): "in 4 hours", "tomorrow", "in 6 days"; none when
+ *  due. */
+export function againIn(due: number | undefined, now: number): string | null {
+  if (!due || due <= now) return null;
+  const h = Math.round((due - now) / 3600);
+  if (h < 1) return 'again within the hour';
+  if (h < 20) return `again in ${h} hour${h === 1 ? '' : 's'}`;
+  const d = Math.round(h / 24);
+  return d <= 1 ? 'again tomorrow' : `again in ${d} days`;
+}
+const setAside = (item: IntakeItem) => (item.set_aside?.length ? `${item.set_aside.length} set aside` : null);
 
 /** The copy that goes in for an item: the one picked for it while it is among its candidates, else the chosen one. */
 export function copyOf(item: IntakeItem, picked: string | undefined): Candidate | null {
@@ -22,7 +36,8 @@ export const tickable = (item: IntakeItem) => item.state === 'found' && item.can
 export const foundIds = (items: readonly IntakeItem[]) => items.filter(tickable).map((i) => i.id);
 
 /** Its row's line: the copy that would go in where found, else where it stands. */
-export function itemLine(item: IntakeItem, picked?: string): string {
+export function itemLine(item: IntakeItem, picked?: string, now = Math.floor(Date.now() / 1000)): string {
+  const said = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(' · ');
   switch (item.state) {
     case 'queued':
       return 'Waiting to be looked for';
@@ -33,9 +48,10 @@ export function itemLine(item: IntakeItem, picked?: string): string {
       return c ? copyLine(c) : 'Not found';
     }
     case 'none':
-      return 'Not found';
+      // Looked for again, longer apart (0.15): how often it found nothing and when it is next.
+      return said('Not found', item.misses && item.misses > 1 ? `${item.misses} times` : null, againIn(item.due, now), setAside(item));
     case 'failed':
-      return item.why || 'The search did not finish';
+      return said(item.why || 'The search did not finish', setAside(item));
     case 'approved':
       return 'To be added';
     case 'fetching':
@@ -45,7 +61,7 @@ export function itemLine(item: IntakeItem, picked?: string): string {
     case 'added':
       return 'Added';
     case 'refused':
-      return item.why || 'It did not pass the checks';
+      return said(item.why || 'It did not pass the checks', setAside(item));
   }
 }
 

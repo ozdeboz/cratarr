@@ -3,14 +3,14 @@
   // or several ticked ones' (lib/SeveralAlbums): what Cratarr found, set by hand household-wide. Settings' rows
   // (lib/settings/Group and Item) in a menu sheet: Type (a sheet of six: as Cratarr finds it and the five types), Year,
   // Secondary types and Genres each a step of their own, Classical a slim track of three (as Cratarr finds it, yes, no;
-  // the 0.10 Classical… sheet folded in). A row set by hand says so; several that differ say Mixed and are left alone
+  // the 0.10 Classical… sheet folded in); then (decision 0097, the words' hand layer) Styles, Moods and Tags, steps as
+  // Genres' is. A row set by hand says so; several that differ say Mixed and are left alone
   // until changed. Save sends only what changed (lib/recordEdit toSend), once; the Library reads itself again after.
-  import { albumView, getCrateAxes, setAlbumOverrides, type ListedAlbum } from './api';
+  import { albumView, setAlbumOverrides, type ListedAlbum } from './api';
   import { readLibrary } from './albums.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { prefs } from './prefs.svelte';
   import { plural } from './insights.svelte';
   import {
     RECORD_TYPES,
@@ -20,6 +20,10 @@
     classicalOfChoice,
     editableOf,
     secondaryLabel,
+    WORD_FIELD_NAME,
+    WORD_FIELDS,
+    WORD_KIND,
+    wordsOfView,
     isSecondary,
     shownOf,
     toSend,
@@ -27,34 +31,36 @@
     type ClassicalChoice,
     type OverrideSet,
     type RecordType,
+    type WordField,
   } from './recordEdit';
   import Seg from './Seg.svelte';
+  import WordsStep from './WordsStep.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
   import { toast } from './toast.svelte';
 
   let { source, albums, onclose }: { source: string; albums: ListedAlbum[]; onclose: () => void } = $props();
 
-  // One record's genres read as the sheet opens (the list does not carry them); several's are not asked for: their row
-  // leaves each its own until changed.
-  let genresRead = $state<string[] | null>(null);
+  // One record's words read as the sheet opens (the list does not carry them); several's are not asked for: their rows
+  // leave each its own until changed.
+  let wordsRead = $state<Record<WordField, string[]> | null>(null);
   $effect(() => {
     if (albums.length !== 1) return;
     const id = albums[0].id;
     let current = true;
     albumView(source, id).then(
-      (r) => current && (genresRead = r.genres),
+      (r) => current && (wordsRead = wordsOfView(r)),
       () => {},
     );
     return () => (current = false);
   });
-  const records = $derived(albums.map((a) => editableOf(a, albums.length === 1 ? genresRead : null)));
+  const records = $derived(albums.map((a) => editableOf(a, albums.length === 1 ? wordsRead : null)));
 
   let draft = $state<OverrideSet>({});
   const send = $derived(toSend(records, draft));
   const changed = $derived(Object.keys(send).length > 0);
 
-  let step = $state<'rows' | 'type' | 'year' | 'secondary' | 'genres'>('rows');
+  let step = $state<'rows' | 'type' | 'year' | 'secondary' | WordField>('rows');
 
   const SET = 'Set by hand';
   const FOUND = 'As Cratarr finds it';
@@ -82,33 +88,13 @@
   const secondaryOffered = SECONDARY_TYPES;
   const toggleSecondary = (v: string) => (draft.secondary = secondaryNow.includes(v) ? secondaryNow.filter((x) => x !== v) : [...secondaryNow, v]);
 
-  // Genres: the library's (the crate builder's genre values, most common first), the chosen first; a typed one added.
-  const genres = $derived(shownOf(records, draft, 'genres'));
-  const genresNow = $derived<string[]>((genres.mixed || genres.reset ? [] : (genres.value as string[] | null)) ?? []);
-  let known = $state<string[]>([]);
-  let find = $state('');
-  $effect(() => {
-    if (step !== 'genres' || known.length) return;
-    getCrateAxes(prefs.source || undefined).then(
-      (axes) => (known = axes.find((x) => x.key === 'genre')?.values ?? []),
-      () => {},
-    );
-  });
-  const genreChips = $derived.by(() => {
-    const q = find.trim().toLowerCase();
-    const rest = known.filter((g) => !genresNow.includes(g) && (!q || g.toLowerCase().includes(q)));
-    return [...genresNow, ...rest.slice(0, q ? 60 : 24)];
-  });
-  const toggleGenre = (g: string) => (draft.genres = genresNow.includes(g) ? genresNow.filter((x) => x !== g) : [...genresNow, g]);
-  function addTyped(e: KeyboardEvent) {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    const g = find.trim().replace(/\s+/g, ' ');
-    if (!g) return;
-    const has = known.find((k) => k.toLowerCase() === g.toLowerCase()) ?? g;
-    if (!genresNow.includes(has)) draft.genres = [...genresNow, has];
-    find = '';
-  }
+  // The words, a kind each (genres, styles, moods, tags), each a step of its own (lib/WordsStep).
+  const isWord = (x: string): x is WordField => (WORD_FIELDS as readonly string[]).includes(x);
+  const shownWords = $derived(Object.fromEntries(WORD_FIELDS.map((f) => [f, shownOf(records, draft, f)])) as Record<WordField, ReturnType<typeof shownOf<WordField>>>);
+  const nowOf = (f: WordField): string[] => {
+    const w = shownWords[f];
+    return (w.mixed || w.reset ? [] : (w.value as string[] | null)) ?? [];
+  };
   const listed = (v: string[], label: (x: string) => string = (x) => x) => (v.length ? (v.length > 2 ? `${v.slice(0, 2).map(label).join(', ')} +${v.length - 2}` : v.map(label).join(', ')) : '–');
 
   // Classical: three choices, a slim track.
@@ -164,15 +150,13 @@
         <Item name="Type" line={lineOf(type)} value={type.mixed || type.reset ? null : typeLabel(type.value as string | null)} onclick={() => (step = 'type')} />
         <Item name="Year" line={lineOf(year)} value={year.mixed || year.reset || year.value === null ? null : String(year.value)} onclick={openYear} />
         <Item name="Secondary types" line={lineOf(secondary)} value={secondary.mixed || secondary.reset ? null : listed(secondaryNow, secondaryLabel)} onclick={() => (step = 'secondary')} />
-        <Item
-          name="Genres"
-          line={genres.reset ? FOUND : albums.length > 1 && !('genres' in draft) ? 'Each its own' : lineOf(genres)}
-          value={genres.reset || (albums.length > 1 && !('genres' in draft)) ? null : listed(genresNow)}
-          onclick={() => (step = 'genres')}
-        />
+        {@render wordRow('genres')}
         <Item name="Classical" line={classical === '' ? 'Mixed' : classicalFound}>
           <Seg label="Classical" options={CLASSICAL_CHOICES} bind:value={() => classical, (v) => (draft.classical = classicalOfChoice(v))} />
         </Item>
+        {@render wordRow('styles')}
+        {@render wordRow('moods')}
+        {@render wordRow('tags')}
       </Group>
     </div>
   {:else if step === 'type'}
@@ -200,18 +184,17 @@
       {/each}
     </div>
     {#if anySet('secondary')}<MenuEntry icon="reset" label={FOUND} onclick={() => reset('secondary')} />{/if}
-  {:else if step === 'genres'}
-    <div class="step field">
-      <input type="search" placeholder="Find or add a genre" aria-label="Find or add a genre" bind:value={find} onkeydown={addTyped} />
-    </div>
-    <div class="step chips">
-      {#each genreChips as g (g)}
-        <button class="chip" aria-pressed={genresNow.includes(g)} onclick={() => toggleGenre(g)}>{g}</button>
-      {/each}
-    </div>
-    {#if anySet('genres')}<MenuEntry icon="reset" label={FOUND} onclick={() => reset('genres')} />{/if}
+  {:else if isWord(step)}
+    {@const f = step}
+    <WordsStep kind={WORD_KIND[f]} chosen={nowOf(f)} onchange={(v) => (draft[f] = v)} reset={anySet(f) ? { label: FOUND, onclick: () => reset(f) } : null} />
   {/if}
 </MenuSheet>
+
+{#snippet wordRow(f: WordField)}
+  {@const w = shownWords[f]}
+  {@const each = albums.length > 1 && !(f in draft)}
+  <Item name={WORD_FIELD_NAME[f]} line={w.reset ? FOUND : each ? 'Each its own' : lineOf(w)} value={w.reset || each ? null : listed(nowOf(f))} onclick={() => (step = f)} />
+{/snippet}
 
 <style>
   .rows {

@@ -181,6 +181,16 @@ class MainActivity : AppCompatActivity() {
         val data = intent.data ?: return null
         if (data.scheme != "cratarr" || data.host != "connected") return null
         val service = data.pathSegments.firstOrNull()?.takeIf { it.matches(Regex("[a-z]+")) } ?: return null
+        // This device's Last.fm (decision 0091): its token back, traded for the session here, off the main thread; the
+        // server's own sign-in never brings one.
+        data.getQueryParameter("token")?.takeIf { service == "lastfm" }?.let { token ->
+            val app = applicationContext
+            lifecycleScope.launch {
+                val why = withContext(Dispatchers.IO) { Scrobblers.lastFmBack(app, token) }
+                page?.postMessage(Scrobblers.here(app).toString())
+                why?.let { openAt = connectedAt(service, it) }
+            }
+        }
         return connectedAt(service, data.getQueryParameter(if (service == "spotify") "spotify_error" else "scrobble"))
     }
 
@@ -267,6 +277,7 @@ class MainActivity : AppCompatActivity() {
         // The network as it changes (0.9.15): the page knows it is out of reach without waiting for an answer.
         network = NetState.Watch(this) { page?.postMessage(it.toString()) }
         Plays.onPlayedHere = { runOnUiThread { page?.postMessage(Plays.playedHere(this).toString()) } }
+        Scrobblers.onChanged = { runOnUiThread { page?.postMessage(Scrobblers.here(this).toString()) } }
         // The device's music changed (decision 0052): the page asks for it again when it shows it.
         contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
@@ -362,6 +373,7 @@ class MainActivity : AppCompatActivity() {
             onError = { cannotReach(url, it) },
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
+            serverCover = { server, cover, size -> Servers.cover(app, server, cover, size) },
             // One sign-in for both addresses (0.12, the owner 2026-10-30): the session a page loaded with goes to the
             // other address too; a sign-in page with the other's session at hand takes it and loads again.
             onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
@@ -427,6 +439,8 @@ class MainActivity : AppCompatActivity() {
                 player?.report(withQueue = true)
                 // A download being saved: where it is.
                 ExportSave.latest?.let { reply.postMessage(it) }
+                // The servers signed in to (decision 0098), each a mode.
+                tellServers(reply)
                 followSession()
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
@@ -491,6 +505,41 @@ class MainActivity : AppCompatActivity() {
                     }
                     reply.postMessage(out.toString())
                 }
+            }
+            // Modes per server (decision 0098): the Jellyfin and Subsonic servers signed in to, kept here (Servers); one
+            // forgotten while its mode is on leaves Cratarr's music playing.
+            "servers" -> when (message.optString("op")) {
+                "list" -> tellServers(reply)
+                "keep" -> {
+                    message.optJSONObject("server")?.let { Servers.keep(this, it) }
+                    tellServers(reply)
+                }
+                "forget" -> {
+                    val id = message.optString("id")
+                    Servers.forget(this, id)
+                    if (prefs.mode == Servers.MODE_PREFIX + id) switchMode(Prefs.MODE_CRATARR)
+                    tellServers(reply)
+                }
+            }
+            // Scrobbling from the device (decision 0091): this device's listening services, sealed here; the account's
+            // way and tracking as the page read them; Last.fm's sign-in opened in the browser, back by the app's link.
+            "scrobblers" -> when (message.optString("op")) {
+                "list" -> reply.postMessage(Scrobblers.here(this).toString())
+                "keep" -> {
+                    Scrobblers.keepListenBrainz(this, message.optString("token"), message.optString("name"))
+                    reply.postMessage(Scrobblers.here(this).toString())
+                }
+                "lastfm" -> openOutside(Scrobblers.lastFmStart(this, message.optString("key"), message.optString("secret")))
+                "forget" -> {
+                    Scrobblers.forget(this, message.optString("service"))
+                    reply.postMessage(Scrobblers.here(this).toString())
+                }
+                "way" -> Scrobblers.setWay(this, message.optString("way"), message.optBoolean("tracking", true))
+            }
+            // A request of the page's for one of them, sent from here (Servers.fetch), its answer back by its id.
+            "server-fetch" -> lifecycleScope.launch {
+                val out = withContext(Dispatchers.IO) { Servers.fetch(message) }
+                reply.postMessage(out.toString())
             }
             // Settings' "Test both connections".
             "network-test" -> lifecycleScope.launch {
@@ -667,6 +716,11 @@ class MainActivity : AppCompatActivity() {
             }
             reply.postMessage(out.toString())
         }
+    }
+
+    /** The servers signed in to, with their sign-ins, for the page's own code for them (never sent on). */
+    private fun tellServers(reply: JavaScriptReplyProxy) {
+        reply.postMessage(JSONObject().put("type", "servers").put("servers", Servers.all(this)).toString())
     }
 
     /** Local mode on or off (decision 0052), by the player, once it is connected. */

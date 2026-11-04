@@ -7,6 +7,7 @@
   // How it plays (the owner, 2026-10-24: a play affair, kept with the device): where its music plays (the device
   // sheet, lib/OutputSheet), and levelling (decision 0035: in the app its own player's, here this browser's). On a
   // phone's browser: Lossless, off by default (lossless tracks stream as Opus there, the owner 2026-10-24).
+  // Servers (decision 0098): the Jellyfin and Subsonic servers signed in to, each a mode; `thing` a server's own page.
   import { allowBackground, appInfo, backgroundSettings, inApp, setDevice } from '../app.svelte';
   import { startStopNow } from '../device.svelte';
   import { isPhone } from '../localPlayer.svelte';
@@ -16,7 +17,8 @@
   import { outputName } from '../playOn.svelte';
   import { allowDeviceMusic, askFolders, device, deviceMusicSettings, setFolder } from '../deviceMusic.svelte';
   import { plural } from '../insights.svelte';
-  import { localMode, switchable } from '../deviceMusic.svelte';
+  import { switchable } from '../deviceMusic.svelte';
+  import { ownMode } from '../serverMode.svelte';
   import { prefs } from '../prefs.svelte';
   import { defaultBrowserName } from '../playOnTarget.svelte';
   import Group from './Group.svelte';
@@ -25,6 +27,17 @@
   import { deviceItems } from './resetItems.svelte';
   import ValueSheet from './ValueSheet.svelte';
   import StartStopSheet from '../StartStopSheet.svelte';
+  import { askServers, servers } from '../servers.svelte';
+  import { nameThing } from '../settingsSections.svelte';
+  import ServerPage from './ServerPage.svelte';
+  import ServersGroup from './ServersGroup.svelte';
+
+  let { thing = null }: { thing?: string | null } = $props();
+  const server = $derived(thing ? (servers.list?.find((s) => s.id === thing) ?? null) : null);
+  nameThing(() => server?.name ?? null);
+  $effect(() => {
+    if (inApp) askServers();
+  });
 
   // What Reset puts back: the part's declaration (lib/settings/resetItems): the app's Stay ready and the tape (they
   // disagreed: the owner, 2026-11-02).
@@ -44,6 +57,9 @@
   let tapeOpen = $state(false);
 </script>
 
+{#if server}
+  <ServerPage {server} />
+{:else}
 <Group title="Playing">
   <Item name="Player name" value={name} onclick={() => (naming = true)} />
   <Item name="Where music plays" value={outputName()} onclick={() => (where = true)} />
@@ -87,7 +103,7 @@
 </Group>
 
 <!-- The visuals by themselves (0.10): this device's, not in local mode (no visuals there, decision 0052). -->
-{#if !localMode()}<VisualsAutoGroup />{/if}
+{#if !ownMode()}<VisualsAutoGroup />{/if}
 
 {#if inApp}
   <Group title="Local music">
@@ -112,11 +128,13 @@
     {#if switchable()}
       <Item
         name="Mode switch in the bar"
-        more="Cratarr or Local, over the bar's pages. Off, it is at the top of Settings."
+        more="Cratarr, each server and Local, over the bar's pages. Off, it is at the top of Settings."
         toggle={{ checked: prefs.modeSwitchInBar, onchange: (on) => (prefs.modeSwitchInBar = on) }}
       />
     {/if}
   </Group>
+  <ServersGroup />
+{/if}
 {/if}
 
 {#if where}

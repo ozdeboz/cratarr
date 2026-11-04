@@ -380,6 +380,17 @@ impl SettingsService {
         Ok(IncomingService::lidarr_view(cfg.as_ref(), client).await)
     }
 
+    /// The tag rules alone saved (the Catalogue sheet's genre aliases, 0.15): every source as it is.
+    pub async fn save_tag_rules(&self, rules: crate::catalogue::Rules) -> Result<SettingsView, ToggleError> {
+        let sources: Vec<SourceConfig> = self.lib.live().iter().map(|a| a.cfg.clone()).collect();
+        self.save(sources, Some(rules), None, None, None).await
+    }
+
+    /// The tag rules as kept.
+    pub fn tag_rules(&self) -> crate::catalogue::Rules {
+        self.lib.tag_rules()
+    }
+
     /// Check every enabled source against its server, then save the list and switch over. Nothing is saved if a
     /// check fails. The Music libraries' files hold the playlists, so Cratarr must see them, all in one folder.
     /// `tag_rules`: `None` keeps what is saved.

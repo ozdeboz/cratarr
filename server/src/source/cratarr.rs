@@ -330,6 +330,7 @@ impl Source for CratarrSource {
                     estimated: false,
                     rewinding: p.rewinding,
                     starting: p.starting,
+                    speed_x: p.speed_x,
                 }),
                 player: Some(p.name.clone()),
                 started_at: None,

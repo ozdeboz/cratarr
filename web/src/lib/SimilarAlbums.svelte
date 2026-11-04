@@ -2,6 +2,7 @@
   // Similar albums, at an album's foot (the owner, 2026-10-23: every list with a profile gets its own kind's similar
   // ones at the bottom): the albums of Cratarr's own library closest to it by the one similarity (the server's), as
   // More from's row (lib/AlbumMore). Left out when there are none.
+  import { untrack } from 'svelte';
   import { similarAlbums, type ListedAlbum } from './api';
   import AlbumCard from './AlbumCard.svelte';
   import { library, readLibrary } from './albums.svelte';
@@ -10,11 +11,13 @@
   let { source, album }: { source: string; album: string } = $props();
 
   let ids = $state<string[]>([]);
+  // Asked once an album, never again while it shows (the owner, 2026-11-03: staying on a record, its similar ones
+  // reloaded): the library is read here untracked, so its refreshing does not ask again and empty the row meanwhile.
   $effect(() => {
     const [s, a] = [source, album];
     ids = [];
     if (s !== 'cratarr') return;
-    if (!library.view) void readLibrary(false);
+    untrack(() => !library.view && void readLibrary(false));
     similarAlbums(s, a).then(
       (found) => {
         if (s === source && a === album) ids = found.map((f) => f.id);

@@ -19,7 +19,7 @@
 
 import type { Proximity, Signal } from './api';
 
-export const SIGNALS: Signal[] = ['tracks', 'genre', 'artists'];
+export const SIGNALS: Signal[] = ['tracks', 'genre', 'artists', 'sound'];
 export const MUTUAL_K = 3;
 export const GROUP_NEIGHBOURS = 6;
 export const GROUP_RESOLUTION = 2.0;

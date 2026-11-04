@@ -18,6 +18,7 @@ pub mod band_wave;
 pub mod flaws;
 pub mod spectrum;
 pub mod batch;
+pub mod rhythm;
 pub mod signals;
 
 use std::fs::File;
@@ -89,6 +90,10 @@ pub struct Analysis {
     /// analysis read from it has `None` here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beats: Option<Beats>,
+    /// Rhythm (0.15): four on the floor, measured against the beats; `None`: not measured (analysed before it was, or
+    /// no beats).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhythm: Option<rhythm::Rhythm>,
 }
 
 /// A track's beats as kept and served (decision 0046): five bytes a beat, its time in milliseconds from the start of the
@@ -479,6 +484,8 @@ fn analyse_inner(path: &Path, genres: &[String], with_signals: bool, heard: Opti
     // The tempo: taktus hears the mono sound.
     let mut ear = taktus::Ear::new(o.rate);
     let mut in_signals = with_signals.then(|| signals::SignalEar::new(o.rate));
+    // Rhythm: the low band's kicks.
+    let mut kicks = rhythm::KickEar::new(o.rate);
     let mut onsets: Vec<f32> = Vec::new();
     let mut frames = 0u64;
     // How far the reader walked the stream (the end of its last packet), against which `frames` is measured.
@@ -548,6 +555,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_signals: bool, heard: Opti
             if let Some(onset) = ear.hear(mono) {
                 onsets.push(onset);
             }
+            kicks.hear(mono);
             if let Some(s) = in_signals.as_mut() {
                 // The side: half the first two channels' difference (none in mono).
                 let side = if ch >= 2 { (scratch[0][i] - scratch[1][i]) * 0.5 } else { 0.0 };
@@ -597,6 +605,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_signals: bool, heard: Opti
         waveform,
         complete: covered(frames, walked, o.time_base, o.rate),
         beats: Some(beats),
+        rhythm: rhythm::four_on_the_floor(&kicks.kicks(), &beat_times).map(|four| rhythm::Rhythm { four }),
     };
     Ok((analysis, in_signals.map(|s| s.finish(&moments, &beat_times, heard.map(|h| h.downbeats.as_slice())))))
 }

@@ -41,6 +41,7 @@ import { drivenHold, NO_DRIVEN_HOLD, NO_OWN_RAMP, NO_PENDING_NEXT, ownRamp, pend
 import { due, entered, NO_DEADLINES, type Deadlines } from './player/graces';
 import { brakeLengthMs, brakeTravel, FLIGHT_TOP, RESTART_AFTER, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
+import { heard as readClock, heardSpeed } from './player/heard';
 import { shuffled } from './shuffle';
 import { toast } from './toast.svelte';
 
@@ -1035,7 +1036,10 @@ function levelSchedule() {
   local.levelKnown = !prefs.levelling || (!!cur && cur.level !== undefined);
   // Paused: the stream's clock stands still while the context's runs on, so no next step is set.
   const nf = next && !audio.paused ? segmentLevel(next) : null;
-  const at = next ? t + (next.start - now) : 0;
+  // At the speed the stream is heard going (a Vinyl ramp, a let-go's hand-over), not 1× (2026-11-03, the owner: "No
+  // guessing anywhere"); the rate set only before it has been heard long enough.
+  const pace = heardSpeed(audio) ?? audio.playbackRate;
+  const at = next ? t + (next.start - now) / Math.max(0.05, pace) : 0;
   if (told?.level !== f || told.seg !== cur) {
     // As when a track's gain comes late, or the switch is flipped.
     const within = !!cur && !audio.paused && now > cur.start + 0.3 && (!told || told.seg === cur);
@@ -2889,10 +2893,13 @@ function windPlace(w: Winding, now: number): { index: number; pos: number } {
   const index = w.seg.index;
   if (w.at === null) return { index, pos: w.from };
   if (w.to !== null) {
+    // As far as its stream has played (its own clock), its way even along it as the server made it (the app's too): never
+    // the clock's time along the planned envelope, which counted a stall or a late rate on (2026-11-03, the owner: "No
+    // guessing anywhere").
     const f = w.fly ? 1 / (w.mapSpeed ?? w.v0) : 0;
-    const el = Math.min(w.D, now - w.at);
-    const C = f * w.D + (1 - f) * consumed(w.wind, w.D, w.D);
-    const share = C > 0 ? Math.min(1, (f * el + (1 - f) * consumed(w.wind, w.D, el)) / C) : 1;
+    const made = w.clip.duration * 1000;
+    const C = Number.isFinite(made) && made > 0 ? made : f * w.D + (1 - f) * consumed(w.wind, w.D, w.D);
+    const share = C > 0 ? Math.min(1, (w.clip.currentTime * 1000) / C) : 1;
     return { index, pos: w.from + (w.to - w.from) * share };
   }
   return placeAt(w, w.clip.currentTime);
@@ -2920,6 +2927,21 @@ const windFor = (m: PointMotion): Wind => pointWind(prefs.startStop, m);
 const windsOn = (m: Motion) => windsBy(prefs.startStop, m);
 /** A hold that way: its own starting and top speed, the tape's spin-up, brake, volume and acceleration. */
 const holdFor = (dir: 1 | -1): HoldWind => holdWind(prefs.startStop, dir, Math.min(HOLD_TOP, RATE_TOP));
+/** How fast this page's tape is heard going now (× the track's, backwards below 0): a wind's stream as measured on its
+ *  clock through its way's speed, else the track's own as measured on its element (lib/player/heard); null where this
+ *  page plays nothing here, or before it has been heard long enough to measure. */
+export function heardDeckSpeed(now = performance.now()): number | null {
+  const w = tape.rewinding;
+  if (w && w.at !== null) {
+    const s = heardSpeed(w.clip, now);
+    return s === null ? null : w.dir * vAt(w, w.clip.currentTime) * s;
+  }
+  if (!audio || handed()) return null;
+  return heardSpeed(audio, now);
+}
+/** How fast a wind's stream is heard going (× its own): measured on its clock (lib/player/heard; a browser applies a rate
+ *  about 0.1 s late); the rate set only in its first moments, before it has been heard long enough to measure. */
+const clipSpeed = (w: Winding): number => heardSpeed(w.clip) ?? w.clip.playbackRate;
 /** A wind's speed now (× the stream's): its envelope. */
 function windRate(w: Winding, now: number): number {
   if (w.at === null) return RATE_LOW;
@@ -2969,8 +2991,13 @@ const PREP_WAIT_MS = 4000;
 function standOf(after = 0): { index: number; pos: number } | null {
   const here = where();
   if (!here || !audio) return null;
-  // The tape's own stop: a vinyl's brake over the tape's Brake (turned).
-  const run = audio.paused ? 0 : after + spanOf('vinyl', 'out', prefs.startStop.tape.brakeMs);
+  if (audio.paused) return { index: here.seg.index, pos: here.offset };
+  // The tape's own stop: a vinyl's brake over the tape's Brake (turned), from where it is: a spin-up turned round part
+  // way brakes from that share of it, over that share of the Brake (pauseRamped's rampOut), never from full speed
+  // (2026-11-03, the owner: "No guessing anywhere").
+  const share = tape.committed === false && ramping.dir === 'in' ? Math.max(0, Math.min(1, tape.rampAt)) : 1;
+  const from = levelAt('vinyl', share);
+  const run = after * from + rampSpan(DOWN.vinyl, from, RAMP_LOW, prefs.startStop.tape.brakeMs * share);
   return { index: here.seg.index, pos: here.offset + run };
 }
 /** Queue track `index`'s place in the stream (the latest placed, where it was placed again). */
@@ -3052,7 +3079,7 @@ function brakeWind(w: Winding) {
   if (w.brake !== null || w.at === null) return;
   const now = performance.now();
   w.brakeFrom = w.edge ? RATE_LOW : windRate(w, now);
-  w.brakeMs = w.to === null && !w.edge && !w.reverse ? brakeLengthMs(vAt(w, w.clip.currentTime) * w.clip.playbackRate, w.fly ? 1 : 0, w.wind.releaseMs) : null;
+  w.brakeMs = w.to === null && !w.edge && !w.reverse ? brakeLengthMs(vAt(w, w.clip.currentTime) * clipSpeed(w), w.fly ? 1 : 0, w.wind.releaseMs) : null;
   w.brake = now;
   prepare(landingOf(w, now));
 }
@@ -3396,7 +3423,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       if (w.letGo && !over) return void setTimeout(go, 16);
       const c = over?.plan ?? null;
       const at = heard;
-      const speed = over?.speed ?? Math.min(TRACK_TOP, vAt(w, clip.currentTime) * clip.playbackRate);
+      const speed = over?.speed ?? Math.min(TRACK_TOP, vAt(w, clip.currentTime) * clipSpeed(w));
       const tw = where();
       // Only where the track is loaded there is it taken over moving; else (a hold wound on through many tracks, its
       // track not in) it lands there at once, as any wind does, never sounding on while the place moves away (the owner,
@@ -3492,6 +3519,8 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       w.timer = setInterval(() => {
         if (!mine()) return clearInterval(w.timer);
         const now = performance.now();
+        // Its clock read every step: the speed it is heard going is measured, never the rate set (lib/player/heard).
+        readClock(clip, now);
         // The finger's drag followed smoothly while held.
         if (tape.holding) w.drag += (tape.dragWant - w.drag) * (1 - Math.exp(-WIND_STEP_MS / 120));
         if (!w.edge) clip.playbackRate = windRate(w, now);
@@ -3507,13 +3536,14 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
             D: Math.round(c.D * 10) / 10,
           });
         }
-        // Let go: the plan's place (the heads are put on it; where it hands over and ends).
-        const place = w.edge ? { index: w.shown, pos: tape.rewindPos ?? w.from } : w.letGo ? planAt(w.letGo, now) : windPlace(w, now);
+        // Where its sound is, let go too (the heads are steered onto the plan's place; what shows is where they are heard:
+        // 2026-11-03, the owner: "No guessing anywhere").
+        const place = w.edge ? { index: w.shown, pos: tape.rewindPos ?? w.from } : windPlace(w, now);
         show(place);
         // A hold (not the knob's playing backwards, but a hold's brake handed to the backwards player): its speed.
         if (w.to === null && (!w.reverse || w.startAt !== null)) {
           holdNow.on = true;
-          holdNow.speed = w.edge ? 0 : vAt(w, clip.currentTime) * clip.playbackRate;
+          holdNow.speed = w.edge ? 0 : vAt(w, clip.currentTime) * clipSpeed(w);
           if (tape.holding) holdNow.dir = w.dir;
           holdNow.held = !!tape.holding && !tape.holding.released;
           holdNow.top = w.top;
@@ -3983,7 +4013,7 @@ export function windRelease(dir: 'back' | 'forward') {
 function letGoLanding(w: Winding, place: { index: number; pos: number }): { index: number; pos: number } {
   // Braked at once either way: the plan's way, from the speed it flies at (forwards to 1×, back to a stand), as long as
   // that speed asks (constant deceleration).
-  const v = vAt(w, w.clip.currentTime) * w.clip.playbackRate;
+  const v = vAt(w, w.clip.currentTime) * clipSpeed(w);
   const to = letGoTo(w.dir, !!w.backTo, tapeDir.want);
   const ms = brakeLengthMs(v, to, w.wind.releaseMs);
   return onThrough(w, place, brakeTravel(v, ms, ms / 1000, to));
@@ -4068,7 +4098,7 @@ function letGo(w: Winding) {
   // in), and taking the curve over there.
   const now = performance.now();
   const here = windPlace(w, now);
-  const speed = vAt(w, w.clip.currentTime) * w.clip.playbackRate;
+  const speed = vAt(w, w.clip.currentTime) * clipSpeed(w);
   const to = letGoTo(w.dir, !!w.backTo, tapeDir.want);
   // As long as its speed asks: constant deceleration, the Brake as set its shortest (the owner, 2026-10-29).
   const T = brakeLengthMs(speed, to, w.wind.releaseMs);

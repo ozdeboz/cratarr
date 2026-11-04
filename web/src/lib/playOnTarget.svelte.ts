@@ -13,8 +13,8 @@ import { desktop } from './desktop';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
-import { canPlayHere, local, pageVolume, playOnCommand, rewindNow, sought, stop } from './localPlayer.svelte';
-import { holdNow, tapeDir } from './ramping.svelte';
+import { canPlayHere, heardDeckSpeed, local, pageVolume, playOnCommand, rewindNow, sought, stop } from './localPlayer.svelte';
+import { holdNow, ramping, tapeDir } from './ramping.svelte';
 import { measure, type Measured } from './drivenCourse';
 import { followGroup, leaveGroup, listening } from './groupListen.svelte';
 import { playOn, drivenName, hereAgain } from './playOn.svelte';
@@ -213,9 +213,12 @@ async function sendReport(withQueue = false) {
   // landing: what a device driving it counts on and zooms by (the owner, 2026-10-30: the tablet "doesn't show reality").
   ownMeasured = measure(ownMeasured, { index: local.index, pos: local.position, at: performance.now() });
   const moving = !idle && (rewindNow.on || holdNow.on);
+  // Its speed as heard (2026-11-03, the owner: "No guessing anywhere"): winding, holding, or on a Start and stop ramp
+  // (a Vinyl ramp was told as 1×); the one measured between reports only before it has been heard long enough.
+  const heardX = !idle && (moving || ramping.dir !== null) ? heardDeckSpeed() : null;
   const landing = !idle && holdNow.on && holdNow.landing !== null && holdNow.landingIndex !== null ? { index: holdNow.landingIndex, position_ms: Math.round(holdNow.landing * 1000), top_x: holdNow.top } : null;
   const body = {
-    ...(moving && ownMeasured.v !== null ? { speed_x: Math.round(ownMeasured.v * 1000) / 1000 } : {}),
+    ...(heardX !== null ? { speed_x: Math.round(heardX * 1000) / 1000 } : moving && ownMeasured.v !== null ? { speed_x: Math.round(ownMeasured.v * 1000) / 1000 } : {}),
     ...(idle ? {} : { landing }),
     index,
     ...(t?.entry ? { entry: t.entry } : {}),

@@ -12,6 +12,11 @@
 //! - **Last.fm:** the API key and its shared secret the person made at last.fm/api, then Last.fm's web sign-in: Cratarr
 //!   sends the browser to Last.fm, which comes back to `/api/scrobble/lastfm/callback` with a token Cratarr trades for a
 //!   session key (`auth.getSession`); calls are signed with the secret.
+//!
+//! From 0.15 (decision 0091) this is one of two ways, the account's choice: through the server (this), or from each
+//! device, which then holds the sign-ins. Through the server, a device hands over its plays of other servers' tracks
+//! (`POST /api/scrobbles`), queued with their names (`userdata::scrobbles::Named`), never in the history. Switched to
+//! the device, what is queued is sent first and each service's keys go once its part is empty.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -162,6 +167,31 @@ struct Play {
     title: String,
     album: String,
     length_secs: u64,
+    album_artist: Option<String>,
+    /// The recording's MusicBrainz id, where the device knew it.
+    mbid: Option<String>,
+}
+
+impl Play {
+    fn named(at: i64, n: crate::userdata::scrobbles::Named) -> Self {
+        Self { at, artist: n.artist, title: n.title, album: n.album, length_secs: n.duration_secs.unwrap_or(0), album_artist: n.album_artist, mbid: n.mbid }
+    }
+}
+
+/// ListenBrainz's `track_metadata` for a play.
+fn listenbrainz_track(p: &Play) -> serde_json::Value {
+    let mut info = serde_json::json!({
+        "media_player": "Cratarr",
+        "submission_client": "Cratarr",
+        "submission_client_version": env!("CARGO_PKG_VERSION"),
+    });
+    if p.length_secs > 0 {
+        info["duration_ms"] = (p.length_secs * 1000).into();
+    }
+    if let Some(m) = &p.mbid {
+        info["recording_mbid"] = m.clone().into();
+    }
+    serde_json::json!({ "artist_name": p.artist, "track_name": p.title, "release_name": p.album, "additional_info": info })
 }
 
 /// Why a send failed: try again later, or the login is no good (stop until connected again).
@@ -173,22 +203,7 @@ enum Failed {
 async fn send_listenbrainz(token: &str, plays: &[Play]) -> Result<(), Failed> {
     let payload: Vec<serde_json::Value> = plays
         .iter()
-        .map(|p| {
-            serde_json::json!({
-                "listened_at": p.at,
-                "track_metadata": {
-                    "artist_name": p.artist,
-                    "track_name": p.title,
-                    "release_name": p.album,
-                    "additional_info": {
-                        "duration_ms": p.length_secs * 1000,
-                        "media_player": "Cratarr",
-                        "submission_client": "Cratarr",
-                        "submission_client_version": env!("CARGO_PKG_VERSION"),
-                    }
-                }
-            })
-        })
+        .map(|p| serde_json::json!({ "listened_at": p.at, "track_metadata": listenbrainz_track(p) }))
         .collect();
     let kind = if plays.len() == 1 { "single" } else { "import" };
     let res = http()
@@ -225,7 +240,15 @@ async fn send_lastfm(secret: &Secret, plays: &[Play]) -> Result<(), Failed> {
         p.insert(format!("track[{i}]"), x.title.clone());
         p.insert(format!("timestamp[{i}]"), x.at.to_string());
         p.insert(format!("album[{i}]"), x.album.clone());
-        p.insert(format!("duration[{i}]"), x.length_secs.to_string());
+        if x.length_secs > 0 {
+            p.insert(format!("duration[{i}]"), x.length_secs.to_string());
+        }
+        if let Some(a) = &x.album_artist {
+            p.insert(format!("albumArtist[{i}]"), a.clone());
+        }
+        if let Some(m) = &x.mbid {
+            p.insert(format!("mbid[{i}]"), m.clone());
+        }
     }
     let by: BTreeMap<&str, String> = p.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     let sig = signature(&by, sec);
@@ -253,6 +276,10 @@ fn now() -> i64 {
 /// One pass over the queue: each account's due plays to each of its services, a batch at a time.
 async fn pass(serve: &Arc<Serve>) -> Result<()> {
     let ud = serve.userdata.clone();
+    for (user, target) in tokio::task::spawn_blocking(move || ud.keys_sent()).await?? {
+        tracing::info!(target: "scrobble", user = %user, to = %target, "scrobbling moved to the devices: the queue sent, the keys gone");
+    }
+    let ud = serve.userdata.clone();
     let due: Vec<Queued> = tokio::task::spawn_blocking(move || ud.due_scrobbles(now(), 500)).await??;
     if due.is_empty() {
         return Ok(());
@@ -279,18 +306,31 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
         let Some(secret) = tokio::task::spawn_blocking(move || ud.scrobble_secret(&u, &t)).await?? else { continue };
         let secret: Secret = serde_json::from_str(&secret).unwrap_or_default();
         for chunk in rows.chunks(BATCH) {
-            let (lib, ids) = (serve.library.clone(), chunk.iter().map(|q| q.song.clone()).collect::<Vec<_>>());
+            let (lib, ids) = (serve.library.clone(), chunk.iter().filter(|q| q.named.is_none()).map(|q| q.song.clone()).collect::<Vec<_>>());
             let songs = tokio::task::spawn_blocking(move || lib.songs_by_id(&ids)).await??;
             let by: std::collections::HashMap<&str, &crate::serve::api::Song> = songs.iter().map(|s| (s.id.as_str(), s)).collect();
-            // A song gone from the library since: nothing to name it by, so it goes.
-            let (named, gone): (Vec<&Queued>, Vec<&Queued>) = chunk.iter().partition(|q| by.contains_key(q.song.as_str()));
-            let plays: Vec<Play> = named
-                .iter()
-                .map(|q| {
-                    let s = by[q.song.as_str()];
-                    Play { at: q.at, artist: s.artist.clone(), title: s.title.clone(), album: s.album.clone(), length_secs: s.duration }
-                })
-                .collect();
+            // Another server's play carries its names; a song gone from the library since has nothing to name it by,
+            // so it goes, as does a handed-over play whose names no longer read.
+            let mut plays = Vec::new();
+            let mut gone = Vec::new();
+            for q in chunk {
+                let play = match &q.named {
+                    Some(n) => serde_json::from_str(n).ok().map(|n| Play::named(q.at, n)),
+                    None => by.get(q.song.as_str()).map(|s| Play {
+                        at: q.at,
+                        artist: s.artist.clone(),
+                        title: s.title.clone(),
+                        album: s.album.clone(),
+                        length_secs: s.duration,
+                        album_artist: None,
+                        mbid: None,
+                    }),
+                };
+                match play {
+                    Some(p) => plays.push(p),
+                    None => gone.push(q),
+                }
+            }
             let sent = if plays.is_empty() {
                 Ok(())
             } else if target == LISTENBRAINZ {
@@ -334,28 +374,52 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
 /// "Now playing" to `user`'s connected services: best effort, never queued (it is stale a minute later).
 async fn now_playing(serve: Arc<Serve>, user: String, song: String) -> Result<()> {
     let (ud, u) = (serve.userdata.clone(), user.clone());
-    let secrets = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
-        let mut out = Vec::new();
-        for t in [LISTENBRAINZ, LASTFM] {
-            if let Some(s) = ud.scrobble_secret(&u, t)? {
-                out.push((t.to_string(), s));
-            }
-        }
-        Ok(out)
-    })
-    .await??;
+    let secrets = tokio::task::spawn_blocking(move || secrets_of(&ud, &u)).await??;
     if secrets.is_empty() {
         return Ok(());
     }
     let (lib, ids) = (serve.library.clone(), vec![song]);
     let Some(s) = tokio::task::spawn_blocking(move || lib.songs_by_id(&ids)).await??.into_iter().next() else { return Ok(()) };
+    let play = Play { at: now(), artist: s.artist, title: s.title, album: s.album, length_secs: s.duration, album_artist: None, mbid: None };
+    send_now_playing(&user, secrets, &play).await
+}
+
+/// "Now playing" of another server's track, handed over by a device (`POST /api/scrobbles/now`): best effort, and per
+/// account the latest only (one still sending when the next comes is dropped).
+pub fn now_playing_named(serve: Arc<Serve>, user: String, named: crate::userdata::scrobbles::Named) {
+    type Sending = std::sync::Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>;
+    static SENDING: std::sync::OnceLock<Sending> = std::sync::OnceLock::new();
+    let who = user.clone();
+    let task = tokio::spawn(async move {
+        let (ud, u) = (serve.userdata.clone(), user.clone());
+        let Ok(Ok(secrets)) = tokio::task::spawn_blocking(move || secrets_of(&ud, &u)).await else { return };
+        if let Err(e) = send_now_playing(&user, secrets, &Play::named(now(), named)).await {
+            tracing::debug!(target: "scrobble", user = %user, reason = %format!("{e:#}"), "now playing failed");
+        }
+    });
+    if let Some(before) = SENDING.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).insert(who, task.abort_handle()) {
+        before.abort();
+    }
+}
+
+/// The account's services that send now, with their secrets.
+fn secrets_of(ud: &crate::userdata::UserData, user: &str) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for t in [LISTENBRAINZ, LASTFM] {
+        if let Some(s) = ud.scrobble_secret(user, t)? {
+            out.push((t.to_string(), s));
+        }
+    }
+    Ok(out)
+}
+
+/// "Now playing" to each of these services.
+async fn send_now_playing(user: &str, secrets: Vec<(String, String)>, s: &Play) -> Result<()> {
     for (target, secret) in secrets {
         let secret: Secret = serde_json::from_str(&secret).unwrap_or_default();
         let sent = if target == LISTENBRAINZ {
             let Some(token) = &secret.token else { continue };
-            let body = serde_json::json!({ "listen_type": "playing_now", "payload": [{ "track_metadata": {
-                "artist_name": s.artist, "track_name": s.title, "release_name": s.album,
-                "additional_info": { "duration_ms": s.duration * 1000, "media_player": "Cratarr", "submission_client": "Cratarr" } } }] });
+            let body = serde_json::json!({ "listen_type": "playing_now", "payload": [{ "track_metadata": listenbrainz_track(s) }] });
             http()?.post(format!("{LB_API}/submit-listens")).header("Authorization", format!("Token {token}")).json(&body).sent().await.map(|_| ())
         } else {
             let (Some(key), Some(sec), Some(sk)) = (&secret.api_key, &secret.api_secret, &secret.session) else { continue };
@@ -366,7 +430,12 @@ async fn now_playing(serve: Arc<Serve>, user: String, song: String) -> Result<()
             p.insert("artist", s.artist.clone());
             p.insert("track", s.title.clone());
             p.insert("album", s.album.clone());
-            p.insert("duration", s.duration.to_string());
+            if s.length_secs > 0 {
+                p.insert("duration", s.length_secs.to_string());
+            }
+            if let Some(a) = &s.album_artist {
+                p.insert("albumArtist", a.clone());
+            }
             let sig = signature(&p, sec);
             p.insert("api_sig", sig);
             p.insert("format", "json".into());
@@ -379,10 +448,20 @@ async fn now_playing(serve: Arc<Serve>, user: String, song: String) -> Result<()
     Ok(())
 }
 
+/// Nudges the queue's sender (plays a device handed over).
+static WAKE: std::sync::OnceLock<Arc<tokio::sync::Notify>> = std::sync::OnceLock::new();
+
+/// Look at the queue now: plays were queued outside the listening channel.
+pub fn wake() {
+    if let Some(w) = WAKE.get() {
+        w.notify_one();
+    }
+}
+
 /// Sends the queue: now, every minute, and whenever a counted play comes in; and "now playing" as tracks start
 /// (decision 0068's channel).
 pub fn run(serve: Arc<Serve>) {
-    let wake = Arc::new(tokio::sync::Notify::new());
+    let wake = WAKE.get_or_init(|| Arc::new(tokio::sync::Notify::new())).clone();
     let (w, s) = (wake.clone(), serve.clone());
     let mut events = super::listening::subscribe();
     tokio::spawn(async move {

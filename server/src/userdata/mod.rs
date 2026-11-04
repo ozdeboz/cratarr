@@ -16,6 +16,7 @@
 
 pub mod offline;
 pub mod overrides;
+pub mod scrobbles;
 pub mod tags;
 pub mod words;
 pub mod works;
@@ -491,6 +492,8 @@ pub struct Queued {
     pub song: String,
     pub at: i64,
     pub tries: i64,
+    /// A play the library does not know, handed over by a device (`scrobbles::Named` as JSON); `song` is then empty.
+    pub named: Option<String>,
 }
 
 /// A listening service an account sends its plays to, as Connections shows it (never its secret).
@@ -660,6 +663,8 @@ impl UserData {
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
+        conn.execute_batch(scrobbles::SCHEMA).context("keeping the plays devices hand over")?;
+        scrobbles::add_named(&conn).context("queueing plays the library does not know")?;
         add_answer_names(&conn)?;
         add_plays_followed(&conn)?;
         add_annotation_own(&conn).context("keeping one's own plays apart from followed ones")?;
@@ -823,10 +828,15 @@ impl UserData {
             return Ok(false);
         }
         // A counted play goes to the listening services the user connected (app::scrobble), queued in the same
-        // transaction (decision 0068). Imported listens never count, so none of them goes back.
+        // transaction (decision 0068). Imported listens never count, so none of them goes back. Nothing is queued for an
+        // account that scrobbles from each device (decision 0091).
         if h.counts {
             tx.execute(
-                "INSERT INTO scrobble_queue (user, target, song, at) SELECT ?1, target, ?2, ?3 FROM scrobble_target WHERE user = ?1 AND broken IS NULL AND off = 0",
+                &format!(
+                    "INSERT INTO scrobble_queue (user, target, song, at) SELECT ?1, target, ?2, ?3 FROM scrobble_target
+                     WHERE user = ?1 AND broken IS NULL AND off = 0 AND NOT {}",
+                    scrobbles::FROM_DEVICE
+                ),
                 params![user, song.0, h.at],
             )?;
         }
@@ -922,12 +932,12 @@ impl UserData {
     pub fn due_scrobbles(&self, now: i64, limit: usize) -> Result<Vec<Queued>> {
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT q.id, q.user, q.target, q.song, q.at, q.tries FROM scrobble_queue q
+            "SELECT q.id, q.user, q.target, q.song, q.at, q.tries, q.named FROM scrobble_queue q
              JOIN scrobble_target t ON t.user = q.user AND t.target = q.target AND t.broken IS NULL AND t.off = 0
              WHERE q.next <= ?1 ORDER BY q.at LIMIT ?2",
         )?;
         let rows = st.query_map(params![now, limit as i64], |r| {
-            Ok(Queued { id: r.get(0)?, user: r.get(1)?, target: r.get(2)?, song: r.get(3)?, at: r.get(4)?, tries: r.get(5)? })
+            Ok(Queued { id: r.get(0)?, user: r.get(1)?, target: r.get(2)?, song: r.get(3)?, at: r.get(4)?, tries: r.get(5)?, named: r.get(6)? })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

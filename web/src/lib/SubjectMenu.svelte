@@ -6,14 +6,14 @@
   import { crateOf } from './crates.svelte';
   import { shownPlaylists } from './output.svelte';
 
-  let { subject, onclose }: { subject: string; onclose: () => void } = $props();
+  let { subject, onclose, from = null }: { subject: string; onclose: () => void; /** A word's record (lib/CrateMenu). */ from?: { album: string; words: string[] } | null } = $props();
 
   const crate = $derived(crateOf(subject));
   const playlist = $derived(crate === null ? (shownPlaylists().find((p) => p.id === subject) ?? null) : null);
 </script>
 
 {#if crate !== null}
-  <CrateMenu id={crate} {onclose} />
+  <CrateMenu id={crate} {onclose} {from} />
 {:else if playlist}
   <PlaylistMenu playlists={[playlist]} {onclose} />
 {/if}

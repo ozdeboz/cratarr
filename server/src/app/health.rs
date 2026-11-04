@@ -236,6 +236,10 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "server:settings-file" => ("Settings file", "unreadable"),
         "servers:lidarr" => ("Lidarr", "unreachable"),
         "requests:waiting" => ("Requests", "waiting"),
+        "words:genre" => ("Genres", "differ in the files"),
+        "words:style" => ("Styles", "differ in the files"),
+        "words:mood" => ("Moods", "differ in the files"),
+        "words:tag" => ("Tags", "differ in the files"),
         k if k.starts_with("servers:") => ("Server", "unreachable"),
         // A player's own (the owner, 2026-11-01: "The player as the thing"): named where it is found.
         k if k.starts_with("players:held:") => ("Player", "play held"),
@@ -279,6 +283,10 @@ pub(super) fn name_of(key: &str) -> &'static str {
         "server:slow" => "Slow responses",
         "server:settings-file" => "Settings",
         "requests:waiting" => "Requests",
+        "words:genre" => "Genres in the files",
+        "words:style" => "Styles in the files",
+        "words:mood" => "Moods in the files",
+        "words:tag" => "Tags in the files",
         k if k.starts_with("files:") => "File problems",
         k if k.starts_with("servers:") => "Unreachable server",
         k if k.starts_with("players:held:") => "Held plays",
@@ -670,6 +678,18 @@ impl App {
         let mut out = library(&rows, &off, &discs);
         out.extend(self.check_incomplete(&served).await?);
         out.extend(self.check_references(&served).await?);
+        // Each kind of word the Catalogue sheet writes (0.15, decision 0097): the records whose files differ.
+        for (kind, records) in super::file_words::findings(&served).await? {
+            let count = records.len() as u64;
+            let word = kind.name();
+            let mut f = finding("library", format!("words:{word}"), Level::Info, count, n(count, &format!("record whose files' {word} differs from Cratarr's"), &format!("records whose files' {word} differs from Cratarr's")));
+            f.items = records
+                .into_iter()
+                .take(ITEMS)
+                .map(|r| Item { title: r.title, line: Some(r.artist), album: Some((crate::source::cratarr::KIND.id.to_string(), r.album)), ..Item::default() })
+                .collect();
+            out.push(f);
+        }
         // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
         let s = served.clone();
         let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;

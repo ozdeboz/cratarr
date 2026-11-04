@@ -436,6 +436,7 @@ impl UserData {
         let tx = db.transaction()?;
         let mut n = tx.execute("DELETE FROM play_seen WHERE at < ?1", [cut])?;
         n += tx.execute("DELETE FROM kept_answer WHERE at < ?1", [cut])?;
+        n += UserData::forget_old_scrobble_seen(&tx, cut)?;
         n += tx.execute("DELETE FROM change_at WHERE at < ?1", [cut * 1000])?;
         n += tx.execute("DELETE FROM playlist_entry_id WHERE gone < ?1", [cut * 1000])?;
         n += tx.execute("DELETE FROM playlist_op WHERE at < ?1", [cut * 1000])?;

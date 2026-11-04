@@ -21,7 +21,7 @@
     onclose: () => void;
   } = $props();
 
-  const KIND: Record<Reading['kind'], string> = { artist: 'Artist', album: 'Album', track: 'Track', label: 'Label', genre: 'Genre', style: 'Style', mood: 'Mood', tag: 'Tag', year: 'Year', bpm: 'Tempo' };
+  const KIND: Record<Reading['kind'], string> = { artist: 'Artist', album: 'Album', track: 'Track', label: 'Label', genre: 'Genre', style: 'Style', mood: 'Mood', tag: 'Tag', year: 'Year', bpm: 'Tempo', four: 'Rhythm', meter: 'Time signature' };
   const shown = (r: Reading) => `${KIND[r.kind]} · ${r.label}`;
   /** Its other readings shown: the best few. */
   const OTHERS = 8;

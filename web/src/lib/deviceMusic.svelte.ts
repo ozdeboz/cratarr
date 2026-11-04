@@ -7,6 +7,7 @@
 import type { AlbumView, ArtistView, ListedAlbum, PlaylistRow } from './api';
 import { appInfo, inApp, onApp, toApp } from './app.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
+import { servers } from './servers.svelte';
 
 /** A track of the device's, as the app lists it: `track` its number on its album. */
 export type DeviceTrack = {
@@ -37,11 +38,15 @@ export const device = $state({
 
 /** Local mode is on (the app plays the device's own music). */
 export const localMode = () => inApp && appInfo.mode === 'device';
-/** The switcher shows: a folder is on and the permission given (the owner: only "if the user has enabled any local
- *  directories"); never in a browser. */
-export const switchable = () => inApp && appInfo.local;
+/** Local mode is there: a folder is on and the permission given. */
+export const localThere = () => inApp && appInfo.local;
+/** The switcher shows: there is more than one mode (the owner: Local only "if the user has enabled any local
+ *  directories"; decision 0098: as soon as there is more than one mode); never in a browser. */
+export const switchable = () => inApp && (appInfo.local || !!servers.list?.length);
 
-export function setMode(mode: 'cratarr' | 'device') {
+/** Into a mode: Cratarr's, Local or a server's (`server:<id>`, decision 0098); the app pauses what plays and brings
+ *  that mode's queue back. */
+export function setMode(mode: string) {
   if (mode === appInfo.mode) return;
   navigator.vibrate?.(8);
   toApp({ type: 'device-music', op: 'mode', mode });

@@ -89,6 +89,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut fetches = super::track_fetch::subscribe();
     // Runs changing the library's files (decision 0092), as they go.
     let mut runs = super::file_runs::subscribe();
+    // The library's words as they change, by any way (0.15, decision 0097).
+    let mut words = super::words::subscribe();
     let app = app.clone();
     tokio::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
@@ -177,6 +179,13 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                         None => true,
                     },
                     Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(broadcast::error::RecvError::Closed) => false,
+                },
+                r = words.recv() => match r {
+                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => match Message::of("changed", &serde_json::json!({ "area": "words" })) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
                     Err(broadcast::error::RecvError::Closed) => false,
                 },
                 r = runs.recv() => match r {

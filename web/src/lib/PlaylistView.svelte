@@ -105,6 +105,7 @@
     withoutFor,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
+  import { deleteServerPlaylist, isServerSource, saveServerPlaylist, serverAlbumView, serverArtistView, serverPlaylistView, serverStar } from './serverMode.svelte';
   import { BANDCAMP } from './bandcampPreview';
   import { DISCOVER, discoverArtistView } from './discoverArtist';
   import RowHeart from './RowHeart.svelte';
@@ -131,6 +132,8 @@
   import SelectionMenu from './SelectionMenu.svelte';
   import RecordSheet from './RecordSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import MenuSheet from './MenuSheet.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { away, here } from './away.svelte';
@@ -160,6 +163,8 @@
   import { playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { port } from './player/port.svelte';
   import { shuffled } from './shuffle';
+  import { serverPlaylistOf } from './panel.svelte';
+  import { whenChanged } from './dataChanged';
   import { albumMoved, albumOf, albumSubject, artistOf, artistSubject, backOne, backToTracks, closePlaylist, goHome, HEALTH, NEW_PLAYLIST, panel, panelDepth, TABS, viewOver, viewPlaylist } from './panel.svelte';
   import { health, recordProblem } from './healthReport.svelte';
   import { wordRows } from './wordRows';
@@ -247,8 +252,13 @@
   const album = $derived(albumOf(panel.viewed));
   /** The viewed artist (their page), or all their tracks (`tracks`: their Top recommendations' ›), when an artist is viewed. */
   const artist = $derived(artistOf(panel.viewed));
+  /** A server's playlist in its mode (decision 0098): its tracks as that server lists them; its name as it came. */
+  const serverList = $derived(serverPlaylistOf(panel.viewed));
+  let serverListName = $state<string | null>(null);
+  let serverListMenu = $state(false);
+  let serverListDeleting = $state(false);
   /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
-  const plain = $derived(!!crate || !!album || !!artist || crateEditing || creating);
+  const plain = $derived(!!crate || !!album || !!artist || !!serverList || crateEditing || creating);
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
   let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite' | 'mbid'> & { studio?: number | null }) | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
@@ -272,7 +282,9 @@
           ? (crateNameKnown(crate) ?? '')
           : album
             ? (albumHead?.title ?? '')
-            : artist
+            : serverList
+              ? (serverListName ?? '')
+              : artist
               ? artist.tracks
                 ? 'All tracks'
                 : artist.name
@@ -299,6 +311,8 @@
   // changes.
   let incomingChanged = $state(0);
   $effect(() => on<{ area: string }>('changed', ({ area }) => (area === 'incoming' || area === 'collection') && album && incomingChanged++));
+  // A record's files written (lib/dataChanged: a fix's lengths, tags, numbers): its rows read again, as after a save.
+  $effect(() => whenChanged(['files', 'words'], () => untrack(() => album || artist) && saved++));
 
   // The album's place in the Library's list (lib/albums.svelte.ts): its library, and what Cratarr may do with it there,
   // for its menu. Read when an album shows and the list is not known yet, and again when an album list changed (the
@@ -384,9 +398,9 @@
 
   // The album's heart: shows the change at once, back as it was when the server refuses.
   const albumFav = $derived(album ? isFavorite(album.source, album.id) : false);
-  /** An album or artist of the device's own music (local mode, decision 0052): played and played next, nothing of
-   *  Cratarr's (hearts, menus, About, radio, select). */
-  const onDevice = $derived((album?.source ?? artist?.source) === DEVICE);
+  /** An album or artist of the device's own music (local mode, decision 0052), or of a server's in its mode (decision
+   *  0098): played and played next, nothing of Cratarr's (hearts, menus, About, radio, select). */
+  const onDevice = $derived((album?.source ?? artist?.source) === DEVICE || isServerSource(album?.source ?? artist?.source) || !!serverList);
   // Played here and kept by none of Cratarr's: the device's own music, or a Bandcamp album (a Discover suggestion's,
   // decision 0071, the owner 2026-10-25): its tracks, no heart, rating, Resume or similar albums of the server's.
   // An artist from Discover, or one asked for on Bandcamp (no server of that name): Discover's page of them.
@@ -396,8 +410,10 @@
     if (!album) return;
     const { source: s, id: a } = album;
     const on = !albumFav;
-    setFavorite(s, a, on);
     navigator.vibrate?.(8);
+    // A server's album (decision 0098): its star there.
+    if (isServerSource(s)) return serverStar(s, 'album', a, on).catch((e) => toast.fail(e, "The favourite didn't change"));
+    setFavorite(s, a, on);
     try {
       await setAlbumFavorite(s, a, on);
     } catch (e) {
@@ -465,7 +481,7 @@
     const asked = c
       ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav, alb, look)
       : a
-        ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : albumView(a.source, a.id)).then((r) => {
+        ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : isServerSource(a.source) ? serverAlbumView(a.source, a.id) : albumView(a.source, a.id)).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) filesState = r.files_state ?? null;
             if (want === id)
@@ -473,7 +489,7 @@
             return { ...r, total: r.rows.length };
           })
         : ar
-          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name, hiddenLibraries())).then((r) => {
+          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : isServerSource(ar.source) ? serverArtistView(ar.source, ar.name) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name, hiddenLibraries())).then((r) => {
               if (want === id) {
                 artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, mbid: (r as { mbid?: string }).mbid, studio: (r as { studio?: number | null }).studio };
                 // Their picture: their newest album's cover (Symfonium's, without an artist's photo); one from Discover's
@@ -483,6 +499,14 @@
               }
               return { ...r, total: r.rows.length, genres: null };
             })
+          : serverPlaylistOf(want)
+            ? serverPlaylistView(serverPlaylistOf(want)!.source, serverPlaylistOf(want)!.id).then((r) => {
+                if (want === id) {
+                  serverListName = r.title;
+                  covers = r.cover ? [r.cover] : [];
+                }
+                return { ...r, genres: null };
+              })
           : playlistRows(want, prefs.source || undefined).then((r) => {
               const shown = withWaiting(want, r.rows);
               return { ...r, rows: shown, total: shown.length, genres: null };
@@ -504,7 +528,7 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        if (r.source !== DEVICE && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        if (r.source !== DEVICE && !isServerSource(r.source) && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
       },
       (e) => {
         if (want !== id) return;
@@ -604,7 +628,7 @@
     covers = [];
     coversKnown = true;
     // An artist's comes with their albums (above).
-    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want)) return;
+    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want) || serverPlaylistOf(want)) return;
     const a = albumOf(want);
     if (a) {
       covers = [albumCoverUrl(a.source, a.id)];
@@ -1098,7 +1122,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
    *  crates and artists with it (the owner, 2026-11-02: "Profile everywhere"); Settings › Display says how much shows. */
   const profileList = $derived.by((): { list: FilterList; source?: string } | null => {
     if (crate) return { list: { kind: 'crate', id: crate }, source: prefs.source || undefined };
-    const ours = (source: string) => source !== DEVICE && !fromDiscover(source);
+    const ours = (source: string) => source !== DEVICE && !isServerSource(source) && !fromDiscover(source);
     if (album) return ours(album.source) ? { list: { kind: 'album', source: album.source, id: album.id } } : null;
     if (artist) return ours(artist.source) ? { list: { kind: 'artist', source: artist.source, name: artist.name } } : null;
     return p ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null;
@@ -1260,6 +1284,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let crateMenuOpen = $state(false);
   /** A badge's menu (decision 0058: a genre badge, a related playlist: what its tap opens, by its subject). */
   let badgeMenu = $state<string | null>(null);
+  /** A word's long-pressed under a record's title: the record and that kind's words (its menu's Remove from this record). */
+  let badgeFrom = $state<{ album: string; words: string[] } | null>(null);
   /** The ticked tracks' menu (the select bar's ⋮, lib/SelectionMenu): their rows, for its Remove from and Exclude from. */
   let tickedMenu = $state.raw<{ rows: PlaylistRow[]; tracks: LocalTrack[] } | null>(null);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
@@ -1310,6 +1336,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return [menu(`Menu of ${title}`, () => (crateMenuOpen = true))];
     // A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu).
     if (album?.source === BANDCAMP) return [menu(`Menu of ${title}`, () => (bandcampMenuOpen = true))];
+    // A server's album in its mode (decision 0098): its heart, its star there; no Cratarr menu. Its playlist: a menu
+    // of what that server does with one (Delete).
+    if (album && isServerSource(album.source)) return [heart(albumFav, toggleAlbumFavorite)];
+    if (serverList) return [menu(`Menu of ${title}`, () => (serverListMenu = true))];
     // The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu.
     if (offServer) return [];
     if (artist) return [...(artistHead?.favorite !== undefined ? [heart(artistHead.favorite, toggleArtistFavorite)] : []), menu(`Menu of ${artist.name}`, () => (artistMenuOpen = true))];
@@ -1834,7 +1864,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
   const newName = $derived(editing ? editing.name.trim() : '');
-  const nameChanged = $derived(!!editing && newName !== '' && newName !== id && !creating);
+  /** The name the edit mode starts from: a server's playlist's own (decision 0098), else its id (Cratarr's are by name). */
+  const editBase = $derived(serverList ? (serverListName ?? '') : id);
+  const nameChanged = $derived(!!editing && newName !== '' && newName !== editBase && !creating);
   // A crate's edit mode: the draft (kept, else the crate as saved, else empty; above), its size as the editor works it
   // out.
   let crateTotal = $state<number | null>(null);
@@ -1968,7 +2000,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   function startEdit() {
     if (!rows) return;
     navigator.vibrate?.(8);
-    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], name: id, saving: false };
+    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], name: editBase, saving: false };
   }
   const reorder = new Reorder(
     () => scroller,
@@ -2016,6 +2048,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (creating) return create();
     if (!editing || !rows) return;
     if (!tracksChanged && !nameChanged) return void (editing = null);
+    if (serverList) return saveOnServer(serverList.source, serverList.id);
     editing.saving = true;
     // Fixed now: once renamed, the panel follows the new name, and what changed would no longer show.
     const [from, to, renamed] = [id, newName, nameChanged];
@@ -2056,6 +2089,20 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
   }
 
+  /** A server's playlist (decision 0098; the owner, 2026-11-03: edited on that server): saved there, then read again. */
+  async function saveOnServer(source: string, playlist: string) {
+    if (!editing) return;
+    editing.saving = true;
+    try {
+      await saveServerPlaylist(source, playlist, tracksChanged ? editing.rows.map((x) => x.r.entry) : null, nameChanged ? newName : null);
+      editing = null;
+      saved++;
+    } catch (e) {
+      toast.fail(e, "The playlist wasn't saved");
+      if (editing) editing.saving = false;
+    }
+  }
+
   // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
   $effect(() => {
     const esc = (e: KeyboardEvent) => {
@@ -2083,7 +2130,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           kind,
           counted: rows && shown ? { shown: shown.length, total: rows.length, pending: pass.pending } : null,
           search: full ? pageUnder : null,
-          extra: rowAway && barEnds.some((e) => e.key === 'menu') ? endsGained : null,
+          // Not while the search is open (the owner, 2026-11-03: the menu coming in as the row went took the field's room,
+          // and the search wobbled): the field keeps the glass, as the left glass's gained actions go for it.
+          extra: rowAway && !pageView.searchOpen && barEnds.some((e) => e.key === 'menu') ? endsGained : null,
         };
   handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, item: true });
 </script>
@@ -2161,6 +2210,26 @@ ${r.album_artist ?? r.artist ?? ''}`;
         >
   {/if}
 {/snippet}
+{#if serverListMenu && serverList}
+  <MenuSheet label="Playlist" title={title} onclose={() => (serverListMenu = false)}>
+    <div role="menu">
+      <MenuEntry icon="trash" label="Delete…" onclick={() => ((serverListMenu = false), (serverListDeleting = true))} />
+    </div>
+  </MenuSheet>
+{/if}
+{#if serverListDeleting && serverList}
+  {@const sl = serverList}
+  <ConfirmSheet
+    title={`Delete ${title}?`}
+    label="Delete"
+    onconfirm={() =>
+      deleteServerPlaylist(sl.source, sl.id).then(
+        () => closePlaylist(),
+        (e) => toast.fail(e, "The playlist wasn't deleted"),
+      )}
+    onclose={() => (serverListDeleting = false)}
+  />
+{/if}
 {#snippet endButton(e: EndAction, size: number, glass = false)}<button class="icon" class:on-glass={glass} class:fav={e.on} aria-pressed={e.key === 'heart' ? e.on : undefined} aria-label={e.label} onclick={e.run}
     ><Icon name={e.key === 'heart' ? 'heart' : 'moreVert'} {size} /></button
   >{/snippet}
@@ -2294,6 +2363,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
         {:else if !album && !artist && !offServer && p && p.mine !== false}
           <button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>
+        {:else if serverList}
+          <button class="icon" aria-label={`Edit ${title}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>
         {/if}
         {#each barEnds as e (e.key)}{@render endButton(e, 24)}{/each}
       </div>
@@ -2400,7 +2471,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
           <!-- A genre opens in the panel (its own crate). -->
           {#if recordWords}
-            {#each recordWords as row (row.kind)}<p class="genres"><span class="row-head">{row.label}</span>{#each row.words as w (w)}<button onclick={() => viewOver(`${CRATE}${row.kind}:${w}`)} use:longpress={() => (badgeMenu = `${CRATE}${row.kind}:${w}`)}>{w}</button>{/each}</p>{/each}
+            {#each recordWords as row (row.kind)}<p class="genres"><span class="row-head">{row.label}</span>{#each row.words as w (w)}<button onclick={() => viewOver(`${CRATE}${row.kind}:${w}`)} use:longpress={() => ((badgeMenu = `${CRATE}${row.kind}:${w}`), (badgeFrom = album ? { album: album.id, words: row.words } : null))}>{w}</button>{/each}</p>{/each}
           {:else if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)} use:longpress={() => (badgeMenu = CRATE + GENRE + g)}>{g}</button>{/each}</p>{/if}
           <!-- A playlist's or a crate's telling artists (its profile's), each opening the artist, headed "Typical artists";
                not an album's or an artist's own, whose header names them. -->
@@ -2647,7 +2718,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   <div class="column-head">
     <!-- Its end as wide as its rows' (rowEnd: the heart and the menu, the tick while selecting, nothing for the
          device's own music), so the columns share out the same room and line up (the owner, 2026-10-23). -->
-    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} sorts={sorts ? trackHeads : undefined} action={onDevice ? undefined : endSpace}>
+    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} sorts={sorts ? trackHeads : undefined} action={onDevice && !isServerSource(source) ? undefined : endSpace}>
       {#snippet lead()}<span class="cover-space"></span>{/snippet}
     </Row>
   </div>
@@ -2681,7 +2752,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
-        if (!ok || onDevice) return;
+        if (!ok || (onDevice && !isServerSource(src))) return;
         // In select mode it asks what to tick; else the track's menu (decision 0058: Select is the header's).
         if (selecting && i !== null) selectSheet = true;
         else trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name) };
@@ -2710,6 +2781,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><ChoiceMark kind="several" on={selecting.has(i)} /></button
     >
+  {:else if isServerSource(src)}
+    <!-- A server's track (decision 0098): its menu, with its heart and that server's playlists. -->
+    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu' })}><Icon name="moreVert" size={22} /></button>
   {:else if !offServer}
     <RowHeart
       source={src}
@@ -2859,7 +2933,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   />
 {/if}
 {#if badgeMenu}
-  <SubjectMenu subject={badgeMenu} onclose={() => (badgeMenu = null)} />
+  <SubjectMenu subject={badgeMenu} from={badgeFrom} onclose={() => ((badgeMenu = null), (badgeFrom = null))} />
 {/if}
 {#if crateMenuOpen && crate}
   <CrateMenu id={crate} onclose={() => (crateMenuOpen = false)} onsave={() => (making = { name: '', saving: false })} />
@@ -3418,7 +3492,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     pointer-events: none;
   }
 
-  .pills > * {
+  /* Every part on it takes taps, another component's too (the left glass is lib/NavigationControls since 0.14: scoped,
+     `*` matched only this component's own, and the glass let taps through on the tablet: the owner, 2026-11-03). */
+  .pills > :global(*) {
     pointer-events: auto;
   }
 

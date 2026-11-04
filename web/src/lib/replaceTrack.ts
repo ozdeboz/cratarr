@@ -107,6 +107,12 @@ export type IntakeItem = {
   why?: string;
   /** Added: its run, which Undo takes out again (lib/fileRuns undoRun). */
   undo?: string;
+  /** Not found (0.15, the retry ladder): searches in a row that found nothing, and when it is looked for again (epoch
+   *  s; 0: due). Users who failed it, never asked again; its files set aside, each with why. */
+  misses?: number;
+  due?: number;
+  failed?: string[];
+  set_aside?: string[];
 };
 export type Intake = { running: boolean; items: IntakeItem[] };
 export const startIntake = (albums: string[]) => call<Intake>('/api/track-intake', 'POST', { albums });
@@ -114,3 +120,5 @@ export const getIntake = () => call<Intake>('/api/track-intake');
 export const approveIntake = (items: { id: string; candidate?: string }[]) => call<void>('/api/track-intake/approve', 'POST', { items });
 export const dropIntake = (id: string) => call<void>(`/api/track-intake/${enc(id)}`, 'DELETE');
 export const clearIntake = () => call<void>('/api/track-intake', 'DELETE');
+/** Looked for now, whatever its wait (0.15: Search now). */
+export const searchIntakeNow = (id: string) => call<Intake>(`/api/track-intake/${enc(id)}/now`, 'POST');

@@ -23,6 +23,11 @@ type Part = {
   box: HTMLElement;
   glass: HTMLElement;
   shade: HTMLElement | null;
+  /** The main glass over the back layer, where a part has one (the pill: the thin back layer is its extension, the
+   *  owner 2026-11-03), and how far in from the box's edges it rests (top, right, bottom, left). It moves as the glass
+   *  does, its outline on the same clock (the owner, 2026-11-03: the two came apart, the main one at its end at once). */
+  main: HTMLElement | null;
+  mainIn: [number, number, number, number] | null;
   radius: number;
   /** No motion now: what changes is there at once (where the owner wanted it so). */
   still: () => boolean;
@@ -42,7 +47,7 @@ type Part = {
 };
 
 const GHOST = 'data-glass-ghost';
-const isLayer = (p: Part, el: Element) => el === p.glass || el === p.shade || el.hasAttribute(GHOST);
+const isLayer = (p: Part, el: Element) => el === p.glass || el === p.shade || el === p.main || el.hasAttribute(GHOST);
 const kidsOf = (p: Part) => [...p.box.children].filter((el) => !isLayer(p, el));
 /** The window's width: a change of it (turning the phone, a window resized) is laid out at once, not moved. Not its
  *  height, which the keyboard changes as the search opens (the owner, 2026-11-01: after the first search it no longer
@@ -75,8 +80,16 @@ function measure(p: Part) {
     kids.set(el, rectIn(el.getBoundingClientRect(), f));
     shows.set(el, display);
   }
-  return { at, kids, shows, glass: Number(getComputedStyle(p.glass).opacity) };
+  let mainIn: [number, number, number, number] | null = null;
+  if (p.main) {
+    const m = rectIn(p.main.getBoundingClientRect(), f);
+    mainIn = [m.y - at.y, at.x + at.w - (m.x + m.w), at.y + at.h - (m.y + m.h), m.x - at.x];
+  }
+  return { at, kids, shows, glass: Number(getComputedStyle(p.glass).opacity), mainIn };
 }
+
+/** A box's outline less the main glass's insets. */
+const within = (r: Rect, [t, rt, b, l]: [number, number, number, number]): Rect => ({ x: r.x + l, y: r.y + t, w: r.w - l - rt, h: r.h - t - b });
 
 /** The outline shown now: where the move under way has got to, else where it rests. By the glass's own animation, as
  *  each child's translate is read from its own (offsetNow), never by the clock on the wall: a move whose first frame a
@@ -139,6 +152,8 @@ function play(p: Part) {
   for (const a of p.anims) stop(a);
   p.anims = [];
   p.glass.style.inset = '';
+  if (p.main) p.main.style.inset = '';
+  const mainWas = p.mainIn;
   const after = measure(p);
   const win = windowNow();
   const resized = win !== p.window;
@@ -148,6 +163,7 @@ function play(p: Part) {
     p.kids = after.kids;
     p.shows = after.shows;
     p.seen = after.glass;
+    p.mainIn = after.mainIn;
     p.run = null;
   };
   const kept = [...after.kids.keys()].filter((el) => was.has(el));
@@ -155,6 +171,7 @@ function play(p: Part) {
     !from ||
     !sameRect(from, after.at) ||
     glassWas !== after.glass ||
+    String(mainWas) !== String(after.mainIn) ||
     after.kids.size !== kept.length ||
     p.kids.size !== kept.length ||
     kept.some((el) => !sameRect(was.get(el)!, after.kids.get(el)!));
@@ -180,6 +197,23 @@ function play(p: Part) {
     timing,
   );
   p.anims.push(clock);
+  // The main glass over it: its own outline (the box's less its insets, before and after) from the old to the new, on
+  // the glass's clock, drawn as large as both meanwhile.
+  if (p.main && mainWas && after.mainIn) {
+    const [m0, m1] = [within(from, mainWas), within(to, after.mainIn)];
+    const both = union(m0, m1);
+    p.main.style.inset = grownTo(both, to);
+    p.anims.push(
+      begin(
+        p.main,
+        [
+          { clipPath: insetOf(m0, both, r), opacity: seen },
+          { clipPath: insetOf(m1, both, r), opacity: seen },
+        ],
+        timing,
+      ),
+    );
+  }
   // Its ring and shadow: its edges moved from the old outline to the new, never stretched (the owner, 2026-11-02: a
   // scale squashed its round ends into an oval, and its ring showed as a second, misplaced outline). An empty layer
   // laid out alone, so a cheap move; and on the same clock as the glass's outline, never ahead of it.
@@ -259,6 +293,7 @@ function play(p: Part) {
   p.kids = after.kids;
   p.shows = after.shows;
   p.seen = after.glass;
+  p.mainIn = after.mainIn;
   p.run = { from, to, clock };
   confine(p);
   const anims = p.anims;
@@ -266,6 +301,7 @@ function play(p: Part) {
     () => {
       if (p.anims !== anims) return;
       p.glass.style.inset = '';
+      if (p.main) p.main.style.inset = '';
       p.run = null;
     },
     () => {},
@@ -282,7 +318,7 @@ function confine(p: Part) {
     const out = p.run ? shownNow(p) : null;
     const f = out ? p.frame() : null;
     for (const el of p.box.children) {
-      if (el === p.glass || el === p.shade || !(el instanceof HTMLElement)) continue;
+      if (el === p.glass || el === p.shade || el === p.main || !(el instanceof HTMLElement)) continue;
       if (out && f) el.style.clipPath = insetOf(out, rectIn(el.getBoundingClientRect(), f), p.radius);
       else el.style.removeProperty('clip-path');
     }
@@ -292,8 +328,8 @@ function confine(p: Part) {
   step();
 }
 
-/** Makes `box` a glass part (an attachment: `{@attach glassPart({ radius: 26 })}`): its first children of class `glass`
- *  and `shade` are its layers. Its motion is its own from then on, whatever changes it. */
+/** Makes `box` a glass part (an attachment: `{@attach glassPart({ radius: 26 })}`): its first children of class `glass`,
+ *  `shade` and `main` are its layers. Its motion is its own from then on, whatever changes it. */
 export function glassPart({ radius, still = () => false }: { radius: number; still?: () => boolean }) {
   return (box: HTMLElement) => {
     const glass = box.querySelector<HTMLElement>(':scope > .glass');
@@ -302,6 +338,8 @@ export function glassPart({ radius, still = () => false }: { radius: number; sti
       box,
       glass,
       shade: box.querySelector<HTMLElement>(':scope > .shade'),
+      main: box.querySelector<HTMLElement>(':scope > .main'),
+      mainIn: null,
       radius,
       still,
       frame: frameOf(box),
@@ -319,12 +357,13 @@ export function glassPart({ radius, still = () => false }: { radius: number; sti
     p.kids = first.kids;
     p.shows = first.shows;
     p.seen = first.glass;
+    p.mainIn = first.mainIn;
     // A change to its children or words: played before the frame is drawn (animation frames come before layout).
     let asked = 0;
     const ask = () => {
       if (!asked) asked = requestAnimationFrame(() => ((asked = 0), play(p)));
     };
-    const ours = (n: Node) => n instanceof Element && (n.hasAttribute(GHOST) || n === p.glass || n === p.shade);
+    const ours = (n: Node) => n instanceof Element && (n.hasAttribute(GHOST) || n === p.glass || n === p.shade || n === p.main);
     const changes = new MutationObserver((list) => {
       if (list.some((m) => !(ours(m.target) || (m.type === 'childList' && [...m.addedNodes, ...m.removedNodes].every(ours))))) ask();
     });

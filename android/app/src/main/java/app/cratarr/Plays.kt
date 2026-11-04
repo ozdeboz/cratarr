@@ -45,9 +45,17 @@ object Plays {
         val source = track.optString("source")
         val id = track.optString("id")
         if (source.isEmpty() || id.isEmpty()) return
+        // The play's own id, its report's and its scrobble's (decision 0091: one play sent once, whichever way).
+        val playId = UUID.randomUUID().toString()
+        if (counts) Scrobblers.played(context, track, playId, atMs, lengthMs)
+        // A server's track (decision 0098): its play is that server's, never Cratarr's.
+        if (source.startsWith(Servers.MODE_PREFIX)) {
+            if (counts) Servers.played(context, source, id, atMs)
+            return
+        }
         val prefs = Prefs(context)
         val play = JSONObject()
-            .put("id", UUID.randomUUID().toString())
+            .put("id", playId)
             .put("source", source)
             .put("track", id)
             .put("at", atMs)

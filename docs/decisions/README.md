@@ -285,3 +285,26 @@ by a later record that says so in its header. A new decision takes the next numb
   name, colour, naming and format; Incoming one library per fetcher, its records the only new ones, Keep into a chosen
   main library; Health over every library; each user's own music a main library with an owner. Amends 0009, 0034 and
   0084.
+- [0098: Modes per server](0098-modes-per-server.md): accepted, for 0.15. A Jellyfin or a Subsonic server in the app,
+  as Local: the app signs in and streams itself, on this device only; added in Settings › This device › Servers; its
+  library, search, playlists (edited on that server), Home (its lists) and Radio (its own mix); no crates, Discover,
+  Insights or Requests. No second Cratarr server in 0.15.
+- [0099: Soulseek in Cratarr](0099-soulseek-in-cratarr.md): accepted, for 0.15; soularr goes, Lidarr stays. Lidarr's
+  Wanted searched on a ladder, each folder judged by its release (every track by title and length), fetched only with
+  a tick, the next folder when a user fails, every file gated and a folder that fails set aside whole; into its own
+  Incoming library (the fetcher "soulseek"), kept on disk.
+  Amended 2026-11-03: Lidarr and Soulseek siblings; Soulseek takes only Cratarr's approved Requests.
+- [0100: Cratarr's own records, artists and labels](0100-cratarrs-own-records-artists-labels.md): accepted, for 0.16;
+  a master record, artist and label, owned or not, each mapped to MusicBrainz, Discogs and Bandcamp, none required;
+  the reference that fits counts; artist pages for anyone, label pages with the whole catalogue, search's "beyond"
+  opening Cratarr's own pages; Soulseek judged by any reference, never a MusicBrainz id required.
+- [0101: 0.16 — each user's own music, one track id, and the library on the device](0101-own-music-one-track-id-library-on-the-device.md):
+  accepted, for 0.16; libraries in list order, requests through Incoming into one's own music, the catalogue's track id
+  served once switched, downloads with a holder per account and caches hidden at sign-out, the whole index with vectors
+  and fits offline, Radio's picker in the rules crate; one migration at first start, rehearsed; two previews. Where it
+  meets 0084, 0085 and 0091, open for later.
+  Amended 2026-11-03: 0102's tape engine joins 0.16 and the rules crate's move.
+- [0102: The tape engine on the device](0102-the-tape-engine-on-the-device.md): accepted, for 0.16; every wind's sound
+  made where it is heard, from the track decoded in memory (the playing track only), the engine's arithmetic in the
+  rules crate (0101); a streamed track's file fetched whole as it starts; the app and the page together; the server's
+  wind, rewind and brake streams retired.

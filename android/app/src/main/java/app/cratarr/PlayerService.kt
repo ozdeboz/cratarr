@@ -241,7 +241,7 @@ class PlayerService : MediaSessionService() {
 
             override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
                 if (!shuffleModeEnabled) return
-                if (prefs.mode == Prefs.MODE_DEVICE) shuffleUpcoming(player) else link?.shuffleOnce()
+                if (prefs.ownQueue) shuffleUpcoming(player) else link?.shuffleOnce()
             }
 
             override fun getShuffleModeEnabled() = false
@@ -270,6 +270,10 @@ class PlayerService : MediaSessionService() {
         // on any more, Cratarr's.
         if (prefs.mode == Prefs.MODE_DEVICE) {
             if (DeviceMusic.on(this)) restore(prefs.savedQueue(Prefs.MODE_DEVICE)) else prefs.mode = Prefs.MODE_CRATARR
+        }
+        // A server's mode (decision 0098) likewise, while it is still signed in to here.
+        if (prefs.mode.startsWith(Servers.MODE_PREFIX)) {
+            if (Servers.has(this, prefs.mode.removePrefix(Servers.MODE_PREFIX))) restore(prefs.savedQueue(prefs.mode)) else prefs.mode = Prefs.MODE_CRATARR
         }
         link = PlayOnLink(this, player, prefs, sync, commands).also { it.start() }
         Ready.ensure(this, "service started")
@@ -373,14 +377,16 @@ class PlayerService : MediaSessionService() {
     /**
      * Local mode (decision 0052): Cratarr's music or the device's own, never mixed. Each keeps its queue: the one left
      * (its tracks, the one that plays and where, shuffle and repeat) is put by, and the other one taken up where it was,
-     * paused. Entering local mode leaves a group. True when the mode changed.
+     * paused. Entering local mode leaves a group. A server's mode (decision 0098) is one more, its queue its own. True
+     * when the mode changed.
      */
     fun switchMode(to: String, why: String): Boolean {
-        val mode = if (to == Prefs.MODE_DEVICE) Prefs.MODE_DEVICE else Prefs.MODE_CRATARR
+        val mode = Prefs.known(to)
         val was = prefs.mode
         if (was == mode || (mode == Prefs.MODE_DEVICE && !DeviceMusic.on(this))) return false
-        LinkLog.add(this, "info", "playon", "mode", "to" to mode, "why" to why)
-        if (mode == Prefs.MODE_DEVICE && sync.leader != null) sync.leave()
+        if (mode.startsWith(Servers.MODE_PREFIX) && !Servers.has(this, mode.removePrefix(Servers.MODE_PREFIX))) return false
+        LinkLog.add(this, "info", "playon", "mode", "to" to if (mode.startsWith(Servers.MODE_PREFIX)) "server" else mode, "why" to why)
+        if (mode != Prefs.MODE_CRATARR && sync.leader != null) sync.leave()
         player.pause()
         prefs.saveQueue(was, snapshot().toString())
         prefs.mode = mode
@@ -418,7 +424,7 @@ class PlayerService : MediaSessionService() {
     }
 
     /** Local mode's queue kept as it goes, for a restart (changes close together as one). */
-    private val saveDevice = Runnable { if (prefs.mode == Prefs.MODE_DEVICE) prefs.saveQueue(Prefs.MODE_DEVICE, snapshot().toString()) }
+    private val saveDevice = Runnable { if (prefs.ownQueue) prefs.saveQueue(prefs.mode, snapshot().toString()) }
 
     /**
      * This device's output as chosen in its sheet (decision 0033, amended 2026-10-19): the player's sound goes there,
@@ -523,8 +529,8 @@ class PlayerService : MediaSessionService() {
         var cut = false
 
         private val keep = Runnable {
-            // Local mode's tracks are on the device already.
-            if (prefs.mode == Prefs.MODE_DEVICE) return@Runnable
+            // Local mode's tracks are on the device already; a server's are its own, nothing of Cratarr's.
+            if (prefs.ownQueue) return@Runnable
             // What the notification and the lock screen show, as Cratarr describes it (0.9.6).
             Describe.fill(this@PlayerService, player)
             val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
@@ -561,6 +567,10 @@ class PlayerService : MediaSessionService() {
             override fun run() {
                 if (hearing == null) {
                     hearing = player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Hearing(it, System.currentTimeMillis()) }
+                    // A server's track (decision 0098): that server hears that it plays here.
+                    hearing?.track?.let { t -> if (t.optString("source").startsWith(Servers.MODE_PREFIX)) Servers.playing(this@PlayerService, t.optString("source"), t.optString("id")) }
+                    // Now playing, from this device (decision 0091).
+                    hearing?.track?.let { t -> Scrobblers.playing(this@PlayerService, t) }
                 }
                 val h = hearing
                 val d = player.duration
@@ -593,7 +603,7 @@ class PlayerService : MediaSessionService() {
                 Radio.insert(this@PlayerService, player, prefs.serverUrl, ::located)
                 Autoplay.fill(this@PlayerService, player, prefs.serverUrl, ::located)
             }
-            if (prefs.mode == Prefs.MODE_DEVICE && events.containsAny(
+            if (prefs.ownQueue && events.containsAny(
                     Player.EVENT_TIMELINE_CHANGED,
                     Player.EVENT_MEDIA_ITEM_TRANSITION,
                     Player.EVENT_PLAY_WHEN_READY_CHANGED,
@@ -786,6 +796,7 @@ class PlayerService : MediaSessionService() {
      *  device's own from Android. */
     fun located(item: MediaItem): MediaItem {
         DeviceMusic.located(item)?.let { return it }
+        Servers.located(this, item)?.let { return it }
         val server = prefs.serverUrl?.trimEnd('/')
         val found = Downloads.locate(this, item, server)
         server ?: return found

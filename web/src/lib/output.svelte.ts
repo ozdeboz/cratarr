@@ -4,8 +4,10 @@
 // players by name (0.13). A browser that cannot play here with no player chosen has nowhere to play (lib/player/port). The player shows each the same way: the queue the page holds is
 // presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
 // other side, which plays from there, and the side that played stops.
+import { playedHere, playingHere } from './scrobbles.svelte';
 import { away, pickHere } from './away.svelte';
 import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
+import { isServerSource, serverAlbumView } from './serverMode.svelte';
 import { albumView, playlistTrackIds, queueTracks, trackDetails, reportPlays, type HeardEvent, type PlayMode, type Playlist } from './api';
 import { untrack } from 'svelte';
 import { canPlayHere, cutForNow, keptHere, local, playQueue, type LocalTrack } from './localPlayer.svelte';
@@ -126,10 +128,22 @@ if (typeof window !== 'undefined') {
 }
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
 const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+/** A play of this browser's as it is scrobbled from here (decision 0091), its id its report's. */
+const asScrobble = (h: Hearing, id: string) => ({
+  id,
+  at: Math.floor(h.started / 1000),
+  artist: h.track.artist ?? '',
+  title: h.track.name,
+  album: h.track.album ?? null,
+  duration_secs: h.length,
+});
 function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
   const account = accountKey();
+  const id = reportId();
+  // From each device (decision 0091): the play counted is scrobbled from here too, by the same id.
+  if (counts && h.track.artist) playedHere(asScrobble(h, id));
   unsent.push({
-    id: reportId(),
+    id,
     source: h.track.source,
     track: h.track.id,
     at: h.started,
@@ -165,7 +179,10 @@ $effect.root(() => {
       hearing = null;
     }
     if (!t) return;
-    hearing ??= { at, track: t, started: Date.now(), heard: 0, length: null, counted: false };
+    if (!hearing) {
+      hearing = { at, track: t, started: Date.now(), heard: 0, length: null, counted: false };
+      if (t.artist) playingHere(asScrobble(hearing, ''));
+    }
     hearing.heard = Math.max(hearing.heard, local.position);
     hearing.length = local.duration ?? hearing.length;
     const d = local.duration;
@@ -241,14 +258,14 @@ export const playPlaylistFrom = async (name: string, source: string, tracks: Loc
  *  Incoming) the server says with each track's state. */
 export async function playAlbumHere(source: string, album: string, title?: string): Promise<boolean> {
   if (!port().holdsQueue) return false;
-  // Out of reach (lib/away): its tracks on this device alone.
-  if (away()) {
+  // Out of reach (lib/away): its tracks on this device alone. A server's own (decision 0098) is reached by the app.
+  if (away() && !isServerSource(source)) {
     const got = await pickHere({ kind: 'album', source, id: album }, 'play', undefined, source);
     playQueue(got.tracks, 0, title ?? null);
     return true;
   }
-  // The device's own (local mode, decision 0052): its album as the app lists it.
-  const r = source === DEVICE ? deviceAlbumView(album) : await albumView(source, album);
+  // The device's own (local mode, decision 0052): its album as the app lists it; a server's, as that server gives it.
+  const r = source === DEVICE ? deviceAlbumView(album) : isServerSource(source) ? await serverAlbumView(source, album) : await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
     r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs })),

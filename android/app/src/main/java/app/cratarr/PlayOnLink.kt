@@ -359,7 +359,7 @@ class PlayOnLink(
             // Sync play (decision 0037): the group this player plays in, by its leader (none: alone). Local mode
             // (decision 0052) plays alone.
             "group" -> {
-                if (prefs.mode == Prefs.MODE_DEVICE && !m.isNull("leader")) return report()
+                if (prefs.ownQueue && !m.isNull("leader")) return report()
                 sync.group(
                     if (m.isNull("leader")) null else m.optString("leader"),
                     if (m.isNull("host")) null else m.optString("host").ifEmpty { null },
@@ -624,7 +624,7 @@ class PlayOnLink(
     private fun report() {
         val base = base() ?: return
         val p = player
-        if (prefs.mode == Prefs.MODE_DEVICE) return reportDevice(base)
+        if (prefs.ownQueue) return reportDevice(base)
         // The deck's one truth (decision 0075): a wind's place across the queue; otherwise the player's, where a group
         // hears it, or Start and stop's held place.
         val deck = service.startStop.deck()

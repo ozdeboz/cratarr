@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS intake_heard (album TEXT PRIMARY KEY, at INTEGER NOT 
 -- What was chosen of a record's references (0.14, app::references): the source that counts, links pasted, checked by
 -- hand (JSON).
 CREATE TABLE IF NOT EXISTS record_references (album TEXT PRIMARY KEY, chosen TEXT NOT NULL) WITHOUT ROWID;
+-- A track's own words set by hand (0.15, decision 0097's track Edit): by its id and kind (genre, style, mood, tag), the
+-- words (JSON), and when; none: its record's.
+CREATE TABLE IF NOT EXISTS track_words (track TEXT NOT NULL, kind TEXT NOT NULL, words TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (track, kind)) WITHOUT ROWID;
 ";
 
 /// A word as a source said it.
@@ -209,7 +213,49 @@ impl UserData {
         let db = self.db();
         let (n, at): (i64, i64) = db.query_row("SELECT count(*), coalesce(max(at), 0) FROM words", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
         let (tags, tagged): (i64, i64) = db.query_row("SELECT count(*), coalesce(max(at), 0) FROM album_tags", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(n.wrapping_mul(31).wrapping_add(at).wrapping_mul(31).wrapping_add(tags).wrapping_mul(31).wrapping_add(tagged))
+        // A track's own words, and the Catalogue sheet's choices (sources switched off, aliases: `words:` choices).
+        let (own, owned): (i64, i64) = db.query_row("SELECT count(*), coalesce(max(at), 0) FROM track_words", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let choices: String = db.query_row("SELECT coalesce(group_concat(source || '=' || choice, ';'), '') FROM import_choices WHERE source LIKE 'words:%'", [], |r| r.get(0))?;
+        let chosen = choices.bytes().fold(0i64, |h, b| h.wrapping_mul(131).wrapping_add(i64::from(b)));
+        Ok(n.wrapping_mul(31)
+            .wrapping_add(at)
+            .wrapping_mul(31)
+            .wrapping_add(tags)
+            .wrapping_mul(31)
+            .wrapping_add(tagged)
+            .wrapping_mul(31)
+            .wrapping_add(own)
+            .wrapping_mul(31)
+            .wrapping_add(owned)
+            .wrapping_mul(31)
+            .wrapping_add(chosen))
+    }
+
+    /// Every track's own words set by hand: (track, kind, words).
+    pub fn all_track_words(&self) -> Result<Vec<(String, String, Vec<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT track, kind, words FROM track_words")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (t, k, w) = row?;
+            out.push((t, k, serde_json::from_str(&w).unwrap_or_default()));
+        }
+        Ok(out)
+    }
+
+    /// A track's own words of a kind set by hand; none: back to its record's.
+    pub fn set_track_words(&self, track: &str, kind: &str, words: Option<&[String]>) -> Result<()> {
+        let db = self.db();
+        match words {
+            Some(w) => db.execute(
+                "INSERT INTO track_words (track, kind, words, at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (track, kind) DO UPDATE SET words = excluded.words, at = excluded.at",
+                params![track, kind, serde_json::to_string(w)?, super::now_ms()],
+            )?,
+            None => db.execute("DELETE FROM track_words WHERE track = ?1 AND kind = ?2", params![track, kind])?,
+        };
+        Ok(())
     }
 }
 

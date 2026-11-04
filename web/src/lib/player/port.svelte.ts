@@ -4,6 +4,7 @@
 // server's player, its other side, went from Cratarr's mode). Which
 // one is `port()`'s to say, here only (lib/player/commands' holdsQueue); everything else asks the port. What each side
 // does is as it was where it was asked: the readings, the commands, what is shown before a command is confirmed.
+import { isServerSource, serverStar, serverTrackState } from '../serverMode.svelte';
 import {
   playlistRows,
   setFavorite,
@@ -184,7 +185,8 @@ export const localState = $state<{ key: string | null; view: TrackState | null; 
 const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
 async function loadState(t: LocalTrack) {
   try {
-    const view = await trackState(t.source, t.id);
+    // A server's track (decision 0098): its heart is its star there, as its lists said it.
+    const view = isServerSource(t.source) ? serverTrackState(t.source, t.id) : await trackState(t.source, t.id);
     if (localState.key !== keyOf(t)) return;
     localState.view = view;
   } catch {
@@ -270,6 +272,10 @@ const here: PlayerPort = {
     localSeek(Math.max(0, Math.min(length ? length - 1 : Infinity, at() + secs)));
   },
   async setFavorite(np, on) {
+    if (isServerSource(np.source)) {
+      await serverStar(np.source, 'track', np.id, on);
+      return tookLocal(np.source, np.id, serverTrackState(np.source, np.id));
+    }
     tookLocal(np.source, np.id, await setTrackFavorite(np.source, np.id, on));
   },
   playlists: () => localState.view?.playlists ?? (live.view?.playlists ?? []).map((p) => ({ ...p, member: false })),

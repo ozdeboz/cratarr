@@ -39,6 +39,8 @@
   import HomeStatus from './lib/HomeStatus.svelte';
   import { CRATE, LIKE, viewGenre, viewLike, withoutFor } from './lib/crates.svelte';
   import { device, DEVICE, localMode } from './lib/deviceMusic.svelte';
+  import { serverList, serverMode, serverSource } from './lib/serverMode.svelte';
+  import { HOME_LIST_NAMES, HOME_LISTS, type HomeList } from './lib/servers/server';
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
@@ -61,9 +63,25 @@
 
   const WEEK = `${LIKE}week`;
   const NEWEST_HERE = 'Newest on this device';
-  /** Local mode (lib/localHome): the device's own Home, nothing asked of Cratarr. */
-  const local = localMode();
-  if (local) askDevicePlays();
+  /** A server's mode (decision 0098; the owner, 2026-11-03: "That server's lists"): its Home is its own rows, on
+   *  Home's row cards (lib/serverMode), nothing asked of Cratarr. */
+  const server = serverMode();
+  const serverSrc = server ? serverSource(server.id) : '';
+  // Its rows as Settings › Content has them for this server (all five, as they come, until changed).
+  const SERVER_ROWS: [HomeList, string][] = server ? (prefs.serverHome[server.id] ?? HOME_LISTS).map((w) => [w, HOME_LIST_NAMES[w]]) : [];
+  let serverRows = $state<Partial<Record<HomeList, ListedAlbum[]>>>({});
+  let serverFailed = $state<Partial<Record<HomeList, string>>>({});
+  const readServerRow = (which: HomeList) =>
+    serverList(serverSrc, which).then(
+      (albums) => ((serverRows[which] = albums), delete serverFailed[which]),
+      (e) => (serverFailed[which] = e instanceof Error ? e.message : "Can't reach the server"),
+    );
+  onMount(() => {
+    if (server) for (const [which] of SERVER_ROWS) readServerRow(which);
+  });
+  /** Local mode (lib/localHome): the device's own Home, nothing asked of Cratarr; nor in a server's. */
+  const local = localMode() || !!server;
+  if (localMode()) askDevicePlays();
   // What Home showed last (lib/homeKept): shown at once on its return, each answer asked again quietly behind it.
   const kept = homeKept(prefs.source, hiddenLibraries());
   // The moment and its sky only while they still hold (half an hour, the same part of the day): else the fresh one.
@@ -544,11 +562,29 @@
 {#if queuesOpen}<QueuesSheet onclose={() => (queuesOpen = false)} />{/if}
 
 <div class="home">
+  {#if server}
+    {#each SERVER_ROWS as [which, title] (which)}
+      {#if serverFailed[which]}
+        <section class="failed" aria-label={title}><Notice text={`${title}: ${serverFailed[which]}`} onretry={() => readServerRow(which)} /></section>
+      {:else if serverRows[which]?.length}
+        <section aria-label={title}>
+          <SectionHead {title} />
+          <ul class="shelf">
+            {#each serverRows[which] ?? [] as a (a.id)}
+              <li><AlbumCard source={serverSrc} album={a} lines={[a.artist ?? '']} /></li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
+    {/each}
+    {#if SERVER_ROWS.every(([w]) => !serverRows[w] && !serverFailed[w])}<PageLoading />{/if}
+  {:else}
   {#if loading}<PageLoading />{/if}
   <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
   {#each order as part, i (part)}
     {#if failedOf(part) && turn(part)}{@render failedPart(part)}{:else if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
   {/each}
+  {/if}
 </div>
 
 {#snippet failedPart(part: Part)}

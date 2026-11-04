@@ -14,6 +14,7 @@
   import LocalAlbums from './LocalAlbums.svelte';
   import ModeSwitcher from './lib/ModeSwitcher.svelte';
   import { localMode, switchable } from './lib/deviceMusic.svelte';
+  import { serverMode } from './lib/serverMode.svelte';
   import { serverConnection } from './lib/connection.svelte';
   import Insights from './Insights.svelte';
   import Downloads from './Downloads.svelte';
@@ -22,7 +23,7 @@
   import HealthPanel from './lib/HealthPanel.svelte';
   import { health, problems } from './lib/healthReport.svelte';
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
-  import { askDownloads, downloads, inApp } from './lib/app.svelte';
+  import { appInfo, askDownloads, downloads, inApp } from './lib/app.svelte';
   import { keyboard } from './lib/keyboard.svelte';
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
@@ -81,6 +82,7 @@
   import { longpress } from './lib/longpress';
   import { followAddress, setBeside } from './lib/panel.svelte';
   import RadioSheet from './lib/RadioSheet.svelte';
+  import ReviewSheet from './lib/ReviewSheet.svelte';
   import { radioSheet } from './lib/radioAsk.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
@@ -454,7 +456,9 @@
   });
   // What the page's place holds (lib/Hold): the page, local mode's Home being another (a switch of the mode, held until
   // it is ready, never half drawn).
-  const pageKey = $derived(page === 'home' && localMode() ? 'home:local' : page);
+  /** A mode of the device's own player (decision 0052's Local, 0098's servers): nothing of Cratarr's server. */
+  const ownMode = $derived(localMode() || !!serverMode());
+  const pageKey = $derived(page === 'home' && ownMode ? `home:${appInfo.mode}` : page);
   let shownKey = $state(untrack(() => pageKey));
   /** The page whose content shows (lib/Hold): until the one asked for is ready, its row is there but not yet to be
    *  used. The bar's highlight and the row follow the tap at once (the owner, 2026-10-27: always responsive, never what
@@ -800,7 +804,7 @@
   // its downloads (decision 0033, step 4), unless it was opened on a page or a view of its own.
   let openedAway = false;
   $effect(() => {
-    if (!inApp || openedAway || reach.answered || !reach.away || localMode()) return;
+    if (!inApp || openedAway || reach.answered || !reach.away || ownMode) return;
     if (!downloads.known) return askDownloads();
     openedAway = true;
     if (downloads.tracks.length && page === HOME.id && openedBare) {
@@ -871,7 +875,8 @@
   $effect(() => {
     serverConnection.value = connection;
   });
-  const MAIN: Page[] = $derived(localMode() ? [HOME, LOCAL] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
+  // A server's mode (decision 0098): its Home, its records and its playlists, as Local has its Home and records.
+  const MAIN: Page[] = $derived(localMode() ? [HOME, LOCAL] : serverMode() ? [HOME, LOCAL, PLAYLISTS] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
   // The sidebar's direct links under Library and Discover (the owner, 2026-10-29): what each one's picker beside back
   // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
   loadSpotify();
@@ -933,18 +938,20 @@
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const mayRequest = $derived(me.admin || me.permissions.request || me.permissions.manage_requests);
   const APART: Page[] = $derived(
-    localMode() ? [SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp || installed ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
+    // A server's mode keeps its own downloads (decision 0098); Local plays what is on the device already.
+    ownMode ? [...(serverMode() ? [DOWNLOADS] : []), SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp || installed ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
   );
   // The global search finds the pages shown and their parts, and Settings' (lib/everywhere).
   provideEverywhere(() => [...MAIN, ...APART]);
   // A switch of the mode (decision 0052) goes to the first page of the mode it went to, unless the page is one both
   // have (Settings, Home: local mode's its own, lib/localHome).
   $effect(() => {
-    const local = localMode();
-    // No visuals in local mode (the owner: "In local mode, the visuals feature is not supported").
+    const local = ownMode;
+    const server = !!serverMode();
+    // No visuals in local mode (the owner: "In local mode, the visuals feature is not supported"), nor in a server's.
     if (local) untrack(() => (visuals.open = false));
     const p = untrack(() => page);
-    if (p === 'settings' || p === HOME.id) return;
+    if (p === 'settings' || p === HOME.id || (server && (p === PLAYLISTS.id || p === DOWNLOADS.id))) return;
     if (local && p !== LOCAL.id) location.hash = HOME.href;
     else if (!local && p === LOCAL.id) location.hash = LIBRARY.href;
   });
@@ -1138,7 +1145,7 @@
       <Requests />
     {:else if page === 'home'}
       <!-- Local mode's Home is its own (lib/localHome): a switch of the mode opens it anew, held as a page is (pageKey). -->
-      {#key localMode()}<Home />{/key}
+      {#key appInfo.mode}<Home />{/key}
     {:else if page === 'find'}
       <Find />
     {:else}
@@ -1311,6 +1318,7 @@
 </div>
 
 <!-- One radio sheet, wherever radio starts (decision 0094 #5, lib/radioAsk). -->
+<ReviewSheet />
 {#if radioSheet.ask}<RadioSheet ask={radioSheet.ask} />{/if}
 
 <style>

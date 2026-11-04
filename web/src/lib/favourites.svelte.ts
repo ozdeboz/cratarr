@@ -176,6 +176,11 @@ on<{ source: string; kind: string; items: string[]; on: boolean }>('favourite', 
 /** The long-press on a row's heart: a favourite or not (a heavy tick, as Finamp's). */
 export async function flipFavorite(source: string, id: string) {
   navigator.vibrate?.(25);
+  // A server's track in its mode (decision 0098): its star there.
+  if (source.startsWith('server:')) {
+    const { serverStar } = await import('./serverMode.svelte');
+    return serverStar(source, 'track', id, !isFavorite(source, id)).catch((e) => toast.fail(e, "The favourite didn't change"));
+  }
   try {
     const s = await setTrackFavorite(source, id, !isFavorite(source, id));
     if (s.favorite !== null) setFavorite(source, id, s.favorite);

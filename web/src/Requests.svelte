@@ -8,7 +8,9 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { panel, REQUESTS, requestsOf, viewPlaylist } from './lib/panel.svelte';
-  import { answersRequests, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, type RequestsList } from './lib/requests.svelte';
+  import { answersRequests, listsShown, loadRequests, lookAtLidarr, requests, type RequestsList } from './lib/requests.svelte';
+  import { me } from './lib/me.svelte';
+  import { loadSoulseek, soulseek } from './lib/soulseek.svelte';
 
   loadRequests();
   $effect(() => {
@@ -17,20 +19,31 @@
     return () => clearInterval(t);
   });
 
-  const lists = $derived(REQUESTS_LISTS.filter((l) => l.id !== 'waiting' || answersRequests()));
+  const lists = $derived(listsShown(answersRequests(), me.admin, requests.view?.fetchers ?? []));
+  // Soulseek's line (decision 0099): how many found to tick, and fetching.
+  $effect(() => {
+    if (me.admin) void loadSoulseek();
+  });
   const count = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
   /** A list's line: how many, and how they stand. */
   function line(id: RequestsList): string | null {
     const v = requests.view;
     if (!v) return null;
     if (id === 'waiting') return v.waiting?.length ? count(v.waiting.length, 'request waits', 'requests wait') : 'None waiting';
+    if (id === 'soulseek') {
+      const items = soulseek.view?.items;
+      if (!items) return null;
+      const found = items.filter((i) => i.state === 'found').length;
+      const going = items.filter((i) => i.state === 'approved' || i.state === 'fetching' || i.state === 'checking').length;
+      return [found ? `${found} found` : null, going ? `${going} fetching` : null, `${items.length.toLocaleString()} wanted`].filter(Boolean).join(' · ');
+    }
     if (id === 'mine') {
       if (!v.mine.length) return 'None yet';
       const pending = v.mine.filter((r) => r.status === 'pending').length;
       return [count(v.mine.length, 'request', 'requests'), pending ? `${pending} waiting` : null].filter(Boolean).join(' · ');
     }
     const w = requests.watching;
-    if (!v.fetcher) return 'Not connected';
+    if (!v.fetchers.includes('lidarr')) return 'Not connected';
     if (!w) return null;
     return [w.fetching.length ? `${w.fetching.length} fetching` : null, count(w.looking.length + w.more, 'not found yet', 'not found yet')].filter(Boolean).join(' · ');
   }

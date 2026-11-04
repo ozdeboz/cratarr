@@ -6,7 +6,7 @@
 import { filterList } from './api';
 import { library } from './albums.svelte';
 import { can } from './capabilities.svelte';
-import { localMode } from './deviceMusic.svelte';
+import { ownMode } from './serverMode.svelte';
 import { complete } from './filterRow';
 import { askAtOnce, filterOf, filterStep, hiddenLibraries, setConditions } from './listFilter.svelte';
 import { prefs, type FilterCondition } from './prefs.svelte';
@@ -22,7 +22,7 @@ let askedFor: unknown[] = [];
 /** The Type axis, asked for again when the Library, its server or the libraries switched on change. Read in an effect
  *  (App: the picker and the sidebar's links show it). */
 export function loadTypes() {
-  if (localMode()) return;
+  if (ownMode()) return;
   const now = [library.view, prefs.source, prefs.hiddenLibraries.join('\n')];
   if (now.every((x, i) => x === askedFor[i])) return;
   askedFor = now;

@@ -38,18 +38,23 @@
   import { library, readLibrary } from './albums.svelte';
   import { libraryOn, mine, setMoreFrom, turnLibrary } from './mySettings.svelte';
   import { OWN } from './sources.svelte';
+  import { serverMode } from './serverMode.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
-  const RADIO: { value: RadioBy | 'off'; label: string }[] = [{ value: 'off', label: 'Off' }, ...RADIO_BYS.map((by) => ({ value: by, label: RADIO_NAMES[by] }))];
+  // A server's mode (decision 0098; the owner, 2026-11-03: "Its sheet offers only what that mix can do"): that server's
+  // own mix, after each track or when the queue ends; no ways of choosing, no albums, favourites or libraries.
+  const server = serverMode();
+  const RADIO: { value: RadioBy | 'off'; label: string }[] = server
+    ? [{ value: 'off', label: 'Off' }, { value: 'track', label: `${server.name}'s mix` }]
+    : [{ value: 'off', label: 'Off' }, ...RADIO_BYS.map((by) => ({ value: by, label: RADIO_NAMES[by] }))];
   const radioNow = $derived<RadioBy | 'off'>(local.radio ? local.radioBy : 'off');
   // How many after each track: a slider (the owner), 1 to the player's most; the number follows the finger, and is set
   // when it lifts (each setting asks the server anew).
   let dragging = $state<number | null>(null);
-  const AUTOPLAY: { value: AutoplayMode | 'stop'; label: string }[] = [
-    { value: 'stop', label: 'Stop' },
-    ...(Object.entries(AUTOPLAY_NAMES) as [AutoplayMode, string][]).map(([value, label]) => ({ value, label })),
-  ];
+  const AUTOPLAY: { value: AutoplayMode | 'stop'; label: string }[] = server
+    ? [{ value: 'stop', label: 'Stop' }, { value: 'similar', label: `${server.name}'s mix` }]
+    : [{ value: 'stop', label: 'Stop' }, ...(Object.entries(AUTOPLAY_NAMES) as [AutoplayMode, string][]).map(([value, label]) => ({ value, label }))];
   const now = $derived<AutoplayMode | 'stop'>(local.autoplay?.mode ?? 'stop');
   const albums = $derived(local.autoplay?.albums ?? false);
 
@@ -64,7 +69,7 @@
   <div class="parts">
     <Card title="Radio" note="after each of your tracks" label="Radio">
       <ChoiceList label="Radio" options={RADIO} value={radioNow} onchange={(v) => (v === 'off' ? setRadio(false) : setRadio(true, { by: v }))} />
-      {#if radioNow === 'track'}<SimilarBy />{/if}
+      {#if radioNow === 'track' && !server}<SimilarBy />{/if}
       {#if local.radio}<div class="count">
         <SettingRow label="After each track">
           <input
@@ -86,8 +91,8 @@
     </Card>
     <Card title="Autoplay" note="when the queue ends" label="Autoplay">
       <ChoiceList label="Autoplay" options={AUTOPLAY} value={now} onchange={(v) => setAutoplay(v)} />
-      {#if now === 'similar'}<SimilarBy />{/if}
-      {#if now !== 'stop'}
+      {#if now === 'similar' && !server}<SimilarBy />{/if}
+      {#if now !== 'stop' && !server}
         <div class="switches">
           <Switch
             label="Queue albums"
@@ -99,7 +104,7 @@
         </div>
       {/if}
     </Card>
-    {#if local.radio || now !== 'stop'}
+    {#if (local.radio || now !== 'stop') && !server}
       <!-- For both (the owner): hearted tracks are left out of what Radio and Autoplay pick. -->
       <Switch
         card

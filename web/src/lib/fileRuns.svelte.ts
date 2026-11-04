@@ -6,7 +6,7 @@ import { applyFilePlan, getFileRuns, undoFileRun, type FileChosen, type FileReco
 import { on } from './events.svelte';
 import { withRun } from './fileChangeRules';
 import { me } from './me.svelte';
-import { HEALTH, openStep, viewInPlace, viewOver, viewPlaylist } from './panel.svelte';
+import { HEALTH, openStep, viewInPlace, viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
 
 export const CHANGES = 'changes';
@@ -44,12 +44,18 @@ export function changesView(thing: string | null): ChangesView {
 const address = (thing?: string) => `${HEALTH}${CHANGES}${thing ? `/${encodeURIComponent(thing)}` : ''}`;
 /** The list, in the panel's place. */
 export const openChanges = () => viewPlaylist(address());
-/** A plan to review (one record's, from its state line, over what the panel showed). */
-export const openReview = (kind: string, album?: string) => (album ? viewOver(address(`${kind}:${album}`)) : viewPlaylist(address(kind)));
-/** A Health finding's fixes on the sheet (`fix:<finding>`), a step deeper than its item. */
-export const openFixes = (finding: string) => openStep(address(`fix:${finding}`));
-/** A record's sheet of its own (`intake:<album>` before Keep, `renumber:<album>`), over what the panel showed. */
-export const openRecordPlan = (kind: 'intake' | 'renumber', album: string) => viewOver(address(`${kind}:${album}`));
+/** The review sheet (the owner, 2026-11-03: "the lowest level should be a review sheet, not a panel of its own"): a
+ *  plan to review, over where it was opened from, then its run as it is written, in the same sheet (lib/ReviewSheet);
+ *  closed, where it was opened from shows as it was. The list of runs stays Health's (Changes to files). */
+export const review = $state<{ thing: string | null }>({ thing: null });
+/** A plan to review (one record's, from its state line). */
+export const openReview = (kind: string, album?: string) => void (review.thing = album ? `${kind}:${album}` : kind);
+/** A Health finding's fixes (`fix:<finding>`). */
+export const openFixes = (finding: string) => void (review.thing = `fix:${finding}`);
+/** A record's own review (`intake:<album>` before Keep, `renumber:<album>`). */
+export const openRecordPlan = (kind: 'intake' | 'renumber', album: string) => void (review.thing = `${kind}:${album}`);
+/** Where a run's page shows: the review sheet's, where it was written from there; else the panel's, in place. */
+const showRun = (id: string) => (review.thing ? void (review.thing = `run:${id}`) : viewInPlace(address(`run:${id}`)));
 /** A run, under way or as written, a step deeper (from the list). */
 export const openRun = (id: string) => openStep(address(`run:${id}`));
 
@@ -64,7 +70,7 @@ export async function apply(kind: string, records: FileRecord[], chosen?: FileCh
     const s = await applyFilePlan(kind, records, chosen);
     fileRuns.list = withRun(fileRuns.list ?? [], s);
     Object.assign(sent, { id: s.id, what: s.what, at: Math.floor(Date.now() / 1000) - 5, records });
-    viewInPlace(address(`run:${s.id}`));
+    showRun(s.id);
     return true;
   } catch (e) {
     toast.fail(e, "The files couldn't be written");
@@ -78,7 +84,7 @@ export function keptOf(live: string): FileRun | null {
   return fileRuns.list?.find((r) => r.id.startsWith('r') && r.what === sent.what && (r.at ?? 0) >= sent.at) ?? null;
 }
 /** The run's page for its kept id, in place of the live one's (no step: back still goes where the sheet came from). */
-export const keptRun = (id: string) => viewInPlace(address(`run:${id}`));
+export const keptRun = (id: string) => showRun(id);
 
 /** A run undone, or some of its albums; whether it was. */
 export async function undoRun(id: string, albums?: string[]): Promise<boolean> {

@@ -203,12 +203,16 @@ class Prefs(context: Context) {
             p.edit().putString(OUTPUT_CHOICE_SET, value).apply()
         }
 
-    /** Which music the app plays (decision 0052): Cratarr's ([MODE_CRATARR]) or the device's own ([MODE_DEVICE]). */
+    /** Which music the app plays (decision 0052): Cratarr's ([MODE_CRATARR]), the device's own ([MODE_DEVICE]), or a
+     *  server's (decision 0098: `server:<id>`, [Servers]). */
     var mode: String
-        get() = if (p.getString(MODE, null) == MODE_DEVICE) MODE_DEVICE else MODE_CRATARR
+        get() = known(p.getString(MODE, null))
         set(value) {
-            p.edit().putString(MODE, if (value == MODE_DEVICE) MODE_DEVICE else MODE_CRATARR).apply()
+            p.edit().putString(MODE, known(value)).apply()
         }
+
+    /** The device's own player holds the queue, nothing of Cratarr's: Local, or a server's mode. */
+    val ownQueue: Boolean get() = mode != MODE_CRATARR
 
     /** Local mode's folders (decision 0052, the owner: local mode shows "if the user has enabled any local
      *  directories"): the device's music folders turned on, by their path in Android's index ("Music/"). Local mode
@@ -228,10 +232,17 @@ class Prefs(context: Context) {
 
     /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none): the one not playing, and local
      *  mode's while it plays too, so it lasts a restart (Cratarr gives its own back). */
-    fun savedQueue(mode: String): String = p.getString(if (mode == MODE_DEVICE) DEVICE_QUEUE else CRATARR_QUEUE, null).orEmpty()
+    fun savedQueue(mode: String): String = p.getString(queueKey(mode), null).orEmpty()
 
     fun saveQueue(mode: String, snapshot: String) {
-        p.edit().putString(if (mode == MODE_DEVICE) DEVICE_QUEUE else CRATARR_QUEUE, snapshot).apply()
+        p.edit().putString(queueKey(mode), snapshot).apply()
+    }
+
+    /** Each mode's queue apart: a server's by its mode's name. */
+    private fun queueKey(mode: String) = when {
+        mode == MODE_DEVICE -> DEVICE_QUEUE
+        mode.startsWith(Servers.MODE_PREFIX) -> "${SERVER_QUEUE}$mode"
+        else -> CRATARR_QUEUE
     }
 
     /** Automatic follows the owner's order of outputs (decision 0033, amended 2026-10-19: [Output.preferred]); off:
@@ -554,6 +565,21 @@ class Prefs(context: Context) {
         const val LOCAL_FOLDERS = "local_folders"
         const val DEVICE_QUEUE = "device_queue"
         const val CRATARR_QUEUE = "cratarr_queue"
+        const val SERVER_QUEUE = "queue_"
+
+        /** A mode as kept: one of the three kinds, else Cratarr's. */
+        fun known(mode: String?): String = when {
+            mode == MODE_DEVICE -> MODE_DEVICE
+            mode != null && mode.startsWith(Servers.MODE_PREFIX) && mode.length > Servers.MODE_PREFIX.length -> mode
+            else -> MODE_CRATARR
+        }
+
+        /** The mode a track's source plays in: the device's own, a server's (its source is its mode's name), Cratarr's. */
+        fun modeOfSource(source: String): String = when {
+            source == DeviceMusic.SOURCE -> MODE_DEVICE
+            source.startsWith(Servers.MODE_PREFIX) -> source
+            else -> MODE_CRATARR
+        }
         /** The public address (the app's only one before it had two). */
         const val SERVER_URL = "server_url"
         const val LOCAL_URL = "local_url"

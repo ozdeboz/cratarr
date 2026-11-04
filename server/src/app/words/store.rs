@@ -153,6 +153,8 @@ pub struct Library {
     aliases: HashMap<Kind, HashMap<String, String>>,
     /// Each word's one spelling across the library: the most written (rule 4, one spelling everywhere).
     spellings: HashMap<String, String>,
+    /// The sources switched off for a kind (the Catalogue sheet, 0.15): their words leave it, kept to come back.
+    off: HashMap<Kind, HashSet<Source>>,
 }
 
 impl Library {
@@ -182,10 +184,24 @@ impl Library {
         }
         let spellings = written.into_iter().filter_map(|(k, s)| s.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0))).map(|(w, _)| (k, w.to_string()))).collect();
         // A genre alias's word is a genre wherever it comes from.
-        let mut lib = Self { genres, curated, aliases, spellings };
+        let mut lib = Self { genres, curated, aliases, spellings, off: HashMap::new() };
         let named: Vec<String> = lib.aliases.get(&Kind::Genre).map(|a| a.values().map(|w| super::key(w)).collect()).unwrap_or_default();
         lib.genres.extend(named);
         lib
+    }
+
+    /// The sources switched off for each kind (never the hand: what is set by hand is always the record's).
+    pub fn with_off(mut self, off: HashMap<Kind, HashSet<Source>>) -> Self {
+        self.off = off.into_iter().map(|(k, mut s)| {
+            s.remove(&Source::Hand);
+            (k, s)
+        }).collect();
+        self
+    }
+
+    /// Whether a source's words are out of a kind.
+    fn is_off(&self, kind: Kind, source: Source) -> bool {
+        self.off.get(&kind).is_some_and(|o| o.contains(&source))
     }
 
     /// A word's kind by the word (never a mood: mood is AudioMuse's).
@@ -280,6 +296,9 @@ struct Gathered {
 
 impl Gathered {
     fn add(&mut self, lib: &Library, kind: Kind, word: &str, source: Source, weight: f32, firm: bool) {
+        if lib.is_off(kind, source) {
+            return;
+        }
         let key = lib.key(kind, word);
         if key.is_empty() {
             return;
@@ -518,6 +537,24 @@ mod tests {
         assert_eq!(t3, ["aggressive"], "a heard track's mood is its own measure");
         assert_eq!(w.of_track("t1", Kind::Genre).len(), 1, "a track like its record reads its record's");
         assert_eq!(w.tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t0", "t3"]);
+    }
+
+    #[test]
+    fn a_source_switched_off_leaves_its_kind_and_the_hand_never_does() {
+        // The Catalogue sheet (0.15): Last.fm off for tags, AudioMuse off for moods; the hand on whatever is asked.
+        let mut a = track("a");
+        a.heard = true;
+        a.heard_moods = vec!["sad".into()];
+        a.tag = vec!["night".into()];
+        let r = RecordIn { id: "r".into(), tracks: vec![a], said: vec![said(Source::Lastfm, "driving", "tag", 1.0)], ..RecordIn::default() };
+        let off = HashMap::from([(Kind::Tag, HashSet::from([Source::Lastfm])), (Kind::Mood, HashSet::from([Source::Audiomuse, Source::Hand]))]);
+        let lib = Library::of(std::slice::from_ref(&r), &HashMap::new()).with_off(off);
+        let w = record(&lib, &r);
+        assert_eq!(kind(&w, Kind::Tag), [("night", &[Source::Files][..])], "Last.fm's tag out, the files' kept");
+        assert!(kind(&w, Kind::Mood).is_empty(), "AudioMuse's mood out");
+        let mut by_hand = r.clone();
+        by_hand.hand.insert(Kind::Mood, vec!["calm".into()]);
+        assert_eq!(kind(&record(&lib, &by_hand), Kind::Mood), [("calm", &[Source::Hand][..])], "the hand is never off");
     }
 
     #[test]

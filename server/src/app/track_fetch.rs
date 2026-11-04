@@ -37,6 +37,8 @@ pub const ACOUSTID_KEY: &str = "acoustid:key";
 const PLACE_SECS: i64 = 5;
 /// How long a search is waited for at most.
 const SEARCH_FOR: Duration = Duration::from_secs(60);
+/// Reads of slskd that may fail in a row before a fetch is given up.
+const READS: u32 = 15;
 /// How long a fetch may wait in an uploader's queue before it is given up.
 const QUEUED_FOR: Duration = Duration::from_secs(30 * 60);
 /// Staged files left from before (a restart, a fetch never added) go after this long.
@@ -189,6 +191,19 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
         .and_then(|(_, j)| j)
         .and_then(|j| serde_json::from_str::<super::matching::Match>(&j).ok())
         .map(|m| m.release))
+}
+
+/// A release by its MusicBrainz id, as MusicBrainz lists its tracks (none held: a record not in the library yet).
+pub async fn release_by_id(id: &str) -> Result<ReleaseView> {
+    let http = super::discover::http()?;
+    let v: Value = http
+        .get(format!("https://musicbrainz.org/ws/2/release/{id}?inc=recordings+artist-credits&fmt=json"))
+        .asked()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(release_of(&v))
 }
 
 /// The album's release, each track with the file that holds it.
@@ -431,6 +446,21 @@ pub fn fetch_view(id: &str) -> Option<FetchView> {
     jobs(|j| j.fetches.get(id).map(|f| f.view.clone()))
 }
 
+/// A refused fetch's staged file set aside with why (0.15), in the data folder's `track-intake-set-aside`: the file and
+/// a note beside it (`<name>.why.txt`). Where it went; none without a staged file.
+pub fn set_aside(id: &str, why: &str) -> Option<String> {
+    let staged = jobs(|j| j.fetches.get(id).and_then(|f| f.staged.clone()))?;
+    let data = served().ok()?.data_dir.clone()?;
+    let to = data.join("track-intake-set-aside").join(id);
+    std::fs::create_dir_all(&to).ok()?;
+    let name = staged.file_name()?.to_owned();
+    if std::fs::rename(&staged, to.join(&name)).is_err() {
+        std::fs::copy(&staged, to.join(&name)).ok()?;
+    }
+    std::fs::write(to.join(format!("{}.why.txt", name.to_string_lossy())), why).ok()?;
+    Some(to.join(name).display().to_string())
+}
+
 /// The file staged and the fetch forgotten (a refused one dropped, or one the admin does not want).
 pub fn drop_fetch(id: &str) {
     if let Some(f) = jobs(|j| j.fetches.remove(id))
@@ -443,8 +473,23 @@ pub fn drop_fetch(id: &str) {
 /// Follows the transfer until it is done; the file moved to `stage`, and slskd's record of it taken away.
 async fn follow(slskd: &Slskd, c: &Candidate, batch: &str, folder: &Path, stage: &Path, told: &(dyn Fn(f64) + Sync)) -> Result<PathBuf> {
     let started = std::time::Instant::now();
+    let mut failed_reads = 0;
     let t = loop {
-        let t = slskd.transfer(batch).await?;
+        // A read of slskd that fails once is not the end of the fetch (0.15): only `READS` in a row.
+        let t = match slskd.transfer(batch).await {
+            Ok(t) => {
+                failed_reads = 0;
+                t
+            }
+            Err(e) => {
+                failed_reads += 1;
+                if failed_reads >= READS {
+                    return Err(e);
+                }
+                tokio::time::sleep(Duration::from_secs(4)).await;
+                continue;
+            }
+        };
         if t.done() {
             break t;
         }
@@ -499,6 +544,32 @@ fn tidy(staging: &Path) {
 /// score.
 async fn gate(file: &Path, track: &ReleaseTrack) -> Result<f32> {
     gate_with(file, track, looked_up).await
+}
+
+/// A release's track as a record fetched whole knows it (0.15): no file holds it yet.
+pub fn track_for(disc: u32, position: u32, title: &str, artist: &str, length_ms: Option<i64>, recording: &str) -> ReleaseTrack {
+    ReleaseTrack {
+        disc,
+        position,
+        title: title.to_string(),
+        artist: artist.to_string(),
+        length_ms,
+        recording: recording.to_string(),
+        have: None,
+        track_id: String::new(),
+        artist_id: None,
+        path: None,
+    }
+}
+
+/// The gate for a release's track (a record fetched whole, 0.15): as [`gate`].
+pub async fn gate_track(file: &Path, track: &ReleaseTrack) -> Result<f32> {
+    gate(file, track).await
+}
+
+/// slskd as set, switched on: its client and its completed-downloads folder (as Cratarr sees it).
+pub async fn slskd_ready() -> Result<(Slskd, PathBuf)> {
+    slskd().await
 }
 
 /// What AcoustID knows of a file, asked with the server's key.

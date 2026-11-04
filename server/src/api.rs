@@ -191,6 +191,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/tasks/{id}", delete(stop_task))
         .route("/api/tracks/describe", post(describe_tracks))
         .route("/api/scrobble", get(scrobble_targets))
+        .route("/api/scrobbles", post(scrobbles_handed))
+        .route("/api/scrobbles/now", post(scrobbles_now))
         .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
         .route("/api/scrobble/lastfm", post(scrobble_lastfm))
         .route("/api/scrobble/lastfm/callback/{code}", get(scrobble_lastfm_callback))
@@ -264,6 +266,13 @@ pub fn router(app: Arc<App>) -> Router {
             // Types, years and Classical into the files (0.13, decision 0092): the switch and Health's Write; a run's
             // Undo.
             .route("/api/settings/file-facts", get(file_facts).put(file_facts_switch))
+            // The Catalogue sheet (decision 0097's controls, 0.15): each kind's writing, sources and aliases; a word's
+            // menu's Rename everywhere and Merge into…; a track's own words.
+            .route("/api/words/catalogue", get(words_catalogue))
+            .route("/api/words/catalogue/{kind}", put(words_catalogue_set))
+            .route("/api/words/aliases/{kind}", put(words_aliases_set))
+            .route("/api/words/{kind}/merge", post(words_merge))
+            .route("/api/track/{source}/{id}/words", put(track_words_set))
             // Every change to the library's files (decision 0092): a kind's review sheet and its apply, the runs, a
             // run as written, its Undo.
             .route("/api/file-changes/plans/{kind}", get(file_change_plan))
@@ -306,6 +315,12 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/track-intake", get(track_intake).post(track_intake_add).delete(track_intake_clear))
             .route("/api/track-intake/approve", post(track_intake_approve))
             .route("/api/track-intake/{id}", axum::routing::delete(track_intake_drop))
+            .route("/api/track-intake/{id}/now", post(track_intake_now))
+            // Soulseek in Cratarr (0.15): Lidarr's Wanted searched, whole records fetched on a tick.
+            .route("/api/soulseek", get(soulseek).delete(soulseek_clear))
+            .route("/api/soulseek/approve", post(soulseek_approve))
+            .route("/api/soulseek/{id}/now", post(soulseek_now))
+            .route("/api/soulseek/{id}", axum::routing::delete(soulseek_drop))
             .route("/api/track-files", get(track_files))
             .route("/api/track-files/fetch", post(start_file_fetch))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
@@ -1115,6 +1130,7 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
     }
     let s = ctx.serve()?;
     let albums = b.albums;
+    let b_words = facts.iter().any(|(f, _)| matches!(f.as_str(), "genres" | "styles" | "moods" | "tags"));
     let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
         let mut bases = Vec::with_capacity(albums.len());
         for album in &albums {
@@ -1133,6 +1149,10 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     ctx.app.collection.refresh().await;
     ctx.app.collection.tell_changed();
+    // A record's words set by hand (0.15): the pages read them again.
+    if b_words {
+        crate::app::words::tell_changed();
+    }
     Ok(Json(json!({ "albums": set })))
 }
 
@@ -4997,11 +5017,74 @@ fn scrobble_refused(e: impl std::fmt::Display) -> ApiError {
     ToggleError::Refused(e.to_string()).into()
 }
 
-/// The asking account's listening services (Connections): whom it scrobbles to, never a secret.
+/// The asking account's listening services (Connections): whom it scrobbles to, never a secret, and from where
+/// (decision 0091: `device` or `server`; switched to `device`, a service's `queued` is what is still to go before its
+/// keys go).
 async fn scrobble_targets(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
-    let targets = tokio::task::spawn_blocking(move || serve.userdata.scrobble_targets(&account)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "targets": targets })))
+    let (targets, way) = tokio::task::spawn_blocking(move || anyhow::Ok((serve.userdata.scrobble_targets(&account)?, serve.userdata.scrobble_way(&account)?)))
+        .await
+        .map_err(scrobble_refused)?
+        .map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "targets": targets, "way": way })))
+}
+
+/// A service connected on the server only while the account scrobbles through it, or has not chosen (decision 0091:
+/// back from `device` means choosing `server` first).
+fn scrobbles_through_server(serve: &crate::serve::Serve, account: &str) -> Result<(), ApiError> {
+    let (_, s) = serve.userdata.settings_of(account).map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    if s.get("scrobble").and_then(serde_json::Value::as_str) == Some("device") {
+        return Err(scrobble_refused("This account scrobbles from each device: choose through the server first."));
+    }
+    Ok(())
+}
+
+/// Plays handed to the server: only while the account scrobbles through it with tracking on.
+fn hand_over_allowed(serve: &crate::serve::Serve, account: &str) -> Result<(), ApiError> {
+    if !serve.userdata.tracking(account) {
+        return Err(scrobble_refused("Tracking is off for this account: nothing is scrobbled."));
+    }
+    match serve.userdata.scrobble_way(account).map_err(|e| scrobble_refused(format!("{e:#}")))? {
+        crate::userdata::scrobbles::Way::Server => Ok(()),
+        crate::userdata::scrobbles::Way::Device => Err(scrobble_refused("This account scrobbles from each device.")),
+    }
+}
+
+#[derive(Deserialize)]
+struct Handed {
+    plays: Vec<crate::userdata::scrobbles::Named>,
+}
+
+/// A device's plays of other servers' tracks, for the server to send (decision 0091): queued for each connected
+/// service as the server's own are, never written to the history; each once by its id.
+async fn scrobbles_handed(ctx: Ctx, Json(b): Json<Handed>) -> Result<Json<crate::userdata::scrobbles::Handed>, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
+    if b.plays.len() > crate::userdata::scrobbles::MOST {
+        return Err(scrobble_refused(format!("At most {} plays at a time.", crate::userdata::scrobbles::MOST)));
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let handed = tokio::task::spawn_blocking(move || {
+        hand_over_allowed(&serve, &account)?;
+        serve.userdata.hand_over(&account, &b.plays, now).map_err(|e| scrobble_refused(format!("{e:#}")))
+    })
+    .await
+    .map_err(scrobble_refused)??;
+    if handed.queued > 0 {
+        crate::app::scrobble::wake();
+    }
+    Ok(Json(handed))
+}
+
+/// "Now playing" of another server's track (decision 0091): sent best effort, the latest winning, never queued.
+async fn scrobbles_now(ctx: Ctx, Json(b): Json<crate::userdata::scrobbles::Named>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
+    if b.artist.trim().is_empty() || b.title.trim().is_empty() {
+        return Err(scrobble_refused("Now playing needs the artist and the title."));
+    }
+    let (s, a) = (serve.clone(), account.clone());
+    tokio::task::spawn_blocking(move || hand_over_allowed(&s, &a)).await.map_err(scrobble_refused)??;
+    crate::app::scrobble::now_playing_named(serve, account, b);
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Deserialize)]
@@ -5012,6 +5095,7 @@ struct ListenBrainzToken {
 /// ListenBrainz connected with the user token from its settings page, checked first.
 async fn scrobble_listenbrainz(ctx: Ctx, Json(b): Json<ListenBrainzToken>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
+    scrobbles_through_server(&serve, &account)?;
     let token = b.token.trim().to_string();
     let name = crate::app::scrobble::listenbrainz_user(&token).await.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     let secret = serde_json::to_string(&crate::app::scrobble::Secret { token: Some(token), ..Default::default() }).map_err(scrobble_refused)?;
@@ -5037,6 +5121,7 @@ struct LastFmKeys {
 /// Last.fm: the API key and its shared secret kept (not sending yet), and where to send the browser to sign in.
 async fn scrobble_lastfm(ctx: Ctx, Json(b): Json<LastFmKeys>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler(&ctx)?;
+    scrobbles_through_server(&serve, &account)?;
     let (key, secret) = (b.api_key.trim().to_string(), b.api_secret.trim().to_string());
     if key.is_empty() || secret.is_empty() {
         return Err(scrobble_refused("Last.fm needs the API key and its shared secret, from last.fm/api/account/create."));
@@ -6341,10 +6426,54 @@ async fn track_intake_approve(State(app): State<Arc<App>>, Json(b): Json<IntakeA
     Json(crate::app::track_intake::approve(&app, &picked))
 }
 
+/// A track searched now, whatever its wait (0.15: one not found is searched again later on its own).
+async fn track_intake_now(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::track_intake::View> {
+    Json(crate::app::track_intake::search_now(&app, &id))
+}
+
 /// One item dropped, its staged file with it.
 async fn track_intake_drop(Path(id): Path<String>) -> StatusCode {
     crate::app::track_intake::drop_item(&id);
     StatusCode::NO_CONTENT
+}
+
+/// Soulseek in Cratarr (0.15): every record of Lidarr's Wanted with its state, its folders (best first), the users that
+/// failed it and the folders set aside; and the library its records go into.
+async fn soulseek(State(app): State<Arc<App>>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::view(&app))
+}
+
+#[derive(Deserialize)]
+struct SoulseekPick {
+    id: String,
+    #[serde(default)]
+    folder: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct SoulseekApprove {
+    items: Vec<SoulseekPick>,
+}
+
+/// Found records approved (a folder given, else the best): fetched, gated and placed in turn.
+async fn soulseek_approve(State(app): State<Arc<App>>, Json(b): Json<SoulseekApprove>) -> Json<crate::app::soulseek::View> {
+    let picked: Vec<(String, Option<usize>)> = b.items.into_iter().map(|p| (p.id, p.folder)).collect();
+    Json(crate::app::soulseek::approve(&app, &picked))
+}
+
+/// A record searched now, whatever its wait.
+async fn soulseek_now(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::search_now(&app, &id))
+}
+
+/// A record taken off the list (not while fetched).
+async fn soulseek_drop(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::drop_item(&app, &id))
+}
+
+/// The placed records cleared.
+async fn soulseek_clear(State(app): State<Arc<App>>) -> Json<crate::app::soulseek::View> {
+    Json(crate::app::soulseek::clear_placed(&app))
 }
 
 /// The finished items cleared.
@@ -6608,6 +6737,99 @@ async fn file_facts() -> Result<Json<crate::app::file_facts::View>, ApiError> {
     Ok(Json(crate::app::file_facts::view().await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
+fn words_refused(e: anyhow::Error) -> ApiError {
+    ToggleError::Refused(format!("{e:#}")).into()
+}
+
+/// The Catalogue sheet: every kind of word, whether it is written to the files, its sources on or off, its aliases.
+async fn words_catalogue(ctx: Ctx) -> Result<Json<crate::app::words::catalogue::Catalogue>, ApiError> {
+    let s = ctx.serve()?;
+    let out = tokio::task::spawn_blocking(move || crate::app::words::catalogue::view(&s)).await.map_err(|e| words_refused(e.into()))?.map_err(words_refused)?;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+struct KindSet {
+    write: Option<bool>,
+    sources: Option<std::collections::HashMap<String, bool>>,
+}
+
+/// A kind's writing and sources set: the kind as it is now (type and year are one switch). The store is built again.
+async fn words_catalogue_set(ctx: Ctx, Path(kind): Path<String>, Json(b): Json<KindSet>) -> Result<Json<crate::app::words::catalogue::KindRow>, ApiError> {
+    let s = ctx.serve()?;
+    let out = tokio::task::spawn_blocking(move || crate::app::words::catalogue::set_kind(&s, &kind, b.write, b.sources.as_ref())).await.map_err(|e| words_refused(e.into()))?.map_err(words_refused)?;
+    ctx.app.collection.tell_changed();
+    crate::app::words::tell_changed();
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+struct AliasSet {
+    word: String,
+    aliases: Vec<String>,
+}
+
+/// A word's spellings in its kind's alias list (none: its entry goes): the kind's list.
+async fn words_aliases_set(ctx: Ctx, Path(kind): Path<String>, Json(b): Json<AliasSet>) -> Result<Json<Vec<crate::app::words::catalogue::AliasRow>>, ApiError> {
+    let s = ctx.serve()?;
+    let out = crate::app::words::catalogue::set_alias(&ctx.app, &s, &kind, &b.word, &b.aliases).await.map_err(words_refused)?;
+    ctx.app.collection.tell_changed();
+    crate::app::words::tell_changed();
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+struct MergeWords {
+    from: String,
+    into: String,
+}
+
+/// A word merged into another, or renamed everywhere (into a new spelling): the kind's alias list.
+async fn words_merge(ctx: Ctx, Path(kind): Path<String>, Json(b): Json<MergeWords>) -> Result<Json<Vec<crate::app::words::catalogue::AliasRow>>, ApiError> {
+    let s = ctx.serve()?;
+    let out = crate::app::words::catalogue::merge(&ctx.app, &s, &kind, &b.from, &b.into).await.map_err(words_refused)?;
+    ctx.app.collection.tell_changed();
+    crate::app::words::tell_changed();
+    Ok(Json(out))
+}
+
+/// A track's own words set by hand (0.15, decision 0097's track Edit), Cratarr's own library's: `{genre?, style?, mood?,
+/// tag?}`, each a list (its own) or null (back to its record's); a kind left out stays. The track's own as kept.
+async fn track_words_set(ctx: Ctx, Path((source, id)): Path<(String, String)>, Json(b): Json<serde_json::Map<String, serde_json::Value>>) -> Result<Json<serde_json::Value>, ApiError> {
+    if source != crate::source::cratarr::KIND.id {
+        return Err(ToggleError::Refused("Only a track of Cratarr's own library has words of its own.".into()).into());
+    }
+    let mut set: Vec<(String, Option<Vec<String>>)> = Vec::new();
+    for (kind, value) in b {
+        if crate::app::words::store::Kind::of(&kind).is_none() {
+            return Err(ToggleError::BadSettings(format!("{kind} is not a kind of word (genre, style, mood, tag).")).into());
+        }
+        let list = match value {
+            serde_json::Value::Null => None,
+            v => {
+                let words: Vec<String> = serde_json::from_value(v).map_err(|_| ToggleError::BadSettings(format!("{kind}: a list of words, or null.")))?;
+                Some(words.into_iter().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()).collect())
+            }
+        };
+        set.push((kind, list));
+    }
+    let s = ctx.serve()?;
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        for (kind, list) in &set {
+            s.userdata.set_track_words(&id, kind, list.as_deref())?;
+        }
+        let own: serde_json::Map<String, serde_json::Value> =
+            s.userdata.all_track_words()?.into_iter().filter(|(t, _, _)| *t == id).map(|(_, k, w)| (k, serde_json::Value::from(w))).collect();
+        Ok(serde_json::Value::Object(own))
+    })
+    .await
+    .map_err(|e| words_refused(e.into()))?
+    .map_err(words_refused)?;
+    ctx.app.collection.tell_changed();
+    crate::app::words::tell_changed();
+    Ok(Json(out))
+}
+
 /// Switched on or off: it only decides what Health offers (decision 0092: nothing is written by itself).
 async fn file_facts_switch(Json(b): Json<SwitchedOn>) -> Result<Json<crate::app::file_facts::View>, ApiError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -6651,6 +6873,8 @@ async fn file_change_plan(State(app): State<Arc<App>>, Path(kind): Path<String>,
     let albums = q.albums.map(|a| a.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect());
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::plan(albums).await.map_err(file_change_refused)?)),
+        // A kind of word the Catalogue sheet writes (`fix:words:<kind>`, 0.15): before Health's other fixes.
+        k if crate::app::file_words::owns(k) => Ok(Json(crate::app::file_words::plan(k, albums).await.map_err(file_change_refused)?)),
         // Health's fixes (`fix:<finding>`) and an arrival's (`intake:<album>`): decision 0092's writers' map.
         k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::plan(&app, k).await.map_err(file_change_refused)?)),
         k if k.starts_with("renumber:") => {
@@ -6666,6 +6890,7 @@ async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>
     let albums = b.albums.unwrap_or_default();
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums, b.stamps).await.map_err(file_change_refused)?)),
+        k if crate::app::file_words::owns(k) => Ok(Json(crate::app::file_words::apply(&app, k, albums, b.stamps).await.map_err(file_change_refused)?)),
         k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::apply(&app, k, albums, b.stamps, b.chosen).await.map_err(file_change_refused)?)),
         k if k.starts_with("renumber:") => {
             let account = crate::serve::who::current().map(|w| w.user).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;

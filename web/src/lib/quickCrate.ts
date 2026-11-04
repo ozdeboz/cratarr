@@ -6,7 +6,7 @@
 import type { Condition } from './api';
 import { byRelevance, relevance, words, type SearchResult } from './search';
 
-export type ChipKind = 'artist' | 'album' | 'track' | 'label' | 'genre' | 'style' | 'mood' | 'tag' | 'year' | 'bpm';
+export type ChipKind = 'artist' | 'album' | 'track' | 'label' | 'genre' | 'style' | 'mood' | 'tag' | 'year' | 'bpm' | 'four' | 'meter';
 /** One way a term reads: its kind, what a condition matches (a name, an album's id, a year's or a tempo's span
  *  `min-max`), and how it shows. An artist's `id` (the library's `ar-…`) seeds "sounds like". */
 export type Reading = { kind: ChipKind; value: string; label: string; id?: string };
@@ -307,6 +307,8 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
       // "120-130 bpm", "over 140 bpm", "about 128 bpm": one tempo (tempoOf), read as one term; out of a tempo's
       // bounds, its words as they were.
       .replace(TEMPOS, (m: string) => (tempoOf(m) ? m.trim().replace(/\s+/g, ':') : m))
+      // "four on the floor" (0.15, rhythm): one term (rhythmOf).
+      .replace(FOUR, (m: string) => m.trim().replace(/[\s-]+/g, ':'))
       .replace(/(\d{4})\s*(?:[-–]|\bto\b)\s*(\d{4})/gi, '$1-$2')
       // "before 1970", "after the 90s", "since 2010", "until 1980": one open span (yearOf), read as one term.
       .replace(OPEN_YEARS, (_, w: string, y: string) => `${w.toLowerCase()}:${y}`)
@@ -314,7 +316,7 @@ export async function readLine(text: string, ask: Ask, now?: number): Promise<Re
     const parts: (Read | string[])[] = [];
     for (const t of tokens) {
       if (!words(t).length && t !== '&') continue;
-      const year = yearOf(t, now) ?? tempoOf(t);
+      const year = yearOf(t, now) ?? tempoOf(t) ?? rhythmOf(t);
       if (year) parts.push({ term: t.replace(/:/g, ' '), readings: [year] });
       else if (Array.isArray(parts.at(-1))) (parts.at(-1) as string[]).push(t);
       else parts.push([t]);
@@ -438,6 +440,22 @@ export function tempoSaid(min: number | null, max: number | null): string | null
   return tempoOf(label)?.value === `${a}-${z}` ? label : null;
 }
 
+/** "Four on the floor" said in a line, for readLine to make one token ("four:on:the:floor"). */
+const FOUR = /\bfour[\s-]+on[\s-]+the[\s-]+floor\b/gi;
+/** Rhythm as typed (0.15; the owner, 2026-11-02: "four on the floor", "4/4" words of the crate sentence): a kick on
+ *  every beat, and a time signature ("4/4", "3/4", "6/8"), as the analysis measures them (the server's `four` and
+ *  `meter`). */
+export function rhythmOf(term: string): Reading | null {
+  const t = term.trim().toLowerCase().replace(/[:\s-]+/g, ' ');
+  if (t === 'four on the floor') return { kind: 'four', value: 'yes', label: 'four on the floor' };
+  const m = /^(\d{1,2})\/(2|4|8|16)$/.exec(t);
+  if (m && Number(m[1]) >= 1 && Number(m[1]) <= 16) {
+    const label = `${Number(m[1])}/${m[2]}`;
+    return { kind: 'meter', value: label, label };
+  }
+  return null;
+}
+
 /** A search result as a reading, where it is one (a track, a playlist or a crate is not). */
 export function readingOf(r: SearchResult & { id?: string }): Reading | null {
   const k = r.kind;
@@ -454,7 +472,7 @@ export function readingOf(r: SearchResult & { id?: string }): Reading | null {
  *  they match the term (its words, the name's own first), equals in ORDER; each once. */
 export function readingsFor(term: string, found: readonly (SearchResult & { id?: string })[], now?: number): Reading[] {
   const q = words(term);
-  const year = yearOf(term, now) ?? tempoOf(term);
+  const year = yearOf(term, now) ?? tempoOf(term) ?? rhythmOf(term);
   const ranked = found
     .map((r) => ({ read: readingOf(r), rel: relevance(q, r) }))
     .filter((x): x is { read: Reading; rel: number[] } => x.read !== null)
@@ -616,8 +634,14 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
   const spans: Partial<Record<Spanned, [number, number]>> = {};
   // Years and tempos left out: each its own negated span ("not the 2000s, not 1975").
   const notSpans: [Spanned, number, number][] = [];
+  // Four on the floor: one row, yes (or left out, not).
+  let four: boolean | null = null;
   for (const c of chips) {
     const r = c.reading;
+    if (r.kind === 'four') {
+      four = four === false ? false : !c.not;
+      continue;
+    }
     if (c.not) {
       if (r.kind === 'track') continue;
       if (spanned(r.kind)) {
@@ -648,6 +672,7 @@ export function conditionsOf(chips: readonly Chip[], min = CLOSE, modes: Modes =
     const s = spans[axis];
     if (s) rows.push({ axis, not: false, value: { kind: 'range', min: end(s[0]), max: end(s[1]) } });
   }
+  if (four !== null) rows.push({ axis: 'four', not: !four, value: { kind: 'yes' } });
   for (const [axis, values] of notAxis) rows.push({ axis, not: true, value: { kind: 'any_of', values } });
   for (const [axis, min, max] of notSpans) rows.push({ axis, not: true, value: { kind: 'range', min: end(min), max: end(max) } });
   const seeds = seedsOf(chips);
@@ -736,6 +761,11 @@ export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: str
     if (last !== tempos[0]) (word('to'), term(last.i));
   }
 
+  // The rhythm (0.15): ", four on the floor", "in 4/4" (several: "in 4/4 or 3/4").
+  for (const { i } of of('four')) (word(',', true), term(i));
+  const meters = of('meter');
+  if (meters.length) (word('in'), list(meters));
+
   // What it feels and sounds like, one clause: "that feels Calm and sounds like Miles Davis" ("Tracks that feel…").
   const plural = !head.length;
   const moods = of('mood');
@@ -759,6 +789,8 @@ export function sentenceOf(chips: readonly Chip[], modes: Modes = {}, brief: str
     ['by', left('artist')],
     ['on', left('label')],
     ['from the album', left('album')],
+    ['', left('four')],
+    ['in', left('meter')],
   ];
   let first = true;
   const leaving = () => {
@@ -850,12 +882,13 @@ export function chipsOf(
     const at = `${c.axis}${c.not ? '!' : ''}`;
     const plain = c.enabled !== false && !c.quantifier && !done.has(at);
     const several = v.kind === 'any_of' || v.kind === 'all_of';
-    const sayable = isMulti(c.axis) || ((c.axis === 'label' || c.axis === 'artist' || c.axis === 'album') && v.kind === 'any_of');
+    const sayable = isMulti(c.axis) || ((c.axis === 'label' || c.axis === 'artist' || c.axis === 'album' || c.axis === 'meter') && v.kind === 'any_of');
     // Left out, "but not": any of them only (none of them); "not all of" is the conditions' to say.
     if (plain && several && v.values.length && sayable && (!c.not || v.kind === 'any_of')) {
       const not = c.not ? { not: true } : {};
       for (const value of v.values) {
         if (c.axis === 'artist') chips.push({ term: value, reading: { kind: 'artist', value, label: value }, others: [], how: 'by', own: false, ...not });
+        else if (c.axis === 'meter') chips.push({ term: value, reading: { kind: 'meter', value, label: value }, others: [], ...not });
         else if (c.axis === 'album') {
           const label = names[value]?.name ?? gone('album');
           chips.push({ term: label, reading: { kind: 'album', value, label }, others: [], ...not });
@@ -874,6 +907,9 @@ export function chipsOf(
       // span the sentence cannot say as typed (120.5 to 130, 10 to 400) stays the conditions'.
       const label = tempoSaid(v.min, v.max)!;
       chips.push({ term: label, reading: { kind: 'bpm', value: `${v.min ?? NO_START}-${v.max ?? NO_END}`, label }, others: [], ...(c.not ? { not: true } : {}) });
+    } else if (plain && c.axis === 'four' && v.kind === 'yes') {
+      // Four on the floor (0.15), or left out: "but not four on the floor".
+      chips.push({ term: 'four on the floor', reading: { kind: 'four', value: 'yes', label: 'four on the floor' }, others: [], ...(c.not ? { not: true } : {}) });
     } else if (plain && !c.not && v.kind === 'like' && !brief && (v.min === undefined || v.fresh || !!v.weights?.length || v.of.length > SEEDS_LISTED)) {
       // A built-in crate's (by how many, weighted, fresh) or a long list: said briefly, kept as it is.
       brief = { text: briefOf(v.of, names, crateName), condition: c };

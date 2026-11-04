@@ -57,7 +57,8 @@
   const SLSKD = 'slskd';
   const ACOUSTID = 'acoustid';
   const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === MCP || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID;
-  const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
+  const FETCHERS_MORE =
+    "What fetches the records asked for, either or both: Lidarr (it also watches your artists for new releases) and Soulseek, which Cratarr searches through slskd itself, each file checked. An approved request goes to each. Each brings its records into an Incoming library of its own (Libraries).";
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
   const AS_ARTISTS = 'As your artists';
@@ -225,7 +226,7 @@
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
   nameThing(() =>
-    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === MCP ? 'MCP' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'slskd' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
+    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === MCP ? 'MCP' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'Soulseek' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
   );
   // Last.fm's key and Discogs' app as rows say them.
   const fmOff = $derived(fmKey?.enabled === false);
@@ -557,7 +558,7 @@
 {:else if thing === SLSKD}
   {#if slskdHas}
     <Group>
-      <Item name="Use slskd" line={slskdOff ? 'Its key is kept, and nothing is asked of it until it is on again' : null} toggle={{ checked: !slskdOff, onchange: (on) => turn('slskd', on) }} />
+      <Item name="Use Soulseek" line={slskdOff ? 'Its key is kept, and nothing is asked of it until it is on again' : null} toggle={{ checked: !slskdOff, onchange: (on) => turn('slskd', on) }} />
     </Group>
   {/if}
   <Group title="Connection" more={SLSKD_MORE}>
@@ -623,7 +624,9 @@
     {/if}
   </Group>
   {#if ed.showLidarr || slskdKnown}
-    <Group title="Download stack" more={ed.showLidarr ? LIDARR_MORE : null}>
+    <!-- The fetchers, siblings (decision 0099's amendment; the owner, 2026-11-03): Lidarr, and Soulseek through slskd,
+         either or both; an approved request goes to each. -->
+    <Group title="Fetchers" more={FETCHERS_MORE}>
       {#if ed.showLidarr}
         {#if s.lidarr || ed.lid.url}
           <Item lead={lidarrState.lead} name="Lidarr" line={lidarrState.line} tone={lidarrState.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', LIDARR)} />
@@ -633,9 +636,9 @@
       {/if}
       {#if slskdKnown}
         {#if slskdHas}
-          <Item lead={slskdState.lead} name="slskd" line={slskdState.line} tone={slskdState.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', SLSKD)} />
+          <Item lead={slskdState.lead} name="Soulseek" line={slskdState.line} tone={slskdState.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', SLSKD)} />
         {:else}
-          <Item name="Add slskd" kind="add" onclick={() => openThing('connections', SLSKD)} />
+          <Item name="Add Soulseek" kind="add" onclick={() => openThing('connections', SLSKD)} />
         {/if}
       {/if}
     </Group>

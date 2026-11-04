@@ -131,7 +131,7 @@ const GENERATION: &str = "generation";
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 11] = [
+const ADDED_COLUMNS: [(&str, &str); 14] = [
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -152,6 +152,11 @@ const ADDED_COLUMNS: [(&str, &str); 11] = [
     // The spectrum, 32 bands 20 times a second (`analysis::spectrum::Spectrum`; NULL: not worked out yet: only on a
     // play), 2026-10-24.
     ("analysis_shape", "spectrum BLOB"),
+    // Rhythm (0.15): four on the floor, 0 to 1 (`analysis::rhythm`; NULL: not measured yet).
+    ("analysis", "four REAL"),
+    // The time signature from Beat this!'s downbeats: beats a bar (0: none sure), and how sure; NULL: not worked out yet.
+    ("beat_this", "meter INTEGER"),
+    ("beat_this", "meter_sure REAL"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -405,6 +410,7 @@ impl Catalogue {
             }
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track);")?;
+        fill_meters(&conn).context("working out the time signatures")?;
         // Once: the tags no query reads go, the unnamed ones (lyrics, pictures' text: 63,000 rows of 455,000 here) and the
         // index by name and value (73 MB of a 200 MB catalogue), so what is read fits in a small container's memory.
         // Their pages are reused by what is written next.
@@ -1026,14 +1032,23 @@ impl Catalogue {
             by.entry(place).or_default().push((name, value));
         }
         // The tempo where the file has no BPM tag: its analysis' when sure enough (decision 0035), while the file is as
-        // it was then. The tag comes first.
+        // it was then. The tag comes first. With it, four on the floor (0.15), measured in the same analysis.
         let mut st = db.prepare(
-            "SELECT a.folder, a.rel, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
-             WHERE a.folder >= 0 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime
+            "SELECT a.folder, a.rel, a.bpm, a.four FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+             WHERE a.folder >= 0 AND (a.bpm IS NOT NULL OR a.four IS NOT NULL) AND a.size = f.size AND a.mtime = f.mtime
                AND (a.complete IS NULL OR a.complete != 0)",
         )?;
-        let analysed: HashMap<Place, f64> =
-            st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, f64>(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let analysed: HashMap<Place, (Option<f64>, Option<f64>)> = st
+            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get::<_, Option<f64>>(2)?, r.get::<_, Option<f64>>(3)?))))?
+            .collect::<rusqlite::Result<_>>()?;
+        // The time signature, where Beat this! heard the file as it is and was sure enough of one (0.15).
+        let mut st = db.prepare(
+            "SELECT b.folder, b.rel, b.meter FROM beat_this b JOIN files f ON f.folder = b.folder AND f.rel = b.rel
+             WHERE b.folder >= 0 AND b.meter > 0 AND b.size = f.size AND b.mtime = f.mtime",
+        )?;
+        let mut meters: HashMap<Place, u8> = st
+            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, i64>(2)?.clamp(0, 255) as u8)))?
+            .collect::<rusqlite::Result<_>>()?;
         // AudioMuse's (decision 0054), where it heard the file: energy, style tags, CLAP's moods.
         type Muse = (Option<f64>, Option<String>, Option<String>, i64, Option<Vec<u8>>, Option<String>);
         let mut st = db.prepare(&format!(
@@ -1098,7 +1113,9 @@ impl Catalogue {
                 let (credits, credit_names) = crate::app::excluded_artists::credited(&artists.iter().chain(&listed).collect::<Vec<_>>());
                 Some(crate::crates::Facts {
                     year: crate::crates::year_of(&first),
-                    bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&place).map(|b| b.round())),
+                    bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&place).and_then(|a| a.0).map(f64::round)),
+                    four: analysed.get(&place).and_then(|a| a.1).map(|f| f as f32),
+                    meter: meters.remove(&place).map(crate::analysis::rhythm::meter_name),
                     genres,
                     rel: line,
                     folder: place.0,
@@ -1879,15 +1896,29 @@ impl Catalogue {
     }
 
     /// Several at once, in one transaction (an import's batch). Blocking.
-    pub fn store_analyses(&self, items: &[(i64, String, u64, i64, crate::analysis::Analysis)]) -> Result<()> {
+    ///
+    /// A file already analysed as it is (the same size and mtime, this version or newer) keeps its analysis and only
+    /// takes what it lacks (0.15: rhythm, the library measured again on the PC): its beats may be Beat this!'s and its
+    /// shapes worked out since, which a whole new row would throw away. Returns how many only took what they lacked.
+    pub fn store_analyses(&self, items: &[(i64, String, u64, i64, crate::analysis::Analysis)]) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
         let now = now_secs();
+        let mut filled = 0;
         for (folder, rel, size, mtime, a) in items {
-            store_analysis(&tx, *folder, rel, *size, *mtime, a, now)?;
+            let kept = tx
+                .prepare_cached("SELECT 1 FROM analysis WHERE folder = ?1 AND rel = ?2 AND size = ?3 AND mtime = ?4 AND version >= ?5")?
+                .exists(params![folder, rel, *size as i64, mtime, a.version])?;
+            if kept {
+                tx.prepare_cached("UPDATE analysis SET four = coalesce(?3, four) WHERE folder = ?1 AND rel = ?2")?
+                    .execute(params![folder, rel, a.rhythm.map(|r| r.four)])?;
+                filled += 1;
+            } else {
+                store_analysis(&tx, *folder, rel, *size, *mtime, a, now)?;
+            }
         }
         tx.commit()?;
-        Ok(())
+        Ok(filled)
     }
 
     /// A file's analysis, while the file is as it was then (same size and mtime); any version. Blocking.
@@ -1961,10 +1992,12 @@ impl Catalogue {
         let now = now_secs();
         {
             let mut st = tx.prepare(
-                "INSERT OR REPLACE INTO beat_this (folder, rel, size, mtime, beats, downbeats, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT OR REPLACE INTO beat_this (folder, rel, size, mtime, beats, downbeats, at, meter, meter_sure)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for r in rows {
-                st.execute(params![r.folder, r.rel, r.size as i64, r.mtime, millis(&r.beats), millis(&r.downbeats), now])?;
+                let (meter, sure) = meter_of(&r.beats, &r.downbeats);
+                st.execute(params![r.folder, r.rel, r.size as i64, r.mtime, millis(&r.beats), millis(&r.downbeats), now, meter, sure])?;
             }
         }
         tx.commit()?;
@@ -2521,7 +2554,7 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
 // The analysis' columns as `analysis_row` reads them (the struct's order).
 /// The shape's columns come from `analysis_shape s`, joined by every query that names these.
 const ANALYSIS_COLS: &str =
-    "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, s.blocks, a.bpm, a.bpm_confidence, s.waveform, a.complete";
+    "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, s.blocks, a.bpm, a.bpm_confidence, s.waveform, a.complete, a.four";
 /// The join `ANALYSIS_COLS` needs, after `analysis a`.
 const SHAPE_JOIN: &str = "LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel";
 
@@ -2529,11 +2562,40 @@ fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// The time signature of Beat this!'s beats and downbeats (milliseconds): beats a bar (0: none sure) and how sure.
+fn meter_of(beats: &[u32], downbeats: &[u32]) -> (i64, f64) {
+    let secs = |v: &[u32]| v.iter().map(|m| f64::from(*m) / 1000.0).collect::<Vec<f64>>();
+    crate::analysis::rhythm::meter(&secs(beats), &secs(downbeats)).map_or((0, 0.0), |(n, sure)| (i64::from(n), f64::from(sure)))
+}
+
+/// The time signatures of the files Beat this! heard before they were worked out (0.15), once. Safe to repeat.
+fn fill_meters(conn: &Connection) -> Result<()> {
+    let rows: Vec<(i64, String, Vec<u8>, Vec<u8>)> = conn
+        .prepare("SELECT folder, rel, beats, downbeats FROM beat_this WHERE meter IS NULL")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let ms = |b: &[u8]| b.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect::<Vec<u32>>();
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut st = tx.prepare("UPDATE beat_this SET meter = ?3, meter_sure = ?4 WHERE folder = ?1 AND rel = ?2")?;
+        for (folder, rel, beats, downbeats) in &rows {
+            let (meter, sure) = meter_of(&ms(beats), &ms(downbeats));
+            st.execute(params![folder, rel, meter, sure])?;
+        }
+    }
+    tx.commit()?;
+    tracing::info!("catalogue: time signatures worked out for {} files", rows.len());
+    Ok(())
+}
+
 fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64, a: &crate::analysis::Analysis, now: i64) -> Result<()> {
     db.prepare_cached(
         "INSERT OR REPLACE INTO analysis (folder, rel, size, mtime, version, duration_secs, loudness_lufs, track_gain_db,
-           track_peak, bpm, bpm_confidence, waveform, blocks, analysed_at, complete)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, ?12, ?13)",
+           track_peak, bpm, bpm_confidence, waveform, blocks, analysed_at, complete, four)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, ?12, ?13, ?14)",
     )?
     .execute(params![
         folder,
@@ -2548,7 +2610,8 @@ fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64
         a.bpm,
         a.bpm_confidence,
         now,
-        a.complete
+        a.complete,
+        a.rhythm.map(|r| r.four)
     ])?;
     db.prepare_cached("INSERT OR REPLACE INTO analysis_shape (folder, rel, waveform, blocks, beats) VALUES (?1, ?2, ?3, ?4, ?5)")?
         .execute(params![folder, rel, a.waveform, blocks_bytes(&a.blocks), a.beats.as_ref().map(|b| b.0.as_slice())])?;
@@ -2644,6 +2707,7 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
         bpm_confidence: r.get::<_, Option<f64>>(at + 7)?.unwrap_or(0.0) as f32,
         waveform: r.get::<_, Option<Vec<u8>>>(at + 8)?.unwrap_or_default(),
         complete: r.get(at + 9)?,
+        rhythm: r.get::<_, Option<f64>>(at + 10)?.map(|f| crate::analysis::rhythm::Rhythm { four: f as f32 }),
         // Read apart (`Catalogue::beats_of`): a few kilobytes no list needs.
         beats: None,
     })
@@ -2883,6 +2947,7 @@ mod tests {
             waveform: vec![7; crate::analysis::WAVEFORM_BINS],
             complete: Some(true),
             beats: None,
+            rhythm: None,
         }
     }
 

@@ -123,7 +123,10 @@ impl InsightsService {
                     on_rows.push(r);
                 }
             }
-            let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists);
+            // The crates' facts by playlist line: the map's Sound (0.15).
+            let facts = catalogue.crate_facts()?;
+            let by_line: std::collections::HashMap<&str, &crate::crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
+            let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists, &by_line);
             report.playlists.library_tracks_in_crates = in_crates;
             if let (Some(served), Some((albums, songs))) = (served, &arrivals) {
                 let (plays, starred): (std::collections::HashMap<String, u32>, std::collections::HashSet<String>) = match &user {

@@ -146,8 +146,10 @@ object Radio {
     /** With radio on, the playing track one of the queue's own: tracks like it after it and its hand-added run, unless
      *  they are there already (a seek, a replay, a report). Called on the main thread. */
     fun insert(context: Context, player: Player, server: String?, locate: (MediaItem) -> MediaItem) {
-        // Not for the device's own music (decision 0052).
-        if (!on(context) || Prefs(context).mode == Prefs.MODE_DEVICE) return
+        // Not for the device's own music (decision 0052); a server's mode (decision 0098) has that server's own mix.
+        val mode = Prefs(context).mode
+        if (!on(context) || mode == Prefs.MODE_DEVICE) return
+        val mix = mode.takeIf { it.startsWith(Servers.MODE_PREFIX) }
         val c = player.currentMediaItemIndex
         val count = player.mediaItemCount
         if (c < 0 || c >= count) return
@@ -170,7 +172,11 @@ object Radio {
         asking = key
         Scorer.asks.execute {
             val artists = setOfNotNull(playing.optString("artist").takeIf { it.isNotEmpty() })
-            val got = server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, queue, artists, false, n, LANE)
+            val got = if (mix != null) {
+                Servers.mix(app, mix, playing.optString("id"), n, queue.map { it.optString("id") }.toSet(), LANE)
+            } else {
+                server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, queue, artists, false, n, LANE)
+            }
             Scorer.main.post {
                 if (asking == key) asking = null
                 // Still on as asked, still that track, still without its inserts.
@@ -257,7 +263,10 @@ object Autoplay {
      *  thread. */
     fun fill(context: Context, player: Player, server: String?, locate: (MediaItem) -> MediaItem) {
         val a = get(context) ?: return
-        if (Prefs(context).mode == Prefs.MODE_DEVICE) return
+        // Not for the device's own music; a server's mode has that server's own mix, from the track that plays.
+        val mode = Prefs(context).mode
+        if (mode == Prefs.MODE_DEVICE) return
+        val mix = mode.takeIf { it.startsWith(Servers.MODE_PREFIX) }
         val count = player.mediaItemCount
         val c = player.currentMediaItemIndex
         if (filling || count == 0 || count - c - 1 >= LOW) return
@@ -281,7 +290,12 @@ object Autoplay {
                 playing?.optString("artist")?.takeIf { it.isNotEmpty() }?.let(::add)
                 for (t in queue) if (t.optString("id") in a.seed) t.optString("artist").takeIf { it.isNotEmpty() }?.let(::add)
             }
-            val got = server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, queue, artists, a.mode == "random", BATCH, LANE)
+            val got = if (mix != null) {
+                val from = playing?.optString("id")?.ifEmpty { null } ?: own.lastOrNull()?.optString("id")
+                from?.let { Servers.mix(app, mix, it, BATCH, queue.map { t -> t.optString("id") }.toSet(), LANE) } ?: JSONArray()
+            } else {
+                server?.let { Scorer.ask(app, it, ask) } ?: Scorer.offline(app, queue, artists, a.mode == "random", BATCH, LANE)
+            }
             Scorer.main.post {
                 filling = false
                 // Off meanwhile, or asked before favourites were ignored (or no longer): what came is not wanted.
