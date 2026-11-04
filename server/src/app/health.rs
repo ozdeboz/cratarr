@@ -14,9 +14,11 @@ use super::App;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
-    /// The owner has to act (critical; called "needs you" until the owner renamed it, 2026-10-23).
+    /// Broken or blind (the owner, 2026-11-04, for 0.16): the music can't play right, or Cratarr can't see (called
+    /// "needs you" until the owner renamed it, 2026-10-23; "the owner has to act" until 0.16).
     Critical,
-    /// Something is wrong and may right itself.
+    /// Something is wrong but the music plays: data that is incomplete, what retries by itself, a decision waiting on
+    /// the owner.
     Warning,
     /// Worth knowing.
     Info,
@@ -313,10 +315,11 @@ fn thousands(count: u64) -> String {
     out
 }
 
-/// A check's answer: its findings, or the one that says it could not look.
+/// A check's answer: its findings, or the one that says it could not look: critical, as Cratarr is blind there (the
+/// owner, 2026-11-04: a library that could not be checked is no warning).
 fn or_failed(domain: &'static str, r: anyhow::Result<Vec<Finding>>) -> Vec<Finding> {
     r.unwrap_or_else(|e| {
-        let mut f = finding(domain, format!("{domain}:check"), Level::Warning, 1, format!("The {domain} could not be checked"));
+        let mut f = finding(domain, format!("{domain}:check"), Level::Critical, 1, format!("The {domain} could not be checked"));
         f.detail = Some(format!("{e:#}"));
         vec![f]
     })
@@ -359,8 +362,9 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 
 /// The library's albums lacking what it requires, a finding for each kind, each album opening its panel: the cover,
 /// the year, the genre, the album artist and the track numbers are warnings; the MusicBrainz id, which many lack and
-/// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is critical (the owner,
-/// 2026-10-25). No share of all the albums (0.9.7, the owner: a bar is for something good, not for what is wrong).
+/// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is a warning too: the record
+/// plays (the owner, 2026-11-04, "broken or blind"; critical from 2026-10-25 until then). No share of all the albums
+/// (0.9.7, the owner: a bar is for something good, not for what is wrong).
 /// Track numbers (0.9.6): `numbering`'s
 /// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
 /// Disc numbers (0.13): `discs`' albums that lost theirs (numbers starting again, or fewer discs than the release that
@@ -368,7 +372,7 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], discs: &[(String, String, String, String)]) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
     let kinds: [(&str, Level, &str, &str, Pick); 5] = [
-        ("cover", Level::Critical, "record without a cover", "records without a cover", |r| r.cover),
+        ("cover", Level::Warning, "record without a cover", "records without a cover", |r| r.cover),
         ("year", Level::Warning, "record without a year", "records without a year", |r| r.year),
         ("genre", Level::Warning, "record without a genre", "records without a genre", |r| r.genre),
         ("album-artist", Level::Warning, "record without an album artist", "records without an album artist", |r| r.album_artist),
@@ -422,11 +426,11 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     let mut out = Vec::new();
     if upgrades > 0 {
         // Said as what the library holds (the owner, 2026-10-25: duplicates on an artist's page went unnoticed under
-        // "duplicates waiting").
-        out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
+        // "duplicates waiting"). Both are decisions waiting on the owner, so warnings (the owner, 2026-11-04).
+        out.push(finding("incoming", "incoming:upgrades", Level::Warning, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
     }
     if duplicates > 0 {
-        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "record is in two libraries at once", "records are in two libraries at once")));
+        out.push(finding("incoming", "incoming:duplicates", Level::Warning, duplicates, n(duplicates, "record is in two libraries at once", "records are in two libraries at once")));
     }
     if failed > 0 {
         out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
@@ -478,8 +482,9 @@ fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums
 }
 
 /// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
-/// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. MusicBrainz is
-/// critical (the background pass and Find more music stop), the rest a warning.
+/// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. Each a warning:
+/// it retries by itself (the owner, 2026-11-04, "broken or blind"; MusicBrainz was critical until then, as the
+/// background pass and Find more music stop while it fails).
 fn check_connections(at: i64) -> Vec<Finding> {
     let tz = super::moment::tz(super::moment::told(at).as_ref());
     let clock = |t: i64| {
@@ -496,8 +501,7 @@ fn check_connections(at: i64) -> Vec<Finding> {
         .into_iter()
         .filter(|(name, _)| !switched_off(name))
         .map(|(name, s)| {
-            let level = if name == "musicbrainz" { Level::Critical } else { Level::Warning };
-            let mut f = finding("connections", format!("connections:{name}"), level, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
+            let mut f = finding("connections", format!("connections:{name}"), Level::Warning, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
             f.name = super::reach::label(name).to_string();
             (f.thing, f.state) = (Some(f.name.clone()), Some("failing".into()));
             f.detail = s.last_error.map(|(_, why)| why);
@@ -1112,7 +1116,7 @@ mod tests {
     fn a_records_health_is_its_own_findings_and_files_and_no_other_records() {
         let own = ("cratarr".to_string(), "al-own".to_string());
         let item = |album: &str, title: &str| Item { title: title.into(), album: Some(("cratarr".into(), album.into())), ..Item::default() };
-        let mut cover = finding("library", "library:cover", Level::Critical, 2, "2 records without a cover");
+        let mut cover = finding("library", "library:cover", Level::Warning, 2, "2 records without a cover");
         cover.items = vec![item("al-other", "Other"), item("al-own", "Own")];
         let mut genre = finding("library", "library:genre", Level::Warning, 1, "1 record without a genre");
         genre.items = vec![item("al-other", "Other")];
@@ -1130,8 +1134,8 @@ mod tests {
             rows,
             [
                 ("files:cut-short", Some("Files"), Some("cut off"), vec!["Three"]),
-                ("library:cover", Some("Covers"), Some("missing"), vec!["Own"]),
                 ("files:damaged_tag", Some("Tags"), Some("damaged"), vec!["One"]),
+                ("library:cover", Some("Covers"), Some("missing"), vec!["Own"]),
                 ("files:no_length", Some("Lengths"), Some("missing"), vec!["Two"]),
             ]
         );
