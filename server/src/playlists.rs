@@ -1,20 +1,21 @@
-//! The playlists: `.m3u` files in one folder. Reads are cheap (small text files, cached by modification stamp),
-//! writes are careful: re-read right before the edit, back the file up, write a temporary file next to it and
-//! rename it into place, so a crash or a concurrent edit can never leave a half-written playlist.
+//! The playlists (decisions 0012, 0101): kept in the user data (`crate::userdata::playlists`), each one's `.m3u` copy
+//! written out after every change into a folder of its own, never read back. Until 0.15 they were `.m3u` files in
+//! Music's playlist folder; those are brought in once (`import`) and left where they are.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::journal::fingerprint;
 use crate::m3u;
-
-pub const BACKUP_DIR: &str = ".cratarr-backups";
-const KEEP_BACKUPS: usize = 20;
+use crate::playlist_ops::Entries;
+use crate::userdata::UserData;
+use crate::userdata::playlists::{Named, Playlist, Written, key_of};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PlaylistView {
@@ -111,23 +112,6 @@ pub fn playlist_stats(playlists: &[(&str, &[String], usize)]) -> PlaylistStats {
 pub struct Repairs {
     pub safe: Vec<Repair>,
     pub review: Vec<Repair>,
-}
-
-struct Cached {
-    stamp: (SystemTime, u64),
-    entries: HashSet<String>,
-    /// Every entry line, in file order (duplicates kept).
-    lines: Vec<String>,
-    /// How many entries point at a missing file; `None` until checked (it changes with the library, not the file).
-    dead: Option<usize>,
-}
-
-impl Cached {
-    /// `prefix`: what the file's lines carry in front of a Music-relative entry ("../" in `.playlists`).
-    fn parse(stamp: (SystemTime, u64), text: &str, prefix: &str) -> Self {
-        let lines: Vec<String> = m3u::entries(text).map(|l| unprefixed(&l, prefix)).collect();
-        Self { stamp, entries: lines.iter().cloned().collect(), lines, dead: None }
-    }
 }
 
 /// True when `entry` (library-relative) names an existing file under `dir`. Absolute paths and `..` never resolve.
@@ -227,26 +211,12 @@ fn unprefixed(line: &str, prefix: &str) -> String {
     line.strip_prefix(prefix).unwrap_or(line).to_string()
 }
 
-/// A playlist's file before and after a change: what undoing it needs (decision 0026).
+/// A playlist's text (`text_of`) before and after a change: what undoing it needs (decision 0026).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edited {
     pub id: String,
     pub before: String,
     pub after: String,
-}
-
-pub struct Store {
-    /// Where the `.m3u` files are.
-    dir: PathBuf,
-    /// The Music folder: entries are relative to it.
-    base: PathBuf,
-    /// What lines carry in front of an entry: "" when the files are in Music itself, "../" in `.playlists`, "../../" in
-    /// an account's folder there.
-    prefix: String,
-    /// Whose playlists (decision 0051): another account's, in its folder; `None`: the first administrator's.
-    account: Option<String>,
-    cache: RwLock<HashMap<String, Cached>>,
-    write: Mutex<()>,
 }
 
 /// Whether an account's name can name its playlists' folder: plain, as the directory's names are.
@@ -259,7 +229,7 @@ fn is_backup_copy(id: &str) -> bool {
     id.to_lowercase().ends_with(".bak")
 }
 
-/// A playlist id is its file name without `.m3u`; it must never be able to point outside the folder.
+/// A playlist id is its name; it names its `.m3u` copy, so it must never be able to point outside its folder.
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() < 200 && !id.starts_with('.') && !id.contains(['/', '\\', '\0'])
 }
@@ -277,24 +247,6 @@ fn valid_new_name(name: &str) -> bool {
 
 /// The nearest name `valid_new_name` takes, for a playlist named elsewhere (a server's): reserved characters become
 /// "-", leading dots and spaces and trailing dots and spaces go, long names are cut. "Playlist" when nothing is left.
-/// Told every playlist write: its name, and its entries before and after. Set once at start (the user data keeps when
-/// each entry came, for the panel's Added order).
-pub type OnWrite = Box<dyn Fn(&str, &[String], &[String]) + Send + Sync>;
-static ON_WRITE: std::sync::OnceLock<OnWrite> = std::sync::OnceLock::new();
-
-pub fn on_write(told: OnWrite) {
-    let _ = ON_WRITE.set(told);
-}
-
-/// Told when a playlist comes (`true`: made, renamed to, brought back) or goes (deleted, renamed away), by its key: the
-/// change log (decision 0087). Its writes are told `on_write`. Set once at start.
-pub type OnNamed = Box<dyn Fn(&str, bool) + Send + Sync>;
-static ON_NAMED: std::sync::OnceLock<OnNamed> = std::sync::OnceLock::new();
-
-pub fn on_named(told: OnNamed) {
-    let _ = ON_NAMED.set(told);
-}
-
 pub fn usable_name(wanted: &str) -> String {
     let mut s: String = wanted.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c }).collect();
     s = s.trim_start_matches(['.', ' ']).to_string();
@@ -322,40 +274,67 @@ pub fn free_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
     (from.max(2)..).map(|n| format!("{stem} {n}")).find(|n| !taken(n)).unwrap_or_default()
 }
 
-impl Store {
-    /// Playlists kept in `dir` itself, entries relative to it.
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
-        let dir = dir.into();
-        Self { base: dir.clone(), dir, prefix: String::new(), account: None, cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
-    }
+/// A playlist's lines as its text: one Music-relative path a line. What its `.m3u` copy holds, and what an undo
+/// keeps (decision 0026).
+pub fn text_of(lines: &[String]) -> String {
+    lines.iter().map(|l| format!("{l}\n")).collect()
+}
 
-    /// The Music folder's playlists: in its playlist folder (`.playlists`) once that exists, else in the folder
-    /// itself.
-    pub fn in_music(music: impl Into<PathBuf>) -> Self {
-        let base = music.into();
-        let dir = base.join(PLAYLIST_DIR);
-        if dir.is_dir() {
-            Self { dir, base, prefix: "../".into(), account: None, cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
-        } else {
-            Self::new(base)
+pub struct Store {
+    db: Arc<UserData>,
+    /// Whose playlists (decision 0051): another account's; `None`: the first administrator's.
+    account: Option<String>,
+    /// The Music folder: entries are relative to it.
+    base: PathBuf,
+    /// Where the playlists' `.m3u` copies are written after each change (decision 0101), another account's in a folder
+    /// of its own there; none: not written.
+    out: Option<PathBuf>,
+    /// How many of each playlist's entries point at a missing file, by the playlist's id, with the print of the lines
+    /// counted: they change with the library, not the playlist (`refresh_dead`).
+    dead: RwLock<HashMap<String, (u64, usize)>>,
+    write: Mutex<()>,
+}
+
+/// Told when a playlist comes (`true`: made, renamed to, brought back) or goes (deleted, renamed away), by its key, and
+/// whether others see it (shared): the change log (decision 0087). Its writes are logged as they are written. Set once
+/// at start.
+pub type OnNamed = Box<dyn Fn(&str, bool, bool) + Send + Sync>;
+static ON_NAMED: std::sync::OnceLock<OnNamed> = std::sync::OnceLock::new();
+
+pub fn on_named(told: OnNamed) {
+    let _ = ON_NAMED.set(told);
+}
+
+impl Store {
+    /// One account's playlists (`None`: the first administrator's), their entries relative to `base` (Music).
+    pub fn open(db: Arc<UserData>, account: Option<&str>, base: impl Into<PathBuf>, out: Option<PathBuf>) -> Self {
+        Self {
+            db,
+            account: account.map(str::to_string),
+            base: base.into(),
+            out,
+            dead: RwLock::new(HashMap::new()),
+            write: Mutex::new(()),
         }
     }
 
-    /// Another account's playlists (decision 0051): in its own folder in the playlist folder (`.playlists/<account>`,
-    /// made with its first playlist), entries relative to Music as everyone's are.
-    pub fn of_account(music: impl Into<PathBuf>, account: &str) -> Self {
-        let base = music.into();
-        let dir = base.join(PLAYLIST_DIR).join(account);
-        Self { dir, base, prefix: "../../".into(), account: Some(account.to_string()), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+    /// The first administrator's playlists over the Music folder, their `.m3u` files brought in first (once:
+    /// `import`).
+    pub async fn in_music(db: Arc<UserData>, music: impl Into<PathBuf>, out: Option<PathBuf>) -> Result<Self> {
+        let music = music.into();
+        let (d, m, o) = (db.clone(), music.clone(), out.clone());
+        tokio::task::spawn_blocking(move || import(&d, &m, o.as_deref())).await??;
+        Ok(Self::open(db, None, music, out))
     }
 
-    /// In the playlist folder (`.playlists`), where other accounts' folders can be.
-    pub fn in_playlist_dir(&self) -> bool {
-        self.account.is_none() && self.prefix == "../"
-    }
-
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    /// Tests: the playlists of `dir`'s `.m3u` files, entries relative to it, in a database of their own, their copies
+    /// written back out there.
+    #[cfg(test)]
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        let dir = dir.into();
+        let db = Arc::new(UserData::open(None).expect("an in-memory database"));
+        import(&db, &dir, Some(&dir)).expect("the playlists brought in");
+        Self::open(db, None, dir.clone(), Some(dir))
     }
 
     pub fn base(&self) -> &Path {
@@ -367,13 +346,15 @@ impl Store {
         self.account.as_deref()
     }
 
+    /// The owner as the database keeps it: '' the first administrator.
+    fn owner(&self) -> String {
+        self.account.clone().unwrap_or_default()
+    }
+
     /// A playlist's key in Cratarr's own records (when its entries came, its old names): its name in the first
     /// administrator's playlists, `account/name` in another's.
     pub fn key(&self, id: &str) -> String {
-        match &self.account {
-            Some(a) => format!("{a}/{id}"),
-            None => id.to_string(),
-        }
+        key_of(&self.owner(), id)
     }
 
     /// The name of this store's playlist a key is of (`key`'s inverse); `None` for another store's.
@@ -384,212 +365,170 @@ impl Store {
         }
     }
 
-    /// A Music-relative entry as a line of this store's files.
-    fn line(&self, entry: &str) -> String {
-        format!("{}{entry}", self.prefix)
+    /// The database's answer, its work done off the async threads.
+    async fn ask<T: Send + 'static>(&self, f: impl FnOnce(&UserData, &str) -> Result<T> + Send + 'static) -> Result<T> {
+        let (db, owner) = (self.db.clone(), self.owner());
+        tokio::task::spawn_blocking(move || f(&db, &owner)).await?
     }
 
-    fn path_of(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.m3u"))
+    /// Whether there is such a playlist.
+    pub fn has(&self, id: &str) -> bool {
+        valid_id(id) && self.db.playlist(&self.owner(), id).ok().flatten().is_some()
     }
 
-    /// Whether playlist `id` has its file.
-    pub fn path_exists(&self, id: &str) -> bool {
-        valid_id(id) && self.path_of(id).is_file()
+    /// Every playlist with its lines, as kept.
+    async fn all(&self) -> Result<Vec<(Playlist, Vec<String>)>> {
+        self.ask(|db, owner| db.playlists(owner)).await
     }
 
-    /// `(id, path, stamp)` for every visible `.m3u` file directly in the folder, backup copies left out.
-    async fn list(&self) -> Result<Vec<(String, PathBuf, (SystemTime, u64))>> {
-        let mut rd = match tokio::fs::read_dir(&self.dir).await {
-            Ok(rd) => rd,
-            // An account's folder comes with its first playlist.
-            Err(e) if self.account.is_some() && e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(anyhow!(e).context(format!("cannot read the playlist folder {}", self.dir.display()))),
-        };
-        let mut out = Vec::new();
-        while let Some(e) = rd.next_entry().await? {
-            let name = e.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if name.starts_with('.') || !name.to_lowercase().ends_with(".m3u") {
-                continue;
+    /// The dead count of each of `lists`, by id: counted again where its lines changed since.
+    async fn dead_of(&self, lists: &[(Playlist, Vec<String>)]) -> HashMap<String, usize> {
+        let known = self.dead.read().await.clone();
+        let stale: Vec<(String, u64, Vec<String>)> = lists
+            .iter()
+            .map(|(p, lines)| (p.id.clone(), fingerprint(&text_of(lines)), lines.clone()))
+            .filter(|(id, print, _)| known.get(id).is_none_or(|(p, _)| p != print))
+            .collect();
+        let mut out: HashMap<String, usize> = known.iter().map(|(id, (_, n))| (id.clone(), *n)).collect();
+        if !stale.is_empty() {
+            let dir = self.base.clone();
+            let counted = tokio::task::spawn_blocking(move || {
+                stale.into_iter().map(|(id, print, lines)| (id, print, dead_count(&dir, &lines))).collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            let mut cache = self.dead.write().await;
+            for (id, print, n) in counted {
+                cache.insert(id.clone(), (print, n));
+                out.insert(id, n);
             }
-            let Ok(meta) = tokio::fs::metadata(e.path()).await else { continue };
-            if !meta.is_file() {
-                continue;
-            }
-            let id = name[..name.len() - 4].to_string();
-            if is_backup_copy(&id) {
-                continue;
-            }
-            out.push((id, e.path(), (meta.modified().unwrap_or(UNIX_EPOCH), meta.len())));
         }
-        Ok(out)
+        out
     }
 
     /// Every playlist, name-sorted (case-insensitive), flagged by whether it contains `entry`.
     pub async fn view(&self, entry: Option<&str>) -> Result<Vec<PlaylistView>> {
-        let files = self.list().await?;
-        let mut cache = self.cache.write().await;
-        cache.retain(|id, _| files.iter().any(|f| &f.0 == id));
-        let mut out = Vec::with_capacity(files.len());
-        for (id, path, stamp) in files {
-            if !cache.get(&id).is_some_and(|c| c.stamp == stamp) {
-                match tokio::fs::read(&path).await {
-                    Ok(bytes) => {
-                        let text = String::from_utf8_lossy(&bytes);
-                        cache.insert(id.clone(), Cached::parse(stamp, &text, &self.prefix));
-                    }
-                    Err(e) => {
-                        tracing::warn!("cannot read {}: {e}", path.display());
-                        continue;
-                    }
+        let lists = self.all().await?;
+        let dead = self.dead_of(&lists).await;
+        let mut out: Vec<PlaylistView> = lists
+            .into_iter()
+            .map(|(p, lines)| {
+                let dead = dead.get(&p.id).copied().unwrap_or(0);
+                PlaylistView {
+                    member: entry.is_some_and(|t| lines.iter().any(|l| l == t)),
+                    count: lines.len().saturating_sub(dead),
+                    dead,
+                    id: p.name.clone(),
+                    name: p.name,
+                    links: Vec::new(),
+                    spoken: Vec::new(),
+                    owner: String::new(),
+                    shared: false,
+                    mine: true,
                 }
-            }
-            if cache[&id].dead.is_none() {
-                let (dir, lines) = (self.base.clone(), cache[&id].lines.clone());
-                let dead = tokio::task::spawn_blocking(move || dead_count(&dir, &lines)).await.unwrap_or(0);
-                cache.get_mut(&id).expect("just inserted").dead = Some(dead);
-            }
-            let c = &cache[&id];
-            let member = entry.is_some_and(|t| c.entries.contains(t));
-            let dead = c.dead.unwrap_or(0);
-            out.push(PlaylistView {
-                name: id.clone(),
-                member,
-                count: c.lines.len().saturating_sub(dead),
-                dead,
-                id,
-                links: Vec::new(),
-                spoken: Vec::new(),
-                owner: String::new(),
-                shared: false,
-                mine: true,
-            });
-        }
+            })
+            .collect();
         out.sort_by_key(|p| p.name.to_lowercase());
         Ok(out)
     }
 
-    /// Every playlist's lines (library-relative) and when its file last changed (epoch seconds), as `view` lists them.
+    /// Every playlist's lines (library-relative) and when it last changed (epoch seconds), by name.
     pub async fn lines_of_all(&self) -> Result<Vec<(String, i64, Vec<String>)>> {
-        let ids: Vec<String> = self.view(None).await?.into_iter().map(|p| p.id).collect();
-        let cache = self.cache.read().await;
-        Ok(ids
-            .into_iter()
-            .filter_map(|id| {
-                let c = cache.get(&id)?;
-                let changed = c.stamp.0.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-                Some((id, changed, c.lines.clone()))
-            })
-            .collect())
+        let mut out: Vec<(String, i64, Vec<String>)> = self.all().await?.into_iter().map(|(p, lines)| (p.name, p.changed, lines)).collect();
+        out.sort_by_key(|(name, _, _)| name.to_lowercase());
+        Ok(out)
     }
 
     /// Re-check every playlist's dead entries against the library (files appear and disappear without the
     /// playlist changing). Meant to run every minute or so in the background.
     pub async fn refresh_dead(&self) {
-        let snapshot: Vec<(String, (SystemTime, u64), Vec<String>)> =
-            self.cache.read().await.iter().map(|(id, c)| (id.clone(), c.stamp, c.lines.clone())).collect();
+        let Ok(lists) = self.all().await else { return };
         let dir = self.base.clone();
         let counted = tokio::task::spawn_blocking(move || {
-            snapshot.into_iter().map(|(id, stamp, lines)| (id, stamp, dead_count(&dir, &lines))).collect::<Vec<_>>()
+            lists.into_iter().map(|(p, lines)| (p.id, fingerprint(&text_of(&lines)), dead_count(&dir, &lines))).collect::<Vec<_>>()
         })
         .await
         .unwrap_or_default();
-        let mut cache = self.cache.write().await;
-        for (id, stamp, dead) in counted {
-            if let Some(c) = cache.get_mut(&id).filter(|c| c.stamp == stamp) {
-                c.dead = Some(dead);
-            }
+        let mut cache = self.dead.write().await;
+        cache.clear();
+        for (id, print, n) in counted {
+            cache.insert(id, (print, n));
         }
     }
 
-    /// A playlist's track lines in file order (comments and blanks left out). Read-only.
+    /// A playlist's lines in order. Read-only.
     pub async fn entries(&self, id: &str) -> Result<Vec<String>, StoreError> {
         if !valid_id(id) {
             return Err(StoreError::Unknown);
         }
-        let path = self.path_of(id);
-        match tokio::fs::metadata(&path).await {
-            Ok(m) if m.is_file() => {}
-            _ => return Err(StoreError::Unknown),
-        }
-        let bytes = tokio::fs::read(&path).await.with_context(|| format!("reading {id}.m3u"))?;
-        Ok(m3u::entries(&String::from_utf8_lossy(&bytes)).map(|l| unprefixed(&l, &self.prefix)).collect())
+        let name = id.to_string();
+        self.ask(move |db, owner| Ok(db.playlist(owner, &name)?.map(|(_, lines)| lines))).await?.ok_or(StoreError::Unknown)
     }
 
-    /// A playlist's file as it is, for its copies; `None` when there is no such playlist.
-    pub async fn text(&self, id: &str) -> Option<String> {
-        if !valid_id(id) {
-            return None;
-        }
-        let bytes = tokio::fs::read(self.path_of(id)).await.ok()?;
-        Some(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
-    }
-
-    /// Open a playlist for editing. The caller must hold the write lock.
-    async fn load_for_edit(&self, id: &str) -> Result<(PathBuf, std::fs::Permissions, String), StoreError> {
+    /// A playlist's entries by their ids (decision 0087), and when each one there came (epoch s; none for one held
+    /// before the dates were kept), in order.
+    pub async fn entries_with_ids(&self, id: &str) -> Result<(Entries, Vec<Option<i64>>), StoreError> {
         if !valid_id(id) {
             return Err(StoreError::Unknown);
         }
-        let path = self.path_of(id);
-        let meta = match tokio::fs::metadata(&path).await {
-            Ok(m) if m.is_file() => m,
-            _ => return Err(StoreError::Unknown),
-        };
-        let bytes = tokio::fs::read(&path).await.with_context(|| format!("reading {id}.m3u"))?;
-        let text = String::from_utf8(bytes).map_err(|_| anyhow!("{id}.m3u is not valid UTF-8, refusing to edit it"))?;
-        Ok((path, meta.permissions(), text))
+        let name = id.to_string();
+        self.ask(move |db, owner| db.playlist_entries(owner, &name)).await?.ok_or(StoreError::Unknown)
     }
 
-    /// Replace the playlist with `new_text`: back the old file up, write a temporary file next to it and rename it
-    /// into place. The caller must hold the write lock. Written as given, repeats included: a playlist holds a track
-    /// twice when it was asked to (decision 0025, amended 2026-10-16). Returns the text as written.
-    async fn commit(&self, id: &str, path: &Path, perms: std::fs::Permissions, new_text: &str) -> Result<String> {
-        let before: Vec<String> = match tokio::fs::read_to_string(path).await {
-            Ok(t) => m3u::entries(&t).map(|l| unprefixed(&l, &self.prefix)).collect(),
-            Err(_) => Vec::new(),
-        };
-        self.backup(id, path).await?;
-        let tmp = self.dir.join(format!(".{id}.m3u.cratarr-tmp"));
-        tokio::fs::write(&tmp, new_text).await.with_context(|| format!("writing {}", tmp.display()))?;
-        tokio::fs::set_permissions(&tmp, perms).await.ok();
-        if let Err(e) = tokio::fs::rename(&tmp, path).await {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            return Err(anyhow!(e).context(format!("replacing {id}.m3u")));
-        }
-        if let Ok(m) = tokio::fs::metadata(path).await {
-            self.cache
-                .write()
-                .await
-                .insert(id.to_string(), Cached::parse((m.modified().unwrap_or(UNIX_EPOCH), m.len()), new_text, &self.prefix));
-        }
-        if let Some(told) = ON_WRITE.get() {
-            let after: Vec<String> = m3u::entries(new_text).map(|l| unprefixed(&l, &self.prefix)).collect();
-            told(&self.key(id), &before, &after);
-        }
-        Ok(new_text.to_string())
+    /// A playlist as its text (`text_of`), for its copies and its undo; `None` when there is no such playlist.
+    pub async fn text(&self, id: &str) -> Option<String> {
+        self.entries(id).await.ok().map(|lines| text_of(&lines))
     }
 
-    /// Tells `on_named` that playlist `id` came (`true`) or went.
-    fn named(&self, id: &str, there: bool) {
+    /// When a playlist was made and last changed (epoch s), as Subsonic clients see it.
+    pub fn dates(&self, id: &str) -> Option<(i64, i64)> {
+        self.db.playlist(&self.owner(), id).ok().flatten().map(|(p, _)| (p.created, p.changed))
+    }
+
+    /// The playlist's lines become `lines` while it holds `expected` (`None`: whatever it holds), its copy written out.
+    /// The caller holds the write lock. `None`: it no longer held `expected`, and nothing was written.
+    async fn put(&self, id: &str, expected: Option<Vec<String>>, lines: Vec<String>) -> Result<Option<Edited>, StoreError> {
+        let (name, l) = (id.to_string(), lines.clone());
+        match self.ask(move |db, owner| db.write_playlist(owner, &name, expected.as_deref(), &l)).await? {
+            Written::Unknown => Err(StoreError::Unknown),
+            Written::Stale => Ok(None),
+            Written::Done { before } => Ok(Some(self.written(id, before, lines).await)),
+        }
+    }
+
+    /// A write done: its copy written out where it changed anything; the playlist before and after.
+    async fn written(&self, id: &str, before: Vec<String>, after: Vec<String>) -> Edited {
+        if before != after {
+            self.write_out(id, Some(&after)).await;
+        }
+        Edited { id: id.to_string(), before: text_of(&before), after: text_of(&after) }
+    }
+
+    /// The playlist's lines as kept now; the caller holds the write lock.
+    async fn lines(&self, id: &str) -> Result<Vec<String>, StoreError> {
+        self.entries(id).await
+    }
+
+    /// Tells `on_named` that playlist `id` came (`true`) or went, shared or not.
+    fn named(&self, id: &str, there: bool, shared: bool) {
         if let Some(told) = ON_NAMED.get() {
-            told(&self.key(id), there);
+            told(&self.key(id), there, shared);
         }
     }
 
-    /// Make the playlist exactly `entries`, in order. Backed up like every edit. Returns false when it already was.
+    /// Whether the playlist a key is of is shared, as it is now or as it went.
+    async fn shared(&self, id: &str) -> bool {
+        let key = self.key(id);
+        self.ask(move |db, _| db.is_playlist_shared(&key)).await.unwrap_or(false)
+    }
+
+    /// Make the playlist exactly `entries`, in order. Returns false when it already was.
     /// Tests only: the sync uses `set_entries_if`, which never overwrites an edit it has not seen.
     #[cfg(test)]
     pub async fn set_entries(&self, id: &str, entries: &[String]) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, perms, text) = self.load_for_edit(id).await?;
-        let lines: Vec<String> = entries.iter().map(|e| self.line(e)).collect();
-        let new_text = m3u::with_entries(&text, &lines);
-        if new_text == text {
-            return Ok(false);
-        }
-        self.commit(id, &path, perms, &new_text).await?;
-        Ok(true)
+        let e = self.put(id, None, entries.to_vec()).await?.ok_or(StoreError::Unknown)?;
+        Ok(e.before != e.after)
     }
 
     /// As `set_entries`, but only when the playlist still holds `expected` (else nothing is written and false is
@@ -598,82 +537,88 @@ impl Store {
         Ok(self.replace_entries_if(id, expected, entries).await?.is_some())
     }
 
-    /// As `set_entries_if`, saying what the file was and became (`None`: it no longer held `expected`).
+    /// As `set_entries_if`, saying what the playlist was and became (`None`: it no longer held `expected`).
     pub async fn replace_entries_if(&self, id: &str, expected: &[String], entries: &[String]) -> Result<Option<Edited>, StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Unknown);
+        }
         let _one_writer = self.write.lock().await;
-        let (path, perms, text) = self.load_for_edit(id).await?;
-        if m3u::entries(&text).map(|l| unprefixed(&l, &self.prefix)).collect::<Vec<_>>() != expected {
-            return Ok(None);
-        }
-        let lines: Vec<String> = entries.iter().map(|e| self.line(e)).collect();
-        let mut new_text = m3u::with_entries(&text, &lines);
-        if new_text != text {
-            new_text = self.commit(id, &path, perms, &new_text).await?;
-        }
-        Ok(Some(Edited { id: id.to_string(), before: text, after: new_text }))
+        self.put(id, Some(expected.to_vec()), entries.to_vec()).await
     }
 
-    /// Put a playlist's file back to `text` (an undo, decision 0026), only while it is still what the change left
-    /// (`left`, its fingerprint); `None` when it changed since. Committed like every edit.
+    /// The playlist's entries become `e` (its operations applied, decision 0087), only while it holds `expected`;
+    /// the operations' ids kept as `account`'s, a refused one with why (`ops`). `None`: it no longer held `expected`.
+    pub async fn put_entries_if(
+        &self,
+        id: &str,
+        expected: &[String],
+        e: &Entries,
+        account: &str,
+        ops: &[(String, Option<String>)],
+    ) -> Result<Option<Edited>, StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Unknown);
+        }
+        let _one_writer = self.write.lock().await;
+        let (name, expected, e, account, ops) = (id.to_string(), expected.to_vec(), e.clone(), account.to_string(), ops.to_vec());
+        let after = e.lines();
+        match self.ask(move |db, owner| db.write_playlist_entries(owner, &name, &expected, &e, &account, &ops)).await? {
+            Written::Unknown => Err(StoreError::Unknown),
+            Written::Stale => Ok(None),
+            Written::Done { before } => Ok(Some(self.written(id, before, after).await)),
+        }
+    }
+
+    /// Put a playlist back to `text` (an undo, decision 0026), only while it is still what the change left (`left`,
+    /// its print); `None` when it changed since.
     pub async fn put_back_if(&self, id: &str, left: u64, text: &str) -> Result<Option<Edited>, StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, perms, now) = self.load_for_edit(id).await?;
-        if fingerprint(&now) != left {
+        let now = self.lines(id).await?;
+        if fingerprint(&text_of(&now)) != left {
             return Ok(None);
         }
-        let after = if now != text { self.commit(id, &path, perms, text).await? } else { now.clone() };
-        Ok(Some(Edited { id: id.to_string(), before: now, after }))
+        self.put(id, Some(now), m3u::entries(text).collect()).await
     }
 
     /// Delete a playlist (as `delete`) only while it is still what a change left (`left`); false when it changed since.
     pub async fn delete_if(&self, id: &str, left: u64) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, _, now) = self.load_for_edit(id).await?;
-        if fingerprint(&now) != left {
+        if fingerprint(&text_of(&self.lines(id).await?)) != left {
             return Ok(false);
         }
-        self.backup(id, &path).await?;
-        tokio::fs::remove_file(&path).await.with_context(|| format!("deleting {id}.m3u"))?;
-        self.cache.write().await.remove(id);
-        self.named(id, false);
+        self.delete_unlocked(id).await?;
         Ok(true)
     }
 
     /// Make `entry` a member of the playlist (`member`) or not. Idempotent: asking twice for the same state changes
-    /// nothing the second time, so a repeated or retried request is harmless. Returns whether the file changed.
+    /// nothing the second time, so a repeated or retried request is harmless. Returns whether the playlist changed.
     pub async fn set_member(&self, id: &str, entry: &str, member: bool) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, perms, text) = self.load_for_edit(id).await?;
-        let line = self.line(entry);
-        let new_text = match (m3u::contains(&text, &line), member) {
-            (false, true) => m3u::with_added(&text, &line),
-            (true, false) => m3u::with_removed(&text, &line).0,
+        let lines = self.lines(id).await?;
+        let new: Vec<String> = match (lines.iter().any(|l| l == entry), member) {
+            (false, true) => lines.iter().cloned().chain([entry.to_string()]).collect(),
+            (true, false) => lines.iter().filter(|l| *l != entry).cloned().collect(),
             _ => return Ok(false),
         };
-        self.commit(id, &path, perms, &new_text).await?;
+        self.put(id, Some(lines), new).await?;
         Ok(true)
     }
 
     /// Add `entry` to the playlist, or remove it if it is already there.
     pub async fn toggle(&self, id: &str, entry: &str) -> Result<Toggled, StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, perms, text) = self.load_for_edit(id).await?;
-        let line = self.line(entry);
-        let (new_text, added) = if m3u::contains(&text, &line) {
-            (m3u::with_removed(&text, &line).0, false)
-        } else {
-            (m3u::with_added(&text, &line), true)
-        };
-        self.commit(id, &path, perms, &new_text).await?;
+        let lines = self.lines(id).await?;
+        let added = !lines.iter().any(|l| l == entry);
+        let new: Vec<String> =
+            if added { lines.iter().cloned().chain([entry.to_string()]).collect() } else { lines.iter().filter(|l| *l != entry).cloned().collect() };
+        self.put(id, Some(lines), new).await?;
         Ok(Toggled { added })
     }
 
     /// Dead entries that can be repaired, across all playlists: `safe` (same file name, other extension: the
     /// library holds the track in another format) and `review` (same track number, similar but different title).
     pub async fn repairs(&self) -> Result<Repairs> {
-        self.view(None).await?;
-        let snapshot: Vec<(String, Vec<String>)> =
-            self.cache.read().await.iter().map(|(id, c)| (id.clone(), c.lines.clone())).collect();
+        let snapshot: Vec<(String, Vec<String>)> = self.all().await?.into_iter().map(|(p, lines)| (p.name, lines)).collect();
         let dir = self.base.clone();
         let mut found = tokio::task::spawn_blocking(move || {
             let mut listings: HashMap<String, Vec<String>> = HashMap::new();
@@ -701,7 +646,7 @@ impl Store {
     }
 
     /// Apply repairs. Every requested pair must be one that is currently offered (the client is never trusted
-    /// with paths). One backup and one write per playlist. Returns the playlists that changed, each as it was and is.
+    /// with paths). One write per playlist. Returns the playlists that changed, each as it was and is.
     pub async fn apply_repairs(&self, wanted: &[Repair]) -> Result<Vec<Edited>, StoreError> {
         let offered = self.repairs().await?;
         let is_offered = |w: &Repair| offered.safe.iter().chain(&offered.review).any(|o| o == w);
@@ -715,15 +660,15 @@ impl Store {
     /// repair is, though no repair offered it (the caller found it by what the line says). A path is still never
     /// trusted: `from` must be a line of the playlist whose file is gone, `to` a file there is, both inside Music.
     pub async fn relink(&self, r: &Repair) -> Result<Vec<Edited>, StoreError> {
-        let (_, _, text) = self.load_for_edit(&r.playlist).await?;
-        let dead = m3u::contains(&text, &self.line(&r.from)) && !entry_exists(&self.base, &r.from);
+        let lines = self.entries(&r.playlist).await?;
+        let dead = lines.iter().any(|l| *l == r.from) && !entry_exists(&self.base, &r.from);
         if !dead || !entry_exists(&self.base, &r.to) {
             return Err(StoreError::NotOffered);
         }
         self.write_repairs(std::slice::from_ref(r)).await
     }
 
-    /// Repairs written: one backup and one write per playlist.
+    /// Repairs written: one write per playlist.
     async fn write_repairs(&self, wanted: &[Repair]) -> Result<Vec<Edited>, StoreError> {
         let mut by_playlist: Vec<(String, Vec<&Repair>)> = Vec::new();
         for w in wanted {
@@ -735,62 +680,58 @@ impl Store {
         let _one_writer = self.write.lock().await;
         let mut changed = Vec::new();
         for (id, repairs) in by_playlist {
-            let (path, perms, before) = self.load_for_edit(&id).await?;
-            let mut text = before.clone();
-            let mut total = 0;
+            let before = self.lines(&id).await?;
+            let mut lines = before.clone();
             for r in repairs {
-                let (from, to) = (self.line(&r.from), self.line(&r.to));
                 // A dead line pointed at a file the playlist already lists would become a repeat nobody asked for:
                 // it goes instead (decision 0025, amended 2026-10-16: repeats only when asked for).
-                let (t, n) = if m3u::contains(&text, &to) { m3u::with_removed(&text, &from) } else { m3u::with_replaced(&text, &from, &to) };
-                text = t;
-                total += n;
+                if lines.contains(&r.to) {
+                    lines.retain(|l| *l != r.from);
+                } else {
+                    for l in lines.iter_mut().filter(|l| **l == r.from) {
+                        *l = r.to.clone();
+                    }
+                }
             }
-            if total > 0 {
-                let after = self.commit(&id, &path, perms, &text).await?;
-                changed.push(Edited { id, before, after });
+            if lines != before
+                && let Some(e) = self.put(&id, Some(before), lines).await?
+            {
+                changed.push(e);
             }
         }
         Ok(changed)
     }
 
-    /// Give every playlist the entries `edit` returns for it (`None`: leave it as it is), each backed up like every
-    /// edit. A file that is not UTF-8 is left alone. Returns the playlists that changed.
+    /// Give every playlist the entries `edit` returns for it (`None`: leave it as it is). Returns the playlists that
+    /// changed.
     pub async fn edit_all(&self, edit: impl Fn(&str, &[String]) -> Option<Vec<String>>) -> Result<Vec<String>> {
         let _one_writer = self.write.lock().await;
         let mut changed = Vec::new();
-        for (id, _, _) in self.list().await? {
-            let (path, perms, text) = match self.load_for_edit(&id).await {
-                Ok(f) => f,
-                Err(StoreError::Unknown) => continue, // gone since the listing
-                Err(e) => {
-                    tracing::warn!("{id}: {e:#}");
-                    continue;
-                }
-            };
-            let entries: Vec<String> = m3u::entries(&text).map(|l| unprefixed(&l, &self.prefix)).collect();
-            let Some(new) = edit(&id, &entries) else { continue };
-            let lines: Vec<String> = new.iter().map(|e| self.line(e)).collect();
-            let new_text = m3u::with_entries(&text, &lines);
-            if new_text != text {
-                self.commit(&id, &path, perms, &new_text).await?;
-                changed.push(id);
+        for (p, lines) in self.all().await? {
+            let Some(new) = edit(&p.name, &lines) else { continue };
+            if new == lines {
+                continue;
+            }
+            match self.put(&p.name, Some(lines), new).await {
+                Ok(Some(_)) => changed.push(p.name),
+                // Gone or changed since the listing.
+                Ok(None) | Err(StoreError::Unknown) => {}
+                Err(e) => tracing::warn!("{}: {e:#}", p.name),
             }
         }
         Ok(changed)
     }
 
-    /// Playlists that list the same entry more than once.
     /// Playlist lines that point into the album folder `folder`, per playlist (playlists without any are left out).
     pub async fn lines_in_folder(&self, folder: &str) -> Result<Vec<(String, usize)>> {
-        self.view(None).await?;
         let prefix = format!("{folder}/");
-        let cache = self.cache.read().await;
-        let mut out: Vec<(String, usize)> = cache
-            .iter()
-            .filter_map(|(id, c)| {
-                let n = c.lines.iter().filter(|l| l.starts_with(&prefix)).count();
-                (n > 0).then(|| (id.clone(), n))
+        let mut out: Vec<(String, usize)> = self
+            .all()
+            .await?
+            .into_iter()
+            .filter_map(|(p, lines)| {
+                let n = lines.iter().filter(|l| l.starts_with(&prefix)).count();
+                (n > 0).then_some((p.name, n))
             })
             .collect();
         out.sort_by_key(|(id, _)| id.to_lowercase());
@@ -799,10 +740,10 @@ impl Store {
 
     /// Every playlist's lines and missing-track count, by name (for Insights).
     pub async fn snapshot(&self) -> Result<Vec<(String, Vec<String>, usize)>> {
-        self.view(None).await?;
-        let cache = self.cache.read().await;
+        let lists = self.all().await?;
+        let dead = self.dead_of(&lists).await;
         let mut out: Vec<(String, Vec<String>, usize)> =
-            cache.iter().map(|(id, c)| (id.clone(), c.lines.clone(), c.dead.unwrap_or(0))).collect();
+            lists.into_iter().map(|(p, lines)| (p.name, lines, dead.get(&p.id).copied().unwrap_or(0))).collect();
         out.sort_by_key(|(id, _, _)| id.to_lowercase());
         Ok(out)
     }
@@ -811,54 +752,44 @@ impl Store {
     /// (decision 0025, amended 2026-10-16). `None` when it held none.
     pub async fn remove_repeats(&self, id: &str) -> Result<Option<Edited>, StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, perms, text) = self.load_for_edit(id).await?;
-        let (deduped, removed) = m3u::with_deduped(&text);
-        if removed == 0 {
+        let lines = self.lines(id).await?;
+        let mut seen = HashSet::new();
+        let deduped: Vec<String> = lines.iter().filter(|l| seen.insert(l.as_str())).cloned().collect();
+        if deduped.len() == lines.len() {
             return Ok(None);
         }
-        let after = self.commit(id, &path, perms, &deduped).await?;
-        Ok(Some(Edited { id: id.to_string(), before: text, after }))
+        self.put(id, Some(lines), deduped).await
     }
 
     /// Add `entries` at the playlist's end, in order, whether or not it holds them already: the user chose Add again
     /// (decision 0025, amended 2026-10-16). Membership asks use `set_member`, which never makes a repeat.
     pub async fn append(&self, id: &str, entries: &[String]) -> Result<Edited, StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, perms, text) = self.load_for_edit(id).await?;
-        let new_text = entries.iter().fold(text.clone(), |t, e| m3u::with_added(&t, &self.line(e)));
-        let after = if new_text != text { self.commit(id, &path, perms, &new_text).await? } else { text.clone() };
-        Ok(Edited { id: id.to_string(), before: text, after })
+        let lines = self.lines(id).await?;
+        if entries.is_empty() {
+            let text = text_of(&lines);
+            return Ok(Edited { id: id.to_string(), before: text.clone(), after: text });
+        }
+        let new: Vec<String> = lines.iter().chain(entries).cloned().collect();
+        self.put(id, Some(lines), new).await?.ok_or(StoreError::Unknown)
     }
 
-    /// Create an empty playlist. Never overwrites an existing file.
+    /// Create an empty playlist. Never takes the name of another (whatever the case).
     pub async fn create(&self, name: &str) -> Result<(), StoreError> {
         if !valid_new_name(name) {
             return Err(StoreError::BadName);
         }
         let _one_writer = self.write.lock().await;
-        let path = self.path_of(name);
-        if self.account.is_some() {
-            tokio::fs::create_dir_all(&self.dir).await.with_context(|| format!("making {}", self.dir.display()))?;
+        let n = name.to_string();
+        if !self.ask(move |db, owner| db.create_playlist(owner, &n, &[])).await? {
+            return Err(StoreError::Exists);
         }
-        // `create_new` fails if the file exists (also on a case-insensitive clash), so nothing is overwritten.
-        match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
-            Ok(_) => {
-                // Group-writable as the playlists around it, as `restore` does: the container's umask (022) made new
-                // playlists 644 (seen 2026-10-15).
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).await;
-                }
-                self.named(name, true);
-                Ok(())
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(StoreError::Exists),
-            Err(e) => Err(anyhow!(e).context(format!("creating {name}.m3u")).into()),
-        }
+        self.write_out(name, Some(&[])).await;
+        self.named(name, true, false);
+        Ok(())
     }
 
-    /// Rename a playlist. The file keeps its content; nothing is overwritten.
+    /// Rename a playlist: it keeps all else. Never takes the name of another.
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), StoreError> {
         if !valid_id(from) {
             return Err(StoreError::Unknown);
@@ -867,146 +798,176 @@ impl Store {
             return Err(StoreError::BadName);
         }
         let _one_writer = self.write.lock().await;
-        let (src, dst) = (self.path_of(from), self.path_of(to));
-        if !tokio::fs::metadata(&src).await.is_ok_and(|m| m.is_file()) {
+        let (f, t) = (from.to_string(), to.to_string());
+        let lines = match self.ask(move |db, owner| db.rename_playlist(owner, &f, &t)).await? {
+            Named::Unknown => return Err(StoreError::Unknown),
+            Named::Taken => return Err(StoreError::Exists),
+            Named::Done(lines) => lines,
+        };
+        self.write_out(from, None).await;
+        self.write_out(to, Some(&lines)).await;
+        let shared = self.shared(to).await;
+        self.named(from, false, shared);
+        self.named(to, true, shared);
+        Ok(())
+    }
+
+    /// Delete a playlist. It is set aside, never destroyed, so `restore_deleted` can bring it back.
+    pub async fn delete(&self, id: &str) -> Result<(), StoreError> {
+        if !valid_id(id) {
             return Err(StoreError::Unknown);
         }
-        if tokio::fs::try_exists(&dst).await.unwrap_or(false) {
-            return Err(StoreError::Exists);
-        }
-        self.backup(from, &src).await?;
-        tokio::fs::rename(&src, &dst).await.with_context(|| format!("renaming {from}.m3u"))?;
-        let mut cache = self.cache.write().await;
-        cache.remove(from);
-        self.named(from, false);
-        self.named(to, true);
-        Ok(())
-    }
-
-    /// Delete a playlist. The file is moved into the backup folder, never destroyed, so `restore_deleted` can bring it back.
-    pub async fn delete(&self, id: &str) -> Result<(), StoreError> {
         let _one_writer = self.write.lock().await;
-        let (path, _, _) = self.load_for_edit(id).await?;
-        self.backup(id, &path).await?;
-        tokio::fs::remove_file(&path).await.with_context(|| format!("deleting {id}.m3u"))?;
-        self.cache.write().await.remove(id);
-        self.named(id, false);
+        self.delete_unlocked(id).await
+    }
+
+    /// `delete`; the caller holds the write lock.
+    async fn delete_unlocked(&self, id: &str) -> Result<(), StoreError> {
+        let name = id.to_string();
+        let Some((_, shared)) = self.ask(move |db, owner| db.delete_playlist(owner, &name)).await? else { return Err(StoreError::Unknown) };
+        self.write_out(id, None).await;
+        self.named(id, false, shared);
         Ok(())
     }
 
-    /// Bring back a deleted playlist from its newest backup (refuses if a playlist of that name exists again). Returns
-    /// the file it came back with.
+    /// Bring back the playlist of that name last deleted (refuses if one has the name again). Returns its text.
     pub async fn restore_deleted(&self, id: &str) -> Result<String, StoreError> {
         if !valid_id(id) {
             return Err(StoreError::Unknown);
         }
         let _one_writer = self.write.lock().await;
-        let path = self.path_of(id);
-        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            return Err(StoreError::Exists);
-        }
-        let Some(backup) = self.newest_backup(id).await else { return Err(StoreError::NothingToUndo) };
-        let bytes = tokio::fs::read(&backup).await.with_context(|| format!("reading the backup of {id}"))?;
-        tokio::fs::write(&path, &bytes).await.with_context(|| format!("restoring {id}.m3u"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).await;
-        }
-        self.named(id, true);
-        Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
-    }
-
-    /// The newest backup file of `id`, if any.
-    async fn newest_backup(&self, id: &str) -> Option<PathBuf> {
-        let prefix = format!("{id}.");
-        let mut newest: Option<(u128, PathBuf)> = None;
-        let mut rd = tokio::fs::read_dir(self.dir.join(BACKUP_DIR)).await.ok()?;
-        while let Ok(Some(e)) = rd.next_entry().await {
-            let name = e.file_name();
-            let Some(name) = name.to_str() else { continue };
-            let Some(mid) = name.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".bak")) else { continue };
-            if let Ok(n) = mid.parse::<u128>() {
-                if newest.as_ref().is_none_or(|(m, _)| n > *m) {
-                    newest = Some((n, e.path()));
-                }
-            }
-        }
-        newest.map(|(_, p)| p)
-    }
-
-    /// Copy the current file to the backup folder (named `<id>.<millis>.bak`) and keep only the newest few.
-    async fn backup(&self, id: &str, path: &Path) -> Result<()> {
-        let dir = self.dir.join(BACKUP_DIR);
-        tokio::fs::create_dir_all(&dir).await.with_context(|| format!("creating {}", dir.display()))?;
-        // Shared media folders are group-writable (and setgid); a container umask of 022 would otherwise lock the
-        // group out of the backup folder.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = tokio::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o2775)).await;
-        }
-        let mut stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-        let target = loop {
-            let t = dir.join(format!("{id}.{stamp}.bak"));
-            if !tokio::fs::try_exists(&t).await.unwrap_or(false) {
-                break t;
-            }
-            stamp += 1;
+        let name = id.to_string();
+        let lines = match self.ask(move |db, owner| db.restore_playlist(owner, &name)).await? {
+            Named::Unknown => return Err(StoreError::NothingToUndo),
+            Named::Taken => return Err(StoreError::Exists),
+            Named::Done(lines) => lines,
         };
-        tokio::fs::copy(path, &target).await.with_context(|| format!("backing up {id}.m3u"))?;
-        let prefix = format!("{id}.");
-        let mut mine: Vec<(u128, PathBuf)> = Vec::new();
-        let mut rd = tokio::fs::read_dir(&dir).await?;
-        while let Some(e) = rd.next_entry().await? {
-            let name = e.file_name();
-            let Some(name) = name.to_str() else { continue };
-            let Some(mid) = name.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".bak")) else { continue };
-            if let Ok(n) = mid.parse::<u128>() {
-                mine.push((n, e.path()));
-            }
+        self.write_out(id, Some(&lines)).await;
+        let shared = self.shared(id).await;
+        self.named(id, true, shared);
+        Ok(text_of(&lines))
+    }
+
+    /// The playlist's `.m3u` copy written out as `lines` (decision 0101: a readable copy beside the database's backup,
+    /// never read back), or taken away (`None`). A temporary file renamed into place, so a copy is never half written;
+    /// one that cannot be written costs only the copy.
+    async fn write_out(&self, name: &str, lines: Option<&[String]>) {
+        let Some(out) = &self.out else { return };
+        let dir = match &self.account {
+            Some(a) => out.join(a),
+            None => out.clone(),
+        };
+        let (name, text) = (name.to_string(), lines.map(text_of));
+        let done = tokio::task::spawn_blocking(move || -> Result<()> {
+            let path = dir.join(format!("{name}.m3u"));
+            let Some(text) = text else {
+                return match std::fs::remove_file(&path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+                    _ => Ok(()),
+                };
+            };
+            std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
+            let tmp = dir.join(format!(".{name}.m3u.cratarr-tmp"));
+            std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+            std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
+            Ok(())
+        })
+        .await;
+        match done {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("a playlist's copy not written: {e:#}"),
+            Err(e) => tracing::warn!("a playlist's copy not written: {e}"),
         }
-        mine.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
-        for (_, old) in mine.into_iter().skip(KEEP_BACKUPS) {
-            let _ = tokio::fs::remove_file(old).await;
-        }
-        Ok(())
     }
 }
 
-/// Bring the playlist files in Music into the playlist folder (`.playlists`, decision 0014): each is copied there
-/// with "../" in front of its lines, so they still point at the same files, unless one of that name is there already.
-/// The file in Music stays, as the playlist's shared copy (the media server keeps the playlist it imported). Returns
-/// the name of every playlist found in Music. Backup copies (`*.bak.m3u`) are left out. Safe to run again. Blocking.
-pub fn adopt_into_playlist_dir(music: &Path) -> Result<Vec<String>> {
+/// The playlists' `.m3u` files as 0.15 kept them (decision 0014): in Music's playlist folder (`.playlists`), their lines
+/// carrying "../", another account's in a folder of its own there, its lines carrying "../../"; without that folder, in
+/// Music itself. Each as (owner, name, lines, when its file last changed in epoch s), backup copies and hidden files
+/// left out. Blocking.
+fn files_of(music: &Path) -> Result<Vec<(String, String, Vec<String>, i64)>> {
     let folder = music.join(PLAYLIST_DIR);
-    crate::moves::create_dirs_like_parent(&folder).with_context(|| format!("making {}", folder.display()))?;
+    let mut out = Vec::new();
+    if !folder.is_dir() {
+        read_folder(music, "", "", &mut out)?;
+        return Ok(out);
+    }
+    read_folder(&folder, "", "../", &mut out)?;
+    let mut accounts: Vec<(String, PathBuf)> = std::fs::read_dir(&folder)?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| Some((e.file_name().into_string().ok()?, e.path())))
+        .filter(|(a, _)| account_folder_ok(a))
+        .collect();
+    accounts.sort();
+    for (account, dir) in accounts {
+        read_folder(&dir, &account, "../../", &mut out)?;
+    }
+    Ok(out)
+}
+
+/// The playlists of one folder, `owner`'s, their lines with `prefix` taken off (`files_of`).
+fn read_folder(dir: &Path, owner: &str, prefix: &str, out: &mut Vec<(String, String, Vec<String>, i64)>) -> Result<()> {
+    let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+        .with_context(|| format!("cannot read the playlist folder {}", dir.display()))?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| Some((e.file_name().into_string().ok()?, e.path())))
+        .filter(|(n, _)| !n.starts_with('.') && n.to_lowercase().ends_with(".m3u"))
+        .map(|(n, p)| (n[..n.len() - 4].to_string(), p))
+        .filter(|(id, _)| !is_backup_copy(id) && valid_id(id))
+        .collect();
+    found.sort();
+    for (name, path) in found {
+        let Ok(bytes) = std::fs::read(&path) else {
+            tracing::warn!("cannot read {}; left out", path.display());
+            continue;
+        };
+        let stamp = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs() as i64);
+        let lines = m3u::entries(&String::from_utf8_lossy(&bytes)).map(|l| unprefixed(&l, prefix)).collect();
+        out.push((owner.to_string(), name, lines, stamp));
+    }
+    Ok(())
+}
+
+/// The playlists' `.m3u` files brought into the database (0.16, decision 0101), once: the first time the Music folder
+/// is known. Each is then written out as its copy into `out`. The files stay where they are, never read again.
+/// Blocking.
+pub fn import(db: &UserData, music: &Path, out: Option<&Path>) -> Result<()> {
+    // Not there yet (a share not mounted): brought in once it is, never as if it held none.
+    if db.playlists_imported()? || !music.is_dir() {
+        return Ok(());
+    }
+    let found = files_of(music)?;
+    let came = db.import_playlists(&found)?;
+    tracing::info!("{came} playlist(s) brought into the database from {}", music.display());
+    let Some(out) = out else { return Ok(()) };
+    for owner in db.playlist_owners()? {
+        let dir = if owner.is_empty() { out.to_path_buf() } else { out.join(&owner) };
+        for (p, lines) in db.playlists(&owner)? {
+            std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
+            std::fs::write(dir.join(format!("{}.m3u", p.name)), text_of(&lines)).with_context(|| format!("writing the copy of {}", p.name))?;
+        }
+    }
+    Ok(())
+}
+
+/// The playlists Music itself holds, by name (the media server's copies, decision 0014), backup copies left out.
+/// Blocking.
+pub fn music_playlists(music: &Path) -> Result<Vec<String>> {
     let mut names: Vec<String> = std::fs::read_dir(music)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
         .filter(|n| !n.starts_with('.') && n.to_lowercase().ends_with(".m3u") && !is_backup_copy(&n[..n.len() - 4]))
+        .map(|n| n[..n.len() - 4].to_string())
         .collect();
     names.sort();
-    let mut out = Vec::new();
-    for name in names {
-        let dest = folder.join(&name);
-        if !dest.exists() {
-            let src = music.join(&name);
-            let Ok(text) = std::fs::read_to_string(&src) else {
-                tracing::warn!("{name} is not valid UTF-8; left out");
-                continue;
-            };
-            let tmp = folder.join(format!(".{name}.cratarr-tmp"));
-            std::fs::write(&tmp, m3u::with_prefix(&text, "../")).with_context(|| format!("writing {}", tmp.display()))?;
-            if let Ok(meta) = std::fs::metadata(&src) {
-                std::fs::set_permissions(&tmp, meta.permissions()).ok();
-            }
-            std::fs::rename(&tmp, &dest).with_context(|| format!("copying {name} into {PLAYLIST_DIR}"))?;
-        }
-        out.push(name[..name.len() - 4].to_string());
-    }
-    Ok(out)
+    Ok(names)
 }
 
 
@@ -1158,28 +1119,42 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn adopted_into_the_playlist_folder_everything_still_points_at_the_same_files() {
+    async fn the_files_of_0_15_are_brought_in_once_and_left_where_they_are() {
         let d = Dir::new();
         d.touch("A/1.mp3");
-        d.write("Chill.m3u", "#EXTM3U\nA/1.mp3\ngone/2.mp3\n");
-        d.write("Old.bak.m3u", "A/1.mp3\n");
-        assert_eq!(adopt_into_playlist_dir(&d.0).unwrap(), vec!["Chill".to_string()]);
-        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
-        assert_eq!(d.read("Chill.m3u"), "#EXTM3U\nA/1.mp3\ngone/2.mp3\n", "the file in Music stays, as the shared copy");
-        assert!(!d.0.join(".playlists/Old.bak.m3u").exists(), "backup copies are left out");
-        // Run again: the one in .playlists is kept, whatever Music holds.
-        d.write("Chill.m3u", "B/9.mp3\n");
-        assert_eq!(adopt_into_playlist_dir(&d.0).unwrap(), vec!["Chill".to_string()]);
-        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
-        // The store finds them there, with Music-relative entries as before.
-        let s = Store::in_music(&d.0);
+        std::fs::create_dir_all(d.0.join(".playlists/ann")).unwrap();
+        d.write(".playlists/Chill.m3u", "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
+        d.write(".playlists/Chill.bak.m3u", "../A/1.mp3\n");
+        d.write(".playlists/ann/Evening.m3u", "../../A/1.mp3\n");
+        d.write("Chill.m3u", "A/1.mp3\n");
+        let (db, out) = (Arc::new(UserData::open(None).unwrap()), d.0.join("copies"));
+        let s = Store::in_music(db.clone(), &d.0, Some(out.clone())).await.unwrap();
         let v = s.view(Some("A/1.mp3")).await.unwrap();
-        assert_eq!((v[0].name.as_str(), v[0].member, v[0].count, v[0].dead), ("Chill", true, 1, 1));
-        assert_eq!(s.entries("Chill").await.unwrap(), vec!["A/1.mp3".to_string(), "gone/2.mp3".to_string()]);
+        assert_eq!(v.iter().map(|p| (p.name.as_str(), p.member, p.count, p.dead)).collect::<Vec<_>>(), [("Chill", true, 1, 1)]);
+        assert_eq!(s.entries("Chill").await.unwrap(), ["A/1.mp3", "gone/2.mp3"], "Music-relative, as before");
+        let ann = Store::open(db.clone(), Some("ann"), &d.0, Some(out.clone()));
+        assert_eq!(ann.entries("Evening").await.unwrap(), ["A/1.mp3"], "another account's, from its folder");
+        // Written out as copies; the files stay as they were and are never read again.
+        assert_eq!(std::fs::read_to_string(out.join("Chill.m3u")).unwrap(), "A/1.mp3\ngone/2.mp3\n");
+        assert_eq!(std::fs::read_to_string(out.join("ann/Evening.m3u")).unwrap(), "A/1.mp3\n");
         s.set_member("Chill", "B/3.mp3", true).await.unwrap();
-        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n../B/3.mp3\n");
-        assert_eq!(s.text("Chill").await.as_deref(), Some("#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n../B/3.mp3\n"));
-        assert_eq!(s.text("None").await, None);
+        assert_eq!(std::fs::read_to_string(out.join("Chill.m3u")).unwrap(), "A/1.mp3\ngone/2.mp3\nB/3.mp3\n");
+        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
+        d.write(".playlists/Chill.m3u", "../B/9.mp3\n");
+        let again = Store::in_music(db, &d.0, Some(out)).await.unwrap();
+        assert_eq!(again.entries("Chill").await.unwrap(), ["A/1.mp3", "gone/2.mp3", "B/3.mp3"], "brought in once");
+        assert_eq!(music_playlists(&d.0).unwrap(), ["Chill"], "Music's own copies, by name");
+    }
+
+    #[tokio::test]
+    async fn a_music_folder_not_there_yet_brings_nothing_in_until_it_is() {
+        let d = Dir::new();
+        let db = Arc::new(UserData::open(None).unwrap());
+        Store::in_music(db.clone(), d.0.join("not mounted"), None).await.unwrap();
+        assert!(!db.playlists_imported().unwrap(), "never as if it held none");
+        d.write("Chill.m3u", "A/1.mp3\n");
+        let s = Store::in_music(db.clone(), &d.0, None).await.unwrap();
+        assert_eq!(s.entries("Chill").await.unwrap(), ["A/1.mp3"]);
     }
 
     #[tokio::test]
@@ -1211,47 +1186,6 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn crlf_files_stay_crlf() {
-        let d = Dir::new();
-        d.write("a.m3u", "A/1.mp3\r\n");
-        d.store().toggle("a", "B/2.mp3").await.unwrap();
-        assert_eq!(d.read("a.m3u"), "A/1.mp3\r\nB/2.mp3\r\n");
-    }
-
-    #[tokio::test]
-    async fn every_write_leaves_a_backup_of_the_previous_content() {
-        let d = Dir::new();
-        d.write("a.m3u", "A/1.mp3\n");
-        d.store().toggle("a", "B/2.mp3").await.unwrap();
-        let backups: Vec<_> = std::fs::read_dir(d.0.join(BACKUP_DIR)).unwrap().collect();
-        assert_eq!(backups.len(), 1);
-        let b = std::fs::read_to_string(backups[0].as_ref().unwrap().path()).unwrap();
-        assert_eq!(b, "A/1.mp3\n");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn the_backup_folder_is_group_writable() {
-        use std::os::unix::fs::PermissionsExt;
-        let d = Dir::new();
-        d.write("a.m3u", "A/1.mp3\n");
-        d.store().toggle("a", "B/2.mp3").await.unwrap();
-        let mode = std::fs::metadata(d.0.join(BACKUP_DIR)).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o775);
-    }
-
-    #[tokio::test]
-    async fn old_backups_are_pruned() {
-        let d = Dir::new();
-        d.write("a.m3u", "A/1.mp3\n");
-        let s = d.store();
-        for _ in 0..(KEEP_BACKUPS + 6) {
-            s.toggle("a", "B/2.mp3").await.unwrap();
-        }
-        assert_eq!(std::fs::read_dir(d.0.join(BACKUP_DIR)).unwrap().count(), KEEP_BACKUPS);
-    }
-
-    #[tokio::test]
     async fn no_temporary_file_is_left_behind() {
         let d = Dir::new();
         d.write("a.m3u", "A/1.mp3\n");
@@ -1272,33 +1206,14 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn outside_edits_are_noticed() {
+    async fn a_copy_edited_elsewhere_is_never_read_back() {
         let d = Dir::new();
         d.write("a.m3u", "A/1.mp3\n");
         let s = d.store();
-        assert!(s.view(Some("B/2.mp3")).await.unwrap().iter().all(|p| !p.member));
         d.write("a.m3u", "A/1.mp3\nB/2.mp3\n");
-        assert!(s.view(Some("B/2.mp3")).await.unwrap()[0].member);
-    }
-
-    #[tokio::test]
-    async fn an_edit_always_starts_from_the_files_current_content() {
-        let d = Dir::new();
-        d.write("a.m3u", "A/1.mp3\n");
-        let s = d.store();
-        s.view(None).await.unwrap();
-        d.write("a.m3u", "A/1.mp3\nC/3.mp3\n"); // another tool edits the file after our view
-        s.toggle("a", "B/2.mp3").await.unwrap();
-        assert_eq!(d.read("a.m3u"), "A/1.mp3\nC/3.mp3\nB/2.mp3\n");
-    }
-
-    #[tokio::test]
-    async fn files_that_are_not_utf8_are_never_rewritten() {
-        let d = Dir::new();
-        d.write("a.m3u", [0x41u8, 0x2f, 0xff, 0xfe, b'\n']);
-        let err = d.store().toggle("a", "B/2.mp3").await.unwrap_err();
-        assert!(err.to_string().contains("UTF-8"));
-        assert_eq!(std::fs::read(d.0.join("a.m3u")).unwrap(), vec![0x41u8, 0x2f, 0xff, 0xfe, b'\n']);
+        assert!(!s.view(Some("B/2.mp3")).await.unwrap()[0].member);
+        s.toggle("a", "C/3.mp3").await.unwrap();
+        assert_eq!(d.read("a.m3u"), "A/1.mp3\nC/3.mp3\n", "the playlist as kept, written out again");
     }
 
     #[test]
@@ -1354,7 +1269,7 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn applying_a_repair_rewrites_only_that_line_and_keeps_a_backup() {
+    async fn applying_a_repair_rewrites_only_that_line() {
         let d = Dir::new();
         d.touch("Alb (2020)/01 A - One.flac");
         d.touch("Alb (2020)/02 A - Two.mp3");
@@ -1363,11 +1278,10 @@ B/2.mp3
         let r = s.repairs().await.unwrap();
         let changed = s.apply_repairs(&r.safe).await.unwrap();
         assert_eq!(changed.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["p"]);
-        assert_eq!(changed[0].before, "#c\nAlb (2020)/01 A - One.mp3\r\nAlb (2020)/02 A - Two.mp3\r\n", "what undo puts back");
-        assert_eq!(d.read("p.m3u"), "#c\nAlb (2020)/01 A - One.flac\r\nAlb (2020)/02 A - Two.mp3\r\n");
+        assert_eq!(changed[0].before, "Alb (2020)/01 A - One.mp3\nAlb (2020)/02 A - Two.mp3\n", "what undo puts back");
+        assert_eq!(d.read("p.m3u"), "Alb (2020)/01 A - One.flac\nAlb (2020)/02 A - Two.mp3\n");
         let v = s.view(None).await.unwrap();
         assert_eq!((v[0].count, v[0].dead), (2, 0));
-        assert_eq!(std::fs::read_dir(d.0.join(BACKUP_DIR)).unwrap().count(), 1);
         assert!(s.repairs().await.unwrap().safe.is_empty());
     }
 
@@ -1462,21 +1376,16 @@ Alb (2020)/01 A - One.mp3
     }
 
     #[tokio::test]
-    async fn a_new_playlist_is_created_empty_and_never_overwrites() {
+    async fn a_new_playlist_is_created_empty_and_never_takes_anothers_name() {
         let d = Dir::new();
         d.write("old.m3u", "A/1.mp3\n");
         let s = d.store();
         s.create("Late Night").await.unwrap();
         assert_eq!(d.read("Late Night.m3u"), "");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(d.0.join("Late Night.m3u")).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o664, "group-writable whatever the umask");
-        }
         assert!(s.view(None).await.unwrap().iter().any(|p| p.id == "Late Night"));
         assert!(matches!(s.create("old").await, Err(StoreError::Exists)));
-        assert_eq!(d.read("old.m3u"), "A/1.mp3\n");
+        assert!(matches!(s.create("OLD").await, Err(StoreError::Exists)), "whatever the case");
+        assert_eq!(s.entries("old").await.unwrap(), ["A/1.mp3"]);
     }
 
     #[test]
@@ -1541,11 +1450,5 @@ Alb (2020)/01 A - One.mp3
         assert!(matches!(s.restore_deleted("a").await, Err(StoreError::Exists)));
         assert!(matches!(s.delete("nope").await, Err(StoreError::Unknown)));
         assert!(matches!(s.restore_deleted("never-existed").await, Err(StoreError::NothingToUndo)));
-    }
-
-    #[tokio::test]
-    async fn a_missing_folder_is_an_error_not_an_empty_list() {
-        let s = Store::new("/definitely/not/here");
-        assert!(s.view(None).await.is_err());
     }
 }

@@ -37,7 +37,6 @@ mod nowplaying;
 mod opus_copies;
 mod opus_copy;
 mod placement;
-mod playlist_rewrite;
 #[allow(dead_code)] // the playlist sync uses it (decision 0012)
 mod playlist_merge;
 mod playlist_ops;
@@ -178,16 +177,6 @@ async fn main() -> Result<()> {
             println!("{line}");
         }
         return Ok(());
-    }
-    if std::env::args().nth(1).as_deref() == Some("--rewrite-playlists") {
-        let args: Vec<String> = std::env::args().skip(2).collect();
-        std::process::exit(match playlist_rewrite::run(&args) {
-            Ok(code) => code,
-            Err(e) => {
-                eprintln!("{e:#}");
-                2
-            }
-        });
     }
     // What is logged (RUST_LOG, else info) governs both what is printed and the diagnostics log, and can change while
     // Cratarr runs (decision 0045); the log itself opens once the data folder is known, keeping what came before.

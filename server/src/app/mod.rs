@@ -173,7 +173,13 @@ pub struct App {
 impl App {
     pub async fn new(cfg: Config, saved: Saved, origin: Origin, served: Option<Arc<crate::serve::Serve>>) -> Result<Arc<Self>> {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
-        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming).await?;
+        // The playlists are kept in Cratarr's own library's user data (decision 0101); a test without one keeps them in
+        // memory.
+        let playlists_db = match &served {
+            Some(s) => s.userdata.clone(),
+            None => Arc::new(crate::userdata::UserData::open(None)?),
+        };
+        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming, playlists_db).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
         let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);

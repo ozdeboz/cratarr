@@ -897,7 +897,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("cratarr-hear-{}", std::process::id()));
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
         let source = |id: &str, enabled| crate::settings::SourceConfig { id: id.into(), kind: "jellyfin".into(), enabled, libraries: Default::default(), values: Default::default() };
-        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), vec![source("old", false), source("away", true)], Default::default(), None).await.unwrap();
+        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), vec![source("old", false), source("away", true)], Default::default(), None, Arc::new(crate::userdata::UserData::open(None).unwrap())).await.unwrap();
         let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));

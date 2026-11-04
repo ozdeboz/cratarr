@@ -1,8 +1,9 @@
 //! What offline writes need kept (0.12, decision 0087): the plays counted, and the first answer to each change sent
 //! with a key, each for 30 days, so a play or a change a device sends again (late, after a restart) is counted or made
 //! once; when each favourite and rating last changed, so an older change sent late does not undo a newer one; and the
-//! change log, so a device asks what changed since it last looked instead of reading everything again; and each
-//! playlist line's entry id beside the `.m3u`, with the operations applied, for playlist edits made offline.
+//! change log, so a device asks what changed since it last looked instead of reading everything again; and the
+//! playlist operations applied, for playlist edits made offline (the entries' ids are the playlists' own:
+//! `super::playlists`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -11,7 +12,6 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::UserData;
-use crate::playlist_ops::{Entries, Entry, Gone};
 
 pub const SCHEMA: &str = "
 -- The plays counted (decision 0087): the player's id for each, and when it came (epoch s).
@@ -38,13 +38,6 @@ CREATE TABLE IF NOT EXISTS change_log (
   at INTEGER NOT NULL, shared INTEGER NOT NULL DEFAULT 0, seen_by TEXT NOT NULL DEFAULT '');
 -- The highest rev pruned: asked for changes since before it, a device reads everything again.
 CREATE TABLE IF NOT EXISTS change_log_floor (one INTEGER PRIMARY KEY CHECK (one = 1), rev INTEGER NOT NULL);
--- Each playlist line's entry id (crate::playlist_ops), beside the .m3u, which stays the truth: by the playlist's key,
--- the entry, its place (`n`; none once removed), its line, when it was last placed (an add or a move, epoch ms), and
--- once removed when (`gone`, epoch ms) and the entry before it then (`after`).
-CREATE TABLE IF NOT EXISTS playlist_entry_id (
-  playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER, line TEXT NOT NULL, placed INTEGER NOT NULL DEFAULT 0,
-  gone INTEGER, after TEXT, PRIMARY KEY (playlist, entry)) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS playlist_entry_id_gone ON playlist_entry_id (gone);
 -- The playlist operations applied or refused, by the account and the operation's id: one sent again is not applied
 -- again, and a refused one is refused again (`why`, none when applied). Kept as long as the change log (epoch ms).
 CREATE TABLE IF NOT EXISTS playlist_op (account TEXT NOT NULL, op_id TEXT NOT NULL, at INTEGER NOT NULL, why TEXT,
@@ -183,12 +176,6 @@ pub(super) fn log(conn: &Connection, account: &str, kind: ChangeKind, item: &str
     Ok(())
 }
 
-/// A playlist's change logged, seen by others while it is shared (`shared`: its sharing changed, so others see that).
-pub(super) fn log_playlist(conn: &Connection, key: &str, op: Op, shared: bool) -> Result<()> {
-    let shared = shared || conn.prepare_cached("SELECT 1 FROM playlist_shared WHERE playlist = ?1")?.exists([key])?;
-    log(conn, owner_of_key(key), ChangeKind::Playlist, key, op, shared)
-}
-
 /// A shared playlist gone from the sight of `others` (unshared, deleted, renamed away): a `deleted` for each of them
 /// alone, by its key (each reads it as `owner/name`).
 pub(super) fn log_gone_for(conn: &Connection, key: &str, others: &[String]) -> Result<()> {
@@ -201,80 +188,7 @@ pub(super) fn log_gone_for(conn: &Connection, key: &str, others: &[String]) -> R
     Ok(())
 }
 
-/// A playlist's entries as kept (`playlist_entry_id`).
-fn entries_kept(conn: &Connection, playlist: &str) -> Result<Entries> {
-    let mut st = conn.prepare_cached("SELECT entry, n, line, placed, gone, after FROM playlist_entry_id WHERE playlist = ?1")?;
-    let rows = st.query_map([playlist], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, Option<String>>(5)?))
-    })?;
-    let mut live: Vec<(i64, Entry)> = Vec::new();
-    let mut e = Entries::default();
-    for row in rows {
-        let (id, n, line, placed, gone, after) = row?;
-        match (n, gone) {
-            (Some(n), None) => {
-                e.placed.insert(id.clone(), placed);
-                live.push((n, Entry { id, line }));
-            }
-            (_, Some(at)) => {
-                e.gone.insert(id, Gone { line, after, at });
-            }
-            (None, None) => {}
-        }
-    }
-    live.sort_by_key(|(n, _)| *n);
-    e.live = live.into_iter().map(|(_, x)| x).collect();
-    Ok(e)
-}
-
-/// A playlist's entries kept as they are now: its rows replaced.
-fn keep_entries(conn: &Connection, playlist: &str, e: &Entries) -> Result<()> {
-    conn.execute("DELETE FROM playlist_entry_id WHERE playlist = ?1", [playlist])?;
-    let mut st = conn.prepare_cached(
-        "INSERT OR REPLACE INTO playlist_entry_id (playlist, entry, n, line, placed, gone, after) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )?;
-    for (n, x) in e.live.iter().enumerate() {
-        let placed = e.placed.get(&x.id).copied().unwrap_or(0);
-        st.execute(params![playlist, x.id, n as i64, x.line, placed, Option::<i64>::None, Option::<String>::None])?;
-    }
-    for (id, g) in &e.gone {
-        st.execute(params![playlist, id, Option::<i64>::None, g.line, 0i64, g.at, g.after])?;
-    }
-    Ok(())
-}
-
 impl UserData {
-    /// A playlist's entries (by its key) as the file has `lines` now: those kept, matched again by order and content
-    /// where the file changed since (written elsewhere, or by an edit of Cratarr's own: `playlists::on_write`), and
-    /// kept so.
-    pub fn entries_of(&self, playlist: &str, lines: &[String]) -> Result<Entries> {
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        let mut e = entries_kept(&tx, playlist)?;
-        if !e.live.iter().map(|x| x.line.as_str()).eq(lines.iter().map(String::as_str)) {
-            e.matched(lines, super::now_ms(), crate::playlist_ops::new_id);
-            keep_entries(&tx, playlist, &e)?;
-        }
-        tx.commit()?;
-        Ok(e)
-    }
-
-    /// A playlist's entries kept as they are after its operations, with the operations' ids (`account`'s) and, for
-    /// one refused, why: one sent again is not applied again, and a refused one is refused again.
-    pub fn keep_entries(&self, playlist: &str, e: &Entries, account: &str, ops: &[(String, Option<String>)]) -> Result<()> {
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        keep_entries(&tx, playlist, e)?;
-        {
-            let mut st = tx.prepare_cached("INSERT OR IGNORE INTO playlist_op (account, op_id, at, why) VALUES (?1, ?2, ?3, ?4)")?;
-            for (op, why) in ops {
-                st.execute(params![account, op, super::now_ms(), why])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
     /// Which of `account`'s playlist operations were applied (`None`) or refused (why), by their ids.
     pub fn ops_applied(&self, account: &str, ops: &[String]) -> Result<HashMap<String, Option<String>>> {
         let db = self.db();
@@ -294,11 +208,6 @@ impl UserData {
         log_gone_for(&self.db(), key, others)
     }
 
-    /// Whether a playlist (by its key) is shared.
-    pub fn is_playlist_shared(&self, key: &str) -> Result<bool> {
-        Ok(self.db().prepare_cached("SELECT 1 FROM playlist_shared WHERE playlist = ?1")?.exists([key])?)
-    }
-
     /// The change log's counter now: the rev of its last change.
     pub fn change_rev(&self) -> Result<i64> {
         Ok(self
@@ -306,11 +215,6 @@ impl UserData {
             .query_row("SELECT seq FROM sqlite_sequence WHERE name = 'change_log'", [], |r| r.get(0))
             .optional()?
             .unwrap_or(0))
-    }
-
-    /// A playlist came (`Op::Changed`: made, written, renamed to it) or went (deleted, renamed away), by its key.
-    pub fn playlist_changed(&self, key: &str, op: Op) -> Result<()> {
-        log_playlist(&self.db(), key, op, false)
     }
 
     /// What `user` excluded everywhere changed: `tracks` or `artists`.
@@ -438,7 +342,7 @@ impl UserData {
         n += tx.execute("DELETE FROM kept_answer WHERE at < ?1", [cut])?;
         n += UserData::forget_old_scrobble_seen(&tx, cut)?;
         n += tx.execute("DELETE FROM change_at WHERE at < ?1", [cut * 1000])?;
-        n += tx.execute("DELETE FROM playlist_entry_id WHERE gone < ?1", [cut * 1000])?;
+        n += super::playlists::forget_old(&tx, cut * 1000)?;
         n += tx.execute("DELETE FROM playlist_op WHERE at < ?1", [cut * 1000])?;
         let old: Option<i64> = tx.query_row("SELECT max(rev) FROM change_log WHERE at < ?1", [cut * 1000], |r| r.get(0))?;
         let many: Option<i64> =
@@ -522,8 +426,9 @@ mod tests {
         let fav = item_id("track", "cratarr", "tr-1");
         u.mark_changed("me", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 1
         u.mark_changed("you", ChangeKind::Favourite, &fav, Op::Changed, 100).unwrap(); // 2
-        u.playlist_changed("Evening", Op::Changed).unwrap(); // 3: the first administrator's
-        u.playlist_changed("you/Morning", Op::Changed).unwrap(); // 4
+        u.create_playlist("you", "Morning", &[]).unwrap();
+        u.playlist_changed("Evening", Op::Changed, false).unwrap(); // 3: the first administrator's
+        u.playlist_changed("you/Morning", Op::Changed, false).unwrap(); // 4
         u.excluded_changed("me", "tracks").unwrap(); // 5
         let (rev, got, more) = changes(u.changes_since(Some(0), "me", "", &all, 10).unwrap());
         assert_eq!(rev, 5);
@@ -553,6 +458,7 @@ mod tests {
     fn a_shared_playlist_gone_from_sight_is_deleted_for_each_other_account_alone() {
         let u = UserData::open(None).unwrap();
         let all = ChangeKind::ALL;
+        u.create_playlist("you", "Morning", &[]).unwrap();
         u.set_playlist_shared("you/Morning", true).unwrap(); // 1
         // Unshared: its owner sees it changed; "me" and "them" each see it deleted, under its own row.
         assert!(u.set_playlist_shared("you/Morning", false).unwrap()); // 2: the owner's
@@ -562,7 +468,7 @@ mod tests {
         let (_, got, _) = changes(u.changes_since(Some(0), "you", "you", &all, 10).unwrap());
         assert_eq!(got, vec![(2, "playlist", "you/Morning".into(), "changed")]);
         // Edited since, unshared: the others' deletes stay.
-        u.playlist_changed("you/Morning", Op::Changed).unwrap(); // 5
+        u.playlist_changed("you/Morning", Op::Changed, false).unwrap(); // 5
         let (_, got, _) = changes(u.changes_since(Some(0), "them", "them", &all, 10).unwrap());
         assert_eq!(got, vec![(4, "playlist", "you/Morning".into(), "deleted")]);
         assert!(!u.set_playlist_shared("you/Morning", false).unwrap(), "not shared: nothing to stop");
@@ -572,9 +478,11 @@ mod tests {
     fn a_refused_operation_is_kept_with_why() {
         let u = UserData::open(None).unwrap();
         let ops = [("op-1".to_string(), None), ("op-2".to_string(), Some("not found".to_string()))];
-        u.keep_entries("Evening", &Entries::default(), "me", &ops).unwrap();
+        u.create_playlist("", "Evening", &[]).unwrap();
+        u.write_playlist_entries("", "Evening", &[], &crate::playlist_ops::Entries::default(), "me", &ops).unwrap();
         let got = u.ops_applied("me", &["op-1".into(), "op-2".into(), "op-3".into()]).unwrap();
         assert_eq!(got, [("op-1".to_string(), None), ("op-2".to_string(), Some("not found".to_string()))].into());
+        assert!(u.ops_applied("you", &["op-1".to_string()]).unwrap().is_empty(), "per account");
     }
 
     #[test]
@@ -590,26 +498,6 @@ mod tests {
         // The counter goes on, never handing out a rev again.
         u.excluded_changed("me", "tracks").unwrap();
         assert_eq!(changes(u.changes_since(Some(2), "me", "", &ChangeKind::ALL, 10).unwrap()).1[0].0, 3);
-    }
-
-    #[test]
-    fn a_playlists_entries_are_kept_and_matched_again_when_its_file_changed() {
-        let u = UserData::open(None).unwrap();
-        let lines = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let first = u.entries_of("Evening", &lines(&["a", "b"])).unwrap();
-        assert_eq!(first.lines(), lines(&["a", "b"]));
-        assert_eq!(u.entries_of("Evening", &lines(&["a", "b"])).unwrap(), first, "the same file: the same ids");
-        // Changed elsewhere: b moved first, a gone, c new.
-        let again = u.entries_of("Evening", &lines(&["b", "c"])).unwrap();
-        assert_eq!(again.live[0].id, first.live[1].id, "b keeps its id");
-        assert!(again.gone.contains_key(&first.live[0].id), "a is remembered as removed");
-        // Operations kept with their ids.
-        let mut after = again.clone();
-        after.apply(&crate::playlist_ops::Do::Remove { entry: again.live[1].id.clone() }, 5, 6);
-        u.keep_entries("Evening", &after, "me", &[("op-1".to_string(), None)]).unwrap();
-        assert_eq!(u.entries_of("Evening", &lines(&["b"])).unwrap(), after);
-        assert_eq!(u.ops_applied("me", &["op-1".to_string(), "op-2".to_string()]).unwrap(), [("op-1".to_string(), None)].into());
-        assert!(u.ops_applied("you", &["op-1".to_string()]).unwrap().is_empty(), "per account");
     }
 
     #[test]

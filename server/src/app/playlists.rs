@@ -1095,9 +1095,10 @@ mod undo_tests {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let d = std::env::temp_dir().join(format!("cratarr-undo-{}-{n}", std::process::id()));
-        // Its playlist folder from the start (decision 0014), so the store never moves meanwhile.
+        // A Music folder of its own, with the playlist folder 0.15 kept its playlists in (decision 0014).
         std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
-        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None).await.unwrap();
+        let db = served.as_ref().map(|s| s.userdata.clone()).unwrap_or_else(|| Arc::new(crate::userdata::UserData::open(None).unwrap()));
+        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
         let journal = Arc::new(Journal::open(None).unwrap());
         let state = crate::sync_state::SyncState::open(None).unwrap();
         let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
@@ -1130,9 +1131,10 @@ mod undo_tests {
     async fn a_service_reads_its_own_library_and_not_another() {
         let open = || crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         let (one, other) = (open(), open());
-        one.userdata.set_playlist_shared("Chill", true).unwrap();
-        let (d1, s1) = service_with(Some(one)).await;
+        let (d1, s1) = service_with(Some(one.clone())).await;
         let (d2, s2) = service_with(Some(other)).await;
+        s1.create("Chill").await.unwrap();
+        one.userdata.set_playlist_shared("Chill", true).unwrap();
         let (d3, none) = service().await;
         assert!(s1.shared_keys().contains("Chill"), "shared in its own library");
         assert!(s2.shared_keys().is_empty(), "the other library shares nothing");
@@ -1143,14 +1145,13 @@ mod undo_tests {
     }
 
     #[tokio::test]
-    async fn each_account_has_its_own_playlists_in_a_folder_of_its_own() {
+    async fn each_account_has_its_own_playlists() {
         let (d, s) = service().await;
         let ann = s.lib.store_for(Some("ann")).unwrap();
         assert!(ann.view(None).await.unwrap().is_empty(), "none until her first");
         ann.create("Chill").await.unwrap();
         ann.replace_entries_if("Chill", &[], &["A/1.mp3".to_string()]).await.unwrap();
-        assert_eq!(std::fs::read_to_string(d.join("ann/Chill.m3u")).unwrap(), "../../A/1.mp3
-", "Music-relative, from her folder");
+        assert_eq!(ann.entries("Chill").await.unwrap(), ["A/1.mp3"], "Music-relative, as everyone's");
         // The first administrator's are as they were: hers is not among them, and one of the same name is another.
         s.create("Chill").await.unwrap();
         let mine: Vec<(String, bool)> = s.view(None).await.unwrap().into_iter().map(|p| (p.id, p.mine)).collect();
@@ -1172,23 +1173,27 @@ mod undo_tests {
     async fn an_undo_is_undone_by_its_redo_and_happens_only_once() {
         let (d, s) = service().await;
         let lines = |v: &[&str]| v.iter().map(|l| l.to_string()).collect::<Vec<_>>();
-        let read = |n: &str| std::fs::read_to_string(d.join(format!("{n}.m3u"))).ok();
+        let store = s.lib.store_for(None).unwrap();
+        let read = |n: &'static str| {
+            let store = store.clone();
+            async move { store.text(n).await }
+        };
         let made = s.create_with("Chill", &lines(&["A/1.mp3", "A/2.mp3"])).await.unwrap().unwrap();
         let edited = s.edit("Chill", &lines(&["A/1.mp3", "A/2.mp3"]), &lines(&["A/2.mp3"])).await.unwrap().unwrap();
-        assert_eq!(read("Chill").as_deref(), Some("../A/2.mp3\n"));
+        assert_eq!(read("Chill").await.as_deref(), Some("A/2.mp3\n"));
 
         let redo = s.undo(&edited).await.unwrap().unwrap();
-        assert_eq!(read("Chill").as_deref(), Some("../A/1.mp3\n../A/2.mp3\n"), "the edit undone");
+        assert_eq!(read("Chill").await.as_deref(), Some("A/1.mp3\nA/2.mp3\n"), "the edit undone");
         assert_eq!(refused(s.undo(&edited).await), "That was undone already.");
         let again = s.undo(&redo).await.unwrap().unwrap();
-        assert_eq!(read("Chill").as_deref(), Some("../A/2.mp3\n"), "redone, as a change of its own");
+        assert_eq!(read("Chill").await.as_deref(), Some("A/2.mp3\n"), "redone, as a change of its own");
         s.undo(&again).await.unwrap();
-        assert_eq!(read("Chill").as_deref(), Some("../A/1.mp3\n../A/2.mp3\n"), "and the redo undone");
+        assert_eq!(read("Chill").await.as_deref(), Some("A/1.mp3\nA/2.mp3\n"), "and the redo undone");
 
         let unmade = s.undo(&made).await.unwrap().unwrap();
-        assert_eq!(read("Chill"), None, "the new playlist set aside");
+        assert_eq!(read("Chill").await, None, "the new playlist set aside");
         s.undo(&unmade).await.unwrap();
-        assert_eq!(read("Chill").as_deref(), Some("../A/1.mp3\n../A/2.mp3\n"), "and back");
+        assert_eq!(read("Chill").await.as_deref(), Some("A/1.mp3\nA/2.mp3\n"), "and back");
         assert_eq!(refused(s.undo("c999").await), "That can no longer be undone.");
         assert_eq!(refused(s.undo("nonsense").await), "That can no longer be undone.");
         std::fs::remove_dir_all(&d).ok();
@@ -1201,20 +1206,22 @@ mod undo_tests {
         let made = s.create_with("Chill", &one).await.unwrap().unwrap();
         let cleared = s.edit("Chill", &one, &[]).await.unwrap().unwrap();
         // Another device (or a sync) changes it meanwhile.
-        std::fs::write(d.join("Chill.m3u"), "../B/9.mp3\n").unwrap();
+        let store = s.lib.store_for(None).unwrap();
+        let nine = vec!["B/9.mp3".to_string()];
+        store.set_entries_if("Chill", &[], &nine).await.unwrap();
         assert_eq!(refused(s.undo(&cleared).await), "It changed since; nothing was undone.");
         assert_eq!(refused(s.undo(&made).await), "It changed since; nothing was undone.");
-        assert_eq!(std::fs::read_to_string(d.join("Chill.m3u")).unwrap(), "../B/9.mp3\n", "left alone");
-        std::fs::write(d.join("Chill.m3u"), "").unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), nine, "left alone");
+        store.set_entries_if("Chill", &nine, &[]).await.unwrap();
         s.undo(&cleared).await.unwrap();
-        assert_eq!(std::fs::read_to_string(d.join("Chill.m3u")).unwrap(), "../A/1.mp3\n", "a refused undo can be tried again");
+        assert_eq!(store.entries("Chill").await.unwrap(), one, "a refused undo can be tried again");
 
         let renamed = s.rename("Chill", "Calm").await.unwrap().unwrap();
         s.create("Chill").await.unwrap();
         assert_eq!(refused(s.undo(&renamed).await), "It changed since; nothing was undone.", "the old name is taken");
-        std::fs::remove_file(d.join("Chill.m3u")).unwrap();
+        store.delete("Chill").await.unwrap();
         s.undo(&renamed).await.unwrap();
-        assert!(d.join("Chill.m3u").exists() && !d.join("Calm.m3u").exists());
+        assert!(store.has("Chill") && !store.has("Calm"));
 
         let deleted = s.delete("Chill").await.unwrap().unwrap();
         s.create("Chill").await.unwrap();
@@ -2103,7 +2110,7 @@ impl PlaylistService {
     /// Shares one's own playlist with everyone, or stops (decision 0051): they see it, play it and copy it.
     pub fn set_shared(&self, id: &str, on: bool) -> Result<(), ToggleError> {
         let (store, name) = self.own(id)?;
-        if !store.path_exists(&name) {
+        if !store.has(&name) {
             return Err(ToggleError::UnknownPlaylist);
         }
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -2241,36 +2248,29 @@ impl PlaylistService {
     /// catalogue, no request to the server. Returns the server the ids are for.
     pub async fn rows(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<PlaylistRow>), ToggleError> {
         let r = self.reach(id)?;
-        let entries = r.store.entries(&r.name).await?;
+        let (entries, added) = r.store.entries_with_ids(&r.name).await?;
         let source = self.rows_source(want);
-        let mut rows = self.rows_of(entries.clone(), &source).await?;
-        // The user's plays of each track and when each entry came, as the user data keeps them (the panel's orders),
-        // and each entry's id (decision 0087: what operations name it by).
-        if let Some(serve) = self.served.clone() {
-            let (id, rs) = (r.key(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
-            let me = serve.current_user();
-            let facts = tokio::task::spawn_blocking(move || {
-                let plays = match me {
-                    Some(me) => serve.userdata.play_stats(&me, &rs).unwrap_or_default(),
-                    None => Default::default(),
-                };
-                let added = serve.userdata.entries_added(&id, &entries).unwrap_or_default();
-                let ids = serve.userdata.entries_of(&id, &entries).map(|e| e.ids()).unwrap_or_else(|e| {
-                    tracing::warn!("playlist {id}: its entry ids not read: {e:#}");
-                    Vec::new()
-                });
-                (plays, added, ids)
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let (plays, added, ids) = facts;
-            for (i, row) in rows.iter_mut().enumerate() {
+        let mut rows = self.rows_of(entries.lines(), &source).await?;
+        // When each entry came (the panel's orders) and its id (decision 0087: what operations name it by), as the
+        // playlist keeps them.
+        let ids = entries.ids();
+        for (i, row) in rows.iter_mut().enumerate() {
+            row.added = added.get(i).copied().flatten();
+            row.entry_id = ids.get(i).cloned();
+        }
+        // The user's plays of each track, as the user data keeps them.
+        if let Some(serve) = self.served.clone()
+            && let Some(me) = serve.current_user()
+        {
+            let rs = rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>();
+            let plays = tokio::task::spawn_blocking(move || serve.userdata.play_stats(&me, &rs).unwrap_or_default())
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            for row in rows.iter_mut() {
                 if let Some((count, last)) = row.id.as_ref().and_then(|t| plays.get(t)) {
                     row.play_count = Some(*count);
                     row.last_played = *last;
                 }
-                row.added = added.get(i).copied().flatten();
-                row.entry_id = ids.get(i).cloned();
             }
         }
         Ok((source, rows))

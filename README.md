@@ -4,8 +4,8 @@
 # Cratarr
 
 A self-hosted music server for the music you own. It plays your library in its web app, its Android and desktop
-apps and any OpenSubsonic app, moves the music between them, and finds more to play in what you already have. Your
-playlists stay plain `.m3u` files beside your music.
+apps and any OpenSubsonic app, moves the music between them, and finds more to play in what you already have. Every
+playlist is also written out as a plain `.m3u` file in its data folder.
 
 ## Try it
 
