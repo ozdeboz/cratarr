@@ -302,7 +302,7 @@ impl IncomingService {
     pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, limit: crate::convert::Limit, to: String, target: i64) -> KeepResult {
         let title = at.album.title.clone();
         // The library its target folder is, as the pages key it.
-        let into = self.lib.catalogue().folders().get(target as usize).cloned();
+        let into = self.lib.catalogue().folders().get(target).cloned();
         let library = self.lib.live().iter().find(|a| a.cfg.id == source_id).and_then(|a| {
             let l = a.placement.libraries.iter().find(|l| into.as_ref().is_some_and(|p| l.folders.iter().any(|f| PathBuf::from(f) == *p)))?;
             Some(format!("{source_id}/{}", l.id))
@@ -357,7 +357,7 @@ impl IncomingService {
         }
         self.queue.change(|jobs| jobs.list.retain(|j| j.id != id));
         if job.state == State::Waiting
-            && let Some(root) = self.lib.catalogue().folders().get(job.folder as usize).cloned()
+            && let Some(root) = self.lib.catalogue().folders().get(job.folder).cloned()
         {
             let dir = job.dir.clone();
             let _ = tokio::task::spawn_blocking(move || clear_staging(&root, &dir)).await;
@@ -404,7 +404,7 @@ impl IncomingService {
     }
 
     async fn run_job(&self, job: Job) -> Outcome {
-        let Some(root) = self.lib.catalogue().folders().get(job.folder as usize).cloned() else {
+        let Some(root) = self.lib.catalogue().folders().get(job.folder).cloned() else {
             return Outcome::Failed("that Incoming folder is not in use any more".into());
         };
         // Cut short after its action was intended: the journal knows whether it happened.

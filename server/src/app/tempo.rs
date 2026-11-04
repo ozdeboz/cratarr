@@ -39,7 +39,7 @@ pub struct TempoChange {
 /// A track's file: its folder in the catalogue, its path there, and where it is.
 pub(super) fn place(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String, PathBuf)> {
     let (folder, rel) = cat.track_of_source(source, id).and_then(|t| cat.file_of(t))?;
-    let path = cat.folders().get(folder as usize)?.join(&rel);
+    let path = cat.folders().get(folder)?.join(&rel);
     Some((folder, rel, path))
 }
 

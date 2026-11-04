@@ -569,7 +569,7 @@ fn artists_of<'a>(source: &str, albums: &[AlbumItem<'a>], look: &ArtistLook) -> 
 /// Where an album's folder is in the catalogue (folder, its path there), from the server's path for it: the server's
 /// root for it exchanged for the folder Cratarr sees there (`Placement::roots`), or the path as it is (Cratarr's own
 /// library names its folders as Cratarr sees them).
-fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathBuf], path: &str) -> Option<(i64, String)> {
+fn folder_of(roots: &[crate::placement::FolderRoot], folders: &crate::catalogue::InUse, path: &str) -> Option<(i64, String)> {
     let path = path.replace('\\', "/");
     let path = path.trim_end_matches('/');
     let seen = roots
@@ -580,9 +580,9 @@ fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathB
         })
         .unwrap_or_else(|| path.to_string());
     let seen = std::path::Path::new(&seen);
-    folders.iter().enumerate().find_map(|(i, f)| {
+    folders.iter().find_map(|(i, f)| {
         let rel = seen.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
-        (!rel.is_empty()).then_some((i as i64, rel))
+        (!rel.is_empty()).then_some((i, rel))
     })
 }
 
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn an_albums_folder_is_found_through_the_servers_root() {
         let roots = [crate::placement::FolderRoot { folder: "/media/Music".into(), root: "/data/music/".into() }];
-        let folders = ["/media/Music", "/media/lidarr-music"].map(std::path::PathBuf::from);
+        let folders: crate::catalogue::InUse = [(0, "/media/Music"), (1, "/media/lidarr-music")].into_iter().map(|(i, p)| (i, std::path::PathBuf::from(p))).collect();
         assert_eq!(folder_of(&roots, &folders, "/data/music/A/B (2020)/"), Some((0, "A/B (2020)".into())));
         assert_eq!(folder_of(&roots, &folders, "/media/lidarr-music/X/New"), Some((1, "X/New".into())), "Cratarr's own: as it is");
         assert_eq!(folder_of(&roots, &folders, "/data/musical/A"), None, "a root is a whole folder");

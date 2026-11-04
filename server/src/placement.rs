@@ -49,11 +49,6 @@ impl Placement {
         self.roots.iter().find(|r| r.folder == folder).map(|r| r.root.as_str())
     }
 
-    /// The libraries found in a folder.
-    pub fn libraries_in<'a>(&'a self, folder: &'a str) -> impl Iterator<Item = &'a PlacedLibrary> + 'a {
-        self.libraries.iter().filter(move |l| l.folders.iter().any(|f| f == folder))
-    }
-
     /// The playlist line for a track: its path relative to the Music folder, if it lies there.
     pub fn entry(&self, music: &str, path: Option<&str>) -> Option<String> {
         let root = self.root(music)?;
@@ -225,7 +220,6 @@ mod tests {
         assert_eq!(p.entry("/music", Some("/data/media/Music/A/../../x.mp3")), None);
         assert_eq!(Placement::default().entry("/music", path), None, "unknown root");
         assert_eq!(p.playlist_path("/music", "Chill").as_deref(), Some("/data/media/Music/Chill.m3u"));
-        assert_eq!(p.libraries_in("/music").map(|l| l.name.as_str()).collect::<Vec<_>>(), vec!["Music"]);
     }
 
     /// A source with fixed libraries and samples, and (optionally) each library's own folder.

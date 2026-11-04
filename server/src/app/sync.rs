@@ -544,8 +544,8 @@ type Away = HashMap<i64, String>;
 struct Translate {
     cat: Arc<Catalogue>,
     source: String,
-    /// The catalogue's folders; 0 is the Music folder, which playlist lines are relative to.
-    folders: Vec<PathBuf>,
+    /// The catalogue's folders; the first in use is the Music folder, which playlist lines are relative to.
+    folders: crate::catalogue::InUse,
 }
 
 impl Translate {
@@ -562,19 +562,22 @@ impl Translate {
     /// A track's playlist line: its path relative to the Music folder.
     fn line(&self, track: i64) -> Option<String> {
         let (folder, rel) = self.cat.file_of(track)?;
-        if folder == 0 {
+        self.line_at(folder, rel)
+    }
+
+    /// A file's playlist line: relative to the Music folder (the first in use).
+    fn line_at(&self, folder: i64, rel: String) -> Option<String> {
+        let (first, root) = self.folders.first()?;
+        if folder == first {
             return Some(rel);
         }
-        relative_to(self.folders.first()?, &self.folders.get(folder as usize)?.join(rel))
+        relative_to(root, &self.folders.get(folder)?.join(rel))
     }
 
     /// A track's playlist line also while its file is away (where it was last seen).
     fn line_any(&self, track: i64) -> Option<String> {
         let (folder, rel) = self.cat.file_of_any(track)?;
-        if folder == 0 {
-            return Some(rel);
-        }
-        relative_to(self.folders.first()?, &self.folders.get(folder as usize)?.join(rel))
+        self.line_at(folder, rel)
     }
 
     /// `items` with the agreed tracks whose file is away for now put back (`with_vanished_kept`).

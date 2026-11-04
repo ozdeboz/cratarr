@@ -870,8 +870,8 @@ impl Have {
 /// The library as Discover compares with it.
 pub fn have(data_dir: &Path, cat: &crate::catalogue::Catalogue, artists: impl IntoIterator<Item = String>) -> Result<Have> {
     let mut release_groups = HashSet::new();
-    for i in 0..cat.folders().len() {
-        for f in cat.album_facts(i as i64)? {
+    for i in cat.folders().ids() {
+        for f in cat.album_facts(i)? {
             if let Some(g) = f.release_group.filter(|g| !g.is_empty()) {
                 release_groups.insert(g);
             }

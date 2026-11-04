@@ -166,7 +166,7 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
     for (h, files) in held {
         let mut any = false;
         for (folder, rel, track) in files {
-            let Some(root) = usize::try_from(folder).ok().and_then(|i| roots.get(i)) else { continue };
+            let Some(root) = roots.get(folder) else { continue };
             let (before, after, from) = track_plan(&h, values.get(&(folder, rel.clone())).unwrap_or(&none));
             if !after.is_empty() {
                 any = true;

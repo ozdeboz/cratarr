@@ -104,7 +104,7 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
             continue;
         }
         let Some(words) = stored.records.get(&album) else { continue };
-        let Some(root) = usize::try_from(folder).ok().and_then(|i| roots.get(i)) else { continue };
+        let Some(root) = roots.get(folder) else { continue };
         let has = values.get(&(folder, rel.clone())).and_then(|v| v.get(field)).unwrap_or(&none);
         let Some((before, after, from)) = file_plan(has, words.of_track(&crate::serve::ids::song(song), kind)) else { continue };
         if !p.records.iter().any(|r| r.album == album) {
