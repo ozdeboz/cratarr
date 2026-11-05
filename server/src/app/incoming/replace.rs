@@ -539,7 +539,8 @@ impl IncomingService {
             release_group: at.dir.release_group.clone(),
             converted,
         };
-        let id = self.journal.intend(now, &event)?;
+        let underway = self.intend(now, &event)?;
+        let id = underway.id();
         if let Some(job) = job {
             self.queue.intended(job, id);
         }
@@ -558,8 +559,13 @@ impl IncomingService {
             self.hold(p).await;
         }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
-        let files = self.files.clone();
-        let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
+        let (files, held) = (self.files.clone(), underway.clone());
+        let moved = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&steps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"));
         if let Err(e) = moved.and_then(|r| r) {
             self.journal.forget(id)?;
             return Err(ToggleError::Refused(format!("{e:#}")));

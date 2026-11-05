@@ -300,6 +300,31 @@ pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
     (cfg, client)
 }
 
+/// Album actions going on in this process, by their journal ids.
+type Running = Arc<std::sync::Mutex<std::collections::HashSet<EventId>>>;
+
+/// An album action going on: its intent in the journal is no crash, and `reconcile` leaves it alone while this lives. A
+/// clone goes with the blocking move: a request dropped half way ends the action's future, not its move.
+#[derive(Clone)]
+struct Underway(Arc<UnderwayId>);
+
+struct UnderwayId {
+    id: EventId,
+    running: Running,
+}
+
+impl Drop for UnderwayId {
+    fn drop(&mut self) {
+        self.running.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+    }
+}
+
+impl Underway {
+    fn id(&self) -> EventId {
+        self.0.id
+    }
+}
+
 pub struct IncomingService {
     lib: Arc<Library>,
     files: Arc<dyn Files>,
@@ -313,6 +338,8 @@ pub struct IncomingService {
     hidden: Mutex<std::collections::HashSet<String>>,
     /// What happened, for the handlers and for Undo (survives restarts).
     journal: Arc<Journal>,
+    /// See `Underway`.
+    running: Running,
     /// Whether Cratarr could write in a folder, and when that was tested (epoch seconds).
     writable: Mutex<std::collections::HashMap<PathBuf, (i64, bool)>>,
     /// Saved with the sources.
@@ -343,6 +370,7 @@ impl IncomingService {
             lidarr: std::sync::RwLock::new(lidarr_pair(lidarr)),
             hidden: Mutex::new(std::collections::HashSet::new()),
             journal,
+            running: Default::default(),
             writable: Mutex::new(std::collections::HashMap::new()),
             trash_days: std::sync::atomic::AtomicU32::new(trash_days),
             queue: queue::Queue::open(data_dir.map(|d| std::path::PathBuf::from(d).join("convert-queue.json"))),
@@ -354,6 +382,15 @@ impl IncomingService {
     /// Told when a background refresh finds a server's Incoming list changed: other albums than before.
     pub fn subscribe_incoming(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.lists_changed.subscribe()
+    }
+
+    /// An action's intent written down (`Journal::intend`), and the action underway. One lock with `reconcile`'s reading
+    /// of the intents, so that cannot fall between the two.
+    fn intend(&self, now: i64, event: &Event) -> Result<Underway> {
+        let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        let id = self.journal.intend(now, event)?;
+        running.insert(id);
+        Ok(Underway(Arc::new(UnderwayId { id, running: self.running.clone() })))
     }
 
     /// Where new music comes from (the saved Lidarr), when one is set.
@@ -654,9 +691,15 @@ impl IncomingService {
         if let Some(mut p) = self.playing_among(&tracks, &tracks.iter().map(|t| (*t, *t)).collect::<Vec<_>>()).await {
             self.hold(&mut p).await;
         }
-        let id = self.journal.intend(now, &event)?;
-        let (f, rel, files) = (folder.clone(), dir.dir.clone(), self.files.clone());
-        let trashed = tokio::task::spawn_blocking(move || files.trash(&f, &rel, now)).await.map_err(|e| anyhow::anyhow!("{e}"));
+        let underway = self.intend(now, &event)?;
+        let id = underway.id();
+        let (f, rel, files, held) = (folder.clone(), dir.dir.clone(), self.files.clone(), underway.clone());
+        let trashed = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.trash(&f, &rel, now)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"));
         if let Err(e) = trashed.and_then(|r| r) {
             self.journal.forget(id)?;
             return Err(ToggleError::Refused(format!("{e:#}")));
@@ -678,10 +721,16 @@ impl IncomingService {
         }
     }
 
-    /// Actions the journal intended but does not know to have happened (a crash in between): what the disk shows
-    /// decides. Done → finish the bookkeeping and mark it applied (the handlers then run); not done → forget it.
+    /// Actions the journal intended but does not know to have happened (a crash in between, or a request dropped): what
+    /// the disk shows decides. Done → finish the bookkeeping and mark it applied (the handlers then run); not done → forget
+    /// it. This runs every minute, so an action going on now is passed over (`Underway`): a Keep caught before its first
+    /// file arrives would lose its event, and with it its Undo, Lidarr's word and its play data.
     pub(super) async fn reconcile(&self) {
-        let intents = match self.journal.intents() {
+        let intents = {
+            let running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+            self.journal.intents().map(|i| i.into_iter().filter(|e| !running.contains(&e.id)).collect::<Vec<_>>())
+        };
+        let intents = match intents {
             Ok(i) => i,
             Err(e) => {
                 tracing::warn!("journal: {e:#}");
@@ -1121,7 +1170,8 @@ impl IncomingService {
             converted,
         };
         let now = epoch_now();
-        let id = self.journal.intend(now, &event)?;
+        let underway = self.intend(now, &event)?;
+        let id = underway.id();
         if let Some(job) = job {
             self.queue.intended(job, id);
         }
@@ -1136,8 +1186,13 @@ impl IncomingService {
             self.hold(p).await;
         }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
-        let files = self.files.clone();
-        let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
+        let (files, held) = (self.files.clone(), underway.clone());
+        let moved = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&steps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"));
         if let Err(e) = moved.and_then(|r| r) {
             self.journal.forget(id)?;
             return Err(ToggleError::Refused(format!("{e:#}")));
@@ -1600,6 +1655,49 @@ mod tests {
         std::fs::create_dir_all(inc.join("X/A")).unwrap();
         std::fs::write(inc.join("X/A/1.flac"), b"one").unwrap();
         std::fs::write(inc.join("X/A/2.flac"), b"two").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_keep_under_way_survives_the_pass_that_finishes_crashed_ones() {
+        let (music, inc) = (folder("underway-music"), folder("underway-inc"));
+        let svc = on_disk(&music, &inc).await;
+        two_tracks(&inc);
+        let underway = svc.intend(100, &keep_of_two()).unwrap();
+        let id = underway.id();
+
+        svc.catch_up().await;
+        assert!(svc.journal.get(id).unwrap().is_some_and(|e| !e.applied), "its first file has not arrived: no crash, its event stays");
+        // The request dropped, its move still going on the blocking pool.
+        let held = underway.clone();
+        drop(underway);
+        svc.catch_up().await;
+        assert!(svc.journal.get(id).unwrap().is_some(), "held for as long as the files are moving");
+        // Nothing holds it now: what the recurring pass is for.
+        drop(held);
+        svc.catch_up().await;
+        assert!(svc.journal.get(id).unwrap().is_none(), "nothing arrived: it never happened");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_keep_whose_request_dropped_is_finished_by_the_pass() {
+        let (music, inc) = (folder("dropped-music"), folder("dropped-inc"));
+        let svc = on_disk(&music, &inc).await;
+        two_tracks(&inc);
+        let underway = svc.intend(100, &keep_of_two()).unwrap();
+        let id = underway.id();
+        std::fs::create_dir_all(music.join("Y")).unwrap();
+        std::fs::rename(inc.join("X/A/1.flac"), music.join("Y/1.flac")).unwrap();
+        drop(underway);
+
+        svc.catch_up().await;
+        assert!(svc.journal.get(id).unwrap().is_some_and(|e| e.applied));
+        assert_eq!(std::fs::read(music.join("Y/2.flac")).unwrap(), b"two");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[tokio::test]
