@@ -1778,7 +1778,8 @@ impl Catalogue {
         let mut moved = 0;
         let mut claimed: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
         // Files Cratarr handed a track to (a better copy in its old one's place, or its Undo): theirs before any rule, the
-        // gone file that held it letting go. Unclaimed for a day: forgotten.
+        // gone file that held it letting go. Only in the file's own folder: both callers place within one, and a gone row
+        // elsewhere is another copy, away for a moment, that comes back to the same track. Unclaimed for a day: forgotten.
         {
             let mut st = tx.prepare("SELECT folder, rel, track FROM handovers")?;
             let handed: Vec<(i64, String, i64)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -1787,12 +1788,12 @@ impl Catalogue {
                 if !new.iter().any(|(f, r, _, _)| *f == folder && *r == rel) {
                     continue;
                 }
-                let mut st = tx.prepare("SELECT folder, rel FROM files WHERE track = ?1 AND gone_at IS NOT NULL")?;
-                let old: Vec<(i64, String)> = st.query_map([track], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+                let mut st = tx.prepare("SELECT rel FROM files WHERE track = ?1 AND folder = ?2 AND gone_at IS NOT NULL")?;
+                let old: Vec<String> = st.query_map(params![track, folder], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
                 drop(st);
-                for (f, r) in old {
+                for r in old {
                     for table in ["files", "tags"] {
-                        tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![f, r])?;
+                        tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, r])?;
                     }
                 }
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, track])?;
@@ -2164,7 +2165,8 @@ impl Catalogue {
 
     /// The file arriving at `path` (not walked yet: a better copy Cratarr is putting in its old one's place, or its Undo)
     /// takes `track` when it is identified, rather than a rule's match or a new id (0101 point 11: a better copy hands
-    /// its id over as Replace does); the gone file that held it lets go. Forgotten after a day unclaimed. Blocking.
+    /// its id over as Replace does); the gone file that held it in that folder lets go. Forgotten after a day unclaimed.
+    /// Blocking.
     pub fn hand_over(&self, path: &Path, track: i64) -> Result<()> {
         let Some((folder, rel)) = self.place_of_path(path) else {
             anyhow::bail!("{} is in no library", path.display());
@@ -2645,7 +2647,7 @@ impl Catalogue {
     /// Where a track's file is, or was last seen while it is away (gone, not yet retired). Blocking.
     pub fn file_of_any(&self, track: i64) -> Option<(i64, String)> {
         self.db()
-            .query_row("SELECT folder, rel FROM files WHERE track = ?1 ORDER BY gone_at IS NOT NULL LIMIT 1", [track], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT folder, rel FROM files WHERE track = ?1 ORDER BY gone_at IS NOT NULL, folder, rel LIMIT 1", [track], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()
             .ok()
             .flatten()
@@ -3976,6 +3978,38 @@ mod tests {
         assert_eq!(rows, 1, "the replaced file's row let go");
         assert!(cat.hand_over(&std::env::temp_dir().join("nowhere/x.flac"), one).is_err(), "in no library");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A mount away for a moment leaves a copy's rows gone: a better file claiming the track in another folder must leave
+    /// them, or that copy comes back with a fresh id and the track splits.
+    #[test]
+    fn a_claim_leaves_another_folders_gone_copy_alone() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let one = cat.track_of(0, rel).unwrap();
+        cat.set_tracks(&[((1, rel.to_string()), Some(one))]).unwrap();
+        let better = "A - B (2020)/01 One.flac";
+        std::fs::remove_file(a.join(rel)).unwrap();
+        std::fs::write(a.join(better), b"better").unwrap();
+        cat.hand_over(&a.join(better), one).unwrap();
+        let away = b.join("one.away");
+        std::fs::rename(b.join(rel), &away).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.file_of_any(one), Some((0, rel.to_string())), "both away: by folder and path");
+        cat.db().execute("UPDATE files SET state = 1, duration_ms = 260000 WHERE state = 0", []).unwrap();
+        assert_eq!(cat.identify().unwrap(), (1, 0), "handed over: no new id");
+        assert_eq!(cat.track_of(0, better), Some(one));
+        let rows = |folder: i64| -> i64 { cat.db().query_row("SELECT COUNT(*) FROM files WHERE track = ?1 AND folder = ?2", params![one, folder], |r| r.get(0)).unwrap() };
+        assert_eq!((rows(0), rows(1)), (1, 1), "the replaced file let go; the other copy's row stayed");
+        std::fs::rename(&away, b.join(rel)).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.track_of(1, rel), Some(one), "back, the same track");
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
     }
 
     #[test]
