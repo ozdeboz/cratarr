@@ -105,6 +105,36 @@ pub fn create_dirs_like_parent(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Where a file is made before it takes its name: hidden, so no walk sees it half-written, and beside it, so the last step
+/// is a rename.
+pub fn part_of(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.cratarr-part"))
+}
+
+/// A file's new content, made by `fill` in `part_of(path)`, put in its place: a rename, so whatever stops this the file
+/// is whole, the old one or the new. Its owner and rights stay: where this account may not give a file away, its group
+/// and rights. What `fill` left goes on an error.
+pub fn replace_through_part(path: &Path, fill: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    let part = part_of(path);
+    let done = (|| -> Result<()> {
+        fill(&part)?;
+        let meta = std::fs::metadata(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, chown};
+            chown(&part, Some(meta.uid()), Some(meta.gid())).or_else(|_| chown(&part, None, Some(meta.gid()))).ok();
+        }
+        std::fs::set_permissions(&part, meta.permissions())?;
+        std::fs::File::open(&part)?.sync_all()?;
+        std::fs::rename(&part, path).with_context(|| format!("putting {} in its place", path.display()))
+    })();
+    if done.is_err() {
+        std::fs::remove_file(&part).ok();
+    }
+    done
+}
+
 fn move_file(from: &Path, to: &Path) -> Result<()> {
     create_dirs_like_parent(to.parent().context("target has no folder")?)?;
     match std::fs::rename(from, to) {

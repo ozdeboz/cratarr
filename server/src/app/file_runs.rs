@@ -346,7 +346,8 @@ pub fn print(path: &Path) -> Result<String> {
 }
 
 /// A file written whole (a length's fix): set aside where it is no longer as planned; else its original copied into
-/// `keep` first, the change made, the original back where it fails. Its copy and its print as written kept.
+/// `keep` first and the change made, beside the file: where that fails the file is as it was, and its copy not needed. Its
+/// copy and its print as written kept.
 fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize) -> Result<()> {
     let Some(w) = f.whole.as_mut() else { bail!("not a whole file's change") };
     // A cover: its folder's picture and its tracks', from what `covers` kept.
@@ -361,7 +362,6 @@ fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize) -> Result<()> {
         let kept = keep.join(format!("{n}-{}", f.path.file_name().and_then(|x| x.to_str()).unwrap_or("track")));
         std::fs::copy(&f.path, &kept).with_context(|| format!("keeping {} first", f.path.display()))?;
         if let Err(e) = super::length_fixes::write(&w.op, &f.path, w.ms) {
-            let _ = std::fs::copy(&kept, &f.path);
             let _ = std::fs::remove_file(&kept);
             return Err(e);
         }
@@ -390,7 +390,11 @@ fn restore_whole(path: &Path, w: &crate::journal::Whole) -> Result<bool> {
         bail!("changed since it was written");
     }
     let kept = w.kept.as_ref().context("its original is no longer kept")?;
-    std::fs::copy(kept, path).with_context(|| format!("{} not given back", path.display()))?;
+    // Through a copy beside it: an Undo cut short must not leave half a track, which no Undo would take back.
+    crate::moves::replace_through_part(path, |part| {
+        std::fs::copy(kept, part).with_context(|| format!("{} not given back", path.display()))?;
+        Ok(())
+    })?;
     Ok(true)
 }
 
@@ -919,6 +923,88 @@ mod tests {
         let vc = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&f).unwrap(), lofty::config::ParseOptions::new()).unwrap().remove_vorbis_comments().unwrap();
         assert_eq!(vc.get_all("MUSICBRAINZ_ALBUMTYPE").collect::<Vec<_>>(), ["ep"]);
         assert_eq!(vc.get_all("RELEASETYPE").collect::<Vec<_>>(), ["ep"]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// An MP3 with no info frame, 50 silent frames: what a length's fix writes a new frame into.
+    fn bare_mp3(path: &Path) -> Vec<u8> {
+        let mut b = b"ID3\x04\x00\x00\x00\x00\x00\x00".to_vec();
+        for _ in 0..50 {
+            let mut frame = vec![0xFF, 0xFB, 0x90, 0x64];
+            frame.resize(417, 0);
+            b.extend_from_slice(&frame);
+        }
+        std::fs::write(path, &b).unwrap();
+        b
+    }
+
+    fn whole(path: &Path, op: &str) -> FileWrite {
+        let w = crate::journal::Whole { op: op.into(), ms: None, kept: None, planned: print(path).unwrap(), wrote: None };
+        FileWrite { album: "al-1".into(), path: path.into(), track: None, before: Vec::new(), after: Vec::new(), from: Vec::new(), undone: false, whole: Some(w) }
+    }
+
+    fn names_in(d: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    /// A second name for the file sees what is done to its bytes, and a rename leaves it be: so these two hold the old
+    /// file whole for as long as the new one is being made.
+    #[test]
+    fn a_length_fix_and_its_undo_never_write_into_the_library_s_own_file() {
+        let d = dir("whole-beside");
+        let (track, keep) = (d.join("track.mp3"), d.join("keep"));
+        let before = bare_mp3(&track);
+        let seen = d.join("seen");
+        std::fs::hard_link(&track, &seen).unwrap();
+        let mut f = whole(&track, "length");
+
+        apply_whole(&mut f, &keep, 0).unwrap();
+        let after = std::fs::read(&track).unwrap();
+        assert!(after.len() > before.len(), "its info frame went in");
+        assert_eq!(std::fs::read(&seen).unwrap(), before, "the old file left whole, not written over");
+        let w = f.whole.as_ref().unwrap();
+        assert_eq!(std::fs::read(w.kept.as_ref().unwrap()).unwrap(), before);
+        assert_eq!(w.wrote.as_deref(), Some(print(&track).unwrap().as_str()));
+
+        std::fs::remove_file(&seen).unwrap();
+        std::fs::hard_link(&track, &seen).unwrap();
+        assert!(restore_whole(&track, w).unwrap());
+        assert_eq!(std::fs::read(&track).unwrap(), before);
+        assert_eq!(std::fs::read(&seen).unwrap(), after, "an Undo does not write over the file either");
+        assert_eq!(names_in(&d), ["keep", "seen", "track.mp3"], "no copy left beside it");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_length_fix_and_its_undo_keep_the_file_s_rights() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dir("whole-rights");
+        let track = d.join("track.mp3");
+        bare_mp3(&track);
+        std::fs::set_permissions(&track, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let mode = || std::fs::metadata(&track).unwrap().permissions().mode() & 0o7777;
+        let mut f = whole(&track, "length");
+        apply_whole(&mut f, &d.join("keep"), 0).unwrap();
+        assert_eq!(mode(), 0o640);
+        assert!(restore_whole(&track, f.whole.as_ref().unwrap()).unwrap());
+        assert_eq!(mode(), 0o640);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_length_fix_that_fails_leaves_the_file_as_it_was_and_nothing_beside_it() {
+        let d = dir("whole-fails");
+        let (track, keep) = (d.join("track.mp3"), d.join("keep"));
+        std::fs::write(&track, b"no frames here at all").unwrap();
+        let mut f = whole(&track, "length");
+        apply_whole(&mut f, &keep, 0).unwrap_err();
+        assert_eq!(std::fs::read(&track).unwrap(), b"no frames here at all");
+        assert_eq!(names_in(&d), ["keep", "track.mp3"]);
+        assert!(names_in(&keep).is_empty(), "its copy kept for nothing goes");
+        assert_eq!(f.whole.as_ref().unwrap().kept, None);
         std::fs::remove_dir_all(&d).ok();
     }
 
