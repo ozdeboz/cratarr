@@ -1959,6 +1959,7 @@ mod tests {
             mtime: 1,
             tags: tags.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
             analysis: None,
+            ..ServedRow::default()
         }
     }
 

@@ -178,6 +178,15 @@ pub struct Remembered {
     pub retired: bool,
 }
 
+/// A file taking the place of `from` (moved outside Cratarr, or a better copy handed its track) came when that one did:
+/// to the copy it is the same file. It keeps its own date where `from` has none.
+fn carry_came(db: &Connection, to: (i64, &str), from: (i64, &str)) -> rusqlite::Result<usize> {
+    db.execute(
+        "UPDATE files SET came = COALESCE((SELECT came FROM files WHERE folder = ?3 AND rel = ?4), came) WHERE folder = ?1 AND rel = ?2",
+        params![to.0, to.1, from.0, from.1],
+    )
+}
+
 /// The retired tracks that share a MusicBrainz recording, a file name, or a title and artist with any of `new`, with
 /// what they were as identity's facts (folded).
 fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64, identity::FileFacts)>> {
@@ -219,7 +228,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 25] = [
+const ADDED_COLUMNS: [(&str, &str); 28] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -263,6 +272,12 @@ const ADDED_COLUMNS: [(&str, &str); 25] = [
     ("beat_this", "meter_sure REAL"),
     // What a file handed a track replaces, in the same folder: the one gone row that lets go of it.
     ("handovers", "replaces TEXT"),
+    // A file's bit depth and sample rate (0.16, reader 9): what ranks one lossless copy above another. NULL: lossy, or not
+    // read since they were kept, which ranks it last until the reader gets there.
+    ("files", "bits INTEGER"),
+    ("files", "rate INTEGER"),
+    // When the file first came (docs/records-and-copies.md): a copy keeps its own date, where `tracks.born` is the track's.
+    ("files", "came INTEGER"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -422,6 +437,11 @@ pub struct ServedRow {
     pub tags: Vec<(String, String)>,
     /// Its analysis (decision 0035), while the file is as it was then.
     pub analysis: Option<RowAnalysis>,
+    /// Bit depth and sample rate (Hz), once reader 9 has read the file.
+    pub bits: Option<u32>,
+    pub rate: Option<u32>,
+    /// When the file first came, epoch seconds; `born` is the track's.
+    pub came: Option<i64>,
 }
 
 /// What the served library takes from a file's analysis: its gain and peak, its tempo when confident, and its album's
@@ -574,6 +594,13 @@ impl Catalogue {
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track);")?;
         // A folder in use before ids for life: its place is its id from now on.
         conn.execute_batch("UPDATE folders SET home = id WHERE id >= 0 AND home IS NULL;")?;
+        // Once, before any copy takes another's track: a file came when its track was born, the one date there was. After
+        // that every row carries its own, and a date from a track would be another copy's.
+        let came: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = 'came'", [], |r| r.get(0)).optional()?;
+        if came.is_none() {
+            conn.execute("UPDATE files SET came = COALESCE((SELECT born FROM tracks WHERE id = files.track), ?1) WHERE came IS NULL", [now()])?;
+            conn.execute_batch("INSERT OR REPLACE INTO meta (key, value) VALUES ('came', 'filled');")?;
+        }
         fill_meters(&conn).context("working out the time signatures")?;
         // Once: the tags no query reads go, the unnamed ones (lyrics, pictures' text: 63,000 rows of 455,000 here) and the
         // index by name and value (73 MB of a 200 MB catalogue), so what is read fits in a small container's memory.
@@ -610,6 +637,14 @@ impl Catalogue {
             // Reader 8 checks a FLAC's seek table (0.14, a broken one ended tracks on a far seek): the FLACs read again.
             if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 8) {
                 cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2 AND format = 'FLAC'", params![PENDING, READ])?;
+            }
+            // Reader 9 keeps bit depth and rate (0.16): only lossless copies rank by them, so only they are read again (an
+            // MP4 at a lossless rate is ALAC, as `export::kind_guessed` tells it). Served as read until then.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 9) {
+                cat.db().execute(
+                    "UPDATE files SET state = ?1 WHERE state = ?2 AND (format IN ('FLAC', 'WAV', 'AIFF', 'APE', 'WAVPACK') OR (format = 'MP4' AND bitrate >= 500))",
+                    params![PENDING, READ],
+                )?;
             }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
@@ -881,9 +916,10 @@ impl Catalogue {
             let mut st = tx.prepare("SELECT rel, size, mtime, gone_at IS NOT NULL FROM files WHERE folder = ?1 AND trashed IS NULL")?;
             st.query_map([folder], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))?.collect::<rusqlite::Result<_>>()?
         };
+        let now = now();
         {
             let mut upsert = tx.prepare(
-                "INSERT INTO files (folder, rel, size, mtime, state) VALUES (?1, ?2, ?3, ?4, 0)
+                "INSERT INTO files (folder, rel, size, mtime, state, came) VALUES (?1, ?2, ?3, ?4, 0, ?5)
                  ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL, gone_at = NULL",
             )?;
             let mut back = tx.prepare("UPDATE files SET gone_at = NULL WHERE folder = ?1 AND rel = ?2")?;
@@ -895,7 +931,7 @@ impl Catalogue {
                         }
                     }
                     _ => {
-                        upsert.execute(params![folder, f.rel, f.size as i64, f.mtime])?;
+                        upsert.execute(params![folder, f.rel, f.size as i64, f.mtime, now])?;
                     }
                 }
             }
@@ -903,7 +939,6 @@ impl Catalogue {
         // Missing now: gone, not deleted. It keeps its track id and tags until it is recognised elsewhere (a move made
         // outside Cratarr) or `GONE_KEEP_SECS` pass. Its server links go at once: they point at a file that is not there.
         let present: std::collections::HashSet<&str> = found.iter().map(|f| f.rel.as_str()).collect();
-        let now = now();
         for rel in known.iter().filter(|(r, k)| !k.2 && !present.contains(r.as_str())).map(|(r, _)| r) {
             tx.execute("UPDATE files SET gone_at = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, now])?;
             tx.execute("DELETE FROM source_ids WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
@@ -1025,7 +1060,7 @@ impl Catalogue {
             match r {
                 Ok((t, issue)) => {
                     tx.execute(
-                        "UPDATE files SET state = ?3, format = ?4, bitrate = ?5, duration_ms = ?6, error = NULL, issue = ?7, issue_detail = ?8
+                        "UPDATE files SET state = ?3, format = ?4, bitrate = ?5, duration_ms = ?6, error = NULL, issue = ?7, issue_detail = ?8, bits = ?9, rate = ?10
                          WHERE folder = ?1 AND rel = ?2",
                         params![
                             folder,
@@ -1035,7 +1070,9 @@ impl Catalogue {
                             t.bitrate_kbps.map(i64::from),
                             t.duration_ms.map(|d| d as i64),
                             issue.as_ref().map(|(i, _)| i.code()),
-                            issue.as_ref().map(|(_, d)| d.as_str())
+                            issue.as_ref().map(|(_, d)| d.as_str()),
+                            t.bit_depth.map(i64::from),
+                            t.sample_rate_hz.map(i64::from)
                         ],
                     )?;
                     let mut ins = tx.prepare_cached("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
@@ -1796,6 +1833,7 @@ impl Catalogue {
                 let old: Vec<String> = st.query_map(params![track, folder, replaces], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
                 drop(st);
                 for r in old {
+                    carry_came(&tx, (folder, &rel), (folder, &r))?;
                     for table in ["files", "tags"] {
                         tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, r])?;
                     }
@@ -1836,6 +1874,7 @@ impl Catalogue {
             for (n, g) in identity::match_moves_by_folder(&new_facts, &gone_facts) {
                 let ((nf, nr, _, _), (gf, gr, _, track)) = (&new[n], &gone[g]);
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
+                carry_came(&tx, (*nf, nr), (*gf, gr))?;
                 for table in ["files", "tags"] {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![gf, gr])?;
                 }
@@ -1853,7 +1892,11 @@ impl Catalogue {
                 let retired_facts: Vec<identity::FileFacts> = retired.iter().map(|(_, f)| f.clone()).collect();
                 for (i, r) in identity::match_moves(&free_facts, &retired_facts) {
                     let (folder, rel, _, _) = &new[free[i]];
-                    tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, retired[r].0])?;
+                    // Its old row went as it retired: when the track was born is what is left of when it came.
+                    tx.execute(
+                        "UPDATE files SET track = ?3, came = (SELECT born FROM tracks WHERE id = ?3) WHERE folder = ?1 AND rel = ?2",
+                        params![folder, rel, retired[r].0],
+                    )?;
                     tx.execute("UPDATE tracks SET retired_at = NULL WHERE id = ?1", [retired[r].0])?;
                     claimed.insert((*folder, rel.clone()));
                     moved += 1;
@@ -2915,7 +2958,7 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
     let mut rows: Vec<ServedRow> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut st = db.prepare(&format!(
-        "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime
+        "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime, f.bits, f.rate, f.came
          FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND {}{}",
         served("f."),
         within("f.rel")
@@ -2932,6 +2975,9 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
             mtime: r.get(7)?,
             tags: Vec::new(),
             analysis: None,
+            bits: r.get(8)?,
+            rate: r.get(9)?,
+            came: r.get(10)?,
         })
     })?;
     for f in files {
@@ -3847,6 +3893,133 @@ mod tests {
         assert_eq!(cat.identify().unwrap(), (1, 0), "recognised as the retired track: no new id");
         assert_eq!(cat.track_of(0, "Elsewhere/1-01 Uno.mp3"), Some(one));
         assert!(!retired(&cat, one), "back in use");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A copy keeps its own date (docs/records-and-copies.md): the row Cratarr moves, and a file that takes a gone row's
+    /// place, whichever way. A date made anew, or read from the track, would be another copy's once tracks are shared.
+    #[test]
+    fn a_file_keeps_when_it_came_across_a_move() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let came = |rel: &str| cat.db().query_row("SELECT came FROM files WHERE folder = 0 AND rel = ?1", [rel], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        assert!(came("A - B (2020)/01 One.mp3").is_some_and(|at| at > 1_000_000_000), "a new file came now");
+        // Long ago, and not when the track was born: a date made anew or read from the track would show.
+        cat.db().execute_batch("UPDATE files SET came = 100; UPDATE tracks SET born = 50;").unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        // Renamed outside Cratarr: a new row pairs with the gone one.
+        std::fs::rename(d.join("A - B (2020)"), d.join("A - B")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (2, 0));
+        assert_eq!(came("A - B/01 One.mp3"), Some(100), "renamed outside");
+        // Moved by Cratarr: the same row.
+        std::fs::rename(d.join("A - B"), d.join("Moved")).unwrap();
+        cat.move_files(0, "A - B", 0, "Moved").unwrap();
+        assert_eq!(came("Moved/01 One.mp3"), Some(100), "moved by Cratarr");
+        // A better copy handed the track.
+        std::fs::remove_file(d.join("Moved/01 One.mp3")).unwrap();
+        std::fs::write(d.join("Moved/01 One.flac"), b"better").unwrap();
+        cat.hand_over(&d.join("Moved/01 One.flac"), &d.join("Moved/01 One.mp3"), one).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (1, 0));
+        assert_eq!(came("Moved/01 One.flac"), Some(100), "handed its track");
+        assert_eq!(cat.served_rows(0).unwrap().iter().find(|r| r.rel == "Moved/01 One.flac").and_then(|r| r.came), Some(100), "and served so");
+        // Retired and back days later: its row went, so when the track was born stands in.
+        std::fs::remove_file(d.join("Moved/01 One.flac")).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        assert!(retired(&cat, one));
+        std::fs::create_dir_all(d.join("Back")).unwrap();
+        std::fs::write(d.join("Back/01 One.flac"), b"again").unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (1, 0), "the retired track");
+        assert_eq!(came("Back/01 One.flac"), Some(50), "back from retirement");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A catalogue from before 0.16: its files take their tracks' dates, once. Filled again later, a date would be the
+    /// track's, which by then may be another copy's.
+    #[test]
+    fn a_file_from_before_came_when_its_track_was_born_and_only_once() {
+        let d = music();
+        let file = d.join("catalogue.sqlite");
+        let (one, two) = ("A - B (2020)/01 One.mp3", "A - B (2020)/02 Two.flac");
+        let came = |cat: &Catalogue, rel: &str| cat.db().query_row("SELECT came FROM files WHERE folder = 0 AND rel = ?1", [rel], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        {
+            let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+            cat.walk_all();
+            read_as_audio(&cat);
+            cat.identify().unwrap();
+            cat.db().execute_batch("UPDATE files SET came = NULL; UPDATE tracks SET born = 50; DELETE FROM meta WHERE key = 'came';").unwrap();
+            cat.db().execute("UPDATE files SET track = NULL WHERE rel = ?1", [two]).unwrap();
+        }
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        assert_eq!(came(&cat, one), Some(50));
+        assert!(came(&cat, two).is_some_and(|at| at > 1_000_000_000), "no track yet: it comes now");
+        cat.db().execute_batch("UPDATE files SET came = NULL;").unwrap();
+        drop(cat);
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        assert_eq!(came(&cat, one), None, "once");
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// N7: only lossless copies rank by bit depth and rate, and reading every file again takes hours on the NAS. What
+    /// waits for it is served as it was read.
+    #[test]
+    fn reader_9_rereads_lossless_files_only() {
+        let d = music();
+        let file = d.join("catalogue.sqlite");
+        {
+            let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+            for (rel, format, kbps) in [("a.flac", "FLAC", 900), ("b.mp3", "MP3", 320), ("c.m4a", "MP4", 1000), ("d.m4a", "MP4", 256), ("e.opus", "OPUS", 128), ("f.wav", "WAV", 1411)] {
+                cat.db().execute("INSERT INTO files (folder, rel, size, mtime, state, format, bitrate) VALUES (0, ?1, 1, 1, ?2, ?3, ?4)", params![rel, READ, format, kbps]).unwrap();
+            }
+            cat.set_meta("reader", "8");
+        }
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        let waiting: Vec<String> = cat.db().prepare("SELECT rel FROM files WHERE state = ?1 ORDER BY rel").unwrap().query_map([PENDING], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(waiting, ["a.flac", "c.m4a", "f.wav"]);
+        assert_eq!(cat.meta("reader").as_deref(), Some("9"));
+        assert_eq!(cat.served_rows(0).unwrap().len(), 6, "served as read until then");
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// What `copy_for` ranks lossless copies by comes from the file, where its read lands.
+    #[test]
+    fn a_read_keeps_a_files_bit_depth_and_rate() {
+        let d = music();
+        let (rate, block, bits) = (48_000u32, 6u16, 24u16);
+        let audio = vec![0u8; rate as usize * usize::from(block) / 2];
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + audio.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * u32::from(block)).to_le_bytes());
+        wav.extend_from_slice(&block.to_le_bytes());
+        wav.extend_from_slice(&bits.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(audio.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&audio);
+        std::fs::write(d.join("A - B (2020)/03 Three.wav"), wav).unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        cat.read_tags_batch(10).unwrap();
+        let rows = cat.served_rows(0).unwrap();
+        let row = rows.iter().find(|r| r.rel.ends_with("Three.wav")).expect("read");
+        assert_eq!((row.bits, row.rate), (Some(24), Some(48_000)));
         std::fs::remove_dir_all(&d).ok();
     }
 
