@@ -185,8 +185,6 @@ const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// Runs waiting or writing, by id.
 static LIVE_RUNS: Mutex<Option<HashMap<String, Status>>> = Mutex::new(None);
-/// Runs writing, by their entries' ids: told as they go, so the list leaves those entries out until they end.
-static WRITING: Mutex<Vec<EventId>> = Mutex::new(Vec::new());
 /// Records' states from runs (waiting, writing, written, changed), by album.
 static STATES: Mutex<Option<HashMap<String, FilesState>>> = Mutex::new(None);
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -513,7 +511,7 @@ impl RunEntry {
             }
         });
         if let Some(id) = id {
-            WRITING.lock().unwrap_or_else(|e| e.into_inner()).push(id);
+            journal.run_writing(id);
         }
         Self { journal, id, run, cut, saved: std::time::Instant::now() }
     }
@@ -543,7 +541,7 @@ impl RunEntry {
     fn end(mut self) -> Option<String> {
         self.save();
         let id = self.id?;
-        WRITING.lock().unwrap_or_else(|e| e.into_inner()).retain(|w| *w != id);
+        self.journal.run_ended(id);
         if self.run.files.is_empty() && self.run.failed.is_empty() {
             if let Err(e) = self.journal.forget_run(id) {
                 tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run that came to nothing still kept");
@@ -701,9 +699,7 @@ fn kept_status(id: i64, at: i64, run: &FileRun, undone: bool) -> Status {
 pub fn runs(app: &super::App, since: i64) -> Result<Vec<Status>> {
     let mut out: Vec<Status> = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.values().cloned().collect()).unwrap_or_default();
     out.retain(|s| s.state != "done");
-    let writing = WRITING.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let mut kept: Vec<Status> =
-        app.journal.file_runs_since(since)?.into_iter().filter(|(id, ..)| !writing.contains(id)).map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
+    let mut kept: Vec<Status> = app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
     kept.extend(app.journal.album_events_since(since)?.iter().filter(|(id, ..)| !out.iter().any(|s| s.id == format!("{MOVE}{id}"))).map(|(id, at, e, undone)| moved_status(app, *id, *at, e, *undone)));
     kept.sort_by(|a, b| b.at.cmp(&a.at));
     out.extend(kept);
@@ -1212,7 +1208,7 @@ mod tests {
         let (run, ..) = j.file_run(id).unwrap().unwrap();
         assert_eq!(run.files, [p.files[0].clone()]);
         assert_eq!(run.failed, aside);
-        assert!(!WRITING.lock().unwrap().contains(&id));
+        assert_eq!(j.file_runs_since(0).unwrap().len(), 1, "on the list now");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -1245,7 +1241,7 @@ mod tests {
         let id = e.id.unwrap();
         assert!(runs(&app, 0).unwrap().iter().all(|s| s.id != format!("{RUN}{id}")), "told as it goes: its entry waits for its end");
         // A restart: nothing is writing, and the entry is all that is left of it.
-        WRITING.lock().unwrap().retain(|w| *w != id);
+        app.journal.run_ended(id);
         let cut = runs(&app, 0).unwrap().into_iter().find(|s| s.id == format!("{RUN}{id}")).unwrap();
         assert_eq!(cut.undo, Some(format!("{RUN}{id}")));
         assert_eq!(cut.failed.iter().map(|f| f.why.as_str()).collect::<Vec<_>>(), [CUT]);
