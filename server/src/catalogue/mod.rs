@@ -5,8 +5,8 @@
 //!
 //! Passes run in the background (`run`): walk the folders (size and modification time decide what changed), read
 //! the tags of new and changed files a batch at a time, then ask every server for its tracks (paged, then only what
-//! changed) and link each to a file. A folder that cannot be read keeps its rows and reports the error: an
-//! unmounted folder must never look like "everything was deleted".
+//! changed) and link each to a file. A folder that cannot be read, or that walks to nothing where it had files, keeps its
+//! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
 mod id3;
 pub mod identity;
@@ -969,11 +969,23 @@ impl Catalogue {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).doing = doing;
     }
 
-    /// Walk every folder and record what is new, changed or gone. Returns problems (unreadable folders). Blocking.
+    /// Whether a folder holds a file that counts, gone and trashed ones not being such: what Keep and Delete leave behind
+    /// them is no reason for alarm. Blocking.
+    fn has_present(&self, folder: i64) -> Result<bool> {
+        Ok(self.db().prepare_cached(&format!("SELECT 1 FROM files WHERE folder = ?1 AND {PRESENT} LIMIT 1"))?.exists([folder])?)
+    }
+
+    /// Walk every folder and record what is new, changed or gone. Returns problems (unreadable folders, and those that read
+    /// as empty where they had files). Blocking.
     pub fn walk_all(&self) -> Vec<String> {
         let mut problems = Vec::new();
         for (id, folder) in self.folders().iter() {
             match walk::walk_with_covers(folder) {
+                // A bind mount whose source is not up, an NFS share gone, read as an empty folder: treated as unreadable.
+                // So is a library someone really emptied, which stays listed until 0.17's library safety can tell them apart.
+                Ok((found, ..)) if found.is_empty() && self.has_present(id).unwrap_or(true) => {
+                    problems.push(format!("{} reads empty: is it mounted? Its files stay listed", folder.display()));
+                }
                 Ok((found, covers, skipped)) => {
                     self.work(1);
                     if let Err(e) = self.record_walk(id, &found).and_then(|()| self.record_covers(id, &covers)) {
@@ -4254,12 +4266,16 @@ mod tests {
     #[test]
     fn one_returned_track_does_not_pull_an_album_into_its_record() {
         let d = music();
+        // Another album stays: a folder that walks to nothing keeps its rows.
+        std::fs::create_dir_all(d.join("Stays")).unwrap();
+        std::fs::write(d.join("Stays/01 Here.mp3"), b"not really an mp3").unwrap();
         let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
         cat.walk_all();
         read_as_audio(&cat);
         cat.identify().unwrap();
         let (one, two) = (cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap(), cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap());
-        cat.assign_records(&[copy(None, "A", "B", &[(one, "One", 200_000), (two, "Two", 200_000)])]).unwrap();
+        let here = cat.track_of(0, "Stays/01 Here.mp3").unwrap();
+        cat.assign_records(&[copy(None, "A", "B", &[(one, "One", 200_000), (two, "Two", 200_000)]), copy(None, "C", "Stays", &[(here, "Here", 200_000)])]).unwrap();
         let old = record_of(&cat, one).unwrap();
         std::fs::remove_dir_all(d.join("A - B (2020)")).unwrap();
         cat.walk_all();
@@ -5075,6 +5091,71 @@ mod tests {
         std::fs::remove_dir_all(&a).ok();
     }
 
+    #[test]
+    fn a_folder_that_reads_empty_keeps_its_rows_and_says_so_and_nothing_is_lost_when_it_is_back() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let one = cat.track_of(0, rel).unwrap();
+        cat.record_links("jf", "music", &[("j-1".into(), 0, rel.into())], 1).unwrap();
+        let (size, mtime): (i64, i64) = cat.db().query_row("SELECT size, mtime FROM files WHERE rel = ?1", [rel], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        cat.store_analysis(0, rel, size as u64, mtime, &an_analysis(-3.0, 500)).unwrap();
+        // The mount not up: a folder there, readable, nothing in it.
+        let away = d.with_extension("away");
+        let _ = std::fs::remove_dir_all(&away);
+        std::fs::rename(&d, &away).unwrap();
+        std::fs::create_dir_all(&d).unwrap();
+
+        let problems = cat.walk_all();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains(&d.display().to_string()), "{problems:?}");
+        assert_eq!(cat.status().unwrap().files, 2, "the library lists what it listed");
+        assert_eq!(cat.track_of_source("jf", "j-1"), Some(one), "its links to the servers stand");
+        let gone: i64 = cat.db().query_row("SELECT COUNT(*) FROM files WHERE gone_at IS NOT NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(gone, 0, "so no day's wait runs out on them");
+        cat.identify().unwrap();
+        assert_eq!(cat.track_of(0, rel), Some(one));
+        assert!(cat.analysis_of(0, rel).is_some());
+
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::rename(&away, &d).unwrap();
+        assert!(cat.walk_all().is_empty(), "back: nothing to say");
+        assert_eq!(cat.track_of(0, rel), Some(one));
+        assert!(cat.analysis_of(0, rel).is_some(), "nothing to analyse again");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_library_keep_and_delete_emptied_is_no_problem() {
+        let (a, b, c) = (music(), music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone(), c.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        // Keep of a's last album: the files and the rows go together.
+        std::fs::rename(a.join("A - B (2020)"), b.join("C - D (2021)")).unwrap();
+        cat.move_files(0, "A - B (2020)", 1, "C - D (2021)").unwrap();
+        // Delete of c's: into its trash, the rows marked.
+        let token = crate::trash::trash(&c, "A - B (2020)", 100).unwrap();
+        cat.mark_trashed(2, "A - B (2020)", &token).unwrap();
+        assert_eq!(cat.walk_all(), Vec::<String>::new());
+        for d in [a, b, c] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_folder_that_was_never_anything_but_empty_is_no_problem() {
+        let d = std::env::temp_dir().join(format!("cratarr-cat-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        assert!(cat.walk_all().is_empty());
+        std::fs::remove_dir_all(d).ok();
+    }
+
     /// A folder of ten albums of ten tracks, `A00` first, read and given track ids.
     fn shelf() -> (PathBuf, Catalogue) {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -5179,7 +5260,9 @@ mod tests {
         std::fs::create_dir_all(d.join(".cratarr-trash")).unwrap();
         cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
         assert_eq!(cat.folders().id_of(&d), Some(0));
-        assert_eq!(cat.track_of(0, "A00/00.mp3"), Some(track), "its rows are its own again, for the walk to keep");
+        assert_eq!(cat.track_of(0, "A00/00.mp3"), Some(track), "its rows are its own again");
+        assert_eq!(cat.walk_all().len(), 1, "said so");
+        assert_eq!(cat.track_of(0, "A00/00.mp3"), Some(track), "and the walk keeps them");
         for d in [d, other, away] {
             std::fs::remove_dir_all(d).ok();
         }
