@@ -1,8 +1,8 @@
 //! The end-to-end suite (decision 0093): the real server binary on a fresh copy of the fixture library and a fresh data
 //! folder, driven through its API as the page drives it. Types into the files (decision 0092): the catalogue read, the
 //! review sheet, a run written and read back from the files, "changed since it was planned", Undo, and the run kept
-//! across a restart. Everything is thrown away after. Run by the Dockerfile's `e2e` stage:
-//! `cargo test --release --test e2e -- --ignored`.
+//! across a restart. Everything is thrown away after. The Dockerfile's test and `e2e` stages run them by name, so a test
+//! here ends its name in `end_to_end` or the gate never runs it: `cargo test --workspace -- --ignored fixtures:: end_to_end`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
