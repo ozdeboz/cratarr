@@ -1,7 +1,7 @@
 //! Cratarr's own library calls (decision 0030), for what the Subsonic API has no word for and for callers that cannot
 //! log in the Subsonic way (Home Assistant's templates have no md5): album tags, favourites, a health check, a song's
-//! facts and its file. Plain JSON under `/api/library`, open on the LAN as the rest of `/api`; errors are a status with
-//! `{"error": "…"}`. They act for Cratarr's first account, the owner's.
+//! facts and its file. Plain JSON under `/api/library`, behind the sign-in as the rest of `/api`; errors are a status
+//! with `{"error": "…"}`. They act for the account asking; what is everyone's takes an administrator or a key of theirs.
 //!
 //! Ids are the ones the Subsonic API hands out: songs `tr-…`, albums `al-…`.
 
@@ -26,8 +26,14 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/library/health", get(health))
         .route("/api/library/albums/{album}", get(album))
         .route("/api/library/albums/{album}/resume", get(resume).delete(forget_resume))
-        .route("/api/library/albums/{album}/tags", axum::routing::delete(clear_tags))
-        .route("/api/library/albums/{album}/tags/{tag}", post(add_tag).delete(remove_tag))
+        // An album's tags are the household's (`userdata::tags`): changes to the library, the administrators' (decision
+        // 0051), and Home Assistant's. What is the account's own here, its hearts and its resume points, stays open to it.
+        .merge(
+            Router::new()
+                .route("/api/library/albums/{album}/tags", axum::routing::delete(clear_tags))
+                .route("/api/library/albums/{album}/tags/{tag}", post(add_tag).delete(remove_tag))
+                .layer(axum::middleware::from_fn(super::access::admin_or_key)),
+        )
         .route("/api/library/tags", get(all_tags))
         .route("/api/library/tags/{tag}", get(tagged))
         .route("/api/library/tracks/{track}", get(track))
@@ -352,6 +358,34 @@ mod tests {
         // Signing in off: the one user.
         s.sessions.set_required(false).unwrap();
         assert_eq!(call(&s, "POST", &format!("/api/library/albums/{id}/reject")).await.0, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn an_album_s_tags_are_an_administrator_s_and_a_heart_is_one_s_own() {
+        let s = server();
+        s.sessions.set_required(true).unwrap();
+        s.users.from_directory("ann", false, None).unwrap();
+        let id = s.library.song_ids(1).unwrap().unwrap().album_id;
+        let (one, all) = (format!("/api/library/albums/{id}/tags/gig"), format!("/api/library/albums/{id}/tags"));
+        let ann = session(&s, "ann");
+        let ha = key(&s, "owner", "control");
+        assert_eq!(asked(&s, &ha, "POST", &one).await, StatusCode::OK, "Home Assistant's key");
+        for (method, path) in [("POST", &one), ("DELETE", &one), ("DELETE", &all)] {
+            assert_eq!(asked(&s, &ann, method, path).await, StatusCode::FORBIDDEN, "{method} {path}: an account");
+            assert_eq!(asked(&s, &key(&s, "ann", "control"), method, path).await, StatusCode::FORBIDDEN, "{method} {path}: that account's key");
+            assert_eq!(asked(&s, &key(&s, "owner", "read"), method, path).await, StatusCode::FORBIDDEN, "{method} {path}: a key that only reads");
+        }
+        assert_eq!(s.userdata.all_tags().unwrap(), [("gig".to_string(), 1)], "left as it was");
+        assert_eq!(asked(&s, &ann, "GET", "/api/library/tags").await, StatusCode::OK, "everyone reads them");
+        assert_eq!(asked(&s, &session(&s, "owner"), "DELETE", &one).await, StatusCode::OK, "an administrator");
+
+        // What is an account's own stays its own to change, and it is ann's that changes.
+        assert_eq!(asked(&s, &ann, "POST", "/api/library/tracks/tr-1/favourite").await, StatusCode::NO_CONTENT);
+        assert_eq!((s.userdata.starred("ann", Kind::Song).unwrap(), s.userdata.starred("owner", Kind::Song).unwrap()), (vec!["tr-1".to_string()], Vec::new()));
+        assert_eq!(asked(&s, &ann, "DELETE", "/api/library/tracks/tr-1/favourite").await, StatusCode::NO_CONTENT);
+        s.userdata.set_bookmark("ann", "tr-2", None, 1_000, "", None).unwrap();
+        assert_eq!(asked(&s, &ann, "DELETE", &format!("/api/library/albums/{id}/resume")).await, StatusCode::NO_CONTENT);
+        assert!(s.userdata.bookmarks("ann").unwrap().is_empty());
     }
 
     #[tokio::test]
