@@ -163,6 +163,66 @@ pub struct AlbumCopy {
     pub year: Option<u32>,
     /// In the order of `facts.tracks`: (track id, disc, number).
     pub tracks: Vec<(i64, Option<u32>, Option<u32>)>,
+    /// Its tracks do not all hold one record: a stray, or one with none yet.
+    pub split: bool,
+}
+
+/// What the tracks hold, as an album's are counted ([`Held::vote`]).
+#[derive(Default)]
+struct Held {
+    /// Each track's record.
+    record: HashMap<i64, i64>,
+    /// How many tracks a record has, retired ones too.
+    size: HashMap<i64, usize>,
+    /// Tracks with more than one file: they stay with their record, whichever album one of them sits in.
+    shared: std::collections::HashSet<i64>,
+    /// Tracks back from retirement, not yet held against their albums.
+    back: std::collections::HashSet<i64>,
+}
+
+impl Held {
+    fn read(db: &Connection) -> Result<Self> {
+        let mut held = Held::default();
+        let mut st = db.prepare("SELECT id, record, back IS NOT NULL FROM tracks WHERE record IS NOT NULL OR back IS NOT NULL")?;
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, bool>(2)?)))? {
+            let (track, record, back) = row?;
+            if let Some(record) = record {
+                held.record.insert(track, record);
+                *held.size.entry(record).or_default() += 1;
+            }
+            if back {
+                held.back.insert(track);
+            }
+        }
+        let mut st = db.prepare("SELECT track FROM files WHERE track IS NOT NULL GROUP BY track HAVING count(*) > 1")?;
+        held.shared = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(held)
+    }
+
+    /// The record more than half of these tracks hold: one held track says nothing of the other seventeen. A track back
+    /// from retirement was matched by its recording or its name, which says nothing of the album its file landed in. So
+    /// where none beside it stayed, it takes more than half of the record's own tracks to bring the record back.
+    fn most(&self, tracks: &[i64]) -> Option<i64> {
+        let mut votes: BTreeMap<i64, (usize, bool)> = BTreeMap::new();
+        for track in tracks {
+            if let Some(record) = self.record.get(track) {
+                let vote = votes.entry(*record).or_default();
+                vote.0 += 1;
+                vote.1 |= !self.back.contains(track);
+            }
+        }
+        let (record, (n, stayed)) = votes.into_iter().max_by_key(|(r, (n, _))| (*n, std::cmp::Reverse(*r)))?;
+        (n * 2 > tracks.len() && (stayed || n * 2 > self.size.get(&record).copied().unwrap_or(0))).then_some(record)
+    }
+
+    /// The record an album's tracks say it is, if they do. Failing all of them, the ones free to move: a track shared with
+    /// a copy elsewhere stays with its record, so without this an album holding such tracks would never settle, a new
+    /// record born for it at every pass.
+    fn vote(&self, album: &AlbumCopy) -> Option<i64> {
+        let tracks: Vec<i64> = album.tracks.iter().map(|t| t.0).collect();
+        let free: Vec<i64> = tracks.iter().copied().filter(|t| !self.shared.contains(t)).collect();
+        self.most(&tracks).or_else(|| self.most(&free))
+    }
 }
 
 /// What a track is or was ([`Catalogue::remembered`]).
@@ -228,11 +288,13 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 28] = [
+const ADDED_COLUMNS: [(&str, &str); 29] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
     ("tracks", "number INTEGER"),
+    // A retired track a file took back, until it has been held against the album that file is in (`Held::most`).
+    ("tracks", "back INTEGER"),
     // 0101 point 1 (the owner, 2026-11-04): a folder's id for life, kept while it is parked under a negative id, so it
     // comes back as itself (`set_folders`).
     ("folders", "home INTEGER"),
@@ -442,6 +504,8 @@ pub struct ServedRow {
     pub rate: Option<u32>,
     /// When the file first came, epoch seconds; `born` is the track's.
     pub came: Option<i64>,
+    /// The record its track is of (0100), once it has one.
+    pub record: Option<i64>,
 }
 
 /// What the served library takes from a file's analysis: its gain and peak, its tempo when confident, and its album's
@@ -591,7 +655,7 @@ impl Catalogue {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}"))?;
             }
         }
-        conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track);")?;
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track); CREATE INDEX IF NOT EXISTS tracks_by_record ON tracks (record);")?;
         // A folder in use before ids for life: its place is its id from now on.
         conn.execute_batch("UPDATE folders SET home = id WHERE id >= 0 AND home IS NULL;")?;
         // Once, before any copy takes another's track: a file came when its track was born, the one date there was. After
@@ -1791,6 +1855,16 @@ impl Catalogue {
         self.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
     }
 
+    /// Tests elsewhere: a file's tags as a read would leave them.
+    #[cfg(test)]
+    pub fn tag_for_tests(&self, folder: i64, rel: &str, tags: &[(&str, &str)]) {
+        let db = self.db();
+        db.execute("DELETE FROM tags WHERE folder = ?1 AND rel = ?2", params![folder, rel]).unwrap();
+        for (n, (name, value)) in tags.iter().enumerate() {
+            db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, ?3, ?4, ?4, ?5)", params![folder, rel, n as i64, name, value]).unwrap();
+        }
+    }
+
     // ----- Track identity (decision 0011 §4) -----
 
     /// Give every identified file a track id: a new file that is a gone one moved (by the rules of
@@ -1897,7 +1971,7 @@ impl Catalogue {
                         "UPDATE files SET track = ?3, came = (SELECT born FROM tracks WHERE id = ?3) WHERE folder = ?1 AND rel = ?2",
                         params![folder, rel, retired[r].0],
                     )?;
-                    tx.execute("UPDATE tracks SET retired_at = NULL WHERE id = ?1", [retired[r].0])?;
+                    tx.execute("UPDATE tracks SET retired_at = NULL, back = 1 WHERE id = ?1", [retired[r].0])?;
                     claimed.insert((*folder, rel.clone()));
                     moved += 1;
                 }
@@ -1953,32 +2027,26 @@ impl Catalogue {
         Ok((moved, fresh))
     }
 
-    /// Whether a track in use has no record yet: only then is [`Self::assign_records`] worth its reading. Blocking.
-    pub fn tracks_without_record(&self) -> bool {
-        self.db().prepare_cached("SELECT 1 FROM tracks WHERE record IS NULL AND retired_at IS NULL LIMIT 1").and_then(|mut st| st.exists([])).unwrap_or(false)
+    /// Whether a track in use has no record yet, or is back from retirement and not yet held against its album: only then,
+    /// or with a stray in an album (`AlbumCopy::split`), is [`Self::assign_records`] worth its reading. Blocking.
+    pub fn records_unsettled(&self) -> bool {
+        self.db()
+            .prepare_cached("SELECT 1 FROM tracks WHERE (record IS NULL OR back IS NOT NULL) AND retired_at IS NULL LIMIT 1")
+            .and_then(|mut st| st.exists([]))
+            .unwrap_or(false)
     }
 
-    /// Give these albums their records (0100, docs/records-and-copies.md), every album there is: a track keeps its
-    /// record for life, a new track joins its album's, and an album new to the catalogue is a copy of the record it is
-    /// the same as (`identity::same_record`), else a record of its own. A copy keeps its own track ids for now. The
-    /// tracks given a record. Blocking.
+    /// Give these albums their records (0100, docs/records-and-copies.md), every album there is. An album is the record
+    /// more than half of its tracks hold ([`Held::vote`]); else it is held against the others as a new one is: a copy of
+    /// the record it is the same as (`identity::same_record`), or a record of its own. A new track joins its album's
+    /// record. A track keeps its record for life, unless its only file now sits in another record's album, where it
+    /// moves: a retired id handed to a file of a best-of must not take that album with it. A copy keeps its own track ids
+    /// for now. The tracks given a record. Blocking.
     pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
         let now = now();
         let mut db = self.db();
         let tx = db.transaction()?;
-        let held: HashMap<i64, i64> = {
-            let mut st = tx.prepare("SELECT id, record FROM tracks WHERE record IS NOT NULL")?;
-            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
-        };
-        let record_of = |a: &AlbumCopy| -> Option<i64> {
-            let mut votes: BTreeMap<i64, usize> = BTreeMap::new();
-            for (track, _, _) in &a.tracks {
-                if let Some(r) = held.get(track) {
-                    *votes.entry(*r).or_default() += 1;
-                }
-            }
-            votes.into_iter().max_by_key(|(r, n)| (*n, std::cmp::Reverse(*r))).map(|(r, _)| r)
-        };
+        let held = Held::read(&tx)?;
         // Who to hold a new album against: the albums that have a record, by name and by release, then the new ones as
         // they get theirs.
         let (mut by_name, mut by_release) = (HashMap::new(), HashMap::new());
@@ -1990,7 +2058,7 @@ impl Catalogue {
                 by_release.entry(r.clone()).or_default().push((i, record));
             }
         }
-        let mut records: Vec<Option<i64>> = albums.iter().map(record_of).collect();
+        let mut records: Vec<Option<i64>> = albums.iter().map(|a| held.vote(a)).collect();
         for (i, a) in albums.iter().enumerate() {
             if let Some(r) = records[i] {
                 note(i, a, r, &mut by_name, &mut by_release);
@@ -1999,10 +2067,12 @@ impl Catalogue {
         let mut given = 0;
         {
             let mut born = tx.prepare_cached("INSERT INTO records (born, title, artist, year) VALUES (?1, ?2, ?3, ?4)")?;
-            let mut join = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND record IS NULL")?;
+            let mut give = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND (record IS NULL OR (?5 AND record != ?2))")?;
             for (i, a) in albums.iter().enumerate() {
                 let record = match records[i] {
                     Some(r) => r,
+                    // Nothing here can take a record: every track stays with a copy's elsewhere.
+                    None if a.tracks.iter().all(|(track, _, _)| held.shared.contains(track)) => continue,
                     None => {
                         let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
                         let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
@@ -2020,8 +2090,13 @@ impl Catalogue {
                     }
                 };
                 for (track, disc, number) in &a.tracks {
-                    given += join.execute(params![track, record, disc, number])?;
+                    given += give.execute(params![track, record, disc, number, !held.shared.contains(track)])?;
                 }
+            }
+            // Held against their albums now, they count as any other track from here.
+            let mut settled = tx.prepare_cached("UPDATE tracks SET back = NULL WHERE id = ?1")?;
+            for (track, _, _) in albums.iter().flat_map(|a| &a.tracks).filter(|(track, _, _)| held.back.contains(track)) {
+                settled.execute([track])?;
             }
         }
         // A record lives while a track of it does (one that never had tracks is a record not had).
@@ -2034,6 +2109,26 @@ impl Catalogue {
                AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL)",
             [now],
         )?;
+        tx.commit()?;
+        Ok(given)
+    }
+
+    /// What a few folders' albums can settle alone: a track with no record takes the one its album's tracks say. Nothing
+    /// is born and nothing moves, as both need every album there is: a new folder held against a few would be a record
+    /// of its own for life. The next [`Self::assign_records`] does the rest. The tracks given a record. Blocking.
+    pub fn join_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let held = Held::read(&tx)?;
+        let mut given = 0;
+        {
+            let mut join = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND record IS NULL")?;
+            for (a, record) in albums.iter().filter_map(|a| Some((a, held.vote(a)?))) {
+                for (track, disc, number) in &a.tracks {
+                    given += join.execute(params![track, record, disc, number])?;
+                }
+            }
+        }
         tx.commit()?;
         Ok(given)
     }
@@ -2958,7 +3053,7 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
     let mut rows: Vec<ServedRow> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut st = db.prepare(&format!(
-        "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime, f.bits, f.rate, f.came
+        "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime, f.bits, f.rate, f.came, t.record
          FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND {}{}",
         served("f."),
         within("f.rel")
@@ -2978,6 +3073,7 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
             bits: r.get(8)?,
             rate: r.get(9)?,
             came: r.get(10)?,
+            record: r.get(11)?,
         })
     })?;
     for f in files {
@@ -4035,6 +4131,7 @@ mod tests {
             artist: artist.to_string(),
             year: Some(2020),
             tracks: tracks.iter().enumerate().map(|(i, (id, _, _))| (*id, None, Some(i as u32 + 1))).collect(),
+            split: false,
         }
     }
 
@@ -4046,12 +4143,12 @@ mod tests {
             cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
         }
         let record = |t: i64| cat.db().query_row("SELECT record FROM tracks WHERE id = ?1", [t], |r| r.get::<_, Option<i64>>(0)).unwrap();
-        assert!(cat.tracks_without_record());
+        assert!(cat.records_unsettled());
         let music = copy(None, "A", "B", &[(1, "One", 200_000), (2, "Two", 180_000)]);
         let own = copy(None, "A", "B", &[(3, "One", 201_000), (4, "Two", 180_000)]);
         let deluxe = copy(None, "A", "B", &[(5, "One", 200_000), (6, "Two", 180_000), (7, "Bonus", 90_000)]);
         assert_eq!(cat.assign_records(&[music.clone(), own.clone(), deluxe.clone()]).unwrap(), 7);
-        assert!(!cat.tracks_without_record());
+        assert!(!cat.records_unsettled());
         assert_eq!(record(1), record(3), "the same tracks: one record");
         assert_ne!(record(1), record(5), "a deluxe edition is its own");
         let first = record(1);
@@ -4070,6 +4167,219 @@ mod tests {
         cat.db().execute("UPDATE tracks SET retired_at = NULL WHERE id = 5", []).unwrap();
         cat.assign_records(&[]).unwrap();
         assert!(!retired(gone), "a track came back");
+    }
+
+    /// `n` tracks with no files.
+    fn tracks(n: usize) -> Catalogue {
+        let cat = Catalogue::open(None, vec![]).unwrap();
+        for _ in 0..n {
+            cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
+        }
+        cat
+    }
+
+    fn record_of(cat: &Catalogue, track: i64) -> Option<i64> {
+        cat.db().query_row("SELECT record FROM tracks WHERE id = ?1", [track], |r| r.get(0)).unwrap()
+    }
+
+    fn record_retired(cat: &Catalogue, record: i64) -> bool {
+        cat.db().query_row("SELECT retired_at IS NOT NULL FROM records WHERE id = ?1", [record], |r| r.get(0)).unwrap()
+    }
+
+    fn records_made(cat: &Catalogue) -> i64 {
+        cat.db().query_row("SELECT count(*) FROM records", [], |r| r.get(0)).unwrap()
+    }
+
+    /// These tracks retired, as their last files' day passing leaves them.
+    fn retire(cat: &Catalogue, ids: &[i64]) {
+        for id in ids {
+            cat.db().execute("UPDATE tracks SET retired_at = 5 WHERE id = ?1", [id]).unwrap();
+        }
+    }
+
+    /// These tracks back from retirement, as `identify` leaves them.
+    fn come_back(cat: &Catalogue, ids: &[i64]) {
+        for id in ids {
+            cat.db().execute("UPDATE tracks SET retired_at = NULL, back = 1 WHERE id = ?1", [id]).unwrap();
+        }
+    }
+
+    /// A file of a track, as `identify` leaves it.
+    fn file_of_track(cat: &Catalogue, rel: &str, track: i64) {
+        cat.db().execute("INSERT INTO files (folder, rel, size, mtime, track) VALUES (0, ?1, 1, 1, ?2)", params![rel, track]).unwrap();
+    }
+
+    /// One album of `tracks`, each given a title and length by its id.
+    fn album(title: &str, tracks: &[i64]) -> AlbumCopy {
+        let names: Vec<String> = tracks.iter().map(|t| format!("Track {t}")).collect();
+        let list: Vec<(i64, &str, i64)> = tracks.iter().zip(&names).map(|(t, n)| (*t, n.as_str(), 200_000)).collect();
+        copy(None, "A", title, &list)
+    }
+
+    /// A file of a best-of takes a retired track's id back by its name. One track of three is no vote: the album is a
+    /// record of its own, and neither takes the old record's id, favourites and facts nor brings it back.
+    #[test]
+    fn one_returned_track_does_not_pull_an_album_into_its_record() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, two) = (cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap(), cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap());
+        cat.assign_records(&[copy(None, "A", "B", &[(one, "One", 200_000), (two, "Two", 200_000)])]).unwrap();
+        let old = record_of(&cat, one).unwrap();
+        std::fs::remove_dir_all(d.join("A - B (2020)")).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        cat.assign_records(&[]).unwrap();
+        assert!(record_retired(&cat, old));
+        std::fs::create_dir_all(d.join("Best Of")).unwrap();
+        for name in ["01 One.mp3", "02 Another.mp3", "03 Third.mp3"] {
+            std::fs::write(d.join("Best Of").join(name), name).unwrap();
+        }
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (1, 2), "its name and length: the old id");
+        assert_eq!(cat.track_of(0, "Best Of/01 One.mp3"), Some(one));
+        let (another, third) = (cat.track_of(0, "Best Of/02 Another.mp3").unwrap(), cat.track_of(0, "Best Of/03 Third.mp3").unwrap());
+        let best = copy(None, "Various", "Best Of", &[(one, "One", 200_000), (another, "Another", 200_000), (third, "Third", 200_000)]);
+        assert_eq!(cat.assign_records(&[best.clone()]).unwrap(), 3);
+        let new = record_of(&cat, another).unwrap();
+        assert_ne!(new, old, "a record of its own");
+        assert_eq!(record_of(&cat, one), Some(new), "the track's only file is in it, so the track moved");
+        assert!(record_retired(&cat, old), "its old record stays gone");
+        assert!(!cat.records_unsettled());
+        assert_eq!(cat.assign_records(&[best]).unwrap(), 0, "settled");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// One track alone is the whole of its album, so it holds the vote; but it came back by its name, and a single with that
+    /// recording is not the record, gone or still in use.
+    #[test]
+    fn a_returned_track_alone_in_an_album_is_not_its_record() {
+        let cat = tracks(3);
+        cat.assign_records(&[album("Long", &[1, 2, 3])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[1, 2, 3]);
+        cat.assign_records(&[]).unwrap();
+        come_back(&cat, &[1]);
+        assert!(cat.records_unsettled(), "held against its album, though it has a record");
+        cat.assign_records(&[album("Single", &[1])]).unwrap();
+        assert_ne!(record_of(&cat, 1), Some(old));
+        assert!(record_retired(&cat, old), "gone, it stays gone");
+
+        let cat = tracks(3);
+        cat.assign_records(&[album("Long", &[1, 2, 3])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[3]);
+        come_back(&cat, &[3]);
+        cat.assign_records(&[album("Long", &[1, 2]), album("Single", &[3])]).unwrap();
+        assert_ne!(record_of(&cat, 3), Some(old), "in use, it takes in no album either");
+        assert_eq!(record_of(&cat, 1), Some(old));
+    }
+
+    /// Beside a track that stayed, a track back from retirement is simply home, even in an album of two.
+    #[test]
+    fn a_returned_track_in_its_own_album_keeps_its_record() {
+        let cat = tracks(2);
+        cat.assign_records(&[album("Two", &[1, 2])]).unwrap();
+        let old = record_of(&cat, 1);
+        retire(&cat, &[2]);
+        come_back(&cat, &[2]);
+        assert_eq!(cat.assign_records(&[album("Two", &[1, 2])]).unwrap(), 0);
+        assert_eq!(record_of(&cat, 2), old);
+        assert!(!cat.records_unsettled(), "it counts as any other track now");
+    }
+
+    /// A folder moved back after its day, or fetched again: most of a record's tracks together are the record.
+    #[test]
+    fn most_of_a_record_coming_back_brings_it_back() {
+        let cat = tracks(3);
+        cat.assign_records(&[album("Three", &[1, 2, 3])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[1, 2, 3]);
+        cat.assign_records(&[]).unwrap();
+        assert!(record_retired(&cat, old));
+        come_back(&cat, &[1, 2]);
+        assert_eq!(cat.assign_records(&[album("Three", &[1, 2])]).unwrap(), 0);
+        assert_eq!(record_of(&cat, 1), Some(old));
+        assert!(!record_retired(&cat, old));
+    }
+
+    /// Half of an album holding a record is no vote: the album is held against the others as a new one is, and its tracks
+    /// go with it.
+    #[test]
+    fn half_of_an_album_holding_a_record_is_no_vote() {
+        let cat = tracks(4);
+        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        let old = record_of(&cat, 1);
+        assert_eq!(cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap(), 4);
+        assert_ne!(record_of(&cat, 3), old);
+        assert_eq!(record_of(&cat, 1), record_of(&cat, 3));
+    }
+
+    /// `tracks.record` is for life but for this: a track whose only file went to another record's album.
+    #[test]
+    fn a_track_moves_when_its_only_file_sits_in_another_records_album() {
+        let cat = tracks(6);
+        cat.assign_records(&[album("First", &[1, 2, 3]), album("Second", &[4, 5, 6])]).unwrap();
+        let (first, second) = (record_of(&cat, 1), record_of(&cat, 4));
+        assert_ne!(first, second);
+        assert_eq!(cat.assign_records(&[album("First", &[1, 2]), album("Second", &[4, 5, 6, 3])]).unwrap(), 1);
+        assert_eq!(record_of(&cat, 3), second);
+        let number: i64 = cat.db().query_row("SELECT number FROM tracks WHERE id = 3", [], |r| r.get(0)).unwrap();
+        assert_eq!(number, 4, "its place is in that record now");
+    }
+
+    /// A shared track has a copy's file in its own record's album: one file elsewhere does not take it away.
+    #[test]
+    fn a_track_with_a_file_in_its_own_album_stays_with_its_record() {
+        let cat = tracks(6);
+        cat.assign_records(&[album("First", &[1, 2, 3]), album("Second", &[4, 5, 6])]).unwrap();
+        let first = record_of(&cat, 1);
+        file_of_track(&cat, "First/03.flac", 3);
+        file_of_track(&cat, "Second/03.flac", 3);
+        assert_eq!(cat.assign_records(&[album("First", &[1, 2, 3]), album("Second", &[4, 5, 6, 3])]).unwrap(), 0);
+        assert_eq!(record_of(&cat, 3), first);
+    }
+
+    /// Shared tracks cannot move, so an album of them with no vote must settle all the same, or a record is born for it at
+    /// every build.
+    #[test]
+    fn an_album_of_shared_tracks_settles_once() {
+        let cat = tracks(6);
+        cat.assign_records(&[album("First", &[1, 2]), album("Second", &[3, 4])]).unwrap();
+        for track in [1, 2, 3, 4] {
+            file_of_track(&cat, &format!("Elsewhere/{track}.flac"), track);
+            file_of_track(&cat, &format!("Together/{track}.flac"), track);
+        }
+        let made = records_made(&cat);
+        let half_new = album("Half new", &[1, 2, 5, 6]);
+        assert_eq!(cat.assign_records(&[half_new.clone()]).unwrap(), 2);
+        assert_eq!(records_made(&cat), made + 1);
+        assert_eq!(record_of(&cat, 5), record_of(&cat, 6));
+        assert_eq!(cat.assign_records(&[half_new]).unwrap(), 0);
+        assert_eq!(records_made(&cat), made + 1, "born once");
+        assert_eq!(cat.assign_records(&[album("Mixed", &[1, 3])]).unwrap(), 0);
+        assert_eq!(records_made(&cat), made + 1, "nothing here to give a record to");
+    }
+
+    /// What a few folders' albums settle alone is what their tracks say. Nothing moves there, nothing is born, and a vote
+    /// counts as it does in a whole pass.
+    #[test]
+    fn a_join_gives_only_what_a_vote_says() {
+        let cat = tracks(9);
+        cat.assign_records(&[album("Grown", &[1, 2]), album("Other", &[3, 4, 5])]).unwrap();
+        let made = records_made(&cat);
+        assert_eq!(cat.join_records(&[album("Grown", &[1, 2, 6])]).unwrap(), 1);
+        assert_eq!(record_of(&cat, 6), record_of(&cat, 1));
+        assert_eq!(cat.join_records(&[album("New", &[7, 8])]).unwrap(), 0, "no vote: nothing given");
+        assert_eq!(cat.join_records(&[album("Other", &[3, 9, 7, 8])]).unwrap(), 0, "one of four is no vote");
+        assert_eq!(record_of(&cat, 9), None);
+        assert_eq!(cat.join_records(&[album("Other", &[1, 3, 4, 5])]).unwrap(), 0, "a stray stays for the whole pass");
+        assert_ne!(record_of(&cat, 1), record_of(&cat, 3));
+        assert_eq!(records_made(&cat), made);
     }
 
     #[test]

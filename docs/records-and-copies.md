@@ -49,6 +49,12 @@ As the owner decided, the same record is the same tracks. A folder is identified
 
 A copy takes the record's track ids (0101's amendment), track by track through the same match.
 
+Once it has a record, a folder's tracks say which it is, while more than half of them hold it. Short of that it is held
+against the records as a new folder is, by the rules above. A track keeps its record for life, unless its only file now
+sits in another record's album: then it moves there. A track that came back from retirement was matched by its recording
+or its name, which says nothing of the album its file landed in, so it does not bring a record back or pull an album in.
+That takes a track beside it that never left, or more than half of the record's own tracks.
+
 ## Which copy plays
 
 One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own and the only place that decides:

@@ -562,6 +562,8 @@ struct Song<'a> {
     album_artist: String,
     album_artists: Vec<String>,
     album_id: String,
+    /// What gathers one folder's files of an album: the hash of its tags, the folder in front. The album's id for now.
+    group: String,
     /// The album's id as it is (or would be) in Music, folder 0: what its tags are kept under, so they follow an
     /// album kept from Incoming.
     album_base: String,
@@ -589,9 +591,10 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
     }
     let album = row.first("album").map(str::to_string).unwrap_or_else(|| "[Unknown Album]".into());
     let album_id = ids::album(row, &album_artist, folder);
+    let group = album_id.clone();
     let album_base = ids::album(row, &album_artist, 0);
     let genres = rules.values("genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
-    Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, album_id, album_base, genres }
+    Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, album_id, group, album_base, genres }
 }
 
 /// What these files say, cheaply: when it differs from what the library was built from, it is built again (tests;
@@ -767,23 +770,31 @@ impl Library {
     pub fn build_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules, print: &str) -> Result<(bool, usize)> {
         let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
         let reader = cat.reader();
-        let folders = cat
-            .folders()
-            .iter()
-            .map(|(folder, root)| {
-                let rows = match &reader {
-                    Some(c) => crate::catalogue::served_rows(c, folder)?,
-                    None => cat.served_rows(folder)?,
-                };
-                Ok(FolderRows { folder, root: root.display().to_string(), rows })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        // New tracks get their records first: what the library lists is what a record is.
-        if cat.tracks_without_record()
-            && let Err(e) = cat.assign_records(&album_copies(&folders, rules))
-        {
-            tracing::warn!(target: "library", reason = %format!("{e:#}"), "records could not be given");
+        let read = || {
+            cat.folders()
+                .iter()
+                .map(|(folder, root)| {
+                    let rows = match &reader {
+                        Some(c) => crate::catalogue::served_rows(c, folder)?,
+                        None => cat.served_rows(folder)?,
+                    };
+                    Ok(FolderRows { folder, root: root.display().to_string(), rows })
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let mut folders = read()?;
+        // New tracks get their records first, and strays their albums': what the library lists is what a record is.
+        let copies = album_copies(&folders, rules);
+        if cat.records_unsettled() || copies.iter().any(|a| a.split) {
+            match cat.assign_records(&copies) {
+                // A row says its record, and `row_src` prints it: built from rows read before, a track given one now would
+                // build without it, and build again at the next pass.
+                Ok(given) if given > 0 => folders = read()?,
+                Ok(_) => {}
+                Err(e) => tracing::warn!(target: "library", reason = %format!("{e:#}"), "records could not be given"),
+            }
         }
+        drop(copies);
         let covers = match &reader {
             Some(c) => crate::catalogue::cover_prints(c)?,
             None => cat.cover_prints()?,
@@ -1070,6 +1081,14 @@ impl Library {
         if dirs.is_empty() {
             return Ok(0);
         }
+        // A track added here takes its album's record, so it shows as one with the rest. By vote alone: these are a few
+        // folders, and a whole record's birth is `build_from`'s, which sees every album.
+        let here = dirs.iter().map(|(folder, dir)| Ok(FolderRows { folder: *folder, root: String::new(), rows: cat.served_rows_in(*folder, dir)? })).collect::<Result<Vec<_>>>()?;
+        if here.iter().flat_map(|f| &f.rows).any(|r| r.track.is_some() && r.record.is_none())
+            && let Err(e) = cat.join_records(&album_copies(&here, rules))
+        {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "records could not be joined");
+        }
         let covers = cat.cover_prints()?;
         let roots: HashMap<i64, &str> = roots_now.iter().map(|(f, r)| (*f, r.as_str())).collect();
         self.rebuild_dirs(dirs, &mut |folder, dir| cat.served_rows_in(folder, dir), &roots, rules, &covers)
@@ -1341,7 +1360,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
     let songs = songs_of(&rows, rules);
     let mut albums: BTreeMap<&str, Vec<&Song>> = BTreeMap::new();
     for s in &songs {
-        albums.entry(&s.album_id).or_default().push(s);
+        albums.entry(&s.group).or_default().push(s);
     }
     let place = |s: &Song| (s.row.first("discnumber").and_then(leading_number), s.row.first("tracknumber").and_then(leading_number));
     albums
@@ -1369,6 +1388,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                         Some((s.row.track?, disc, number))
                     })
                     .collect(),
+                split: list.iter().any(|s| s.row.record != first.row.record),
             }
         })
         .collect()
@@ -1695,9 +1715,9 @@ fn one_album_per_folder(songs: &mut [Song]) {
     for &i in &order {
         let s = &songs[i];
         let list = votes.entry(dir(s)).or_default();
-        match list.iter_mut().find(|(_, id)| *id == s.album_id) {
+        match list.iter_mut().find(|(_, id)| *id == s.group) {
             Some(v) => v.0 += 1,
-            None => list.push((1, s.album_id.as_str())),
+            None => list.push((1, s.group.as_str())),
         }
     }
     let chosen: HashMap<(i64, String), (String, usize)> = votes
@@ -1711,7 +1731,7 @@ fn one_album_per_folder(songs: &mut [Song]) {
     let mut lead: HashMap<String, (String, String, Vec<String>, String)> = HashMap::new();
     for s in songs.iter() {
         if let Some((id, _)) = chosen.get(&dir(s))
-            && *id == s.album_id
+            && *id == s.group
         {
             lead.entry(id.clone()).or_insert_with(|| (s.album.clone(), s.album_artist.clone(), s.album_artists.clone(), s.album_base.clone()));
         }
@@ -1721,6 +1741,7 @@ fn one_album_per_folder(songs: &mut [Song]) {
         if *kinds > 1
             && let Some((album, artist, artists, base)) = lead.get(id)
         {
+            s.group = id.clone();
             s.album_id = id.clone();
             s.album_base = base.clone();
             s.album = album.clone();
@@ -1928,6 +1949,105 @@ mod tests {
             rows[0].analysis = Some(crate::catalogue::RowAnalysis { track_gain_db: -7.5, track_peak: 0.98, bpm: Some(92.0), album: Some((-7.0, 0.99)) })
         });
         assert_eq!(same_as_whole(&sample(), &analysed, |_| {}), 1);
+    }
+
+    /// A catalogue on a folder of its own, for a test named `name`.
+    fn catalogue_in(name: &str) -> (std::path::PathBuf, crate::catalogue::Catalogue) {
+        let root = std::env::temp_dir().join(format!("cratarr-records-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let cat = crate::catalogue::Catalogue::open(None, vec![root.clone()]).unwrap();
+        (root, cat)
+    }
+
+    /// These files, (path, album, title), as the catalogue holds them once read and identified.
+    fn add_files(cat: &crate::catalogue::Catalogue, root: &Path, files: &[(&str, &str, &str)]) {
+        for (rel, _, _) in files {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, rel).unwrap();
+        }
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        for (rel, album, title) in files {
+            cat.tag_for_tests(0, rel, &[("album", album), ("albumartist", "Artist"), ("title", title)]);
+        }
+        cat.identify().unwrap();
+    }
+
+    fn build_now(lib: &Library, cat: &crate::catalogue::Catalogue) -> (bool, usize) {
+        let (_, print) = lib.change(cat, &Rules::default()).unwrap();
+        lib.build_from(cat, &Rules::default(), &print).unwrap()
+    }
+
+    fn record_at(cat: &crate::catalogue::Catalogue, rel: &str) -> Option<i64> {
+        cat.served_rows(0).unwrap().iter().find(|r| r.rel == rel).expect("served").record
+    }
+
+    /// Built from rows read before the records were given, a new track would have none, and its row would print otherwise
+    /// at the next pass and build again.
+    #[test]
+    fn a_new_track_has_its_record_in_the_same_build() {
+        let (root, cat) = catalogue_in("same-build");
+        add_files(&cat, &root, &[("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two")]);
+        let lib = Library::open(None).unwrap();
+        assert_eq!(build_now(&lib, &cat), (true, 0));
+        assert!(record_at(&cat, "A/01 One.flac").is_some());
+        assert_eq!(build_now(&lib, &cat), (false, 0), "built with its record: nothing to build again");
+        add_files(&cat, &root, &[("A/03 Three.flac", "A", "Three")]);
+        assert_eq!(build_now(&lib, &cat), (false, 1));
+        assert_eq!(record_at(&cat, "A/03 Three.flac"), record_at(&cat, "A/01 One.flac"));
+        assert_eq!(build_now(&lib, &cat), (false, 0), "built with its record: nothing to build again");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A track Cratarr added shows at once, so it takes its album's record there and then. A new folder must wait: held
+    /// against these few albums it would be a record of its own for life.
+    #[test]
+    fn update_files_joins_and_never_gives_birth() {
+        let (root, cat) = catalogue_in("join");
+        let rules = Rules::default();
+        add_files(&cat, &root, &[("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two")]);
+        let lib = Library::open(None).unwrap();
+        build_now(&lib, &cat);
+        add_files(&cat, &root, &[("A/03 Three.flac", "A", "Three")]);
+        assert_eq!(lib.update_files(&cat, &rules, &[root.join("A/03 Three.flac")]).unwrap(), 1);
+        assert_eq!(record_at(&cat, "A/03 Three.flac"), record_at(&cat, "A/01 One.flac"), "joined by its album's tracks");
+        assert_eq!(build_now(&lib, &cat), (false, 0), "and built with it");
+        add_files(&cat, &root, &[("B/01 Alone.flac", "B", "Alone")]);
+        assert_eq!(lib.update_files(&cat, &rules, &[root.join("B/01 Alone.flac")]).unwrap(), 1);
+        assert_eq!(record_at(&cat, "B/01 Alone.flac"), None, "no album to join, and no birth");
+        assert!(cat.records_unsettled(), "the next build's to give");
+        build_now(&lib, &cat);
+        let alone = record_at(&cat, "B/01 Alone.flac");
+        assert!(alone.is_some() && alone != record_at(&cat, "A/01 One.flac"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// No track lacks a record here, and still one is wrong: the build must look at its albums to know.
+    #[test]
+    fn a_build_moves_a_stray_to_the_album_it_sits_in() {
+        let (root, cat) = catalogue_in("stray");
+        let a = [("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two"), ("A/03 Three.flac", "A", "Three")];
+        let b = [("B/01 Uno.flac", "B", "Uno"), ("B/02 Dos.flac", "B", "Dos"), ("B/03 Tres.flac", "B", "Tres")];
+        add_files(&cat, &root, &a);
+        add_files(&cat, &root, &b);
+        let lib = Library::open(None).unwrap();
+        build_now(&lib, &cat);
+        let (first, second) = (record_at(&cat, "A/01 One.flac"), record_at(&cat, "B/01 Uno.flac"));
+        assert_ne!(first, second);
+        let track = cat.track_of(0, "A/03 Three.flac");
+        std::fs::rename(root.join("A/03 Three.flac"), root.join("B/03 Three.flac")).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.tag_for_tests(0, "B/03 Three.flac", &[("album", "A"), ("albumartist", "Artist"), ("title", "Three")]);
+        cat.identify().unwrap();
+        assert_eq!(cat.track_of(0, "B/03 Three.flac"), track, "moved outside Cratarr, it keeps its track");
+        assert!(!cat.records_unsettled());
+        build_now(&lib, &cat);
+        assert_eq!(record_at(&cat, "B/03 Three.flac"), second, "its only file is in that record's album");
+        assert_eq!(build_now(&lib, &cat), (false, 0), "built with it");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// The library's own grouping is what gets a record: tracks in disc and number order, whatever the paths say.
