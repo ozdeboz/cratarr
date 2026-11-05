@@ -68,8 +68,8 @@ CREATE TABLE IF NOT EXISTS handovers (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, track INTEGER NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER);
--- 0100: a record's id for life, as a track's is, owned or not: one with no tracks is a record not had. Its facts are
--- here, so a retired one keeps what it was. Its copies are its tracks' files, one folder's each
+-- 0100: a record's id for life, as a track's is, owned or not: one with no tracks, not retired, is a record not had.
+-- Its facts are here, so a retired one keeps what it was. Its copies are its tracks' files, one folder's each
 -- (docs/records-and-copies.md).
 CREATE TABLE IF NOT EXISTS records (
   id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER,
@@ -2065,6 +2065,8 @@ impl Catalogue {
             }
         }
         let mut given = 0;
+        // The records a track moved out of.
+        let mut left = std::collections::HashSet::new();
         {
             let mut born = tx.prepare_cached("INSERT INTO records (born, title, artist, year) VALUES (?1, ?2, ?3, ?4)")?;
             let mut give = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND (record IS NULL OR (?5 AND record != ?2))")?;
@@ -2090,7 +2092,11 @@ impl Catalogue {
                     }
                 };
                 for (track, disc, number) in &a.tracks {
-                    given += give.execute(params![track, record, disc, number, !held.shared.contains(track)])?;
+                    let changed = give.execute(params![track, record, disc, number, !held.shared.contains(track)])?;
+                    given += changed;
+                    if changed > 0 {
+                        left.extend(held.record.get(track).copied());
+                    }
                 }
             }
             // Held against their albums now, they count as any other track from here.
@@ -2109,6 +2115,14 @@ impl Catalogue {
                AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL)",
             [now],
         )?;
+        // Every track moved on, none retired: nothing in the rows now tells this record from one not had, so it goes here,
+        // while the pass still knows it had them.
+        for record in &left {
+            tx.execute(
+                "UPDATE records SET retired_at = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)",
+                params![record, now],
+            )?;
+        }
         tx.commit()?;
         Ok(given)
     }
@@ -4319,6 +4333,56 @@ mod tests {
         assert_eq!(record_of(&cat, 1), record_of(&cat, 3));
     }
 
+    /// No track of it retired, so nothing else says it went; and left with no tracks and no retirement, it would read as a
+    /// record never had, offering Want for what is here under another id.
+    #[test]
+    fn a_record_whose_tracks_all_moved_away_retires() {
+        let cat = tracks(4);
+        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap();
+        let new = record_of(&cat, 1).unwrap();
+        assert_ne!(new, old);
+        assert!(record_retired(&cat, old), "born anew: the tracks left it");
+        assert!(!record_retired(&cat, new));
+        let title: String = cat.db().query_row("SELECT title FROM records WHERE id = ?1", [old], |r| r.get(0)).unwrap();
+        assert_eq!(title, "Half", "it keeps what it was");
+
+        let cat = tracks(4);
+        cat.assign_records(&[album("Lone", &[1]), album("Big", &[2, 3, 4])]).unwrap();
+        let (lone, big) = (record_of(&cat, 1).unwrap(), record_of(&cat, 2).unwrap());
+        cat.assign_records(&[album("Big", &[2, 3, 4, 1])]).unwrap();
+        assert_eq!(record_of(&cat, 1), Some(big));
+        assert!(record_retired(&cat, lone), "its one track went to a record already there");
+    }
+
+    /// Only a record tracks left retires for having none: one that never had any is one not had, whatever else a pass moves.
+    #[test]
+    fn a_record_that_never_had_tracks_is_not_retired() {
+        let cat = tracks(4);
+        cat.db().execute("INSERT INTO records (born, title) VALUES (1, 'Wanted')", []).unwrap();
+        let wanted = cat.db().last_insert_rowid();
+        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap();
+        assert!(!record_retired(&cat, wanted));
+    }
+
+    /// Gone before its last track moved on, a record stays gone from when it went.
+    #[test]
+    fn a_retired_record_keeps_its_date_when_a_returned_track_moves_on() {
+        let cat = tracks(3);
+        cat.assign_records(&[album("Single", &[1])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[1]);
+        cat.assign_records(&[]).unwrap();
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [old]).unwrap();
+        come_back(&cat, &[1]);
+        cat.assign_records(&[album("Best Of", &[1, 2, 3])]).unwrap();
+        assert_ne!(record_of(&cat, 1), Some(old));
+        let at: i64 = cat.db().query_row("SELECT retired_at FROM records WHERE id = ?1", [old], |r| r.get(0)).unwrap();
+        assert_eq!(at, 5);
+    }
+
     /// `tracks.record` is for life but for this: a track whose only file went to another record's album.
     #[test]
     fn a_track_moves_when_its_only_file_sits_in_another_records_album() {
@@ -4330,6 +4394,7 @@ mod tests {
         assert_eq!(record_of(&cat, 3), second);
         let number: i64 = cat.db().query_row("SELECT number FROM tracks WHERE id = 3", [], |r| r.get(0)).unwrap();
         assert_eq!(number, 4, "its place is in that record now");
+        assert!(!record_retired(&cat, first.unwrap()), "two tracks are left in it");
     }
 
     /// A shared track has a copy's file in its own record's album: one file elsewhere does not take it away.

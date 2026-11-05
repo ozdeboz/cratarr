@@ -53,7 +53,8 @@ Once it has a record, a folder's tracks say which it is, while more than half of
 against the records as a new folder is, by the rules above. A track keeps its record for life, unless its only file now
 sits in another record's album: then it moves there. A track that came back from retirement was matched by its recording
 or its name, which says nothing of the album its file landed in, so it does not bring a record back or pull an album in.
-That takes a track beside it that never left, or more than half of the record's own tracks.
+That takes a track beside it that never left, or more than half of the record's own tracks. A record whose tracks have
+all moved on is retired, as one whose tracks retired is: it was had, and it keeps what it was.
 
 ## Which copy plays
 
@@ -129,7 +130,7 @@ back alone.
 ## The rest of 0100
 
 All of 0100 goes in preview 1 (the owner, 2026-11-05). What is above is its owned half; this is the rest, on the same
-`records` table: a record with no tracks is a record you do not have.
+`records` table: a record with no tracks, not retired, is a record you do not have.
 
 ### What is kept
 
