@@ -29,10 +29,12 @@ track" and "how a record's copies behave"); this says how they are built, and in
 
 - `albums.id` becomes `al-<record>`, whatever the copies; the prefixes and `base_id` go. Ids hold no `/` or `@`, which the
   page cuts on.
-- `copies (record, folder, dir, format, min_kbps, size, added)`: what each copy is.
-- `copy_files (folder, rel, dir, song, record, src)`: every served file of every copy, with its own numbers. `songs` holds
-  one row per track, so a file of a copy that does not play has none: this is what a build compares, and what every lookup
-  by folder and path reads.
+- `copies (album, folder, dir, format, min_kbps, size, added, tracks, bits, rate)`: what each copy is. `album` is
+  `albums.id`, the record as it is served, and `added` the first `came` of its files. A copy is as good as its worst file:
+  one file not read leaves its `bits` and `rate` unknown, and it ranks last.
+- `copy_files (folder, rel, dir, song, album, src, ...)`: every served file of every copy, with its own numbers. `songs`
+  holds one row per track, so a file of a copy that does not play has none: this is what a build compares, and what every
+  lookup by folder and path reads.
 - `albums` keeps the facts of the record, not of a copy: its folder and directory columns move to `copies`.
 
 ## The same record

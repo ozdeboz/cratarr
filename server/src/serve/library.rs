@@ -60,6 +60,20 @@ CREATE INDEX IF NOT EXISTS albums_by_artist ON albums (artist_id, year, n);
 CREATE TABLE IF NOT EXISTS album_artists (album_id TEXT NOT NULL, artist_id TEXT NOT NULL, name TEXT NOT NULL,
   position INTEGER NOT NULL, mbid TEXT, PRIMARY KEY (album_id, position)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS album_artists_by_artist ON album_artists (artist_id, album_id);
+-- A copy (0100): what one folder holds of an album. `album` is `albums.id`: a record's id once ids are the records'.
+CREATE TABLE IF NOT EXISTS copies (
+  album TEXT NOT NULL, folder INTEGER NOT NULL, dir TEXT NOT NULL, format TEXT, min_kbps INTEGER, size INTEGER NOT NULL,
+  added INTEGER, tracks INTEGER NOT NULL, bits INTEGER, rate INTEGER, PRIMARY KEY (album, folder, dir)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS copies_by_place ON copies (folder, dir);
+-- Every served file, with its own numbers. `dir` is the file's own folder, a copy's is what its files share: a copy over
+-- CD1 and CD2 is one row above and has two `dir` here. `src` is the print of the row it was built from.
+CREATE TABLE IF NOT EXISTS copy_files (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, dir TEXT NOT NULL, song TEXT NOT NULL, album TEXT NOT NULL, src TEXT NOT NULL,
+  size INTEGER NOT NULL, suffix TEXT, kbps INTEGER, duration_ms INTEGER, bpm INTEGER,
+  rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL, rg_album_peak REAL, PRIMARY KEY (folder, rel)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS copy_files_by_dir ON copy_files (folder, dir);
+CREATE INDEX IF NOT EXISTS copy_files_by_album ON copy_files (album);
+CREATE INDEX IF NOT EXISTS copy_files_by_song ON copy_files (song);
 CREATE INDEX IF NOT EXISTS song_artists_by_artist ON song_artists (artist_id, song_id);
 CREATE TABLE IF NOT EXISTS artists (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mbid TEXT, album_count INTEGER NOT NULL,
@@ -409,7 +423,7 @@ mod release_type_tests {
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 13;
+const LAYOUT: i64 = 14;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -855,7 +869,8 @@ impl Library {
         tx.execute_batch(
             "DELETE FROM songs; DELETE FROM song_artists; DELETE FROM albums; DELETE FROM album_artists; DELETE FROM artists;
              DELETE FROM genres; DELETE FROM songs_fts; DELETE FROM albums_fts; DELETE FROM artists_fts;
-             DELETE FROM songs_tri_fts; DELETE FROM albums_tri_fts; DELETE FROM artists_tri_fts;",
+             DELETE FROM songs_tri_fts; DELETE FROM albums_tri_fts; DELETE FROM artists_tri_fts;
+             DELETE FROM copies; DELETE FROM copy_files;",
         )?;
         write_albums(&tx, &rows, &roots, rules, &facts, covers)?;
         artists_again(&tx, None)?;
@@ -953,6 +968,7 @@ impl Library {
             let mut del_tri = tx.prepare("DELETE FROM songs_tri_fts WHERE rowid = ?1")?;
             let mut del_credits = tx.prepare("DELETE FROM song_artists WHERE song_id = ?1")?;
             let mut del_song = tx.prepare("DELETE FROM songs WHERE n = ?1")?;
+            let mut del_files = tx.prepare("DELETE FROM copy_files WHERE folder = ?1 AND dir = ?2")?;
             for (folder, dir) in &dirs {
                 let found: Vec<(i64, String, String)> =
                     songs.query_map(params![folder, dir], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -966,6 +982,7 @@ impl Library {
                     del_song.execute([n])?;
                     gone_albums.insert(album);
                 }
+                del_files.execute(params![folder, dir])?;
             }
             let mut album_n = tx.prepare("SELECT n FROM albums WHERE id = ?1")?;
             let mut album_credits = tx.prepare("SELECT artist_id FROM album_artists WHERE album_id = ?1")?;
@@ -973,6 +990,7 @@ impl Library {
             let mut del_album_tri = tx.prepare("DELETE FROM albums_tri_fts WHERE rowid = ?1")?;
             let mut del_album_credits = tx.prepare("DELETE FROM album_artists WHERE album_id = ?1")?;
             let mut del_album = tx.prepare("DELETE FROM albums WHERE id = ?1")?;
+            let mut del_copies = tx.prepare("DELETE FROM copies WHERE album = ?1")?;
             for album in &gone_albums {
                 for a in album_credits.query_map([album], |r| r.get::<_, String>(0))? {
                     touched.insert(a?);
@@ -983,6 +1001,7 @@ impl Library {
                 }
                 del_album_credits.execute([album])?;
                 del_album.execute([album])?;
+                del_copies.execute([album])?;
             }
         }
         let (written, credited) = write_albums(&tx, &refs, roots, rules, &facts, covers)?;
@@ -1429,11 +1448,17 @@ fn write_albums(
         let mut ins_fts = tx.prepare_cached("INSERT INTO songs_fts (rowid, title, artist, album) VALUES (?1, ?2, ?3, ?4)")?;
         let mut ins_tri = tx.prepare_cached("INSERT INTO songs_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
         let mut ins_artist = tx.prepare_cached("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
+        let mut ins_file = tx.prepare_cached(
+            "INSERT INTO copy_files (folder, rel, dir, song, album, src, size, suffix, kbps, duration_ms, bpm,
+               rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        )?;
         for s in &songs {
             let r = s.row;
             let id = ids::song(r.track.unwrap_or_default());
             let suffix = r.rel.rsplit_once('.').map(|(_, e)| e.to_lowercase());
             let g = gains(r);
+            let (dir, src, bpm, length) = (crate::catalogue::dir_of(&r.rel), row_src(r), bpm_of(r), r.duration_ms.map(|d| d as i64));
             ins_song.execute(params![
                 id,
                 ids::song_pid(r, &s.album_artist),
@@ -1448,8 +1473,8 @@ fn write_albums(
                 r.first("discnumber").and_then(leading_number),
                 r.first("date").and_then(year_of),
                 s.genres.first(),
-                bpm_of(r),
-                r.duration_ms.map(|d| d as i64),
+                bpm,
+                length,
                 r.size as i64,
                 suffix,
                 r.kbps,
@@ -1462,11 +1487,28 @@ fn write_albums(
                 g.album_gain,
                 g.album_peak,
                 s.genres.join("\u{1f}"),
-                crate::catalogue::dir_of(&r.rel),
-                row_src(r),
+                dir,
+                src,
                 total_of(r),
             ])?;
             let n = tx.last_insert_rowid();
+            ins_file.execute(params![
+                s.folder,
+                r.rel,
+                dir,
+                id,
+                s.album_id,
+                src,
+                r.size as i64,
+                suffix,
+                r.kbps,
+                length,
+                bpm,
+                g.track_gain,
+                g.track_peak,
+                g.album_gain,
+                g.album_peak,
+            ])?;
             ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
             ins_tri.execute(params![n, s.title])?;
             for (i, name) in s.artists.iter().enumerate() {
@@ -1487,6 +1529,9 @@ fn write_albums(
     let mut ins_fts = tx.prepare_cached("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
     let mut ins_tri = tx.prepare_cached("INSERT INTO albums_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
     let mut ins_aa = tx.prepare_cached("INSERT INTO album_artists (album_id, artist_id, name, position, mbid) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+    let mut ins_copy = tx.prepare_cached(
+        "INSERT INTO copies (album, folder, dir, format, min_kbps, size, added, tracks, bits, rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )?;
     for (album_id, songs) in &albums {
         let first = songs[0];
         let years: Vec<u32> = songs.iter().filter_map(|s| s.row.first("date").and_then(year_of)).collect();
@@ -1538,6 +1583,7 @@ fn write_albums(
         let formats: BTreeSet<&str> = songs.iter().filter_map(|s| s.row.format.as_deref()).collect();
         let format = (formats.len() == 1).then(|| formats.iter().next().map(|f| f.to_string())).flatten();
         let duration_ms = songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>();
+        let (size, min_kbps) = (songs.iter().map(|s| s.row.size).sum::<u64>() as i64, songs.iter().filter_map(|s| s.row.kbps).min());
         let shape = Shape {
             tracks: songs.len(),
             duration_ms,
@@ -1568,7 +1614,7 @@ fn write_albums(
             genres.join("\u{1f}"),
             songs.len() as i64,
             duration_ms as i64,
-            songs.iter().map(|s| s.row.size).sum::<u64>() as i64,
+            size,
             discs,
             songs.iter().filter_map(|s| s.row.born).chain(facts.added.get(album_id).copied()).min(),
             first.row.first("musicbrainz_albumid"),
@@ -1578,7 +1624,7 @@ fn write_albums(
             order_name(&first.album),
             first.album_base,
             format,
-            songs.iter().filter_map(|s| s.row.kbps).min(),
+            min_kbps,
             cover,
             kind,
             type_from,
@@ -1591,6 +1637,20 @@ fn write_albums(
         let n = tx.last_insert_rowid();
         ins_fts.execute(params![n, first.album, first.album_artist])?;
         ins_tri.execute(params![n, first.album])?;
+        // A copy is as good as its worst file. `None` sorts first, so one file the reader has not reached leaves the copy
+        // unread, and an unread copy ranks last until it gets there.
+        ins_copy.execute(params![
+            album_id,
+            first.folder,
+            dir,
+            format,
+            min_kbps,
+            size,
+            songs.iter().filter_map(|s| s.row.came).min(),
+            songs.len() as i64,
+            songs.iter().map(|s| s.row.bits).min().flatten(),
+            songs.iter().map(|s| s.row.rate).min().flatten(),
+        ])?;
         for (i, name) in first.album_artists.iter().enumerate() {
             let aid = ids::artist(name);
             let mbid = if i == 0 { first.row.first("musicbrainz_albumartistid") } else { None };
@@ -1787,7 +1847,7 @@ mod tests {
         let db = lib.db();
         let mut out = Vec::new();
         for (table, skip_n) in
-            [("songs", true), ("song_artists", false), ("albums", true), ("album_artists", false), ("artists", true), ("genres", false)]
+            [("songs", true), ("song_artists", false), ("albums", true), ("album_artists", false), ("artists", true), ("genres", false), ("copies", false), ("copy_files", false)]
         {
             let mut st = db.prepare(&format!("SELECT * FROM {table}")).unwrap();
             let cols = st.column_count();
@@ -2129,6 +2189,99 @@ mod tests {
         assert_eq!((track, disc), (1, 2));
         let order: String = db.query_row("SELECT order_name FROM artists WHERE name = 'The Orb'", [], |r| r.get(0)).unwrap();
         assert_eq!(order, "orb");
+    }
+
+    /// What a copy says of its files, and of each one apart. A file with no track yet serves nothing, so it is in neither.
+    #[test]
+    fn a_copy_is_one_folders_files() {
+        let tags = |disc: &'static str| [("title", "t"), ("artist", "Björk"), ("albumartist", "Björk"), ("album", "Live Box"), ("discnumber", disc)];
+        let mut one = row(1, "Björk/Live Box/CD1/01 Hunter.flac", &tags("1"));
+        let mut two = row(2, "Björk/Live Box/CD2/01 Jóga.flac", &tags("2"));
+        (one.size, one.kbps, one.came, one.bits, one.rate) = (30, Some(900), Some(200), Some(24), Some(96_000));
+        (two.size, two.kbps, two.came, two.bits, two.rate) = (20, Some(700), Some(100), Some(16), Some(44_100));
+        one.analysis = Some(crate::catalogue::RowAnalysis { track_gain_db: -4.0, track_peak: 0.5, bpm: Some(120.0), album: Some((-5.0, 0.75)) });
+        let mut trackless = row(3, "Björk/Live Box/CD2/02 New.flac", &tags("2"));
+        trackless.track = None;
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&[FolderRows { folder: 4, root: "/music".into(), rows: vec![one.clone(), two.clone(), trackless] }], &Rules::default()).unwrap();
+        let db = lib.db();
+        let album: String = db.query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap();
+        type Copy = (String, i64, String, Option<String>, Option<i64>, i64, Option<i64>, i64, Option<i64>, Option<i64>);
+        let copies: Vec<Copy> = db
+            .prepare("SELECT album, folder, dir, format, min_kbps, size, added, tracks, bits, rate FROM copies")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(copies, [(album.clone(), 4, "Björk/Live Box".to_string(), Some("FLAC".to_string()), Some(700), 50, Some(100), 2, Some(16), Some(44_100))], "two discs, one copy");
+        type File = (String, String, String, String, i64, Option<String>, Option<i64>, Option<i64>, Option<i64>);
+        let files: Vec<File> = db
+            .prepare("SELECT rel, dir, song, src, size, suffix, kbps, duration_ms, bpm FROM copy_files WHERE folder = 4 AND album = ?1 ORDER BY rel")
+            .unwrap()
+            .query_map([&album], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let flac = || Some("flac".to_string());
+        assert_eq!(files, [
+            (one.rel.clone(), "Björk/Live Box/CD1".to_string(), ids::song(1), row_src(&one), 30, flac(), Some(900), Some(200_000), Some(120)),
+            (two.rel.clone(), "Björk/Live Box/CD2".to_string(), ids::song(2), row_src(&two), 20, flac(), Some(700), Some(200_000), None),
+        ]);
+        let rg: (Option<f64>, Option<f64>, Option<f64>, Option<f64>) = db
+            .query_row("SELECT rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM copy_files WHERE rel = ?1", [&one.rel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap();
+        assert_eq!(rg, (Some(-4.0), Some(0.5), Some(-5.0), Some(0.75)));
+    }
+
+    /// `None` sorts first: this is the line between a copy read and one that ranks last until the reader gets there.
+    #[test]
+    fn one_unread_file_leaves_its_copy_unread() {
+        let read = |r: ServedRow| ServedRow { bits: Some(16), rate: Some(44_100), ..r };
+        let tags = [("title", "t"), ("artist", "A"), ("album", "X")];
+        let (one, two) = (read(row(1, "A/X/01 t.flac", &tags)), row(2, "A/X/02 t.flac", &tags));
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![one, two] }], &Rules::default()).unwrap();
+        let copy: (Option<i64>, Option<i64>) = lib.db().query_row("SELECT bits, rate FROM copies", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(copy, (None, None));
+    }
+
+    /// Under today's ids the same album in two folders is two albums, each one copy. A file of one changing is that copy's.
+    #[test]
+    fn the_same_album_in_two_folders_is_built_again_where_it_changed() {
+        let second = |mut f: Vec<FolderRows>| {
+            let rows = f[0].rows.iter().map(|r| ServedRow { track: r.track.map(|t| t + 10), ..r.clone() }).collect();
+            f.push(FolderRows { folder: 1, root: "/incoming".into(), rows });
+            f
+        };
+        let before = second(sample());
+        let lib = Library::open(None).unwrap();
+        lib.build(&before, &Rules::default()).unwrap();
+        let copies: i64 = lib.db().query_row("SELECT count(*) FROM copies", [], |r| r.get(0)).unwrap();
+        assert_eq!(copies, 4);
+        let mut after = second(sample());
+        tag(&mut after[1].rows[1], "genre", "Electronic; Trip Hop");
+        assert_eq!(same_as_whole(&before, &after, |_| {}), 1);
+    }
+
+    /// A library from before these tables is built again, as any of another layout is: nothing carries over to go wrong.
+    #[test]
+    fn a_library_of_the_layout_before_is_built_again_with_its_copies() {
+        let dir = std::env::temp_dir().join(format!("cratarr-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("library.sqlite");
+        let _ = std::fs::remove_file(&file);
+        {
+            let lib = Library::open(Some(file.as_path())).unwrap();
+            assert!(lib.refresh(&sample(), &Rules::default()).unwrap());
+            lib.db().execute_batch(&format!("DROP TABLE copies; DROP TABLE copy_files; PRAGMA user_version = {}", LAYOUT - 1)).unwrap();
+        }
+        let lib = Library::open(Some(file.as_path())).unwrap();
+        assert_eq!(lib.counts().unwrap(), (0, 0, 0), "emptied, not read as it was");
+        assert!(lib.refresh(&sample(), &Rules::default()).unwrap(), "and built");
+        assert_eq!(lib.db().query_row("SELECT count(*) FROM copies", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        drop(lib);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
