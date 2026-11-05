@@ -136,6 +136,9 @@ const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NU
 /// How long a folder out of use keeps its rows (parked) before they are forgotten.
 const PARKED_KEEP_SECS: i64 = 30 * 24 * 3600;
 
+/// How many of a folder's files `set_folders` looks for at a path, to tell whether those rows are that folder's.
+const SAMPLE: i64 = 20;
+
 /// The meta key of `Catalogue::generation`.
 const GENERATION: &str = "generation";
 
@@ -152,6 +155,11 @@ const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id
   was_artist = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'artist' ORDER BY t.n LIMIT 1),
   was_album = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'album' ORDER BY t.n LIMIT 1),
   was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1)";
+
+/// Whether a folder shows nothing, or is not there: how a mount that is not up looks, and no sign its files are gone.
+fn holds_nothing(path: &str) -> bool {
+    std::fs::read_dir(path).map_or(true, |mut d| !d.any(|e| e.is_ok_and(|e| !e.file_name().to_string_lossy().starts_with('.'))))
+}
 
 /// An album's files in one folder as the library groups them: what [`Catalogue::assign_records`] gives a record.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -781,7 +789,9 @@ impl Catalogue {
     /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, with its files
     /// where they were, it picks them up again under its own id: the same track ids, only changed files read again. A
     /// source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked folders are
-    /// forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path.
+    /// forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path. "The same files" is more than half
+    /// of a sample spread over the folder: one album gone while it was away forgets nothing (rows go one by one, once the
+    /// walk misses them), and nothing at all there is no other files, but a mount not up (`holds_nothing`).
     pub fn set_folders(&self, folders: Vec<PathBuf>) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -792,10 +802,18 @@ impl Catalogue {
                 wanted.push(p);
             }
         }
+        // Spread, as a folder's first rows are its first album: that album gone must not forget a folder, and that album
+        // alike at another path must not hand a folder over. The moved mount's case asks no more than half: a mount moved
+        // with a few files lost must keep its ids, and two folders alike in more than half of an even sample are one.
         let same_files = |id: i64, at: &str| -> Result<bool> {
-            let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND gone_at IS NULL AND trashed IS NULL LIMIT 20")?;
-            let rels: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-            Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(at).join(rel).is_file()))
+            let mut st = tx.prepare(
+                "SELECT rel FROM (SELECT rel, row_number() OVER (ORDER BY rel) - 1 AS n, count(*) OVER () AS total
+                                  FROM files WHERE folder = ?1 AND gone_at IS NULL AND trashed IS NULL)
+                 WHERE n % ((total + ?2 - 1) / ?2) = 0",
+            )?;
+            let rels: Vec<String> = st.query_map(params![id, SAMPLE], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let there = rels.iter().filter(|rel| Path::new(at).join(rel).is_file()).count();
+            Ok(there * 2 > rels.len())
         };
         let rekey = |from: i64, to: i64| -> Result<()> {
             for table in FILE_TABLES {
@@ -835,7 +853,7 @@ impl Catalogue {
             }
             let own = rows.iter().find(|(id, p, _)| *id < 0 && p == path).map(|(id, _, _)| *id);
             let taken = match own {
-                Some(p) if same_files(p, path)? => Some(p),
+                Some(p) if same_files(p, path)? || holds_nothing(path) => Some(p),
                 Some(p) => {
                     forget.push(p);
                     None
@@ -3716,6 +3734,7 @@ mod tests {
         assert!(cat.beat_this_of(0, &one).is_some());
         cat.set_folders(vec![b.clone()]).unwrap();
         std::fs::remove_dir_all(a.join("A - B (2020)")).unwrap();
+        std::fs::write(a.join("other.mp3"), "x").unwrap();
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
         let left: i64 = cat.db().query_row("SELECT (SELECT COUNT(*) FROM analysis_shape) + (SELECT COUNT(*) FROM beat_this)", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 0, "its files gone from its path: forgotten, and all of theirs with them");
@@ -5054,6 +5073,116 @@ mod tests {
         assert_eq!(found[1], (0, "A - B (2020)/02 Two.flac".to_string(), Some(200_000)), "a server's id, linked");
         assert!(cat.files_of_sources(&[]).is_empty());
         std::fs::remove_dir_all(&a).ok();
+    }
+
+    /// A folder of ten albums of ten tracks, `A00` first, read and given track ids.
+    fn shelf() -> (PathBuf, Catalogue) {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("cratarr-shelf-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for album in 0..10 {
+            shelve(&d, album);
+        }
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        (d, cat)
+    }
+
+    fn shelve(at: &Path, album: usize) {
+        std::fs::create_dir_all(at.join(format!("A{album:02}"))).unwrap();
+        for track in 0..10 {
+            std::fs::write(at.join(format!("A{album:02}/{track:02}.mp3")), b"not really an mp3").unwrap();
+        }
+    }
+
+    fn elsewhere(d: &Path) -> PathBuf {
+        let e = d.with_extension("elsewhere");
+        let _ = std::fs::remove_dir_all(&e);
+        std::fs::create_dir_all(&e).unwrap();
+        std::fs::write(e.join("kept.mp3"), b"another folder").unwrap();
+        e
+    }
+
+    #[test]
+    fn the_album_that_sorts_first_gone_from_a_parked_folder_forgets_nothing_else() {
+        let (d, cat) = shelf();
+        let other = elsewhere(&d);
+        let track = cat.track_of(0, "A05/03.mp3").unwrap();
+        cat.set_folders(vec![other.clone()]).unwrap();
+        std::fs::remove_dir_all(d.join("A00")).unwrap();
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&d), Some(0), "its own id");
+        assert_eq!(cat.track_of(0, "A05/03.mp3"), Some(track), "the rest of its rows came back with it");
+        for d in [d, other] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_parked_folder_with_most_of_its_files_gone_is_another_folder() {
+        let (d, cat) = shelf();
+        let other = elsewhere(&d);
+        cat.set_folders(vec![other.clone()]).unwrap();
+        for album in 0..7 {
+            std::fs::remove_dir_all(d.join(format!("A{album:02}"))).unwrap();
+        }
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        assert_ne!(cat.folders().id_of(&d), Some(0));
+        for d in [d, other] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_mount_moved_with_an_album_lost_keeps_the_rest_of_its_rows() {
+        let (d, cat) = shelf();
+        let track = cat.track_of(0, "A05/03.mp3").unwrap();
+        let moved = d.with_extension("moved");
+        let _ = std::fs::remove_dir_all(&moved);
+        std::fs::rename(&d, &moved).unwrap();
+        std::fs::remove_dir_all(moved.join("A00")).unwrap();
+        cat.set_folders(vec![moved.clone()]).unwrap();
+        assert_eq!(cat.track_of(0, "A05/03.mp3"), Some(track));
+        std::fs::remove_dir_all(moved).ok();
+    }
+
+    /// Two libraries made by one template can hold the same album under the same names: what is first in the one is no
+    /// proof that the other is the same library.
+    #[test]
+    fn a_folder_alike_in_its_first_albums_is_not_handed_another_folder_s_rows() {
+        let (d, cat) = shelf();
+        let alike = d.with_extension("alike");
+        let _ = std::fs::remove_dir_all(&alike);
+        shelve(&alike, 0);
+        shelve(&alike, 1);
+        cat.set_folders(vec![alike.clone()]).unwrap();
+        assert_eq!(cat.track_of(0, "A00/00.mp3"), None, "those rows stay parked");
+        assert_ne!(cat.folders().id_of(&alike), Some(0));
+        for d in [d, alike] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_mount_not_up_when_its_library_is_switched_on_forgets_nothing() {
+        let (d, cat) = shelf();
+        let other = elsewhere(&d);
+        let track = cat.track_of(0, "A00/00.mp3").unwrap();
+        cat.set_folders(vec![other.clone()]).unwrap();
+        // A folder there, as a mount point is, and nothing in it.
+        let away = d.with_extension("away");
+        let _ = std::fs::remove_dir_all(&away);
+        std::fs::rename(&d, &away).unwrap();
+        std::fs::create_dir_all(d.join(".cratarr-trash")).unwrap();
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&d), Some(0));
+        assert_eq!(cat.track_of(0, "A00/00.mp3"), Some(track), "its rows are its own again, for the walk to keep");
+        for d in [d, other, away] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[test]
