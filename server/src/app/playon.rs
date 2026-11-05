@@ -2817,20 +2817,22 @@ impl PlayOn {
             (a.map(|a| a.mode).unwrap_or_default(), a.is_some_and(|a| a.albums), q.is_some_and(|q| q.skip_favourites))
         };
         let ask = super::radio::NextRequest {
-            mode: super::radio::Mode::of(mode),
-            seed: seed.clone(),
-            exclude: seed.clone(),
-            last: None,
-            count: Some(RADIO_START),
+            ask: super::radio::Ask {
+                mode: mode.asks(),
+                seed: seed.clone(),
+                exclude: seed.clone(),
+                last: None,
+                count: Some(RADIO_START),
+                albums,
+                by: RadioBy::default(),
+                skip_favourites,
+                // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
+                similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
+                folders: None,
+            },
             within: None,
-            albums,
-            by: RadioBy::default(),
-            skip_favourites,
-            // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
-            similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
             // Its account's More music choice (0.9.5), as for its "Similar by".
             account: self.account_of(name),
-            folders: None,
         };
         let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
         let first = super::radio::next(&app, ask).await?;

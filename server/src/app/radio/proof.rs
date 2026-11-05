@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
+use cratarr_rules::radio::DEFAULT_COUNT;
+
 use super::*;
 use crate::app::App;
 use crate::catalogue::AudioMuseRow;
@@ -106,7 +108,7 @@ struct Asking<'a> {
     tasted: &'a Index,
     recent: &'a HashMap<String, i64>,
     /// The request as its settings make it.
-    asked: NextRequest,
+    asked: Ask,
     seed: u64,
 }
 
@@ -117,7 +119,7 @@ impl Asking<'_> {
         for (mode, by) in ASKS {
             for (albums, skip_favourites) in [(false, false), (false, true), (true, false), (true, true)] {
                 let seed = if mode == Mode::Radio { vec![track.to_string()] } else { seed.to_vec() };
-                let req = NextRequest { mode, by, albums, skip_favourites, exclude: seed.clone(), seed, last: Some(track.to_string()), count: Some(DEFAULT_COUNT), ..self.asked.clone() };
+                let req = Ask { mode, by, albums, skip_favourites, exclude: seed.clone(), seed, last: Some(track.to_string()), count: Some(DEFAULT_COUNT), ..self.asked.clone() };
                 let index = if mode == Mode::Taste { self.tasted } else { self.plain };
                 let picks = choose(index, &req, self.recent, within, &mut Rng::seeded(self.seed));
                 let ids: Vec<&str> = picks.iter().map(|&i| index.songs[i].id.as_str()).collect();
@@ -134,7 +136,7 @@ impl Asking<'_> {
 async fn picks_of(app: &Arc<App>, account: &str, crates: &[String], seed: u64, tracks: usize) -> Vec<String> {
     let (index, recent) = ready().await.unwrap();
     let asked = match as_asked(NextRequest::default()) {
-        Ok((req, _, _)) => req,
+        Ok((req, _, _)) => req.ask,
         Err(e) => return vec![format!("{account}\tradio\trefused: {e:?}")],
     };
     let plain = with_taste(app, index.clone(), Some(account), false).await.unwrap();

@@ -21,9 +21,13 @@ wasm-matcher = []
 # A crate's records kept apart, for the page (0.13): in matcher.wasm, which has an allocator already (in rules.wasm it
 # took it from 9 to 38 KB).
 wasm-spread = []
+# Radio's modes in the page's generated types: the server's tests turn it on, as they write those. Nothing that plays
+# builds it.
+ts = ["dep:ts-rs"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+ts-rs = { version = "12.0.1", optional = true }
 unicode-normalization = { version = "0.1", optional = true }
 
 [dev-dependencies]

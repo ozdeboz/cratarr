@@ -23,6 +23,7 @@ pub mod excluded_artists;
 pub mod ids;
 pub mod matcher;
 pub mod names;
+pub mod radio;
 pub mod similarity;
 #[cfg(target_arch = "wasm32")]
 mod wasm;

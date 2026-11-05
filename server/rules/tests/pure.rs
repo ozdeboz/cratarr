@@ -39,8 +39,12 @@ fn the_rules_take_no_dependency_a_player_could_not_build() {
     let manifest = include_str!("../Cargo.toml").replace('\r', "");
     let (_, rest) = manifest.split_once("[dependencies]\n").unwrap();
     let (dependencies, _) = rest.split_once("\n[").unwrap();
-    let names: Vec<&str> = dependencies.lines().filter_map(|l| l.split_once(" = ")).map(|(name, _)| name).collect();
+    // ts-rs only writes the page's types, in the server's tests: no build of the rules that plays turns `ts` on.
+    let names: Vec<&str> = dependencies.lines().filter_map(|l| l.split_once(" = ")).map(|(name, _)| name).filter(|name| *name != "ts-rs").collect();
     assert_eq!(names, ["serde", "unicode-normalization"], "a new one must build for wasm32-unknown-unknown first: cargo check-wasm");
+    assert!(manifest.contains("\ndefault = [\"nfkd\"]\n"), "the rules' default build stays without ts");
+    let check = include_str!("../../.cargo/config.toml").lines().find(|l| l.starts_with("check-wasm = ")).unwrap();
+    assert!(!check.split([' ', ',', '"']).any(|word| word == "ts"), "the page's build stays without ts");
 }
 
 #[test]
