@@ -725,6 +725,11 @@ impl IncomingService {
                 tracing::info!("finished an interrupted action on {title}");
                 self.journal.applied(entry.id)
             } else {
+                // Stopped on its first copy: what that left must not refuse the same Keep tried again.
+                if let Some(steps) = self.steps(&entry.event) {
+                    let files = self.files.clone();
+                    let _ = tokio::task::spawn_blocking(move || files.clear_parts(&steps)).await;
+                }
                 tracing::info!("forgot an action on {title} that never happened");
                 self.journal.forget(entry.id)
             };
@@ -1567,6 +1572,71 @@ mod tests {
         lib.catalogue().set_folders(vec![music.to_path_buf(), inc.to_path_buf()]).unwrap();
         let shelves = Arc::new(Shelves::new(lib.clone(), None));
         IncomingService::new(lib, crate::ports::disk(), Arc::new(Journal::open(None).unwrap()), None, crate::trash::DEFAULT_KEEP_DAYS, None, shelves)
+    }
+
+    fn folder(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cratarr-incoming-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A Keep of `X/A`'s two tracks from Incoming (1) into `Y` in the library (0).
+    fn keep_of_two() -> Event {
+        let mv = |n: &str| TrackMove { track: None, from: (1, format!("X/A/{n}")), to: (0, format!("Y/{n}")), was: None };
+        Event::AlbumAdopted {
+            source: "cratarr".into(),
+            album_id: "al-1".into(),
+            title: "A".into(),
+            from_dir: (1, "X/A".into()),
+            to_dir: (0, "Y".into()),
+            moves: vec![mv("1.flac"), mv("2.flac")],
+            release_group: None,
+            converted: Vec::new(),
+        }
+    }
+
+    fn two_tracks(inc: &std::path::Path) {
+        std::fs::create_dir_all(inc.join("X/A")).unwrap();
+        std::fs::write(inc.join("X/A/1.flac"), b"one").unwrap();
+        std::fs::write(inc.join("X/A/2.flac"), b"two").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_keep_stopped_on_its_first_copy_is_forgotten_and_nothing_stands_in_the_way_of_trying_again() {
+        let (music, inc) = (folder("first-music"), folder("first-inc"));
+        let svc = on_disk(&music, &inc).await;
+        two_tracks(&inc);
+        let id = svc.journal.intend(100, &keep_of_two()).unwrap();
+        std::fs::create_dir_all(music.join("Y")).unwrap();
+        std::fs::write(crate::moves::part_of(&music.join("Y/1.flac")), b"on").unwrap();
+
+        svc.reconcile().await;
+        assert!(svc.journal.get(id).unwrap().is_none(), "it never happened");
+        assert!(!music.join("Y").exists(), "plan_keep refuses a folder that is there");
+        assert_eq!(std::fs::read(inc.join("X/A/1.flac")).unwrap(), b"one");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_keep_stopped_on_a_later_copy_is_finished_whole() {
+        let (music, inc) = (folder("later-music"), folder("later-inc"));
+        let svc = on_disk(&music, &inc).await;
+        two_tracks(&inc);
+        let id = svc.journal.intend(100, &keep_of_two()).unwrap();
+        std::fs::create_dir_all(music.join("Y")).unwrap();
+        std::fs::rename(inc.join("X/A/1.flac"), music.join("Y/1.flac")).unwrap();
+        std::fs::write(crate::moves::part_of(&music.join("Y/2.flac")), b"t").unwrap();
+
+        svc.reconcile().await;
+        assert!(svc.journal.get(id).unwrap().is_some_and(|e| e.applied), "the album's Undo stands");
+        assert_eq!(std::fs::read(music.join("Y/2.flac")).unwrap(), b"two");
+        assert!(!inc.join("X").exists(), "the album is not split between two libraries");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[test]

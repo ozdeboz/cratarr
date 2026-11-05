@@ -23,6 +23,8 @@ pub trait Files: Send + Sync {
     fn move_all(&self, plan: &[crate::moves::Step]) -> Result<()>;
     /// Undo `move_all`.
     fn move_back(&self, plan: &[crate::moves::Step]) -> Result<()>;
+    /// Take away what a `move_all` stopped before any file arrived left at its targets.
+    fn clear_parts(&self, plan: &[crate::moves::Step]);
 }
 
 /// The disk itself.
@@ -51,6 +53,10 @@ impl Files for Disk {
 
     fn move_back(&self, plan: &[crate::moves::Step]) -> Result<()> {
         crate::moves::revert(plan)
+    }
+
+    fn clear_parts(&self, plan: &[crate::moves::Step]) {
+        crate::moves::clear_parts(plan)
     }
 }
 
