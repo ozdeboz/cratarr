@@ -571,6 +571,8 @@ fn radio_cases(lib: &Shared) -> Vec<RadioCase> {
     // Autoplay after the first tracks of a seed: the rest of it, a favourite among them, is Random's to draw first.
     let drawing = || Ask { exclude: vec![seeds[0].clone()], ..asked(Mode::Random, RadioBy::Track) };
     let one_of_the_seed: Vec<String> = of(&["al-signal"]).into_iter().chain([seeds[3].clone()]).collect();
+    // Half of each record: a crate of whole records could not tell the crate's tracks from the album's.
+    let halves: Vec<String> = ["al-signal", "al-ember"].iter().map(|a| lib.album(a)).flat_map(|t| t[..t.len() / 2].to_vec()).collect();
     cases.extend([
         case("after the playing track alone", no_seed(similar())),
         case("with no seed and nothing playing", Ask { last: None, ..no_seed(similar()) }),
@@ -585,12 +587,12 @@ fn radio_cases(lib: &Shared) -> Vec<RadioCase> {
         RadioCase { recent: at(of(&["al-ember", "al-various"]), NOW - DAY), ..case("what was played this week waits", similar()) },
         RadioCase { recent: at(everything_but_two, NOW - DAY), ..case("nothing else left: the longest ago come back", similar()) },
         RadioCase { excluded: of(&["al-ember"]), ..case("never what the listener excluded", similar()) },
-        RadioCase { excluded: vec![lib.album("al-harbour")[1].clone()], ..case("nor in a whole album", Ask { albums: true, ..similar() }) },
+        RadioCase { excluded: vec![lib.album("al-lantern")[1].clone()], ..case("nor in a whole album", Ask { albums: true, ..similar() }) },
         RadioCase { folders: Some(vec![1, 2]), ..case("only the libraries chosen, seeds from others still seed", similar()) },
         RadioCase { folders: Some(vec![9]), ..case("no library chosen holds anything: nothing", similar()) },
         RadioCase { within: Some(inside.clone()), ..case("inside a crate only its tracks play", similar()) },
         RadioCase { within: Some(inside.clone()), ..case("inside a crate, at random", asked(Mode::Random, RadioBy::Track)) },
-        RadioCase { within: Some(inside.clone()), ..case("inside a crate, whole albums", Ask { albums: true, ..similar() }) },
+        RadioCase { within: Some(halves), ..case("inside a crate, whole albums: what it holds of them", Ask { albums: true, ..similar() }) },
         RadioCase {
             within: Some(inside.clone()),
             ..case("all of it queued: a new round, the longest ago first", Ask { exclude: inside.clone(), last: inside.last().cloned(), count: Some(3), ..no_seed(similar()) })
@@ -737,6 +739,33 @@ fn every_way_of_asking_radio_is_written_and_the_seed_decides() {
     for mode in [Mode::Similar, Mode::Random, Mode::Radio, Mode::Taste] {
         assert!(draws(mode), "{mode:?} drew the same on both seeds");
     }
+}
+
+/// A written answer sets down what every build must give, so `write` must not be able to set down a leak. Reshuffle is the
+/// seed again, whatever it holds, and no player asks for it now.
+#[test]
+fn no_written_answer_holds_what_may_not_be_picked() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let cases: Vec<RadioCase> = serde_json::from_str(RADIO).unwrap();
+    for c in cases.iter().filter(|c| c.ask.mode != Mode::Reshuffle) {
+        for t in &c.expected {
+            assert_eq!(barred(&lib, c, t), None, "{}: {t}", c.name);
+        }
+    }
+}
+
+/// A whole album is where the limits were lost: the record picked has to hold a track each of them leaves out. (No record of
+/// the shared library spans two libraries, so that limit is `radio.rs`'s own test.)
+#[test]
+fn whole_albums_are_written_with_a_track_of_the_record_for_each_limit_to_leave_out() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let cases: Vec<RadioCase> = serde_json::from_str(RADIO).unwrap();
+    let mut kept_out: HashSet<&str> = HashSet::new();
+    for c in cases.iter().filter(|c| (c.ask.albums || c.ask.mode == Mode::AlbumMix) && c.ask.mode != Mode::Reshuffle) {
+        let records: HashSet<&String> = lib.files.iter().filter(|f| c.expected.contains(&song(f.track))).map(|f| &f.album).collect();
+        kept_out.extend(lib.files.iter().filter(|f| records.contains(&f.album)).filter_map(|f| barred(&lib, c, &song(f.track))));
+    }
+    assert_eq!(kept_out, HashSet::from(["outside what it stays inside", "excluded", "a favourite, ignored"]));
 }
 
 /// Random takes the seed by a road of its own, past the pool, so a case has to reach it with something there to keep out.

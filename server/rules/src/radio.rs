@@ -322,21 +322,23 @@ pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: O
             _ => Vec::new(),
         };
         let from = if narrowed.is_empty() { &pool } else { &narrowed };
-        return album_mix(index, from, &seed, &out, req.mode, &req.weights(), rng);
+        // Whole but for what may not be picked: inside a crate only its tracks, and every hearted one out while favourites
+        // are ignored (0036), as an excluded one always was.
+        return album_mix(index, from, &seed, &out, req.mode, &req.weights(), rng).into_iter().filter(|i| allowed.contains(i)).collect();
     }
-    let picked = by_mode(index, req, &pool, &seed, &out, &allowed, last, count, rng);
+    let picked = by_mode(index, req, &pool, &seed, &allowed, last, count, rng);
     // Era and Artist can run dry (no year, artists with nothing more here): Similar fills up the rest.
     if picked.len() < count && matches!(req.mode, Mode::Era | Mode::Artist) {
         let rest: Vec<usize> = pool.iter().copied().filter(|i| !picked.contains(i)).collect();
         let similar = Ask { mode: Mode::Similar, count: Some(count - picked.len()), ..req.clone() };
-        let more = by_mode(index, &similar, &rest, &seed, &out, &allowed, picked.last().copied().or(last), count - picked.len(), rng);
+        let more = by_mode(index, &similar, &rest, &seed, &allowed, picked.last().copied().or(last), count - picked.len(), rng);
         return picked.into_iter().chain(more).collect();
     }
     picked
 }
 
 #[allow(clippy::too_many_arguments)]
-fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], out: &HashSet<usize>, allowed: &HashSet<usize>, last: Option<usize>, count: usize, rng: &mut Rng) -> Vec<usize> {
+fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], allowed: &HashSet<usize>, last: Option<usize>, count: usize, rng: &mut Rng) -> Vec<usize> {
     let artists_of = |i: usize| index.songs[i].like.artists.clone();
     match req.mode {
         Mode::Similar | Mode::Continuous | Mode::Radio | Mode::Taste => {
@@ -365,7 +367,6 @@ fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], out: &HashS
             // Radio's inserts may keep to the artist (only the albums are spaced); otherwise never one artist twice in a row.
             pick_spaced(index, scored, count, last.map(artists_of), !radio, rng)
         }
-        Mode::AlbumMix => album_mix(index, pool, seed, out, Mode::AlbumMix, &req.weights(), rng),
         Mode::Era => {
             let center = last.and_then(|i| index.songs[i].like.year).or_else(|| index.profile(seed).year());
             let near: Vec<(usize, f64)> = pool
@@ -399,7 +400,7 @@ fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], out: &HashS
             }
             picked
         }
-        Mode::Reshuffle => unreachable!("answered above"),
+        Mode::AlbumMix | Mode::Reshuffle => unreachable!("answered above"),
     }
 }
 
@@ -463,7 +464,7 @@ fn away(s: &Song) -> f64 {
 }
 
 /// One whole album, the closest to the seed (Random: any; Your taste: the one that fits the taste best) of those with
-/// nothing in the queue and none of the seed's own.
+/// nothing in the queue and none of the seed's own. `choose` holds its tracks to what may be picked.
 fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>, mode: Mode, weights: &Weights, rng: &mut Rng) -> Vec<usize> {
     let profile = index.profile(seed);
     let banned: HashSet<u32> = out.iter().map(|&i| index.songs[i].album_n).collect();
@@ -492,7 +493,7 @@ fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>
     albums.sort_by(|a, b| b.1.total_cmp(&a.1));
     albums.truncate(10);
     let Some(&(album, _)) = albums.get(if albums.is_empty() { 0 } else { rng.below(albums.len().min(3)) }) else { return Vec::new() };
-    index.albums.get(&album).map(|songs| songs.iter().copied().filter(|i| !out.contains(i) && !index.songs[*i].excluded).collect()).unwrap_or_default()
+    index.albums.get(&album).map(|songs| songs.iter().copied().filter(|i| !out.contains(i)).collect()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -862,6 +863,23 @@ mod tests {
             assert_eq!(picked[0], "s4", "the seed first");
             assert!(picked.iter().all(|p| ["s4", "x0", "x1"].contains(&p.as_str())), "only the crate's: {picked:?}");
         }
+    }
+
+    #[test]
+    fn a_whole_album_holds_only_what_may_be_picked() {
+        // Album 1 is the seed's, so album 2 is the one to come: e2 a favourite, e3 in library 1.
+        let mut a = vec![song("s1", 1, 1, 1, 2000, &[]), song("s2", 1, 1, 1, 2000, &[]), song("e1", 2, 2, 9, 1996, &[]), song("e2", 2, 2, 9, 1996, &[]), song("e3", 2, 2, 9, 1996, &[])];
+        a[3].favourite = true;
+        a[4].folder = 1;
+        let index = Index::new(a);
+        let picked = |req: &Ask, within: Option<&[usize]>| ids(&index, &choose(&index, req, &HashMap::new(), within, &mut Rng::seeded(2)));
+        let whole = Ask { albums: true, count: Some(5), ..ask(Mode::Similar) };
+        assert_eq!(picked(&whole, None), ["e1", "e2", "e3"], "whole and in order, where nothing bars a track");
+        assert_eq!(picked(&Ask { skip_favourites: true, ..whole.clone() }, None), ["e1", "e3"], "no favourite while they are ignored");
+        assert_eq!(picked(&Ask { folders: Some(vec![0]), ..whole.clone() }, None), ["e1", "e2"], "nothing of a library not chosen");
+        let crate_: Vec<usize> = ["e1", "e3"].iter().map(|id| index.by_id[*id]).collect();
+        assert_eq!(picked(&whole, Some(&crate_)), ["e1", "e3"], "only the crate's tracks");
+        assert_eq!(picked(&Ask { albums: false, ..ask(Mode::AlbumMix) }, Some(&crate_)), ["e1", "e3"], "Album mix is whole albums by its old name");
     }
 
     #[test]
