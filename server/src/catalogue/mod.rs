@@ -219,7 +219,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 24] = [
+const ADDED_COLUMNS: [(&str, &str); 25] = [
     // 0100: the record a track is of, and its place there.
     ("tracks", "record INTEGER"),
     ("tracks", "disc INTEGER"),
@@ -261,6 +261,8 @@ const ADDED_COLUMNS: [(&str, &str); 24] = [
     // The time signature from Beat this!'s downbeats: beats a bar (0: none sure), and how sure; NULL: not worked out yet.
     ("beat_this", "meter INTEGER"),
     ("beat_this", "meter_sure REAL"),
+    // What a file handed a track replaces, in the same folder: the one gone row that lets go of it.
+    ("handovers", "replaces TEXT"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
@@ -1779,18 +1781,19 @@ impl Catalogue {
         let mut moved = 0;
         let mut claimed: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
         // Files Cratarr handed a track to (a better copy in its old one's place, or its Undo): theirs before any rule, the
-        // gone file that held it letting go. Only in the file's own folder: both callers place within one, and a gone row
-        // elsewhere is another copy, away for a moment, that comes back to the same track. Unclaimed for a day: forgotten.
+        // gone file it replaces letting go. That file only: any other gone row of the track is another copy, in this
+        // folder or elsewhere, away for a moment, that comes back to the same track. Unclaimed for a day: forgotten.
         {
-            let mut st = tx.prepare("SELECT folder, rel, track FROM handovers")?;
-            let handed: Vec<(i64, String, i64)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+            let mut st = tx.prepare("SELECT folder, rel, track, replaces FROM handovers")?;
+            let handed: Vec<(i64, String, i64, Option<String>)> =
+                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
             drop(st);
-            for (folder, rel, track) in handed {
+            for (folder, rel, track, replaces) in handed {
                 if !new.iter().any(|(f, r, _, _)| *f == folder && *r == rel) {
                     continue;
                 }
-                let mut st = tx.prepare("SELECT rel FROM files WHERE track = ?1 AND folder = ?2 AND gone_at IS NOT NULL")?;
-                let old: Vec<String> = st.query_map(params![track, folder], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+                let mut st = tx.prepare("SELECT rel FROM files WHERE track = ?1 AND folder = ?2 AND rel = ?3 AND gone_at IS NOT NULL")?;
+                let old: Vec<String> = st.query_map(params![track, folder, replaces], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
                 drop(st);
                 for r in old {
                     for table in ["files", "tags"] {
@@ -2166,15 +2169,16 @@ impl Catalogue {
 
     /// The file arriving at `path` (not walked yet: a better copy Cratarr is putting in its old one's place, or its Undo)
     /// takes `track` when it is identified, rather than a rule's match or a new id (0101 point 11: a better copy hands
-    /// its id over as Replace does); the gone file that held it in that folder lets go. Forgotten after a day unclaimed.
-    /// Blocking.
-    pub fn hand_over(&self, path: &Path, track: i64) -> Result<()> {
+    /// its id over as Replace does); `replaced`, the file that held it there, lets go once gone. Both callers place within
+    /// one folder. Forgotten after a day unclaimed. Blocking.
+    pub fn hand_over(&self, path: &Path, replaced: &Path, track: i64) -> Result<()> {
         let Some((folder, rel)) = self.place_of_path(path) else {
             anyhow::bail!("{} is in no library", path.display());
         };
+        let replaces = self.place_of_path(replaced).filter(|(f, _)| *f == folder).map(|(_, r)| r);
         self.db().execute(
-            "INSERT OR REPLACE INTO handovers (folder, rel, track, at) VALUES (?1, ?2, ?3, ?4)",
-            params![folder, rel, track, now()],
+            "INSERT OR REPLACE INTO handovers (folder, rel, track, at, replaces) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![folder, rel, track, now(), replaces],
         )?;
         Ok(())
     }
@@ -3970,14 +3974,15 @@ mod tests {
         assert_eq!(cat.place_of_path(&d.join("A - B (2020)/01 One.mp3")), Some((0, "A - B (2020)/01 One.mp3".to_string())));
         std::fs::remove_file(d.join("A - B (2020)/01 One.mp3")).unwrap();
         std::fs::write(d.join("A - B (2020)/01 One.flac"), b"better").unwrap();
-        cat.hand_over(&d.join("A - B (2020)/01 One.flac"), one).unwrap();
+        cat.hand_over(&d.join("A - B (2020)/01 One.flac"), &d.join("A - B (2020)/01 One.mp3"), one).unwrap();
         cat.walk_all();
         cat.db().execute("UPDATE files SET state = 1, duration_ms = 260000 WHERE state = 0", []).unwrap();
         assert_eq!(cat.identify().unwrap(), (1, 0), "handed over: no new id");
         assert_eq!(cat.track_of(0, "A - B (2020)/01 One.flac"), Some(one));
         let rows: i64 = cat.db().query_row("SELECT COUNT(*) FROM files WHERE track = ?1", [one], |r| r.get(0)).unwrap();
         assert_eq!(rows, 1, "the replaced file's row let go");
-        assert!(cat.hand_over(&std::env::temp_dir().join("nowhere/x.flac"), one).is_err(), "in no library");
+        let nowhere = std::env::temp_dir().join("nowhere/x.flac");
+        assert!(cat.hand_over(&nowhere, &nowhere, one).is_err(), "in no library");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -4037,6 +4042,41 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// A better copy in one directory, the record's other copy in the same library away for a moment: only the file it
+    /// replaces lets go, or that copy comes back with a fresh id and the track splits.
+    #[test]
+    fn a_claim_leaves_another_directorys_gone_copy_alone() {
+        let d = music();
+        let (rel, copy, better) = ("A - B (2020)/01 One.mp3", "A - B (2020) [MP3]/01 One.mp3", "A - B (2020)/01 One.flac");
+        std::fs::create_dir_all(d.join("A - B (2020) [MP3]")).unwrap();
+        std::fs::copy(d.join(rel), d.join(copy)).unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, rel).unwrap();
+        cat.set_tracks(&[((0, copy.to_string()), Some(one))]).unwrap();
+        std::fs::remove_file(d.join(rel)).unwrap();
+        std::fs::write(d.join(better), b"better").unwrap();
+        cat.hand_over(&d.join(better), &d.join(rel), one).unwrap();
+        let away = d.join("one.away");
+        std::fs::rename(d.join(copy), &away).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET state = 1, duration_ms = 260000 WHERE state = 0", []).unwrap();
+        assert_eq!(cat.identify().unwrap(), (1, 0), "handed over: no new id");
+        assert_eq!(cat.track_of(0, better), Some(one));
+        let gone: Vec<String> = {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT rel FROM files WHERE track = ?1 AND gone_at IS NOT NULL").unwrap();
+            st.query_map([one], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(gone, vec![copy.to_string()], "the replaced file let go; the other copy's row stayed");
+        std::fs::rename(&away, d.join(copy)).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.track_of(0, copy), Some(one), "back, the same track");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// A mount away for a moment leaves a copy's rows gone: a better file claiming the track in another folder must leave
     /// them, or that copy comes back with a fresh id and the track splits.
     #[test]
@@ -4052,7 +4092,7 @@ mod tests {
         let better = "A - B (2020)/01 One.flac";
         std::fs::remove_file(a.join(rel)).unwrap();
         std::fs::write(a.join(better), b"better").unwrap();
-        cat.hand_over(&a.join(better), one).unwrap();
+        cat.hand_over(&a.join(better), &a.join(rel), one).unwrap();
         let away = b.join("one.away");
         std::fs::rename(b.join(rel), &away).unwrap();
         cat.walk_all();

@@ -987,8 +987,8 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
         tracing::warn!("track fetch: the cover not put inside {}: {e:#}", dest.display());
     }
     let id = now.to_string() + &new_id()[..4];
-    if let Some(track) = handed
-        && let Err(e) = s.catalogue().hand_over(&dest, track)
+    if let (Some(track), Some(r)) = (handed, replaced)
+        && let Err(e) = s.catalogue().hand_over(&dest, &r.path, track)
     {
         tracing::warn!("track fetch: {} not handed its track: {e:#}", dest.display());
     }
@@ -1074,7 +1074,7 @@ pub fn undo_at(file: &Path) -> Result<()> {
             let back = a.root.join(crate::trash::restore_file(&a.root, tok)?);
             // The track back to the file it was (0101 point 11).
             if let (Some(s), Some(track)) = (&served, a.track)
-                && let Err(e) = s.catalogue().hand_over(&back, track)
+                && let Err(e) = s.catalogue().hand_over(&back, &a.root.join(&a.added), track)
             {
                 tracing::warn!("track fetch undo: {} not handed its track back: {e:#}", back.display());
             }
