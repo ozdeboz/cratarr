@@ -3,6 +3,10 @@
 //! review sheet, a run written and read back from the files, "changed since it was planned", Undo, and the run kept
 //! across a restart. Everything is thrown away after. The Dockerfile's test and `e2e` stages run them by name, so a test
 //! here ends its name in `end_to_end` or the gate never runs it: `cargo test --workspace -- --ignored fixtures:: end_to_end`.
+//!
+//! `Server` calls as nobody, which a server with no accounts takes for its administrator. `Server::sign_in` gives a
+//! `Caller` that is an account, `settings` writes 0.16's settings for the whole layout (`--make-layout`), `settings_0_15`
+//! what 0.15 left.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -19,7 +23,7 @@ struct Server {
 }
 
 impl Server {
-    /// The server on `data`, on a free port, once it answers.
+    /// The server on `data`, on a free port, once it answers: asking for a sign-in is an answer.
     async fn start(data: &Path) -> Server {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let child = Command::new(BIN)
@@ -31,29 +35,36 @@ impl Server {
             .spawn()
             .expect("the server starts");
         let s = Server { child, base: format!("http://127.0.0.1:{port}"), http: reqwest::Client::new() };
-        s.until("the server answers", Duration::from_secs(60), || async { s.http.get(format!("{}/api/albums", s.base)).send().await.is_ok_and(|r| r.status().is_success()) }).await;
+        let answered = |r: reqwest::Response| r.status().is_success() || r.status() == reqwest::StatusCode::UNAUTHORIZED;
+        s.until("the server answers", Duration::from_secs(60), || async { s.http.get(format!("{}/api/albums", s.base)).send().await.is_ok_and(answered) }).await;
         s
     }
 
+    /// Calls as nobody.
+    fn anyone(&self) -> Caller<'_> {
+        Caller { server: self, session: None }
+    }
+
+    /// Signs in as the page's form does: the answer sends a browser on, with the session in its cookie.
+    async fn sign_in(&self, name: &str, password: &str) -> Caller<'_> {
+        let form = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let r = form.post(format!("{}/signin", self.base)).form(&[("username", name), ("password", password)]).send().await.unwrap();
+        let cookies: Vec<&str> = r.headers().get_all(reqwest::header::SET_COOKIE).iter().filter_map(|c| c.to_str().ok()?.split(';').next()).collect();
+        assert!(!cookies.is_empty(), "{name} not signed in: {}", r.status());
+        Caller { server: self, session: Some(cookies.join("; ")) }
+    }
+
     async fn get(&self, path: &str) -> Value {
-        let r = self.http.get(format!("{}{path}", self.base)).send().await.unwrap();
-        let status = r.status();
-        let body = r.text().await.unwrap();
-        assert!(status.is_success(), "GET {path}: {status} {body}");
-        serde_json::from_str(&body).unwrap()
+        self.anyone().get(path).await
     }
 
     /// A call that may be refused: (status, answer).
     async fn send(&self, method: reqwest::Method, path: &str, body: Value) -> (u16, Value) {
-        let r = self.http.request(method, format!("{}{path}", self.base)).json(&body).send().await.unwrap();
-        let status = r.status().as_u16();
-        (status, r.json().await.unwrap_or(Value::Null))
+        self.anyone().send(method, path, body).await
     }
 
     async fn ok(&self, method: reqwest::Method, path: &str, body: Value) -> Value {
-        let (status, v) = self.send(method.clone(), path, body).await;
-        assert!((200..300).contains(&status), "{method} {path}: {status} {v}");
-        v
+        self.anyone().ok(method, path, body).await
     }
 
     async fn until<F, Fut>(&self, what: &str, within: Duration, mut f: F)
@@ -70,8 +81,7 @@ impl Server {
 
     /// The fixture library's albums as the Library lists them.
     async fn albums(&self) -> Vec<Value> {
-        let v = self.get("/api/albums").await;
-        v["sources"].as_array().into_iter().flatten().filter(|s| s["id"] == "cratarr").flat_map(|s| s["albums"].as_array().cloned().unwrap_or_default()).collect()
+        self.anyone().albums().await
     }
 
     /// The newest run once it is done and kept, other than `not`.
@@ -115,6 +125,79 @@ impl Server {
         self.child.kill().ok();
         self.child.wait().ok();
     }
+}
+
+/// Who calls the server: an account by its session, or nobody. The session goes in a `Cookie` header by hand, as the
+/// page's cookie jar would send it: this `reqwest` has no `cookies` feature.
+struct Caller<'a> {
+    server: &'a Server,
+    session: Option<String>,
+}
+
+impl Caller<'_> {
+    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let r = self.server.http.request(method, format!("{}{path}", self.server.base));
+        match &self.session {
+            Some(cookie) => r.header(reqwest::header::COOKIE, cookie),
+            None => r,
+        }
+    }
+
+    async fn get(&self, path: &str) -> Value {
+        let r = self.request(reqwest::Method::GET, path).send().await.unwrap();
+        let status = r.status();
+        let body = r.text().await.unwrap();
+        assert!(status.is_success(), "GET {path}: {status} {body}");
+        serde_json::from_str(&body).unwrap()
+    }
+
+    /// A call that may be refused: (status, answer).
+    async fn send(&self, method: reqwest::Method, path: &str, body: Value) -> (u16, Value) {
+        let r = self.request(method, path).json(&body).send().await.unwrap();
+        let status = r.status().as_u16();
+        (status, r.json().await.unwrap_or(Value::Null))
+    }
+
+    async fn ok(&self, method: reqwest::Method, path: &str, body: Value) -> Value {
+        let (status, v) = self.send(method.clone(), path, body).await;
+        assert!((200..300).contains(&status), "{method} {path}: {status} {v}");
+        v
+    }
+
+    /// A file as it is served: (status, its bytes), which tell which copy came.
+    async fn bytes(&self, path: &str) -> (u16, Vec<u8>) {
+        let r = self.request(reqwest::Method::GET, path).send().await.unwrap();
+        (r.status().as_u16(), r.bytes().await.unwrap().to_vec())
+    }
+
+    /// The albums as the Library lists them to this caller.
+    async fn albums(&self) -> Vec<Value> {
+        let v = self.get("/api/albums").await;
+        v["sources"].as_array().into_iter().flatten().filter(|s| s["id"] == "cratarr").flat_map(|s| s["albums"].as_array().cloned().unwrap_or_default()).collect()
+    }
+}
+
+/// Settings as 0.15 left them: version 3, the library's roles, `folder` as the Music folder (a server looks for music in
+/// its mounts and there, decision 0009).
+fn settings_0_15(data: &Path, folder: &str) {
+    let settings = json!({
+        "version": 3,
+        "music_folder": folder,
+        "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": { "music": [folder] }, "values": { "folders": [folder] } }],
+    });
+    std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+}
+
+/// Settings as 0.16 writes them: version 4, these libraries in order, each (folder, kind), and the own-music folder.
+fn settings(data: &Path, libraries: &[(&Path, &str)], own_music: &Path) {
+    let folders: Vec<String> = libraries.iter().map(|(folder, _)| folder.to_string_lossy().to_string()).collect();
+    let list: Vec<Value> = folders.iter().zip(libraries).map(|(id, (_, kind))| json!({ "id": id, "kind": kind })).collect();
+    let settings = json!({
+        "version": 4,
+        "music_folder": folders[0],
+        "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": list, "values": { "folders": folders, "own_music": own_music.to_string_lossy() } }],
+    });
+    std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
 }
 
 /// A file's values of one Vorbis field, as the file keeps it.
@@ -189,12 +272,7 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
         )
         .unwrap();
     }
-    let settings = json!({
-        "version": 3,
-        "music_folder": folder,
-        "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": { "music": [folder] }, "values": { "folders": [folder] } }],
-    });
-    std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+    settings_0_15(&data, &folder);
 
     let s = Server::start(&data).await;
     s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
@@ -244,6 +322,59 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The harness for who hears what (decision 0101), on every kind of library and settings as 0.16 writes them: two
+/// accounts signed in by their sessions. Each is itself to the server, nobody is refused, and a file comes as it lies.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
+    let root = temp("accounts");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let own = library.join("own");
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("second"), "main"), (&library.join("incoming"), "incoming")], &own);
+
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    // A server with no accounts takes any caller for its administrator: so the first account comes to be.
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    assert_eq!(s.send(reqwest::Method::GET, "/api/albums", json!({})).await.0, 401, "no session, no answer");
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    assert_eq!(bob.send(reqwest::Method::POST, "/api/users", json!({ "name": "cid", "password": "x" })).await.0, 403, "bob is no administrator");
+
+    // Every library read: the albums' titles, as these stay however the copies of a record are listed.
+    let titles = |albums: Vec<Value>| albums.iter().filter_map(|a| a["title"].as_str().map(str::to_string)).collect::<std::collections::BTreeSet<String>>();
+    s.until("every library read", Duration::from_secs(180), || async { titles(ann.albums().await).len() == 22 }).await;
+    let shown = titles(bob.albums().await);
+    assert!(["Tide Tables", "Far Bank", "Just Arrived", "Own Room", "Other Room"].iter().all(|t| shown.contains(*t)), "{shown:?}");
+
+    // Each is who they signed in as: whose own music is whose.
+    let own_music = |view: Value| -> Vec<(String, bool)> {
+        let libraries = view["sources"].as_array().into_iter().flatten().flat_map(|s| s["library_info"].as_array().cloned().unwrap_or_default());
+        libraries.filter(|l| l["kind"] == "own").map(|l| (l["owner"].as_str().unwrap_or("").to_string(), l["mine"].as_bool().unwrap_or(false))).collect()
+    };
+    assert_eq!(own_music(ann.get("/api/albums").await), [("ann".to_string(), true), ("bob".to_string(), false)]);
+    assert_eq!(own_music(bob.get("/api/albums").await), [("ann".to_string(), false), ("bob".to_string(), true)]);
+
+    // A file comes as it lies on the disk, and to a session only.
+    let room = ann.albums().await.into_iter().find(|a| a["title"] == "Own Room").unwrap();
+    let album = ann.get(&format!("/api/albums/cratarr/{}", room["id"].as_str().unwrap())).await;
+    let file = format!("/api/file/cratarr/{}", album["rows"][0]["id"].as_str().unwrap());
+    let (status, bytes) = ann.bytes(&file).await;
+    assert_eq!(status, 200);
+    assert!(bytes == std::fs::read(own.join("ann/Salt Meridian/Own Room (2018)/01 Own Room.mp3")).unwrap(), "not the file as it lies");
+    assert_eq!(s.anyone().bytes(&file).await.0, 401);
+    s.stop();
+
+    // A server that asks for a sign-in starts as any other.
+    let s = Server::start(&data).await;
+    assert_eq!(s.sign_in("bob", "bob's password").await.get("/api/albums").await["sources"][0]["id"], "cratarr");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
 async fn types_and_years_into_the_files_end_to_end() {
@@ -252,14 +383,7 @@ async fn types_and_years_into_the_files_end_to_end() {
     std::fs::create_dir_all(&data).unwrap();
     let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
     assert!(made.success(), "the fixture library is made");
-    let folder = music.to_string_lossy().to_string();
-    // The fixture library as the Music folder: a server looks for music in its mounts and there (decision 0009).
-    let settings = json!({
-        "version": 3,
-        "music_folder": folder,
-        "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": { "music": [folder] }, "values": { "folders": [folder] } }],
-    });
-    std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+    settings_0_15(&data, &music.to_string_lossy());
 
     let s = Server::start(&data).await;
     // Nothing from outside: MusicBrainz off before anything asks it.
