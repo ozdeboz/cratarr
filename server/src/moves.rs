@@ -308,6 +308,31 @@ mod tests {
         }
     }
 
+    /// The whole road, on two real file systems: the temporary folder and the shared memory beside it, where there is one.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_plan_across_file_systems_moves_every_file_and_its_undo_brings_them_back() {
+        use std::os::unix::fs::MetadataExt;
+        let music = tmp();
+        let inc = Path::new("/dev/shm").join(format!("cratarr-moves-{}", std::process::id()));
+        if std::fs::create_dir_all(&inc).is_err() || std::fs::metadata(&inc).unwrap().dev() == std::fs::metadata(&music).unwrap().dev() {
+            return;
+        }
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        std::fs::write(inc.join("A/1.flac"), b"1").unwrap();
+        std::fs::write(inc.join("A/2.flac"), b"2").unwrap();
+        let plan = vec![step(&inc, "A/1.flac", &music, "B/1.flac"), step(&inc, "A/2.flac", &music, "B/2.flac")];
+        apply(&plan).unwrap();
+        assert_eq!(names_in(&music.join("B")), ["1.flac", "2.flac"]);
+        assert!(!inc.join("A").exists());
+        revert(&plan).unwrap();
+        assert_eq!(names_in(&inc.join("A")), ["1.flac", "2.flac"]);
+        assert!(!music.join("B").exists());
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     /// `/proc/self/mem` opens and then fails its first read, as a disk failing part way does: the target is made by then.
     #[cfg(target_os = "linux")]
     #[test]
