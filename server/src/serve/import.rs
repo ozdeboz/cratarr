@@ -921,6 +921,7 @@ mod tests {
         let rows = vec![tagged(0, "Björk", "Homogenic", "1997"), tagged(1, "Björk", "Homogenic", "1997"), tagged(2, "The Orb", "Adventures", "1991")];
         serve.library.refresh(&[FolderRows { folder: 0, root: d.display().to_string(), rows }], &Rules::default()).unwrap();
         serve.users.set("me", "pw").unwrap();
+        serve.sessions.set_required(false).unwrap();
         (d, serve, tracks.map(ids::song))
     }
 

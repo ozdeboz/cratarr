@@ -1251,6 +1251,7 @@ mod undo_tests {
     async fn an_artist_is_excluded_everywhere_once_per_account_and_taken_back() {
         let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         served.users.set("me", "pw").unwrap();
+        served.sessions.set_required(false).unwrap();
         let (d, s) = service_with(Some(served.clone())).await;
         let (a, undo) = s.exclude_artist("The Avalanches").await.unwrap();
         assert_eq!((a.key.as_str(), a.name.as_str()), ("avalanches", "The Avalanches"));

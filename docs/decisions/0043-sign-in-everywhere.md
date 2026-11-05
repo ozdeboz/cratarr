@@ -99,3 +99,10 @@ Home Assistant, so Settings → Connections has a Home Assistant section: when i
 weather it last told, and its key, made (with the password again, shown once), and revoked there. Each key carries a
 purpose (`home_assistant`); the key named "Home Assistant" from before took that purpose when the column came. There is
 no list of other clients. Authentication keeps the sign-in requirement and the directory.
+
+## Amendment (2026-11-05): no record means on
+
+The audit, finding 3. With `sessions.sqlite` gone and the accounts still there, Cratarr took itself for an install from
+before this decision, started with the requirement off, and made anyone who reached it the owner. Nothing from before it
+is left to keep working, so a missing record now means on, whatever else the data folder holds, and the log says so. Off
+is only ever what Authentication's switch says, with the password.

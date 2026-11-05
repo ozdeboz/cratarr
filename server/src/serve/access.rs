@@ -2,8 +2,8 @@
 //! (decision 0039), an API key (`Authorization: Bearer cratarr_…`, made in Settings → Authentication or on the server),
 //! or a signed link (for players that cannot send a header: Kodi's playlist and the group's sound). Open to anyone: the
 //! sign-in page and what it shows, the health check, the proxy's check, and the Subsonic API, which checks its own
-//! logins. While the requirement is off (an install from before it, until it is switched on), or while Cratarr has no
-//! account yet (a new install's first account is made on its page), everything passes.
+//! logins. While the requirement is off (Settings' switch, with the password), or while Cratarr has no account yet (a
+//! new install's first account is made on its page), everything passes.
 //!
 //! Switching the requirement and making a key need the account's password again (as Change password does): someone
 //! at a page left open, or on the home network before the requirement is on, cannot turn it off or keep a key of their
@@ -737,6 +737,27 @@ mod tests {
         assert_eq!(status(&s, mcp).await.0, StatusCode::OK);
         let made = s.sessions.keys().unwrap().into_iter().find(|k| k.name == "Claude Code").unwrap();
         assert_eq!((made.purpose.as_deref(), made.scope.as_str()), (Some("mcp"), "read"));
+    }
+
+    #[tokio::test]
+    async fn a_lost_sessions_file_leaves_signing_in_required() {
+        let dir = std::env::temp_dir().join(format!("cratarr-lost-sessions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = Serve::open(Some(&dir), Rules::default(), &|_| None).unwrap();
+        s.users.set("me", "pw").unwrap();
+        let (key, _) = s.sessions.new_key("Home Assistant", None, "control", Some(HOME_ASSISTANT), now()).unwrap();
+        drop(s);
+        // The accounts stay: left out of a restore, or deleted because it was corrupt.
+        for file in ["sessions.sqlite", "sessions.sqlite-wal", "sessions.sqlite-shm"] {
+            let _ = std::fs::remove_file(dir.join(file));
+        }
+        let s = Serve::open(Some(&dir), Rules::default(), &|_| None).unwrap();
+        assert!(s.sign_in_required());
+        assert_eq!(status(&s, get_("/api/library")).await.0, StatusCode::UNAUTHORIZED, "not the owner, as anyone");
+        let keyed = HttpRequest::get("/api/library").header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
+        assert_eq!(status(&s, keyed).await.0, StatusCode::UNAUTHORIZED, "a key it no longer knows");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

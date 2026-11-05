@@ -146,13 +146,17 @@ impl Serve {
     pub fn open(data_dir: Option<&std::path::Path>, rules: Rules, env: &dyn Fn(&str) -> Option<String>) -> Result<Arc<Self>> {
         let library = Arc::new(library::Library::open(data_dir.map(|d| d.join("library.sqlite")).as_deref())?);
         let userdata = Arc::new(UserData::open(data_dir.map(|d| d.join("userdata.sqlite")).as_deref())?);
-        // A new install (no logins kept yet) requires a sign-in everywhere from the start; one from before decision 0043
-        // keeps it off until the owner switches it on, once its clients have their keys.
-        let fresh = data_dir.is_some_and(|d| !d.join("subsonic-users.json").exists());
         let users = users::Users::open(data_dir)?;
         let sessions = sessions::Sessions::open(data_dir.map(|d| d.join("sessions.sqlite")).as_deref())?;
+        // No word on the requirement: on, whatever else the folder holds (decision 0043, amended). Off is only what
+        // Settings says with the password: a file lost from a restore, or deleted as corrupt, must not open the server to
+        // anyone as its owner. With accounts here it is lost, not new, and its keys with it: say so, as every client is
+        // refused from now on.
         if sessions.required().is_none() {
-            sessions.set_required(fresh)?;
+            sessions.set_required(true)?;
+            if !users.names().is_empty() {
+                tracing::warn!(target: "signin", "sessions.sqlite says nothing of the sign-in: required, and the keys it held are gone");
+            }
         }
         if let (Some(u), Some(p)) = (env("CRATARR_SUBSONIC_USER"), env("CRATARR_SUBSONIC_PASSWORD"))
             && !u.trim().is_empty()

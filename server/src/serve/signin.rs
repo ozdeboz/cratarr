@@ -464,6 +464,7 @@ mod tests {
     fn served() -> Arc<Serve> {
         let s = Serve::open(None, Rules::default(), &|_| None).unwrap();
         s.users.set("me", "pw").unwrap();
+        s.sessions.set_required(false).unwrap();
         s
     }
 

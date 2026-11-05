@@ -305,6 +305,7 @@ mod tests {
         };
         serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![row(1), row(2)] }], &Rules::default()).unwrap();
         serve.users.set("owner", "pw").unwrap();
+        serve.sessions.set_required(false).unwrap();
         serve
     }
 
