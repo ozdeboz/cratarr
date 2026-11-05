@@ -16,8 +16,9 @@ track" and "how a record's copies behave"); this says how they are built, and in
 
 **In the catalogue, the truth:**
 
-- `records (id, born, retired_at, was_title, was_artist, was_year)`: a record's id for life, as `tracks.id` is. A retired
-  record keeps what it was, as a retired track does.
+- `records (id, born, retired_at, title, artist, year, kind, counting)`: a record's id for life, as `tracks.id` is, owned
+  or not. Its facts are on the record, so a retired one keeps what it was and one you do not have has them too.
+  `counting` is the reference that counts.
 - `tracks` gains `record` and its place in it (`disc`, `number`).
 - `files.track` stops being one to one: a track has a file in each copy. A **copy** is one folder's files of a record:
   (record, folder, dir).
@@ -106,7 +107,84 @@ Each step leaves the server working and its tests green:
 
 ## The rest of 0100
 
-All of 0100 goes in preview 1 (the owner, 2026-11-05), so this design is its first half. Still to design, on the same
-`records` table, where a record with no tracks is a record one does not have: its references, artists and labels of
-Cratarr's own, their pages, the one missing list, search's "beyond", and Soulseek without MusicBrainz.
+All of 0100 goes in preview 1 (the owner, 2026-11-05). What is above is its owned half; this is the rest, on the same
+`records` table: a record with no tracks is a record you do not have.
 
+### What is kept
+
+In the catalogue, beside `records`, growing with what is looked at and never the whole catalogues:
+
+- `references (subject, source, kind, value, at)`: a record's, artist's or label's id at a source. For a record: a
+  MusicBrainz release group and release, a Discogs master and release, a Bandcamp album. Unique per source, kind and
+  value, so a link finds its subject.
+- `reference_tracks (record, source, tracks)`: the tracklist a reference gives, titles and lengths. What judges a folder.
+- `artists (id, born, name, sort)` and `labels (id, born, name)`, with `record_artists (record, artist)` and
+  `record_labels (record, label, catno)`.
+- 0.14's `record_references` and the kept `discography` move into these, and go.
+
+### Merging (0100 point 4)
+
+One pure function, `same_release(a, b)`, beside `same_record`:
+
+1. A source's link to the other: MusicBrainz's Discogs and Bandcamp URLs. It decides.
+2. Else the artist, the title and the tracklist, by `same_tracks`.
+3. Else two. A name alone never merges.
+
+A discography lists no tracklists, and reading each one costs a request. So a listing merges by links and otherwise stays
+apart, and a tracklist is read when a record is opened or asked for, which merges it then. A list can show a record twice
+until then; 0100 prefers that to a wrong merge.
+
+### The reference that counts
+
+`counting(references, files)`, pure, the owner's rule: the source whose tracklist agrees with the files; with no files,
+MusicBrainz, then Discogs, then Bandcamp. A hand choice (0.14) comes first.
+
+### One missing list
+
+`discover::missing_albums` reads MusicBrainz alone. It becomes three reads into one list:
+
+- **MusicBrainz:** release groups, as today.
+- **Discogs:** the artist's masters. New: `discogs::artist_masters`. Albums and EPs only, as the owner chose, and a master
+  gives no type in that listing, so the type comes from its main release's format when that is read.
+- **Bandcamp:** the artist's music page. New in `bandcamp.rs`.
+
+An artist known to none of the three has no list, and shows only what you own.
+
+### Pages
+
+No new patterns: the pages there are, fed by the record and the artist.
+
+- **A record you do not have** opens the album page: cover, facts, the counting reference's tracks, not playable, Want.
+- **An artist you have nothing of** opens the artist page, as Discover's does today, for any artist: profile, related,
+  the missing list. `discoverArtist` becomes that one page.
+- **A label** opens a page of its own, built of the artist page's parts: its whole catalogue from every source by year,
+  what you own marked, the rest one tap from Want. The label on an album's facts opens it.
+- **Search's "beyond"** gives records and artists of Cratarr's own, kept on the first look, and opens these pages. Each
+  source's site is one tap from the record's references.
+
+### Requests and Soulseek (0100 point 5)
+
+- `request.record` replaces `album_key`, `release_group`, `album` and `artist`, which the record holds. A record any
+  source knows can be asked for, so Want works on all of them.
+- A fetcher reads the reference it needs: Lidarr takes a release group and says so when there is none, as it does today.
+- Soulseek's `Record` points at a record. `soulseek.rs` stops reading MusicBrainz itself and asks for the counting
+  reference's tracklist, so a Discogs or Bandcamp record is judged the same way. The one left out: a record with no
+  tracklist anywhere is not fetched, and says why.
+
+### The migration, again
+
+The same transaction also: gives each request a record, owned or new, and moves `record_references` and `discography`
+across, each in the report.
+
+### Order of work, after step 6
+
+7. `references`, with `counting`, 0.14's record references moving in.
+8. `artists`, `labels` and `same_release`.
+9. Requests on the record, Soulseek by reference.
+10. One missing list: Discogs' and Bandcamp's reads.
+11. The pages and search's "beyond".
+
+### Open point for the owner
+
+- **Artist ids.** Today an artist's id is a hash of the name, so two artists of one name are one. Keep the hash for now,
+  or give artists an id for life in this same migration?
