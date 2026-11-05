@@ -22,12 +22,17 @@ track" and "how a record's copies behave"); this says how they are built, and in
 - `tracks` gains `record` and its place in it (`disc`, `number`).
 - `files.track` stops being one to one: a track has a file in each copy. A **copy** is one folder's files of a record:
   (record, folder, dir).
+- `files` gains `came`, `bits` and `rate`. `came` is when the file first came, so a copy keeps its own date when the track
+  it holds is another copy's (`tracks.born` is the track's). `bits` and `rate` are what `copy_for` ranks lossless copies by.
 
 **Served:**
 
 - `albums.id` becomes `al-<record>`, whatever the copies; the prefixes and `base_id` go. Ids hold no `/` or `@`, which the
   page cuts on.
 - `copies (record, folder, dir, format, min_kbps, size, added)`: what each copy is.
+- `copy_files (folder, rel, dir, song, record, src)`: every served file of every copy, with its own numbers. `songs` holds
+  one row per track, so a file of a copy that does not play has none: this is what a build compares, and what every lookup
+  by folder and path reads.
 - `albums` keeps the facts of the record, not of a copy: its folder and directory columns move to `copies`.
 
 ## The same record
@@ -99,11 +104,21 @@ through it (point 22). Devices start fresh (point 23). Other Subsonic apps and K
 Each step leaves the server working and its tests green:
 
 1. `records` in the catalogue, `tracks.record`, several files per track, nothing shown differently yet.
-2. Identification by the rules above, copies taking the record's tracks.
-3. `copies` in the served library, `al-<record>`, and `copy_for`.
-4. The views and the page: dots, menus, the verdicts' end.
+2. Identification by the rules above.
+3. `copies` and `copy_files` in the served library, `al-<record>`, and `copy_for`. Copies still hold ids of their own, so a
+   record is served with the tracks of the copy that plays.
+4. The views and the page: dots, menus, the verdicts' end. Then the take: copies take the record's tracks, and a record is
+   served with every copy's.
 5. The migration, rehearsed on a copy of the dev data, then on staging with production's.
 6. Copy to own music.
+
+The take belongs to identification, but it cannot land with it. While an album's id is a hash of its tags, a track shared
+by two copies sits in two albums, and two `songs` rows with one id stop the library building. And `al-<record>` with every
+copy's rows doubles a record whose copies still hold their own ids. So the ids change first, showing one copy's tracks,
+and the take then turns that into all of them by track id. It waits for every reader and writer that took a track to be
+one file (which file plays, Delete, a fix reaching every copy, a line on any copy, what a crate counts), and for the merge
+of what plays and counts on a track, which it shares with the migration. It stays one small commit, so it can be taken
+back alone.
 
 ## The rest of 0100
 
