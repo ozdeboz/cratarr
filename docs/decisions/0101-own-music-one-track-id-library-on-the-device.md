@@ -281,6 +281,8 @@ handing the record's track a new file.
 - **A copy picked by hand** is remembered for the account until they pick another or that copy goes (2026-11-05).
 - **On a disk without shared blocks** a copy into own music is a real copy, and it counts against the user's allocation
   (2026-11-05).
+- **26's first preview holds all of 0100** (2026-11-05): records one does not have, artists, labels and their pages, and
+  Soulseek without MusicBrainz, as well as records and copies.
 
 ## Amended 2026-11-04: what point 11 meets in the code (a5's survey, trunk 96ed26062)
 

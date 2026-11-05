@@ -104,3 +104,9 @@ Each step leaves the server working and its tests green:
 5. The migration, rehearsed on a copy of the dev data, then on staging with production's.
 6. Copy to own music.
 
+## The rest of 0100
+
+All of 0100 goes in preview 1 (the owner, 2026-11-05), so this design is its first half. Still to design, on the same
+`records` table, where a record with no tracks is a record one does not have: its references, artists and labels of
+Cratarr's own, their pages, the one missing list, search's "beyond", and Soulseek without MusicBrainz.
+
