@@ -1,6 +1,7 @@
-//! The crate's own rule (src/lib.rs): no I/O, no clock, no randomness of its own, and it builds for wasm32. Only
-//! scripts/rules-wasm.sh builds that, by hand, so a break would show in the next player's build: every test run reads
-//! here what would cause one.
+//! The crate's own rule (src/lib.rs): no I/O, no clock, no randomness of its own, and it builds for wasm32. The build
+//! itself is `cargo check-wasm`, in the Dockerfile's test stage. It cannot see the rest: a file, a clock or a thread
+//! compile for wasm32-unknown-unknown and only fail when a page runs them, so every test run reads here that none is
+//! used. Which leaves making sure that compile reaches every module the page loads.
 
 use std::path::{Path, PathBuf};
 
@@ -39,5 +40,18 @@ fn the_rules_take_no_dependency_a_player_could_not_build() {
     let (_, rest) = manifest.split_once("[dependencies]\n").unwrap();
     let (dependencies, _) = rest.split_once("\n[").unwrap();
     let names: Vec<&str> = dependencies.lines().filter_map(|l| l.split_once(" = ")).map(|(name, _)| name).collect();
-    assert_eq!(names, ["serde", "unicode-normalization"], "a new one must build for wasm32-unknown-unknown first: scripts/rules-wasm.sh");
+    assert_eq!(names, ["serde", "unicode-normalization"], "a new one must build for wasm32-unknown-unknown first: cargo check-wasm");
+}
+
+#[test]
+fn every_module_the_page_loads_is_in_the_wasm32_check() {
+    let config = include_str!("../../.cargo/config.toml").replace('\r', "");
+    let (_, rest) = config.split_once("check-wasm = ").unwrap();
+    let check = rest.lines().next().unwrap();
+    let manifest = include_str!("../Cargo.toml").replace('\r', "");
+    let modules: Vec<&str> = manifest.lines().filter_map(|l| l.split_once(" = [")).map(|(name, _)| name).filter(|name| name.starts_with("wasm-")).collect();
+    assert!(!modules.is_empty(), "the crate's wasm features are read from its manifest");
+    for module in modules {
+        assert!(check.contains(module), "{module} is left out of cargo check-wasm, so its exports compile for nobody until the page's build");
+    }
 }
