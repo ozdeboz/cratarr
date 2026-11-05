@@ -652,6 +652,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_directory_account_s_app_password_signs_in_to_no_page_while_the_directory_is_on() {
+        let s = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        s.users.set("me", "pw").unwrap();
+        s.users.from_directory("ann", true, None).unwrap();
+        s.users.set_app_password("ann", "for-apps").unwrap();
+        // Nothing listens on port 1: the directory says no, however it says it.
+        s.directory.set_config(Config { url: "ldap://127.0.0.1:1".into(), ..config() }).unwrap();
+        assert_eq!(s.sign_in("ann", "for-apps").await, None);
+        assert_eq!(s.sign_in("me", "pw").await.as_deref(), Some("me"), "Cratarr's own accounts stay the fallback");
+        assert!(s.users.check(Some("ann"), None, None, Some("for-apps")).is_ok(), "her apps still sign in with it");
+        s.directory.set_config(Config { enabled: false, ..config() }).unwrap();
+        assert_eq!(s.sign_in("ann", "for-apps").await.as_deref(), Some("ann"), "no directory: it is all she has");
+    }
+
+    #[tokio::test]
     async fn while_the_directory_cannot_be_reached_a_recent_sign_in_still_works_for_30_days() {
         let d = std::env::temp_dir().join(format!("cratarr-ldap-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();

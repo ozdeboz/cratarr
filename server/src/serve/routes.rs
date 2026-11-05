@@ -126,8 +126,11 @@ struct NewPassword {
     password: String,
 }
 
-/// One's own account's (an administrator's: any, knowing its password).
+/// One's own account's (an administrator's: any, knowing its password). With a sign-in, as `/api/me/password`.
 async fn change_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json(p): axum::Json<NewPassword>) -> Response {
+    if !super::access::signed_in() {
+        return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This takes a sign-in, not a key." }))).into_response();
+    }
     if !super::access::administering() && serve.current_user().as_deref() != Some(p.username.as_str()) {
         return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Only your own account's." }))).into_response();
     }

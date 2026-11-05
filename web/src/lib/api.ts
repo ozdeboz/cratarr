@@ -1339,9 +1339,10 @@ export type LibrariesView = {
   sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: (Pick<LibrarySetting, 'id'> & { kind: LibrarySetting['kind'] | 'own' })[] }[];
 };
 export const getLibraries = () => quietly<LibrariesView>('/api/libraries');
-/** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it). */
-export const setAppPassword = (password: string) =>
-  request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+/** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it): set with
+ *  the password they sign in with (`current`), a lasting way in being more than a page left open may make. */
+export const setAppPassword = (current: string, password: string) =>
+  request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current, password }) });
 /** Every user, for the administrators' Users panel: their profile, permissions, devices, sign-ins. `directory`: an
  *  account from the directory (its name and role set there); else Cratarr's own (decision 0051, amended 2026-10-19). */
 export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null };

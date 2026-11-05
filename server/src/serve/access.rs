@@ -255,6 +255,12 @@ pub fn administering() -> bool {
     }
 }
 
+/// Whether the running request came with a sign-in and not a key: an account's passwords take one (decision 0051: "never
+/// a key or an app"), or a key could set itself a way in as that account. No one: only while signing in is off.
+pub fn signed_in() -> bool {
+    current().is_none_or(|w| w.scope == Scope::Full)
+}
+
 /// The administrators' routes.
 pub async fn admin(request: Request, next: Next) -> Response {
     if administering() {
@@ -276,7 +282,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
 }
 
 /// The account's password again (the account signed in here, else the owner): the sign-in's own check and throttle.
-async fn reauthenticate(serve: &Serve, headers: &HeaderMap, password: &str) -> Result<String, Response> {
+pub(super) async fn reauthenticate(serve: &Serve, headers: &HeaderMap, password: &str) -> Result<String, Response> {
     let Some(name) = session_of(serve, headers).map(|s| s.user).or_else(|| serve.users.owner()) else {
         return Err((StatusCode::CONFLICT, axum::Json(json!({ "error": "Cratarr has no account yet." }))).into_response());
     };
@@ -555,7 +561,43 @@ mod tests {
         assert_eq!(send_json(&s, "PUT", "/api/me/password", json!({ "current": "pw", "password": "x" })).await.0, StatusCode::NO_CONTENT);
         assert!(s.users.sign_in("me", "x").is_some());
         // A Cratarr account's app password is its password.
-        assert_eq!(send_json(&s, "PUT", "/api/me/subsonic-password", json!({ "password": "y" })).await.0, StatusCode::CONFLICT);
+        assert_eq!(send_json(&s, "PUT", "/api/me/subsonic-password", json!({ "current": "x", "password": "y" })).await.0, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn a_password_takes_a_sign_in_never_a_key_and_an_app_password_the_password_too() {
+        let s = served(true);
+        // A directory's administrator, with a key that controls for her, as Home Assistant's does. No directory here, so
+        // what she signs in with is this.
+        s.users.from_directory("ann", true, None).unwrap();
+        s.users.set_app_password("ann", "old").unwrap();
+        let (token, _) = s.sessions.create("ann", "d", now()).unwrap();
+        let (hers, _) = s.sessions.new_key("Home Assistant", Some("ann"), "control", None, now()).unwrap();
+        let by_session = ("cookie", format!("{COOKIE}={token}"));
+        let by_key = ("authorization", format!("Bearer {hers}"));
+        let send = |by: &(&str, String), method: &str, uri: &str, body: serde_json::Value| {
+            HttpRequest::builder().method(method).uri(uri).header("content-type", "application/json").header(by.0, by.1.as_str()).body(Body::from(body.to_string())).unwrap()
+        };
+        let set = |by: &(&str, String), current: &str, password: &str| send(by, "PUT", "/api/me/subsonic-password", json!({ "current": current, "password": password }));
+        assert_eq!(status(&s, set(&by_key, "old", "new")).await.0, StatusCode::FORBIDDEN, "a key, even with the password");
+        assert_eq!(status(&s, set(&by_session, "wrong", "new")).await.0, StatusCode::FORBIDDEN, "a page left open");
+        assert!(s.users.sign_in("ann", "old").is_some(), "neither changed it");
+        assert_eq!(status(&s, set(&by_session, "old", "new")).await.0, StatusCode::NO_CONTENT);
+        assert!(s.users.sign_in("ann", "new").is_some());
+
+        // Cratarr's own account, by the key of its owner, who knows the password.
+        let (mine, _) = s.sessions.new_key("A script", Some("me"), "control", None, now()).unwrap();
+        let by_mine = ("authorization", format!("Bearer {mine}"));
+        assert_eq!(status(&s, send(&by_mine, "PUT", "/api/me/password", json!({ "current": "pw", "password": "x" }))).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(status(&s, send(&by_mine, "POST", "/api/subsonic/password", json!({ "username": "me", "current": "pw", "password": "x" }))).await.0, StatusCode::FORBIDDEN);
+        assert!(s.users.sign_in("me", "pw").is_some(), "the other road to the same password");
+
+        // An account with no password yet gives none as its current one: the fence above stands on this road too.
+        s.users.from_directory("bo", false, None).unwrap();
+        let (token, _) = s.sessions.create("bo", "d", now()).unwrap();
+        let by_bo = ("cookie", format!("{COOKIE}={token}"));
+        assert_eq!(status(&s, send(&by_bo, "POST", "/api/subsonic/password", json!({ "username": "bo", "current": "", "password": "x" }))).await.0, StatusCode::BAD_REQUEST);
+        assert!(s.users.get("bo").unwrap().password.is_empty());
     }
 
     #[tokio::test]

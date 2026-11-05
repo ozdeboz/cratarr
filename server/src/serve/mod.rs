@@ -219,7 +219,11 @@ impl Serve {
         if let Some(account) = self.directory.sign_in(name, password, &account, now()).await {
             return Some(account);
         }
-        self.users.sign_in(name, password).map(|u| u.name)
+        // All a directory's account holds here is its app password, for OpenSubsonic apps: never a way past the directory
+        // that just said no, or a password changed there goes on working, and one a third-party app leaked signs in as an
+        // administrator. Refused after the check, so how long it takes tells nothing (`Users::sign_in`).
+        let directory_on = self.directory.config().enabled;
+        self.users.sign_in(name, password).filter(|u| !(directory_on && u.directory)).map(|u| u.name)
     }
 
     /// The account the running request acts for (decision 0051): the one signed in, or, while signing in is not required
