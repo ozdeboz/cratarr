@@ -40,22 +40,22 @@ fn full((root, rel): &(PathBuf, String)) -> Result<PathBuf> {
 /// earlier step moves that file away (Replace: an old file goes to the trash, a new one of the same name takes its
 /// place). When a move fails midway, the files already moved go back, what was made for them goes, and the error is
 /// returned. Safe to repeat: a step already done (its file at the target, and gone from the source or put there by a
-/// later step) is skipped, so a plan interrupted by a crash can be finished.
+/// later step) is skipped, and the one step a stop left whole at both ends has only its original taken away, so a plan
+/// interrupted by a crash can be finished.
 pub fn apply(plan: &[Step]) -> Result<()> {
     let all: Vec<(PathBuf, PathBuf)> = plan.iter().map(|s| Ok((full(&s.from)?, full(&s.to)?))).collect::<Result<_>>()?;
-    // A copy stopped after its rename left the file whole at both ends: only taking the original away is left. Where
-    // another step moves the target on, or fills the source, these are two files, however alike.
-    for (i, (from, to)) in all.iter().enumerate() {
-        let alone = !all.iter().any(|(moved, _)| moved == to) && !all[i + 1..].iter().any(|(_, later)| later == from);
-        if alone && to.is_file() && from.is_file() && same_bytes(from, to)? {
-            std::fs::remove_file(from).with_context(|| format!("removing {} after copying it", from.display()))?;
-        }
-    }
     let done = |i: usize| {
         let (from, to) = &all[i];
         to.is_file() && (!from.exists() || all[i + 1..].iter().any(|(_, later)| later == from))
     };
-    let pairs: Vec<(PathBuf, PathBuf)> = (0..all.len()).filter(|&i| !done(i)).map(|i| all[i].clone()).collect();
+    let mut pairs: Vec<(PathBuf, PathBuf)> = (0..all.len()).filter(|&i| !done(i)).map(|i| all[i].clone()).collect();
+    // A copy stopped after its rename left the file whole at both ends: only taking the original away is left. A stop is
+    // on one step, the first not done, and what follows it has not begun: a file alike anywhere else is a target like any
+    // other. So is one another step moves on: those are two files, however alike.
+    let stopped = match pairs.first() {
+        Some((from, to)) if !all.iter().any(|(moved, _)| moved == to) && to.is_file() && from.is_file() && same_bytes(from, to)? => Some(pairs.remove(0)),
+        _ => None,
+    };
     for (k, (from, to)) in pairs.iter().enumerate() {
         if !from.is_file() {
             bail!("{} is not there", from.display());
@@ -64,6 +64,11 @@ pub fn apply(plan: &[Step]) -> Result<()> {
             bail!("{} exists already; not overwriting it", to.display());
         }
     }
+    // Only now, the look behind it: a plan refused takes nothing away. Before the moves, so a stop in them leaves one step
+    // at both ends, never two.
+    if let Some((from, _)) = &stopped {
+        std::fs::remove_file(from).with_context(|| format!("removing {} after copying it", from.display()))?;
+    }
     let mut done: Vec<&(PathBuf, PathBuf)> = Vec::new();
     for pair in &pairs {
         if let Err(e) = move_file(&pair.0, &pair.1) {
@@ -71,6 +76,12 @@ pub fn apply(plan: &[Step]) -> Result<()> {
                 if let Err(back) = move_file(to, from) {
                     tracing::error!("could not move {} back to {}: {back:#}", to.display(), from.display());
                 }
+            }
+            // Copied back, not moved: the file at its target may be one the plan found there.
+            if let Some((from, to)) = &stopped
+                && let Err(back) = copy_across(to, from, |_| Ok(()))
+            {
+                tracing::error!("could not put {} back: {back:#}", from.display());
             }
             // A target folder left behind would refuse every retry ("already has a folder named").
             for s in plan {
@@ -384,6 +395,86 @@ mod tests {
         apply(&plan).unwrap();
         assert!(!inc.join("A").exists(), "the album left whole");
         assert_eq!(names_in(&music.join("B")), ["1.flac", "2.flac"]);
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A file alike at a target is no reason to take anything away until the look has passed the whole plan.
+    #[test]
+    fn a_plan_refused_takes_no_original_away_however_alike_its_target() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        std::fs::write(inc.join("A/1.flac"), b"1").unwrap();
+        std::fs::write(inc.join("A/2.flac"), b"2").unwrap();
+        std::fs::create_dir_all(music.join("B")).unwrap();
+        std::fs::write(music.join("B/1.flac"), b"1").unwrap();
+        std::fs::write(music.join("B/2.flac"), b"another file").unwrap();
+        let plan = vec![step(&inc, "A/1.flac", &music, "B/1.flac"), step(&inc, "A/2.flac", &music, "B/2.flac")];
+        assert!(format!("{:#}", apply(&plan).unwrap_err()).contains("exists already"));
+        assert_eq!(names_in(&inc.join("A")), ["1.flac", "2.flac"], "all or nothing");
+        assert_eq!(std::fs::read(music.join("B/2.flac")).unwrap(), b"another file");
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A stop is on one step: past the first step not done nothing has begun, so what stands there is no copy of the plan's.
+    #[test]
+    fn a_file_alike_past_the_first_step_not_done_is_a_target_like_any_other() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        std::fs::write(inc.join("A/1.flac"), b"1").unwrap();
+        std::fs::write(inc.join("A/2.flac"), b"2").unwrap();
+        std::fs::create_dir_all(music.join("B")).unwrap();
+        std::fs::write(music.join("B/2.flac"), b"2").unwrap();
+        let plan = vec![step(&inc, "A/1.flac", &music, "B/1.flac"), step(&inc, "A/2.flac", &music, "B/2.flac")];
+        assert!(format!("{:#}", apply(&plan).unwrap_err()).contains("exists already"));
+        assert_eq!(names_in(&inc.join("A")), ["1.flac", "2.flac"], "nothing moved");
+        assert_eq!(names_in(&music.join("B")), ["2.flac"]);
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_plan_that_fails_after_a_stopped_copy_leaves_it_at_both_ends_as_found() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        std::fs::write(inc.join("A/1.flac"), b"1").unwrap();
+        std::fs::write(inc.join("A/2.flac"), b"2").unwrap();
+        std::fs::create_dir_all(music.join("B")).unwrap();
+        std::fs::write(music.join("B/1.flac"), b"1").unwrap();
+        // A file where the second one's folder should be: the look before moving does not see it, the move fails.
+        std::fs::write(music.join("C"), b"a file").unwrap();
+        let plan = vec![step(&inc, "A/1.flac", &music, "B/1.flac"), step(&inc, "A/2.flac", &music, "C/2.flac")];
+        apply(&plan).unwrap_err();
+        assert_eq!(names_in(&inc.join("A")), ["1.flac", "2.flac"], "no part left beside it");
+        assert_eq!(std::fs::read(inc.join("A/1.flac")).unwrap(), b"1", "the original stands");
+        assert_eq!(std::fs::read(music.join("B/1.flac")).unwrap(), b"1", "and so does what stood at its target");
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A stop in the repeat of a stopped plan: still one step at both ends, or the next repeat would be refused.
+    #[test]
+    fn a_plan_stopped_twice_is_still_finished_by_a_repeat() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        for n in ["1", "2", "3"] {
+            std::fs::write(inc.join(format!("A/{n}.flac")), n).unwrap();
+        }
+        std::fs::create_dir_all(music.join("B")).unwrap();
+        std::fs::write(music.join("B/1.flac"), b"1").unwrap();
+        let plan: Vec<Step> = ["1", "2", "3"].map(|n| step(&inc, &format!("A/{n}.flac"), &music, &format!("B/{n}.flac"))).to_vec();
+        // The repeat's first step finished and a stop in its second: as `apply` leaves it, the first original already gone.
+        apply(&plan[..1]).unwrap();
+        std::fs::write(music.join("B/2.flac"), b"2").unwrap();
+        assert_eq!(names_in(&inc.join("A")), ["2.flac", "3.flac"]);
+        apply(&plan).unwrap();
+        assert!(!inc.join("A").exists());
+        assert_eq!(names_in(&music.join("B")), ["1.flac", "2.flac", "3.flac"]);
         for d in [inc, music] {
             std::fs::remove_dir_all(d).ok();
         }

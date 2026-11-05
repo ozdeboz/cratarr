@@ -1737,6 +1737,31 @@ mod tests {
         }
     }
 
+    /// The same release fetched into Incoming again, a track changed by its covers being completed and the other alike to the
+    /// byte: what stands at Undo's targets refuses it, and a refusal touches nothing.
+    #[tokio::test]
+    async fn an_undo_refused_by_the_same_release_fetched_again_leaves_the_album_whole() {
+        let (music, inc) = (folder("again-music"), folder("again-inc"));
+        let svc = on_disk(&music, &inc).await;
+        two_tracks(&inc);
+        let event = keep_of_two();
+        let id = svc.journal.intend(100, &event).unwrap();
+        crate::moves::apply(&svc.steps(&event).unwrap()).unwrap();
+        svc.journal.applied(id).unwrap();
+        two_tracks(&inc);
+        std::fs::write(inc.join("X/A/1.flac"), b"one with its cover inside").unwrap();
+
+        let refused = svc.undo(&id.to_string()).await.unwrap_err();
+        assert!(matches!(&refused, ToggleError::Refused(why) if why.contains("exists already")), "{refused:?}");
+        assert_eq!(std::fs::read(music.join("Y/1.flac")).unwrap(), b"one");
+        assert_eq!(std::fs::read(music.join("Y/2.flac")).unwrap(), b"two", "the library's album keeps every file");
+        assert_eq!(std::fs::read(inc.join("X/A/1.flac")).unwrap(), b"one with its cover inside");
+        assert!(svc.journal.get(id).unwrap().is_some_and(|e| !e.undone));
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     #[test]
     fn an_incoming_album_is_judged_against_every_other_library_but_its_own() {
         // Music lacks it; one Incoming library has it at 320 kbps, another lossless.
