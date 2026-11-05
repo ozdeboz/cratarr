@@ -6,8 +6,9 @@
 //! - **Applied one way:** one album at a time under one lock; each file read again first and set aside where it no
 //!   longer holds what was planned ("changed since it was planned"); written through `retag::rewrite` (only what
 //!   changes, the audio compared byte for byte); a failure set aside with its reason, the rest still written.
-//! - **Recorded once:** one journal entry per run (`Journal::record_run`, kept as long as the trash keeps), its Undo per
-//!   run or per album, putting back only files that still hold what the run wrote.
+//! - **Recorded once:** one journal entry per run (`Journal::record_run`, kept as long as the trash keeps), in before its
+//!   first file and kept up as it goes (`RunEntry`: a stop loses nothing), its Undo per run or per album, putting back only
+//!   files that still hold what the run wrote.
 //! - **Told once:** one status for every run (`Status`), and each record's state (`FilesState`), on the live channel.
 //!
 //! Its writers so far: types, years and Classical into the files (`file_facts`). Health's fixes, Renumber, the tempo,
@@ -24,7 +25,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use crate::journal::{FileRun, FileWrite, RunFailed, RunRecord};
+use crate::journal::{EventId, FileRun, FileWrite, Journal, RunFailed, RunRecord};
 
 /// What a writer proposes: its kind and title, its records, each file's change.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -174,11 +175,18 @@ const LIVE: char = 'l';
 const PACE: std::time::Duration = std::time::Duration::from_millis(50);
 /// How long a record says "written".
 const WRITTEN_SECS: i64 = 24 * 3600;
+/// What a run's entry says of a record it has not finished with: after a restart, all that says the run was cut off.
+const CUT: &str = "Cratarr stopped before this was done";
+/// How often a run's entry is written again as it goes. It goes in whole, so at every album a long run's cost would grow
+/// with its square; and a stop misses only which records were reached, as every file's before is in from the start.
+const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The one lock over every change to the library's files: a second run waits.
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// Runs waiting or writing, by id.
 static LIVE_RUNS: Mutex<Option<HashMap<String, Status>>> = Mutex::new(None);
+/// Runs writing, by their entries' ids: told as they go, so the list leaves those entries out until they end.
+static WRITING: Mutex<Vec<EventId>> = Mutex::new(Vec::new());
 /// Records' states from runs (waiting, writing, written, changed), by album.
 static STATES: Mutex<Option<HashMap<String, FilesState>>> = Mutex::new(None);
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -471,6 +479,81 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
     PlanView { kind: kind.to_string(), title: title.to_string(), records, making: false }
 }
 
+/// A run's entry in the journal while it writes. In before the first file, with every file's before and after, so whatever
+/// stops the run nothing is lost: its Undo goes over them all, putting back what was reached and passing what was not
+/// (`restore_one`). A file written whole comes in once written: what its Undo needs comes of writing it, and a cover's Undo
+/// with nothing written would take the pictures out of its tracks.
+struct RunEntry {
+    journal: Arc<Journal>,
+    id: Option<EventId>,
+    run: FileRun,
+    /// The records not finished with, as the entry says them.
+    cut: Vec<RunFailed>,
+    saved: std::time::Instant,
+}
+
+impl RunEntry {
+    /// `keep`: as `Journal::record_run`. Nothing to write and nothing set aside: no entry.
+    fn begin(journal: Arc<Journal>, p: &Proposal, at: i64, account: Option<&str>, keep: i64) -> Self {
+        let cut: Vec<RunFailed> = albums_of(&p.files)
+            .into_iter()
+            .map(|(album, _)| {
+                let r = p.records.iter().find(|r| r.album == album);
+                RunFailed { title: r.map(|r| r.title.clone()), artist: r.map(|r| r.artist.clone()), album, file: None, why: CUT.into() }
+            })
+            .collect();
+        let files = p.files.iter().filter(|f| f.whole.is_none()).cloned().collect();
+        let failed = p.failed.iter().chain(&cut).cloned().collect();
+        let run = FileRun { what: p.kind.clone(), title: p.title.clone(), records: p.records.clone(), files, failed };
+        let id = (!p.files.is_empty() || !p.failed.is_empty()).then(|| journal.record_run(at, &run, account, keep)).and_then(|kept| match kept {
+            Ok(id) => Some(id),
+            Err(e) => {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run of file changes not kept for Undo");
+                None
+            }
+        });
+        if let Some(id) = id {
+            WRITING.lock().unwrap_or_else(|e| e.into_inner()).push(id);
+        }
+        Self { journal, id, run, cut, saved: std::time::Instant::now() }
+    }
+
+    /// An album finished: what it wrote takes the place of what it planned, and `failed` is all the run set aside so far.
+    /// A file written whole is saved at once, its Undo being in nothing else.
+    fn album_done(&mut self, album: &str, wrote: Vec<FileWrite>, failed: &[RunFailed]) {
+        let whole = wrote.iter().any(|f| f.whole.is_some());
+        self.cut.retain(|c| c.album != album);
+        self.run.files.retain(|f| f.album != album);
+        self.run.files.extend(wrote);
+        self.run.failed = failed.iter().chain(&self.cut).cloned().collect();
+        if whole || self.saved.elapsed() >= SAVE_EVERY {
+            self.save();
+        }
+    }
+
+    fn save(&mut self) {
+        let Some(id) = self.id else { return };
+        if let Err(e) = self.journal.update_run(id, &self.run, None) {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run's progress not kept");
+        }
+        self.saved = std::time::Instant::now();
+    }
+
+    /// The run over, every album done: its Undo's token, where it is kept.
+    fn end(mut self) -> Option<String> {
+        self.save();
+        let id = self.id?;
+        WRITING.lock().unwrap_or_else(|e| e.into_inner()).retain(|w| *w != id);
+        if self.run.files.is_empty() && self.run.failed.is_empty() {
+            if let Err(e) = self.journal.forget_run(id) {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run that came to nothing still kept");
+            }
+            return None;
+        }
+        Some(format!("{RUN}{id}"))
+    }
+}
+
 /// Starts a run of a proposal's ticked records (an administrator's yes, given by the route): one album at a time under
 /// the one lock, each file's failure set aside with its reason, the run kept in the journal. Returns its first status
 /// ("waiting" while another run holds the lock).
@@ -500,7 +583,8 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         let _turn = LOCK.lock().await;
         status.state = "writing";
         tell(&status);
-        let mut written: Vec<FileWrite> = Vec::new();
+        let at = super::moment::now_secs();
+        let mut entry = RunEntry::begin(app.journal.clone(), &p, at, account.as_deref(), i64::from(app.incoming.trash_days()) * 86_400);
         for (album, files) in albums {
             let of = files.len();
             set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(id.clone()), at: None });
@@ -528,19 +612,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
             .await;
             let (ok, failed, seen) = done.unwrap_or_else(|e| (Vec::new(), vec![(None, e.to_string())], Vec::new()));
             let record = p.records.iter().find(|r| r.album == album);
-            // The written files read again, and those set aside too: the catalogue learns what changed them.
-            reread(&ok.iter().map(|f| f.path.clone()).chain(seen).collect::<Vec<_>>()).await;
             let changed = failed.iter().any(|(_, why)| why.contains("changed since"));
-            set_state(
-                &album,
-                FilesState {
-                    state: if changed { "changed" } else { "written" }.into(),
-                    done: Some(ok.len()),
-                    of: Some(of),
-                    run: Some(id.clone()),
-                    at: Some(super::moment::now_secs()),
-                },
-            );
             status.failed.extend(failed.into_iter().map(|(file, why)| RunFailed {
                 album: album.clone(),
                 title: record.map(|r| r.title.clone()),
@@ -548,26 +620,30 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
                 file,
                 why,
             }));
-            written.extend(ok);
+            let (wrote, again): (usize, Vec<PathBuf>) = (ok.len(), ok.iter().map(|f| f.path.clone()).chain(seen).collect());
+            entry.album_done(&album, ok, &status.failed);
+            // The written files read again, and those set aside too: the catalogue learns what changed them.
+            reread(&again).await;
+            set_state(
+                &album,
+                FilesState {
+                    state: if changed { "changed" } else { "written" }.into(),
+                    done: Some(wrote),
+                    of: Some(of),
+                    run: Some(id.clone()),
+                    at: Some(super::moment::now_secs()),
+                },
+            );
             status.done += 1;
             tell(&status);
             tokio::time::sleep(PACE).await;
         }
-        let at = super::moment::now_secs();
-        if !written.is_empty() || !status.failed.is_empty() {
-            let keep = i64::from(app.incoming.trash_days()) * 86_400;
-            let run = FileRun { what: p.kind.clone(), title: p.title.clone(), records: p.records.clone(), files: written, failed: status.failed.clone() };
-            match app.journal.record_run(at, &run, account.as_deref(), keep) {
-                Ok(j) => {
-                    let kept = format!("{RUN}{j}");
-                    let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
-                    for s in states.get_or_insert_with(HashMap::new).values_mut().filter(|s| s.run.as_deref() == Some(id.as_str())) {
-                        s.run = Some(kept.clone());
-                    }
-                    status.undo = Some(kept);
-                }
-                Err(e) => tracing::warn!(target: "library", reason = %format!("{e:#}"), "a run of file changes not kept for Undo"),
+        if let Some(kept) = entry.end() {
+            let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
+            for s in states.get_or_insert_with(HashMap::new).values_mut().filter(|s| s.run.as_deref() == Some(id.as_str())) {
+                s.run = Some(kept.clone());
             }
+            status.undo = Some(kept);
         }
         status.state = "done";
         status.at = Some(at);
@@ -625,7 +701,9 @@ fn kept_status(id: i64, at: i64, run: &FileRun, undone: bool) -> Status {
 pub fn runs(app: &super::App, since: i64) -> Result<Vec<Status>> {
     let mut out: Vec<Status> = LIVE_RUNS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.values().cloned().collect()).unwrap_or_default();
     out.retain(|s| s.state != "done");
-    let mut kept: Vec<Status> = app.journal.file_runs_since(since)?.into_iter().map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
+    let writing = WRITING.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut kept: Vec<Status> =
+        app.journal.file_runs_since(since)?.into_iter().filter(|(id, ..)| !writing.contains(id)).map(|(id, at, run, undone)| kept_status(id, at, &run, undone)).collect();
     kept.extend(app.journal.album_events_since(since)?.iter().filter(|(id, ..)| !out.iter().any(|s| s.id == format!("{MOVE}{id}"))).map(|(id, at, e, undone)| moved_status(app, *id, *at, e, *undone)));
     kept.sort_by(|a, b| b.at.cmp(&a.at));
     out.extend(kept);
@@ -716,8 +794,15 @@ fn kept_id(token: &str) -> Result<i64> {
     token.strip_prefix(RUN).and_then(|n| n.parse().ok()).context("Not a kept run")
 }
 
+/// Whether a file of a run cut off holds what the run was to write: its entry cannot say, a file it never reached being in
+/// it too.
+fn reached(f: &FileWrite) -> bool {
+    let names: Vec<&str> = f.after.iter().chain(&f.before).map(|(n, _)| n.as_str()).collect();
+    f.whole.is_some() || fields_of(&f.path, &names).is_ok_and(|now| holds(&now, &f.after) && !holds(&now, &f.before))
+}
+
 /// A kept run, its records as written; an album action, its folder before and after.
-pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
+pub async fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
     if let Some(id) = token.strip_prefix(MOVE).and_then(|n| n.parse::<i64>().ok()) {
         use crate::journal::Event;
         let entry = app.journal.get(id)?.filter(|e| e.applied).context("That is no longer kept")?;
@@ -736,7 +821,16 @@ pub fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
     }
     let id = kept_id(token)?;
     let (run, at, undone) = app.journal.file_run(id)?.context("That run is no longer kept")?;
-    Ok((kept_status(id, at, &run, undone), view(&run.what, &run.title, &run.records, &run.files, true)))
+    let mut sheet = view(&run.what, &run.title, &run.records, &run.files, true);
+    let cut: Vec<String> = run.failed.iter().filter(|f| f.why == CUT).map(|f| f.album.clone()).collect();
+    if !cut.is_empty() {
+        let files: Vec<FileWrite> = run.files.iter().filter(|f| cut.contains(&f.album)).cloned().collect();
+        let wrote = tokio::task::spawn_blocking(move || files.into_iter().filter(reached).map(|f| f.album).collect::<Vec<_>>()).await?;
+        for r in sheet.records.iter_mut().filter(|r| cut.contains(&r.album)) {
+            r.written = Some(wrote.iter().filter(|a| **a == r.album).count());
+        }
+    }
+    Ok((kept_status(id, at, &run, undone), sheet))
 }
 
 /// Undoes a run (`r…`), or its records `albums`: each file put back where it still holds what the run wrote, the
@@ -1006,6 +1100,155 @@ mod tests {
         assert!(names_in(&keep).is_empty(), "its copy kept for nothing goes");
         assert_eq!(f.whole.as_ref().unwrap().kept, None);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    fn tag_write(album: &str, path: &Path, after: &[&str]) -> FileWrite {
+        FileWrite {
+            album: album.into(),
+            path: path.into(),
+            track: None,
+            before: vec![("releasetype".into(), Vec::new())],
+            after: vec![("releasetype".into(), s(after))],
+            from: Vec::new(),
+            undone: false,
+            whole: None,
+        }
+    }
+
+    fn proposal(files: Vec<FileWrite>) -> Proposal {
+        let records = ["a", "b"].map(|a| RunRecord { album: a.into(), title: a.to_uppercase(), artist: "X".into() }).to_vec();
+        Proposal { kind: "types".into(), title: "Types".into(), records, files, failed: Vec::new() }
+    }
+
+    fn entry(p: &Proposal) -> (Arc<Journal>, RunEntry) {
+        let j = Arc::new(Journal::open(None).unwrap());
+        (j.clone(), RunEntry::begin(j, p, 100, None, 1000))
+    }
+
+    fn cut_albums(run: &FileRun) -> Vec<&str> {
+        run.failed.iter().filter(|f| f.why == CUT).map(|f| f.album.as_str()).collect()
+    }
+
+    /// As a restart finds it: only the journal, nothing `start` still held.
+    #[test]
+    fn a_run_stopped_before_its_first_album_is_there_with_every_file_s_before() {
+        let d = dir("run-entry-first");
+        let (one, two) = (flac(&d, "one"), flac(&d, "two"));
+        let p = proposal(vec![tag_write("a", &one, &["ep"]), tag_write("b", &two, &["ep"])]);
+        let (j, e) = entry(&p);
+        let (run, _, undone) = j.file_run(e.id.unwrap()).unwrap().unwrap();
+        assert_eq!(run.files, p.files);
+        assert_eq!(cut_albums(&run), ["a", "b"]);
+        assert_eq!((run.failed[0].title.as_deref(), undone), (Some("A"), false));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_run_stopped_half_way_undoes_what_it_wrote_and_passes_what_it_did_not() {
+        let d = dir("run-entry-half");
+        let (one, two) = (flac(&d, "one"), flac(&d, "two"));
+        let p = proposal(vec![tag_write("a", &one, &["ep"]), tag_write("b", &two, &["ep"])]);
+        let (j, mut e) = entry(&p);
+        let first = p.files[0].clone();
+        apply_one(&first.path, &first.before, &first.after, "moved").unwrap();
+        e.saved -= SAVE_EVERY;
+        e.album_done("a", vec![first], &[]);
+
+        let (run, ..) = j.file_run(e.id.unwrap()).unwrap().unwrap();
+        assert_eq!(cut_albums(&run), ["b"], "the album finished is not said to be cut");
+        assert_eq!(run.files.len(), 2, "the one not reached is in it all the same");
+        let of = |path: &Path| run.files.iter().find(|f| f.path == path).unwrap();
+        assert!(reached(of(&one)) && !reached(of(&two)), "its page says what is so");
+        assert!(restore_one(&one, &of(&one).after, &of(&one).before).unwrap(), "the file it wrote is put back");
+        assert!(!restore_one(&two, &of(&two).after, &of(&two).before).unwrap(), "the one it did not reach is passed");
+        assert!(holds(&fields_of(&one, &["releasetype"]).unwrap(), &of(&one).before));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A stop inside the second before the next save: the entry is behind, and the file's before is still there.
+    #[test]
+    fn an_album_not_saved_yet_can_still_be_undone() {
+        let d = dir("run-entry-behind");
+        let one = flac(&d, "one");
+        let p = proposal(vec![tag_write("a", &one, &["ep"])]);
+        let (j, mut e) = entry(&p);
+        let first = p.files[0].clone();
+        apply_one(&first.path, &first.before, &first.after, "moved").unwrap();
+        e.album_done("a", vec![first], &[]);
+
+        let (run, ..) = j.file_run(e.id.unwrap()).unwrap().unwrap();
+        assert_eq!(cut_albums(&run), ["a"], "not saved within the second");
+        assert!(restore_one(&one, &run.files[0].after, &run.files[0].before).unwrap());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_whole_file_is_in_the_entry_once_written_and_not_before() {
+        let d = dir("run-entry-whole");
+        let track = d.join("track.mp3");
+        bare_mp3(&track);
+        let mut f = whole(&track, "length");
+        f.album = "a".into();
+        let p = proposal(vec![f.clone()]);
+        let (j, mut e) = entry(&p);
+        assert!(j.file_run(e.id.unwrap()).unwrap().unwrap().0.files.is_empty(), "not reached: nothing of it to undo");
+        apply_whole(&mut f, &d.join("keep"), 0).unwrap();
+        e.album_done("a", vec![f.clone()], &[]);
+        assert_eq!(j.file_run(e.id.unwrap()).unwrap().unwrap().0.files, [f], "saved at once, its kept copy named");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_run_that_ended_says_only_what_it_wrote_and_what_it_set_aside() {
+        let d = dir("run-entry-end");
+        let (one, two) = (flac(&d, "one"), flac(&d, "two"));
+        let p = proposal(vec![tag_write("a", &one, &["ep"]), tag_write("b", &two, &["ep"])]);
+        let (j, mut e) = entry(&p);
+        let id = e.id.unwrap();
+        let aside = [RunFailed { album: "b".into(), title: None, artist: None, file: Some("two.flac".into()), why: "changed since it was planned".into() }];
+        e.album_done("a", vec![p.files[0].clone()], &[]);
+        e.album_done("b", Vec::new(), &aside);
+        assert_eq!(e.end(), Some(format!("{RUN}{id}")));
+        let (run, ..) = j.file_run(id).unwrap().unwrap();
+        assert_eq!(run.files, [p.files[0].clone()]);
+        assert_eq!(run.failed, aside);
+        assert!(!WRITING.lock().unwrap().contains(&id));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_run_that_came_to_nothing_leaves_no_entry() {
+        let p = proposal(vec![tag_write("a", Path::new("/m/a.flac"), &["ep"])]);
+        let (j, mut e) = entry(&p);
+        let id = e.id.unwrap();
+        e.album_done("a", Vec::new(), &[]);
+        assert_eq!(e.end(), None);
+        assert_eq!(j.file_run(id).unwrap(), None);
+        let (j, e) = entry(&proposal(Vec::new()));
+        assert_eq!((e.id, j.file_runs_since(0).unwrap().len()), (None, 0), "nothing to write, nothing set aside: not even begun");
+    }
+
+    /// An `App` with no server, for what asks it: its journal, the list of runs.
+    async fn app(tag: &str) -> Arc<crate::app::App> {
+        let d = dir(tag);
+        std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
+        let saved = crate::settings::Saved { music_folder: Some(d.to_string_lossy().into_owned()), ..Default::default() };
+        crate::app::App::new(cfg, saved, crate::settings::Origin::Env, None).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_run_under_way_is_on_the_list_once_and_a_run_cut_off_is_on_it_with_its_undo() {
+        let app = app("run-entry-list").await;
+        let p = proposal(vec![tag_write("a", Path::new("/m/a.flac"), &["ep"])]);
+        let e = RunEntry::begin(app.journal.clone(), &p, super::super::moment::now_secs(), None, 1000);
+        let id = e.id.unwrap();
+        assert!(runs(&app, 0).unwrap().iter().all(|s| s.id != format!("{RUN}{id}")), "told as it goes: its entry waits for its end");
+        // A restart: nothing is writing, and the entry is all that is left of it.
+        WRITING.lock().unwrap().retain(|w| *w != id);
+        let cut = runs(&app, 0).unwrap().into_iter().find(|s| s.id == format!("{RUN}{id}")).unwrap();
+        assert_eq!(cut.undo, Some(format!("{RUN}{id}")));
+        assert_eq!(cut.failed.iter().map(|f| f.why.as_str()).collect::<Vec<_>>(), [CUT]);
     }
 
     #[test]

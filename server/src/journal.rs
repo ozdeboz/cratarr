@@ -516,6 +516,12 @@ impl Journal {
         Ok(())
     }
 
+    /// A run that came to nothing: it wrote no file and set none aside.
+    pub fn forget_run(&self, id: EventId) -> Result<()> {
+        self.db().execute("DELETE FROM file_runs WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     /// The runs kept since `since` (epoch seconds), newest first: id, when, the run, whether all of it was undone.
     pub fn file_runs_since(&self, since: i64) -> Result<Vec<(EventId, i64, FileRun, bool)>> {
         let db = self.db();

@@ -7023,7 +7023,7 @@ async fn file_change_runs(State(app): State<Arc<App>>, Query(q): Query<RunsSince
 
 /// A kept run, its records as written.
 async fn file_change_run(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (status, sheet) = crate::app::file_runs::run(&app, &id).map_err(file_change_refused)?;
+    let (status, sheet) = crate::app::file_runs::run(&app, &id).await.map_err(file_change_refused)?;
     Ok(Json(json!({ "run": status, "kind": sheet.kind, "title": sheet.title, "records": sheet.records })))
 }
 
