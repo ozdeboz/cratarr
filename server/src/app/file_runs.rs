@@ -1251,6 +1251,24 @@ mod tests {
         assert_eq!(cut.failed.iter().map(|f| f.why.as_str()).collect::<Vec<_>>(), [CUT]);
     }
 
+    /// Inside the second before the next save, so the entry still says the first album was not finished with.
+    #[tokio::test]
+    async fn a_run_cut_off_says_on_its_page_what_was_written_whatever_its_entry_got_to() {
+        let app = app("run-entry-page").await;
+        let d = dir("run-entry-page-files");
+        let (one, two) = (flac(&d, "one"), flac(&d, "two"));
+        let p = proposal(vec![tag_write("a", &one, &["ep"]), tag_write("b", &two, &["ep"])]);
+        let mut e = RunEntry::begin(app.journal.clone(), &p, super::super::moment::now_secs(), None, 1000);
+        let first = p.files[0].clone();
+        apply_one(&first.path, &first.before, &first.after, "moved").unwrap();
+        e.album_done("a", vec![first], &[]);
+
+        let (_, sheet) = run(&app, &format!("{RUN}{}", e.id.unwrap())).await.unwrap();
+        let written: Vec<(&str, Option<usize>)> = sheet.records.iter().map(|r| (r.album.as_str(), r.written)).collect();
+        assert_eq!(written, [("a", Some(1)), ("b", Some(0))]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn a_record_no_longer_as_its_sheet_showed_is_set_aside() {
         let file = |album: &str, before: &[&str]| FileWrite {
