@@ -276,7 +276,11 @@ handing the record's track a new file.
 - **An Incoming copy** plays only when picked in the record's menu: the kept copy plays until it is added or replaced.
 - **Delete names the copy:** with two copies the menu says "Delete from Music", "Delete from Your music". The record
   stays while one copy is left.
-- **In lists** a record shows once, with a dot for each library that holds a copy.
+- **In lists** a record shows once, with a dot for each library that holds a copy. An Incoming copy of a kept record
+  shows only on Incoming's list until it is added: no dot on the card (2026-11-05).
+- **A copy picked by hand** is remembered for the account until they pick another or that copy goes (2026-11-05).
+- **On a disk without shared blocks** a copy into own music is a real copy, and it counts against the user's allocation
+  (2026-11-05).
 
 ## Amended 2026-11-04: what point 11 meets in the code (a5's survey, trunk 96ed26062)
 

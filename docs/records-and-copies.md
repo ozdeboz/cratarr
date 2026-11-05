@@ -1,7 +1,7 @@
 # Records and copies: how 0100 and 0101 get built
 
 A design for 0.16's last foundation piece. The rules are decisions 0100 and 0101 (its amendments "a track is the record's
-track" and "how a record's copies behave"); this says how they are built, in what order, and what is still open.
+track" and "how a record's copies behave"); this says how they are built, and in what order.
 
 ## Today
 
@@ -47,7 +47,8 @@ A copy takes the record's track ids (0101's amendment), track by track through t
 
 One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own and the only place that decides:
 
-1. A copy picked by hand in the record's menu.
+1. A copy picked by hand in the record's menu. The pick is remembered for the account (`copy_picks`: account, record,
+   library) until they pick another or that copy goes.
 2. The viewer's own music, even at a lower quality.
 3. The best quality among the kept libraries the viewer has on: lossless before lossy, then bit depth and rate, then
    bitrate.
@@ -60,6 +61,7 @@ stream asks `copy_for` with who is asking.
 
 - A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, deletable }]`. Dots: one per copy,
   the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on.
+- An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
   The record stays while one copy is left.
 - The quality on a card is the copy that plays.
@@ -71,6 +73,8 @@ stream asks `copy_for` with who is asking.
 `Copy to` makes a shared-block copy (the FICLONE ioctl on btrfs), its files taking the record's track ids. It is free
 against the allocation. A file written afterwards takes room of its own (0101: tags and covers go into every copy).
 `KeepPreview.copy` says so to the page, and Undo takes the copy away.
+
+On a disk without shared blocks (ext4) it is a real copy, and it counts against the user's allocation.
 
 The off-site backup leaves out shared-block copies of records in Music's mirror, and Cratarr keeps their list for it. A
 copy whose original leaves Music is its own from then on, and backed up (0101).
@@ -100,10 +104,3 @@ Each step leaves the server working and its tests green:
 5. The migration, rehearsed on a copy of the dev data, then on staging with production's.
 6. Copy to own music.
 
-## Open points for the owner
-
-- **A filesystem without shared blocks** (a self-hoster on ext4): Copy to refused with the reason, or a real copy that
-  counts against the allocation?
-- **An Incoming copy on the Library:** does a record's better copy show as a dot on its card, or only on Incoming's list
-  until it is added?
-- **A hand pick in the record's menu:** for that one play, or remembered per account?
