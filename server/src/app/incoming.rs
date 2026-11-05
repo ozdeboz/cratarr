@@ -1182,7 +1182,9 @@ impl IncomingService {
     }
 
     /// The moves that undo an album action, in order: its own moves back, then any conversion undone (the converted
-    /// files into the trash, the originals back from it). One plan, so all of it happens or none. `None` when a
+    /// files into the trash, the originals back from it). One plan, so all of it happens or none. A converted file goes
+    /// to the trash from where the action took it, never by way of its old place: `moves::apply` looks for every file
+    /// before anything moves, so a step from a place only an earlier step fills is refused, every time. `None` when a
     /// folder is no longer in use.
     fn undo_steps(&self, event: &Event) -> Option<Vec<crate::moves::Step>> {
         let mut back: Vec<crate::moves::Step> =
@@ -1193,7 +1195,12 @@ impl IncomingService {
         let root = self.lib.catalogue().folders().get(from_dir.0)?.clone();
         let at = |rel: &str| (root.clone(), rel.to_string());
         for c in converted {
-            back.push(crate::moves::Step { from: at(&c.converted), to: at(&queue::converted_trash(c)?) });
+            let trash = at(&queue::converted_trash(c)?);
+            match back.iter_mut().find(|s| s.to == at(&c.converted)) {
+                Some(step) => step.to = trash,
+                // No step took it away: it is where it was converted.
+                None => back.push(crate::moves::Step { from: at(&c.converted), to: trash }),
+            }
         }
         for c in converted {
             back.push(crate::moves::Step { from: at(&c.trashed), to: at(&c.original) });
@@ -1550,6 +1557,16 @@ mod tests {
 
     fn dir(folder: i64, dir: &str) -> IncomingDir {
         IncomingDir { folder, dir: dir.into(), release_group: None }
+    }
+
+    /// The service on a main library `music` (catalogue folder 0) and an Incoming `inc` (1), no server, on the disk.
+    pub(super) async fn on_disk(music: &std::path::Path, inc: &std::path::Path) -> IncomingService {
+        std::fs::create_dir_all(music.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
+        let lib = Library::new(None, Some(music.to_string_lossy().into_owned()), Vec::new(), Default::default(), None, db).await.unwrap();
+        lib.catalogue().set_folders(vec![music.to_path_buf(), inc.to_path_buf()]).unwrap();
+        let shelves = Arc::new(Shelves::new(lib.clone(), None));
+        IncomingService::new(lib, crate::ports::disk(), Arc::new(Journal::open(None).unwrap()), None, crate::trash::DEFAULT_KEEP_DAYS, None, shelves)
     }
 
     #[test]
