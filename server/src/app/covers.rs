@@ -379,8 +379,9 @@ fn prepare(album: &str, data: &[u8]) -> Result<(PathBuf, String)> {
 }
 
 /// The picture kept in `keep` (`prepare`) written: the old pictures kept first (written ahead), then the old cover file
-/// out, the new one beside the tracks and inside each; the tracks read again. Blocking.
-pub fn write_kept(keep: &Path) -> Result<()> {
+/// out, the new one beside the tracks and inside each; the tracks read again. `ready` comes between the two: from there on
+/// `undo_kept` puts it all back, however far this gets, and before there it would take the tracks' pictures out. Blocking.
+pub fn write_kept(keep: &Path, ready: impl FnOnce()) -> Result<()> {
     let mut kept: Kept = serde_json::from_slice(&std::fs::read(keep.join("kept.json")).context("The picture is no longer kept")?)?;
     let data = std::fs::read(keep.join("new"))?;
     let mime = kept.new_mime.clone().unwrap_or_else(|| crate::serve::art::sniff(&data).to_string());
@@ -396,6 +397,7 @@ pub fn write_kept(keep: &Path) -> Result<()> {
     kept.old_file = old_file.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned());
     kept.old_inside = old_inside.map(|(m, _)| m);
     std::fs::write(keep.join("kept.json"), serde_json::to_vec(&kept)?)?;
+    ready();
     if let Some(f) = &old_file {
         std::fs::remove_file(f)?;
     }
@@ -457,5 +459,56 @@ mod tests {
         assert!(uploaded(b"not a picture").unwrap_err().to_string().contains("JPEG, PNG or WebP"));
         assert!(uploaded(&vec![0xFF; MOST_BYTES + 1]).unwrap_err().to_string().contains("too large"));
         assert!(kind_of(&[0xFF, 0xD8, 0xFF, 0x00, 0x01]).unwrap_err().to_string().contains("not an image"), "a JPEG's mark, no picture");
+    }
+
+    /// A folder with its cover file and two tracks with the old picture inside, and what `prepare` keeps of a new one.
+    fn album_with_a_new_cover_kept(d: &Path) -> (PathBuf, Vec<PathBuf>) {
+        std::fs::write(d.join("cover.jpg"), b"old file").unwrap();
+        let tracks = vec![crate::retag::fixtures::flac(d, "one"), crate::retag::fixtures::flac(d, "two")];
+        assert!(crate::covers_inside::replace(&tracks, Some((b"old inside", "image/jpeg"))).is_empty());
+        let keep = d.join("keep");
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::write(keep.join("new"), b"new picture").unwrap();
+        let kept = Kept { dir: d.to_path_buf(), old_file: None, old_inside: None, new_file: "cover.jpg".into(), new_mime: Some("image/jpeg".into()) };
+        std::fs::write(keep.join("kept.json"), serde_json::to_vec(&kept).unwrap()).unwrap();
+        (keep, tracks)
+    }
+
+    fn inside(track: &Path) -> Vec<u8> {
+        crate::serve::art::embedded(track).unwrap().1
+    }
+
+    #[test]
+    fn a_cover_is_ready_for_its_undo_once_its_old_pictures_are_kept_and_before_anything_changes() {
+        let d = crate::retag::fixtures::dir("cover-ready");
+        let (keep, tracks) = album_with_a_new_cover_kept(&d);
+        let mut heard = false;
+        write_kept(&keep, || {
+            heard = true;
+            let kept: Kept = serde_json::from_slice(&std::fs::read(keep.join("kept.json")).unwrap()).unwrap();
+            assert_eq!((kept.old_file.as_deref(), kept.old_inside.as_deref()), (Some("cover.jpg"), Some("image/jpeg")));
+            assert_eq!(std::fs::read(keep.join("old-inside")).unwrap(), b"old inside");
+            assert_eq!(std::fs::read(d.join("cover.jpg")).unwrap(), b"old file", "nothing changed yet");
+            assert_eq!(inside(&tracks[0]), b"old inside");
+        })
+        .unwrap();
+        assert!(heard);
+        assert_eq!(std::fs::read(d.join("cover.jpg")).unwrap(), b"new picture");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// What a stop leaves part way through the tracks: the new cover file, the first track done, the second not.
+    #[test]
+    fn a_cover_stopped_part_way_through_its_tracks_is_put_back_whole_by_its_undo() {
+        let d = crate::retag::fixtures::dir("cover-cut");
+        let (keep, tracks) = album_with_a_new_cover_kept(&d);
+        write_kept(&keep, || ()).unwrap();
+        assert!(crate::covers_inside::replace(&tracks[1..], Some((b"old inside", "image/jpeg"))).is_empty());
+        assert_eq!((inside(&tracks[0]), inside(&tracks[1])), (b"new picture".to_vec(), b"old inside".to_vec()));
+
+        undo_kept(&keep).unwrap();
+        assert_eq!(std::fs::read(d.join("cover.jpg")).unwrap(), b"old file");
+        assert_eq!((inside(&tracks[0]), inside(&tracks[1])), (b"old inside".to_vec(), b"old inside".to_vec()));
+        std::fs::remove_dir_all(&d).ok();
     }
 }

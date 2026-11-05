@@ -353,28 +353,34 @@ pub fn print(path: &Path) -> Result<String> {
 
 /// A file written whole (a length's fix): set aside where it is no longer as planned; else its original copied into
 /// `keep` first and the change made, beside the file: where that fails the file is as it was, and its copy not needed. Its
-/// copy and its print as written kept.
-fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize) -> Result<()> {
-    let Some(w) = f.whole.as_mut() else { bail!("not a whole file's change") };
+/// copy and its print as written kept. `noted` has it with all its Undo needs, before the file changes: what stops this
+/// after that finds it in the run's entry.
+fn apply_whole(f: &mut FileWrite, keep: &Path, n: usize, noted: impl FnOnce(&FileWrite)) -> Result<()> {
+    let Some(w) = f.whole.clone() else { bail!("not a whole file's change") };
     // A cover: its folder's picture and its tracks', from what `covers` kept.
     if w.op == "cover" {
-        return super::covers::write_kept(w.kept.as_ref().context("the picture is no longer kept")?);
+        return super::covers::write_kept(w.kept.as_ref().context("the picture is no longer kept")?, || noted(f));
     }
     if print(&f.path)? != w.planned {
         bail!("changed since it was planned");
     }
-    if w.op != "reread" {
-        std::fs::create_dir_all(keep)?;
-        let kept = keep.join(format!("{n}-{}", f.path.file_name().and_then(|x| x.to_str()).unwrap_or("track")));
-        std::fs::copy(&f.path, &kept).with_context(|| format!("keeping {} first", f.path.display()))?;
-        if let Err(e) = super::length_fixes::write(&w.op, &f.path, w.ms) {
-            let _ = std::fs::remove_file(&kept);
-            return Err(e);
-        }
-        w.kept = Some(kept);
+    if w.op == "reread" {
+        f.whole = Some(crate::journal::Whole { wrote: Some(w.planned.clone()), ..w });
+        return Ok(());
     }
-    w.wrote = Some(print(&f.path)?);
-    Ok(())
+    std::fs::create_dir_all(keep)?;
+    let kept = keep.join(format!("{n}-{}", f.path.file_name().and_then(|x| x.to_str()).unwrap_or("track")));
+    std::fs::copy(&f.path, &kept).with_context(|| format!("keeping {} first", f.path.display()))?;
+    let path = f.path.clone();
+    let changed = super::length_fixes::write(&w.op, &path, w.ms, |made| {
+        f.whole = Some(crate::journal::Whole { kept: Some(kept.clone()), wrote: Some(print(made)?), ..w.clone() });
+        noted(f);
+        Ok(())
+    });
+    if changed.is_err() {
+        let _ = std::fs::remove_file(&kept);
+    }
+    changed
 }
 
 /// A file written whole put back: as planned already, nothing (false); as written, its copy back (true); else set aside.
@@ -479,8 +485,9 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
 
 /// A run's entry in the journal while it writes. In before the first file, with every file's before and after, so whatever
 /// stops the run nothing is lost: its Undo goes over them all, putting back what was reached and passing what was not
-/// (`restore_one`). A file written whole comes in once written: what its Undo needs comes of writing it, and a cover's Undo
-/// with nothing written would take the pictures out of its tracks.
+/// (`restore_one`). A file written whole comes in on its way, with all its Undo needs and before it changes (`whole_file`):
+/// what its Undo needs comes of starting it, and a cover's Undo with its old pictures not kept yet would take the pictures
+/// out of its tracks.
 struct RunEntry {
     journal: Arc<Journal>,
     id: Option<EventId>,
@@ -516,15 +523,20 @@ impl RunEntry {
         Self { journal, id, run, cut, saved: std::time::Instant::now() }
     }
 
+    /// A file written whole, about to change: saved at once, at every file and not by `SAVE_EVERY`, as its Undo is in nothing
+    /// else. Its own copy costs far more than this.
+    fn whole_file(&mut self, f: &FileWrite) {
+        self.run.files.push(f.clone());
+        self.save();
+    }
+
     /// An album finished: what it wrote takes the place of what it planned, and `failed` is all the run set aside so far.
-    /// A file written whole is saved at once, its Undo being in nothing else.
     fn album_done(&mut self, album: &str, wrote: Vec<FileWrite>, failed: &[RunFailed]) {
-        let whole = wrote.iter().any(|f| f.whole.is_some());
         self.cut.retain(|c| c.album != album);
         self.run.files.retain(|f| f.album != album);
         self.run.files.extend(wrote);
         self.run.failed = failed.iter().chain(&self.cut).cloned().collect();
-        if whole || self.saved.elapsed() >= SAVE_EVERY {
+        if self.saved.elapsed() >= SAVE_EVERY {
             self.save();
         }
     }
@@ -538,7 +550,7 @@ impl RunEntry {
     }
 
     /// The run over, every album done: its Undo's token, where it is kept.
-    fn end(mut self) -> Option<String> {
+    fn end(&mut self) -> Option<String> {
         self.save();
         let id = self.id?;
         self.journal.run_ended(id);
@@ -582,11 +594,12 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
         status.state = "writing";
         tell(&status);
         let at = super::moment::now_secs();
-        let mut entry = RunEntry::begin(app.journal.clone(), &p, at, account.as_deref(), i64::from(app.incoming.trash_days()) * 86_400);
+        // Shared with the blocking pool: a file written whole goes into it from there.
+        let entry = Arc::new(Mutex::new(RunEntry::begin(app.journal.clone(), &p, at, account.as_deref(), i64::from(app.incoming.trash_days()) * 86_400)));
         for (album, files) in albums {
             let of = files.len();
             set_state(&album, FilesState { state: "writing".into(), done: Some(0), of: Some(of), run: Some(id.clone()), at: None });
-            let keep = kept_dir(&id);
+            let (keep, noted) = (kept_dir(&id), entry.clone());
             let done = tokio::task::spawn_blocking(move || {
                 let mut ok = Vec::new();
                 let mut failed = Vec::new();
@@ -594,7 +607,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
                 for (n, mut f) in files.into_iter().enumerate() {
                     let wrote = match (&f.whole, &keep) {
                         (None, _) => apply_one(&f.path, &f.before, &f.after, "changed since it was planned"),
-                        (Some(_), Ok(keep)) => apply_whole(&mut f, keep, n),
+                        (Some(_), Ok(keep)) => apply_whole(&mut f, keep, n, |f| noted.lock().unwrap_or_else(|e| e.into_inner()).whole_file(f)),
                         (Some(_), Err(e)) => Err(anyhow::anyhow!("{e:#}")),
                     };
                     match wrote {
@@ -619,7 +632,7 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
                 why,
             }));
             let (wrote, again): (usize, Vec<PathBuf>) = (ok.len(), ok.iter().map(|f| f.path.clone()).chain(seen).collect());
-            entry.album_done(&album, ok, &status.failed);
+            entry.lock().unwrap_or_else(|e| e.into_inner()).album_done(&album, ok, &status.failed);
             // The written files read again, and those set aside too: the catalogue learns what changed them.
             reread(&again).await;
             set_state(
@@ -636,7 +649,8 @@ pub fn start(app: &Arc<super::App>, p: Proposal) -> Status {
             tell(&status);
             tokio::time::sleep(PACE).await;
         }
-        if let Some(kept) = entry.end() {
+        let kept = entry.lock().unwrap_or_else(|e| e.into_inner()).end();
+        if let Some(kept) = kept {
             let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
             for s in states.get_or_insert_with(HashMap::new).values_mut().filter(|s| s.run.as_deref() == Some(id.as_str())) {
                 s.run = Some(kept.clone());
@@ -791,10 +805,14 @@ fn kept_id(token: &str) -> Result<i64> {
 }
 
 /// Whether a file of a run cut off holds what the run was to write: its entry cannot say, a file it never reached being in
-/// it too.
+/// it too. A file written whole is in it on its way, so one the stop caught before it took the file's place is still as
+/// planned; a cover is in it from before its first change, and its Undo is right however far it got.
 fn reached(f: &FileWrite) -> bool {
+    if let Some(w) = &f.whole {
+        return w.op == "cover" || print(&f.path).is_ok_and(|now| now != w.planned);
+    }
     let names: Vec<&str> = f.after.iter().chain(&f.before).map(|(n, _)| n.as_str()).collect();
-    f.whole.is_some() || fields_of(&f.path, &names).is_ok_and(|now| holds(&now, &f.after) && !holds(&now, &f.before))
+    fields_of(&f.path, &names).is_ok_and(|now| holds(&now, &f.after) && !holds(&now, &f.before))
 }
 
 /// A kept run, its records as written; an album action, its folder before and after.
@@ -1050,7 +1068,7 @@ mod tests {
         std::fs::hard_link(&track, &seen).unwrap();
         let mut f = whole(&track, "length");
 
-        apply_whole(&mut f, &keep, 0).unwrap();
+        apply_whole(&mut f, &keep, 0, |_| ()).unwrap();
         let after = std::fs::read(&track).unwrap();
         assert!(after.len() > before.len(), "its info frame went in");
         assert_eq!(std::fs::read(&seen).unwrap(), before, "the old file left whole, not written over");
@@ -1077,7 +1095,7 @@ mod tests {
         std::fs::set_permissions(&track, std::fs::Permissions::from_mode(0o640)).unwrap();
         let mode = || std::fs::metadata(&track).unwrap().permissions().mode() & 0o7777;
         let mut f = whole(&track, "length");
-        apply_whole(&mut f, &d.join("keep"), 0).unwrap();
+        apply_whole(&mut f, &d.join("keep"), 0, |_| ()).unwrap();
         assert_eq!(mode(), 0o640);
         assert!(restore_whole(&track, f.whole.as_ref().unwrap()).unwrap());
         assert_eq!(mode(), 0o640);
@@ -1090,7 +1108,7 @@ mod tests {
         let (track, keep) = (d.join("track.mp3"), d.join("keep"));
         std::fs::write(&track, b"no frames here at all").unwrap();
         let mut f = whole(&track, "length");
-        apply_whole(&mut f, &keep, 0).unwrap_err();
+        apply_whole(&mut f, &keep, 0, |_| panic!("nothing was made to tell of")).unwrap_err();
         assert_eq!(std::fs::read(&track).unwrap(), b"no frames here at all");
         assert_eq!(names_in(&d), ["keep", "track.mp3"]);
         assert!(names_in(&keep).is_empty(), "its copy kept for nothing goes");
@@ -1179,18 +1197,60 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_file_is_in_the_entry_once_written_and_not_before() {
+    fn a_whole_file_is_in_the_entry_before_it_changes_and_not_before_it_is_reached() {
         let d = dir("run-entry-whole");
         let track = d.join("track.mp3");
-        bare_mp3(&track);
+        let before = bare_mp3(&track);
         let mut f = whole(&track, "length");
         f.album = "a".into();
         let p = proposal(vec![f.clone()]);
         let (j, mut e) = entry(&p);
-        assert!(j.file_run(e.id.unwrap()).unwrap().unwrap().0.files.is_empty(), "not reached: nothing of it to undo");
-        apply_whole(&mut f, &d.join("keep"), 0).unwrap();
-        e.album_done("a", vec![f.clone()], &[]);
-        assert_eq!(j.file_run(e.id.unwrap()).unwrap().unwrap().0.files, [f], "saved at once, its kept copy named");
+        let id = e.id.unwrap();
+        assert!(j.file_run(id).unwrap().unwrap().0.files.is_empty(), "not reached: nothing of it to undo");
+        apply_whole(&mut f, &d.join("keep"), 0, |noted| {
+            e.whole_file(noted);
+            assert_eq!(std::fs::read(&track).unwrap(), before, "the entry first, the file after");
+        })
+        .unwrap();
+        assert_eq!(j.file_run(id).unwrap().unwrap().0.files, [f], "saved at once, its kept copy and its print as written named");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A stop inside an album of whole files, as a restart finds it: `album_done` never came, and only the journal is left.
+    #[test]
+    fn a_stop_inside_an_album_of_whole_files_loses_the_undo_of_none_it_wrote() {
+        let d = dir("run-entry-whole-cut");
+        let tracks: Vec<PathBuf> = ["one", "two", "three"].map(|n| d.join(format!("{n}.mp3"))).to_vec();
+        let originals: Vec<Vec<u8>> = tracks.iter().map(|t| bare_mp3(t)).collect();
+        let files: Vec<FileWrite> = tracks.iter().map(|t| FileWrite { album: "a".into(), ..whole(t, "length") }).collect();
+        let (j, mut e) = entry(&proposal(files.clone()));
+        let id = e.id.unwrap();
+        for (n, mut f) in files.into_iter().take(2).enumerate() {
+            apply_whole(&mut f, &d.join("keep"), n, |noted| e.whole_file(noted)).unwrap();
+        }
+
+        let (run, ..) = j.file_run(id).unwrap().unwrap();
+        assert_eq!(cut_albums(&run), ["a"], "its album not finished with");
+        assert_eq!(run.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), tracks[..2], "the two it wrote, and not the one it did not reach");
+        assert!(run.files.iter().all(reached), "its page says so");
+        for f in &run.files {
+            assert!(restore_whole(&f.path, f.whole.as_ref().unwrap()).unwrap());
+        }
+        assert_eq!(tracks.iter().map(|t| std::fs::read(t).unwrap()).collect::<Vec<_>>(), originals, "each as it was");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A stop in the moment between the entry and the rename: it names a file that has not changed.
+    #[test]
+    fn a_whole_file_stopped_before_it_took_the_file_s_place_is_said_not_written_and_its_undo_passes_it() {
+        let d = dir("run-entry-whole-ahead");
+        let track = d.join("track.mp3");
+        bare_mp3(&track);
+        let mut f = whole(&track, "length");
+        let w = f.whole.as_mut().unwrap();
+        (w.kept, w.wrote) = (Some(d.join("kept")), Some("what it would have been".into()));
+        assert!(!reached(&f));
+        assert!(!restore_whole(&track, f.whole.as_ref().unwrap()).unwrap(), "as planned: nothing to put back");
         std::fs::remove_dir_all(&d).ok();
     }
 

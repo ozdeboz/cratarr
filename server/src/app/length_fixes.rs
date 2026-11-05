@@ -120,8 +120,9 @@ pub fn fix(served: &Serve, field: &str, song: &str) -> Result<Option<Fix>> {
 }
 
 /// Writes a length's change into a file (`op`: length, trim, seektable; `ms` a FLAC's length to set), through a copy: on an
-/// error, or a stop, the file is as it was. The run on the one path keeps its original first (`file_runs`). Blocking.
-pub fn write(op: &str, path: &Path, ms: Option<i64>) -> Result<()> {
+/// error, or a stop, the file is as it was. `ready` has the copy, as made, before it takes the file's place. The run on the
+/// one path keeps its original first (`file_runs`). Blocking.
+pub fn write(op: &str, path: &Path, ms: Option<i64>, ready: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     crate::moves::replace_through_part(path, |copy| {
         std::fs::copy(path, copy).with_context(|| format!("copying {}", path.display()))?;
         match op {
@@ -129,7 +130,8 @@ pub fn write(op: &str, path: &Path, ms: Option<i64>) -> Result<()> {
             "length" | "trim" if is_flac(path) => set_flac_total(copy, ms.context("its sound's length is not known")?),
             "length" | "trim" => set_mp3_length(copy),
             _ => bail!("no such change: {op}"),
-        }
+        }?;
+        ready(copy)
     })
 }
 
