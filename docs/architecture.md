@@ -33,9 +33,11 @@ the parts are and how they talk.
 - **The rules**: `shared/rules.json` holds the players' rules in one table: Previous's restart, the wind's limits, the
   tape's ranges, the brake and its worked cases. The server's tests, the app's and the page's
   (`web/tests/rules-table.test.ts`) each check their own code against it.
-- **The rules crate** (`server/rules/`): what plays and in what order, and the brake, one implementation for the
-  server and for players that play on their own. It also builds to WebAssembly (`web/src/lib/wasm/`), which the page
-  can use instead of its own code behind a switch (off by default).
+- **The rules crate** (`server/rules/`): what plays and in what order, the brake, how a crate is worked out, what makes
+  music alike and Radio's picker, one implementation for the server and for players that play on their own. It reads no
+  file, clock or network (`tests/pure.rs`), and `tests/vectors/` holds its cases with their answers, for every build to
+  check: crates and Radio are asked of one library there. It also builds to WebAssembly (`web/src/lib/wasm/`), which the
+  page can use instead of its own code behind a switch (off by default).
 
 ## Server (`server/`)
 
@@ -54,8 +56,9 @@ the parts are and how they talk.
   `guest.rs` (the guest page, at home only); `access.rs` and `proxy.rs` (who a request is, and from where).
 - `src/catalogue/`: every audio file and its tags, read once and kept up to date.
 - `src/source/`: where music comes from (Cratarr's own folders; Jellyfin optionally), behind one trait.
-- `src/crates.rs`: crates, the rules that make playlists by themselves; filters use the same engine.
-- `src/similarity.rs`: what makes music alike, for radio, Autoplay and "more like this".
+- `src/crates.rs`: one's crates as they are kept. The rules that make playlists by themselves are the rules crate's
+  (`rules/src/crates.rs`), named here; filters use the same engine.
+- `src/similarity.rs`: what makes music alike, for radio, Autoplay and "more like this": the rules crate's, named here.
 - `src/analysis/`: waveform, tempo and loudness, worked out once per track.
 - `src/journal.rs`: every change is written down first, so it can be undone.
 - `src/snapcast/`: playing in step, as a Snapcast server.
