@@ -76,7 +76,7 @@ async fn like_crate(served: Option<Arc<crate::serve::Serve>>, id: &str, item: &s
     let served = served.ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     if item == crates::WEEK {
         let me = asking_user(Some(&*served)).ok_or_else(|| ToggleError::Refused("Sounds like your week is an account's own: sign in.".into()))?;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let now = super::moment::now_secs();
         let since = now - crates::WEEK_SECS;
         // The history's week (decision 0064): how often and how lately each was heard; skipped ones left out too. Until
         // the log reaches back a week: the songs last played within it, alike.
@@ -449,7 +449,7 @@ impl CrateLibrary {
             favourites: self.favourites.as_ref(),
             favourite_albums: self.favourite_albums.as_ref(),
             uses: self.uses.as_ref(),
-            now: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64),
+            now: super::moment::now_secs(),
             fits: self.fits.as_ref(),
         }
     }
@@ -2622,7 +2622,7 @@ impl PlaylistService {
         };
         let (songs, played) = songs_played;
         let facts: HashMap<&str, &crates::Facts> = lib.files.iter().chain(every.iter().flat_map(|e| e.files.iter())).map(|f| (f.rel.as_str(), f)).collect();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let now = super::moment::now_secs();
         let images = self.crate_images();
         Ok(all
             .into_iter()
@@ -3892,7 +3892,7 @@ impl PlaylistService {
     /// (Insights' one) narrows the plays and skips; favourites, playlists and exclusions have no time.
     /// The sources the account switched off add nothing (decision 0094, `taste::off_of`).
     pub async fn taste(&self, want: Option<&str>, without: &[String], period: super::history::Period) -> Result<super::taste::TasteView, ToggleError> {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let now = super::moment::now_secs();
         let since = period.since(now).unwrap_or(0);
         let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("A taste is an account's own: sign in.".into()))?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -4045,7 +4045,7 @@ impl PlaylistService {
             let found = serve.library.albums_by_id(&ids)?;
             let out: HashSet<String> = found.iter().filter(|a| album_out(a, &artists)).map(|a| a.id.clone()).collect();
             let artist_of: HashMap<String, String> = found.into_iter().map(|a| (a.id, a.artist_id)).collect();
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+            let now = super::moment::now_secs();
             // How far an album is from the listening (the owner, 2026-10-23: weigh the unplayed, "the albums that are
             // totally opposite our actual listening behaviour while matching our profile"): never played, 1; played,
             // nearer the more lately (half at UNPLAYED_HALF_DAYS); an artist played much pulls it nearer, up to half.

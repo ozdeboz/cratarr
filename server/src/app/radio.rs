@@ -10,18 +10,22 @@
 //! minutes (playlists and album tags change in between). The listener's favourites and plays are read for each choice:
 //! the account whose player asks (decision 0051).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
+use super::play::Rng;
 use super::playon::QueueTrack;
 use crate::similarity::{Library, Profile, Signal, Track, Weights, unique};
+
+#[cfg(test)]
+mod proof;
 
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
 pub const LANE_RADIO: &str = "radio";
@@ -459,37 +463,6 @@ impl Index {
     }
 }
 
-/// A small generator (xorshift, seeded from the clock): picking needs no better.
-pub(crate) struct Rng(u64);
-
-impl Rng {
-    pub(crate) fn new() -> Self {
-        Self(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1)
-    }
-    #[cfg(test)]
-    pub(crate) fn seeded(n: u64) -> Self {
-        Self(n | 1)
-    }
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    /// From 0 up to (not including) 1.
-    fn unit(&mut self) -> f64 {
-        (self.next() >> 11) as f64 / (1u64 << 53) as f64
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n.max(1) as u64) as usize
-    }
-    fn shuffle<T>(&mut self, items: &mut [T]) {
-        for i in (1..items.len()).rev() {
-            items.swap(i, self.below(i + 1));
-        }
-    }
-}
-
 /// What AudioMuse heard of a song (decision 0054), as similarity takes it. The tests' own: nothing else uses it (no
 /// warning in the server's build).
 #[cfg(test)]
@@ -721,7 +694,8 @@ fn away(s: &Song) -> f64 {
 fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>, mode: Mode, weights: &Weights, rng: &mut Rng) -> Vec<usize> {
     let profile = index.profile(seed);
     let banned: HashSet<u32> = out.iter().map(|&i| index.songs[i].album_n).collect();
-    let mut sums: HashMap<u32, (f64, u32)> = HashMap::new();
+    // In the albums' order, for the draws below: a map's own order differs from run to run, and one seed gives one answer.
+    let mut sums: BTreeMap<u32, (f64, u32)> = BTreeMap::new();
     for &i in pool {
         let s = &index.songs[i];
         if banned.contains(&s.album_n) {
@@ -758,13 +732,12 @@ struct Cache {
 
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
-/// The next radio tracks for a player (decision 0036).
-pub async fn next(app: &Arc<super::App>, mut req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
-    let (index, recent) = ready().await?;
+/// A request as its listener's settings make it: their Similar by, and the libraries they let Radio and Autoplay choose
+/// from (0.9.5: their folders). With the account it is for, and whether Bandcamp joins.
+fn as_asked(mut req: NextRequest) -> Result<(NextRequest, Option<String>, bool), ToggleError> {
     if req.similar_by.is_none() {
         req.similar_by = similar_by_of_listener();
     }
-    // The libraries the account lets Radio and Autoplay choose from (0.9.5): their folders; and whether Bandcamp joins.
     let account = req.account.clone().or_else(|| crate::serve::instance()?.current_user());
     let (libraries, bandcamp) = account.as_deref().map(more_music_of).unwrap_or((None, false));
     if let (Some(libraries), Some(served)) = (libraries, crate::serve::instance()) {
@@ -775,6 +748,13 @@ pub async fn next(app: &Arc<super::App>, mut req: NextRequest) -> Result<Vec<Que
         }
         req.folders = Some(folders);
     }
+    Ok((req, account, bandcamp))
+}
+
+/// The next radio tracks for a player (decision 0036).
+pub async fn next(app: &Arc<super::App>, req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
+    let (index, recent) = ready().await?;
+    let (req, account, bandcamp) = as_asked(req)?;
     let within = match &req.within {
         Some(w) => Some(index.find(&super::play::own_songs(app, &w.collection(), account.as_deref()).await?)),
         None => None,
@@ -785,7 +765,7 @@ pub async fn next(app: &Arc<super::App>, mut req: NextRequest) -> Result<Vec<Que
     let index = with_taste(app, index, account.as_deref(), req.mode == Mode::Taste).await?;
     // Radio's inserts in the radio lane; everything else is Autoplay's.
     let lane = if req.mode == Mode::Radio { LANE_RADIO } else { LANE_AUTOPLAY };
-    let picks = choose(&index, &req, &recent, within.as_deref(), &mut Rng::new());
+    let picks = choose(&index, &req, &recent, within.as_deref(), &mut super::play::rng());
     let tracks: Vec<QueueTrack> = picks.iter().map(|&i| track(&index.songs[i], lane)).collect();
     // Bandcamp's suggestions join where the account lets them, on likeness alone (0.9.5; not inside a list).
     match account {
@@ -863,7 +843,7 @@ async fn with_elsewhere(index: &Index, req: &NextRequest, picks: &[usize], mut t
         _ => return tracks,
     };
     let elsewhere = elsewhere_of(index, &found, &req.exclude);
-    let mut rng = Rng::new();
+    let mut rng = super::play::rng();
     for (place, e) in mix_elsewhere(index, req, picks, &elsewhere) {
         let page = &elsewhere[e].page;
         let album = match crate::bandcamp::Bandcamp::get().album(page).await {
@@ -988,7 +968,7 @@ fn starred_songs(userdata: &Path, user: &str) -> Result<HashSet<String>> {
 /// is not kept from the radio (the owner, 2026-10-30).
 fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
     let conn = read_only(userdata)?;
-    let since = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) - RECENT.as_secs() as i64;
+    let since = super::moment::now_secs() - RECENT.as_secs() as i64;
     let mut st = conn.prepare("SELECT item, own_date FROM annotation WHERE user = ?1 AND kind = 'song' AND own_date >= ?2")?;
     let rows = st.query_map(params![owner, since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -1118,7 +1098,7 @@ pub async fn similar_songs(item: &str, count: usize) -> Result<Vec<String>, Togg
         return Ok(Vec::new());
     }
     let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(count.min(MAX_COUNT)), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: similar_by_of_listener(), account: None, folders: None };
-    Ok(choose(&index, &req, &recent, None, &mut Rng::new()).into_iter().map(|i| index.songs[i].id.clone()).collect())
+    Ok(choose(&index, &req, &recent, None, &mut super::play::rng()).into_iter().map(|i| index.songs[i].id.clone()).collect())
 }
 
 /// Lists like a list, of its own kind (the owner, 2026-10-23: "any list that has a profile at the top gets a
@@ -1195,7 +1175,7 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
     let seed: Vec<String> = index.of_item(artist).into_iter().map(|i| index.songs[i].id.clone()).collect();
     let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(MAX_COUNT), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: similar_by_of_listener(), account: None, folders: None };
     let mut tally: HashMap<u32, u32> = HashMap::new();
-    for i in choose(&index, &req, &recent, None, &mut Rng::new()) {
+    for i in choose(&index, &req, &recent, None, &mut super::play::rng()) {
         for &a in unique(&index.songs[i].like.artists).collect::<Vec<_>>().iter().filter(|&&a| a != own) {
             *tally.entry(a).or_default() += 1;
         }
@@ -1250,7 +1230,7 @@ mod tests {
         let file = dir.join("userdata.sqlite");
         let _ = std::fs::remove_file(&file);
         let u = crate::userdata::UserData::open(Some(&file)).unwrap();
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let now = crate::app::moment::now_secs();
         u.count_play("me", ("tr-1", "p1"), "al-1", &[], now - 60).unwrap();
         let along = crate::userdata::Heard { event: Some("f1".into()), followed: true, ..crate::userdata::Heard::counted(now - 30) };
         u.record("me", ("tr-2", "p2"), "al-1", &[], &along).unwrap();
@@ -1407,6 +1387,18 @@ mod tests {
         }
     }
 
+    /// Every album alike, so the draw alone decides; a map's order differs from map to map, and the draws must not.
+    #[test]
+    fn one_seed_gives_one_whole_album_every_time() {
+        let index = Index::new((0..40).flat_map(|a| [song(&format!("a{a}"), a, a, 1, 2000, &[]), song(&format!("b{a}"), a, a, 1, 2000, &[])]).collect());
+        let req = NextRequest { mode: Mode::Similar, albums: true, ..NextRequest::default() };
+        let first = choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(7));
+        assert_eq!(first.len(), 2);
+        for _ in 0..50 {
+            assert_eq!(choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(7)), first);
+        }
+    }
+
     #[test]
     fn album_mix_gives_one_whole_album_not_the_seeds() {
         let index = library();
@@ -1518,8 +1510,7 @@ mod tests {
         let (mut first, mut came, mut others) = (0, 0, 0);
         for n in 0..400u64 {
             let req = NextRequest { seed: vec![], exclude: vec![], last: None, count: Some(5), ..ask(Mode::Random) };
-            // Seeds spread over the generator's range: small ones give xorshift small first draws, and t0 is drawn first.
-            let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded((n + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))));
+            let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(n)));
             came += usize::from(picked.contains(&"t0".to_string()));
             others += usize::from(picked.contains(&"t1".to_string()));
             first += usize::from(picked[0] == "t0");

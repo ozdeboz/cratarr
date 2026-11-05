@@ -1318,7 +1318,7 @@ fn minutes(secs: f64) -> f64 {
 }
 
 fn now_secs() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    crate::app::moment::now_secs()
 }
 
 /// Whether every condition that is on, but Sounds like, holds for a file: the files a Sounds like picks its closest

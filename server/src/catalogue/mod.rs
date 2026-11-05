@@ -2759,7 +2759,7 @@ impl Roots {
 }
 
 /// One server: link its tracks to files, a page at a time. A full listing when due, else only what changed.
-async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -> Result<()> {
+pub(crate) async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -> Result<()> {
     if !source.lists_tracks() {
         return Ok(());
     }

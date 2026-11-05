@@ -16,7 +16,7 @@
 //!
 //! The weights are all equal until AudioMuse has heard the whole library; then they are weighed (docs/plans.md).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -187,9 +187,11 @@ pub struct Profile {
     /// Its tracks' places, in order.
     members: Vec<usize>,
     /// Per kind of word, how much of its tracks (by weight) have each word.
-    counts: [HashMap<u32, f64>; WORDS.len()],
+    counts: [BTreeMap<u32, f64>; WORDS.len()],
     /// Per kind of word, its tf-idf weights (the share of its tracks having the word times its rarity) and their length.
-    weights: [HashMap<u32, f64>; WORDS.len()],
+    /// In the words' order: floats summed in another order come out another in the last bits, and near ties fall the
+    /// other way (one seed gives one answer).
+    weights: [BTreeMap<u32, f64>; WORDS.len()],
     norms: [f64; WORDS.len()],
     numbers: [Option<Spread>; NUMBERS],
     /// The mean of its tracks' sounds, of unit length; none when none was heard.
@@ -214,12 +216,11 @@ impl Profile {
     /// As `of`, each place weighing what it is given (a taste: a favourite more than a track heard once); places
     /// weighing nothing are left out, a place given twice weighs both together.
     pub fn of_weighted<'a>(lib: &Library, set: &[(usize, f64)], track: impl Fn(usize) -> &'a Track) -> Self {
-        let mut weight: HashMap<usize, f64> = HashMap::new();
+        let mut weight: BTreeMap<usize, f64> = BTreeMap::new();
         for &(i, w) in set.iter().filter(|(_, w)| w.is_finite() && *w > 0.0) {
             *weight.entry(i).or_default() += w;
         }
-        let mut members: Vec<usize> = weight.keys().copied().collect();
-        members.sort_unstable();
+        let members: Vec<usize> = weight.keys().copied().collect();
         let mut p = Profile { n: members.len(), mass: weight.values().sum(), ..Profile::default() };
         let mut values: [Vec<(f64, f64)>; NUMBERS] = Default::default();
         for &i in &members {
@@ -304,7 +305,7 @@ impl Profile {
     }
 
     /// How much of its tracks (by weight) have each artist.
-    pub fn artists(&self) -> &HashMap<u32, f64> {
+    pub fn artists(&self) -> &BTreeMap<u32, f64> {
         &self.counts[1]
     }
 
@@ -586,6 +587,24 @@ mod tests {
         assert!((s.score(&Weights::ranked(&[Signal::Era, Signal::Sound])) - 1.0 / 3.0).abs() < 1e-9);
         assert_eq!(s.score(&Weights::ranked(&[Signal::Sound])), 1.0, "genre and era off");
         assert_eq!(s.score(&Weights::ranked(&[Signal::Mood])), 0.0, "nothing known of what counts");
+    }
+
+    /// Many words of many rarities, so the order of their sums shows in the last bits; a map's order differs from map to
+    /// map, and a near tie must not fall one way here and the other there.
+    #[test]
+    fn a_profile_comes_out_the_same_to_the_last_bit_every_time() {
+        let tracks: Vec<Track> = (0..300u32).map(|n| Track { genres: (0..=n % 40).map(|g| (g * 7 + n % 3) % 97).collect(), ..Track::default() }).collect();
+        let lib = Library::new(&tracks, Vec::new());
+        let set: Vec<(usize, f64)> = (0..300).map(|i| (i, 1.0 + i as f64 / 7.0)).collect();
+        let other = Profile::of(&lib, &[1, 22, 123, 244], |i| &tracks[i]);
+        let once = || {
+            let p = Profile::of_weighted(&lib, &set, |i| &tracks[i]);
+            (p.mass.to_bits(), p.norms.map(f64::to_bits), p.to_profile(&lib, &other).get(Signal::Genres).map(f64::to_bits))
+        };
+        let first = once();
+        for _ in 0..50 {
+            assert_eq!(once(), first);
+        }
     }
 
     #[test]

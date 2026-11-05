@@ -104,7 +104,7 @@ pub struct Week {
 }
 
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    super::moment::now_secs()
 }
 
 /// The albums without a cover, of Cratarr's own library (Home shows none of them).
