@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS handovers (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, track INTEGER NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER);
+-- 0100: a record's id for life, as a track's is, owned or not: one with no tracks is a record not had. Its facts are
+-- here, so a retired one keeps what it was. Its copies are its tracks' files, one folder's each
+-- (docs/records-and-copies.md).
+CREATE TABLE IF NOT EXISTS records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER,
+  title TEXT, artist TEXT, year INTEGER, kind TEXT, counting TEXT);
 CREATE TABLE IF NOT EXISTS analysis (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, version INTEGER NOT NULL,
   duration_secs REAL, loudness_lufs REAL, track_gain_db REAL, track_peak REAL, bpm REAL, bpm_confidence REAL,
@@ -197,7 +203,11 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
 }
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 21] = [
+const ADDED_COLUMNS: [(&str, &str); 24] = [
+    // 0100: the record a track is of, and its place there.
+    ("tracks", "record INTEGER"),
+    ("tracks", "disc INTEGER"),
+    ("tracks", "number INTEGER"),
     // 0101 point 1 (the owner, 2026-11-04): a folder's id for life, kept while it is parked under a negative id, so it
     // comes back as itself (`set_folders`).
     ("folders", "home INTEGER"),
@@ -772,7 +782,10 @@ impl Catalogue {
         }
         for p in forget {
             tx.execute(
-                &format!("UPDATE tracks SET retired_at = ?2, {REMEMBER} WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)"),
+                &format!(
+                    "UPDATE tracks SET retired_at = ?2, {REMEMBER} WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)
+                     AND NOT EXISTS (SELECT 1 FROM files o WHERE o.track = tracks.id AND o.folder != ?1)"
+                ),
                 params![p, now_s],
             )?;
             for table in ["files", "tags", "source_ids", "analysis"] {
@@ -1860,9 +1873,13 @@ impl Catalogue {
                 }
             }
         }
+        // A track lives while any copy holds a file of it, gone a while or in a trash included: the last one retires it.
         for (folder, rel) in &retire {
             tx.execute(
-                &format!("UPDATE tracks SET retired_at = ?3, {REMEMBER} WHERE id = (SELECT track FROM files WHERE folder = ?1 AND rel = ?2)"),
+                &format!(
+                    "UPDATE tracks SET retired_at = ?3, {REMEMBER} WHERE id = (SELECT track FROM files WHERE folder = ?1 AND rel = ?2)
+                     AND NOT EXISTS (SELECT 1 FROM files o WHERE o.track = tracks.id AND (o.folder != ?1 OR o.rel != ?2))"
+                ),
                 params![folder, rel, now],
             )?;
             for table in ["files", "tags", "source_ids", "analysis"] {
@@ -3110,7 +3127,7 @@ fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
 
 /// See `Catalogue::file_of`.
 fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
-    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
+    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel LIMIT 1"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()
         .ok()
         .flatten()
@@ -3670,6 +3687,32 @@ mod tests {
         assert_eq!(cat.track_of(0, "Elsewhere/1-01 Uno.mp3"), Some(one));
         assert!(!retired(&cat, one), "back in use");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A track is the record's (0101): two copies hold its id, and it lives until the last of them goes.
+    #[test]
+    fn a_track_with_two_copies_retires_with_the_last() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let one = cat.track_of(0, rel).unwrap();
+        cat.set_tracks(&[((1, rel.to_string()), Some(one))]).unwrap();
+        let lost = |dir: &PathBuf| {
+            std::fs::remove_file(dir.join(rel)).unwrap();
+            cat.walk_all();
+            cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+            cat.identify().unwrap();
+        };
+        lost(&b);
+        assert!(!retired(&cat, one), "a copy is left");
+        assert_eq!(cat.file_of(one), Some((0, rel.to_string())));
+        lost(&a);
+        assert!(retired(&cat, one), "the last copy went");
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
     }
 
     /// Lost track ids (0101, the owner): nothing is given out while they are lost; started afresh, the new ids come above

@@ -79,9 +79,79 @@ pub fn match_moves(new: &[FileFacts], gone: &[FileFacts]) -> Vec<(usize, usize)>
     pairs
 }
 
+/// A track of a folder as a record's tracklist compares it: folded title and length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub title: String,
+    pub duration_ms: i64,
+}
+
+/// Whether two tracklists, in order, are the same tracks (0101: the same record is the same tracks): as many, each the
+/// same title, each within [`SAME_LENGTH_MS`]. An empty list is nothing's tracklist.
+pub fn same_tracks(a: &[Listed], b: &[Listed]) -> bool {
+    !a.is_empty()
+        && a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| !x.title.is_empty() && x.title == y.title && (x.duration_ms - y.duration_ms).abs() <= SAME_LENGTH_MS)
+}
+
+/// What decides whether two folders are copies of one record ([`same_record`]), folded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecordFacts {
+    /// MusicBrainz release.
+    pub release: Option<String>,
+    pub artist: String,
+    pub title: String,
+    pub tracks: Vec<Listed>,
+}
+
+/// Whether two folders are copies of one record (docs/records-and-copies.md): the tracks must match, always; with that,
+/// two MusicBrainz releases decide, and without one on either side the album artist and title do. What cannot be told
+/// apart stays two (0100).
+pub fn same_record(a: &RecordFacts, b: &RecordFacts) -> bool {
+    if !same_tracks(&a.tracks, &b.tracks) {
+        return false;
+    }
+    match (&a.release, &b.release) {
+        (Some(x), Some(y)) => x == y,
+        _ => !a.title.is_empty() && a.title == b.title && a.artist == b.artist,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rec(release: Option<&str>, artist: &str, title: &str, tracks: &[(&str, i64)]) -> RecordFacts {
+        RecordFacts {
+            release: release.map(fold),
+            artist: fold(artist),
+            title: fold(title),
+            tracks: tracks.iter().map(|(t, ms)| Listed { title: fold(t), duration_ms: *ms }).collect(),
+        }
+    }
+
+    #[test]
+    fn the_same_record_is_the_same_tracks() {
+        let two = [("One", 200_000), ("Two", 180_000)];
+        let album = rec(None, "A", "B", &two);
+        assert!(same_record(&album, &rec(None, "A", "B", &[("one", 201_500), ("Two!", 180_000)])), "lengths within 2 s, loose titles");
+        assert!(!same_record(&album, &rec(None, "A", "B", &[("One", 200_000)])), "a track missing");
+        assert!(!same_record(&album, &rec(None, "A", "B", &[("One", 200_000), ("Two", 180_000), ("Bonus", 90_000)])), "a deluxe edition");
+        assert!(!same_record(&album, &rec(None, "A", "B", &[("One", 200_000), ("Two", 190_000)])), "another length");
+        assert!(!same_record(&album, &rec(None, "A", "C", &two)), "another title");
+        assert!(!same_record(&album, &rec(None, "D", "B", &two)), "another artist");
+    }
+
+    #[test]
+    fn a_release_decides_only_among_the_same_tracks() {
+        let two = [("One", 200_000), ("Two", 180_000)];
+        let tagged = rec(Some("r1"), "A", "B", &two);
+        assert!(same_record(&tagged, &rec(Some("r1"), "A (remaster tag)", "B [2011]", &two)), "the same release, tags apart");
+        assert!(!same_record(&tagged, &rec(Some("r2"), "A", "B", &two)), "two releases are two records");
+        assert!(!same_record(&tagged, &rec(Some("r1"), "A", "B", &[("One", 200_000)])), "a folder missing a track is no copy");
+        assert!(same_record(&tagged, &rec(None, "A", "B", &two)), "one side without a release: artist and title");
+        assert!(!same_record(&rec(None, "", "", &[]), &rec(None, "", "", &[])), "nothing is no record");
+    }
 
     fn f(name: &str, ms: i64, recording: Option<&str>, title: Option<&str>, artist: Option<&str>) -> FileFacts {
         FileFacts {

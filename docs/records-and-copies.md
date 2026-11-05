@@ -119,7 +119,8 @@ In the catalogue, beside `records`, growing with what is looked at and never the
   value, so a link finds its subject.
 - `reference_tracks (record, source, tracks)`: the tracklist a reference gives, titles and lengths. What judges a folder.
 - `artists (id, born, name, sort)` and `labels (id, born, name)`, with `record_artists (record, artist)` and
-  `record_labels (record, label, catno)`.
+  `record_labels (record, label, catno)`. An artist's id is for life, like a record's, and served as `ar-<id>`. Two
+  artists of one name are one until their references say otherwise, and then they split.
 - 0.14's `record_references` and the kept `discography` move into these, and go.
 
 ### Merging (0100 point 4)
@@ -173,8 +174,9 @@ No new patterns: the pages there are, fed by the record and the artist.
 
 ### The migration, again
 
-The same transaction also: gives each request a record, owned or new, and moves `record_references` and `discography`
-across, each in the report.
+The same transaction also: gives each request a record, owned or new; gives each artist an id and rewrites what names
+the name's hash (favourites, exclusions, `artist_person`, related artists, the discography's keys); and moves
+`record_references` and `discography` across. Each is in the report, and the map keeps old artist ids too.
 
 ### Order of work, after step 6
 
@@ -183,8 +185,3 @@ across, each in the report.
 9. Requests on the record, Soulseek by reference.
 10. One missing list: Discogs' and Bandcamp's reads.
 11. The pages and search's "beyond".
-
-### Open point for the owner
-
-- **Artist ids.** Today an artist's id is a hash of the name, so two artists of one name are one. Keep the hash for now,
-  or give artists an id for life in this same migration?
