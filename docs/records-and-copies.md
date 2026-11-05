@@ -10,7 +10,7 @@ track" and "how a record's copies behave"); this says how they are built, in wha
   prefix outside the first folder (`albums.base_id` is the hash without it), and it lies in one folder and one directory.
 - The same album in two libraries is two albums, two sets of tracks. Incoming's verdicts pair them by directory name
   and tags: `upgrade` or `duplicate`.
-- User data names albums by those ids in about twenty tables (tags, reviews, references, marks, overrides, covers).
+- User data names albums by those ids in a dozen tables (added, reviews, tags, overrides, references, marks and more).
 
 ## The model
 
@@ -33,10 +33,12 @@ track" and "how a record's copies behave"); this says how they are built, in wha
 
 As the owner decided, the same record is the same tracks. A folder is identified once, when its files are read:
 
-1. Its MusicBrainz release, where its tags or its reference say one: the same release is the same record.
-2. Else the same album artist and title, and the same tracklist: as many tracks, each one's length within 2 seconds, its
-   title the same by the loose key.
-3. Else it is a record of its own. What cannot be told apart stays two (0100 point 4), and a deluxe edition with bonus
+1. The tracklists must match, always: as many tracks, each one's length within 2 seconds, its title the same by the
+   loose key. A folder missing a track of the release is not a copy of it.
+2. With that, the same MusicBrainz release, where tags or references say one, is the same record; two different
+   releases are two records.
+3. Without a release on either side, the same album artist and title is the same record.
+4. Else it is a record of its own. What cannot be told apart stays two (0100 point 4), and a deluxe edition with bonus
    tracks is its own record by this rule.
 
 A copy takes the record's track ids (0101's amendment), track by track through the same match.
@@ -59,6 +61,7 @@ stream asks `copy_for` with who is asking.
 - A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, deletable }]`. Dots: one per copy,
   the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
+  The record stays while one copy is left.
 - The quality on a card is the copy that plays.
 - A record's Move, Add to and Delete take the copy: `from`, a library's id.
 - Incoming's verdicts go: a better copy is a copy of the record, and Replace swaps two copies of one record.
@@ -69,6 +72,9 @@ stream asks `copy_for` with who is asking.
 against the allocation. A file written afterwards takes room of its own (0101: tags and covers go into every copy).
 `KeepPreview.copy` says so to the page, and Undo takes the copy away.
 
+The off-site backup leaves out shared-block copies of records in Music's mirror, and Cratarr keeps their list for it. A
+copy whose original leaves Music is its own from then on, and backed up (0101).
+
 ## The migration (0101 point 21)
 
 One transaction in each database, its report the `records` part:
@@ -77,9 +83,11 @@ One transaction in each database, its report the `records` part:
 2. Where two copies hold different track ids for one track, the main library's survives. Plays, favourites, playlist
    entries and every other reference move to it, through a map kept for the report.
 3. Rewrite every user-data table that names an album, through `old id → record`.
-4. Report each table's rows before and after; unmatched: albums no record took, references to no album.
+4. Report each table's rows before and after, and the rows that matched nothing. Those stay as missing entries with
+   their remembered tags, never dropped.
 
-Devices start fresh (0101 point 23). Other Subsonic apps see new album ids once.
+The old-to-new map is kept: old shared links open through it, and the release run rewrites Home Assistant's references
+through it (point 22). Devices start fresh (point 23). Other Subsonic apps and Kodi see new album ids once.
 
 ## Order of work
 
