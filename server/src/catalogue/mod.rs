@@ -206,6 +206,7 @@ fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64
             recording: fold(recording),
             title: fold(title),
             artist: fold(artist),
+            ..Default::default()
         };
         let shares = f.recording.as_deref().is_some_and(|r| recordings.contains(r))
             || (!f.name.is_empty() && names.contains(f.name.as_str()))
@@ -1812,7 +1813,7 @@ impl Catalogue {
                 "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('musicbrainz_trackid', 'title', 'artist') ORDER BY n",
             )?;
             let mut file_facts = |(folder, rel, ms, _): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
-                let mut f = identity::FileFacts { name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
+                let mut f = identity::FileFacts { folder: *folder, name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
                 for row in tag.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
                     let (name, value) = row?;
                     let slot = match name.as_str() {
@@ -1829,7 +1830,7 @@ impl Catalogue {
             let new_facts = new.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
             let gone_facts = gone.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
             drop(tag);
-            for (n, g) in identity::match_moves(&new_facts, &gone_facts) {
+            for (n, g) in identity::match_moves_by_folder(&new_facts, &gone_facts) {
                 let ((nf, nr, _, _), (gf, gr, _, track)) = (&new[n], &gone[g]);
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
                 for table in ["files", "tags"] {
@@ -3978,6 +3979,33 @@ mod tests {
         assert_eq!(rows, 1, "the replaced file's row let go");
         assert!(cat.hand_over(&std::env::temp_dir().join("nowhere/x.flac"), one).is_err(), "in no library");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Each new file fits the gone rows of both copies: as a whole that is no pair, and fresh ids would split the track.
+    #[test]
+    fn both_copies_renamed_outside_keep_their_track() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, two) = ("01 One.mp3", "02 Two.flac");
+        let track_of = |name: &str| cat.track_of(0, &format!("A - B (2020)/{name}")).unwrap();
+        let (track_one, track_two) = (track_of(one), track_of(two));
+        cat.set_tracks(&[((1, format!("A - B (2020)/{one}")), Some(track_one)), ((1, format!("A - B (2020)/{two}")), Some(track_two))]).unwrap();
+        for d in [&a, &b] {
+            std::fs::rename(d.join("A - B (2020)"), d.join("A - B (2020) [FLAC]")).unwrap();
+        }
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (4, 0), "each paired in its own folder: no new ids");
+        for folder in [0, 1] {
+            assert_eq!(cat.track_of(folder, &format!("A - B (2020) [FLAC]/{one}")), Some(track_one));
+            assert_eq!(cat.track_of(folder, &format!("A - B (2020) [FLAC]/{two}")), Some(track_two));
+        }
+        assert!(!retired(&cat, track_one) && !retired(&cat, track_two));
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
     }
 
     /// A mount away for a moment leaves a copy's rows gone: a better file claiming the track in another folder must leave

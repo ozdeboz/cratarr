@@ -8,6 +8,8 @@
 /// What is compared, already folded (lower case, letters and digits only).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileFacts {
+    /// The catalogue folder it is in: no rule reads it, [`match_moves_by_folder`] sorts by it.
+    pub folder: i64,
     /// The file name, without folders.
     pub name: String,
     pub duration_ms: Option<i64>,
@@ -73,6 +75,32 @@ pub fn match_moves(new: &[FileFacts], gone: &[FileFacts]) -> Vec<(usize, usize)>
                 gone_free[g] = false;
                 pairs.push((n, g));
             }
+        }
+    }
+    pairs.sort();
+    pairs
+}
+
+/// [`match_moves`] within each folder first, then across folders on what is left. Two copies of a track renamed outside
+/// Cratarr fit each other's gone rows too, and that ambiguity would give both fresh ids and split the track; within its
+/// folder each fits one. A file moved from one folder to another still pairs, in the last round.
+pub fn match_moves_by_folder(new: &[FileFacts], gone: &[FileFacts]) -> Vec<(usize, usize)> {
+    let mut new_free = vec![true; new.len()];
+    let mut gone_free = vec![true; gone.len()];
+    let mut folders: Vec<i64> = new.iter().map(|f| f.folder).collect();
+    folders.sort_unstable();
+    folders.dedup();
+    let mut pairs = Vec::new();
+    for folder in folders.into_iter().map(Some).chain([None]) {
+        let here = |f: &FileFacts| folder.is_none_or(|x| x == f.folder);
+        let new_here: Vec<usize> = (0..new.len()).filter(|&n| new_free[n] && here(&new[n])).collect();
+        let gone_here: Vec<usize> = (0..gone.len()).filter(|&g| gone_free[g] && here(&gone[g])).collect();
+        let (new_facts, gone_facts): (Vec<FileFacts>, Vec<FileFacts>) =
+            (new_here.iter().map(|&n| new[n].clone()).collect(), gone_here.iter().map(|&g| gone[g].clone()).collect());
+        for (n, g) in match_moves(&new_facts, &gone_facts) {
+            new_free[new_here[n]] = false;
+            gone_free[gone_here[g]] = false;
+            pairs.push((new_here[n], gone_here[g]));
         }
     }
     pairs.sort();
@@ -155,12 +183,18 @@ mod tests {
 
     fn f(name: &str, ms: i64, recording: Option<&str>, title: Option<&str>, artist: Option<&str>) -> FileFacts {
         FileFacts {
+            folder: 0,
             name: name_of(name),
             duration_ms: Some(ms),
             recording: recording.map(fold),
             title: title.map(fold),
             artist: artist.map(fold),
         }
+    }
+
+    /// One song, as a file of a folder.
+    fn intro(folder: i64, path: &str) -> FileFacts {
+        FileFacts { folder, ..f(path, 60_000, None, Some("Intro"), Some("X")) }
     }
 
     #[test]
@@ -201,6 +235,31 @@ mod tests {
         // Two new files fit one gone file: no pair either.
         let two_new = vec![gone[0].clone(), gone[1].clone()];
         assert!(match_moves(&two_new, &gone[..1]).is_empty());
+    }
+
+    #[test]
+    fn a_rename_pairs_in_its_own_folder() {
+        let new = vec![intro(0, "a2/01 Intro.flac"), intro(1, "b2/01 Intro.flac")];
+        let gone = vec![intro(1, "b/01 Intro.flac"), intro(0, "a/01 Intro.flac")];
+        assert!(match_moves(&new, &gone).is_empty(), "across folders each fits both");
+        assert_eq!(match_moves_by_folder(&new, &gone), vec![(0, 1), (1, 0)]);
+    }
+
+    #[test]
+    fn a_file_moved_between_folders_still_pairs() {
+        let new = vec![intro(1, "b/01 Intro.flac")];
+        let gone = vec![intro(0, "a/01 Intro.flac")];
+        assert_eq!(match_moves_by_folder(&new, &gone), vec![(0, 0)]);
+        let other = f("a/02 Other.flac", 90_000, None, Some("Other"), None);
+        let (new, gone) = (vec![new[0].clone(), other.clone()], vec![gone[0].clone(), other]);
+        assert_eq!(match_moves_by_folder(&new, &gone), vec![(0, 0), (1, 1)], "beside a file its own folder paired");
+    }
+
+    #[test]
+    fn ambiguity_within_a_folder_is_not_guessed_across_them() {
+        let new = vec![intro(0, "c/01 Intro.flac")];
+        let gone = vec![intro(0, "a/01 Intro.flac"), intro(0, "b/01 Intro.flac"), intro(1, "d/01 Intro.flac")];
+        assert!(match_moves_by_folder(&new, &gone).is_empty());
     }
 
     #[test]
