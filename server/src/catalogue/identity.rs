@@ -58,49 +58,46 @@ const RULES: [fn(&FileFacts, &FileFacts) -> bool; 3] = [
 
 /// Pairs of (new index, gone index): each new file takes the gone file's track id.
 pub fn match_moves(new: &[FileFacts], gone: &[FileFacts]) -> Vec<(usize, usize)> {
+    match_within(new, gone, &[None])
+}
+
+/// [`match_moves`] with each rule tried within each folder first, then across folders on what is left. Two copies of a
+/// track renamed outside Cratarr fit each other's gone rows too, and that ambiguity would give both fresh ids and split
+/// the track; within its folder each fits one. A file moved from one folder to another still pairs, in a rule's last
+/// round. The folders sit inside the rules: they settle what one rule alone cannot, and a weak fit in a file's own folder
+/// must not beat a surer rule's fit in another.
+pub fn match_moves_by_folder(new: &[FileFacts], gone: &[FileFacts]) -> Vec<(usize, usize)> {
+    let mut rounds: Vec<Option<i64>> = new.iter().map(|f| Some(f.folder)).collect();
+    rounds.sort_unstable();
+    rounds.dedup();
+    rounds.push(None);
+    match_within(new, gone, &rounds)
+}
+
+/// Every rule in order, and each rule over `rounds` in order: the files of one folder, or None for all of them.
+fn match_within(new: &[FileFacts], gone: &[FileFacts], rounds: &[Option<i64>]) -> Vec<(usize, usize)> {
     let mut new_free = vec![true; new.len()];
     let mut gone_free = vec![true; gone.len()];
     let mut pairs = Vec::new();
     for rule in RULES {
-        for n in 0..new.len() {
-            if !new_free[n] {
-                continue;
+        for &folder in rounds {
+            let here = |f: &FileFacts| folder.is_none_or(|x| x == f.folder);
+            let new_here: Vec<usize> = (0..new.len()).filter(|&n| here(&new[n])).collect();
+            let gone_here: Vec<usize> = (0..gone.len()).filter(|&g| here(&gone[g])).collect();
+            for &n in &new_here {
+                if !new_free[n] {
+                    continue;
+                }
+                let fits: Vec<usize> = gone_here.iter().copied().filter(|&g| gone_free[g] && rule(&new[n], &gone[g])).collect();
+                let [g] = fits[..] else { continue };
+                // Unambiguous the other way too: no other free new file fits that gone file.
+                let rivals = new_here.iter().filter(|&&m| m != n && new_free[m] && rule(&new[m], &gone[g])).count();
+                if rivals == 0 {
+                    new_free[n] = false;
+                    gone_free[g] = false;
+                    pairs.push((n, g));
+                }
             }
-            let fits: Vec<usize> = (0..gone.len()).filter(|&g| gone_free[g] && rule(&new[n], &gone[g])).collect();
-            let [g] = fits[..] else { continue };
-            // Unambiguous the other way too: no other free new file fits that gone file.
-            let rivals = (0..new.len()).filter(|&m| m != n && new_free[m] && rule(&new[m], &gone[g])).count();
-            if rivals == 0 {
-                new_free[n] = false;
-                gone_free[g] = false;
-                pairs.push((n, g));
-            }
-        }
-    }
-    pairs.sort();
-    pairs
-}
-
-/// [`match_moves`] within each folder first, then across folders on what is left. Two copies of a track renamed outside
-/// Cratarr fit each other's gone rows too, and that ambiguity would give both fresh ids and split the track; within its
-/// folder each fits one. A file moved from one folder to another still pairs, in the last round.
-pub fn match_moves_by_folder(new: &[FileFacts], gone: &[FileFacts]) -> Vec<(usize, usize)> {
-    let mut new_free = vec![true; new.len()];
-    let mut gone_free = vec![true; gone.len()];
-    let mut folders: Vec<i64> = new.iter().map(|f| f.folder).collect();
-    folders.sort_unstable();
-    folders.dedup();
-    let mut pairs = Vec::new();
-    for folder in folders.into_iter().map(Some).chain([None]) {
-        let here = |f: &FileFacts| folder.is_none_or(|x| x == f.folder);
-        let new_here: Vec<usize> = (0..new.len()).filter(|&n| new_free[n] && here(&new[n])).collect();
-        let gone_here: Vec<usize> = (0..gone.len()).filter(|&g| gone_free[g] && here(&gone[g])).collect();
-        let (new_facts, gone_facts): (Vec<FileFacts>, Vec<FileFacts>) =
-            (new_here.iter().map(|&n| new[n].clone()).collect(), gone_here.iter().map(|&g| gone[g].clone()).collect());
-        for (n, g) in match_moves(&new_facts, &gone_facts) {
-            new_free[new_here[n]] = false;
-            gone_free[gone_here[g]] = false;
-            pairs.push((new_here[n], gone_here[g]));
         }
     }
     pairs.sort();
@@ -260,6 +257,17 @@ mod tests {
         let new = vec![intro(0, "c/01 Intro.flac")];
         let gone = vec![intro(0, "a/01 Intro.flac"), intro(0, "b/01 Intro.flac"), intro(1, "d/01 Intro.flac")];
         assert!(match_moves_by_folder(&new, &gone).is_empty());
+    }
+
+    /// The folder settles what one rule alone cannot, never a surer rule's answer: the weaker fit is another album's file.
+    #[test]
+    fn a_recording_in_another_folder_beats_a_weaker_fit_in_the_files_own() {
+        let new = vec![FileFacts { folder: 0, ..f("c/01 Intro.flac", 60_000, Some("r1"), Some("Intro"), Some("X")) }];
+        let moved = FileFacts { folder: 1, ..f("a/01 Intro.flac", 60_000, Some("r1"), Some("Intro"), Some("X")) };
+        let weaker = FileFacts { folder: 0, ..f("b/01 Intro.flac", 61_000, Some("r0"), Some("Intro"), Some("X")) };
+        assert_eq!(match_moves_by_folder(&new, &[moved.clone(), weaker.clone()]), vec![(0, 0)]);
+        let here = FileFacts { folder: 0, ..moved.clone() };
+        assert_eq!(match_moves_by_folder(&new, &[moved, here, weaker]), vec![(0, 1)], "the same rule in two folders: its own");
     }
 
     #[test]
