@@ -1067,11 +1067,23 @@ pub fn undo_at(file: &Path) -> Result<()> {
     {
         let a: Added = serde_json::from_slice(&std::fs::read(file).context("That can no longer be undone")?)?;
         let now = super::moment::now_secs();
-        crate::trash::trash_file(&a.root, &a.added, now)?;
+        // Asked first: a run stays listed after the trash let the old track go, and the album must not lose both.
+        if let Some(tok) = &a.trashed {
+            crate::trash::can_restore_file(&a.root, tok, &a.added)?;
+        }
+        let taken = crate::trash::trash_file(&a.root, &a.added, now)?;
         let mut changed = vec![a.root.join(&a.added)];
         let served = crate::serve::instance();
         if let Some(tok) = &a.trashed {
-            let back = a.root.join(crate::trash::restore_file(&a.root, tok)?);
+            let back = match crate::trash::restore_file(&a.root, tok) {
+                Ok(rel) => a.root.join(rel),
+                Err(e) => {
+                    if let Err(again) = crate::trash::restore_file(&a.root, &taken) {
+                        tracing::error!("track fetch undo: {} left in the trash: {again:#}", a.added);
+                    }
+                    return Err(e);
+                }
+            };
             // The track back to the file it was (0101 point 11).
             if let (Some(s), Some(track)) = (&served, a.track)
                 && let Err(e) = s.catalogue().hand_over(&back, &a.root.join(&a.added), track)
@@ -1092,6 +1104,79 @@ pub fn undo_at(file: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a Better copy leaves: `added` in its album, the replaced track `old` named for the trash (paths relative to
+    /// the library), and what its Undo reads.
+    fn better_copy(tag: &str, added: &str, old: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("cratarr-better-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("A")).unwrap();
+        std::fs::write(root.join(added), b"new").unwrap();
+        let undo = root.join("undo.json");
+        let a = Added { root: root.clone(), added: added.into(), trashed: Some(format!("100/{old}")), track: None };
+        std::fs::write(&undo, serde_json::to_vec(&a).unwrap()).unwrap();
+        (root, undo)
+    }
+
+    fn in_trash(root: &Path, old: &str) {
+        let at = root.join(crate::trash::TRASH_DIR).join("100").join(old);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, b"old").unwrap();
+    }
+
+    #[test]
+    fn undo_of_a_better_copy_takes_the_new_track_out_and_puts_the_old_one_back() {
+        let (root, undo) = better_copy("plain", "A/new.flac", "A/old.flac");
+        in_trash(&root, "A/old.flac");
+        undo_at(&undo).unwrap();
+        assert_eq!(std::fs::read(root.join("A/old.flac")).unwrap(), b"old");
+        assert!(!root.join("A/new.flac").exists());
+        assert!(!undo.exists(), "done once");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_new_track_with_the_old_ones_name_does_not_stand_in_the_way_of_its_undo() {
+        let (root, undo) = better_copy("same-name", "A/one.flac", "A/one.flac");
+        in_trash(&root, "A/one.flac");
+        undo_at(&undo).unwrap();
+        assert_eq!(std::fs::read(root.join("A/one.flac")).unwrap(), b"old");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn undo_of_a_better_copy_leaves_the_new_track_when_the_trash_has_let_the_old_one_go() {
+        for (tag, added) in [("purged", "A/new.flac"), ("purged-same-name", "A/old.flac")] {
+            let (root, undo) = better_copy(tag, added, "A/old.flac");
+            assert!(undo_at(&undo).unwrap_err().to_string().contains("no longer in the trash"), "{tag}");
+            assert_eq!(std::fs::read(root.join(added)).unwrap(), b"new", "{tag}");
+            assert!(undo.exists(), "{tag}: still its Undo, to say why again");
+            std::fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
+    fn undo_of_a_better_copy_leaves_the_new_track_when_a_file_is_back_at_the_old_name() {
+        let (root, undo) = better_copy("taken", "A/new.flac", "A/old.flac");
+        in_trash(&root, "A/old.flac");
+        std::fs::write(root.join("A/old.flac"), b"someone else's").unwrap();
+        assert!(undo_at(&undo).unwrap_err().to_string().contains("exists again"));
+        assert_eq!(std::fs::read(root.join("A/new.flac")).unwrap(), b"new");
+        assert_eq!(std::fs::read(root.join("A/old.flac")).unwrap(), b"someone else's");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A file where its folder was passes the look first: only the restore itself finds out.
+    #[test]
+    fn the_new_track_goes_back_where_the_old_ones_restore_fails_after_all() {
+        let (root, undo) = better_copy("late", "A/new.flac", "B/old.flac");
+        in_trash(&root, "B/old.flac");
+        std::fs::write(root.join("B"), b"a file where its folder was").unwrap();
+        undo_at(&undo).unwrap_err();
+        assert_eq!(std::fs::read(root.join("A/new.flac")).unwrap(), b"new", "back in its album");
+        assert!(root.join(crate::trash::TRASH_DIR).join("100/B/old.flac").is_file(), "the old one where it was");
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn a_track_is_converted_to_its_librarys_limit() {
