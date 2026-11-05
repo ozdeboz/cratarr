@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod brake;
 pub mod matcher;
+pub mod similarity;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
