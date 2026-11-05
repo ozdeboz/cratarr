@@ -99,6 +99,16 @@ impl Server {
         }
     }
 
+    /// Every record the types sheet offers, written: told to go, not gone.
+    async fn write_the_sheet(&self) {
+        let sheet = self.get("/api/file-changes/plans/types").await;
+        let records = sheet["records"].as_array().unwrap();
+        assert!(!records.is_empty(), "something to write");
+        let albums: Vec<&Value> = records.iter().map(|r| &r["album"]).collect();
+        let stamps: serde_json::Map<String, Value> = records.iter().map(|r| (r["album"].as_str().unwrap().to_string(), r["stamp"].clone())).collect();
+        self.ok(reqwest::Method::POST, "/api/file-changes/plans/types/apply", json!({ "albums": albums, "stamps": stamps })).await;
+    }
+
     /// Undoes a run and waits for its Undo to finish (it answers at once and works in the background): the run then.
     async fn undo(&self, id: &str) -> (u16, Value) {
         let (status, first) = self.send(reqwest::Method::POST, &format!("/api/file-changes/runs/{id}/undo"), json!({})).await;
@@ -488,6 +498,126 @@ async fn types_and_years_into_the_files_end_to_end() {
     assert_eq!(vorbis(&second, "RELEASETYPE"), ["album"], "back as it was");
     assert_eq!(vorbis(&second, "MUSICBRAINZ_ALBUMTYPE"), ["album"]);
     assert_eq!(vorbis(&first, "RELEASETYPE"), ["single"]);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The types of every FLAC under `dir`, by its path. A hidden file is a copy a stop left, no track.
+fn types_under(dir: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    let tracks = audio_under(dir).into_iter().filter(|f| f.ends_with(".flac") && !f.rsplit('/').next().unwrap().starts_with('.'));
+    tracks.map(|f| (f.clone(), vorbis(&dir.join(&f), "RELEASETYPE"))).collect()
+}
+
+/// A run's records as its page says them: each record and how many of its files were written.
+fn written(run: &Value) -> Vec<(String, u64)> {
+    run["records"].as_array().unwrap().iter().map(|r| (r["album"].as_str().unwrap().to_string(), r["written"].as_u64().unwrap())).collect()
+}
+
+/// A real stop: the server killed while a run writes, not a state made to look like one. The run is listed as cut off, read at
+/// start, and keeps to what it wrote: the write tried again for what is left is the second run's, on the first's page and in
+/// each one's Undo.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_run_killed_half_way_keeps_to_what_it_wrote_end_to_end() {
+    let root = temp("killed");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
+    assert!(made.success(), "the fixture library is made");
+    settings_0_15(&data, &music.to_string_lossy());
+
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/file-facts", json!({ "on": true })).await;
+    let first = types_under(&music);
+
+    s.write_the_sheet().await;
+    // Albums go at least 50 ms apart, so asked this often the run is caught with most of them to go.
+    let asked = Instant::now();
+    loop {
+        let runs = s.get("/api/file-changes/runs").await;
+        assert_eq!(runs[0]["id"].as_str().unwrap().chars().next(), Some('l'), "it finished before it could be stopped: {runs}");
+        if runs[0]["done"].as_u64().unwrap() >= 2 {
+            break;
+        }
+        assert!(asked.elapsed() < Duration::from_secs(60), "waited for the run to get going: {runs}");
+    }
+    s.stop();
+
+    let s = Server::start(&data).await;
+    let cut = s.get("/api/file-changes/runs").await[0].clone();
+    let id = cut["id"].as_str().unwrap().to_string();
+    assert!(cut["failed"].as_array().unwrap().iter().any(|f| f["why"] == "Cratarr stopped before this was done"), "{cut}");
+    let page = format!("/api/file-changes/runs/{id}");
+    let stopped = types_under(&music);
+    let wrote: Vec<&String> = stopped.keys().filter(|f| stopped[*f] != first[*f]).collect();
+    assert!(!wrote.is_empty(), "it wrote before it was stopped");
+    // Nothing has written since: the files alone hold it to what it reached, a record's worth of them said on its list.
+    let reached = written(&s.get(&page).await).iter().filter(|(_, n)| *n > 0).count() as u64;
+    s.until("the run cut off read at start", Duration::from_secs(60), || async { s.get("/api/file-changes/runs").await[0]["albums"] == reached }).await;
+    let claimed = written(&s.get(&page).await);
+
+    s.write_the_sheet().await;
+    let second = s.done_run(Some(&id)).await["id"].as_str().unwrap().to_string();
+    let both = types_under(&music);
+    assert_ne!(both, stopped, "the second run wrote what the first did not reach");
+    assert_eq!(written(&s.get(&page).await), claimed, "the first run claims nothing the second wrote");
+
+    let (status, undone) = s.undo(&id).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    for (f, types) in types_under(&music) {
+        assert_eq!(types, if wrote.contains(&&f) { first[&f].clone() } else { both[&f].clone() }, "{f}");
+    }
+    let (status, undone) = s.undo(&second).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert_eq!(types_under(&music), first, "every file as it was before either run");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A real stop in a file written whole: a cover killed with its new picture beside the tracks and its tracks under way. Nothing
+/// but the run's entry knows what the folder held.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_cover_killed_part_way_is_put_back_by_its_undo_end_to_end() {
+    let root = temp("cover");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    let made = Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap();
+    assert!(made.success(), "the fixture library is made");
+    settings_0_15(&data, &music.to_string_lossy());
+
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    let album = s.albums().await.into_iter().find(|a| a["title"] == "Club Classics").expect("eight tracks to be part way through");
+    let dir = music.join("Various Artists/Club Classics (2001)");
+    let cover = dir.join("cover.jpg");
+    let (old, new) = (std::fs::read(&cover).unwrap(), std::fs::read(music.join("Glass Harbour/Tide Tables (2012)/cover.jpg")).unwrap());
+    assert_ne!(old, new);
+
+    let url = format!("{}/api/albums/cratarr/{}/covers", s.base, album["id"].as_str().unwrap());
+    let sent = s.http.put(url).body(new.clone()).send().await.unwrap();
+    assert!(sent.status().is_success(), "{}", sent.status());
+    let asked = Instant::now();
+    while std::fs::read(&cover).ok().as_ref() != Some(&new) {
+        assert!(asked.elapsed() < Duration::from_secs(60), "waited for the new cover");
+    }
+    s.stop();
+
+    let s = Server::start(&data).await;
+    let run = s.get("/api/file-changes/runs").await[0].clone();
+    assert_eq!(run["what"], "cover", "{run}");
+    assert!(run["failed"].as_array().unwrap().iter().any(|f| f["why"] == "Cratarr stopped before this was done"), "stopped part way: {run}");
+    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert_eq!(std::fs::read(&cover).unwrap(), old, "the old picture back");
+    for track in audio_under(&dir).iter().filter(|f| !f.starts_with('.')) {
+        use lofty::prelude::*;
+        let file = lofty::read_from_path(dir.join(track)).unwrap();
+        assert_eq!(file.tags().iter().map(|t| t.picture_count()).sum::<u32>(), 0, "{track} had no picture inside");
+    }
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
