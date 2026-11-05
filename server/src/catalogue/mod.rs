@@ -142,6 +142,9 @@ const GENERATION: &str = "generation";
 /// How long a gone file waits to be recognised as moved before its track id is retired (decision 0011 §4).
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
+/// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along.
+const FILE_TABLES: [&str; 6] = ["files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
+
 /// What a retiring track was, from its file and tags while they are still there (`tracks`' kept columns).
 const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id LIMIT 1),
   was_ms = (SELECT duration_ms FROM files WHERE track = tracks.id LIMIT 1),
@@ -693,7 +696,7 @@ impl Catalogue {
             Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(at).join(rel).is_file()))
         };
         let rekey = |from: i64, to: i64| -> Result<()> {
-            for table in ["files", "tags", "source_ids", "analysis"] {
+            for table in FILE_TABLES {
                 tx.execute(&format!("UPDATE {table} SET folder = ?2 WHERE folder = ?1"), params![from, to])?;
             }
             tx.execute("UPDATE folders SET id = ?2 WHERE id = ?1", params![from, to])?;
@@ -800,7 +803,7 @@ impl Catalogue {
                 ),
                 params![p, now_s],
             )?;
-            for table in ["files", "tags", "source_ids", "analysis"] {
+            for table in FILE_TABLES {
                 tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [p])?;
             }
             tx.execute("DELETE FROM folders WHERE id = ?1", [p])?;
@@ -1894,7 +1897,7 @@ impl Catalogue {
                 ),
                 params![folder, rel, now],
             )?;
-            for table in ["files", "tags", "source_ids", "analysis"] {
+            for table in FILE_TABLES {
                 tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel])?;
             }
         }
@@ -2022,7 +2025,7 @@ impl Catalogue {
         for rel in &rels {
             let new_rel = format!("{to}{}", &rel[from.len()..]);
             if (to_folder, new_rel.as_str()) != (from_folder, rel.as_str()) {
-                for table in ["files", "tags", "source_ids", "analysis"] {
+                for table in FILE_TABLES {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![to_folder, new_rel])?;
                 }
             }
@@ -2031,9 +2034,9 @@ impl Catalogue {
                 "UPDATE files SET folder = ?3, rel = ?4, trashed = ?5, gone_at = NULL WHERE folder = ?1 AND rel = ?2",
                 params![from_folder, rel, to_folder, new_rel, trashed],
             )?;
-            tx.execute("UPDATE tags SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
-            tx.execute("UPDATE analysis SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
-            tx.execute("UPDATE analysis_shape SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
+            for table in ["tags", "analysis", "analysis_shape", "beat_this"] {
+                tx.execute(&format!("UPDATE {table} SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2"), params![from_folder, rel, to_folder, new_rel])?;
+            }
         }
         tx.commit()?;
         Ok(rels.len())
@@ -3503,6 +3506,60 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// A folder's first file given an analysis, with its shape, and Beat this!'s beats.
+    fn heard(cat: &Catalogue, folder: i64) -> (String, BeatThisRow) {
+        let (_, one, _, size, mtime) = cat.unanalysed(10).unwrap().into_iter().find(|t| t.0 == folder && t.1.ends_with("One.mp3")).unwrap();
+        cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
+        let row = BeatThisRow { folder, rel: one.clone(), size, mtime, beats: vec![500, 1_000], downbeats: vec![500] };
+        cat.store_beat_this(std::slice::from_ref(&row)).unwrap();
+        (one, row)
+    }
+
+    /// How many rows of a file's shape and beats are kept at a place.
+    fn parts_at(cat: &Catalogue, folder: i64, rel: &str) -> (i64, i64) {
+        let count = |table: &str| cat.db().query_row(&format!("SELECT COUNT(*) FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel], |r| r.get(0)).unwrap();
+        (count("analysis_shape"), count("beat_this"))
+    }
+
+    /// Beats left behind would list the file for hearing again, and a row a walk left in the way would break the shape's key.
+    #[test]
+    fn a_moved_file_keeps_its_beats_and_shape() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let (one, row) = heard(&cat, 0);
+        let moved = one.replace("A - B (2020)", "A - B (2020) moved");
+        cat.store_beat_this(&[BeatThisRow { rel: moved.clone(), beats: vec![9], ..row }]).unwrap();
+        cat.db().execute("INSERT INTO analysis_shape (folder, rel) VALUES (0, ?1)", [&moved]).unwrap();
+        cat.move_files(0, "A - B (2020)", 0, "A - B (2020) moved").unwrap();
+        assert_eq!(cat.beat_this_of(0, &moved).map(|(beats, _)| beats), Some(vec![0.5, 1.0]), "its own beats, not what stood there");
+        assert_eq!(cat.analysis_of(0, &moved).unwrap().waveform.len(), 512, "its shape came along");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "nothing left behind");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_parked_folder_keeps_its_beats_and_shape_and_a_forgotten_one_leaves_none() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let (one, _) = heard(&cat, 0);
+        cat.set_folders(vec![b.clone()]).unwrap();
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "parked, with its files");
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1), "back, with them");
+        assert!(cat.beat_this_of(0, &one).is_some());
+        cat.set_folders(vec![b.clone()]).unwrap();
+        std::fs::remove_dir_all(a.join("A - B (2020)")).unwrap();
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        let left: i64 = cat.db().query_row("SELECT (SELECT COUNT(*) FROM analysis_shape) + (SELECT COUNT(*) FROM beat_this)", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "its files gone from its path: forgotten, and all of theirs with them");
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
+    }
+
     #[test]
     fn a_changed_file_is_served_as_it_was_read_until_it_is_read_again() {
         let d = music();
@@ -3833,6 +3890,23 @@ mod tests {
         cat.db().execute("UPDATE tracks SET retired_at = NULL WHERE id = 5", []).unwrap();
         cat.assign_records(&[]).unwrap();
         assert!(!retired(gone), "a track came back");
+    }
+
+    #[test]
+    fn a_retired_file_leaves_no_beats() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, _) = heard(&cat, 0);
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1));
+        std::fs::remove_file(d.join(&one)).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// A track is the record's (0101): two copies hold its id, and it lives until the last of them goes.
