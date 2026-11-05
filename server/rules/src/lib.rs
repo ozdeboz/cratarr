@@ -18,7 +18,11 @@
 use serde::{Deserialize, Serialize};
 
 pub mod brake;
+pub mod crates;
+pub mod excluded_artists;
+pub mod ids;
 pub mod matcher;
+pub mod names;
 pub mod similarity;
 #[cfg(target_arch = "wasm32")]
 mod wasm;

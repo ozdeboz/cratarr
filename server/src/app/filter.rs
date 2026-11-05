@@ -356,7 +356,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         return Ok((answer, verdicts));
     }
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|i| i.tracks.as_slice()).collect();
-    let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
+    let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses(), super::moment::now_secs());
     // The Library's Type axis counts records by their types (a record under each it has: the counts overlap).
     if let Some(kinds) = &record_kinds
         && let Some(axis) = axes.iter_mut().find(|a| a.key == "type")
@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(passing(&[row(false, &["Album"]), row(true, &["Compilation"])]), [0, 1, 4]);
         assert_eq!(passing(&[row(false, &["Broadcast"])]), [5]);
         // The Type axis counts each record under every type it has, and says each value's layer.
-        let mut axis = crates::list_axes(&[], &[], None, None).into_iter().find(|a| a.key == "type").unwrap();
+        let mut axis = crates::list_axes(&[], &[], None, None, 0).into_iter().find(|a| a.key == "type").unwrap();
         kind_axis(&mut axis, &records);
         let at = |v: &str| axis.values.iter().position(|x| x == v).map(|i| (axis.counts[i], axis.layers[i]));
         assert_eq!((at("Album"), at("Live"), at("Classical"), at("Broadcast")), (Some((4, 1)), Some((2, 2)), Some((1, 3)), Some((1, 1))));

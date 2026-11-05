@@ -14,19 +14,7 @@ use md5::{Digest, Md5};
 
 use crate::catalogue::ServedRow;
 
-pub const SONG: &str = "tr-";
-pub const ALBUM: &str = "al-";
-pub const ARTIST: &str = "ar-";
-
-/// A song's id from its Cratarr track id.
-pub fn song(track: i64) -> String {
-    format!("{SONG}{track}")
-}
-
-/// The Cratarr track id in a song id.
-pub fn track_of(id: &str) -> Option<i64> {
-    id.strip_prefix(SONG)?.parse().ok()
-}
+pub use cratarr_rules::ids::{ALBUM, ARTIST, SONG, song, track_of};
 
 /// Navidrome's `NewHash`: md5 over each part followed by a zero-width space, as 22 base62 characters.
 pub fn hash(parts: &[&str]) -> String {
