@@ -65,8 +65,17 @@ pub fn embedded(track: &Path) -> Option<(String, Vec<u8>)> {
     if data.is_empty() || data.len() as u64 > MAX_BYTES {
         return None;
     }
-    let ct = pick.mime_type().map(|m| m.as_str().to_string()).filter(|m| m.starts_with("image/")).unwrap_or_else(|| sniff(data).to_string());
-    Some((ct, data.to_vec()))
+    Some((picture_type(pick.mime_type().map(|m| m.as_str()), data).to_string(), data.to_vec()))
+}
+
+/// The picture types Cratarr answers with.
+pub const TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+/// What a picture is answered as: what it `said` it is, among [TYPES], else what its first bytes say. A tag or another
+/// server says what it likes, and an `image/svg+xml` opened at its address would run its script in Cratarr's origin, with
+/// the viewer's session.
+pub fn picture_type(said: Option<&str>, data: &[u8]) -> &'static str {
+    said.and_then(|s| TYPES.into_iter().find(|t| *t == s)).unwrap_or_else(|| sniff(data))
 }
 
 /// A picture's type from its first bytes.
@@ -181,6 +190,17 @@ mod tests {
         assert_eq!((back.width(), back.height()), (150, 75), "aspect kept");
         assert!(resize(&big, 600).unwrap().is_none(), "no larger than it is");
         assert_eq!(sniff(&big), "image/png");
+    }
+
+    #[test]
+    fn a_picture_is_answered_as_a_raster_type_whatever_it_says_it_is() {
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+        for said in ["image/svg+xml", "text/html", "IMAGE/SVG+XML", "image/png; x", ""] {
+            assert_eq!(picture_type(Some(said), svg), "image/jpeg", "{said}");
+        }
+        assert_eq!(picture_type(Some("image/svg+xml"), &png(1, 1)), "image/png", "its bytes say what it is");
+        assert_eq!(picture_type(Some("image/webp"), b"anything"), "image/webp", "one of the four is believed");
+        assert_eq!(picture_type(None, &png(1, 1)), "image/png");
     }
 
     #[test]

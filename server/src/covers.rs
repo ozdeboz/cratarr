@@ -130,7 +130,7 @@ async fn embedded_cover(root: &Path, entry: &str, if_none_match: Option<&str>) -
     let Some((ct, bytes)) = tokio::task::spawn_blocking(move || crate::serve::art::embedded(&track)).await.ok().flatten() else {
         return Outcome::NotFound;
     };
-    let Some(content_type) = ["image/jpeg", "image/png", "image/webp", "image/gif"].into_iter().find(|t| *t == ct) else { return Outcome::NotFound };
+    let Some(content_type) = crate::serve::art::TYPES.into_iter().find(|t| *t == ct) else { return Outcome::NotFound };
     Outcome::Image { content_type, etag, bytes }
 }
 
@@ -277,6 +277,11 @@ mod tests {
 
     /// A short silent WAV with `picture` embedded as its front cover (an ID3v2 chunk).
     fn wav_with_picture(path: &Path, picture: &[u8]) {
+        wav_with_typed_picture(path, picture, "image/png");
+    }
+
+    /// The same, with `mime` for what the tag says the picture is.
+    fn wav_with_typed_picture(path: &Path, picture: &[u8], mime: &str) {
         use lofty::picture::{MimeType, Picture, PictureType};
         use lofty::prelude::*;
         use lofty::tag::{Tag, TagType};
@@ -299,9 +304,20 @@ mod tests {
         std::fs::write(path, w).unwrap();
         let mut file = lofty::read_from_path(path).unwrap();
         let mut tag = Tag::new(TagType::Id3v2);
-        tag.push_picture(Picture::unchecked(picture.to_vec()).pic_type(PictureType::CoverFront).mime_type(MimeType::Png).build());
+        tag.push_picture(Picture::unchecked(picture.to_vec()).pic_type(PictureType::CoverFront).mime_type(MimeType::from_str(mime)).build());
         file.insert_tag(tag);
         file.save_to_path(path, lofty::config::WriteOptions::default()).unwrap();
+    }
+
+    #[test]
+    fn a_tag_that_calls_its_picture_svg_is_not_believed() {
+        let d = Dir::new();
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>".to_vec();
+        let track = d.0.join("Embedded/01 a.wav");
+        wav_with_typed_picture(&track, &svg, "image/svg+xml");
+        let (ct, bytes) = crate::serve::art::embedded(&track).unwrap();
+        assert_eq!(bytes, svg, "the file's own picture");
+        assert_eq!(ct, "image/jpeg", "a type that runs nothing, in every answer that has it from here");
     }
 
     #[tokio::test]

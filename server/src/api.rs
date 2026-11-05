@@ -386,6 +386,8 @@ pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware
         res.headers_mut().insert("x-request-id", v);
     }
     res.headers_mut().insert("x-response-time-ms", HeaderValue::from(ms as u64));
+    // On every answer, what comes from a file's tags or from another server too: a browser takes it for what it says it is.
+    res.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     res
 }
 
@@ -3931,7 +3933,8 @@ struct CoverStamp {
 async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
     match app.playing.album_cover(&source, &album).await {
         Some((content_type, bytes)) => {
-            let ct = HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
+            // Another server's album comes with what that server says.
+            let ct = HeaderValue::from_static(crate::serve::art::picture_type(Some(&content_type), &bytes));
             let keep = if q.v.is_some_and(|v| !v.is_empty()) { "private, max-age=31536000, immutable" } else { "private, max-age=3600" };
             ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static(keep))], bytes).into_response()
         }

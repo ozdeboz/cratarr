@@ -167,6 +167,18 @@ async fn a_group_s_sound_answers_only_a_player_of_the_group_and_nothing_else_mak
 }
 
 #[tokio::test]
+async fn every_answer_tells_a_browser_not_to_guess_its_type() {
+    let w = Whole::open("nosniff").await;
+    let me = w.session("me");
+    // What a route answers, a refusal, what no route takes (the page's), a file a tag could have reached: all of them.
+    for (cookie, path) in [(me.as_str(), "/api/about"), ("", "/api/about"), (me.as_str(), "/"), (me.as_str(), "/api/albums/cratarr/al-1/cover")] {
+        let req = Request::builder().uri(path).header("cookie", cookie).body(Body::empty()).unwrap();
+        let r = w.router.clone().oneshot(req).await.unwrap();
+        assert_eq!(r.headers().get("x-content-type-options").and_then(|v| v.to_str().ok()), Some("nosniff"), "{path} with {cookie:?}");
+    }
+}
+
+#[tokio::test]
 async fn every_route_is_behind_the_sign_in_and_is_there() {
     let w = Whole::open("sweep").await;
     let (router, cookie) = (&w.router, w.session("me"));
