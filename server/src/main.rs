@@ -303,6 +303,8 @@ async fn main() -> Result<()> {
     let warm = app.clone();
     tokio::spawn(async move { warm.playlists.warm_favourites().await });
     app.collection.follow(&app.journal);
+    // A run of file changes a stop cut off: read now, before anything can write what it was to write.
+    tokio::spawn(app::file_runs::settle_cut_off(app.journal.clone()));
 
     // One background pass keeps Cratarr in step with the sources and the library (see `App::sync`); the first runs
     // at once, so the incoming lists are ready soon after start.

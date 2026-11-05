@@ -148,6 +148,10 @@ pub struct FileRun {
     /// The files not written, and why.
     #[serde(default)]
     pub failed: Vec<RunFailed>,
+    /// The records whose `files` are what was planned, not what was written: those of a run still writing, or of one a stop
+    /// cut off, until its files have been read (`file_runs::settle`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planned: Vec<String>,
 }
 
 /// A record of a run: its album id, title and artist.
@@ -577,7 +581,7 @@ mod change_tests {
             undone: false, whole: None,
         };
         let record = RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() };
-        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new() };
+        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new(), planned: Vec::new() };
         let old = j.record_run(1_000, &run, None, 100).unwrap();
         let id = j.record_run(2_000, &run, Some("ann"), 100).unwrap();
         assert_eq!(j.file_run(old).unwrap(), None, "older than the trash keeps: forgotten");
