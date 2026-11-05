@@ -322,6 +322,35 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The first start of `scripts/dev-instance.sh`, step by step, as this suite cannot run the script: its account in the
+/// data folder before anything starts, so sign-in is on as in any new folder, and off only by the switch, with the password.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_development_instance_signs_in_once_to_switch_sign_in_off_end_to_end() {
+    let root = temp("dev-instance");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    settings_0_15(&data, music.to_str().unwrap());
+    std::fs::write(data.join("subsonic-users.json"), r#"[{ "name": "owner", "password": "0f1e2d3c", "admin": true }]"#).unwrap();
+
+    let s = Server::start(&data).await;
+    assert_eq!(s.send(reqwest::Method::GET, "/api/albums", json!({})).await.0, 401, "an account here says nothing of the sign-in");
+    assert_eq!(s.send(reqwest::Method::GET, "/api/health", json!({})).await.0, 200, "what the script waits for");
+    let owner = s.sign_in("owner", "0f1e2d3c").await;
+    owner.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    assert_eq!(owner.send(reqwest::Method::PUT, "/api/auth/required", json!({ "on": false, "password": "another" })).await.0, 403);
+    owner.ok(reqwest::Method::PUT, "/api/auth/required", json!({ "on": false, "password": "0f1e2d3c" })).await;
+    assert_eq!(s.send(reqwest::Method::GET, "/api/albums", json!({})).await.0, 200, "nobody signs in now");
+    s.stop();
+
+    // The instance restarts with its machine, and the script starts it anew.
+    let s = Server::start(&data).await;
+    assert_eq!(s.send(reqwest::Method::GET, "/api/albums", json!({})).await.0, 200);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// The harness for who hears what (decision 0101), on every kind of library and settings as 0.16 writes them: two
 /// accounts signed in by their sessions. Each is itself to the server, nobody is refused, and a file comes as it lies.
 #[tokio::test(flavor = "multi_thread")]
