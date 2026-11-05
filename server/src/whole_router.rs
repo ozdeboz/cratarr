@@ -127,6 +127,42 @@ async fn show_all_past_two_hundred_results_answers() {
 }
 
 #[tokio::test]
+async fn show_all_gives_every_track_once_where_the_ranking_is_not_the_index_s_order() {
+    // The index's order is by how often the word comes, in how little text: an artist that says it eight times goes before a
+    // long title that says it once. The ranking is the other way round: a word in the title is a direct hit.
+    let w = Whole::open("show-all-mixed").await;
+    let row = |n: i64, title: String, artist: &str| crate::catalogue::ServedRow {
+        rel: format!("Various/Adventures (1991)/{n:03} Track.flac"),
+        track: Some(n),
+        tags: vec![("title".into(), title), ("artist".into(), artist.into()), ("album".into(), "Adventures".into()), ("tracknumber".into(), n.to_string())],
+        ..Default::default()
+    };
+    let by_the_artist = (1..=230).map(|n| row(n, format!("Track {n}"), "Cloud Cloud Cloud Cloud Cloud Cloud Cloud Cloud"));
+    let by_the_title = (231..=260).map(|n| row(n, format!("Cloud over the long grey water of a river with no name and no end at all {n}"), "The Orb"));
+    let rows = by_the_artist.chain(by_the_title).collect();
+    w.served.library.refresh(&[crate::serve::library::FolderRows { folder: 0, root: "/music".into(), rows }], &Default::default()).unwrap();
+    let first = w.served.library.find(&crate::search::words("cloud"), 200).unwrap();
+    assert!(first.tracks.iter().all(|t| !t.title.starts_with("Cloud")), "the case: the index's first 200 hold no direct hit");
+
+    let me = w.session("me");
+    let (mut seen, mut titles) = (Vec::new(), Vec::new());
+    loop {
+        let (status, found) = w.ask(&me, Method::GET, &format!("/api/search?q=cloud&kinds=track&limit=50&offset={}", seen.len())).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(found["groups"]["track"]["total"].as_u64(), Some(260));
+        let page = found["groups"]["track"]["items"].as_array().unwrap().clone();
+        if page.is_empty() {
+            break;
+        }
+        seen.extend(page.iter().map(|i| i["track"].as_str().unwrap().to_string()));
+        titles.extend(page.iter().map(|i| i["title"].as_str().unwrap().to_string()));
+    }
+    let once: std::collections::HashSet<&String> = seen.iter().collect();
+    assert_eq!((seen.len(), once.len()), (260, 260), "each once, so none lost");
+    assert!(titles[..30].iter().all(|t| t.starts_with("Cloud")), "the direct hits first, from the first page: {:?}", &titles[..30]);
+}
+
+#[tokio::test]
 async fn sharing_playlists_in_a_batch_is_behind_the_administrators_fence() {
     let w = Whole::open("link").await;
     w.served.users.from_directory("ann", false, None).unwrap();

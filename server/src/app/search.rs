@@ -538,9 +538,11 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     }
     let wants = |k: &str| kinds.is_empty() || kinds.iter().any(|x| x == k);
     let limit = limit.clamp(1, 100);
-    // Show all (0076): a page of one kind from `offset`; the library asked for as far as that page reaches.
+    // Show all (0076): a page of one kind from `offset`, of the one list its pages share. So the library is asked the same
+    // for each, as far as any of them goes: `find` ranks what it is asked for, so one asked for no further than its page
+    // ranked another list than the page before, and an offset into that showed some twice and others never.
     let offset = offset.min(DEEPEST);
-    let reach = (offset + limit).min(DEEPEST);
+    let reach = if kinds.len() == 1 { DEEPEST } else { (offset + limit).min(DEEPEST) };
     let mut groups: BTreeMap<&'static str, Vec<Item>> = BTreeMap::new();
     // How many each kind matches in all, where the library shows fewer (`limit`); the rest count what they hold.
     let mut totals: HashMap<&'static str, usize> = HashMap::new();
