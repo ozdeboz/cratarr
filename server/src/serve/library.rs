@@ -2657,6 +2657,16 @@ mod tests {
     }
 
     #[test]
+    fn a_search_for_more_than_the_index_is_widened_to_finds_them_all() {
+        // Show all's fifth page of 50 asks for 250: past `WIDEST`, where the release build's panic stopped the server.
+        let lib = Library::open(None).unwrap();
+        let cloud = |n: i64| row(n, &format!("The Orb/Adventures (1991)/{n:03} Cloud.flac"), &[("title", &format!("Cloud {n}")), ("artist", "The Orb"), ("album", "Adventures"), ("tracknumber", &n.to_string())]);
+        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: (1..=260).map(cloud).collect() }], &Rules::default()).unwrap();
+        let f = lib.find(&crate::search::words("cloud"), 250).unwrap();
+        assert_eq!((f.tracks.len(), f.totals.tracks), (250, 260));
+    }
+
+    #[test]
     fn search_finds_words_and_their_beginnings_without_accents() {
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();

@@ -53,18 +53,71 @@ fn named_routes() -> Vec<(String, Vec<Method>)> {
     out
 }
 
+/// The server as `main` serves it, signing in required, with one account, the administrator `me`, and a folder of its own.
+struct Whole {
+    dir: std::path::PathBuf,
+    served: Arc<crate::serve::Serve>,
+    router: axum::Router,
+}
+
+impl Whole {
+    async fn open(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("cratarr-whole-router-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        served.users.set("me", "pw").unwrap();
+        served.sessions.set_required(true).unwrap();
+        let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
+        let saved = crate::settings::Saved { music_folder: Some(dir.to_string_lossy().into_owned()), ..Default::default() };
+        let app = crate::app::App::new(cfg, saved, crate::settings::Origin::Env, Some(Arc::clone(&served))).await.unwrap();
+        let router = super::routes(app, Arc::clone(&served));
+        Self { dir, served, router }
+    }
+
+    /// A sign-in of `user`, as the cookie a browser sends.
+    fn session(&self, user: &str) -> String {
+        let (token, _) = self.served.sessions.create(user, "the sweep", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).unwrap();
+        format!("{}={token}", crate::serve::signin::COOKIE)
+    }
+
+    /// `path` asked with that cookie: the answer's status, and its body as JSON (null where it is none).
+    async fn ask(&self, cookie: &str, method: Method, path: &str) -> (StatusCode, serde_json::Value) {
+        let req = Request::builder().method(method).uri(path).header("cookie", cookie).header("accept", "application/json").body(Body::empty()).unwrap();
+        let r = self.router.clone().oneshot(req).await.unwrap();
+        let status = r.status();
+        let body = axum::body::to_bytes(r.into_body(), 1 << 24).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null))
+    }
+}
+
+impl Drop for Whole {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[tokio::test]
+async fn show_all_past_two_hundred_results_answers() {
+    // The audit's request, on as many tracks as it takes to reach it: a fifth page of 50.
+    let w = Whole::open("show-all").await;
+    let cloud = |n: i64| crate::catalogue::ServedRow {
+        rel: format!("The Orb/Adventures (1991)/{n:03} Cloud.flac"),
+        track: Some(n),
+        tags: vec![("title".into(), format!("Cloud {n}")), ("artist".into(), "The Orb".into()), ("album".into(), "Adventures".into()), ("tracknumber".into(), n.to_string())],
+        ..Default::default()
+    };
+    let rows = (1..=260).map(cloud).collect();
+    w.served.library.refresh(&[crate::serve::library::FolderRows { folder: 0, root: "/music".into(), rows }], &Default::default()).unwrap();
+    let me = w.session("me");
+    let (status, found) = w.ask(&me, Method::GET, "/api/search?q=cloud&kinds=track&limit=50&offset=200").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!((found["groups"]["track"]["total"].as_u64(), found["groups"]["track"]["items"].as_array().map(Vec::len)), (Some(260), Some(50)));
+}
+
 #[tokio::test]
 async fn every_route_is_behind_the_sign_in_and_is_there() {
-    let dir = std::env::temp_dir().join(format!("cratarr-whole-router-{}", std::process::id()));
-    std::fs::create_dir_all(dir.join(crate::playlists::PLAYLIST_DIR)).unwrap();
-    let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
-    served.users.set("me", "pw").unwrap();
-    served.sessions.set_required(true).unwrap();
-    let (token, _) = served.sessions.create("me", "the sweep", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).unwrap();
-    let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
-    let saved = crate::settings::Saved { music_folder: Some(dir.to_string_lossy().into_owned()), ..Default::default() };
-    let app = crate::app::App::new(cfg, saved, crate::settings::Origin::Env, Some(Arc::clone(&served))).await.unwrap();
-    let router = super::routes(app, Arc::clone(&served));
+    let w = Whole::open("sweep").await;
+    let (router, cookie) = (&w.router, w.session("me"));
 
     let routes = named_routes();
     assert!(routes.len() > 150, "the source's routes found: {}", routes.len());
@@ -87,7 +140,7 @@ async fn every_route_is_behind_the_sign_in_and_is_there() {
         let req = Request::builder()
             .method(Method::from_bytes(b"PROPFIND").unwrap())
             .uri(path.as_str())
-            .header("cookie", format!("{}={token}", crate::serve::signin::COOKIE))
+            .header("cookie", cookie.as_str())
             .body(Body::empty())
             .unwrap();
         let status = router.clone().oneshot(req).await.unwrap().status();
@@ -96,5 +149,4 @@ async fn every_route_is_behind_the_sign_in_and_is_there() {
     open.sort();
     open.dedup();
     assert!(open.iter().all(|p| p == "/signin" || p == "/signout" || p.starts_with("/api/health") || p.starts_with("/api/auth/check") || p.starts_with("/rest/") || p.starts_with("/api/scrobble/lastfm/callback/") || p == "/api/spotify/callback" || p == "/guest" || p.starts_with("/api/guest/")), "open: {open:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }

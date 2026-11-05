@@ -352,6 +352,7 @@ fn beyond(db: &Connection, sql: &str, q: &str, extras: &[(i64, String)]) -> Resu
 }
 
 /// Search asks the index for this many times what it shows (0.9.7), at most `WIDEST`, and ranks them before the cut.
+/// Show all asks for more than `WIDEST` by itself (2,000 at the deepest, `app::search`): then for just that.
 const WIDER: usize = 4;
 const WIDEST: usize = 200;
 
@@ -629,7 +630,7 @@ impl Library {
         let lim = limit as i64;
         // More asked of the index than are shown (0.9.7): ranked here (`search::rank`, a direct hit first) before the
         // cut, so one found by its artist or album cannot push one named by the words out of the first `limit`.
-        let wide = (limit * WIDER).clamp(limit, WIDEST) as i64;
+        let wide = (limit * WIDER).min(WIDEST).max(limit) as i64;
         let ranked = |names: Vec<&str>| -> Vec<usize> {
             let n = names.len();
             let mut order: Vec<(usize, f32)> = names.iter().enumerate().map(|(i, name)| (i, crate::search::rank(name, words, i, n))).collect();
