@@ -91,9 +91,9 @@ impl InsightsService {
                 None => None,
             };
             let came: std::collections::HashMap<(i64, &str), i64> = match &arrivals {
-                Some((albums, songs)) => {
-                    let at: std::collections::HashMap<&str, i64> = albums.iter().filter_map(|(id, _, c)| c.map(|c| (id.as_str(), c))).collect();
-                    songs.iter().filter_map(|(_, a, f, rel)| at.get(a.as_str()).map(|c| ((*f, rel.as_str()), *c))).collect()
+                Some((copies, files)) => {
+                    let at: std::collections::HashMap<&str, i64> = copies.iter().filter_map(|(id, _, c)| c.map(|c| (id.as_str(), c))).collect();
+                    files.iter().filter_map(|(_, a, f, rel)| at.get(a.as_str()).map(|c| ((*f, rel.as_str()), *c))).collect()
                 }
                 None => Default::default(),
             };
@@ -128,7 +128,7 @@ impl InsightsService {
             let by_line: std::collections::HashMap<&str, &crate::crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
             let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists, &by_line);
             report.playlists.library_tracks_in_crates = in_crates;
-            if let (Some(served), Some((albums, songs))) = (served, &arrivals) {
+            if let (Some(served), Some((copies, files))) = (served, &arrivals) {
                 let (plays, starred): (std::collections::HashMap<String, u32>, std::collections::HashSet<String>) = match &user {
                     Some(u) => (
                         served.userdata.song_plays(u)?.into_iter().map(|(id, (n, _))| (id, n)).collect(),
@@ -145,7 +145,7 @@ impl InsightsService {
                     Period::Year => (Step::Month, Some(12)),
                     Period::All => (Step::Year, None),
                 };
-                let mut overview = crate::insights::overview(albums, songs, &shown.iter().copied().collect(), &incoming, &plays, &starred, since, growth, epoch_now(), 0);
+                let mut overview = crate::insights::overview(copies, files, &shown.iter().copied().collect(), &incoming, &plays, &starred, since, growth, epoch_now(), 0);
                 // Most played by name, as the library has them.
                 let ids: Vec<String> = overview.most_played.iter().map(|t| t.id.clone()).collect();
                 let named: std::collections::HashMap<String, (String, String)> =

@@ -2319,6 +2319,42 @@ mod tests {
         assert!(files.contains(&(song, album, 1, other.to_string())), "{files:?}");
     }
 
+    /// `album_arrivals` gives a row per copy and per file, where Insights once had a row per album and per song. The same
+    /// record in a second folder, under the ids it will share, is what Insights must still read as one album.
+    #[test]
+    fn insights_reads_the_arrivals_of_an_album_in_two_folders_as_one_album() {
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.db()
+            .execute_batch(
+                "INSERT INTO copy_files SELECT 1, 'Elsewhere/' || rel, 'Elsewhere', song, album, src, size, suffix, kbps, duration_ms, bpm,
+                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM copy_files WHERE dir = 'Björk/Homogenic (1997)';
+                 INSERT INTO copies SELECT album, 1, 'Elsewhere', format, min_kbps, size, added, tracks, bits, rate FROM copies WHERE dir = 'Björk/Homogenic (1997)';",
+            )
+            .unwrap();
+        let (copies, files) = lib.album_arrivals().unwrap();
+        assert_eq!((copies.len(), files.len()), (3, 5), "a row each");
+        let figures = |shown: &[i64]| {
+            let shown = shown.iter().copied().collect();
+            let o = crate::insights::overview(
+                &copies,
+                &files,
+                &shown,
+                &Default::default(),
+                &Default::default(),
+                &Default::default(),
+                None,
+                (crate::insights::Step::Year, None),
+                1_792_800_000,
+                0,
+            );
+            (o.albums, o.tracks, o.added.iter().map(|c| c.n).sum::<usize>())
+        };
+        assert_eq!(figures(&[0, 1]), (2, 3, 2), "as if the other folder were not there");
+        assert_eq!(figures(&[0]), (2, 3, 2));
+        assert_eq!(figures(&[1]), (1, 2, 1), "Homogenic alone");
+    }
+
     /// A library from before these tables is built again, as any of another layout is: nothing carries over to go wrong.
     #[test]
     fn a_library_of_the_layout_before_is_built_again_with_its_copies() {
