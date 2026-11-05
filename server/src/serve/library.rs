@@ -778,6 +778,12 @@ impl Library {
                 Ok(FolderRows { folder, root: root.display().to_string(), rows })
             })
             .collect::<Result<Vec<_>>>()?;
+        // New tracks get their records first: what the library lists is what a record is.
+        if cat.tracks_without_record()
+            && let Err(e) = cat.assign_records(&album_copies(&folders, rules))
+        {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "records could not be given");
+        }
         let covers = match &reader {
             Some(c) => crate::catalogue::cover_prints(c)?,
             None => cat.cover_prints()?,
@@ -1325,6 +1331,47 @@ fn songs_of<'a>(rows: &[(i64, &'a ServedRow)], rules: &Rules) -> Vec<Song<'a>> {
     let mut songs: Vec<Song> = rows.iter().filter(|(_, r)| r.track.is_some()).map(|(folder, r)| song(r, *folder, rules)).collect();
     one_album_per_folder(&mut songs);
     songs
+}
+
+/// The albums these folders make, each as the catalogue gives it a record: the library's own grouping, so a record is
+/// what a list shows. Pure.
+pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalogue::AlbumCopy> {
+    use crate::catalogue::identity::{Listed, RecordFacts, fold};
+    let rows: Vec<(i64, &ServedRow)> = folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))).collect();
+    let songs = songs_of(&rows, rules);
+    let mut albums: BTreeMap<&str, Vec<&Song>> = BTreeMap::new();
+    for s in &songs {
+        albums.entry(&s.album_id).or_default().push(s);
+    }
+    let place = |s: &Song| (s.row.first("discnumber").and_then(leading_number), s.row.first("tracknumber").and_then(leading_number));
+    albums
+        .into_values()
+        .map(|mut list| {
+            list.sort_by(|a, b| {
+                let ((ad, an), (bd, bn)) = (place(*a), place(*b));
+                (ad.unwrap_or(1), an.unwrap_or(u32::MAX), &a.row.rel).cmp(&(bd.unwrap_or(1), bn.unwrap_or(u32::MAX), &b.row.rel))
+            });
+            let first = list[0];
+            crate::catalogue::AlbumCopy {
+                facts: RecordFacts {
+                    release: list.iter().find_map(|s| s.row.first("musicbrainz_albumid")).map(str::to_lowercase),
+                    artist: fold(&first.album_artist),
+                    title: fold(&first.album),
+                    tracks: list.iter().map(|s| Listed { title: fold(&s.title), duration_ms: s.row.duration_ms.unwrap_or(0) as i64 }).collect(),
+                },
+                title: first.album.clone(),
+                artist: first.album_artist.clone(),
+                year: list.iter().filter_map(|s| s.row.first("date").and_then(year_of)).max(),
+                tracks: list
+                    .iter()
+                    .filter_map(|s| {
+                        let (disc, number) = place(*s);
+                        Some((s.row.track?, disc, number))
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
 }
 
 /// The albums these rows make.
@@ -1881,6 +1928,23 @@ mod tests {
             rows[0].analysis = Some(crate::catalogue::RowAnalysis { track_gain_db: -7.5, track_peak: 0.98, bpm: Some(92.0), album: Some((-7.0, 0.99)) })
         });
         assert_eq!(same_as_whole(&sample(), &analysed, |_| {}), 1);
+    }
+
+    /// The library's own grouping is what gets a record: tracks in disc and number order, whatever the paths say.
+    #[test]
+    fn an_album_goes_to_its_record_in_order() {
+        let mut one = row(1, "A/2-01 Late.flac", &[("album", "Album"), ("albumartist", "Artist"), ("title", "Late"), ("discnumber", "2"), ("tracknumber", "1"), ("date", "2001-02-03")]);
+        let mut two = row(2, "A/1-02 Early.flac", &[("album", "Album"), ("albumartist", "Artist"), ("title", "Early"), ("discnumber", "1"), ("tracknumber", "2"), ("musicbrainz_albumid", "ABC")]);
+        one.duration_ms = Some(100_000);
+        two.duration_ms = Some(200_000);
+        let folders = [FolderRows { folder: 0, root: "/music".into(), rows: vec![one, two] }];
+        let copies = album_copies(&folders, &Rules::default());
+        let [album] = &copies[..] else { panic!("one album: {copies:?}") };
+        assert_eq!(album.tracks, [(2, Some(1), Some(2)), (1, Some(2), Some(1))]);
+        assert_eq!((album.title.as_str(), album.artist.as_str(), album.year), ("Album", "Artist", Some(2001)));
+        assert_eq!(album.facts.release.as_deref(), Some("abc"));
+        assert_eq!(album.facts.tracks[0].title, "early");
+        assert_eq!(album.facts.tracks[0].duration_ms, 200_000);
     }
 
     fn row(track: i64, rel: &str, tags: &[(&str, &str)]) -> ServedRow {

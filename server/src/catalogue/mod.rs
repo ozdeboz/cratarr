@@ -150,6 +150,18 @@ const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id
   was_album = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'album' ORDER BY t.n LIMIT 1),
   was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1)";
 
+/// An album's files in one folder as the library groups them: what [`Catalogue::assign_records`] gives a record.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlbumCopy {
+    pub facts: identity::RecordFacts,
+    /// As shown, for the record's own facts.
+    pub title: String,
+    pub artist: String,
+    pub year: Option<u32>,
+    /// In the order of `facts.tracks`: (track id, disc, number).
+    pub tracks: Vec<(i64, Option<u32>, Option<u32>)>,
+}
+
 /// What a track is or was ([`Catalogue::remembered`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Remembered {
@@ -1888,6 +1900,91 @@ impl Catalogue {
         }
         tx.commit()?;
         Ok((moved, fresh))
+    }
+
+    /// Whether a track in use has no record yet: only then is [`Self::assign_records`] worth its reading. Blocking.
+    pub fn tracks_without_record(&self) -> bool {
+        self.db().prepare_cached("SELECT 1 FROM tracks WHERE record IS NULL AND retired_at IS NULL LIMIT 1").and_then(|mut st| st.exists([])).unwrap_or(false)
+    }
+
+    /// Give these albums their records (0100, docs/records-and-copies.md), every album there is: a track keeps its
+    /// record for life, a new track joins its album's, and an album new to the catalogue is a copy of the record it is
+    /// the same as (`identity::same_record`), else a record of its own. A copy keeps its own track ids for now. The
+    /// tracks given a record. Blocking.
+    pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
+        let now = now();
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let held: HashMap<i64, i64> = {
+            let mut st = tx.prepare("SELECT id, record FROM tracks WHERE record IS NOT NULL")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        let record_of = |a: &AlbumCopy| -> Option<i64> {
+            let mut votes: BTreeMap<i64, usize> = BTreeMap::new();
+            for (track, _, _) in &a.tracks {
+                if let Some(r) = held.get(track) {
+                    *votes.entry(*r).or_default() += 1;
+                }
+            }
+            votes.into_iter().max_by_key(|(r, n)| (*n, std::cmp::Reverse(*r))).map(|(r, _)| r)
+        };
+        // Who to hold a new album against: the albums that have a record, by name and by release, then the new ones as
+        // they get theirs.
+        let (mut by_name, mut by_release) = (HashMap::new(), HashMap::new());
+        type ByName = HashMap<(String, String), Vec<(usize, i64)>>;
+        type ByRelease = HashMap<String, Vec<(usize, i64)>>;
+        fn note(i: usize, a: &AlbumCopy, record: i64, by_name: &mut ByName, by_release: &mut ByRelease) {
+            by_name.entry((a.facts.artist.clone(), a.facts.title.clone())).or_default().push((i, record));
+            if let Some(r) = &a.facts.release {
+                by_release.entry(r.clone()).or_default().push((i, record));
+            }
+        }
+        let mut records: Vec<Option<i64>> = albums.iter().map(record_of).collect();
+        for (i, a) in albums.iter().enumerate() {
+            if let Some(r) = records[i] {
+                note(i, a, r, &mut by_name, &mut by_release);
+            }
+        }
+        let mut given = 0;
+        {
+            let mut born = tx.prepare_cached("INSERT INTO records (born, title, artist, year) VALUES (?1, ?2, ?3, ?4)")?;
+            let mut join = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND record IS NULL")?;
+            for (i, a) in albums.iter().enumerate() {
+                let record = match records[i] {
+                    Some(r) => r,
+                    None => {
+                        let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
+                        let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
+                        let same = named.chain(released).find(|(j, _)| identity::same_record(&a.facts, &albums[*j].facts)).map(|(_, r)| *r);
+                        let r = match same {
+                            Some(r) => r,
+                            None => {
+                                born.execute(params![now, a.title, a.artist, a.year])?;
+                                tx.last_insert_rowid()
+                            }
+                        };
+                        records[i] = Some(r);
+                        note(i, a, r, &mut by_name, &mut by_release);
+                        r
+                    }
+                };
+                for (track, disc, number) in &a.tracks {
+                    given += join.execute(params![track, record, disc, number])?;
+                }
+            }
+        }
+        // A record lives while a track of it does (one that never had tracks is a record not had).
+        tx.execute_batch(
+            "UPDATE records SET retired_at = NULL WHERE retired_at IS NOT NULL
+               AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL);",
+        )?;
+        tx.execute(
+            "UPDATE records SET retired_at = ?1 WHERE retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)
+               AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL)",
+            [now],
+        )?;
+        tx.commit()?;
+        Ok(given)
     }
 
     /// An album folder (or file) Cratarr moved into the trash of its folder: its rows follow it there, keep their
@@ -3687,6 +3784,55 @@ mod tests {
         assert_eq!(cat.track_of(0, "Elsewhere/1-01 Uno.mp3"), Some(one));
         assert!(!retired(&cat, one), "back in use");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    fn copy(release: Option<&str>, artist: &str, title: &str, tracks: &[(i64, &str, i64)]) -> AlbumCopy {
+        AlbumCopy {
+            facts: identity::RecordFacts {
+                release: release.map(str::to_string),
+                artist: identity::fold(artist),
+                title: identity::fold(title),
+                tracks: tracks.iter().map(|(_, t, ms)| identity::Listed { title: identity::fold(t), duration_ms: *ms }).collect(),
+            },
+            title: title.to_string(),
+            artist: artist.to_string(),
+            year: Some(2020),
+            tracks: tracks.iter().enumerate().map(|(i, (id, _, _))| (*id, None, Some(i as u32 + 1))).collect(),
+        }
+    }
+
+    /// 0100: the same tracks are one record, a deluxe edition its own; a track keeps its record, a new one joins.
+    #[test]
+    fn albums_get_their_records() {
+        let cat = Catalogue::open(None, vec![]).unwrap();
+        for _ in 0..7 {
+            cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
+        }
+        let record = |t: i64| cat.db().query_row("SELECT record FROM tracks WHERE id = ?1", [t], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        assert!(cat.tracks_without_record());
+        let music = copy(None, "A", "B", &[(1, "One", 200_000), (2, "Two", 180_000)]);
+        let own = copy(None, "A", "B", &[(3, "One", 201_000), (4, "Two", 180_000)]);
+        let deluxe = copy(None, "A", "B", &[(5, "One", 200_000), (6, "Two", 180_000), (7, "Bonus", 90_000)]);
+        assert_eq!(cat.assign_records(&[music.clone(), own.clone(), deluxe.clone()]).unwrap(), 7);
+        assert!(!cat.tracks_without_record());
+        assert_eq!(record(1), record(3), "the same tracks: one record");
+        assert_ne!(record(1), record(5), "a deluxe edition is its own");
+        let first = record(1);
+        let (title, year): (String, u32) = cat.db().query_row("SELECT title, year FROM records WHERE id = ?1", [first], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((title.as_str(), year), ("B", 2020));
+        assert_eq!(cat.assign_records(&[music, own, deluxe]).unwrap(), 0, "for life: nothing to give again");
+        cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
+        let grown = copy(None, "A", "B", &[(1, "One", 200_000), (2, "Two", 180_000), (8, "Three", 100_000)]);
+        assert_eq!(cat.assign_records(&[grown]).unwrap(), 1);
+        assert_eq!(record(8), record(1), "a new track joins its album's record");
+        let gone = record(5).unwrap();
+        cat.db().execute("UPDATE tracks SET retired_at = 5 WHERE record = ?1", [gone]).unwrap();
+        cat.assign_records(&[]).unwrap();
+        let retired = |r: i64| cat.db().query_row("SELECT retired_at IS NOT NULL FROM records WHERE id = ?1", [r], |x| x.get::<_, bool>(0)).unwrap();
+        assert!(retired(gone), "its last track went");
+        cat.db().execute("UPDATE tracks SET retired_at = NULL WHERE id = 5", []).unwrap();
+        cat.assign_records(&[]).unwrap();
+        assert!(!retired(gone), "a track came back");
     }
 
     /// A track is the record's (0101): two copies hold its id, and it lives until the last of them goes.
