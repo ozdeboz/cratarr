@@ -80,9 +80,20 @@ impl Whole {
         format!("{}={token}", crate::serve::signin::COOKIE)
     }
 
+    /// An API key of `user`'s, as the `authorization` header a client sends.
+    fn key(&self, user: &str, scope: &str) -> String {
+        let (key, _) = self.served.sessions.new_key("a client", Some(user), scope, None, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64).unwrap();
+        format!("Bearer {key}")
+    }
+
     /// `path` asked with that cookie: the answer's status, and its body as JSON (null where it is none).
     async fn ask(&self, cookie: &str, method: Method, path: &str) -> (StatusCode, serde_json::Value) {
-        let req = Request::builder().method(method).uri(path).header("cookie", cookie).header("accept", "application/json").body(Body::empty()).unwrap();
+        self.send(("cookie", cookie), method, path, Body::empty()).await
+    }
+
+    /// `path` asked that way, with `body`: the answer as `ask` gives it.
+    async fn send(&self, by: (&str, &str), method: Method, path: &str, body: Body) -> (StatusCode, serde_json::Value) {
+        let req = Request::builder().method(method).uri(path).header(by.0, by.1).header("accept", "application/json").header("content-type", "application/json").body(body).unwrap();
         let r = self.router.clone().oneshot(req).await.unwrap();
         let status = r.status();
         let body = axum::body::to_bytes(r.into_body(), 1 << 24).await.unwrap();
@@ -112,6 +123,20 @@ async fn show_all_past_two_hundred_results_answers() {
     let (status, found) = w.ask(&me, Method::GET, "/api/search?q=cloud&kinds=track&limit=50&offset=200").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!((found["groups"]["track"]["total"].as_u64(), found["groups"]["track"]["items"].as_array().map(Vec::len)), (Some(260), Some(50)));
+}
+
+#[tokio::test]
+async fn sharing_playlists_in_a_batch_is_behind_the_administrators_fence() {
+    let w = Whole::open("link").await;
+    w.served.users.from_directory("ann", false, None).unwrap();
+    let share = || Body::from(serde_json::json!({ "ids": ["Mine"], "on": true }).to_string());
+    let path = "/api/batch/playlists/link";
+    let (ann, me) = (w.session("ann"), w.session("me"));
+    assert_eq!(w.send(("cookie", &ann), Method::POST, path, share()).await.0, StatusCode::FORBIDDEN, "an account");
+    assert_eq!(w.send(("authorization", &w.key("me", "control")), Method::POST, path, share()).await.0, StatusCode::FORBIDDEN, "an administrator's key, as on the single route");
+    // Past the fence, where the handler answers for each playlist.
+    let (status, answer) = w.send(("cookie", &me), Method::POST, path, share()).await;
+    assert_eq!((status, answer["target"].as_str()), (StatusCode::OK, Some("shared")));
 }
 
 #[tokio::test]

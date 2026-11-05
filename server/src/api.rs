@@ -166,7 +166,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/undo", post(undo))
         .route("/api/batch/playlists/favorite", post(playlists_favorite))
         .route("/api/batch/playlists/delete", post(playlists_delete))
-        .route("/api/batch/playlists/link", post(playlists_link))
         .route("/api/batch/playlists/rows", post(playlists_rows))
 
         // For everyone: the version and when it started (About), the servers and their libraries (the filter): what
@@ -260,6 +259,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/library/find", get(library_find))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
+            .route("/api/batch/playlists/link", post(playlists_link))
             .route("/api/sync/targets", get(sync_targets))
             .route("/api/albums/{source}/{album}/delete-own", post(delete_own_album))
             .route("/api/albums/duplicates", get(album_duplicates))
