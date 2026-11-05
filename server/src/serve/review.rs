@@ -25,13 +25,14 @@ const JOB: &str = "job:";
 
 pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()
-        // Reviewing what comes in is the administrators' (decision 0051), as under `/api/incoming/`.
+        // Reviewing what comes in is the administrators' (decision 0051), as under `/api/incoming/`. On these routes alone:
+        // `layer` holds a router's fallback too, and `merge` hands that on, so whatever no route took would be fenced.
         .merge(
             Router::new()
                 .route("/api/library/albums/{album}/promote", post(promote))
                 .route("/api/library/albums/{album}/reject", post(reject))
                 .route("/api/library/albums/{album}/review", delete(unreview))
-                .layer(axum::middleware::from_fn(super::access::admin_or_key)),
+                .route_layer(axum::middleware::from_fn(super::access::admin_or_key)),
         )
         .route("/api/library/incoming", get(incoming))
         .with_state(serve)

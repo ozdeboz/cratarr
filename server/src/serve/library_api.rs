@@ -32,7 +32,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
             Router::new()
                 .route("/api/library/albums/{album}/tags", axum::routing::delete(clear_tags))
                 .route("/api/library/albums/{album}/tags/{tag}", post(add_tag).delete(remove_tag))
-                .layer(axum::middleware::from_fn(super::access::admin_or_key)),
+                .route_layer(axum::middleware::from_fn(super::access::admin_or_key)),
         )
         .route("/api/library/tags", get(all_tags))
         .route("/api/library/tags/{tag}", get(tagged))
