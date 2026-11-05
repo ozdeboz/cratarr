@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_takes_its_real_name_only_once_it_is_whole() {
+    fn a_copy_comes_whole_and_the_original_goes() {
         let (inc, music) = (tmp(), tmp());
         std::fs::write(inc.join("1.flac"), b"sound").unwrap();
         copy_across(&inc.join("1.flac"), &music.join("1.flac"), |f| {
@@ -308,15 +308,19 @@ mod tests {
         }
     }
 
+    /// `/proc/self/mem` opens and then fails its first read, as a disk failing part way does: the target is made by then.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn a_copy_that_fails_leaves_nothing_at_the_target_and_the_original_where_it_was() {
+    fn a_copy_that_fails_part_way_leaves_nothing_under_its_real_name() {
+        let music = tmp();
+        copy_across(Path::new("/proc/self/mem"), &music.join("1.flac"), |_| panic!("no copy, nothing to remove")).unwrap_err();
+        assert!(names_in(&music).is_empty(), "{:?}", names_in(&music));
+        std::fs::remove_dir_all(music).ok();
+    }
+
+    #[test]
+    fn a_copy_whose_original_cannot_go_is_taken_back_and_the_original_stands() {
         let (inc, music) = (tmp(), tmp());
-        // A folder where the file should be: the copy itself fails.
-        std::fs::create_dir(inc.join("1.flac")).unwrap();
-        copy_across(&inc.join("1.flac"), &music.join("1.flac"), |_| panic!("no copy, nothing to remove")).unwrap_err();
-        assert!(names_in(&music).is_empty());
-        std::fs::remove_dir(inc.join("1.flac")).unwrap();
-        // The original cannot be removed: the copy goes again, as a retry would find it otherwise.
         std::fs::write(inc.join("1.flac"), b"sound").unwrap();
         let e = copy_across(&inc.join("1.flac"), &music.join("1.flac"), |_| Err(std::io::ErrorKind::PermissionDenied.into())).unwrap_err();
         assert!(format!("{e:#}").contains("after copying it"), "{e:#}");
