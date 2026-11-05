@@ -1,15 +1,19 @@
 //! Which new file is a gone file that moved (decision 0011 §4). Only for changes made outside Cratarr: Cratarr's own
 //! moves and replacements write the track id themselves. Pure.
 //!
-//! A pair is made only when it is unambiguous both ways: one new file and one gone file fit, and no other. Size and
-//! tags alone never pair two files, so retagging or a format change made elsewhere gives a new id rather than a
-//! wrong one.
+//! A pair is made only when it is unambiguous both ways: one new file and one gone file fit, and no other. The gone
+//! files of one track are one fit: they are its copies, and any of them gives the new file the same id. Size and tags
+//! alone never pair two files, so retagging or a format change made elsewhere gives a new id rather than a wrong one.
+
+use std::collections::BTreeMap;
 
 /// What is compared, already folded (lower case, letters and digits only).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileFacts {
     /// The catalogue folder it is in: no rule reads it, [`match_moves_by_folder`] sorts by it.
     pub folder: i64,
+    /// The track a gone file holds: no rule reads it, it says which gone files are one fit. None: it stands alone.
+    pub track: Option<i64>,
     /// The file name, without folders.
     pub name: String,
     pub duration_ms: Option<i64>,
@@ -41,8 +45,10 @@ fn some_eq(a: &Option<String>, b: &Option<String>) -> bool {
     matches!((a, b), (Some(x), Some(y)) if !x.is_empty() && x == y)
 }
 
+type Rule = fn(&FileFacts, &FileFacts) -> bool;
+
 /// Rules in order; the first that pairs a file decides.
-const RULES: [fn(&FileFacts, &FileFacts) -> bool; 3] = [
+const RULES: [Rule; 3] = [
     // The same MusicBrainz recording.
     |n, g| some_eq(&n.recording, &g.recording),
     // Renamed folder, same file name and length (and title, when both have one).
@@ -82,25 +88,61 @@ fn match_within(new: &[FileFacts], gone: &[FileFacts], rounds: &[Option<i64>]) -
     for rule in RULES {
         for &folder in rounds {
             let here = |f: &FileFacts| folder.is_none_or(|x| x == f.folder);
-            let new_here: Vec<usize> = (0..new.len()).filter(|&n| here(&new[n])).collect();
-            let gone_here: Vec<usize> = (0..gone.len()).filter(|&g| here(&gone[g])).collect();
-            for &n in &new_here {
-                if !new_free[n] {
-                    continue;
-                }
-                let fits: Vec<usize> = gone_here.iter().copied().filter(|&g| gone_free[g] && rule(&new[n], &gone[g])).collect();
-                let [g] = fits[..] else { continue };
-                // Unambiguous the other way too: no other free new file fits that gone file.
-                let rivals = new_here.iter().filter(|&&m| m != n && new_free[m] && rule(&new[m], &gone[g])).count();
-                if rivals == 0 {
-                    new_free[n] = false;
-                    gone_free[g] = false;
-                    pairs.push((n, g));
-                }
+            let new_here: Vec<usize> = (0..new.len()).filter(|&n| new_free[n] && here(&new[n])).collect();
+            let gone_here: Vec<usize> = (0..gone.len()).filter(|&g| gone_free[g] && here(&gone[g])).collect();
+            for (n, g) in pairs_by(rule, new, gone, &new_here, &gone_here) {
+                new_free[n] = false;
+                gone_free[g] = false;
+                pairs.push((n, g));
             }
         }
     }
     pairs.sort();
+    pairs
+}
+
+/// What a new file can fit under a rule: one gone file, or all the gone files of one track.
+#[derive(Default)]
+struct Target {
+    gone: Vec<usize>,
+    /// How many new files fit it, whatever else they fit.
+    fitting: usize,
+    /// The new files that fit it and nothing else, each with the gone files it fits.
+    only: Vec<(usize, Vec<usize>)>,
+}
+
+/// One rule's pairs among these free files.
+fn pairs_by(rule: Rule, new: &[FileFacts], gone: &[FileFacts], new_here: &[usize], gone_here: &[usize]) -> Vec<(usize, usize)> {
+    let target_of = |g: usize| gone[g].track.map_or((None, g), |t| (Some(t), 0));
+    let mut targets: BTreeMap<(Option<i64>, usize), Target> = BTreeMap::new();
+    for &g in gone_here {
+        targets.entry(target_of(g)).or_default().gone.push(g);
+    }
+    for &n in new_here {
+        let fits: Vec<usize> = gone_here.iter().copied().filter(|&g| rule(&new[n], &gone[g])).collect();
+        let mut fit: Vec<_> = fits.iter().map(|&g| target_of(g)).collect();
+        fit.sort_unstable();
+        fit.dedup();
+        for t in &fit {
+            targets.entry(*t).or_default().fitting += 1;
+        }
+        if let [t] = fit[..] {
+            targets.entry(t).or_default().only.push((n, fits));
+        }
+    }
+    let mut pairs = Vec::new();
+    for mut t in targets.into_values() {
+        // Unambiguous the other way too: no more new files fit it than it has gone files for them to take.
+        if t.fitting > t.gone.len() {
+            continue;
+        }
+        for (n, fits) in t.only {
+            // Its own where one is left, else another of the track's, taken by a file that fits both: the id is the same.
+            let g = fits.iter().copied().find(|g| t.gone.contains(g)).unwrap_or(t.gone[0]);
+            t.gone.retain(|&x| x != g);
+            pairs.push((n, g));
+        }
+    }
     pairs
 }
 
@@ -181,6 +223,7 @@ mod tests {
     fn f(name: &str, ms: i64, recording: Option<&str>, title: Option<&str>, artist: Option<&str>) -> FileFacts {
         FileFacts {
             folder: 0,
+            track: None,
             name: name_of(name),
             duration_ms: Some(ms),
             recording: recording.map(fold),
@@ -192,6 +235,11 @@ mod tests {
     /// One song, as a file of a folder.
     fn intro(folder: i64, path: &str) -> FileFacts {
         FileFacts { folder, ..f(path, 60_000, None, Some("Intro"), Some("X")) }
+    }
+
+    /// That song as a gone file of a track.
+    fn gone_copy(track: i64, folder: i64, path: &str) -> FileFacts {
+        FileFacts { track: Some(track), ..intro(folder, path) }
     }
 
     #[test]
@@ -257,6 +305,45 @@ mod tests {
         let new = vec![intro(0, "c/01 Intro.flac")];
         let gone = vec![intro(0, "a/01 Intro.flac"), intro(0, "b/01 Intro.flac"), intro(1, "d/01 Intro.flac")];
         assert!(match_moves_by_folder(&new, &gone).is_empty());
+    }
+
+    #[test]
+    fn gone_copies_of_one_track_are_one_fit() {
+        let new = vec![intro(0, "a2/01 Intro.flac"), intro(0, "b2/01 Intro.flac")];
+        let gone = vec![gone_copy(7, 0, "a/01 Intro.flac"), gone_copy(7, 0, "b/01 Intro.flac")];
+        assert_eq!(match_moves_by_folder(&new, &gone), vec![(0, 0), (1, 1)], "both renamed in one folder");
+        assert_eq!(match_moves(&new[..1], &gone), vec![(0, 0)], "one back: the other gone file waits");
+        let spread = vec![gone[0].clone(), gone_copy(7, 1, "b/01 Intro.flac")];
+        assert_eq!(match_moves_by_folder(&new, &spread), vec![(0, 0), (1, 1)], "too few in the folder: across them");
+    }
+
+    #[test]
+    fn a_track_takes_no_more_new_files_than_it_has_gone_files() {
+        let new = vec![intro(0, "a2/01 Intro.flac"), intro(0, "b2/01 Intro.flac"), intro(0, "c/01 Intro.flac")];
+        let gone = vec![gone_copy(7, 0, "a/01 Intro.flac"), gone_copy(7, 0, "b/01 Intro.flac")];
+        assert!(match_moves_by_folder(&new, &gone).is_empty(), "one of three is no copy of it, and which is not known");
+    }
+
+    #[test]
+    fn two_tracks_are_two_fits() {
+        let new = vec![intro(0, "a2/01 Intro.flac"), intro(0, "b2/01 Intro.flac")];
+        let gone = vec![gone_copy(7, 0, "a/01 Intro.flac"), gone_copy(8, 0, "b/01 Intro.flac")];
+        assert!(match_moves_by_folder(&new, &gone).is_empty());
+        // The second new file fits both tracks and pairs with neither, and still stands in the first one's way.
+        let (near, far) = (FileFacts { duration_ms: Some(60_000), ..gone[0].clone() }, FileFacts { duration_ms: Some(62_500), ..gone[1].clone() });
+        let new = vec![FileFacts { duration_ms: Some(59_000), ..new[0].clone() }, FileFacts { duration_ms: Some(61_000), ..new[1].clone() }];
+        assert!(match_moves_by_folder(&new, &[near, far]).is_empty());
+    }
+
+    /// The first new file fits both gone files and takes the second's only one: the track is what it was after.
+    #[test]
+    fn a_copy_takes_its_track_though_another_took_its_gone_file() {
+        let gone = vec![
+            FileFacts { duration_ms: Some(60_000), ..gone_copy(7, 0, "a/01 Intro.flac") },
+            FileFacts { duration_ms: Some(61_500), ..gone_copy(7, 0, "b/01 Intro.flac") },
+        ];
+        let new = vec![FileFacts { duration_ms: Some(60_500), ..intro(0, "a2/01 Intro.flac") }, FileFacts { duration_ms: Some(58_500), ..intro(0, "b2/01 Intro.flac") }];
+        assert_eq!(match_moves_by_folder(&new, &gone), vec![(0, 0), (1, 1)]);
     }
 
     /// The folder settles what one rule alone cannot, never a surer rule's answer: the weaker fit is another album's file.

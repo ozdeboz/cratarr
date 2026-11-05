@@ -1812,8 +1812,8 @@ impl Catalogue {
             let mut tag = tx.prepare_cached(
                 "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('musicbrainz_trackid', 'title', 'artist') ORDER BY n",
             )?;
-            let mut file_facts = |(folder, rel, ms, _): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
-                let mut f = identity::FileFacts { folder: *folder, name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
+            let mut file_facts = |(folder, rel, ms, track): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
+                let mut f = identity::FileFacts { folder: *folder, track: *track, name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
                 for row in tag.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
                     let (name, value) = row?;
                     let slot = match name.as_str() {
@@ -4006,6 +4006,35 @@ mod tests {
         assert!(!retired(&cat, track_one) && !retired(&cat, track_two));
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
+    }
+
+    /// A copy is a record's files in one directory, so two can sit in one library: a rename above both leaves each new file
+    /// fitting both gone rows on every rule, in its own folder too. They are one track's rows: fresh ids would retire it.
+    #[test]
+    fn both_copies_in_one_folder_renamed_outside_keep_their_track() {
+        let d = music();
+        let (one, two) = ("01 One.mp3", "02 Two.flac");
+        std::fs::create_dir_all(d.join("A/B [MP3]")).unwrap();
+        std::fs::rename(d.join("A - B (2020)"), d.join("A/B")).unwrap();
+        for name in [one, two] {
+            std::fs::copy(d.join("A/B").join(name), d.join("A/B [MP3]").join(name)).unwrap();
+        }
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (track_one, track_two) = (cat.track_of(0, &format!("A/B/{one}")).unwrap(), cat.track_of(0, &format!("A/B/{two}")).unwrap());
+        cat.set_tracks(&[((0, format!("A/B [MP3]/{one}")), Some(track_one)), ((0, format!("A/B [MP3]/{two}")), Some(track_two))]).unwrap();
+        std::fs::rename(d.join("A"), d.join("A again")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (4, 0), "one track's gone rows are one fit: no new ids");
+        for dir in ["A again/B", "A again/B [MP3]"] {
+            assert_eq!(cat.track_of(0, &format!("{dir}/{one}")), Some(track_one));
+            assert_eq!(cat.track_of(0, &format!("{dir}/{two}")), Some(track_two));
+        }
+        assert!(!retired(&cat, track_one) && !retired(&cat, track_two));
+        std::fs::remove_dir_all(&d).ok();
     }
 
     /// A mount away for a moment leaves a copy's rows gone: a better file claiming the track in another folder must leave
