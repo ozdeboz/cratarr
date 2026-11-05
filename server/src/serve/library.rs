@@ -40,7 +40,6 @@ CREATE TABLE IF NOT EXISTS songs (
   rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL, rg_album_peak REAL, genres TEXT NOT NULL DEFAULT '',
   dir TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', track_total INTEGER);
 CREATE INDEX IF NOT EXISTS songs_by_album ON songs (album_id, disc_no, track_no, rel);
-CREATE INDEX IF NOT EXISTS songs_by_dir ON songs (folder, dir);
 CREATE INDEX IF NOT EXISTS songs_by_title ON songs (order_title, n);
 CREATE INDEX IF NOT EXISTS songs_by_pid ON songs (pid);
 CREATE TABLE IF NOT EXISTS song_artists (song_id TEXT NOT NULL, artist_id TEXT NOT NULL, name TEXT NOT NULL,
@@ -423,7 +422,7 @@ mod release_type_tests {
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 14;
+const LAYOUT: i64 = 15;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -885,14 +884,14 @@ impl Library {
     }
 
     /// Builds again only the albums of the files that changed since they were built (0.9.8, the owner: a fix, a cover,
-    /// a Renumber showed only after a whole build, half a minute on the NAS): each song keeps the print of the row it
+    /// a Renumber showed only after a whole build, half a minute on the NAS): each file keeps the print of the row it
     /// was built from, each album its kept facts' and cover files'; the folders where any differs, or a file came or
     /// went, are built again, with every folder their albums reach. The number of folders built again. Blocking.
     fn update_rows(&self, folders: &[FolderRows], rules: &Rules, covers: &Covers) -> Result<usize> {
         let facts = self.facts();
         let now: HashMap<(i64, &str), &ServedRow> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some()).map(move |r| ((f.folder, r.rel.as_str()), r))).collect();
-        let built = self.built_songs()?;
+        let built = self.built_files()?;
         let mut dirs: BTreeSet<(i64, String)> = BTreeSet::new();
         for ((folder, rel), r) in &now {
             if built.get(&(*folder, rel.to_string())).is_none_or(|b| b.src != row_src(r)) {
@@ -958,32 +957,23 @@ impl Library {
         let refs: Vec<(i64, &ServedRow)> = rows.iter().map(|(f, r)| (*f, r)).collect();
         let mut db = self.db();
         let tx = db.transaction()?;
-        // What was built of them: their songs and albums, and the artists they credit, go.
+        // What was built of them: their albums, and the artists they credit, go. An album goes whole, as the folders followed
+        // above are every one it reaches, and is found by its files, as a file need not be a song.
         let mut touched: BTreeSet<String> = BTreeSet::new();
         let mut gone_albums: BTreeSet<String> = BTreeSet::new();
         {
-            let mut songs = tx.prepare("SELECT n, id, album_id FROM songs WHERE folder = ?1 AND dir = ?2")?;
+            let mut in_dir = tx.prepare("SELECT DISTINCT album FROM copy_files WHERE folder = ?1 AND dir = ?2")?;
+            for (folder, dir) in &dirs {
+                for album in in_dir.query_map(params![folder, dir], |r| r.get::<_, String>(0))? {
+                    gone_albums.insert(album?);
+                }
+            }
+            let mut songs = tx.prepare("SELECT n, id FROM songs WHERE album_id = ?1")?;
             let mut credits = tx.prepare("SELECT artist_id FROM song_artists WHERE song_id = ?1")?;
             let mut del_fts = tx.prepare("DELETE FROM songs_fts WHERE rowid = ?1")?;
             let mut del_tri = tx.prepare("DELETE FROM songs_tri_fts WHERE rowid = ?1")?;
             let mut del_credits = tx.prepare("DELETE FROM song_artists WHERE song_id = ?1")?;
             let mut del_song = tx.prepare("DELETE FROM songs WHERE n = ?1")?;
-            let mut del_files = tx.prepare("DELETE FROM copy_files WHERE folder = ?1 AND dir = ?2")?;
-            for (folder, dir) in &dirs {
-                let found: Vec<(i64, String, String)> =
-                    songs.query_map(params![folder, dir], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-                for (n, id, album) in found {
-                    for a in credits.query_map([&id], |r| r.get::<_, String>(0))? {
-                        touched.insert(a?);
-                    }
-                    del_fts.execute([n])?;
-                    del_tri.execute([n])?;
-                    del_credits.execute([&id])?;
-                    del_song.execute([n])?;
-                    gone_albums.insert(album);
-                }
-                del_files.execute(params![folder, dir])?;
-            }
             let mut album_n = tx.prepare("SELECT n FROM albums WHERE id = ?1")?;
             let mut album_credits = tx.prepare("SELECT artist_id FROM album_artists WHERE album_id = ?1")?;
             let mut del_album_fts = tx.prepare("DELETE FROM albums_fts WHERE rowid = ?1")?;
@@ -991,7 +981,18 @@ impl Library {
             let mut del_album_credits = tx.prepare("DELETE FROM album_artists WHERE album_id = ?1")?;
             let mut del_album = tx.prepare("DELETE FROM albums WHERE id = ?1")?;
             let mut del_copies = tx.prepare("DELETE FROM copies WHERE album = ?1")?;
+            let mut del_files = tx.prepare("DELETE FROM copy_files WHERE album = ?1")?;
             for album in &gone_albums {
+                let found: Vec<(i64, String)> = songs.query_map([album], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+                for (n, id) in found {
+                    for a in credits.query_map([&id], |r| r.get::<_, String>(0))? {
+                        touched.insert(a?);
+                    }
+                    del_fts.execute([n])?;
+                    del_tri.execute([n])?;
+                    del_credits.execute([&id])?;
+                    del_song.execute([n])?;
+                }
                 for a in album_credits.query_map([album], |r| r.get::<_, String>(0))? {
                     touched.insert(a?);
                 }
@@ -1002,6 +1003,7 @@ impl Library {
                 del_album_credits.execute([album])?;
                 del_album.execute([album])?;
                 del_copies.execute([album])?;
+                del_files.execute([album])?;
             }
         }
         let (written, credited) = write_albums(&tx, &refs, roots, rules, &facts, covers)?;
@@ -1018,11 +1020,11 @@ impl Library {
         Ok(dirs.len())
     }
 
-    /// Each song as built: (folder, rel) → its folder, album and the print of its row.
-    fn built_songs(&self) -> Result<HashMap<(i64, String), BuiltSong>> {
+    /// Each file as built: (folder, rel) → its folder, album and the print of its row.
+    fn built_files(&self) -> Result<HashMap<(i64, String), BuiltFile>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT folder, rel, dir, album_id, src FROM songs")?;
-        let rows = st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), BuiltSong { folder: r.get(0)?, dir: r.get(2)?, album: r.get(3)?, src: r.get(4)? })))?;
+        let mut st = db.prepare("SELECT folder, rel, dir, album, src FROM copy_files")?;
+        let rows = st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), BuiltFile { folder: r.get(0)?, dir: r.get(2)?, album: r.get(3)?, src: r.get(4)? })))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -1041,10 +1043,10 @@ impl Library {
             .collect::<rusqlite::Result<_>>()?)
     }
 
-    /// The albums whose songs are in these folders, as built.
+    /// The albums with files in these folders, as built.
     fn built_albums_in(&self, dirs: &BTreeSet<(i64, String)>) -> Result<BTreeSet<String>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT DISTINCT album_id FROM songs WHERE folder = ?1 AND dir = ?2")?;
+        let mut st = db.prepare_cached("SELECT DISTINCT album FROM copy_files WHERE folder = ?1 AND dir = ?2")?;
         let mut out = BTreeSet::new();
         for (folder, dir) in dirs {
             for a in st.query_map(params![folder, dir], |r| r.get::<_, String>(0))? {
@@ -1054,10 +1056,10 @@ impl Library {
         Ok(out)
     }
 
-    /// The folders the songs of these albums are in, as built.
+    /// The folders the files of these albums are in, as built.
     fn dirs_of(&self, albums: &BTreeSet<String>) -> Result<BTreeSet<(i64, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT DISTINCT folder, dir FROM songs WHERE album_id = ?1")?;
+        let mut st = db.prepare_cached("SELECT DISTINCT folder, dir FROM copy_files WHERE album = ?1")?;
         let mut out = BTreeSet::new();
         for a in albums {
             for d in st.query_map([a], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
@@ -1119,8 +1121,8 @@ impl Library {
     pub fn songs_by_rel(&self, folder: i64) -> Result<HashMap<String, RelSong>> {
         let db = self.db();
         let mut st = db.prepare(
-            "SELECT s.rel, s.id, s.album_id, s.duration_ms, MIN(COALESCE(s.created, a.created), COALESCE(a.created, s.created)), s.genres
-             FROM songs s LEFT JOIN albums a ON a.id = s.album_id WHERE s.folder = ?1",
+            "SELECT c.rel, c.song, c.album, c.duration_ms, MIN(COALESCE(s.created, a.created), COALESCE(a.created, s.created)), s.genres
+             FROM copy_files c JOIN songs s ON s.id = c.song LEFT JOIN albums a ON a.id = c.album WHERE c.folder = ?1",
         )?;
         let rows = st.query_map(rusqlite::params![folder], |r| {
             let genres: Option<String> = r.get(5)?;
@@ -1144,14 +1146,14 @@ impl Library {
     }
 
     /// Counts, for the log and tests: (songs, albums, artists).
-    /// Every album's id, catalogue folder and when it came (`created`), and every song's id, album, catalogue folder and
-    /// place in it: Insights' overview and its period.
+    /// Every copy's album, catalogue folder and when the album came (`created`), and every file's song, album, catalogue
+    /// folder and place in it: Insights' overview and its period.
     #[allow(clippy::type_complexity)]
     pub fn album_arrivals(&self) -> Result<(Vec<(String, i64, Option<i64>)>, Vec<(String, String, i64, String)>)> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, folder, created FROM albums")?;
+        let mut st = db.prepare("SELECT c.album, c.folder, a.created FROM copies c JOIN albums a ON a.id = c.album")?;
         let albums = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-        let mut st = db.prepare("SELECT id, album_id, folder, rel FROM songs")?;
+        let mut st = db.prepare("SELECT song, album, folder, rel FROM copy_files")?;
         let songs = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
         Ok((albums, songs))
     }
@@ -1323,8 +1325,8 @@ struct Facts {
     overrides: HashMap<String, Overrides>,
 }
 
-/// A song as built: its folder there, its album and its row's print.
-struct BuiltSong {
+/// A file as built: its folder there, its album and its row's print.
+struct BuiltFile {
     folder: i64,
     dir: String,
     album: String,
@@ -2262,6 +2264,59 @@ mod tests {
         let mut after = second(sample());
         tag(&mut after[1].rows[1], "genre", "Electronic; Trip Hop");
         assert_eq!(same_as_whole(&before, &after, |_| {}), 1);
+    }
+
+    /// What the flip does to a file of a copy that does not play: its row in `copy_files` stays, it has none in `songs`.
+    fn off_the_songs(lib: &Library, rel: &str) {
+        let db = lib.db();
+        let (n, id): (i64, String) = db.query_row("SELECT n, id FROM songs WHERE rel = ?1", [rel], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        db.execute("DELETE FROM songs_fts WHERE rowid = ?1", [n]).unwrap();
+        db.execute("DELETE FROM songs_tri_fts WHERE rowid = ?1", [n]).unwrap();
+        db.execute("DELETE FROM song_artists WHERE song_id = ?1", [&id]).unwrap();
+        db.execute("DELETE FROM songs WHERE n = ?1", [n]).unwrap();
+    }
+
+    /// Compared with `songs`, such a file would look new at every pass, and a folder of nothing else would have nothing
+    /// to clear: its album would still stand, and writing it again would break `albums.id`.
+    #[test]
+    fn a_file_with_no_row_in_songs_is_neither_new_nor_left_behind() {
+        let rules = Rules::default();
+        let lib = Library::open(None).unwrap();
+        lib.build(&sample(), &rules).unwrap();
+        off_the_songs(&lib, &sample()[0].rows[2].rel);
+        assert_eq!(lib.update_rows(&sample(), &rules, &Covers::new()).unwrap(), 0, "as it was built");
+        let changed = with(sample(), |rows| tag(&mut rows[2], "genre", "Ambient"));
+        assert_eq!(lib.update_rows(&changed, &rules, &Covers::new()).unwrap(), 1);
+        let whole = Library::open(None).unwrap();
+        whole.build(&changed, &rules).unwrap();
+        assert_eq!(dump(&lib), dump(&whole));
+    }
+
+    /// Once a copy holds the record's track, `songs` names the other file. The lookups by place read the file's own row,
+    /// or Health's and a playlist's files in that copy would go blind.
+    #[test]
+    fn a_file_of_a_copy_that_does_not_play_is_found_by_its_place() {
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        let (rel, other) = ("Björk/Homogenic (1997)/01 Hunter.flac", "Elsewhere/01 Hunter.flac");
+        lib.db()
+            .execute_batch(&format!(
+                "INSERT INTO copy_files SELECT 1, '{other}', 'Elsewhere', song, album, src, size, suffix, kbps, duration_ms, bpm,
+                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM copy_files WHERE rel = '{rel}';
+                 INSERT INTO copies SELECT album, 1, 'Elsewhere', format, min_kbps, size, added, tracks, bits, rate FROM copies WHERE dir = 'Björk/Homogenic (1997)';"
+            ))
+            .unwrap();
+        let (song, album): (String, String) = lib.db().query_row("SELECT song, album FROM copy_files WHERE rel = ?1", [other], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(song, ids::song(1));
+        assert_eq!(lib.song_at(1, other).unwrap(), Some((song.clone(), album.clone(), "Hunter".to_string())));
+        assert_eq!(lib.albums_of_files(&[(1, other.to_string())]).unwrap(), [album.clone()]);
+        let by_rel = lib.songs_by_rel(1).unwrap();
+        assert_eq!((by_rel.len(), by_rel[other].song.as_str(), by_rel[other].album.as_str()), (1, song.as_str(), album.as_str()));
+        assert_eq!(by_rel[other].genres, ["Electronic", "Art Pop"], "its track's");
+        assert_eq!(lib.songs_by_rel(0).unwrap().len(), 3, "the other folder's as they were");
+        let (copies, files) = lib.album_arrivals().unwrap();
+        assert!(copies.contains(&(album.clone(), 1, Some(1_700_000_001))), "{copies:?}");
+        assert!(files.contains(&(song, album, 1, other.to_string())), "{files:?}");
     }
 
     /// A library from before these tables is built again, as any of another layout is: nothing carries over to go wrong.

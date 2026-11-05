@@ -843,7 +843,7 @@ impl Library {
     /// The song a file is (0.9.14, Health's items): its id, its album's, and its title.
     pub fn song_at(&self, folder: i64, rel: &str) -> Result<Option<(String, String, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT id, album_id, title FROM songs WHERE folder = ?1 AND rel = ?2")?;
+        let mut st = db.prepare_cached("SELECT c.song, c.album, s.title FROM copy_files c JOIN songs s ON s.id = c.song WHERE c.folder = ?1 AND c.rel = ?2")?;
         Ok(st.query_map(rusqlite::params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.next().transpose()?)
     }
 
@@ -884,7 +884,7 @@ impl Library {
     /// The albums these files (catalogue folder, path) are in, each once (0.9.7: the rules' fixes).
     pub fn albums_of_files(&self, files: &[(i64, String)]) -> Result<Vec<String>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT album_id FROM songs WHERE folder = ?1 AND rel = ?2")?;
+        let mut st = db.prepare_cached("SELECT album FROM copy_files WHERE folder = ?1 AND rel = ?2")?;
         let mut out: Vec<String> = Vec::new();
         for (folder, rel) in files {
             if let Some(a) = st.query_map(rusqlite::params![folder, rel], |r| r.get::<_, String>(0))?.next() {

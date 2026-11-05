@@ -131,8 +131,8 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
         let db = serve.library.db();
         let mut st = db.prepare(
             "SELECT a.id, a.name, a.artist, a.release_type, a.secondary, a.type_from, a.type_why, a.year, a.set_fields,
-               s.folder, s.rel, s.title
-             FROM albums a JOIN songs s ON s.album_id = a.id ORDER BY a.n, s.disc_no, s.track_no, s.rel",
+               c.folder, c.rel, s.title
+             FROM albums a JOIN copy_files c ON c.album = a.id JOIN songs s ON s.id = c.song ORDER BY a.n, s.disc_no, s.track_no, c.rel",
         )?;
         let rows = st.query_map([], |r| {
             Ok((
@@ -285,6 +285,33 @@ mod tests {
         // Not classical: its genres untouched, a "Classical" there kept.
         let (_, a, _) = track_plan(&held(&[], None, false, false), &has(&[("genre", &["Classical"])]));
         assert!(a.is_empty());
+    }
+
+    /// A record's files are every file it is served from: `songs` holds one per track, and a fact is written to each.
+    #[test]
+    fn a_plan_reaches_a_file_with_no_row_in_songs() {
+        let dir = std::env::temp_dir().join(format!("cratarr-file-facts-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("A")).unwrap();
+        std::fs::write(dir.join("A/1.mp3"), b"x").unwrap();
+        let cat = std::sync::Arc::new(crate::catalogue::Catalogue::open(None, vec![dir.clone()]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let serve = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(cat);
+        serve.refresh().unwrap();
+        serve
+            .library
+            .db()
+            .execute_batch(
+                "INSERT INTO copy_files SELECT folder, 'B/1.mp3', 'B', song, album, src, size, suffix, kbps, duration_ms, bpm,
+                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM copy_files",
+            )
+            .unwrap();
+        let mut paths: Vec<std::path::PathBuf> = proposal(&serve, None).unwrap().files.into_iter().map(|f| f.path).collect();
+        paths.sort();
+        assert_eq!(paths, [dir.join("A/1.mp3"), dir.join("B/1.mp3")]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

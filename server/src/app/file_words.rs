@@ -91,8 +91,8 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
     let mut p = Proposal { kind: format!("{PREFIX}{}", kind.name()), title: title_of(kind).into(), ..Proposal::default() };
     let db = serve.library.db();
     let mut st = db.prepare(
-        "SELECT a.id, a.name, a.artist, s.id, s.folder, s.rel, s.title
-         FROM albums a JOIN songs s ON s.album_id = a.id ORDER BY a.n, s.disc_no, s.track_no, s.rel",
+        "SELECT a.id, a.name, a.artist, c.song, c.folder, c.rel, s.title
+         FROM albums a JOIN copy_files c ON c.album = a.id JOIN songs s ON s.id = c.song ORDER BY a.n, s.disc_no, s.track_no, c.rel",
     )?;
     let rows = st.query_map([], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?))
