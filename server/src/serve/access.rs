@@ -269,6 +269,20 @@ pub async fn admin(request: Request, next: Next) -> Response {
     (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This is for administrators." }))).into_response()
 }
 
+/// The administrators' routes that Home Assistant calls as well (decision 0030: its voice commands review Incoming and
+/// tag albums). Its key acts for the owner, and `admin` holds every key back, so these let an administrator's key through
+/// if it may control; a key that reads, and anyone who is no administrator, stay out. No one: as `administering`.
+pub async fn admin_or_key(request: Request, next: Next) -> Response {
+    let let_in = match current() {
+        Some(w) => w.admin && w.scope != Scope::Read,
+        None => administering(),
+    };
+    if let_in {
+        return next.run(request).await;
+    }
+    (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This is for administrators." }))).into_response()
+}
+
 // --- Settings, Authentication: the requirement and the API keys ---
 
 pub fn router(serve: Arc<Serve>) -> Router {

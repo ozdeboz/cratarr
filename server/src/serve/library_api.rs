@@ -316,6 +316,44 @@ mod tests {
         (status, serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null))
     }
 
+    /// A sign-in of `user`, as the header a browser sends.
+    fn session(serve: &Arc<Serve>, user: &str) -> (&'static str, String) {
+        let (token, _) = serve.sessions.create(user, "d", crate::serve::now()).unwrap();
+        ("cookie", format!("{}={token}", crate::serve::signin::COOKIE))
+    }
+
+    /// An API key of `user`'s, as the header a client sends.
+    fn key(serve: &Arc<Serve>, user: &str, scope: &str) -> (&'static str, String) {
+        let (key, _) = serve.sessions.new_key("a client", Some(user), scope, None, crate::serve::now()).unwrap();
+        ("authorization", format!("Bearer {key}"))
+    }
+
+    /// `path` asked that way through the access check, as `main` has it.
+    async fn asked(serve: &Arc<Serve>, by: &(&'static str, String), method: &str, path: &str) -> StatusCode {
+        let app = router(serve.clone()).layer(axum::middleware::from_fn_with_state(serve.clone(), crate::serve::access::require));
+        app.oneshot(Request::builder().method(method).uri(path).header(by.0, by.1.as_str()).body(Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn only_an_administrator_or_a_key_of_theirs_reviews_an_album() {
+        let s = server();
+        s.sessions.set_required(true).unwrap();
+        s.users.from_directory("ann", false, None).unwrap();
+        let id = s.library.song_ids(1).unwrap().unwrap().album_id;
+        for (method, path) in [("POST", format!("/api/library/albums/{id}/promote")), ("POST", format!("/api/library/albums/{id}/reject")), ("DELETE", format!("/api/library/albums/{id}/review"))] {
+            assert_eq!(asked(&s, &session(&s, "ann"), method, &path).await, StatusCode::FORBIDDEN, "{path}: an account");
+            assert_eq!(asked(&s, &key(&s, "ann", "control"), method, &path).await, StatusCode::FORBIDDEN, "{path}: that account's key");
+            assert_eq!(asked(&s, &key(&s, "owner", "read"), method, &path).await, StatusCode::FORBIDDEN, "{path}: a key that only reads");
+            // Past the fence: this album is in the library, not in Incoming.
+            assert_eq!(asked(&s, &session(&s, "owner"), method, &path).await, StatusCode::CONFLICT, "{path}: an administrator");
+            assert_eq!(asked(&s, &key(&s, "owner", "control"), method, &path).await, StatusCode::CONFLICT, "{path}: Home Assistant's key");
+        }
+        assert_eq!(asked(&s, &session(&s, "ann"), "GET", "/api/library/incoming").await, StatusCode::OK, "what is coming in is everyone's to see");
+        // Signing in off: the one user.
+        s.sessions.set_required(false).unwrap();
+        assert_eq!(call(&s, "POST", &format!("/api/library/albums/{id}/reject")).await.0, StatusCode::CONFLICT);
+    }
+
     #[tokio::test]
     async fn home_assistant_tags_an_album_and_marks_a_favourite() {
         let s = server();
