@@ -120,13 +120,18 @@ async fn main() -> Result<()> {
             }
         });
     }
-    // The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there.
-    if std::env::args().nth(1).as_deref() == Some("--make-fixtures") {
+    // The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there; `--make-layout <folder>`, every kind
+    // of library. The end-to-end suite is a program of its own: this is its way to them.
+    type Make = fn(&std::path::Path) -> Result<Vec<std::path::PathBuf>>;
+    for (flag, make) in [("--make-fixtures", fixtures::make as Make), ("--make-layout", fixtures::make_layout)] {
+        if std::env::args().nth(1).as_deref() != Some(flag) {
+            continue;
+        }
         let Some(dir) = std::env::args().nth(2) else {
-            eprintln!("--make-fixtures <folder>");
+            eprintln!("{flag} <folder>");
             std::process::exit(2);
         };
-        std::process::exit(match fixtures::make(std::path::Path::new(&dir)) {
+        std::process::exit(match make(std::path::Path::new(&dir)) {
             Ok(albums) => {
                 println!("{} albums in {dir}", albums.len());
                 0
