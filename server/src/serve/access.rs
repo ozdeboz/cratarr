@@ -306,16 +306,13 @@ pub(super) async fn reauthenticate(serve: &Serve, headers: &HeaderMap, password:
         r.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait));
         return Err(r);
     }
-    match serve.sign_in(&name, password).await {
-        Some(user) => {
-            serve.throttle.succeeded(&keys);
-            Ok(user)
-        }
-        None => {
-            serve.throttle.failed(&keys, now());
-            tracing::warn!(target: "signin", user = %name, status = 403u16, "wrong password in Settings");
-            Err((StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Wrong password." }))).into_response())
-        }
+    if serve.password_of(&name, password).await {
+        serve.throttle.succeeded(&keys);
+        Ok(name)
+    } else {
+        serve.throttle.failed(&keys, now());
+        tracing::warn!(target: "signin", user = %name, status = 403u16, "wrong password in Settings");
+        Err((StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Wrong password." }))).into_response())
     }
 }
 

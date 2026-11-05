@@ -226,6 +226,18 @@ impl Serve {
         self.users.sign_in(name, password).filter(|u| !(directory_on && u.directory)).map(|u| u.name)
     }
 
+    /// Whether `password` is `account`'s, for what asks for it again (`access::reauthenticate`): whether it signs in as that
+    /// account by any name it goes by. A session knows the account, and the directory may know it by another name; and a
+    /// name may sign in as another account than the one of its name, whose password this is not.
+    pub async fn password_of(&self, account: &str, password: &str) -> bool {
+        for name in self.directory.names_of(account) {
+            if self.sign_in(&name, password).await.as_deref() == Some(account) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// The account the running request acts for (decision 0051): the one signed in, or, while signing in is not required
     /// (one user, decision 0043 off), the owner. `None` outside a request when signing in is required: work of its own
     /// must say whose it is.
