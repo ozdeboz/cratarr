@@ -568,6 +568,9 @@ fn radio_cases(lib: &Shared) -> Vec<RadioCase> {
     let tides: BTreeMap<String, f64> = of(&["al-tideline", "al-ember"]).into_iter().map(|t| (t, 1.0)).collect();
     let everything_but_two: Vec<String> = lib.files.iter().skip(2).map(|f| song(f.track)).filter(|t| !seeds.contains(t)).collect();
     let no_seed = |ask: Ask| Ask { seed: Vec::new(), exclude: Vec::new(), ..ask };
+    // Autoplay after the first tracks of a seed: the rest of it, a favourite among them, is Random's to draw first.
+    let drawing = || Ask { exclude: vec![seeds[0].clone()], ..asked(Mode::Random, RadioBy::Track) };
+    let one_of_the_seed: Vec<String> = of(&["al-signal"]).into_iter().chain([seeds[3].clone()]).collect();
     cases.extend([
         case("after the playing track alone", no_seed(similar())),
         case("with no seed and nothing playing", Ask { last: None, ..no_seed(similar()) }),
@@ -592,8 +595,25 @@ fn radio_cases(lib: &Shared) -> Vec<RadioCase> {
             within: Some(inside.clone()),
             ..case("all of it queued: a new round, the longest ago first", Ask { exclude: inside.clone(), last: inside.last().cloned(), count: Some(3), ..no_seed(similar()) })
         },
+        case("at random, what the queue left of the seed first", drawing()),
+        RadioCase { excluded: vec![seeds[4].clone()], ..case("at random, never what the listener excluded of the seed", drawing()) },
+        case("at random, no favourite of the seed while they are ignored", Ask { skip_favourites: true, ..drawing() }),
+        RadioCase { folders: Some(vec![1, 2]), ..case("at random, nothing of the seed from a library not chosen", drawing()) },
+        RadioCase { within: Some(one_of_the_seed), ..case("at random inside a crate, nothing of the seed outside it", drawing()) },
     ]);
     cases
+}
+
+/// Why a case may not pick a track, if it may not: what no answer of it can hold, whatever `write` was handed.
+fn barred(lib: &Shared, c: &RadioCase, id: &String) -> Option<&'static str> {
+    let folder = lib.files.iter().find(|f| song(f.track) == *id).expect("a track of the library").folder;
+    match &c.within {
+        Some(inside) if !inside.contains(id) => Some("outside what it stays inside"),
+        None if c.folders.as_ref().is_some_and(|f| !f.contains(&folder)) => Some("in a library not chosen"),
+        _ if c.excluded.contains(id) => Some("excluded"),
+        _ if c.ask.skip_favourites && c.favourites.contains(id) => Some("a favourite, ignored"),
+        _ => None,
+    }
 }
 
 /// One thing to a line, so a changed answer is a changed line: a list's items, or a map's values.
@@ -717,6 +737,25 @@ fn every_way_of_asking_radio_is_written_and_the_seed_decides() {
     for mode in [Mode::Similar, Mode::Random, Mode::Radio, Mode::Taste] {
         assert!(draws(mode), "{mode:?} drew the same on both seeds");
     }
+}
+
+/// Random takes the seed by a road of its own, past the pool, so a case has to reach it with something there to keep out.
+#[test]
+fn random_is_written_with_a_seed_left_to_draw_that_holds_each_thing_it_may_not_pick() {
+    let lib: Shared = serde_json::from_str(LIBRARY).unwrap();
+    let cases: Vec<RadioCase> = serde_json::from_str(RADIO).unwrap();
+    let left = |c: &'_ RadioCase| -> Vec<String> { c.ask.seed.iter().filter(|t| !c.ask.exclude.contains(t) && c.ask.last.as_ref() != Some(t)).cloned().collect() };
+    let mut kept_out: HashSet<&str> = HashSet::new();
+    for c in cases.iter().filter(|c| c.ask.mode == Mode::Random && !c.ask.albums) {
+        for t in left(c) {
+            if let Some(why) = barred(&lib, c, &t) {
+                assert!(!c.expected.contains(&t), "{}: {t}: {why}", c.name);
+                kept_out.insert(why);
+            }
+        }
+    }
+    assert_eq!(kept_out.len(), 4, "{kept_out:?}");
+    assert!(cases.iter().any(|c| c.ask.mode == Mode::Random && left(c).iter().any(|t| c.expected.contains(t))), "no case draws from the seed");
 }
 
 #[test]

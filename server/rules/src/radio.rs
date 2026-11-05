@@ -283,6 +283,8 @@ pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: O
     }
     // Never what the listener excluded (decision 0024, amended 2026-10-19: global exclusions).
     all.retain(|&i| !index.songs[i].excluded);
+    // All that may be picked at all: what a mode takes from outside the pool is held to it too.
+    let allowed: HashSet<usize> = all.iter().copied().collect();
     // Not in the queue; the recently played only when there is not enough else.
     let fresh: Vec<usize> = all.iter().copied().filter(|i| !out.contains(i) && !recent.contains_key(&index.songs[*i].id)).collect();
     // Not enough else: as many of the recently played as are missing come back, those played longest ago first.
@@ -322,19 +324,19 @@ pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: O
         let from = if narrowed.is_empty() { &pool } else { &narrowed };
         return album_mix(index, from, &seed, &out, req.mode, &req.weights(), rng);
     }
-    let picked = by_mode(index, req, &pool, &seed, &out, last, count, rng);
+    let picked = by_mode(index, req, &pool, &seed, &out, &allowed, last, count, rng);
     // Era and Artist can run dry (no year, artists with nothing more here): Similar fills up the rest.
     if picked.len() < count && matches!(req.mode, Mode::Era | Mode::Artist) {
         let rest: Vec<usize> = pool.iter().copied().filter(|i| !picked.contains(i)).collect();
         let similar = Ask { mode: Mode::Similar, count: Some(count - picked.len()), ..req.clone() };
-        let more = by_mode(index, &similar, &rest, &seed, &out, picked.last().copied().or(last), count - picked.len(), rng);
+        let more = by_mode(index, &similar, &rest, &seed, &out, &allowed, picked.last().copied().or(last), count - picked.len(), rng);
         return picked.into_iter().chain(more).collect();
     }
     picked
 }
 
 #[allow(clippy::too_many_arguments)]
-fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], out: &HashSet<usize>, last: Option<usize>, count: usize, rng: &mut Rng) -> Vec<usize> {
+fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], out: &HashSet<usize>, allowed: &HashSet<usize>, last: Option<usize>, count: usize, rng: &mut Rng) -> Vec<usize> {
     let artists_of = |i: usize| index.songs[i].like.artists.clone();
     match req.mode {
         Mode::Similar | Mode::Continuous | Mode::Radio | Mode::Taste => {
@@ -386,8 +388,10 @@ fn by_mode(index: &Index, req: &Ask, pool: &[usize], seed: &[usize], out: &HashS
         Mode::Random => {
             let seeds: HashSet<usize> = seed.iter().copied().collect();
             let queued: HashSet<usize> = index.find(&req.exclude).into_iter().collect();
-            // From the seed first (its own tracks again, those not in the queue), then from the whole library.
-            let from_seed: Vec<(usize, f64)> = seed.iter().copied().filter(|i| !queued.contains(i) && Some(*i) != last).map(|i| (i, rng.unit())).collect();
+            // From the seed first (its own tracks again, those not in the queue), then from the whole library. The pool left
+            // the seed out, so the seed answers to what may be picked by itself: a seed from a library not chosen still seeds,
+            // but it is never picked (0036), and what the listener excluded or ignores comes back by no road.
+            let from_seed: Vec<(usize, f64)> = seed.iter().copied().filter(|i| allowed.contains(i) && !queued.contains(i) && Some(*i) != last).map(|i| (i, rng.unit())).collect();
             let mut picked = pick_spaced(index, from_seed, count, None, false, rng);
             if picked.len() < count {
                 let rest: Vec<(usize, f64)> = pool.iter().filter(|i| !seeds.contains(i) && !picked.contains(i)).map(|&i| (i, rng.unit())).collect();
@@ -821,6 +825,43 @@ mod tests {
         let index = Index::new(a);
         let whole = Ask { seed: vec!["s1".into(), "s2".into()], exclude: vec!["s1".into(), "s2".into()], last: Some("s2".into()), albums: true, ..ask };
         assert_eq!(ids(&index, &choose(&index, &whole, &HashMap::new(), None, &mut Rng::seeded(2))), ["e1"]);
+    }
+
+    /// Random's seed: s0 queued, s1 excluded, s2 a favourite, s3 in library 1, s4 and s5 plain. All in albums of their own,
+    /// so the spacing decides nothing, and strangers in library 0 for what comes after the seed.
+    fn seeded_at_random() -> (Index, Ask) {
+        let mut s: Vec<Song> = (0..6).map(|n| song(&format!("s{n}"), 1 + n, 1 + n, 1, 2000, &[])).collect();
+        s.extend((0..6).map(|n| song(&format!("x{n}"), 20 + n, 20 + n, 2, 2010, &[])));
+        s[1].excluded = true;
+        s[2].favourite = true;
+        s[3].folder = 1;
+        let req = Ask { mode: Mode::Random, seed: (0..6).map(|n| format!("s{n}")).collect(), exclude: vec!["s0".into()], last: None, count: Some(2), ..Ask::default() };
+        (Index::new(s), req)
+    }
+
+    #[test]
+    fn random_draws_from_the_seed_first_what_may_be_picked_of_it() {
+        let (index, req) = seeded_at_random();
+        let wide = Ask { count: Some(4), ..req.clone() };
+        let seen: HashSet<String> = (0..40).flat_map(|n| ids(&index, &choose(&index, &wide, &HashMap::new(), None, &mut Rng::seeded(n)))).collect();
+        assert_eq!(seen, HashSet::from(["s2", "s3", "s4", "s5"].map(String::from)), "every seed track left but the excluded one, and no stranger while they last");
+        for (asked, gone) in [(Ask { skip_favourites: true, ..req.clone() }, "s2"), (Ask { folders: Some(vec![0]), ..req }, "s3")] {
+            for n in 0..40 {
+                let picked = ids(&index, &choose(&index, &asked, &HashMap::new(), None, &mut Rng::seeded(n)));
+                assert!(picked.len() == 2 && !picked.iter().any(|p| p == gone || p == "s1"), "{gone}: {picked:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn random_inside_a_crate_draws_from_the_seed_only_the_crates_tracks() {
+        let (index, req) = seeded_at_random();
+        let crate_: Vec<usize> = ["s4", "x0", "x1"].iter().map(|id| index.by_id[*id]).collect();
+        for n in 0..40 {
+            let picked = ids(&index, &choose(&index, &req, &HashMap::new(), Some(&crate_), &mut Rng::seeded(n)));
+            assert_eq!(picked[0], "s4", "the seed first");
+            assert!(picked.iter().all(|p| ["s4", "x0", "x1"].contains(&p.as_str())), "only the crate's: {picked:?}");
+        }
     }
 
     #[test]
