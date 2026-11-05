@@ -57,6 +57,7 @@ fn named_routes() -> Vec<(String, Vec<Method>)> {
 struct Whole {
     dir: std::path::PathBuf,
     served: Arc<crate::serve::Serve>,
+    app: Arc<crate::app::App>,
     router: axum::Router,
 }
 
@@ -70,8 +71,8 @@ impl Whole {
         let cfg = crate::config::Config::from_lookup(|_| None).unwrap();
         let saved = crate::settings::Saved { music_folder: Some(dir.to_string_lossy().into_owned()), ..Default::default() };
         let app = crate::app::App::new(cfg, saved, crate::settings::Origin::Env, Some(Arc::clone(&served))).await.unwrap();
-        let router = super::routes(app, Arc::clone(&served));
-        Self { dir, served, router }
+        let router = super::routes(app.clone(), Arc::clone(&served));
+        Self { dir, served, app, router }
     }
 
     /// A sign-in of `user`, as the cookie a browser sends.
@@ -137,6 +138,32 @@ async fn sharing_playlists_in_a_batch_is_behind_the_administrators_fence() {
     // Past the fence, where the handler answers for each playlist.
     let (status, answer) = w.send(("cookie", &me), Method::POST, path, share()).await;
     assert_eq!((status, answer["target"].as_str()), (StatusCode::OK, Some("shared")));
+}
+
+#[tokio::test]
+async fn a_group_s_sound_answers_only_a_player_of_the_group_and_nothing_else_makes_a_stream() {
+    let w = Whole::open("groups").await;
+    let on = w.app.play_on.clone();
+    let snap = crate::snapcast::Snapcast::new(on.clone(), 1000);
+    assert!(w.app.snapcast.set(snap.clone()).is_ok());
+    on.serve_sync_play(1704, 1000, None);
+    let (_tablet, _page, _kitchen) = (on.connect("tablet").unwrap(), on.connect_browser("page", Some("tab-1")).unwrap(), on.connect("kitchen").unwrap());
+    on.command("page", crate::app::PlayOnCommand::Join { to: "tablet".into() }).await.unwrap();
+    let me = w.session("me");
+    // The status alone: the answer that passes never ends.
+    let status = async |path: String| {
+        let req = Request::builder().uri(path).header("cookie", me.as_str()).body(Body::empty()).unwrap();
+        w.router.clone().oneshot(req).await.unwrap().status()
+    };
+    for route in ["listen.wav", "listen.pcm"] {
+        assert_eq!(status(format!("/api/groups/made%20up/{route}?player=page")).await, StatusCode::NOT_FOUND, "no such group");
+        assert_eq!(status(format!("/api/groups/tablet/{route}?player=kitchen")).await, StatusCode::NOT_FOUND, "a player not in it");
+        assert_eq!(status(format!("/api/groups/tablet/{route}?player=made%20up")).await, StatusCode::NOT_FOUND, "no such player");
+    }
+    assert_eq!(snap.streams_held(), 0);
+    for route in ["listen.wav", "listen.pcm"] {
+        assert_eq!(status(format!("/api/groups/tablet/{route}?player=page")).await, StatusCode::OK);
+    }
 }
 
 #[tokio::test]

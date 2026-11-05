@@ -208,6 +208,12 @@ impl Snapcast {
         let _ = INSTANCE.set(me);
     }
 
+    /// How many groups' streams there are.
+    #[cfg(test)]
+    pub fn streams_held(&self) -> usize {
+        self.streams.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
     /// From a chunk's stamp to its sound (ms).
     pub fn buffer_ms(&self) -> u32 {
         self.buffer_ms

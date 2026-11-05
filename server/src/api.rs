@@ -2780,6 +2780,9 @@ async fn group_listen(ctx: Ctx, Path(leader): Path<String>, Query(q): Query<List
     let Some(snap) = ctx.snapcast() else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
     };
+    if !app.play_on.hears(&leader, &q.player) {
+        return refused(StatusCode::NOT_FOUND, "No such group.");
+    }
     let delay = u32::from(app.play_on.delay_of(&q.player));
     let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.listen(&leader, &q.player, delay)));
     ([(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav")), (header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], body).into_response()
@@ -2792,8 +2795,8 @@ async fn group_frames(ctx: Ctx, Path(leader): Path<String>, Query(q): Query<List
     let Some(snap) = ctx.snapcast() else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
     };
-    if let Err(e) = app.play_on.reached(&q.player) {
-        return ApiError::from(e).into_response();
+    if !app.play_on.hears(&leader, &q.player) {
+        return refused(StatusCode::NOT_FOUND, "No such group.");
     }
     let delay = u32::from(app.play_on.delay_of(&q.player));
     let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.frames(&leader, &q.player, delay)));
