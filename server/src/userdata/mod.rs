@@ -1078,15 +1078,6 @@ impl UserData {
         Ok(())
     }
 
-    /// The ids of the listens imported into a user's history from `context` (an import's, decision 0067), to tell
-    /// what a preview would add.
-    pub fn heard_events(&self, user: &str, context: &str) -> Result<std::collections::HashSet<String>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT event FROM plays WHERE user = ?1 AND context = ?2 AND event IS NOT NULL")?;
-        let rows = st.query_map(params![user, context], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
     /// An import from `context` undone (decision 0067): its listens out of the user's history. They never counted, so
     /// the counts stay. How many.
     pub fn forget_heard(&self, user: &str, context: &str) -> Result<usize> {

@@ -243,6 +243,8 @@ pub struct Listened<'a> {
     pub track: Track<'a>,
     pub at: i64,
     pub event: String,
+    /// The player it was heard on, where the source knows: else [`into_history`]'s, the source's own name.
+    pub player: Option<&'a str>,
 }
 
 /// Another listen of the same song this near (seconds) is the same listen (a scrobbler that fed two services).
@@ -286,7 +288,7 @@ pub fn into_history(
                 length_secs: l.track.length_secs,
                 ended: crate::userdata::Ended::Finished,
                 counts: false,
-                player: Some(player.to_string()),
+                player: Some(l.player.unwrap_or(player).to_string()),
                 output: None,
                 context: Some(context.to_string()),
                 event: Some(l.event.clone()),

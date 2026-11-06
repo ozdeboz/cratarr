@@ -444,7 +444,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
             let (serve, account) = (serve.clone(), account.to_string());
             tokio::task::spawn_blocking(move || -> Result<Tally> {
                 let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
-                let listens: Vec<Listened> = partial.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s) }).collect();
+                let listens: Vec<Listened> = partial.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s), player: None }).collect();
                 into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, false)
             })
             .await??;
@@ -475,7 +475,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
     progress("Matching", 0, None);
     let (serve, account, user) = (serve.clone(), account.to_string(), user.to_string());
     tokio::task::spawn_blocking(move || -> Result<Imported> {
-        let listens: Vec<Listened> = scrobbles.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s) }).collect();
+        let listens: Vec<Listened> = scrobbles.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s), player: None }).collect();
         // The scrobbles only when chosen (they are still read: the loved tracks' albums come from them).
         let scrobbled = if choice.scrobbles { into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, preview)? } else { Tally::default() };
         // Loved: stars, as an import keeps them; one loved there no more is unstarred here (where it is still ours).
