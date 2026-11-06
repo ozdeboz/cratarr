@@ -70,7 +70,7 @@ class PlayerService : MediaSessionService() {
      * runs. A hold pauses the track under it (the owner, 2026-10-27: "the play pause button flashes"), and the lock
      * screen, the notification and the page heard that pause before; they see playing throughout.
      */
-    private inner class Shown(private val l: Player.Listener) : Player.Listener by l {
+    private inner class Shown(private val l: Player.Listener) : ListenerRelay(l) {
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = l.onPlayWhenReadyChanged(startStop.committed ?: playWhenReady, reason)
 
         override fun onIsPlayingChanged(isPlaying: Boolean) = l.onIsPlayingChanged(startStop.committed ?: isPlaying)
