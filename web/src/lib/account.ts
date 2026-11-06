@@ -54,6 +54,10 @@ export const perAccount = (name: string) => name + whoOf(key);
 /** Called once the account is known, and when another is (or nobody is). */
 export const whenAccount = new Set<() => void>();
 
+/** Called each time /api/me has answered here. A page opens as the name kept, so an ordinary open changes nothing and
+ *  [whenAccount] does not hear of it: what must run at every open, once Cratarr has said who it is, is here. */
+export const whenLearnt = new Set<() => void>();
+
 function set(k: string | null) {
   if (k === key) return;
   key = k;
@@ -105,6 +109,7 @@ export function accountLearnt(name: string | null) {
   learnt = true;
   set(name ?? '');
   toWorker(key);
+  for (const f of whenLearnt) f();
 }
 
 /** Signing out here: nobody's from now on, so what is made before the next /api/me answers is no one's, never the one

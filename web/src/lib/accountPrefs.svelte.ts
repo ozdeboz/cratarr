@@ -7,7 +7,7 @@
 // change on another of the account's devices comes on the live channel (`changed`: preferences), and the copy is
 // compared again whenever the channel is back.
 import { untrack } from 'svelte';
-import { accountKey, perAccount, whenAccount, whoOf } from './account';
+import { accountKey, perAccount, whenAccount, whenLearnt, whoOf } from './account';
 import { canon, meet, type Copy } from './accountPrefsRule';
 import { getPreferences, putPreference, type HeldPreference } from './api';
 import { on, stream } from './events.svelte';
@@ -145,8 +145,9 @@ whenAccount.add(() => {
     seen[k] = now(k);
   }
   copy = readCopy();
-  sync();
 });
+// Compared at every open, with or without the live channel.
+whenLearnt.add(sync);
 on<{ area?: string }>('changed', ({ area }) => void (area === 'preferences' && sync()));
 $effect.root(() => {
   // The channel back: what changed meanwhile is not on it, so the copy is compared again.
