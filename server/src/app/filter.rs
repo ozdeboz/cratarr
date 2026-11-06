@@ -265,11 +265,12 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         List::Crate { .. } => (Items::Tracks, lib.select(&shown).iter().map(|l| one(String::new(), Some(l.as_str()))).collect()),
         List::Playlist { id } => {
             let rows = app.playlists.entries(id).await?;
-            let row = |l: &String| {
-                let f = facts_of(&by_line, &none, Some(l.as_str()));
+            let led = app.playlists.led_entries(id).await?;
+            let row = |(l, at): (&String, &String)| {
+                let f = facts_of(&by_line, &none, Some(at.as_str()));
                 Item::of(l.clone(), vec![f], unless(!on("unplayed") || never_played(f, uses), bit("unplayed")) | unless(!on("missing") || !f.rel.is_empty(), bit("missing")))
             };
-            (Items::Tracks, rows.iter().map(row).collect())
+            (Items::Tracks, rows.iter().zip(&led).map(row).collect())
         }
         List::Playlists => {
             let lists = app.playlists.snapshot().await?;
@@ -408,7 +409,7 @@ fn by_album<'a>(files: impl Iterator<Item = &'a Facts>, album_of: &HashMap<Strin
 async fn row_lines(app: &Arc<App>, source: &str, rows: Vec<super::playlists::PlaylistRow>) -> Vec<(String, Option<String>)> {
     let (c, sid, ids) = (app.library.catalogue(), source.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
     let lines: Vec<Option<String>> = tokio::task::spawn_blocking(move || {
-        ids.iter().map(|id| c.track_of_source(&sid, id).and_then(|t| c.file_of(t)).and_then(|(f, rel)| c.line_of(f, &rel))).collect()
+        ids.iter().map(|id| c.track_of_source(&sid, id).and_then(|t| c.row_line(t))).collect()
     })
     .await
     .unwrap_or_default();

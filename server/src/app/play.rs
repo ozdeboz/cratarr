@@ -324,7 +324,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
         }
         Collection::Playlist { id } => {
             let r = app.playlists.reach(id)?;
-            let entries = r.store.entries(&r.name).await?;
+            let entries = r.store.led_entries(&r.name).await?;
             let (source, _) = app.playlists.source_of(want)?;
             let (sid, music) = (source.clone(), app.library.music().map(std::path::PathBuf::from));
             let count = entries.len();

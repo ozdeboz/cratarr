@@ -115,6 +115,25 @@ pub struct Repairs {
     pub review: Vec<Repair>,
 }
 
+/// Whether a playlist line's file is there: in Music, or, for a line that climbs out of it, in the folder it names
+/// (`Catalogue::path_of_line`). Blocking.
+pub(crate) fn line_exists(cat: &Catalogue, music: Option<&Path>, line: &str) -> bool {
+    if line.starts_with("../") {
+        return cat.path_of_line(line).is_some_and(|p| p.is_file());
+    }
+    music.is_some_and(|d| entry_exists(d, line))
+}
+
+/// Where an entry leads when its own file went: its track's line now (decision 0101 point 11: an entry is its track). None
+/// while its file is there, or where its track has none. Blocking.
+fn led_to(cat: &Catalogue, music: &Path, line: &str, track: &str) -> Option<String> {
+    if line_exists(cat, Some(music), line) {
+        return None;
+    }
+    let now = cat.row_line(track.strip_prefix(crate::serve::ids::SONG)?.parse().ok()?)?;
+    (now != line).then_some(now)
+}
+
 /// True when `entry` (library-relative) names an existing file under `dir`. Absolute paths and `..` never resolve.
 pub(crate) fn entry_exists(dir: &Path, entry: &str) -> bool {
     let p = Path::new(entry);
@@ -476,12 +495,7 @@ impl Store {
             }
             let mut moves = Vec::new();
             for (name, entry, line, track) in db.tracked_entries(&owner)? {
-                if entry_exists(&base, &line) {
-                    continue;
-                }
-                let Some(n) = track.strip_prefix(crate::serve::ids::SONG).and_then(|n| n.parse::<i64>().ok()) else { continue };
-                let Some(now) = cat.file_of(n).and_then(|(folder, rel)| cat.line_of(folder, &rel)) else { continue };
-                if now != line {
+                if let Some(now) = led_to(&cat, &base, &line, &track) {
                     moves.push((name, entry, now));
                 }
             }
@@ -509,6 +523,23 @@ impl Store {
         }
         let name = id.to_string();
         self.ask(move |db, owner| Ok(db.playlist(owner, &name)?.map(|(_, lines)| lines))).await?.ok_or(StoreError::Unknown)
+    }
+
+    /// A playlist's lines as they play now: an entry whose file went reads where its track's file is, as the next
+    /// `follow_tracks` will write it (decision 0101 point 11). A copy deleted leaves its lines on the other copy with no gap
+    /// for that minute to fall into. Read-only.
+    pub async fn led_entries(&self, id: &str) -> Result<Vec<String>, StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Unknown);
+        }
+        let (name, cat, base) = (id.to_string(), self.cat.clone(), self.base.clone());
+        let led = self.ask(move |db, owner| {
+            let Some((_, lines)) = db.playlist(owner, &name)? else { return Ok(None) };
+            let tracks = db.playlist_tracks(owner, &name)?.unwrap_or_default();
+            let tracks = tracks.into_iter().chain(std::iter::repeat(None));
+            Ok(Some(lines.into_iter().zip(tracks).map(|(line, track)| track.and_then(|t| led_to(&cat, &base, &line, &t)).unwrap_or(line)).collect()))
+        });
+        led.await?.ok_or(StoreError::Unknown)
     }
 
     /// A playlist's entries by their ids (decision 0087), and when each one there came (epoch s; none for one held
@@ -1259,6 +1290,36 @@ B/2.mp3
         s.refresh_dead().await;
         assert_eq!(tracked(&db), [("A/1.mp3".to_string(), track)]);
         assert_eq!(s.view(None).await.unwrap()[0].dead, 3);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_copy_leaves_its_lines_playing() {
+        let d = Dir::new();
+        d.touch("Music/A/1.mp3");
+        d.touch("own/A/1.mp3");
+        let cat = Arc::new(Catalogue::open(None, vec![d.0.join("Music"), d.0.join("own")]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let track = cat.track_of(0, "A/1.mp3").unwrap();
+        cat.give_track_for_tests(1, "A/1.mp3", track);
+        let s = Store::open(Arc::new(UserData::open(None).unwrap()), cat.clone(), None, d.0.join("Music"), None);
+        s.create("Mix").await.unwrap();
+        s.set_member("Mix", "../own/A/1.mp3", true).await.unwrap();
+        s.refresh_dead().await;
+        assert_eq!(s.entries("Mix").await.unwrap(), ["../own/A/1.mp3"], "a line on a copy that is there stays on it");
+        assert_eq!(s.led_entries("Mix").await.unwrap(), ["../own/A/1.mp3"]);
+        // That copy goes. Its line reads the other at once, and plays: nothing waits for the minute's pass.
+        std::fs::remove_file(d.0.join("own/A/1.mp3")).unwrap();
+        cat.walk_all();
+        let led = s.led_entries("Mix").await.unwrap();
+        assert_eq!(led, ["A/1.mp3"]);
+        let song = crate::serve::ids::song(track);
+        assert_eq!(cat.line_track_ids(crate::source::cratarr::KIND.id, &led).unwrap(), [Some(song)]);
+        assert!(line_exists(&cat, Some(d.0.join("Music").as_path()), &led[0]), "not missing");
+        assert_eq!(s.entries("Mix").await.unwrap(), ["../own/A/1.mp3"], "reading writes nothing");
+        s.refresh_dead().await;
+        assert_eq!(s.entries("Mix").await.unwrap(), ["A/1.mp3"], "the pass writes where it read");
     }
 
     #[tokio::test]

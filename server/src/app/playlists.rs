@@ -1419,17 +1419,16 @@ fn songs_by_line(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue)
             }
         }
     }
+    // `songs` holds a track's row copy alone: a playlist line on another copy is the same song.
+    for f in cat.crate_facts().iter().flat_map(|facts| facts.iter()).filter(|f| !f.lines.is_empty()) {
+        if let Some(song) = out.get(&f.rel).cloned() {
+            out.extend(f.lines.iter().map(|l| (l.clone(), song.clone())));
+        }
+    }
     out
 }
 
-/// Whether a playlist line's file is there: in Music, or, for a line that climbs out of it, in the Incoming folder it
-/// names (`Catalogue::path_of_line`). Blocking.
-pub(super) fn line_exists(cat: &crate::catalogue::Catalogue, music: Option<&std::path::Path>, line: &str) -> bool {
-    if line.starts_with("../") {
-        return cat.path_of_line(line).is_some_and(|p| p.is_file());
-    }
-    music.is_some_and(|d| crate::playlists::entry_exists(d, line))
-}
+pub(super) use crate::playlists::line_exists;
 
 /// A crate's lines to leave out: its own tracks left out, its albums' tracks now, and the tracks excluded everywhere.
 fn left_lines(left: &crates::LeftOut, album_tracks: &HashMap<String, Vec<String>>, excluded: &[String]) -> Vec<String> {
@@ -1703,8 +1702,9 @@ impl PlaylistService {
         {
             return Ok(kept.clone());
         }
+        let cat = self.lib.catalogue();
         let worked = tokio::task::spawn_blocking(move || {
-            let songs = serve.library.songs_by_rel(0).unwrap_or_default();
+            let songs = songs_by_line(&serve, &cat);
             let plays = me.and_then(|me| serve.userdata.song_plays(&me).ok());
             lists.into_iter().map(|(id, changed, lines)| (id, playlist_stats(&lines, &songs, plays.as_ref(), changed))).collect::<std::collections::BTreeMap<_, _>>()
         })
@@ -2254,7 +2254,8 @@ impl PlaylistService {
         let r = self.reach(id)?;
         let (entries, added) = r.store.entries_with_ids(&r.name).await?;
         let source = self.rows_source(want);
-        let mut rows = self.rows_of(entries.lines(), &source).await?;
+        let led = r.store.led_entries(&r.name).await?;
+        let mut rows = self.rows_as(entries.lines(), led, &source).await?;
         // When each entry came (the panel's orders) and its id (decision 0087: what operations name it by), as the
         // playlist keeps them.
         let ids = entries.ids();
@@ -2310,9 +2311,14 @@ impl PlaylistService {
 
     /// Rows for these lines (a playlist's, or a page of a crate's), with what the catalogue knows of their files.
     pub(super) async fn rows_of(&self, entries: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
+        self.rows_as(entries.clone(), entries, source).await
+    }
+
+    /// `rows_of`, each entry read at the line beside it in `at` (`Store::led_entries`): the entry stays what an edit names.
+    async fn rows_as(&self, entries: Vec<String>, at: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
         let (c, sid, music, served) = (self.lib.catalogue(), source.to_string(), self.lib.music(), self.served.clone());
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
-            let facts = c.line_rows(&sid, &entries)?;
+            let facts = c.line_rows(&sid, &at)?;
             // Cratarr's own tracks with their album, as the library has it (the app's downloads are told it, and find
             // their album and its cover by it).
             let (albums, album_tracks): (HashMap<String, String>, HashMap<String, u32>) = match served {
@@ -2331,13 +2337,14 @@ impl PlaylistService {
             let dir = music.map(std::path::PathBuf::from);
             Ok(entries
                 .into_iter()
+                .zip(at)
                 .zip(facts)
-                .map(|(entry, f)| PlaylistRow {
+                .map(|((entry, at), f)| PlaylistRow {
                     entry_id: None,
                     album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
                     album_tracks: f.track_id.as_ref().and_then(|t| albums.get(t)).and_then(|a| album_tracks.get(a).copied()),
-                    missing: !line_exists(&c, dir.as_deref(), &entry),
-                    file: entry.rsplit('/').next().unwrap_or(&entry).to_string(),
+                    missing: !line_exists(&c, dir.as_deref(), &at),
+                    file: at.rsplit('/').next().unwrap_or(&at).to_string(),
                     entry,
                     id: f.track_id,
                     name: f.title,
@@ -3609,7 +3616,7 @@ impl PlaylistService {
         want: Option<&str>,
     ) -> Result<(Arc<super::library::Active>, Arc<dyn source::Source>, Vec<String>, usize), ToggleError> {
         let r = self.reach(id)?;
-        let entries = r.store.entries(&r.name).await?;
+        let entries = r.store.led_entries(&r.name).await?;
         let sources = self.lib.connected();
         let (active, source) = want
             .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
@@ -4188,6 +4195,12 @@ impl PlaylistService {
     pub async fn entries(&self, id: &str) -> Result<Vec<String>, ToggleError> {
         let r = self.reach(id)?;
         Ok(r.store.entries(&r.name).await?)
+    }
+
+    /// One playlist's lines as they play now (`Store::led_entries`).
+    pub async fn led_entries(&self, id: &str) -> Result<Vec<String>, ToggleError> {
+        let r = self.reach(id)?;
+        Ok(r.store.led_entries(&r.name).await?)
     }
 
     /// A playlist's lines replaced as one write, as `edit`, but the new list may also hold lines it did not have (an

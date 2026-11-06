@@ -92,6 +92,9 @@ gains, is the file that plays, so a waveform's ETag names the file.
   the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on, and so
   does a track, in every list and count: `crates::on_for`, the one test. An Incoming copy counts there, though it plays only
   when picked: with the kept library off, that is where the record is found.
+- A playlist's line names a file, and an entry is its track: on any copy it has the track's id and plays, what plays being
+  `copy_for`'s to say. A line written now is the row copy's. Where its copy goes the entry reads the file its track has left,
+  at once, and the minute's pass writes that line.
 - An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
   The record stays while one copy is left.

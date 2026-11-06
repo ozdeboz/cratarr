@@ -1292,20 +1292,16 @@ impl Catalogue {
     /// The server's track id for each file of a folder, `None` where not known (yet). Blocking.
     pub fn track_ids(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<Option<String>>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
-        rels.iter()
-            .map(|rel| Ok(st.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?))
-            .collect()
+        rels.iter().map(|rel| item_at(&db, source, folder, rel)).collect()
     }
 
     /// The server's id of the file each playlist line names (`place_of_line`), in order. Blocking.
     pub fn line_track_ids(&self, source: &str, lines: &[String]) -> Result<Vec<Option<String>>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
         lines
             .iter()
             .map(|l| match self.place_of_line(l) {
-                Some((folder, rel)) => Ok(st.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?),
+                Some((folder, rel)) => item_at(&db, source, folder, &rel),
                 None => Ok(None),
             })
             .collect()
@@ -1612,8 +1608,11 @@ impl Catalogue {
     }
 
     /// The playlist lines of the files these server track ids are, in any folder in use (`line_of`); ids not known are
-    /// left out. Blocking.
+    /// left out. Cratarr's own id is a track: its one line, as the crates know it (`row_line`). Blocking.
     pub fn lines_of(&self, source: &str, ids: &[String]) -> Result<std::collections::HashSet<String>> {
+        if source == crate::source::cratarr::KIND.id {
+            return Ok(ids.iter().filter_map(|id| self.row_line(self.track_of_source(source, id)?)).collect());
+        }
         let folders = self.folders();
         let db = self.db();
         let mut st = db.prepare_cached("SELECT folder, rel FROM source_ids WHERE source = ?1 AND track_id = ?2 AND folder >= 0")?;
@@ -1632,6 +1631,14 @@ impl Catalogue {
     /// not in use, or one there is no way to from the Music folder.
     pub fn line_of(&self, folder: i64, rel: &str) -> Option<String> {
         line_in(&self.folders(), folder, rel)
+    }
+
+    /// A track's playlist line as the crates' facts have it (`read_crate_facts`): its row copy's. A line written now goes by
+    /// this, as the lowest folder can be someone's own music or a copy waiting in Incoming. Blocking.
+    pub fn row_line(&self, track: i64) -> Option<String> {
+        let files = self.files_of(track);
+        let row = crate::serve::instance().filter(|_| files.len() > 1).and_then(|s| s.library.file_of(&crate::serve::ids::song(track)).ok().flatten());
+        row_line_of(&self.folders(), &files, row.as_ref())
     }
 
     /// The file a playlist line names, on the disk (`place_of_line`): Music's, or another folder's for a line that
@@ -1723,7 +1730,6 @@ impl Catalogue {
         let number = |v: &str| v.split('/').next().and_then(|n| n.trim().parse::<u32>().ok());
         // "1994", "1994-05-01": its first four digits.
         let year = |v: &str| v.get(..4).and_then(|y| y.parse::<i32>().ok());
-        let mut ids = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
         places
             .iter()
             .map(|place| {
@@ -1763,7 +1769,7 @@ impl Catalogue {
                         row.duration_ms = Some(ms);
                     }
                 }
-                row.track_id = ids.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?;
+                row.track_id = item_at(&db, source, *folder, rel)?;
                 Ok(row)
             })
             .collect()
@@ -3578,6 +3584,22 @@ fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
     .flatten()
 }
 
+/// A file's item on a source. Cratarr's own item is the track, whichever copy the file is: its links come from `songs`, which
+/// holds a track's row copy alone, so a playlist line on any other copy would have no id and stop playing.
+fn item_at(db: &Connection, source: &str, folder: i64, rel: &str) -> Result<Option<String>> {
+    if source == crate::source::cratarr::KIND.id {
+        let mut st = db.prepare_cached(&format!("SELECT track FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"))?;
+        return Ok(st.query_row(params![folder, rel], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten().map(crate::serve::ids::song));
+    }
+    let mut st = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
+    Ok(st.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?)
+}
+
+/// The line of a track's `row` file where that is among its `files` as they are now, else the first that has one.
+fn row_line_of(folders: &InUse, files: &[Place], row: Option<&Place>) -> Option<String> {
+    row.filter(|r| files.contains(r)).and_then(|(f, rel)| line_in(folders, *f, rel)).or_else(|| files.iter().find_map(|(f, rel)| line_in(folders, *f, rel)))
+}
+
 /// See `Catalogue::file_of`.
 fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
     db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel LIMIT 1"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -5093,6 +5115,34 @@ mod tests {
         let items: Vec<&[&crate::crates::Facts]> = one.iter().map(|f| f.as_slice()).collect();
         let genre = crate::crates::list_axes(&items, &[], None, None, 0).into_iter().find(|a| a.key == "genre").unwrap();
         assert_eq!((genre.values, genre.counts), (vec!["Dub".to_string()], vec![1]));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_line_on_any_copy_has_its_track() {
+        let (root, cat) = one_track_twice();
+        let own = crate::source::cratarr::KIND.id;
+        let song = Some("tr-77".to_string());
+        let lines = ["A/01.mp3".to_string(), "../own/A/01.mp3".to_string(), "Nowhere/01.mp3".to_string()];
+        assert_eq!(cat.line_track_ids(own, &lines).unwrap(), [song.clone(), song.clone(), None]);
+        assert_eq!(cat.line_rows(own, &lines).unwrap().into_iter().map(|r| r.track_id).collect::<Vec<_>>(), [song.clone(), song.clone(), None]);
+        assert_eq!(cat.track_ids(own, 1, &["A/01.mp3".to_string()]).unwrap(), [song]);
+        // Another server's item is its own link to one file.
+        cat.record_links("jf", "lib", &[("i1".to_string(), 0, "A/01.mp3".to_string())], 1).unwrap();
+        assert_eq!(cat.line_track_ids("jf", &lines).unwrap(), [Some("i1".to_string()), None, None]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_tracks_line_is_its_row_copys() {
+        let (root, cat) = one_track_twice();
+        let (folders, files) = (cat.folders(), cat.files_of(77));
+        let row = (1, "A/01.mp3".to_string());
+        assert_eq!(row_line_of(&folders, &files, Some(&row)).as_deref(), Some("../own/A/01.mp3"));
+        assert_eq!(row_line_of(&folders, &files, None).as_deref(), Some("A/01.mp3"), "no library to ask: the first by folder");
+        assert_eq!(row_line_of(&folders, &files, Some(&(1, "Gone/01.mp3".to_string()))).as_deref(), Some("A/01.mp3"), "a row from before the file went");
+        let own = crate::source::cratarr::KIND.id;
+        assert_eq!(cat.lines_of(own, &["tr-77".to_string()]).unwrap(), ["A/01.mp3".to_string()].into_iter().collect(), "one line a track, as the crates know it");
         std::fs::remove_dir_all(&root).ok();
     }
 

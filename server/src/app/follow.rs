@@ -3,7 +3,9 @@
 //! - Keep and Replace move files into Music: every playlist line naming a moved file names its new place. Undo puts
 //!   the lines back.
 //! - Delete leaves them: each entry is its track's (decision 0101 point 11), kept as missing until a file of it is
-//!   there again (its Undo, an upgrade); nothing is taken out, so nothing is put back.
+//!   there again (its Undo, an upgrade); nothing is taken out, so nothing is put back. Where another copy of the track
+//!   stays it is not missing at all: it reads and plays from there (`Store::led_entries`), and the line follows
+//!   (`follow_tracks`).
 //!
 //! Safe to repeat: what is done (and undone) is recorded per event in the journal.
 
