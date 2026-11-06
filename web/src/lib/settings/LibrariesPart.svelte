@@ -437,6 +437,7 @@
   {@const d = browsingOwn}
   <FolderBrowser
     chosen={ownOf(d) ? [ownOf(d)] : []}
+    choose="Use this folder"
     onadd={(p) => {
       d.values.own_music = p;
       browsingOwn = null;

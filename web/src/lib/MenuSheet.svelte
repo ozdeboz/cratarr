@@ -241,10 +241,10 @@
         <div class="back-row">
           <button class="back" aria-label="Back" onclick={onback}><Icon name="back" size={22} /></button>
           {#if beside}<span class="beside">{@render beside()}</span>{/if}
-          {#if end_.action}
-            {@const e = end_.action}
+          <!-- A step's own action, or the sheet's: with a back row there is no row of large actions to hold them. -->
+          {#each end_.action ? [end_.action] : actions.filter((a) => actionAway(a.label, reach.away)) as e (e.label)}
             <button class="back step-end" aria-label={e.label} title={e.label} disabled={e.disabled} onclick={e.onclick}><Icon name={e.icon} size={22} /></button>
-          {/if}
+          {/each}
         </div>
       {:else if actions.length}
         <div class="actions">

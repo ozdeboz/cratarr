@@ -5,7 +5,7 @@
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
 
-  let { chosen, onadd, onclose }: { chosen: string[]; onadd: (path: string) => void; onclose: () => void } = $props();
+  let { chosen, choose = 'Add this folder', onadd, onclose }: { chosen: string[]; choose?: string; onadd: (path: string) => void; onclose: () => void } = $props();
 
   let at = $state<FolderListing | null>(null);
   let error = $state<string | null>(null);
@@ -41,7 +41,6 @@
   icon="library"
   title={at?.path ? name(at.path) : 'Add folder'}
   chips={at?.path ? [at.path] : []}
-  actions={at?.path && !isChosen(at.path) ? [{ icon: 'plus', label: 'Add this folder', onclick: () => at?.path && add(at.path) }] : []}
   onback={at?.path ? () => open(at?.parent ?? null) : null}
   {onclose}
 >
@@ -50,6 +49,11 @@
       {#each shownFound as p (p)}
         <MenuEntry icon="circlePlus" label={`Add ${p}`} onclick={() => add(p)} />
       {/each}
+    {/if}
+    <!-- A row, not the sheet's actions: those give way to the back row, which every folder but the top one has. -->
+    {#if at?.path && !isChosen(at.path)}
+      {@const here = at.path}
+      <MenuEntry icon="circlePlus" label={choose} onclick={() => add(here)} />
     {/if}
     {#each at?.folders ?? [] as e (e.path)}
       <MenuEntry icon="library" label={[e.name, isChosen(e.path) ? 'added' : tracks(e), e.writable ? null : 'read only'].filter(Boolean).join(' · ')} onclick={() => open(e.path)} />
