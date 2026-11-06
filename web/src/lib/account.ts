@@ -25,7 +25,19 @@ function stored(): string | null | undefined {
   }
 }
 
-const kept = typeof window === 'undefined' ? undefined : stored();
+/** Cratarr's sign-in page just sent this page here: who came is /api/me's to say. The name kept may be of someone whose
+ *  session ended with no page open, so until it answers the page is nobody's, never theirs for a moment. A reload of
+ *  such a page, later and perhaps out of reach, is no sign-in. */
+function fromSignIn(): boolean {
+  try {
+    const open = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+    return open?.type !== 'reload' && new URL(document.referrer).pathname === '/signin';
+  } catch {
+    return false;
+  }
+}
+
+const kept = typeof window === 'undefined' ? undefined : fromSignIn() ? null : stored();
 let key: string | null = kept ?? null;
 /** Learnt from /api/me in this page: the kept one read in late does not take its place. */
 let learnt = false;
@@ -58,13 +70,32 @@ function set(k: string | null) {
 // an older copy there (the tablet, 2026-11-04).
 if (typeof window !== 'undefined' && kept === undefined)
   readKept<unknown>(NAME).then((v) => {
-    if (!learnt && key === null && typeof v === 'string') set(v);
+    if (learnt || key !== null || typeof v !== 'string') return;
+    set(v);
+    toWorker(key);
   });
 
 /** The service worker keeps and shows the last copies of this account's reads only (public/sw.js). */
-const toWorker = (k: string | null) => {
+function toWorker(k: string | null) {
   if (typeof navigator !== 'undefined') navigator.serviceWorker?.controller?.postMessage({ type: 'account', name: k });
-};
+}
+
+if (typeof window !== 'undefined') {
+  // Told before this page's first read, which it would otherwise answer as the last page's account.
+  toWorker(key);
+  // Another tab signed in or out, or this page came back from the browser's history after one did. What the page holds
+  // in memory is the one before's and no store says so, so it starts over as the one there is now.
+  const another = () => {
+    const now = stored();
+    if (now !== undefined && now !== key) location.reload();
+  };
+  addEventListener('storage', (e) => {
+    if ((e as StorageEvent).key === LS) another();
+  });
+  addEventListener('pageshow', (e) => {
+    if ((e as PageTransitionEvent).persisted) another();
+  });
+}
 
 /** /api/me answered: `name` signed in (null: sign-in off, one user). */
 export function accountLearnt(name: string | null) {

@@ -3,6 +3,7 @@
 // three are out of reach: the pages say so in one line, the pollers ask less often, and the app opens on its downloads
 // (decision 0033, step 4).
 // Without a session away from home, Cratarr asks for its sign-in instead: the page goes to the sign-in page.
+import { accountForgotten } from './account';
 
 export const reach = $state({
   /** The last request did not reach Cratarr. */
@@ -97,6 +98,9 @@ export const onSignInAsked = (f: (go: () => void) => boolean) => (holding = f);
 export function toSignIn() {
   if (leaving) return;
   refusedUntil = Date.now() + REFUSED_MS;
+  // Cratarr says nobody is signed in here (a session that ended, not one out of reach): the name kept is not to open the
+  // stores for whoever signs in next.
+  accountForgotten();
   if (holding?.(signIn)) return;
   signIn();
 }

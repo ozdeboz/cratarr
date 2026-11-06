@@ -25,6 +25,11 @@ const WHO = 'cratarr-who';
 const NOBODY = '-';
 let who = null;
 const whoNow = async () => (who ??= await caches.open(WHO).then((c) => c.match('/__who')).then((r) => (r ? r.text() : NOBODY), () => NOBODY));
+/** `w`'s copies from now on, kept for a worker woken later. */
+const setWho = (w) => {
+  who = w;
+  return caches.open(WHO).then((c) => c.put('/__who', new Response(w)));
+};
 /** The account's own cache of `base` (DATA, COVERS); null for nobody. */
 const ours = async (base) => {
   const w = await whoNow();
@@ -167,8 +172,7 @@ self.addEventListener('message', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data?.type !== 'account') return;
   const name = event.data.name;
-  who = typeof name === 'string' ? `@${name}` : NOBODY;
-  event.waitUntil(caches.open(WHO).then((c) => c.put('/__who', new Response(who))));
+  event.waitUntil(setWho(typeof name === 'string' ? `@${name}` : NOBODY));
 });
 
 // The covers to keep, the account's (their paths, without a version): those no longer listed go, the missing ones are
@@ -257,7 +261,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.pathname.startsWith('/api/')) return;
-  // Cratarr's sign-in page (decision 0039) is the server's own, never the shell.
+  // Cratarr's sign-in page (decision 0039) is the server's own, never the shell. Whoever comes through it is not known
+  // yet, and the one before may be someone whose session ended with no page open: nobody's, until the page says.
+  if (url.pathname === '/signin' && req.mode === 'navigate') event.waitUntil(setWho(NOBODY));
   if (url.pathname === '/signin' || url.pathname === '/signout') return;
 
   if (req.mode === 'navigate') {
