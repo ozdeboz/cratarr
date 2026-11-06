@@ -1671,6 +1671,8 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                 (ad.unwrap_or(1), an.unwrap_or(u32::MAX), &a.row.rel).cmp(&(bd.unwrap_or(1), bn.unwrap_or(u32::MAX), &b.row.rel))
             });
             let first = list[0];
+            // The file that named the album: one of a folder's that disagrees was settled to it, and its own tags say another.
+            let named = list.iter().copied().find(|s| ids::album(s.row, &s.album_artist, s.folder) == s.group).unwrap_or(first);
             crate::catalogue::AlbumCopy {
                 facts: RecordFacts {
                     release: list.iter().find_map(|s| s.row.first("musicbrainz_albumid")).map(str::to_lowercase),
@@ -1691,6 +1693,10 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                 files: list.iter().filter(|s| s.row.track.is_some()).map(|s| (s.folder, s.row.rel.clone())).collect(),
                 // A shared track stays with its record, wherever a file of it lies: that settles nothing.
                 split: list.iter().any(|s| s.row.record.is_none() || (s.row.record != record && !s.row.shared)),
+                folder: first.folder,
+                old_id: first.group.clone(),
+                old_base: first.album_base.clone(),
+                pid: ids::album_pid(named.row, &named.album_artist),
             }
         })
         .collect();
@@ -1703,6 +1709,26 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
         }
     }
     copies
+}
+
+/// Every album the first start gives a record to, read from the catalogue: what the libraries list, what no list shows and can
+/// come back, and every name either credits. No build has run, and 0.15's `library.sqlite` has gone with the layout. Blocking.
+pub fn first_albums(cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<crate::catalogue::FirstAlbums> {
+    let folders = cat.folders().iter().map(|(folder, root)| Ok(FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder)? })).collect::<Result<Vec<_>>>()?;
+    let mut names = credited_artists(folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules);
+    let served = album_copies(&folders, rules);
+    drop(folders);
+    let mut unserved = Vec::new();
+    for (folder, id, rows) in cat.unserved_rows()? {
+        // By the id it was served under, so its hash is the one it had. A parked folder's rows lie under another now.
+        let away = [FolderRows { folder: id, root: String::new(), rows }];
+        names.extend(credited_artists(away[0].rows.iter().map(|r| (id, r)), rules));
+        for mut album in album_copies(&away, rules) {
+            album.files.iter_mut().for_each(|place| place.0 = folder);
+            unserved.push(album);
+        }
+    }
+    Ok(crate::catalogue::FirstAlbums { served, unserved, names })
 }
 
 /// The albums these rows make.
@@ -2415,6 +2441,62 @@ mod tests {
     fn albums_now(cat: &crate::catalogue::Catalogue) -> Vec<crate::catalogue::AlbumCopy> {
         let folders: Vec<FolderRows> = cat.folders().iter().map(|(folder, root)| FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect();
         album_copies(&folders, &Rules::default())
+    }
+
+    /// An album knows the hashes 0.15 served it by, and of a folder that disagrees, the one the folder was settled to: the map is
+    /// made of nothing else, so a wrong one reads as an old row that matched nothing.
+    #[test]
+    fn an_album_knows_the_ids_it_had_whatever_its_files_disagree_on() {
+        let (roots, cat, _) = two_kept("old-ids");
+        add_files_to(&cat, 1, &roots[1], &[("A/01 One.flac", "Most", "One"), ("A/02 Two.flac", "Most", "Two"), ("A/03 Odd.flac", "Odd", "Three")]);
+        let albums = albums_now(&cat);
+        let album = &albums[0];
+        assert_eq!(albums.len(), 1, "one folder, one album");
+        let by = album_pid_for_tests("Most", "Artist");
+        assert_eq!((album.folder, album.pid.as_str()), (1, by.as_str()), "the first track by place says Most, and so does the album");
+        assert_eq!(album.old_id, ids::album_at(&by, 1));
+        assert_eq!(album.old_base, ids::album_at(&by, 0));
+
+        // The first by place is the odd one out: the pid is still the album's.
+        cat.tag_for_tests(1, "A/01 One.flac", &[("album", "Odd"), ("albumartist", "Artist"), ("title", "One")]);
+        cat.tag_for_tests(1, "A/03 Odd.flac", &[("album", "Most"), ("albumartist", "Artist"), ("title", "Three")]);
+        cat.tag_for_tests(1, "A/02 Two.flac", &[("album", "Most"), ("albumartist", "Artist"), ("title", "Two")]);
+        let albums = albums_now(&cat);
+        assert_eq!((albums[0].pid.as_str(), albums[0].old_id.as_str()), (by.as_str(), ids::album_at(&by, 1).as_str()));
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// What `ids::album` hashes, from an album's title and artist alone.
+    fn album_pid_for_tests(album: &str, artist: &str) -> String {
+        ids::album_pid(&row(1, "A/01.flac", &[("album", album)]), artist)
+    }
+
+    /// CR13, read from a real catalogue: what no list shows comes under the id it was served by, its files named as they lie.
+    #[test]
+    fn the_first_albums_are_what_the_lists_show_and_what_can_come_back() {
+        let (roots, cat, _) = two_kept("first-albums");
+        add_files_to(&cat, 0, &roots[0], &[("Here/01 One.flac", "Here", "One")]);
+        add_files_to(&cat, 1, &roots[1], &[("Away/01 One.flac", "Away", "One")]);
+        cat.mark_trashed(1, "Away", "token").unwrap();
+        let found = first_albums(&cat, &Rules::default()).unwrap();
+        assert_eq!(found.served.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Here"]);
+        assert_eq!(found.unserved.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Away"]);
+        let away = &found.unserved[0];
+        let by = album_pid_for_tests("Away", "Artist");
+        assert_eq!((away.folder, away.old_id.as_str(), away.old_base.as_str()), (1, ids::album_at(&by, 1).as_str(), ids::album_at(&by, 0).as_str()));
+        assert_eq!(away.files, [(1, ".cratarr-trash/token/01 One.flac".to_string())]);
+        assert!(found.names.contains("Artist"));
+
+        // A folder out of use: its rows lie under a negative id, and its albums were known by the one it had.
+        let track = cat.track_of(0, "Here/01 One.flac");
+        cat.set_folders(vec![roots[1].clone()]).unwrap();
+        let found = first_albums(&cat, &Rules::default()).unwrap();
+        let parked = found.unserved.iter().find(|a| a.title == "Here").expect("what a parked folder held");
+        let by = album_pid_for_tests("Here", "Artist");
+        assert_eq!((parked.folder, parked.old_id.as_str()), (0, ids::album_at(&by, 0).as_str()), "by the id it had");
+        assert!(parked.files[0].0 < 0, "and it lies where the catalogue keeps it: {:?}", parked.files);
+        assert_eq!(parked.tracks[0].0, track.unwrap());
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
     const ONE_TWO: [(&str, &str, &str); 2] = [("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two")];
