@@ -2331,7 +2331,11 @@ impl Catalogue {
                 let ((nf, nr, _, _), (gf, gr, _, track)) = (&new[n], &gone[g]);
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
                 carry_came(&tx, (*nf, nr), (*gf, gr))?;
-                for table in ["files", "tags"] {
+                // The same sound under another name: what was worked out of it goes along, and is read while the file is as it was then.
+                for table in ["analysis", "analysis_shape", "beat_this"] {
+                    tx.execute(&format!("UPDATE OR IGNORE {table} SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2"), params![gf, gr, nf, nr])?;
+                }
+                for table in FILE_TABLES {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![gf, gr])?;
                 }
                 claimed.insert((*nf, nr.clone()));
@@ -6659,6 +6663,29 @@ mod tests {
         for d in [&a, &renamed, &copy] {
             std::fs::remove_dir_all(d).ok();
         }
+    }
+
+    /// A file renamed or moved outside Cratarr is the same sound under another name: what was worked out of it goes with it, or its
+    /// waveform is out of view until the pass has gone over it again, and what it left stays behind with nothing to say whose it is.
+    #[test]
+    fn a_file_moved_outside_cratarr_keeps_what_was_worked_out_of_its_sound() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, _) = heard(&cat, 0);
+        std::fs::rename(d.join("A - B (2020)"), d.join("A - B (2020) moved")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (2, 0), "recognised");
+        let moved = one.replace("A - B (2020)", "A - B (2020) moved");
+        assert_eq!(cat.analysis_of(0, &moved).map(|a| a.waveform.len()), Some(crate::analysis::WAVEFORM_BINS), "its analysis, as it is the file it was");
+        assert_eq!(parts_at(&cat, 0, &moved), (1, 1), "its shape and beats");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "nothing left behind");
+        let left: i64 = cat.db().query_row("SELECT count(*) FROM analysis WHERE rel = ?1", [&one], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
