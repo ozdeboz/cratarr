@@ -79,6 +79,20 @@ pub fn copy_for<'a>(copies: &'a [Copy], viewer: Option<&Viewer>, off: &[i64]) ->
     best(on().filter(|c| c.kind != Kind::Incoming)).or_else(|| best(on()).filter(|_| held.iter().all(|c| c.kind == Kind::Incoming)))
 }
 
+/// A record's copies in the order they would play for this viewer, whatever is off: `copy_for` asked again of what is left,
+/// so there is no second rule. The first of these a library switched on holds is what plays, so a switch thrown on the page
+/// moves it with no new list; a copy off keeps its place, as what is off must not change the order.
+pub fn in_order(copies: &[Copy], viewer: Option<&Viewer>) -> Vec<Copy> {
+    let mut left = copies.to_vec();
+    let mut order = Vec::with_capacity(left.len());
+    while let Some(next) = copy_for(&left, viewer, &[]).cloned() {
+        left.retain(|c| *c != next);
+        order.push(next);
+    }
+    order.append(&mut left);
+    order
+}
+
 /// Whether a record plays for this viewer: what every list's "is it switched on" comes to.
 #[allow(dead_code)] // the lists, once a track lies in several libraries
 pub fn on_for(copies: &[Copy], viewer: Option<&Viewer>, off: &[i64]) -> bool {
@@ -171,6 +185,47 @@ mod tests {
         let incoming = [mp3(2, Kind::Incoming, 128), flac(1, Kind::Own)];
         assert_eq!(folder(copy_for(&incoming, None, &[])), Some(2), "Incoming holds it too: own music counts as off");
         assert_eq!(folder(copy_for(&[flac(1, Kind::Own)], None, &[])), Some(1), "nothing else holds it");
+    }
+
+    /// The page reads `in_order` by itself (`copyPlaying`: the first copy on, an Incoming one only when picked or nothing
+    /// kept holds the record), so that reading must come to `copy_for`'s answer for every viewer and every set of libraries
+    /// off, or the card and the stream name two copies.
+    #[test]
+    fn the_first_copy_on_in_order_is_what_copy_for_plays_whatever_is_off() {
+        let records = [
+            vec![flac(0, Kind::Main), mp3(1, Kind::Own, 128), mp3(2, Kind::Incoming, 192), flac(3, Kind::Own)],
+            vec![mp3(0, Kind::Main, 128), mp3(1, Kind::Main, 320), flac(2, Kind::Incoming)],
+            vec![mp3(2, Kind::Incoming, 128), flac(3, Kind::Incoming)],
+            vec![flac(1, Kind::Own), mp3(3, Kind::Own, 128)],
+        ];
+        for copies in &records {
+            let folders: Vec<i64> = copies.iter().map(|c| c.folder).collect();
+            let mut viewers = vec![None, Some(viewer(None, None))];
+            viewers.extend(folders.iter().flat_map(|f| [Some(viewer(Some(*f), None)), Some(viewer(None, Some(*f))), Some(viewer(Some(*f), Some(folders[0])))]));
+            for who in &viewers {
+                let order = in_order(copies, who.as_ref());
+                assert_eq!(order.len(), copies.len(), "every copy, off or not");
+                for set in 0..1 << folders.len() {
+                    let off: Vec<i64> = folders.iter().enumerate().filter(|(i, _)| set >> i & 1 == 1).map(|(_, f)| *f).collect();
+                    let only_incoming = copies.iter().all(|c| c.kind == Kind::Incoming);
+                    let picked = |c: &Copy| who.as_ref().is_some_and(|v| v.pick == Some(c.folder));
+                    let own = |c: &Copy| who.as_ref().is_some_and(|v| v.own == Some(c.folder));
+                    let read = order.iter().find(|c| !off.contains(&c.folder) && (c.kind != Kind::Incoming || picked(c) || own(c) || only_incoming));
+                    // With no one, own music counts as off unless nothing else holds the record, and the order puts it last.
+                    let shunned = |c: &&Copy| who.is_none() && c.kind == Kind::Own && copies.iter().any(|o| o.kind != Kind::Own);
+                    assert_eq!(read.filter(|c| !shunned(c)), copy_for(copies, who.as_ref(), &off), "{who:?}, {off:?} off, in {order:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_copy_off_keeps_its_place_in_the_order() {
+        let copies = [mp3(1, Kind::Main, 128), flac(0, Kind::Main), mp3(2, Kind::Incoming, 320)];
+        let order: Vec<i64> = in_order(&copies, Some(&viewer(None, None))).iter().map(|c| c.folder).collect();
+        assert_eq!(order, [0, 1, 2], "best first, Incoming last though it beats the MP3");
+        let mine: Vec<i64> = in_order(&copies, Some(&viewer(Some(1), Some(2)))).iter().map(|c| c.folder).collect();
+        assert_eq!(mine, [2, 1, 0], "the pick, then their own, then the rest");
     }
 
     #[test]

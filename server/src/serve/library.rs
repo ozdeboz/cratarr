@@ -379,6 +379,7 @@ mod release_type_tests {
             duration_secs: Some(secs),
             tags: Vec::new(),
             library: None,
+            copies: Vec::new(),
             artists: Vec::new(),
             release: Default::default(),
         };
@@ -1666,7 +1667,9 @@ fn write_albums(
                rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )?;
-        for s in records.values().flatten().flat_map(|c| c.songs.iter().copied()) {
+        // In the order of the rows, as every file is one of these: `n` is the library's order, and it must not turn on how a
+        // record's number happens to sort.
+        for s in &songs {
             let r = s.row;
             let id = ids::song(r.track.unwrap_or_default());
             let suffix = r.rel.rsplit_once('.').map(|(_, e)| e.to_lowercase());
@@ -1735,6 +1738,8 @@ fn write_albums(
             albums.entry(s.album_id.clone()).or_default().push(s);
         }
     }
+    // By path: rows come in the order of a whole read or of the folders a build reached, and an album's first song names it.
+    albums.values_mut().for_each(|list| list.sort_by(|a, b| a.row.rel.cmp(&b.row.rel)));
     let mut ins_album = tx.prepare_cached(
         "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
            size, discs, created, mbid, compilation, order_name, base_id, format, min_kbps, cover,
@@ -2469,6 +2474,17 @@ mod tests {
         n
     }
 
+    /// `n` is the library's order: `all_song_ids`, a server's listing and the radio proof's accounts all read it. It follows
+    /// the rows, never how record numbers sort as text.
+    #[test]
+    fn songs_are_numbered_in_the_order_of_the_rows_whatever_their_records() {
+        let rows = [copy_rows(1, "A/Album", 10, "FLAC", 900), copy_rows(3, "B/Album", 9, "FLAC", 900)].concat();
+        let mut rows = rows;
+        rows[2..].iter_mut().for_each(|r| tag(r, "album", "Other"));
+        let lib = built_with(&[(0, Kind::Main)], &[in_folder(0, rows)]);
+        assert_eq!(lib.all_song_ids().unwrap(), ["tr-1", "tr-2", "tr-3", "tr-4"], "\"al-10\" sorts before \"al-9\", and it must not show");
+    }
+
     /// A retag can put two copies of one folder in one group, so two files of one track reach one group, and `songs.id` must
     /// hold for any input: a failed insert here stops the library updating for good.
     #[test]
@@ -2491,6 +2507,31 @@ mod tests {
         once.push(ServedRow { rel: "A/Album/CD1/01 One.flac".into(), ..once[0].clone() });
         once[0].rel = "A/Album/CD2/01 One.flac".into();
         assert_eq!(built_with(&[(0, Kind::Main)], &[in_folder(0, once)]).counts().unwrap().0, 2);
+    }
+
+    /// A library's list says each copy as it is there, and goes by when that copy came: a new copy of an old record is news
+    /// in Incoming, and with a limit it would otherwise be the first to fall off.
+    #[test]
+    fn a_library_lists_its_own_copy_of_a_record_by_when_it_came() {
+        let mut old = copy_rows(1, "A/Album", 5, "MP3", 192);
+        old.iter_mut().for_each(|r| r.born = Some(100));
+        let mut other = copy_rows(21, "B/Other", 6, "FLAC", 900);
+        other.iter_mut().for_each(|r| {
+            r.born = Some(5_000);
+            r.came = Some(5_000);
+            tag(r, "album", "Other");
+        });
+        let mut new = copy_rows(11, "A/Album", 5, "FLAC", 900);
+        new.iter_mut().for_each(|r| {
+            r.born = Some(100);
+            r.came = Some(9_000);
+        });
+        let lib = built_with(&[(0, Kind::Main), (1, Kind::Incoming)], &[in_folder(0, old), in_folder(1, [new, other].concat())]);
+        let listed = lib.albums_in(1, 1).unwrap();
+        assert_eq!(listed.len(), 1);
+        let c = &listed[0];
+        assert_eq!((c.album.id.as_str(), c.dir.as_str(), c.format.as_deref(), c.kbps, c.bits, c.rate, c.added), ("al-5", "A/Album", Some("FLAC"), Some(900), Some(16), Some(44_100), Some(9_000)));
+        assert_eq!(lib.albums_in(0, 10).unwrap()[0].format.as_deref(), Some("MP3"), "the other library's is its own");
     }
 
     /// Copies hold ids of their own until the take, so a record shows one copy's tracks, or it would show them twice.
@@ -3003,7 +3044,7 @@ mod tests {
         assert_eq!(lib.album_folders().unwrap()[&album].iter().copied().collect::<BTreeSet<i64>>(), [0, 1].into());
         let folders = lib.artist_albums().unwrap().into_iter().find(|r| r.3 == album).unwrap().4;
         assert_eq!(folders.into_iter().collect::<BTreeSet<i64>>(), [0, 1].into());
-        assert_eq!(lib.albums_in(1, 10).unwrap().iter().map(|(a, dir, ..)| (a.id.clone(), dir.clone())).collect::<Vec<_>>(), [(album.clone(), "Elsewhere".to_string())], "the copy's own folder");
+        assert_eq!(lib.albums_in(1, 10).unwrap().iter().map(|c| (c.album.id.clone(), c.dir.clone())).collect::<Vec<_>>(), [(album.clone(), "Elsewhere".to_string())], "the copy's own folder");
         let copies: Vec<(i64, String)> = lib.copies_of(&album).unwrap().into_iter().map(|c| (c.folder, c.dir)).collect();
         assert_eq!(copies, [(0, "Björk/Homogenic (1997)".to_string()), (1, "Elsewhere".to_string())]);
         assert_eq!(lib.album_in(1, "Elsewhere").unwrap(), Some(album));
@@ -3081,18 +3122,18 @@ mod tests {
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();
         let listed = lib.albums_in(0, 10).unwrap();
-        let (homogenic, _, _, _, secs) = listed.iter().find(|(a, ..)| a.name == "Homogenic").unwrap();
-        assert_eq!(*secs, Some(400.0), "two songs of 200 s");
-        assert_eq!(lib.album_facts(&homogenic.id).unwrap().unwrap().3, Some(400.0));
+        let homogenic = listed.iter().find(|c| c.album.name == "Homogenic").unwrap();
+        assert_eq!(homogenic.secs, Some(400.0), "two songs of 200 s");
+        assert_eq!(lib.album_facts(&homogenic.album.id).unwrap().unwrap().3, Some(400.0));
         let untimed = with(sample(), |rows| rows[1].duration_ms = None);
         let lib = Library::open(None).unwrap();
         lib.refresh(&untimed, &Rules::default()).unwrap();
         let listed = lib.albums_in(0, 10).unwrap();
-        let (homogenic, _, _, _, secs) = listed.iter().find(|(a, ..)| a.name == "Homogenic").unwrap();
-        assert_eq!(*secs, None, "one song's length unknown: the album's is");
-        assert_eq!(lib.album_facts(&homogenic.id).unwrap().unwrap().3, None);
-        let (_, _, _, _, orb) = listed.iter().find(|(a, ..)| a.name == "Adventures Beyond the Ultraworld").unwrap();
-        assert_eq!(*orb, Some(200.0), "another album's is its own");
+        let homogenic = listed.iter().find(|c| c.album.name == "Homogenic").unwrap();
+        assert_eq!(homogenic.secs, None, "one song's length unknown: the album's is");
+        assert_eq!(lib.album_facts(&homogenic.album.id).unwrap().unwrap().3, None);
+        let orb = listed.iter().find(|c| c.album.name == "Adventures Beyond the Ultraworld").unwrap();
+        assert_eq!(orb.secs, Some(200.0), "another album's is its own");
     }
 
     #[test]

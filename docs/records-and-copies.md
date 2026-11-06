@@ -81,7 +81,11 @@ gains, is the file that plays, so a waveform's ETag names the file.
 
 ## On the page
 
-- A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, deletable }]`. Dots: one per copy,
+- A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, bits, rate, deletable, keepable,
+  keep_to, lacks, picked, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
+  would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
+  first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
+  copy that plays. Dots: one per copy,
   the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on.
 - An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.

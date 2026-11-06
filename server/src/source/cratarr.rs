@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use super::{Album, AlbumDetails, AlbumTrack, Choice, Field, Fut, Kind, Library, LibraryScan, Listed, PlaylistEvent, Source, Status, Track, TrackInfo, TrackPage, Values};
+use super::{Album, AlbumCopy, AlbumDetails, AlbumTrack, Choice, Field, Fut, Kind, Library, LibraryScan, Listed, PlaylistEvent, Source, Status, Track, TrackInfo, TrackPage, Values};
 use crate::app::{PlayOn, PlayOnCommand as Command};
 use crate::serve::Serve;
 use crate::userdata::{Annotation, Kind as Item};
@@ -212,6 +212,7 @@ pub fn card(a: crate::serve::api::Album) -> Album {
         duration_secs: None,
         tags: Vec::new(),
         library: None,
+        copies: Vec::new(),
         artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
         release: a.release,
         id: a.id,
@@ -495,12 +496,15 @@ impl Source for CratarrSource {
             let s = server()?;
             let Some(folder) = folder_of(&s, library_id) else { return Ok(Vec::new()) };
             let (lib, ud) = (s.library.clone(), s.userdata.clone());
-            let root = library_id.trim_end_matches('/').to_string();
+            let (root, library) = (library_id.trim_end_matches('/').to_string(), library_id.to_string());
             blocking(move || {
                 let mut out = Vec::new();
-                for (a, dir, format, kbps, secs) in lib.albums_in(folder, limit)? {
+                for c in lib.albums_in(folder, limit)? {
+                    let (a, dir) = (c.album, c.dir);
                     let base = lib.album_base(&a.id)?.unwrap_or_else(|| a.id.clone());
                     let stamp = format!("{} {} {}", a.song_count, a.created.as_deref().unwrap_or(""), dir);
+                    // This library's copy: `App::albums` says what the viewer may do with it, and folds a record's together.
+                    let copy = AlbumCopy { library: library.clone(), bits: c.bits, rate: c.rate, added: c.added, folder, dir: dir.clone(), ..AlbumCopy::default() };
                     out.push(Listed {
                         album: Album {
                             added: a.created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
@@ -509,11 +513,12 @@ impl Source for CratarrSource {
                             year: a.year,
                             path: Some(format!("{root}/{dir}")),
                             tracks: a.song_count,
-                            format,
-                            bitrate_kbps: kbps,
-                            duration_secs: secs,
+                            format: c.format,
+                            bitrate_kbps: c.kbps,
+                            duration_secs: c.secs,
                             tags: ud.tags_of(&base)?,
                             library: None,
+                            copies: vec![copy],
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
                             release: a.release,
                             id: a.id,

@@ -1611,6 +1611,7 @@ mod tests {
             duration_secs: None,
             tags: Vec::new(),
             library: None,
+            copies: Vec::new(),
             artists: Vec::new(),
             release: Default::default(),
         }

@@ -99,10 +99,20 @@ pub struct JobView {
     /// The library it moves into (`source/library`), where known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
+    /// The library it comes from: which of a record's copies this is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     /// Once done: pass to undo.
     pub undo: Option<String>,
     /// Once failed: why.
     pub why: Option<String>,
+}
+
+impl JobView {
+    /// Whether it is yet to finish.
+    pub fn at_work(&self) -> bool {
+        matches!(self.state, State::Waiting | State::Converting)
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -282,6 +292,7 @@ fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
             total: j.files.len(),
             folder: j.to.clone(),
             library: j.library.clone(),
+            from: j.album.library.clone(),
             undo: j.undo.clone(),
             why: j.why.clone(),
         })
@@ -753,6 +764,7 @@ mod tests {
                 duration_secs: None,
                 tags: Vec::new(),
                 library: None,
+                copies: Vec::new(),
                 artists: Vec::new(),
                 release: Default::default(),
             },

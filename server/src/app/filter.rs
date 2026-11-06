@@ -430,7 +430,11 @@ async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> (Ve
     let cat = app.library.catalogue();
     let folders = cat.folders();
     let album_artists = |artist: Option<String>, artists: Vec<String>| -> Vec<String> { if artists.is_empty() { artist.into_iter().collect() } else { artists } };
-    let (on, off): (Vec<_>, Vec<_>) = s.albums.into_iter().partition(|a| a.library.as_ref().is_none_or(|l| !without.contains(&format!("{source}/{l}"))));
+    // On while any copy is: a record's list entry names the copy that plays, and that one can be the library switched off.
+    let (on, off): (Vec<_>, Vec<_>) = s.albums.into_iter().partition(|a| {
+        let held = a.libraries();
+        held.is_empty() || held.iter().any(|l| !without.contains(&format!("{source}/{l}")))
+    });
     let listed = on
         .into_iter()
         .map(|a| {

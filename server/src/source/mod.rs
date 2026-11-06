@@ -267,6 +267,38 @@ pub struct ComposerRef {
     pub name: String,
 }
 
+/// One copy of a record as the page sees it: one folder's files of it (docs/records-and-copies.md). `AlbumCopy` in the
+/// page's `lib/api.ts` is this shape; `lib/copiesRule.ts` reads it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
+pub struct AlbumCopy {
+    /// The library it lies in, as `Album.library`.
+    pub library: String,
+    pub format: Option<String>,
+    pub kbps: Option<u32>,
+    /// A lossless copy's; none where one of its files is not read yet.
+    pub bits: Option<u32>,
+    pub rate: Option<u32>,
+    /// What the viewer may do with this copy: rights go by library, so two copies of a record can differ.
+    pub deletable: bool,
+    pub keepable: bool,
+    pub keep_to: Option<String>,
+    /// What it lacks of what the library requires: an Incoming copy's, marked before it is added.
+    pub lacks: Vec<String>,
+    /// Plays from it by the viewer's own choice.
+    pub picked: bool,
+    /// The one the server plays them, as their libraries were switched when the list was read.
+    pub plays: bool,
+    /// When its first file came, epoch seconds.
+    pub added: Option<i64>,
+    /// The conversion at work on it, `JobView.id`.
+    pub job: Option<u64>,
+    /// Its catalogue folder and its folder in it: what tells it from the record's other copies here, not the page's.
+    #[serde(skip)]
+    pub folder: i64,
+    #[serde(skip)]
+    pub dir: String,
+}
+
 /// An album as a source sees it. Paths are the source's own (see `placement`).
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Album {
@@ -291,12 +323,26 @@ pub struct Album {
     /// The library it was listed from (the album pages' library switches filter by it); none outside a listing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
+    /// Cratarr's own record in the Library's one list: every copy of it, in the order they would play for the viewer, off
+    /// or not. Left out of a list with no libraries, and for another server's album, which has its `library` alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copies: Vec<AlbumCopy>,
     /// Its artists one by one, when the source credits several (the menu's Go to each); empty: `artist` alone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artists: Vec<String>,
     /// Its release type (0.9.6): `type`, `type_from`, `secondary`.
     #[serde(flatten, default)]
     pub release: ReleaseType,
+}
+
+impl Album {
+    /// The libraries holding it: its copies', else the one it was listed from. None from a list with no libraries.
+    pub fn libraries(&self) -> Vec<&str> {
+        match self.copies.is_empty() {
+            true => self.library.iter().map(String::as_str).collect(),
+            false => self.copies.iter().map(|c| c.library.as_str()).collect(),
+        }
+    }
 }
 
 /// What a source knows of an artist (the artist panel, decided 2026-10-16, as Symfonium's): the albums credited to them

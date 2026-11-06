@@ -27,7 +27,7 @@ pub struct Listener {
 
 impl Listener {
     /// As `copy_for` takes them, for this record; none for no one in particular.
-    pub(super) fn viewer(&self, album: &str) -> Option<Viewer> {
+    pub fn viewer(&self, album: &str) -> Option<Viewer> {
         self.account.as_ref().map(|_| Viewer { own: self.own, pick: self.picks.get(album).copied() })
     }
 

@@ -118,10 +118,12 @@ impl Server {
         self.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/{kind}/apply"), json!({ "albums": albums, "stamps": stamps })).await;
     }
 
-    /// An album of `library` as the Library lists it, if it does.
+    /// An album with a copy in `library` as the Library lists it, if it does. A record is one entry, and its `library` is
+    /// only the copy that plays.
     async fn album_in(&self, title: &str, library: &Path) -> Option<Value> {
         let library = library.to_string_lossy();
-        self.albums().await.into_iter().find(|a| a["title"] == title && a["library"].as_str() == Some(&*library))
+        let holds = |a: &Value| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"].as_str() == Some(&*library)));
+        self.albums().await.into_iter().find(|a| a["title"] == title && holds(a))
     }
 
     /// That album once the library has read it there.
@@ -464,6 +466,43 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     s.until("every library read", Duration::from_secs(180), || async { titles(ann.albums().await).len() == 22 }).await;
     let shown = titles(bob.albums().await);
     assert!(["Tide Tables", "Far Bank", "Just Arrived", "Own Room", "Other Room"].iter().all(|t| shown.contains(*t)), "{shown:?}");
+
+    // A record is one entry whichever libraries hold it, its copies in the order they play for whoever asks, each with
+    // what that viewer may do with it. Two records of one name stay two.
+    let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
+    let path = |p: &Path| p.to_string_lossy().to_string();
+    let named = |albums: Vec<Value>, title: &str| albums.into_iter().filter(|a| a["title"] == title).collect::<Vec<Value>>();
+    let copies = |a: &Value| a["copies"].as_array().cloned().unwrap_or_default();
+    s.until("the record's four copies", Duration::from_secs(120), || async { named(ann.albums().await, "Both Shores").first().is_some_and(|a| copies(a).len() == 4) }).await;
+    let shores = named(ann.albums().await, "Both Shores");
+    assert_eq!(shores.len(), 1, "one record, listed once: {shores:?}");
+    let in_order: Vec<String> = copies(&shores[0]).iter().map(|c| c["library"].as_str().unwrap().to_string()).collect();
+    assert_eq!(in_order[0], path(&own.join("ann")), "her own music first, though it is an MP3");
+    assert_eq!(in_order[3], path(&incoming), "Incoming last");
+    assert_eq!((copies(&shores[0])[0]["plays"].as_bool(), shores[0]["format"].as_str(), shores[0]["library"].as_str()), (Some(true), Some("MP3"), Some(&*in_order[0])), "the card is what plays");
+    assert_eq!(copies(&shores[0]).iter().filter(|c| c["plays"] == true).count(), 1);
+    let of = |list: &[Value], p: &Path| list.iter().find(|c| c["library"].as_str() == Some(&*path(p))).cloned().unwrap();
+    assert_eq!(of(&copies(&shores[0]), &music)["deletable"], true, "an administrator deletes in a main library");
+    assert_eq!(of(&copies(&shores[0]), &incoming)["keepable"], true);
+    assert_eq!(of(&copies(&shores[0]), &music)["keepable"], false, "only an Incoming copy is added");
+    assert!(of(&copies(&shores[0]), &incoming)["keep_to"].is_string() && of(&copies(&shores[0]), &music)["keep_to"].is_null());
+
+    let shores = named(bob.albums().await, "Both Shores");
+    assert_eq!(shores.len(), 1);
+    let theirs = copies(&shores[0]);
+    assert_eq!(theirs.len(), 4, "someone's own music is a copy too, off or not");
+    assert!([path(&music), path(&second)].iter().any(|p| theirs[0]["library"].as_str() == Some(&**p)), "for bob the best kept copy: {theirs:?}");
+    assert_eq!((theirs[0]["plays"].as_bool(), shores[0]["format"].as_str()), (Some(true), Some("FLAC")));
+    assert_eq!(of(&theirs, &music)["deletable"], false, "not an administrator");
+    assert_eq!(of(&theirs, &incoming)["keepable"], false, "not a request of his");
+
+    let papers = named(bob.albums().await, "No Papers");
+    assert_eq!(papers.len(), 1, "no release on either side, one record");
+    assert_eq!(copies(&papers[0])[0]["library"].as_str(), Some(&*path(&own.join("bob"))), "his own music, at a lower quality");
+    assert_eq!(named(ann.albums().await, "Bonus Round").len(), 2, "a bonus track makes another record");
+    let pressings = named(ann.albums().await, "Two Pressings");
+    assert_eq!(pressings.len(), 2, "two releases are two records");
+    assert_ne!(pressings[0]["id"], pressings[1]["id"]);
 
     // Each is who they signed in as: whose own music is whose.
     let own_music = |view: Value| -> Vec<(String, bool)> {
@@ -864,6 +903,16 @@ async fn on_music_and_incoming(name: &str) -> (Server, PathBuf, PathBuf, PathBuf
     (s, root, music, incoming)
 }
 
+/// A copy's own track ids, by where its files lie. A record's page shows the copy that plays, so until copies share their
+/// tracks only the catalogue can say another copy's.
+fn tracks_at(data: &Path, library: &Path, dir: &str) -> Vec<String> {
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT 'tr-' || f.track FROM files f JOIN folders d ON d.id = f.folder WHERE d.path = ?1 AND f.rel LIKE ?2 AND f.track IS NOT NULL ORDER BY f.rel").unwrap();
+    let rows = st.query_map([library.to_string_lossy().to_string(), format!("{dir}/%")], |r| r.get::<_, String>(0)).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
 /// Keep: the album leaves Incoming for Music with its track ids and every byte, and is on the list of runs. Its Undo puts each
 /// file back where it was, under its old name, and Music holds nothing of it.
 #[tokio::test(flavor = "multi_thread")]
@@ -977,8 +1026,10 @@ async fn replace_takes_the_old_tracks_ids_and_its_undo_gives_both_back_end_to_en
     let (old_dir, new_dir) = (music.join(dir), incoming.join(dir));
     let (old, new) = (as_it_lies(&old_dir), as_it_lies(&new_dir));
     let songs = s.songs_of(&s.read_in("Both Shores", &music).await).await;
-    let arriving = s.songs_of(&album).await;
-    assert_ne!(songs, arriving);
+    let data = root.join("data");
+    let arriving = tracks_at(&data, &incoming, dir);
+    assert_eq!(arriving.len(), 3, "the copy waiting, read by where it lies");
+    assert!(arriving.iter().all(|t| !songs.contains(t)), "copies hold ids of their own until the take: {songs:?} {arriving:?}");
 
     let preview = s.get(&replacing(&album)).await;
     assert_eq!((preview["tracks"].as_u64(), preview["added"].as_u64(), &preview["refused"]), (Some(3), Some(0), &Value::Null), "{preview}");
@@ -1003,8 +1054,8 @@ async fn replace_takes_the_old_tracks_ids_and_its_undo_gives_both_back_end_to_en
     s.until("Music to serve the old files", Duration::from_secs(120), || async { s.served(&songs[0]).await.starts_with(b"fLaC") }).await;
     let shown = s.read_in("Both Shores", &music).await;
     assert_eq!(s.songs_of(&shown).await, songs);
-    let back = s.read_in("Both Shores", &incoming).await;
-    assert_eq!(s.songs_of(&back).await, arriving, "each file its own id again");
+    s.read_in("Both Shores", &incoming).await;
+    assert_eq!(tracks_at(&data, &incoming, dir), arriving, "each file its own id again");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

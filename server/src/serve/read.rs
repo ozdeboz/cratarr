@@ -23,6 +23,23 @@ const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.ge
 /// index, in the query that reads the album's format and bitrate.
 const ALBUM_LENGTH: &str = "(SELECT CASE WHEN count(*) = count(nullif(s.duration_ms, 0)) THEN sum(s.duration_ms) END FROM songs s WHERE s.album_id = a.id)";
 
+/// A copy as a source's album listing gives it (`Library::albums_in`).
+#[derive(Debug, Clone)]
+pub struct ListedCopy {
+    pub album: Album,
+    /// The copy's folder, relative to the catalogue folder.
+    pub dir: String,
+    pub format: Option<String>,
+    /// Its lowest bitrate.
+    pub kbps: Option<u32>,
+    /// The album's length in seconds.
+    pub secs: Option<f64>,
+    pub bits: Option<u32>,
+    pub rate: Option<u32>,
+    /// When its first file came, epoch seconds.
+    pub added: Option<i64>,
+}
+
 /// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id and Music-form id (what its
 /// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists; and
 /// (0.13) its tracks, and whether it is a mix of others' (a compilation or a soundtrack).
@@ -1205,29 +1222,37 @@ impl Library {
         Ok(albums)
     }
 
-    /// The albums of one catalogue folder, newest first, at most `limit`, with what a source's album listing needs: an
-    /// entry for each of its copies there, (album, the copy's folder relative to the catalogue folder, format, lowest
-    /// bitrate, length in seconds).
-    #[allow(clippy::type_complexity)]
-    pub fn albums_in(&self, folder: i64, limit: usize) -> Result<Vec<(Album, String, Option<String>, Option<u32>, Option<f64>)>> {
+    /// The albums of one catalogue folder, the copy that came last first, at most `limit`, with what a source's album
+    /// listing needs: an entry for each of its copies there. By the copy's own date: a new copy of an old record has just
+    /// come here, and it must not fall off the end of a list.
+    pub fn albums_in(&self, folder: i64, limit: usize) -> Result<Vec<ListedCopy>> {
         let db = self.db();
         let ns = numbers(
             &db,
-            "SELECT n FROM albums a WHERE EXISTS (SELECT 1 FROM copies c WHERE c.album = a.id AND c.folder = ?1) ORDER BY created DESC, n LIMIT ?2",
+            "SELECT n FROM albums a WHERE EXISTS (SELECT 1 FROM copies c WHERE c.album = a.id AND c.folder = ?1)
+             ORDER BY coalesce((SELECT max(c.added) FROM copies c WHERE c.album = a.id AND c.folder = ?1), created) DESC, n LIMIT ?2",
             &[&folder, &(limit as i64)],
         )?;
         let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
         self.album_artists(&db, &mut albums)?;
-        let mut st = db.prepare_cached(&format!("SELECT c.dir, c.format, c.min_kbps, {ALBUM_LENGTH} FROM copies c JOIN albums a ON a.id = c.album WHERE c.album = ?1 AND c.folder = ?2 ORDER BY c.dir"))?;
+        let mut st = db.prepare_cached(&format!(
+            "SELECT c.dir, c.format, c.min_kbps, {ALBUM_LENGTH}, c.bits, c.rate, c.added FROM copies c JOIN albums a ON a.id = c.album WHERE c.album = ?1 AND c.folder = ?2 ORDER BY c.dir"
+        ))?;
         let mut out = Vec::with_capacity(albums.len());
         for a in albums {
             let copies = st.query_map(rusqlite::params![a.id, folder], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<u32>>(2)?, r.get::<_, Option<i64>>(3)?))
+                Ok(ListedCopy {
+                    album: a.clone(),
+                    dir: r.get(0)?,
+                    format: r.get(1)?,
+                    kbps: r.get(2)?,
+                    secs: r.get::<_, Option<i64>>(3)?.map(|ms| ms as f64 / 1000.0),
+                    bits: r.get(4)?,
+                    rate: r.get(5)?,
+                    added: r.get(6)?,
+                })
             })?;
-            for copy in copies.collect::<rusqlite::Result<Vec<_>>>()? {
-                let (dir, format, kbps, ms) = copy;
-                out.push((a.clone(), dir, format, kbps, ms.map(|ms| ms as f64 / 1000.0)));
-            }
+            out.extend(copies.collect::<rusqlite::Result<Vec<_>>>()?);
         }
         Ok(out)
     }

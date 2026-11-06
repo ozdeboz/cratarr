@@ -142,7 +142,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the playing one's dots instead; every track's row ends in ⋮ (its menu). **An album ends** as Symfonium's (decided
   2026-10-16): More from the artist (their other albums on that server, newest first, in a row that scrolls sideways;
   a cover opens that album, the heading's › goes to the artist), then About: genres and year as chips, last played and
-  date added (date and time), and the media provider (the server and library, with the library's dot); after Year its
+  date added (date and time), and the media providers (the server, and a chip per library holding the record, each with its dot); after Year its
   rating as five stars, the same as its menu's (a tap rates). Anything not known is left out. The album's artist chip opens the artist too.
   **An artist** (decided 2026-10-16, as Symfonium's; `?view=artist:<server>/<name>`, by name as the albums credit
   them) is a subject of the panel like an album: their newest album's cover (no artist photos yet), the action bar
@@ -463,8 +463,9 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   and in the sidebar; each record in its own kind only, unless the filter's switch says otherwise. Classical opens on
   its composers, each opening their records, its performers the records' second line.
   Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was added,
-  and an Incoming album's lines: its conversion and how it relates to Music; an album of a library other than Music
-  has a dot in its library's colour after its title, while more than one library shows); its menu is the album's one
+  and an Incoming album's lines: its conversion and how it relates to the kept libraries; a record has a dot in its
+  library's colour after its title for each library holding it, while two or more libraries are on, and an Incoming copy
+  of a kept record has none, as `lib/copiesRule` says); its menu is the album's one
   menu (above); Covers are tiles (the dot before the title). A row ends in ⋮ (its menu). **Covers** (the owner,
   2026-10-27; `lib/CoverPlay`, `lib/CoverWait`, `lib/PlayingDots`): a tap on a cover opens its album, never plays it;
   a cover that plays has **Play in its upper right corner**, which alone plays, its ring turning while it starts;
