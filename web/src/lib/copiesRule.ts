@@ -26,17 +26,20 @@ export function recordOn(a: Held, on: On): boolean {
   return librariesOf(a).some(on);
 }
 
-/** The dots on a record's card, one per library holding it, in the list's order: none while fewer than two libraries
- *  are on, as every record would carry the same. A library counts as on before its first record, own music too.
- *  Copies in libraries switched off say nothing while another is on, and a card reached with all of them off (Home's
- *  crates, a search) names where it lies. An Incoming copy gets none beside a kept one: it waits to be added. */
+/** The dots on a record's card, in the list's order: one for each library foreign to home (the owner, 2026-11-06). Home
+ *  is the first kept library in the libraries' order, main or own music alike, and a switch does not change what it
+ *  means. It goes without saying, so it has a dot only beside another kept library, and a duplicate shows both. Any other
+ *  kept library has its dot, as a record only there says where it lies, and so has every Incoming one, beside a kept copy
+ *  too. Copies in libraries switched off say nothing while another is on, and a card reached with all of them off (Home's
+ *  crates, a search) names where it lies, home too. A server of one library has none: nothing there is foreign. */
 export function dotsOf(a: Held, info: LibraryInfo[] | undefined, on: On): Dot[] {
-  if (!info || info.filter((l) => on(l.id)).length < 2) return [];
+  if (!info || info.length < 2) return [];
   const held = librariesOf(a);
-  const lit = held.some(on) ? held.filter(on) : held;
-  const shown = lit.flatMap((id) => info.find((l) => l.id === id) ?? []);
-  const kept = shown.some((l) => l.kind !== 'incoming');
-  return shown.flatMap(({ id, kind, colour, name }) => (colour && !(kept && kind === 'incoming') ? { id, colour, name } : []));
+  const allOff = !held.some(on);
+  const shown = (allOff ? held : held.filter(on)).flatMap((id) => info.find((l) => l.id === id) ?? []);
+  const home = info.find((l) => l.kind !== 'incoming')?.id;
+  const keptElsewhere = shown.some((l) => l.kind !== 'incoming' && l.id !== home);
+  return shown.flatMap(({ id, colour, name }) => (colour && (id !== home || keptElsewhere || allOff) ? { id, colour, name } : []));
 }
 
 /** The copy that plays, as the switches stand now. The server decides (`copy_for`) and lists the copies in its order

@@ -229,9 +229,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     is asked once for them all, with one Undo, a main library's second question said in that one. No Play from: it starts
     one record's queue.
 - **A record's copies in its panel** (the owner, 2026-11-06: "What's the difference!?!"; the rules are `lib/copiesRule`'s):
-  a record of several copies has a line per copy under its details, in the order they would play: its library's dot and
-  name, its format and bitrate ("MP3 320", a lossless copy its format alone), its size, and "plays" on the one Play would
-  give. Format and bitrate leave the details line then, and the dots before it, as no line says one copy's quality as if
+  a record of several copies has a line per copy under its details, in the order they would play: its library's dot, which
+  every copy has here whatever a card's dots leave out, and name, its format and bitrate ("MP3 320", a lossless copy its
+  format alone), its size, and "plays" on the one Play would give. Format and bitrate leave the details line then, and the dots before it, as no line says one copy's quality as if
   it were the record's. A tap on another copy's line is its Play from, as the menu's entry. A copy in a library off has no
   line, and the one left on by that keeps its own; a later folder of a library has a line and no tap, as `from` takes the
   first. A record of one copy has no lines. A long library name gives way, never what follows it.
@@ -501,9 +501,11 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   its composers, each opening their records, its performers the records' second line.
   Rows are extra large rows (the cover, the year after the title, the artist, tracks, the format of the copy that plays
   and when it was added, and an Incoming album's lines: its conversion and how it relates to the kept libraries; a
-  record has a dot in its library's colour after its title for each library holding it that is on, or for all of them
-  on a card reached with none on (Home's crates, a search), while two or more libraries are on; an Incoming copy of a
-  kept record has none, as `lib/copiesRule` says); its menu is the album's one
+  record has a dot in its library's colour after its title for each library holding it that is on and foreign to home,
+  or for all of them on a card reached with none on (Home's crates, a search). Home is the first kept library in the
+  libraries' order, main or own music alike, on or off (the owner, 2026-11-06): it has a dot only beside another kept
+  library, so a duplicate shows both. Every other kept library has its dot, so a record only there says where it lies,
+  and so has every Incoming one, beside a kept copy too. A server of one library has none, as `lib/copiesRule` says); its menu is the album's one
   menu (above); Covers are tiles (the dot before the title). A row ends in ⋮ (its menu). **Covers** (the owner,
   2026-10-27; `lib/CoverPlay`, `lib/CoverWait`, `lib/PlayingDots`): a tap on a cover opens its album, never plays it;
   a cover that plays has **Play in its upper right corner**, which alone plays, its ring turning while it starts;
