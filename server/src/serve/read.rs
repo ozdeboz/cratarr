@@ -947,7 +947,7 @@ impl Library {
         };
         let mut copies = self.copies_of(&album)?;
         copies.retain(|c| held.iter().any(|h| holds(c, h)));
-        let Some(copy) = copy_for(&copies, who.viewer(&album).as_ref(), &who.off) else { return Ok(None) };
+        let Some(copy) = copy_for(&copies, who.viewer().as_ref(), &who.off) else { return Ok(None) };
         Ok(held.iter().find(|h| holds(copy, h)).map(|(_, folder, rel, _)| (*folder, rel.clone())))
     }
 
@@ -1444,7 +1444,9 @@ impl Library {
     /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. Copies
     /// share their tracks, so an id on two songs is two tracks tagged alike: two records, a copy that left its record among
     /// them. It says neither, and the data stays where it is: going to the first folder's, it would leave the record that
-    /// holds it, whichever folder that happens to be.
+    /// holds it, whichever folder that happens to be. The price: a persistent id on two songs is followed nowhere, so after
+    /// a start with its ids lost, two records of one release keep what they had on dead ids, though no song holds those
+    /// (`all_song_ids`): nothing here says which of the two they were.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
         let mut st = db.prepare("SELECT pid, min(id) FROM songs GROUP BY pid HAVING count(*) = 1 ORDER BY pid")?;

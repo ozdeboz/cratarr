@@ -480,6 +480,8 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                     _ => song_ids.push(id),
                 }
             }
+            // An app's saved list can hold an old id: left on it, a heart sits where no list shows it.
+            let song_ids = blocking(move || Ok(song_ids.iter().map(|id| s.song_now(id)).collect::<Vec<_>>())).await?;
             serve.userdata.set_starred(&me, Kind::Song, &song_ids, on)?;
             serve.userdata.set_starred(&me, Kind::Album, &album_ids, on)?;
             serve.userdata.set_starred(&me, Kind::Artist, &artist_ids, on)?;
@@ -493,18 +495,19 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({})))
         }
         "setRating" => {
-            let id = p.get("id").ok_or_else(|| missing("id"))?;
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
             let rating = p.number("rating").ok_or_else(|| missing("rating"))?.clamp(0, 5) as u8;
             let kind = match id.get(..3) {
                 Some(super::ids::ALBUM) => Kind::Album,
                 Some(super::ids::ARTIST) => Kind::Artist,
                 _ => Kind::Song,
             };
-            serve.userdata.set_rating(&me, kind, id, rating)?;
+            let id = if kind == Kind::Song { blocking(move || Ok(s.song_now(&id))).await? } else { id };
+            serve.userdata.set_rating(&me, kind, &id, rating)?;
             let named = match kind {
-                Kind::Album => Some(("album", id.to_string())),
-                Kind::Artist => serve.library.artist_name(id).ok().flatten().map(|n| ("artist", n)),
-                _ => Some(("track", id.to_string())),
+                Kind::Album => Some(("album", id)),
+                Kind::Artist => serve.library.artist_name(&id).ok().flatten().map(|n| ("artist", n)),
+                _ => Some(("track", id)),
             };
             if let Some((what, id)) = named {
                 mark_now(serve, &me, ChangeKind::Rating, &item_id(what, CRATARR, &id), Op::of(rating > 0));

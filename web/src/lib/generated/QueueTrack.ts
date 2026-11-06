@@ -24,4 +24,9 @@ duration_secs?: number,
  * Who asked for it, a queue request accepted (decision 0079; 0.10): the follower's name, or the guest's as the
  * page shows it ("Guest Sam"). It stays with the entry wherever the entry goes.
  */
-asked_by?: string, };
+asked_by?: string, 
+/**
+ * The copy it is heard from, a library's id: Play from's queue names it on every track and every stream of it asks for it,
+ * so it lives as long as the queue does, and a track added names none. Nothing else keeps it.
+ */
+from?: string, };

@@ -141,7 +141,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
         .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
-        .route("/api/albums/{source}/{album}/copy-pick", put(pick_copy))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
         // Asked of everyone: who may is the record's own (0101 point 2).
@@ -2730,7 +2729,7 @@ struct StreamFrom {
     #[serde(default)]
     mp3_from: Option<u8>,
     /// The copy to hear, a library's id: the intake card's snippets are of the copy waiting, which plays for no one else. It
-    /// counts as a pick for this stream, so a copy in a library off still never plays.
+    /// counts for this stream alone, and a copy in a library off still never plays.
     #[serde(default)]
     from: Option<String>,
 }
@@ -2874,6 +2873,10 @@ struct FileAs {
     /// `opus`: a lossless track as a smaller copy (decision 0033, step 4); a lossy one comes as it is.
     #[serde(default, rename = "as")]
     as_: Option<String>,
+    /// The copy to hear, a library's id, as `/api/stream` takes it: a player on this address asks it of every track of a queue
+    /// started from that copy.
+    #[serde(default)]
+    from: Option<String>,
 }
 
 /// A track's file as it is, with byte ranges: for a native player (the Android app's, decision 0031 amended), which
@@ -2886,7 +2889,8 @@ async fn file(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): Qu
     if source == crate::bandcamp::SOURCE {
         return bandcamp_relay(&id, headers.get(header::RANGE).and_then(|v| v.to_str().ok()), 0).await;
     }
-    let (cat, who) = (app.library.catalogue(), ctx.listener());
+    let (cat, mut who) = (app.library.catalogue(), ctx.listener());
+    who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
     let source_id = (source.clone(), id.clone());
     let listener = who.clone();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten();
@@ -3395,6 +3399,9 @@ struct RewindFrom {
     speed: Option<f64>,
     piece_ms: Option<u64>,
     ramp: Option<f64>,
+    /// The copy to hear, as `/api/stream` takes it.
+    #[serde(default)]
+    from: Option<String>,
 }
 
 /// How long Tape rewind and a wind wait for a turn ([`crate::app::analysis_pass::wind_turn`]) before the player goes on
@@ -3413,7 +3420,8 @@ async fn stream_rewind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Que
     if source == crate::bandcamp::SOURCE {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": crate::bandcamp::NO_TAPE }))).into_response();
     }
-    let (cat, who) = (app.library.catalogue(), ctx.listener());
+    let (cat, mut who) = (app.library.catalogue(), ctx.listener());
+    who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &who, &source, &id)).await.ok().flatten();
     let Some((path, _, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
@@ -3533,6 +3541,9 @@ struct WindAsk {
     brake_ms: Option<u64>,
     #[serde(default)]
     brake_at_ms: Option<u64>,
+    /// The copy to hear, as `/api/stream` takes it.
+    #[serde(default)]
+    from: Option<String>,
 }
 
 /// The most tracks a hold winds on into past its own (0.9.14-2; 8 before: a hold back stopped at the start of the
@@ -3610,7 +3621,8 @@ async fn stream_wind(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query
     let accel = brake.or(accel);
     let ask = Ask { dir, from_ms: q.from_ms, to_ms: q.to_ms, speed: q.speed.unwrap_or(6.0), gain_db: q.gain_db.unwrap_or(crate::wind::GAIN_DB_START), fit, accel };
     // One listener for all of it: the track and those it runs on into.
-    let (cat, who) = (app.library.catalogue(), ctx.listener());
+    let (cat, mut who) = (app.library.catalogue(), ctx.listener());
+    who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
     let listener = who.clone();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &listener, &source, &id)).await.ok().flatten();
     let Some((path, _, duration_ms)) = found else {
@@ -3886,18 +3898,6 @@ async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(
 async fn delete_own_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
     Ok(Json(app.delete_own_album(&source, &album, b.from.as_deref()).await?))
-}
-
-#[derive(Deserialize)]
-struct CopyPick {
-    library: String,
-}
-
-/// "Plays from": the account's own choice of a record's copy, so anyone's who has an account.
-async fn pick_copy(ctx: Ctx, Path((source, album)): Path<(String, String)>, Json(b): Json<CopyPick>) -> Result<Json<serde_json::Value>, ApiError> {
-    let account = ctx.account().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
-    ctx.app.pick_copy(&source, &album, &account, &b.library).await?;
-    Ok(Json(json!({ "library": b.library })))
 }
 
 async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<MoveTo>) -> Result<Json<crate::app::KeepPreview>, ApiError> {

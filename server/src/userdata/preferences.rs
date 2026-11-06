@@ -3,7 +3,7 @@
 //! latest change wins, the whole value; offline a device works from its cached copy. Only the libraries switched off
 //! mean anything to the server (Subsonic's music folders); the others are the page's, kept and handed back.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -15,15 +15,7 @@ pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS preference (
   account TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, changed INTEGER NOT NULL,
   PRIMARY KEY (account, key)) WITHOUT ROWID;
--- The copy of a record an account picked by hand to play from: its library, until they pick another or that copy goes.
-CREATE TABLE IF NOT EXISTS copy_picks (
-  account TEXT NOT NULL, record TEXT NOT NULL, library TEXT NOT NULL, PRIMARY KEY (account, record)) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS copy_picks_by_record ON copy_picks (record, library);
 ";
-
-/// What an account's open pages are told when a pick of theirs changes: the area of `PreferenceChanged`, though it is no
-/// preference a page keeps. What plays changes, so they read their lists again.
-pub const COPY_PICKS: &str = "copy_picks";
 
 /// The libraries switched off, as `source/library` (the page's `without` keys).
 pub const HIDDEN_LIBRARIES: &str = "hidden_libraries";
@@ -149,58 +141,6 @@ impl UserData {
                 Arc::default()
             }
         }
-    }
-
-    /// The library `account` picked for `record`: it plays from there, until they pick another or that copy goes. Blocking.
-    pub fn set_copy_pick(&self, account: &str, record: &str, library: &str) -> Result<()> {
-        self.db().execute("INSERT OR REPLACE INTO copy_picks (account, record, library) VALUES (?1, ?2, ?3)", params![account, record, library])?;
-        self.picks_changed(account);
-        Ok(())
-    }
-
-    /// `account`'s picks: the library of each record picked. Blocking.
-    pub fn copy_picks(&self, account: &str) -> Result<HashMap<String, String>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT record, library FROM copy_picks WHERE account = ?1")?;
-        let rows = st.query_map([account], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// `copy_picks` as every stream asks for it: read once and kept until they change, as `hidden_libraries_kept`. Those that
-    /// cannot be read count as none, and are asked again.
-    pub fn copy_picks_kept(&self, account: &str) -> Arc<HashMap<String, String>> {
-        let mut kept = self.picks.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(picks) = kept.get(account) {
-            return picks.clone();
-        }
-        match self.copy_picks(account) {
-            Ok(picks) => kept.entry(account.to_string()).or_insert(Arc::new(picks)).clone(),
-            Err(e) => {
-                tracing::warn!(account, reason = %format!("{e:#}"), "the copies picked not read");
-                Arc::default()
-            }
-        }
-    }
-
-    /// A copy left `library`: everyone's pick of it goes (the design: "until they pick another or that copy goes"). Blocking.
-    pub fn forget_copy_picks(&self, record: &str, library: &str) -> Result<()> {
-        let accounts: Vec<String> = {
-            let db = self.db();
-            let mut st = db.prepare_cached("SELECT account FROM copy_picks WHERE record = ?1 AND library = ?2")?;
-            let rows = st.query_map(params![record, library], |r| r.get(0))?;
-            let accounts = rows.collect::<rusqlite::Result<_>>()?;
-            db.execute("DELETE FROM copy_picks WHERE record = ?1 AND library = ?2", params![record, library])?;
-            accounts
-        };
-        for account in accounts {
-            self.picks_changed(&account);
-        }
-        Ok(())
-    }
-
-    fn picks_changed(&self, account: &str) {
-        self.picks.lock().unwrap_or_else(|p| p.into_inner()).remove(account);
-        let _ = self.preferences.send(PreferenceChanged { account: account.to_string(), key: COPY_PICKS.to_string() });
     }
 
     /// `library` (`source/library`) switched off for each of `accounts`, beside what they have off: a library that starts

@@ -23,7 +23,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::userdata::overrides::Overrides;
 
-use super::copies::{Copy, Kind, copy_for, in_order};
+use super::copies::{Copy, Kind, copy_for, in_order, keeping};
 use super::ids;
 use crate::catalogue::{Rules, Say, ServedRow, vote_of};
 
@@ -839,9 +839,12 @@ impl Library {
                 })
                 .collect::<Result<Vec<_>>>()
         };
+        cat.reading_albums();
         let mut folders = read()?;
         // New tracks get their records first, and strays their albums': what the library lists is what a record is.
-        let copies = album_copies(&folders, rules);
+        let mut copies = album_copies(&folders, rules);
+        let kinds = self.kinds();
+        copies.iter_mut().for_each(|a| a.rank = keeping(kind_in(&kinds, a.folder).0));
         if cat.records_unsettled() || copies.iter().any(|a| a.split) {
             // A row with no record is not served, so a build going on without them would take those albums off the lists,
             // and note itself as up to date. The library stays as it is until the next pass can give them.
@@ -1681,6 +1684,8 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                 files: list.iter().filter(|s| s.row.track.is_some()).map(|s| (s.folder, s.row.rel.clone())).collect(),
                 // A shared track stays with its record, wherever a file of it lies: that settles nothing.
                 split: list.iter().any(|s| s.row.record.is_none() || (s.row.record != record && !s.row.shared)),
+                // The build's to give: it knows the libraries' kinds.
+                rank: 0,
                 folder: first.folder,
                 old_id: first.group.clone(),
                 old_base: first.album_base.clone(),
@@ -2516,6 +2521,76 @@ mod tests {
 
     const ONE_TWO: [(&str, &str, &str); 2] = [("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two")];
 
+    /// `taken` on two libraries of these kinds: the two folders, the catalogue, the library, the album and Music's first track.
+    fn a_record_in(name: &str, second: Kind) -> ([std::path::PathBuf; 2], crate::catalogue::Catalogue, Library, String, Option<i64>) {
+        let (roots, cat, lib) = two_kept(name);
+        lib.set_kinds(vec![(0, Kind::Main), (1, second)]);
+        let album = taken(&roots, &cat, &lib);
+        let track = cat.track_of(0, "A/01 One.flac");
+        assert_eq!(track, cat.track_of(1, "A/01 One.flac"), "one set of tracks");
+        (roots, cat, lib, album, track)
+    }
+
+    /// Music holds what it held: its id, its tracks and all that names them.
+    fn stays_with_music(cat: &crate::catalogue::Catalogue, lib: &Library, album: &str, track: Option<i64>) {
+        assert_eq!(cat.track_of(0, "A/01 One.flac"), track, "Music's file on its track");
+        assert_eq!(lib.album_in(0, "A").unwrap().as_deref(), Some(album), "and Music's copy the record");
+        assert_ne!(cat.track_of(1, "A/01 One.flac"), track, "the other copy left");
+        assert_ne!(lib.album_in(1, "A").unwrap().as_deref(), Some(album));
+    }
+
+    /// CR18, the owner: who keeps a record goes by kind first, and track count decides only between copies of one kind. Nobody
+    /// has checked an Incoming copy: with a track more it leaves, and what names the record stays on Music's files.
+    #[test]
+    fn a_kept_copy_keeps_its_record_from_an_incoming_copy_with_a_track_more() {
+        let (roots, cat, lib, album, track) = a_record_in("kept-more", Kind::Incoming);
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Three.flac", "A", "Three")]);
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// CR18: one bad track removed from Music must not hand the album to Incoming.
+    #[test]
+    fn a_kept_copy_keeps_its_record_from_an_incoming_copy_when_a_file_left_it() {
+        let (roots, cat, lib, album, track) = a_record_in("kept-less", Kind::Incoming);
+        std::fs::remove_file(roots[0].join("A/02 Two.flac")).unwrap();
+        cat.walk_all();
+        cat.gone_long_ago_for_tests();
+        cat.identify().unwrap();
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// CR18: Music gaining more than it held is no majority for it, and the Incoming copy still holding the record's files must
+    /// not stop it being the record's by what is kept.
+    #[test]
+    fn a_kept_copy_that_gained_more_than_it_held_keeps_its_record_from_an_incoming_copy() {
+        let (roots, cat, lib, album, track) = a_record_in("kept-grown", Kind::Incoming);
+        add_files_to(&cat, 0, &roots[0], &[("A/03 Three.flac", "A", "Three"), ("A/04 Four.flac", "A", "Four"), ("A/05 Five.flac", "A", "Five")]);
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// CR18: one account's act must not rewrite what every account has.
+    #[test]
+    fn someones_own_copy_never_takes_a_record_from_music() {
+        let (roots, cat, lib, album, track) = a_record_in("own-more", Kind::Own);
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Three.flac", "A", "Three")]);
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// Between copies of one kind the track count decides, as Q8 said, and CR18 leaves that as it was.
+    #[test]
+    fn of_two_copies_of_one_kind_the_one_with_more_keeps_the_record() {
+        let (roots, cat, lib, album, track) = a_record_in("main-more", Kind::Main);
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Three.flac", "A", "Three")]);
+        build_now(&lib, &cat);
+        assert_eq!(cat.track_of(1, "A/01 One.flac"), track);
+        assert_eq!(lib.album_in(1, "A").unwrap().as_deref(), Some(album.as_str()));
+        assert_ne!(cat.track_of(0, "A/01 One.flac"), track);
+    }
+
     /// A record in the first folder, then a copy of it in the second: what the take leaves. The album's id.
     fn taken(roots: &[std::path::PathBuf; 2], cat: &crate::catalogue::Catalogue, lib: &Library) -> String {
         add_files_to(cat, 0, &roots[0], &ONE_TWO);
@@ -3131,7 +3206,7 @@ mod tests {
         assert_eq!(built_with(&TWO_KEPT, &two_copies()).pids().unwrap().len(), 2, "two files of one track are one song");
     }
 
-    /// An Incoming copy plays only when picked, though it is the better, and it is no album of its own beside the kept one.
+    /// An Incoming copy plays only when named, though it is the better, and it is no album of its own beside the kept one.
     #[test]
     fn an_incoming_copy_of_a_kept_record_is_a_copy_not_an_album() {
         let kinds = [(0, Kind::Main), (1, Kind::Incoming)];

@@ -214,9 +214,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   - **Cancel conversion:** an administrator's. A copy with a conversion at work is not moved, replaced or deleted; the
     record's other copies offer what they did.
   - **Play from:** an entry per other copy in a library switched on, "Play from Incoming", leading the menu's Library card.
-    An Incoming copy counts, as this is how one waiting is heard. No entry for the copy that plays, none where the record
-    has no other copy, and none while the music plays on another player, as Cratarr cannot yet tell it which copy. It
-    needs no account. A tap closes the menu and starts a new queue of the record from that copy, as its Play does and
+    An Incoming copy counts, as this is how one waiting is heard. No entry for the copy that plays, and none where the
+    record has no other copy. It needs no account. A tap closes the menu and starts a new queue of the record from that copy, as its Play does and
     with what Play does to the queue before it, and says nothing. The queue keeps its copy for as long as it lives, over a
     seek, a replay and being left and taken up again; a track added to it afterwards names none. Nothing is remembered:
     the next Play, on any button, is the best copy again, and all the while the card's quality says what Play would give.

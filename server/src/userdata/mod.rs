@@ -473,8 +473,6 @@ pub struct UserData {
     preferences: tokio::sync::broadcast::Sender<preferences::PreferenceChanged>,
     /// The libraries each account has off, as read (`hidden_libraries_kept`).
     hidden: Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<String>>>>,
-    /// Each account's copy picks as read, for every stream to ask (`copy_picks_kept`).
-    picks: Mutex<std::collections::HashMap<String, std::sync::Arc<std::collections::HashMap<String, String>>>>,
 }
 
 /// A change of favourites (stars) as `set_starred` made it, whichever way it came: a page, a Subsonic app, Home
@@ -775,7 +773,7 @@ impl UserData {
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
-        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default(), picks: Mutex::default() })
+        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default() })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -836,7 +834,7 @@ impl UserData {
     /// The highest record or artist id for life the user data names (`ids::highest_named`), 0 for none: with the JSON stores,
     /// what a fresh start of lost ids must number above. Blocking.
     pub fn top_named(&self) -> Result<i64> {
-        const COLUMNS: [(&str, &str); 20] = [
+        const COLUMNS: [(&str, &str); 19] = [
             ("annotation", "item"),
             ("added", "album"),
             ("imported", "item"),
@@ -846,7 +844,6 @@ impl UserData {
             ("album_matches", "album"),
             ("album_complete", "album"),
             ("intake_heard", "album"),
-            ("copy_picks", "record"),
             ("record_references", "album"),
             ("discogs_genres", "album"),
             ("renumber_matched", "album"),
@@ -1631,23 +1628,31 @@ impl UserData {
 
     /// Songs' annotations, and what imports brought in for them, follow their persistent ids to new song ids (the
     /// catalogue was rebuilt): `moves` is (persistent id, song id now). A persistent id given twice goes to its first
-    /// song only: two would move its data there and back every time. Returns how many annotations moved.
-    pub fn follow_pids(&self, moves: &[(String, String)]) -> Result<usize> {
-        let mut seen = std::collections::HashSet::new();
-        let moves: Vec<&(String, String)> = moves.iter().filter(|(pid, _)| seen.insert(pid.as_str())).collect();
+    /// song only: two would move its data there and back every time. Ids are for life, so what lies on one of `songs`, the
+    /// ids a song holds, stays: a copy tagged otherwise has a persistent id of its own, and the one on a row can leave with
+    /// a copy while the track stays. Returns how many annotations moved.
+    pub fn follow_pids(&self, moves: &[(String, String)], songs: &std::collections::HashSet<String>) -> Result<usize> {
+        let mut to = std::collections::HashMap::new();
+        for (pid, item) in moves {
+            to.entry(pid.as_str()).or_insert(item.as_str());
+        }
         let mut db = self.db();
         let tx = db.transaction()?;
-        let mut n = 0;
-        {
-            let mut st = tx.prepare_cached("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
-            let mut ledger = tx.prepare_cached("UPDATE OR IGNORE imported SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
-            let mut marks = tx.prepare_cached("UPDATE OR IGNORE bookmark SET item = ?2 WHERE pid = ?1 AND item != ?2")?;
-            for (pid, item) in moves {
-                n += st.execute(params![pid, item])?;
-                ledger.execute(params![pid, item])?;
-                marks.execute(params![pid, item])?;
+        let follow = |table: &str, of_songs: &str| -> Result<usize> {
+            let mut rows = tx.prepare_cached(&format!("SELECT DISTINCT pid, item FROM {table} WHERE pid IS NOT NULL{of_songs}"))?;
+            let rows: Vec<(String, String)> = rows.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            let mut go = tx.prepare_cached(&format!("UPDATE OR IGNORE {table} SET item = ?3 WHERE pid = ?1 AND item = ?2{of_songs}"))?;
+            let mut n = 0;
+            for (pid, item) in rows.iter().filter(|(_, item)| !songs.contains(item)) {
+                if let Some(now) = to.get(pid.as_str()).filter(|now| **now != item.as_str()) {
+                    n += go.execute(params![pid, item, now])?;
+                }
             }
-        }
+            Ok(n)
+        };
+        let n = follow("annotation", " AND kind = 'song'")?;
+        follow("imported", " AND kind = 'song'")?;
+        follow("bookmark", "")?;
         tx.commit()?;
         Ok(n)
     }
@@ -2499,7 +2504,7 @@ mod tests {
     fn data_follows_a_song_to_its_new_id() {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
-        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())]).unwrap(), 1);
+        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())], &Default::default()).unwrap(), 1);
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 1);
     }
 
@@ -2508,9 +2513,9 @@ mod tests {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
         let both = [("pid1".to_string(), "tr-5".to_string()), ("pid1".to_string(), "tr-8".to_string())];
-        assert_eq!(u.follow_pids(&both).unwrap(), 1, "moved once, to the first");
+        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 1, "moved once, to the first");
         assert_eq!(u.get("me", Kind::Song, &["tr-5".into()]).unwrap()["tr-5"].play_count, 1);
-        assert_eq!(u.follow_pids(&both).unwrap(), 0, "and it stays there");
+        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 0, "and it stays there");
     }
 
     const KEY: ImportKey = ImportKey { account: "me", source: "jellyfin", server_user: "u1" };
@@ -2547,7 +2552,7 @@ mod tests {
         u.apply_import(KEY, &[off]).unwrap();
         assert_eq!(u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"].starred_at, None);
         // The record follows the song to a new id with its annotation.
-        u.follow_pids(&[("p".into(), "tr-9".into())]).unwrap();
+        u.follow_pids(&[("p".into(), "tr-9".into())], &Default::default()).unwrap();
         assert!(u.imported(KEY, Kind::Song, &["tr-9".into()]).unwrap().contains_key("tr-9"));
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 8);
     }
@@ -2743,7 +2748,7 @@ mod tests {
         let mine = u.bookmarks("me").unwrap();
         assert_eq!(mine.len(), 1, "one per song: the second replaced the first");
         assert_eq!((mine[0].position_ms, mine[0].comment.as_str()), (140_000, "chorus"));
-        u.follow_pids(&[("p1".into(), "tr-9".into())]).unwrap();
+        u.follow_pids(&[("p1".into(), "tr-9".into())], &Default::default()).unwrap();
         assert_eq!(u.bookmarks("me").unwrap()[0].item, "tr-9", "kept its persistent id through the update");
         u.delete_bookmark("me", "tr-9").unwrap();
         assert!(u.bookmarks("me").unwrap().is_empty());

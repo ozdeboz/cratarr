@@ -294,6 +294,13 @@ impl Serve {
         self.catalogue_cell.get().is_some()
     }
 
+    /// The song an id stands for now: one a take retired names the track that took it, and a queue or an app's list can hold
+    /// it long after (`Listener::song` plays it). Any other id is as given. Blocking.
+    pub fn song_now(&self, id: &str) -> String {
+        let taken = self.catalogue_cell.get().and_then(|c| c.track_of_source(crate::source::cratarr::KIND.id, id));
+        taken.map_or_else(|| id.to_string(), ids::song)
+    }
+
     /// The catalogue. `main` attaches it before anything that uses it runs: the API is served, and the library
     /// followed, only after.
     pub fn catalogue(&self) -> &Arc<Catalogue> {
@@ -433,6 +440,13 @@ impl Serve {
         let moved = self.catalogue().tracks_to_follow()?;
         if !moved.is_empty() {
             let rows = self.userdata.move_tracks(&moved)?;
+            let songs = crate::moved::Moved { ids: moved.iter().map(|(old, id)| (ids::song(*old), ids::song(*id))).collect(), ..Default::default() };
+            self.userdata.move_filters(&songs)?;
+            // `main` hands them over before the first build: only a test has none. A store's lock is a task's, and every way
+            // here is a blocking thread, which can wait for one.
+            if let Some(playlists) = self.playlists() {
+                tokio::runtime::Handle::current().block_on(playlists.follow_tracks(&songs))?;
+            }
             self.catalogue().tracks_followed(&moved)?;
             tracing::info!(target: "library", tracks = moved.len(), rows = ?rows, "what named taken tracks followed them");
         }
@@ -449,7 +463,8 @@ impl Serve {
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
         }
-        let moved = self.userdata.follow_pids(&self.library.pids()?)?;
+        let songs = self.library.all_song_ids()?.into_iter().collect();
+        let moved = self.userdata.follow_pids(&self.library.pids()?, &songs)?;
         if moved > 0 {
             tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
         }
@@ -570,12 +585,7 @@ impl Serve {
         let Some(name) = account else { return who };
         who.account = Some(name.to_string());
         if let Some(incoming) = self.incoming() {
-            who.own = incoming.own_folder(name);
             who.off = incoming.folders_off(&self.userdata.hidden_libraries_kept(name));
-        }
-        let picks = self.userdata.copy_picks_kept(name);
-        if !picks.is_empty() {
-            who.picks = listener::picks_in(&picks, &self.library.roots());
         }
         who
     }
@@ -845,6 +855,69 @@ mod tests {
         let left = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
         assert_ne!(left, song, "the first folder's copy left");
         assert_eq!((plays_of(&serve, &song), plays_of(&serve, &left)), (1, 0), "the play stays on the record's track");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// The same for copies tagged otherwise, each with a persistent id of its own: `pids` cannot tell them for one track, and the
+    /// row copy's id goes with the copy that left. An id for life names its track, so what is on one no one lost stays.
+    #[test]
+    fn a_copy_tagged_otherwise_that_leaves_takes_nothing_that_points_at_the_record() {
+        let (roots, cat, serve) = on_two_folders("leaves-tagged");
+        let two = [("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")];
+        add(&cat, &roots[0], 0, &two);
+        add(&cat, &roots[1], 1, &two);
+        for (rel, title) in two {
+            cat.tag_for_tests(0, rel, &[("album", "Album"), ("albumartist", "Artist"), ("title", title), ("date", "1999")]);
+        }
+        serve.refresh().unwrap();
+        let track = cat.track_of(1, "A/01 One.flac").unwrap();
+        assert_eq!(cat.track_of(0, "A/01 One.flac"), Some(track));
+        let song = ids::song(track);
+        let (pid, _, _) = serve.library.play_targets(&song).unwrap().unwrap();
+        serve.userdata.record("me", (&song, &pid), "al-x", &[], &Heard::counted(100)).unwrap();
+
+        add(&cat, &roots[1], 1, &[("A/03 Three.flac", "Three")]);
+        checked_again(&serve);
+        let left = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        assert_ne!(left, song, "the first folder's copy left");
+        assert_eq!((plays_of(&serve, &song), plays_of(&serve, &left)), (1, 0), "the play stays on the record's track");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// An old id plays on, in a queue no take reached, and what is heard of it counts on the track that took it.
+    #[test]
+    fn a_play_on_a_taken_id_counts_on_the_track_that_took_it() {
+        let (roots, cat, serve) = on_two_folders("heard-taken");
+        let one = [("A/01 One.flac", "One")];
+        add(&cat, &roots[0], 0, &one);
+        add(&cat, &roots[1], 1, &one);
+        serve.refresh().unwrap();
+        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
+        assert!(crate::app::listening::heard_blocking(&serve, "me", &old, &Heard::counted(100)).unwrap(), "heard");
+        assert_eq!((plays_of(&serve, &stays), plays_of(&serve, &old)), (1, 0));
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// An app's saved list can hold an old id too: a heart or a rating left on it sits on an id no list shows, and once followed
+    /// nothing moves it.
+    #[tokio::test]
+    async fn a_heart_and_a_rating_on_a_taken_id_land_on_the_track_that_took_it() {
+        let (roots, cat, serve) = on_two_folders("star-taken");
+        let one = [("A/01 One.flac", "One")];
+        add(&cat, &roots[0], 0, &one);
+        add(&cat, &roots[1], 1, &one);
+        serve.refresh().unwrap();
+        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
+        serve.users.set("me", "a password").unwrap();
+        let me = serve.users.get("me").unwrap();
+        for (method, query) in [("star", format!("id={old}")), ("setRating", format!("id={old}&rating=4"))] {
+            let said = routes::handle(&serve, &me, method, &routes::Params::parse(Some(&query), &[]), &HeaderMap::new()).await;
+            assert!(said.is_ok(), "{method}");
+        }
+        let a = serve.userdata.get("me", Item::Song, &[stays.clone()]).unwrap().remove(&stays).unwrap_or_default();
+        assert_eq!((a.starred_at.is_some(), a.rating), (true, 4));
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 

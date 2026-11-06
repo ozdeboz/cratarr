@@ -79,6 +79,11 @@ pub struct QueueTrack {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub asked_by: Option<String>,
+    /// The copy it is heard from, a library's id: Play from's queue names it on every track and every stream of it asks for it,
+    /// so it lives as long as the queue does, and a track added names none. Nothing else keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub from: Option<String>,
 }
 
 /// An announcement as a player reports it (Command::Announce).
@@ -3997,6 +4002,36 @@ mod tests {
         // As the page sends it; the player is told a position only.
         let c: Command = serde_json::from_str(r#"{"command":"seek","by_ms":-30000}"#).unwrap();
         assert_eq!(c, by(-30_000));
+    }
+
+    /// Play from: a queue's tracks name the copy they are heard from, and that lasts as long as the queue. A player is told it,
+    /// reports it with the rest and is given it back: a field `QueueTrack` lacks is lost at any of the three.
+    #[tokio::test]
+    async fn a_queue_keeps_the_copy_its_tracks_are_heard_from_through_a_report_and_back() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let mut tablet = p.connect("tablet").unwrap();
+        said(&mut tablet);
+        p.command("tablet", Command::play(vec![QueueTrack { from: Some("/media/incoming".into()), ..t("tr-1") }, t("tr-2")], 0, 0)).await.unwrap();
+        let first = told(&mut tablet);
+        let play = first.iter().find(|m| m["command"] == "play").expect("told to play");
+        assert_eq!(play["tracks"][0]["from"], "/media/incoming");
+        assert_eq!(play["tracks"][1].get("from"), None, "a track that names none");
+
+        // As a player reports its queue, by what it was told.
+        let queue: Vec<QueueTrack> = serde_json::from_value(play["tracks"].clone()).unwrap();
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: 0, version: Some(version), queue: Some(queue), ..Report::default() }).unwrap();
+
+        // Its app is updated: back without a queue, it is given Cratarr's.
+        drop(tablet);
+        let mut tablet = p.connect("tablet").unwrap();
+        said(&mut tablet);
+        p.report("tablet", Report { index: -1, ..Report::default() }).unwrap();
+        let back = told(&mut tablet);
+        let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
+        assert_eq!(play["tracks"][0]["from"], "/media/incoming", "whole");
+        assert_eq!(play["tracks"][1].get("from"), None);
     }
 
     #[tokio::test]

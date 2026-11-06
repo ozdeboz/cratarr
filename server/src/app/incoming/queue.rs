@@ -514,15 +514,23 @@ impl IncomingService {
         // The swap: originals into the trash, converted files in their place.
         let converted = conversions(&job.dir, &job.files, stamp);
         let steps = swap_steps(&root, &job.dir, &job.files, &converted);
-        let files = self.files.clone();
+        let moving = self.lib.catalogue().copies_moving();
+        let (files, held) = (self.files.clone(), moving.clone());
         let swap = steps.clone();
-        let swapped = tokio::task::spawn_blocking(move || files.move_all(&swap)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
+        let swapped = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&swap)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|r| r);
         if let Err(e) = swapped {
             let (r, d) = (root.clone(), job.dir.clone());
             let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
             return Outcome::Failed(format!("the converted files could not take the originals' place: {e:#}"));
         }
         self.rename_rows(job.folder, &converted, false).await;
+        drop(moving);
         *self.owned.lock().await = None;
         // The action, on what is now a CD-format album.
         let at = Located {

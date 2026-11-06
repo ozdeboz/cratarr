@@ -42,7 +42,7 @@ pub fn range(header: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
 }
 
 /// A file's validator: its time and size, and which file it is. One address can come to mean another file, as a track's file
-/// is whichever copy plays for the asker now: a pick, a library switched off or a copy deleted mid-track. A seek must not then
+/// is whichever copy plays for the asker now: a copy named, a library switched off or a copy deleted mid-track. A seek must not then
 /// get the other file's bytes for the same place.
 fn validator(path: &Path, modified: std::time::SystemTime, len: u64) -> String {
     let time = crate::covers::etag(modified, len);
