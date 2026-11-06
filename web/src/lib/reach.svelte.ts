@@ -3,7 +3,7 @@
 // three are out of reach: the pages say so in one line, the pollers ask less often, and the app opens on its downloads
 // (decision 0033, step 4).
 // Without a session away from home, Cratarr asks for its sign-in instead: the page goes to the sign-in page.
-import { accountForgotten } from './account';
+import { accountForgotten, signOutOwed } from './account';
 
 export const reach = $state({
   /** The last request did not reach Cratarr. */
@@ -77,8 +77,9 @@ if (typeof window !== 'undefined') {
 const REFUSED_MS = 5 * 60_000;
 let refusedUntil = 0;
 
-/** Whether a refusal holds the background requests back; how long still (ms). */
-export const refusedFor = () => Math.max(0, refusedUntil - Date.now());
+/** Whether a refusal holds the background requests back; how long still (ms). A sign-out owed holds them too (lib/account):
+ *  nothing is asked under a session that is over. */
+export const refusedFor = () => (signOutOwed() ? REFUSED_MS : Math.max(0, refusedUntil - Date.now()));
 
 export function refused() {
   refusedUntil = Date.now() + REFUSED_MS;

@@ -30,10 +30,9 @@
   // This device's own Sign out, with who is signed in (the owner, 2026-10-29: where one looks for it): only where the
   // page came with a sign-in of its own (an API key's or the app's address alone has none to end). With downloads of
   // the account here, a sheet first: they stay hidden for its next sign-in, or go (decision 0101; lib/signOut).
-  let signOutForm = $state<HTMLFormElement | null>(null);
   const signedInHere = $derived(!!me.sessions?.some((s) => s.current));
   let signingOut = $state(false);
-  const out = (remove: boolean) => signOutForm && void signOut(signOutForm, remove);
+  const out = (remove: boolean) => void signOut(remove);
 
   // A Cratarr account's own password: the current one and a new one. A directory's app password: the one they sign in
   // with and a new one.
@@ -134,10 +133,6 @@
     {/each}
   </Group>
 {/if}
-
-<!-- Signing out clears this browser's cookie too. After the cards, never between two (the owner, 2026-11-02: the
-     cards stuck together, lib/settings/Group's space being one card's after another's). -->
-<form method="post" action="/signout" bind:this={signOutForm} hidden></form>
 
 {#if signingOut}
   <MenuSheet label="Sign out" icon="user" title="Sign out?" onclose={() => (signingOut = false)}>

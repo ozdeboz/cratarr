@@ -33,17 +33,12 @@ export async function signIn(page, user, at = '/') {
   await page.waitForFunction((u) => localStorage.getItem('cratarr-who') === JSON.stringify(u), user, { timeout: 20_000 });
 }
 
-/** Signs out as Settings › Account's Sign out does (lib/signOut), to Cratarr's sign-in page. */
+/** Sign out as Settings › Account's does (lib/signOut), wherever it goes on to. */
+export const askSignOut = (page) => inModule(page, '/src/lib/signOut.svelte.ts', (m) => void m.signOut(false));
+
+/** Signs out, to Cratarr's sign-in page. */
 export async function signOut(page) {
-  await Promise.all([
-    page.waitForURL(/\/signin/, { timeout: 20_000 }),
-    page.evaluate(async () => {
-      const m = await import('/src/lib/signOut.svelte.ts');
-      const f = Object.assign(document.createElement('form'), { method: 'post', action: '/signout' });
-      document.body.append(f);
-      await m.signOut(f, false);
-    }),
-  ]);
+  await Promise.all([page.waitForURL(/\/signin/, { timeout: 20_000 }), askSignOut(page)]);
 }
 
 /** A page module's live copy (as the page loaded it, never a second one) does `fn(module, arg)` in the page. */

@@ -3,7 +3,7 @@
 // show to be no change of anyone's preferences.
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { device, inModule, PAGE, signIn, storage } from './browser.mjs';
+import { askSignOut, device, inModule, PAGE, signIn, signOut, storage } from './browser.mjs';
 
 const PREFS = '/src/lib/prefs.svelte.ts';
 const ACCOUNT = '/src/lib/account.ts';
@@ -90,4 +90,29 @@ test('another account in one tab starts another over at once: nothing is refused
   await d.page.evaluate(() => localStorage.setItem('cratarr-who', '"ann"'));
   await other.waitForFunction(() => !window.__before, null, { timeout: 5_000 });
   await other.close();
+});
+
+test('a sign-out that did not reach Cratarr: the next open is not hers, and the session is ended before anything else', async () => {
+  await signOut(d.page);
+  await signIn(d.page, 'ann', '/signin');
+  await d.page.route('**/signout', (r) => r.abort());
+  await askSignOut(d.page);
+  // Through the page's own move to itself, as nobody.
+  await d.page.waitForFunction(() => localStorage.getItem('cratarr-sign-out-owed') !== null && localStorage.getItem('cratarr-who') === 'null');
+  await d.page.waitForLoadState('load');
+  await d.page.unroute('**/signout');
+  // Open again, Cratarr back and her session standing: the page must not take it up, and ends it.
+  await d.page.goto(`${PAGE}/`);
+  await d.page.waitForURL(/\/signin/, { timeout: 20_000 });
+  const s = await storage(d.page);
+  assert.equal(s['cratarr-who'], 'null');
+  assert.equal(s['cratarr-sign-out-owed'], undefined);
+  const me = await d.page.evaluate(async () => (await fetch('/api/me')).status);
+  assert.equal(me, 401, 'and it is over');
+});
+
+test('a sign-out that reached Cratarr ends the session it held', async () => {
+  await signIn(d.page, 'ann', '/signin');
+  await signOut(d.page);
+  assert.equal(await d.page.evaluate(async () => (await fetch('/api/me')).status), 401);
 });

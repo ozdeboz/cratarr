@@ -11,6 +11,7 @@ import { keep, readKept } from './keptStore';
 
 const NAME = 'account';
 const LS = 'cratarr-who';
+const OWED = 'cratarr-sign-out-owed';
 
 /** The key kept in localStorage: its name, `''`, or null for nobody; undefined where none is kept there (or it cannot
  *  be read), so the kept store's copy counts instead. Nobody kept there is an answer (signed out), never a gap. */
@@ -41,6 +42,18 @@ const kept = typeof window === 'undefined' ? undefined : fromSignIn() ? null : s
 let key: string | null = kept ?? null;
 /** Learnt from /api/me in this page: the kept one read in late does not take its place. */
 let learnt = false;
+
+/** A sign-out begun that Cratarr has not said it took. Only Cratarr can end a session, its cookie out of the page's reach, so
+ *  this is kept: until then the session stands, and what Cratarr answers is no one's. */
+function owedKept() {
+  try {
+    return localStorage.getItem(OWED) !== null;
+  } catch {
+    return false;
+  }
+}
+let owed = typeof window !== 'undefined' && owedKept();
+export const signOutOwed = () => owed;
 
 /** The account signed in: its name, '' with sign-in off; null for nobody (or nothing learnt on this device yet). */
 export const accountKey = () => key;
@@ -106,6 +119,8 @@ if (typeof window !== 'undefined') {
 
 /** /api/me answered: `name` signed in (null: sign-in off, one user). */
 export function accountLearnt(name: string | null) {
+  // The session it names is one signing out: an answer to a question asked before, or a session that stands for now.
+  if (owed) return;
   learnt = true;
   set(name ?? '');
   toWorker(key);
@@ -118,4 +133,26 @@ export function accountForgotten() {
   learnt = false;
   set(null);
   toWorker(null);
+}
+
+/** A sign-out begins here: nobody's from now on, and owed until [signOutTold]. Kept first, so that a tab closed on the way
+ *  owes it too. */
+export function signOutBegun() {
+  owed = true;
+  try {
+    localStorage.setItem(OWED, '1');
+  } catch {
+    /* owed for this page */
+  }
+  accountForgotten();
+}
+
+/** Cratarr has said the session is over. */
+export function signOutTold() {
+  owed = false;
+  try {
+    localStorage.removeItem(OWED);
+  } catch {
+    /* nothing kept */
+  }
 }

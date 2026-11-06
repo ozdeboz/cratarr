@@ -1,3 +1,4 @@
+import { signOutOwed } from './account';
 import { track } from './progress.svelte';
 import { keepAndTry, laterKey } from './later.svelte';
 import { cue } from './queueCue.svelte';
@@ -142,6 +143,11 @@ function quietly<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  // A sign-out owed (lib/account): nothing is asked under a session that is over, what one taps either.
+  if (signOutOwed()) {
+    unreached();
+    throw new ApiError(UNREACHED);
+  }
   let res: Response;
   try {
     res = await fetch(path, init);

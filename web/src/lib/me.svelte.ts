@@ -3,16 +3,19 @@
 // answers no /api/me (one from before several users, or sign-in switched off) has one user, its administrator. Until
 // the answer comes, nothing of the administrators' shows: a user never sees it flash. The app is told whose its things
 // are now (decision 0101), at once.
-import { accountLearnt } from './account';
+import { accountLearnt, signOutOwed } from './account';
 import { ApiError, getMe, type Me, type Permissions } from './api';
 import { toApp } from './app.svelte';
 import { loadCapabilities } from './capabilities.svelte';
+import { settleSignOut } from './signOut.svelte';
 
 const ALL: Permissions = { offline: true, playlists: true, share: true, links: true, request: true, auto_approve: true, manage_requests: true };
 
 export const me = $state<Me & { known: boolean }>({ known: false, name: null, admin: false, permissions: ALL });
 
 export async function loadMe() {
+  // A session whose sign-out did not get through stands, and /api/me would take it up: Cratarr is told that first.
+  if (signOutOwed()) return settleSignOut();
   try {
     Object.assign(me, { app_password: undefined, devices: undefined, sessions: undefined }, await getMe(), { known: true });
     accountLearnt(me.name);
