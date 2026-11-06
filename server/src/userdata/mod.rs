@@ -234,7 +234,7 @@ pub struct Logged {
 /// with 74.3, the week before it was only in `annotation`). One row per song last played in the seven days before the
 /// user's first row a player told: finished, counted (it was, in `annotation` already: nothing is counted again),
 /// context `backfill:annotation`, its own event so running it again adds nothing. Only the last play of each song is
-/// known. Run as the file opens.
+/// known. Run once, as the file opens (`week_before_the_log`).
 const WEEK_BEFORE_THE_LOG: &str = "
 INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event)
   SELECT a.user, a.item, a.pid, a.play_date, NULL, NULL, 'finished', 1, NULL, NULL, 'backfill:annotation',
@@ -246,6 +246,17 @@ INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted,
   WHERE a.kind = 'song' AND a.play_date >= f.first - 604800 AND a.play_date < f.first
   ON CONFLICT DO NOTHING;
 ";
+
+/// Once for a data folder, and every install has had it since 74.3.1: its event names a song by the id it had, and a merge moves
+/// the play and leaves the event, so told over it would count the play again.
+fn week_before_the_log(conn: &Connection) -> Result<()> {
+    const WRITTEN: &str = "week_before_the_log";
+    if !conn.prepare("SELECT 1 FROM meta WHERE key = ?1")?.exists([WRITTEN])? {
+        conn.execute_batch(WEEK_BEFORE_THE_LOG)?;
+        conn.execute("INSERT INTO meta (key, value) VALUES (?1, 'written')", [WRITTEN])?;
+    }
+    Ok(())
+}
 
 /// A row of the log as read.
 fn logged(r: &rusqlite::Row) -> rusqlite::Result<Logged> {
@@ -772,7 +783,7 @@ impl UserData {
         add_release_types_rule(&conn)?;
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
-        conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
+        week_before_the_log(&conn).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default() })
     }
 
@@ -1194,8 +1205,9 @@ impl UserData {
         )?)
     }
 
-    /// Writes the week before the log from the last plays (`WEEK_BEFORE_THE_LOG`); as the file opens. Safe to repeat.
-    pub fn backfill_week(&self) -> Result<()> {
+    /// `WEEK_BEFORE_THE_LOG` over a test's own rows: the file has run it at its open, before they were there.
+    #[cfg(test)]
+    fn backfill_week(&self) -> Result<()> {
         Ok(self.db().execute_batch(WEEK_BEFORE_THE_LOG)?)
     }
 
