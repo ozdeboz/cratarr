@@ -1653,6 +1653,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const PLAY_NEXT = { icon: 'playNext', label: 'Play next' } as const;
   const OUT_OF_CRATE = { icon: 'crateOut', label: 'Exclude', danger: true } as const;
   const OUT_OF_PLAYLIST = { icon: 'listRemove', label: 'Remove', danger: true } as const;
+  /** A playlist's name for what is shown: an id is `pl-` and hex digits, and says nothing to anyone (decision 0101). */
+  const playlistName = (list: string) => shownPlaylists().find((x) => x.id === list)?.name ?? list;
   /** A swipe left on a row of `list` (a playlist's id; the crate viewed): null where it takes nothing out. */
   function outOf(r: PlaylistRow, list: string): (() => 'away') | null {
     const c = crate;
@@ -1724,10 +1726,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** The ticked rows' Remove from and Exclude from, in the select bar's ⋮ (the owner, 2026-10-27: what one has, several
    *  have): where each row's own menu has them, all at once. Many ask first (lib/many). */
   function tickedOuts(rs: PlaylistRow[]): { label: string; icon: IconName; run: () => void }[] {
-    if (!rs.length || !rs.every((r) => outOf(r, title))) return [];
+    if (!rs.length || !rs.every((r) => outOf(r, id))) return [];
     const [c, list, n] = [crate, title, plural(rs.length, 'track')];
     const asked = (what: string, icon: IconName, run: () => void) => () => askIfMany(rs.length, { title: `${what}?`, label: what, icon }, run);
-    if (!c) return [{ label: `Remove from ${list}`, icon: 'listRemove', run: asked(`Remove ${n} from ${list}`, 'listRemove', () => void outOfPlaylist(list, rs)) }];
+    if (!c) return [{ label: `Remove from ${list}`, icon: 'listRemove', run: asked(`Remove ${n} from ${list}`, 'listRemove', () => void outOfPlaylist(id, rs)) }];
     const name = crateName(c);
     const albums = new Set(rs.flatMap((r) => (r.album_id ? [r.album_id] : []))).size;
     return [
@@ -1831,7 +1833,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           before.map((x) => x.entry),
           after.map((x) => x.entry),
         );
-        withUndo(`Removed from ${list}.`, [undo]);
+        withUndo(`Removed from ${playlistName(list)}.`, [undo]);
       })
       .catch((e) => toast.fail(e, "It wasn't taken out"))
       .finally(() => {
@@ -2171,7 +2173,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {:else}
         <button
           class="icon on-glass"
-          aria-label={`Delete ${id}`}
+          aria-label={`Delete ${title}`}
           title="Delete"
           disabled={editing.saving}
           onclick={() => {
@@ -2369,7 +2371,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
             >
           {/if}
         {:else if !album && !artist && !offServer && p && p.mine !== false}
-          <button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>
+          <button class="icon" aria-label={`Edit ${title}`} title="Edit" disabled={!rows || editWaits} onclick={startEdit}><Icon name="pencil" size={22} /></button>
         {:else if serverList}
           <button class="icon" aria-label={`Edit ${title}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>
         {/if}
@@ -2521,7 +2523,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {@const all = s && 'rows' in s ? s.rows : null}
         {@const left = all ? all.filter((r) => keeps(r) && matchesSearch(r.name ?? r.file, r.artist, r.album)) : null}
         <Section
-          title={sid}
+          title={playlistName(sid)}
           dot={layerColor(k, ids.length)}
           count={all && left && left.length < all.length ? `${left.length.toLocaleString()} of ${plural(all.length, 'track')}` : playlistsKnown() ? plural(count, 'track') : ''} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
           {#if s && 'error' in s}
@@ -2532,7 +2534,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
             <p class="empty">No tracks yet.</p>
           {:else}
             <ol class="rows" bind:clientWidth={listWidth}>
-              {#each s.rows as r, i (i)}{#if keeps(r) && matchesSearch(r.name ?? r.file, r.artist, r.album)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
+              {#each s.rows as r, i (i)}{#if keeps(r) && matchesSearch(r.name ?? r.file, r.artist, r.album)}{@render trackRow(r, s.source, playlistName(sid), s.rows, null, true, sid)}{/if}{/each}
             </ol>
           {/if}
         </Section>
@@ -2741,11 +2743,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   </div>
 {/snippet}
 
-<!-- `columns`: its list's columns where it has room (a short list of top tracks has none). -->
-{#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[], i: number | null = null, columns = true)}
+<!-- `columns`: its list's columns where it has room (a short list of top tracks has none). `name`: its list as shown;
+     `listId`: its list as Cratarr knows it. -->
+{#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[], i: number | null = null, columns = true, listId = id)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
-  {@const out = selecting ? null : outOf(r, name)}
+  {@const out = selecting ? null : outOf(r, listId)}
   <li class:now={here} class:ticked={!!selecting && i !== null && selecting.has(i)} data-track={r.id || undefined}>
     <SwipeBehind right={ok ? PLAY_NEXT : null} left={out ? (crate ? OUT_OF_CRATE : OUT_OF_PLAYLIST) : null} />
     <Row
