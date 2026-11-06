@@ -217,6 +217,29 @@ impl SyncState {
         Ok(forgot)
     }
 
+    /// An agreed list names tracks, and a record's track can take one (`Catalogue::moved_tracks`): left as it was the track
+    /// would read as removed and another added, and the server's copy would be edited for nothing. How many lists changed.
+    pub fn follow_tracks(&self, moved: &std::collections::HashMap<i64, i64>) -> Result<usize> {
+        if moved.is_empty() {
+            return Ok(0);
+        }
+        let db = self.db();
+        let lists: Vec<(String, String, String, String)> = {
+            let mut st = db.prepare("SELECT source, user, name, base FROM links")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        let mut n = 0;
+        for (source, user, name, base) in lists {
+            let was: Vec<i64> = serde_json::from_str(&base)?;
+            let now: Vec<i64> = was.iter().map(|t| moved.get(t).copied().unwrap_or(*t)).collect();
+            if now != was {
+                db.execute("UPDATE links SET base = ?4 WHERE source = ?1 AND user = ?2 AND name = ?3", params![source, user, name, serde_json::to_string(&now)?])?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     pub fn remove(&self, source: &str, user: &str, name: &str) -> Result<()> {
         self.db().execute("DELETE FROM links WHERE source = ?1 AND user = ?2 AND name = ?3", params![source, user, name])?;
         Ok(())
@@ -409,6 +432,21 @@ impl SyncState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A track taken must read as itself in an agreed list, or the sync takes it for one removed and another added, and edits
+    /// the server's copy for nothing.
+    #[test]
+    fn an_agreed_list_follows_a_track_that_was_taken() {
+        let s = SyncState::open(None).unwrap();
+        let link = Link { stamp: Some("e".into()), base: vec![1, 2, 3], ids: vec!["a".into(), "b".into(), "c".into()], ..Link::new("A", "r", "A") };
+        s.put("jf", "u", &link).unwrap();
+        s.put("jf", "other", &Link { base: vec![7], ids: vec!["x".into()], ..Link::new("B", "r", "B") }).unwrap();
+        assert_eq!(s.follow_tracks(&std::collections::HashMap::from([(2, 9)])).unwrap(), 1, "the one list that names it");
+        let now = s.links("jf", "u").unwrap().remove(0);
+        assert_eq!((now.base.as_slice(), now.stamp.as_deref()), ([1, 9, 3].as_slice(), Some("e")), "in its place, nothing else moved");
+        assert_eq!(now.ids, ["a", "b", "c"], "the server's item is the same");
+        assert_eq!(s.follow_tracks(&std::collections::HashMap::from([(2, 9)])).unwrap(), 0, "safe to repeat");
+    }
 
     #[test]
     fn a_new_catalogue_forgets_every_agreed_list_once() {

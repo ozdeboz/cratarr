@@ -81,7 +81,8 @@ impl Listener {
     /// format are that file's, not the row copy's. Blocking.
     pub fn song(&self, cat: &Catalogue, source: &str, item: &str) -> Option<Song> {
         let library = self.library.as_ref()?;
-        let id = if source == crate::source::cratarr::KIND.id { item.to_string() } else { library.song_ids(cat.track_of_source(source, item)?).ok()??.song_id };
+        // An id a take retired names the track that took it: a queue can hold one.
+        let id = if source == crate::source::cratarr::KIND.id { cat.track_of_source(source, item).map_or(item.to_string(), ids::song) } else { library.song_ids(cat.track_of_source(source, item)?).ok()??.song_id };
         let mut song = library.songs_by_id(&[id]).ok()?.into_iter().next()?;
         if let Some((folder, rel)) = self.place(cat, source, item)
             && let Err(e) = library.as_played(&mut song, folder, &rel)

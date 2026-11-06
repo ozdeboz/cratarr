@@ -355,6 +355,10 @@ impl Serve {
         if let Some(incoming) = self.incoming() {
             self.library.set_kinds(incoming.folder_kinds());
         }
+        // Left over from a build that could not finish it: with nothing changed there may be no other build to ask.
+        if let Err(e) = self.follow_taken() {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
+        }
         // The tag rules as saved in Settings, so a change there needs no restart.
         if let Some(dir) = &self.data_dir
             && let Ok(Some(saved)) = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())
@@ -412,12 +416,29 @@ impl Serve {
         Ok(true)
     }
 
+    /// What names a track the build's take retired follows the track that took it (N1: a retired id can come back with its
+    /// plays, and then be taken). The one place for it: another store that names tracks joins here, before the mark. Marked
+    /// once all have, so a stop before it goes over them again, and each must change nothing the second time. Blocking.
+    fn follow_taken(&self) -> Result<()> {
+        let moved = self.catalogue().tracks_to_follow()?;
+        if !moved.is_empty() {
+            let rows = self.userdata.move_tracks(&moved)?;
+            self.catalogue().tracks_followed(&moved)?;
+            tracing::info!(target: "library", tracks = moved.len(), rows = ?rows, "what named taken tracks followed them");
+        }
+        Ok(())
+    }
+
     /// After the library was built (whole, or `folders` of it): when, the plays and stars that follow songs to new ids, a
     /// line in the log; with changed songs, the catalogue links the built-in source's ids and those who keep its covers'
     /// stamps are told; and those who wait on a build. Blocking.
     fn built_now(&self, why: &str, whole: bool, folders: usize, songs_changed: bool) -> Result<()> {
         let at = now();
         *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
+        // Before the persistent ids: they would move what the merge means to add up. Failing, the next check goes over it.
+        if let Err(e) = self.follow_taken() {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
+        }
         let moved = self.userdata.follow_pids(&self.library.pids()?)?;
         if moved > 0 {
             tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
@@ -718,6 +739,130 @@ impl Serve {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::serve::copies::Kind;
+    use crate::userdata::{Heard, Kind as Item};
+    use std::path::Path;
+
+    /// A server on two kept folders with a catalogue of them, for a test named `name`.
+    fn on_two_folders(name: &str) -> ([PathBuf; 2], Arc<Catalogue>, Arc<Serve>) {
+        let roots = [0, 1].map(|n| std::env::temp_dir().join(format!("cratarr-serve-{name}-{n}-{}", std::process::id())));
+        for root in &roots {
+            std::fs::remove_dir_all(root).ok();
+            std::fs::create_dir_all(root).unwrap();
+        }
+        let cat = Arc::new(Catalogue::open(None, roots.to_vec()).unwrap());
+        let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.library.set_kinds(vec![(0, Kind::Main), (1, Kind::Main)]);
+        serve.attach_catalogue(cat.clone());
+        (roots, cat, serve)
+    }
+
+    /// These files, (path, title), of one album, as the catalogue holds them once read and identified.
+    fn add(cat: &Catalogue, root: &Path, folder: i64, files: &[(&str, &str)]) {
+        for (rel, _) in files {
+            std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(root.join(rel), rel).unwrap();
+        }
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        for (rel, title) in files {
+            cat.tag_for_tests(folder, rel, &[("album", "Album"), ("albumartist", "Artist"), ("title", title)]);
+        }
+        cat.identify().unwrap();
+    }
+
+    /// A check that finds something new: `last_pass` is in whole seconds, and a check at the second of the last sees nothing.
+    fn checked_again(serve: &Serve) {
+        std::thread::sleep(Duration::from_millis(1100));
+        serve.catalogue().changed_outside_pass();
+        serve.refresh().unwrap();
+    }
+
+    fn plays_of(serve: &Serve, song: &str) -> u32 {
+        serve.userdata.get("me", Item::Song, &[song.to_string()]).unwrap().get(song).map_or(0, |a| a.play_count)
+    }
+
+    /// N1: `identify` hands a new file an id retired before there were records, plays and all, and the take then takes it. The
+    /// plays go to the record's track at the same build, and nothing is left to follow.
+    #[test]
+    fn a_retired_id_with_plays_keeps_them_when_taken() {
+        let (roots, cat, serve) = on_two_folders("retired");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One")]);
+        add(&cat, &roots[1], 1, &[("Old/01 One.flac", "One"), ("Stays/09 Stays.flac", "Stays")]);
+        cat.tag_for_tests(1, "Stays/09 Stays.flac", &[("album", "Another"), ("albumartist", "Artist"), ("title", "Stays")]);
+        let old = cat.track_of(1, "Old/01 One.flac").unwrap();
+        let song = ids::song(old);
+        serve.userdata.record("me", (&song, "p"), "al-x", &[], &Heard::counted(100)).unwrap();
+        std::fs::remove_file(roots[1].join("Old/01 One.flac")).unwrap();
+        cat.walk_all();
+        cat.gone_long_ago_for_tests();
+        cat.identify().unwrap();
+        assert!(cat.track_of_source(crate::source::cratarr::KIND.id, &song).is_none(), "retired");
+
+        serve.refresh().unwrap();
+        let track = cat.track_of(0, "A/01 One.flac").unwrap();
+        let kept = ids::song(track);
+        serve.userdata.record("me", (&kept, "q"), "al-x", &[], &Heard::counted(200)).unwrap();
+
+        add(&cat, &roots[1], 1, &[("Back/01 One.flac", "One")]);
+        assert_eq!(cat.track_of(1, "Back/01 One.flac"), Some(old), "its name and length: the old id, with what it held");
+        checked_again(&serve);
+        assert_eq!(cat.track_of(1, "Back/01 One.flac"), Some(track), "taken");
+        let a = serve.userdata.get("me", Item::Song, &[kept.clone()]).unwrap().remove(&kept).unwrap();
+        assert_eq!((a.play_count, a.play_date), (2, Some(200)), "both plays, once each");
+        assert_eq!(plays_of(&serve, &song), 0, "none left on the id that went");
+        assert!(cat.tracks_to_follow().unwrap().is_empty(), "followed");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// Q8: the copy with more tracks keeps what points at the record, even from a later folder. The two copies' songs are tagged
+    /// alike, one persistent id, and a build must not move the plays to the copy that left by it.
+    #[test]
+    fn a_copy_that_leaves_takes_nothing_that_points_at_the_record() {
+        let (roots, cat, serve) = on_two_folders("leaves");
+        let two = [("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")];
+        add(&cat, &roots[0], 0, &two);
+        add(&cat, &roots[1], 1, &two);
+        serve.refresh().unwrap();
+        let track = cat.track_of(1, "A/01 One.flac").unwrap();
+        assert_eq!(cat.track_of(0, "A/01 One.flac"), Some(track));
+        let song = ids::song(track);
+        let (pid, _, _) = serve.library.play_targets(&song).unwrap().unwrap();
+        serve.userdata.record("me", (&song, &pid), "al-x", &[], &Heard::counted(100)).unwrap();
+
+        add(&cat, &roots[1], 1, &[("A/03 Three.flac", "Three")]);
+        checked_again(&serve);
+        let left = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        assert_ne!(left, song, "the first folder's copy left");
+        assert_eq!((plays_of(&serve, &song), plays_of(&serve, &left)), (1, 0), "the play stays on the record's track");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// What names a taken track moves once, whatever stops in between: the mark comes after, and going over it changes nothing.
+    #[test]
+    fn a_stop_before_the_mark_loses_nothing_and_counts_nothing_twice() {
+        let (roots, cat, serve) = on_two_folders("mark");
+        let one = [("A/01 One.flac", "One")];
+        add(&cat, &roots[0], 0, &one);
+        add(&cat, &roots[1], 1, &one);
+        // Which of two new copies stays is the first album met, by its hash: both have a play to bring.
+        for folder in [0, 1] {
+            let song = ids::song(cat.track_of(folder, "A/01 One.flac").unwrap());
+            serve.userdata.record("me", (&song, "p"), "al-x", &[], &Heard::counted(100)).unwrap();
+        }
+        serve.refresh().unwrap();
+        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        assert_eq!(cat.track_of(1, "A/01 One.flac"), ids::track_of(&stays));
+        assert_eq!(plays_of(&serve, &stays), 2);
+        // Stopped before the mark: the user data moved, the catalogue says it has not.
+        let moved = cat.moved_tracks().unwrap().into_iter().collect::<Vec<_>>();
+        cat.not_followed_for_tests();
+        assert_eq!(cat.tracks_to_follow().unwrap(), moved);
+        serve.follow_taken().unwrap();
+        assert_eq!(plays_of(&serve, &stays), 2, "not a play more");
+        assert!(cat.tracks_to_follow().unwrap().is_empty());
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
 
     #[test]
     fn a_cover_changed_new_or_gone_is_told_an_unchanged_one_is_not() {

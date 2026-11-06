@@ -84,8 +84,8 @@ fn made(root: &Path, library: &str, names: &[(&str, &str)], ext: &str) -> Vec<Pa
         .collect()
 }
 
-/// The record on disk, read and built. `shared`: both copies on one track each, as the take will leave them and `set_tracks`
-/// may before it (CR9); else each with its own, as copies are until the take.
+/// The record on disk, read and built. `shared`: both copies on one track each before the first build, by `set_tracks` (CR9);
+/// else each comes with its own, and the build's take makes them one.
 pub(super) fn two_copies(name: &str, shared: bool) -> Copies {
     let root = crate::retag::fixtures::dir(&format!("every-copy-{name}"));
     let (flacs, mp3s) = (made(&root, "music", &KEPT, "flac"), made(&root, "incoming", &WAITING, "mp3"));
@@ -197,18 +197,6 @@ async fn undo_takes_a_fix_out_of_every_copy() {
     for f in c.files() {
         assert_eq!(tag(&f, "genre"), ["Rock and Roll"], "{}", f.display());
     }
-}
-
-/// Until the take a copy holds tracks of its own: nothing links its tracks to the row copy's, and the record's fields reach
-/// it all the same, as a track's cannot yet.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_records_fix_reaches_a_copy_on_tracks_of_its_own() {
-    let (c, app) = (two_copies("own-tracks", false), app("own-tracks").await);
-    assert_ne!(c.serve.library.files_of_record(&c.album).unwrap().iter().map(|f| &f.0).collect::<std::collections::HashSet<_>>().len(), 2);
-    let p = rule_fix(&c, None);
-    let named: Vec<&str> = p.files.iter().filter_map(|f| f.track.as_deref()).collect();
-    assert_eq!(named.iter().filter(|t| **t == "One").count(), 2, "a file with no row in `songs` is named by its tags: {named:?}");
-    written_and_undone("genre", &app, &c, p, &["Rock"]).await;
 }
 
 /// The "Before adding" sheet: the copy named, and nothing of the kept one.

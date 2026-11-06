@@ -1470,22 +1470,15 @@ impl Library {
         Ok(st.exists([id])?)
     }
 
-    /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. A
-    /// track in two folders (an album in Music and again in Incoming) is one persistent id with two songs: its data
-    /// goes to the first folder's (Music's, the library's own file), not back and forth between them on every build.
+    /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. Copies
+    /// share their tracks, so an id on two songs is two tracks tagged alike: two records, a copy that left its record among
+    /// them. It says neither, and the data stays where it is: going to the first folder's, it would leave the record that
+    /// holds it, whichever folder that happens to be.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT pid, id FROM songs ORDER BY folder, n")?;
+        let mut st = db.prepare("SELECT pid, min(id) FROM songs GROUP BY pid HAVING count(*) = 1 ORDER BY pid")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for row in rows {
-            let (pid, id) = row?;
-            if seen.insert(pid.clone()) {
-                out.push((pid, id));
-            }
-        }
-        Ok(out)
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 }
 

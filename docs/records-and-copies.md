@@ -24,6 +24,7 @@ track" and "how a record's copies behave"); this says how they are built, and in
   (record, folder, dir).
 - `files` gains `came`, `bits` and `rate`. `came` is when the file first came, so a copy keeps its own date when the track
   it holds is another copy's (`tracks.born` is the track's). `bits` and `rate` are what `copy_for` ranks lossless copies by.
+- `track_moved (old, id, followed)`: a track a record's track took, what it became, and whether the user data has followed.
 
 **Served:**
 
@@ -50,7 +51,20 @@ As the owner decided, the same record is the same tracks. A folder is identified
 4. Else it is a record of its own. What cannot be told apart stays two (0100 point 4), and a deluxe edition with bonus
    tracks is its own record by this rule.
 
-A copy takes the record's track ids (0101's amendment), track by track through the same match.
+A copy takes the record's track ids (0101's amendment), track by track through the same match: its files go to the record's
+tracks, and the ids they held retire for good. A file replaced outside Cratarr in one copy, with an id of its own, takes the
+track that copy has no file of, by its name and length. `track_moved` keeps what each id became, for as long as there is
+anything that could name it: a taken id never comes back to a file, what names it follows it (plays, favourites, playlist
+entries and the rest, at the next build), an Undo from before lands on the record's track, an old id in a queue plays it,
+and AudioMuse's export finds its track by it.
+
+Copies of one record always hold the same tracks, which is what the ids say once taken: a retag or a length fix in one
+copy splits nothing. A track added to one of two copies does (the owner, 2026-11-06), as a deluxe edition is its own
+record: the copy with more tracks keeps the record, its id and what points at it, the first on an equal count, and the other
+is held against the rest as a new folder is, with tracks of its own. That goes ahead of "a track keeps its record for life".
+A copy that lost a file for good leaves the same way; a file gone a while splits nothing, and the record lists the track
+from the copy that has it. Where a copy gained more than it held, no majority holds it to the record, so it leaves whatever
+its count: the record stays with the copy that is still it.
 
 Once it has a record, a folder's tracks say which it is, while more than half of them hold it, or nothing else does: a
 folder holding every file of a record that is left keeps it, however many tracks came in beside them. Short of that it is
@@ -94,8 +108,8 @@ gains, is the file that plays, so a waveform's ETag names the file.
   does a track, in every list and count: `crates::on_for`, the one test. An Incoming copy counts there, though it plays only
   when picked: with the kept library off, that is where the record is found.
 - A playlist's line names a file, and an entry is its track: on any copy it has the track's id and plays, what plays being
-  `copy_for`'s to say. A line written now is the row copy's. Where its copy goes the entry reads the file its track has left,
-  at once, and the minute's pass writes that line.
+  `copy_for`'s to say. A line written now is the row copy's. Where its copy goes, or leaves the record, the entry reads the file
+  its track has left, at once, and the minute's pass writes that line.
 - An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
   The record stays while one copy is left.
