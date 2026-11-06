@@ -1171,6 +1171,70 @@ mod undo_tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// `service` with its crates and pictures in a data folder, as a take finds them, and the take: `tr-5` went to `tr-1`.
+    async fn before_a_take(name: &str) -> (PathBuf, PlaylistService, crate::moved::Moved) {
+        let d = std::env::temp_dir().join(format!("cratarr-take-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let dir = d.to_string_lossy().into_owned();
+        let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
+        let lib = Library::new(Some(dir.clone()), Some(dir), Vec::new(), Default::default(), None, db).await.unwrap();
+        let journal = Arc::new(Journal::open(None).unwrap());
+        let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), crate::sync_state::SyncState::open(None).unwrap(), journal.clone()));
+        let moved = crate::moved::Moved { ids: [("tr-5".to_string(), "tr-1".to_string())].into(), ..Default::default() };
+        (d, PlaylistService::new(lib, sync, journal, None), moved)
+    }
+
+    /// A take names no account, so one store's trouble is no reason to leave the others: each is followed, and the answer says one
+    /// was not, so nothing marks it done. The next check goes over them all.
+    #[tokio::test]
+    async fn a_store_that_cannot_be_read_stops_no_other_and_is_gone_over_again() {
+        let (d, s, taken) = before_a_take("unread").await;
+        let others = ["bob", "cy", "dan", "eve", "fay"];
+        let excluded = r#"{ "version": 1, "crates": [], "excluded": ["tr-5"] }"#;
+        for account in others {
+            std::fs::create_dir_all(d.join("users").join(account)).unwrap();
+            std::fs::write(d.join("users").join(account).join("crates.json"), excluded).unwrap();
+        }
+        std::fs::create_dir_all(d.join("users/amy")).unwrap();
+        std::fs::write(d.join("users/amy/crates.json"), "{ half written").unwrap();
+
+        assert!(s.follow_tracks(&taken).await.is_err(), "not all followed");
+        for account in others {
+            assert_eq!(s.crate_stores.of(Some(account)).unwrap().excluded().await.unwrap(), ["tr-1"], "{account}");
+        }
+        std::fs::write(d.join("users/amy/crates.json"), excluded).unwrap();
+        s.follow_tracks(&taken).await.unwrap();
+        assert_eq!(s.crate_stores.of(Some("amy")).unwrap().excluded().await.unwrap(), ["tr-1"], "mended, the next check reaches it");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A Sounds like's picture is named by its seed: left behind, the crate shows its albums' covers again.
+    #[tokio::test]
+    async fn a_sounds_likes_picture_goes_with_its_seed_at_a_take() {
+        let (d, s, taken) = before_a_take("picture").await;
+        std::fs::create_dir_all(d.join("crate-images")).unwrap();
+        std::fs::write(d.join("crate-images").join(crates::image_file("like:tr-5")), "a picture").unwrap();
+        s.follow_tracks(&taken).await.unwrap();
+        assert!(d.join("crate-images").join(crates::image_file("like:tr-1")).is_file());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Undo holds a list against what the change left, so a change from before a take must read as the list does now, or it says
+    /// the list changed since.
+    #[tokio::test]
+    async fn an_undo_from_before_a_take_finds_the_list_as_it_left_it() {
+        let (d, s, taken) = before_a_take("undo").await;
+        let (first, left) = (s.crate_stores.first.clone(), crates::LeftOut { tracks: vec!["tr-5".into()], albums: Vec::new() });
+        first.set_left_out("c1", left.clone()).await.unwrap();
+        let undo = s.keep(Change::LeftOut { crate_id: "c1".into(), before: crates::LeftOut::default(), after: left }).unwrap();
+        s.follow_tracks(&taken).await.unwrap();
+        assert_eq!(first.left_out("c1").await.unwrap().tracks, ["tr-1"]);
+        s.undo(&undo).await.unwrap();
+        assert!(first.left_out("c1").await.unwrap().is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[tokio::test]
     async fn all_of_where_a_track_has_one_value_is_refused_saved_previewed_or_drawn() {
         // 0.13, decision 0088: refused as unanswerable (422), naming the axis; on the axes of several values, kept.
@@ -1491,6 +1555,18 @@ impl CrateStores {
         let mut others = self.others.lock().unwrap_or_else(|p| p.into_inner());
         let store = others.entry(account.to_string()).or_insert_with(|| Arc::new(crates::CrateStore::of_account(self.data_dir.as_deref(), account)));
         Ok(store.clone())
+    }
+
+    /// Every account's store and whose it is (`None`: the first administrator's), one nobody has opened since the start too: its
+    /// file is all there is of it, and it must read as the others do once someone does.
+    fn every(&self) -> Vec<(Option<String>, Arc<crates::CrateStore>)> {
+        let users = self.data_dir.iter().filter_map(|d| std::fs::read_dir(std::path::Path::new(d).join("users")).ok()).flatten().flatten();
+        for account in users.filter_map(|u| u.file_name().into_string().ok()) {
+            // A folder no account could have: nothing can open it.
+            let _ = self.of(Some(&account));
+        }
+        let others = self.others.lock().unwrap_or_else(|p| p.into_inner());
+        std::iter::once((None, self.first.clone())).chain(others.iter().map(|(account, store)| (Some(account.clone()), store.clone()))).collect()
     }
 }
 
@@ -2009,6 +2085,36 @@ impl PlaylistService {
     /// administrator's.
     pub fn own_folder(&self) -> String {
         asking_account(self.served.as_deref()).unwrap_or_default()
+    }
+
+    /// What every account keeps in its crates follows ids a take moved (`Serve::follow_taken`): lists, seeds and all that goes by
+    /// a Sounds like's id, its picture, and what an Undo holds them against. Each changes nothing the second time. One store that
+    /// cannot be read stops no other, and says so: the next check goes over them all.
+    pub async fn follow_tracks(&self, moved: &crate::moved::Moved) -> Result<()> {
+        let mut followed = Ok(());
+        for (account, store) in self.crate_stores.every() {
+            match store.follow(moved).await {
+                Ok(false) => {}
+                Ok(true) => self.excluded_tracks_moved(account.as_deref()),
+                Err(e) => followed = followed.and(Err(e)),
+            }
+        }
+        followed?;
+        if let Some(pictures) = self.crate_images() {
+            moved.images(&pictures, &mut Default::default())?;
+        }
+        self.journal.move_changes(moved)?;
+        Ok(())
+    }
+
+    /// An account's tracks excluded everywhere changed under it: logged, as a change of its own is.
+    fn excluded_tracks_moved(&self, account: Option<&str>) {
+        let Some(serve) = self.served.as_deref() else { return };
+        if let Some(account) = account.map(str::to_string).or_else(|| serve.users.owner())
+            && let Err(e) = serve.userdata.excluded_changed(&account, "tracks")
+        {
+            tracing::warn!("the tracks excluded: their change not logged: {e:#}");
+        }
     }
 
     /// The asking account's tracks excluded everywhere changed: logged (decision 0087).
@@ -4397,6 +4503,30 @@ mod favourites_tests {
 #[cfg(test)]
 mod left_out_tests {
     use super::*;
+
+    /// A take names no account: an account's crates are followed whether anyone opened them since the start or not, and a folder
+    /// no account could have is left. With no data folder, the stores open are all there is.
+    #[test]
+    fn every_store_is_the_first_the_open_ones_and_those_only_on_disk() {
+        let dir = std::env::temp_dir().join(format!("cratarr-every-store-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        for folder in ["users/ann", "users/.hidden", "users/bob"] {
+            std::fs::create_dir_all(dir.join(folder)).unwrap();
+        }
+        let stores = CrateStores::new(dir.to_str());
+        stores.of(Some("cy")).unwrap();
+        let mut accounts: Vec<Option<String>> = stores.every().into_iter().map(|(a, _)| a).collect();
+        accounts.sort();
+        assert_eq!(accounts, [None, Some("ann".to_string()), Some("bob".to_string()), Some("cy".to_string())]);
+        let first = stores.every().into_iter().find(|(a, _)| a.is_none()).unwrap().1;
+        assert!(Arc::ptr_eq(&first, &stores.first), "the store in use, or its memory would go on saying what the file no longer does");
+        assert!(Arc::ptr_eq(&stores.every().into_iter().find(|(a, _)| a.as_deref() == Some("cy")).unwrap().1, &stores.of(Some("cy")).unwrap()));
+        std::fs::remove_dir_all(&dir).ok();
+
+        let memory = CrateStores::new(None);
+        memory.of(Some("ann")).unwrap();
+        assert_eq!(memory.every().len(), 2);
+    }
 
     #[test]
     fn what_a_crate_leaves_out_is_its_tracks_its_albums_tracks_now_and_those_excluded_everywhere() {

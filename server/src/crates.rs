@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 pub use cratarr_rules::crates::*;
 
+use crate::moved::Moved;
+
 /// Each artist the files name, their library id by their name, for `Alike::of`, `known` being the catalogue's ids by key: the
 /// catalogue is no rule. A part of a credit no one is named by alone has no id: nothing lists them, so nothing seeds by them.
 pub fn artist_ids(all: &[Facts], known: &HashMap<String, i64>) -> HashMap<String, String> {
@@ -95,22 +97,64 @@ struct Stored {
     added: BTreeMap<String, Vec<Condition>>,
 }
 
+impl Stored {
+    /// What names these ids names what they became, everywhere `Moved::crates` looks. Whether anything did.
+    fn follow(&mut self, moved: &Moved) -> Result<bool> {
+        if moved.ids.is_empty() {
+            return Ok(false);
+        }
+        let was = serde_json::to_value(&*self)?;
+        let mut now = was.clone();
+        moved.crates(&mut now, &mut Default::default());
+        if now == was {
+            return Ok(false);
+        }
+        *self = serde_json::from_value(now)?;
+        Ok(true)
+    }
+}
+
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
 /// beside it (`crates.json.bak`). Without a data folder they live in memory only.
 pub struct CrateStore {
     path: Option<PathBuf>,
     memory: tokio::sync::Mutex<Option<Stored>>,
+    /// The ids `follow` has moved since the start: a change that read them before writes them after, here and in whoever asked
+    /// (`crate_leave_out` reads, works out and sets), and must not bring back what went.
+    followed: std::sync::Mutex<Moved>,
 }
 
 impl CrateStore {
+    fn at(path: Option<PathBuf>) -> Self {
+        Self { path, memory: tokio::sync::Mutex::new(None), followed: Default::default() }
+    }
+
     pub fn new(data_dir: Option<&str>) -> Self {
-        Self { path: data_dir.map(|d| PathBuf::from(d).join("crates.json")), memory: tokio::sync::Mutex::new(None) }
+        Self::at(data_dir.map(|d| PathBuf::from(d).join("crates.json")))
     }
 
     /// Another account's crates (decision 0051: one's own, not shared), in its folder of the data folder.
     pub fn of_account(data_dir: Option<&str>, account: &str) -> Self {
-        let path = data_dir.map(|d| PathBuf::from(d).join("users").join(account).join("crates.json"));
-        Self { path, memory: tokio::sync::Mutex::new(None) }
+        Self::at(data_dir.map(|d| PathBuf::from(d).join("users").join(account).join("crates.json")))
+    }
+
+    /// What names these ids follows them to what they became (a take, `Serve::follow_taken`), read, changed and written in one
+    /// hold of the store, so no change lands between. The second time finds nothing to move and writes nothing. Whether what is
+    /// excluded moved: a device keeps its own copy of that list.
+    pub async fn follow(&self, moved: &Moved) -> Result<bool> {
+        let mut memory = self.memory.lock().await;
+        self.followed.lock().unwrap_or_else(|p| p.into_inner()).ids.extend(moved.ids.clone());
+        let mut s = match memory.clone() {
+            Some(s) => s,
+            None => self.read().await?,
+        };
+        let excluded = s.excluded.clone();
+        if !s.follow(moved)? {
+            return Ok(false);
+        }
+        let told = s.excluded != excluded;
+        self.written(&mut memory, s).await?;
+        Ok(told)
     }
 
     async fn stored(&self) -> Result<Stored> {
@@ -249,7 +293,14 @@ impl CrateStore {
         self.write_stored(Stored { crates, ..s }).await
     }
 
+    /// Held to the end of the write, or `follow` could land between this reading what followed and writing what it holds.
     async fn write_stored(&self, mut s: Stored) -> Result<()> {
+        let mut memory = self.memory.lock().await;
+        s.follow(&self.followed.lock().unwrap_or_else(|p| p.into_inner()))?;
+        self.written(&mut memory, s).await
+    }
+
+    async fn written(&self, memory: &mut Option<Stored>, mut s: Stored) -> Result<()> {
         s.version = VERSION;
         if let Some(path) = &self.path {
             let bytes = serde_json::to_vec_pretty(&s)?;
@@ -263,7 +314,7 @@ impl CrateStore {
             tokio::fs::write(&tmp, bytes).await.context("writing the crates")?;
             tokio::fs::rename(&tmp, path).await.context("writing the crates")?;
         }
-        *self.memory.lock().await = Some(s);
+        *memory = Some(s);
         Ok(())
     }
 
@@ -421,6 +472,92 @@ mod tests {
         first.save(None, "Late", Vec::new()).await.unwrap();
         assert_eq!(ann.list().await.unwrap().len(), 1, "a name is unique among one's own only");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn taken() -> Moved {
+        Moved { ids: [("tr-5".to_string(), "tr-1".to_string())].into(), ..Default::default() }
+    }
+
+    fn seeded(of: &[&str]) -> Vec<Condition> {
+        let of = of.iter().map(|s| s.to_string()).collect();
+        vec![Condition::new("like", false, Value::Like { of, count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() })]
+    }
+
+    /// A take names no crate, so it walks all of a store: lists, seeds, and what goes by a Sounds like's id. A stop before the mark
+    /// goes over it again, and that second time must leave the file alone: `.bak` is the version before the last real change.
+    #[tokio::test]
+    async fn a_store_follows_a_take_once() {
+        let dir = std::env::temp_dir().join(format!("cratarr-crates-take-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = CrateStore::new(dir.to_str());
+        let id = store.save(None, "Late", seeded(&["tr-5", "al-1"])).await.unwrap();
+        let left = LeftOut { tracks: vec!["tr-5".into(), "tr-1".into(), "tr-2".into()], albums: Vec::new() };
+        store.set_left_out(&id, left).await.unwrap();
+        store.set_left_out("like:tr-5@50", LeftOut { tracks: vec!["tr-2".into()], albums: Vec::new() }).await.unwrap();
+        store.set_fit("like:tr-5", Fit { rules: seeded(&["tr-5"]), dismissed: vec!["tempo".into()] }).await.unwrap();
+        store.set_added("like:tr-5", seeded(&["tr-5"])).await.unwrap();
+        store.set_favourites("like:tr-5", Favourites::Only).await.unwrap();
+        store.set_excluded(vec!["tr-5".into(), "tr-9".into()]).await.unwrap();
+
+        assert!(store.follow(&taken()).await.unwrap(), "what is excluded moved");
+        for kept in [&store, &CrateStore::new(dir.to_str())] {
+            assert_eq!(named_ids(&kept.list().await.unwrap()[0].conditions), ["tr-1", "al-1"], "its seed");
+            assert_eq!(kept.left_out(&id).await.unwrap().tracks, ["tr-1", "tr-2"], "two ids of one track are one");
+            assert_eq!(kept.left_out("like:tr-1@50").await.unwrap().tracks, ["tr-2"], "its count stays with it");
+            assert_eq!(named_ids(&kept.fit("like:tr-1").await.unwrap().rules), ["tr-1"]);
+            assert_eq!(named_ids(&kept.added("like:tr-1").await.unwrap()), ["tr-1"]);
+            assert_eq!(kept.favourites("like:tr-1").await.unwrap(), Favourites::Only);
+            assert_eq!(kept.excluded().await.unwrap(), ["tr-1", "tr-9"]);
+            assert!(kept.left_out("like:tr-5@50").await.unwrap().is_empty(), "no key left behind");
+        }
+
+        let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
+        let (file, before) = (read("crates.json"), read("crates.json.bak"));
+        assert!(!store.follow(&taken()).await.unwrap(), "nothing moved, nothing told");
+        assert_eq!((read("crates.json"), read("crates.json.bak")), (file.clone(), before.clone()), "nothing written");
+        assert!(!CrateStore::new(dir.to_str()).follow(&taken()).await.unwrap(), "the same from the file alone");
+        assert_eq!((read("crates.json"), read("crates.json.bak")), (file, before));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_store_nobody_opened_follows_from_its_file() {
+        let dir = std::env::temp_dir().join(format!("cratarr-crates-closed-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        CrateStore::new(dir.to_str()).set_excluded(vec!["tr-5".into()]).await.unwrap();
+        assert!(CrateStore::new(dir.to_str()).follow(&taken()).await.unwrap());
+        assert_eq!(CrateStore::new(dir.to_str()).excluded().await.unwrap(), ["tr-1"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A store with no file makes none by following: an account with no crates stays one.
+    #[tokio::test]
+    async fn following_makes_no_file_for_a_store_with_nothing_in_it() {
+        let dir = std::env::temp_dir().join(format!("cratarr-crates-none-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!CrateStore::of_account(dir.to_str(), "ann").follow(&taken()).await.unwrap());
+        assert!(!dir.join("users").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `crate_leave_out` reads the list, works out the new one and sets it. A take that lands between must not lose to it: what it
+    /// sets holds the id that went, and nothing would ever follow that id again.
+    #[tokio::test]
+    async fn a_change_that_read_before_a_take_does_not_bring_its_id_back() {
+        let store = CrateStore::new(None);
+        store.set_left_out("c1", LeftOut { tracks: vec!["tr-5".into()], albums: Vec::new() }).await.unwrap();
+        store.set_excluded(vec!["tr-5".into()]).await.unwrap();
+        let (mut read, mut excluded) = (store.left_out("c1").await.unwrap(), store.excluded().await.unwrap());
+        store.follow(&taken()).await.unwrap();
+        read.tracks.push("tr-2".into());
+        excluded.push("tr-3".into());
+        store.set_left_out("c1", read).await.unwrap();
+        store.set_excluded(excluded).await.unwrap();
+        assert_eq!(store.left_out("c1").await.unwrap().tracks, ["tr-1", "tr-2"]);
+        assert_eq!(store.excluded().await.unwrap(), ["tr-1", "tr-3"]);
     }
 
     #[test]

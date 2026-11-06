@@ -562,6 +562,187 @@ async fn a_track_left_out_can_be_put_back_after_its_file_went_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+const FAR: &str = "Salt Meridian/Far Bank (2018)";
+const THREE: &str = "Salt Meridian/Three Banks (2018)";
+
+/// Two real files, two tracks for now, each with an id anyone can name: Far Bank, alone on its record in Music, and a track of that
+/// name and length on an album of three in the second library. `take` makes the second a copy of the first.
+struct Banks {
+    data: PathBuf,
+    second: PathBuf,
+    stays: String,
+    goes: String,
+    others: Vec<String>,
+}
+
+impl Banks {
+    /// A person moves the second file out of its album and tags it as Far Bank. Its album leaves its record to the two left, so it
+    /// is held against the others and is a copy of Far Bank, and its track is taken at the next build. A Delete of something else
+    /// asks for a pass, which a file moved outside Cratarr waits for. Back once what names the track has followed it.
+    async fn take(&self, who: &Caller<'_>) {
+        let (from, to) = (self.second.join(THREE).join("01 Far Bank.flac"), self.second.join(FAR));
+        set_vorbis(&from, "ALBUM", "Far Bank");
+        std::fs::create_dir_all(&to).unwrap();
+        std::fs::rename(&from, to.join("01 Far Bank.flac")).unwrap();
+        let library = self.second.to_string_lossy();
+        let there = |a: &Value| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"].as_str() == Some(&*library)));
+        let other = who.albums().await.into_iter().find(|a| a["title"] == "Two Pressings" && there(a)).unwrap();
+        who.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{}/delete", other["id"].as_str().unwrap()), json!({})).await;
+        let s = who.server;
+        s.until("its id to go", Duration::from_secs(120), || async { tracks_at(&self.data, &self.second, FAR) == [self.stays.clone()] }).await;
+        s.until("what names it to follow", Duration::from_secs(60), || async { self.left_to_follow() == 0 }).await;
+    }
+
+    /// How many taken tracks wait for what names them to follow.
+    fn left_to_follow(&self) -> i64 {
+        let db = rusqlite::Connection::open(self.data.join("catalogue.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(10)).unwrap();
+        db.query_row("SELECT count(*) FROM track_moved WHERE followed = 0", [], |r| r.get(0)).unwrap()
+    }
+
+    /// A crate of the four tracks: the files' own genre.
+    async fn crate_of(&self, who: &Caller<'_>) -> String {
+        let genre = json!([{ "axis": "genre", "value": { "kind": "any_of", "values": ["Riverside"] } }]);
+        let made = who.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Riverside", "conditions": genre })).await;
+        let id = made["id"].as_str().unwrap().to_string();
+        assert_eq!(in_order(row_ids(&who.get(&format!("/api/crates/{id}/rows")).await)), in_order([vec![self.stays.clone(), self.goes.clone()], self.others.clone()].concat()));
+        id
+    }
+}
+
+fn in_order(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
+async fn two_banks(name: &str) -> (Server, PathBuf, Banks) {
+    let root = temp(name);
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, second) = (library.join("music"), library.join("second"));
+    std::fs::rename(second.join(FAR), music.join(FAR)).unwrap();
+    let far = music.join(FAR).join("01 Far Bank.flac");
+    set_vorbis(&far, "GENRE", "Riverside");
+    std::fs::create_dir_all(second.join(THREE)).unwrap();
+    for (n, title) in ["Far Bank", "Near Bank", "Mid Bank"].into_iter().enumerate() {
+        let file = second.join(THREE).join(format!("0{} {title}.flac", n + 1));
+        std::fs::copy(&far, &file).unwrap();
+        set_vorbis(&file, "ALBUM", "Three Banks");
+        set_vorbis(&file, "TITLE", title);
+        set_vorbis(&file, "TRACKNUMBER", &(n + 1).to_string());
+    }
+    settings(&data, &[(&music, "main"), (&second, "main")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.read_in("Far Bank", &music).await;
+    s.read_in("Three Banks", &second).await;
+    let (stays, mut others) = (tracks_at(&data, &music, FAR).remove(0), tracks_at(&data, &second, THREE));
+    let goes = others.remove(0);
+    assert_ne!(goes, stays, "two tracks for now");
+    (s, root, Banks { data, second, stays, goes, others })
+}
+
+/// A track left out before its id is taken (CR6: the list names the track, so nothing hides a take from it) stays out, read from
+/// either file. A stop before the mark goes over it again and writes nothing, and an Undo from before the take finds the list as it
+/// left it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_left_out_stays_out_when_its_id_is_taken_end_to_end() {
+    let (s, root, banks) = two_banks("taken-left-out").await;
+    let id = banks.crate_of(&s.anyone()).await;
+    let (rows, left) = (format!("/api/crates/{id}/rows"), format!("/api/crates/{id}/left-out"));
+    let out = s.ok(reqwest::Method::POST, &left, json!({ "ids": [banks.goes] })).await;
+    assert_eq!(row_ids(&s.get(&rows).await).len(), 3, "the other file is another track for now");
+
+    banks.take(&s.anyone()).await;
+    assert_eq!(in_order(row_ids(&s.get(&rows).await)), in_order(banks.others.clone()), "the track stays out, whichever file it is read from");
+    assert_eq!(row_ids(&s.get(&left).await), [banks.stays.clone()], "on the list that puts it back");
+    let (file, before) = (root.join("data/crates.json"), root.join("data/crates.json.bak"));
+    let store: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(store["left_out"][&id], json!([banks.stays]), "by the track that took it");
+
+    // Stopped before the mark: `refresh` goes over it at its head, and a route that sets a fact asks for one at once.
+    let (kept, previous) = (std::fs::read(&file).unwrap(), std::fs::read(&before).unwrap());
+    let db = rusqlite::Connection::open(banks.data.join("catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    db.execute("UPDATE track_moved SET followed = 0", []).unwrap();
+    assert!(banks.left_to_follow() > 0);
+    let album = s.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap();
+    s.ok(reqwest::Method::PUT, "/api/albums/overrides", json!({ "albums": [album["id"]], "set": { "year": 1999 } })).await;
+    assert_eq!(banks.left_to_follow(), 0, "gone over");
+    assert!(std::fs::read(&file).unwrap() == kept, "nothing to move");
+    assert!(std::fs::read(&before).unwrap() == previous, "nothing written");
+
+    let undone = s.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [out["undo"]] })).await;
+    assert_eq!(in_order(row_ids(&s.get(&rows).await)), in_order([vec![banks.stays.clone()], banks.others.clone()].concat()), "put back, once: {undone}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A track excluded before its id is taken stays out of every crate, for each account that excluded it: one whose store is open,
+/// and one that has not been in since the start, whose file is all there is. A device keeps that list, so it is told.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_excluded_stays_out_when_its_id_is_taken_end_to_end() {
+    let (s, root, banks) = two_banks("taken-excluded").await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let id = banks.crate_of(&ann).await;
+    let rows = format!("/api/crates/{id}/rows");
+    ann.ok(reqwest::Method::POST, "/api/excluded", json!({ "ids": [banks.goes] })).await;
+    assert_eq!(row_ids(&ann.get(&rows).await).len(), 3, "the other file is another track for now");
+    let his = root.join("data/users/bob/crates.json");
+    std::fs::create_dir_all(his.parent().unwrap()).unwrap();
+    std::fs::write(&his, json!({ "version": 1, "crates": [], "excluded": [banks.goes] }).to_string()).unwrap();
+
+    banks.take(&ann).await;
+    assert_eq!(in_order(row_ids(&ann.get(&rows).await)), in_order(banks.others.clone()), "out of every crate, whichever file it is read from");
+    assert_eq!(row_ids(&ann.get("/api/excluded").await), [banks.stays.clone()], "on the list that puts it back");
+    let file: Value = serde_json::from_slice(&std::fs::read(&his).unwrap()).unwrap();
+    assert_eq!(file["excluded"], json!([banks.stays]), "a store nobody opened");
+    assert_eq!(row_ids(&bob.get("/api/excluded").await), [banks.stays.clone()]);
+    let user = rusqlite::Connection::open(banks.data.join("userdata.sqlite")).unwrap();
+    let told: i64 = user.query_row("SELECT count(*) FROM change_log WHERE account = 'bob' AND kind = 'excluded' AND item = 'tracks'", [], |r| r.get(0)).unwrap();
+    assert_eq!(told, 1, "his device reads the list again");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// What is seeded by a track goes on being seeded by it once its id is taken: a saved crate, a Sounds like and what is kept by its
+/// id, its picture, and a filter.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_seed_follows_its_track_when_its_id_is_taken_end_to_end() {
+    let (s, root, banks) = two_banks("taken-seed").await;
+    let like = json!({ "axis": "like", "not": false, "value": { "kind": "like", "of": [banks.goes], "count": 20 } });
+    let made = s.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Like it", "conditions": [like] })).await;
+    let saved = format!("/api/crates/{}", made["id"].as_str().unwrap());
+    let (before, after) = (format!("like:{}", banks.goes), format!("like:{}", banks.stays));
+    s.ok(reqwest::Method::POST, &format!("/api/crates/{before}/left-out"), json!({ "ids": [banks.others[0]] })).await;
+    let picture = std::fs::read(banks.second.parent().unwrap().join("music/Various Artists/Club Classics (2001)/cover.jpg")).unwrap();
+    let sent = s.http.put(format!("{}/api/crates/{before}/image", s.base)).body(picture).send().await.unwrap();
+    assert!(sent.status().is_success(), "{}", sent.status());
+    let shown = s.anyone().bytes(&format!("/api/crates/{before}/image")).await.1;
+    let filters = json!({ "tracks": { "on": [], "conditions": [like] } });
+    s.ok(reqwest::Method::PUT, "/api/me/preferences/filters", json!({ "value": filters, "changed": 1 })).await;
+
+    banks.take(&s.anyone()).await;
+    let got = s.get(&saved).await;
+    assert_eq!(got["conditions"][0]["value"]["of"], json!([banks.stays]), "{got}");
+    assert_eq!(got["names"][&banks.stays]["name"], "Far Bank", "named, as an id with a track behind it");
+    assert_eq!(row_ids(&s.get(&format!("/api/crates/{after}/left-out")).await), banks.others[..1], "what was turned down for it");
+    let store: Value = serde_json::from_slice(&std::fs::read(root.join("data/crates.json")).unwrap()).unwrap();
+    assert_eq!(store["left_out"].as_object().unwrap().keys().collect::<Vec<_>>(), [&after], "no key left behind");
+    assert!(s.anyone().bytes(&format!("/api/crates/{after}/image")).await.1 == shown, "its picture");
+    let prefs = s.get("/api/me/preferences").await;
+    assert_eq!(prefs["values"]["filters"]["value"]["tracks"]["conditions"][0]["value"]["of"], json!([banks.stays]), "{prefs}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// An artist's id for life on a running server: what the library serves, the panel's heart by name, an artist seed's crate
 /// by id, and all of it the same after a restart. A heart on a name no file credits yet is kept too, as it was under the hash.
 #[tokio::test(flavor = "multi_thread")]

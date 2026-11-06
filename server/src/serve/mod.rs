@@ -433,6 +433,13 @@ impl Serve {
         let moved = self.catalogue().tracks_to_follow()?;
         if !moved.is_empty() {
             let rows = self.userdata.move_tracks(&moved)?;
+            let songs = crate::moved::Moved { ids: moved.iter().map(|(old, id)| (ids::song(*old), ids::song(*id))).collect(), ..Default::default() };
+            self.userdata.move_filters(&songs)?;
+            // `main` hands them over before the first build: only a test has none. A store's lock is a task's, and every way
+            // here is a blocking thread, which can wait for one.
+            if let Some(playlists) = self.playlists() {
+                tokio::runtime::Handle::current().block_on(playlists.follow_tracks(&songs))?;
+            }
             self.catalogue().tracks_followed(&moved)?;
             tracing::info!(target: "library", tracks = moved.len(), rows = ?rows, "what named taken tracks followed them");
         }

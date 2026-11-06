@@ -2,7 +2,8 @@
 //! JSON stores in the data folder, and the JSON inside the journal's `changes` and a preference. One map goes through them all,
 //! made by whoever calls: nothing here reads the catalogue, so a hand-made map tests it. Each store is written beside and
 //! renamed, so a stop leaves it whole, old or new, and a second run finds nothing old to move. An id no map holds stays as it
-//! is, and is counted. Nothing calls this until the first start does.
+//! is, and is counted. Until the first start calls it, only a take does: `Serve::follow_taken`, through what `crates` walks, the
+//! pictures, the journal's changes and the filters, as `stores` is too late for a store already open.
 
 #![allow(dead_code)] // the first start's (C34)
 
@@ -242,7 +243,7 @@ impl Moved {
     }
 
     /// `crates.json`, anyone's: conditions, albums left out, tracks left out and excluded, and every map kept by a crate's id.
-    fn crates(&self, v: &mut Json, walk: &mut Walk) -> u64 {
+    pub fn crates(&self, v: &mut Json, walk: &mut Walk) -> u64 {
         for c in items_of(v, "crates") {
             if let Some(conditions) = c.get_mut("conditions") {
                 self.conditions(conditions, walk);
@@ -405,7 +406,7 @@ impl Moved {
 
     /// `crate-images`: a Sounds like's picture is named by its seed (`crates::image_file`), so it moves with it. A picture
     /// already there stays, and the other is left under its old name, counted: of two pictures of one crate, one can show.
-    fn images(&self, dir: &Path, report: &mut Report) -> Result<()> {
+    pub fn images(&self, dir: &Path, report: &mut Report) -> Result<()> {
         let mut walk = Walk::default();
         let mut pictures = 0;
         if let Ok(files) = std::fs::read_dir(dir) {

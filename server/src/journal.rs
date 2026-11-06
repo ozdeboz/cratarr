@@ -499,7 +499,6 @@ impl Journal {
     /// The kept changes as they must read after the move (`Moved::change`, Q25): what a day's Undo holds against the stores.
     /// `events` and `file_runs` are left: an old link to a gone album finds "was deleted" by its old id, and a run's ids only
     /// match each other. Both are in the report, as left. Blocking.
-    #[allow(dead_code)] // the first start's (C34)
     pub fn move_changes(&self, moved: &crate::moved::Moved) -> Result<crate::moved::Report> {
         let mut db = self.db();
         let tx = db.transaction()?;
