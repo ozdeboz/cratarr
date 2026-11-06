@@ -1,5 +1,5 @@
 // What stands behind every flow (the owner, 2026-10-26): one of Cratarr's photos (public/backdrops,
-// from Unsplash: CREDITS.txt there), or one's own picture (lib/localCovers, kept on this device). App puts it on the
+// from Unsplash: CREDITS.txt there), or one's own picture (lib/localCovers, on the account). App puts it on the
 // page (--flow-photo); Home's sky takes it too where asked (Also on Home).
 import { HOME_HEADER, localCovers } from './localCovers.svelte';
 import { prefs, type FlowBackdrop } from './prefs.svelte';

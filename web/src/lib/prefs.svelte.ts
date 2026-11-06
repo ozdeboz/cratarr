@@ -4,6 +4,7 @@
 import { HOME_LISTS, type HomeList } from './servers/server';
 import { inApp, toApp } from './app.svelte';
 import { RECORD_ORDER_KEYS, type CrateView, type RecordOrder } from './crateRecords';
+import type { CrateDraft } from './crates.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
 import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
@@ -305,6 +306,9 @@ export type Prefs = {
   crateRecordSort: { key: RecordOrder; down: boolean };
   /** Every list's filter, per kind of list (a page's id, or a panel kind; decisions 0060 and 0061). */
   filters: Partial<Record<string, ListFilter>>;
+  /** Crates being made or changed, by crate (a new one: `new`), until Save or Cancel (lib/crates): on the account, so
+   *  one begun on a phone goes on on the tablet (decision 0101 point 14). */
+  crateDrafts: Record<string, CrateDraft>;
 };
 
 export type AlbumLayout = 'rows' | 'grid' | 'table' | 'flow';
@@ -525,6 +529,7 @@ export const DEFAULTS: Prefs = {
   crateViews: {},
   crateRecordSort: { key: 'bestMatch', down: false },
   filters: {},
+  crateDrafts: {},
 };
 
 function read(): Prefs {
@@ -540,7 +545,7 @@ function read(): Prefs {
 /** The preferences in `kept` (JSON: this device's copy, or one of them from the account, `fromSaved`), each as
  *  understood: one missing, or not understood, is its default. */
 function parse(kept: string | null): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {} } as Prefs;
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, crateViews: {}, filters: {}, groupLast: {}, crateDrafts: {} } as Prefs;
   try {
     const saved = JSON.parse(kept ?? 'null');
     if (saved && typeof saved === 'object') {
@@ -662,6 +667,8 @@ function parse(kept: string | null): Prefs {
       if (output) p.output = output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
       if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
+      if (saved.crateDrafts && typeof saved.crateDrafts === 'object')
+        for (const [k, v] of Object.entries<CrateDraft | null>(saved.crateDrafts)) if (v && Array.isArray(v.conditions)) p.crateDrafts[k] = v;
       if (saved.crateViews && typeof saved.crateViews === 'object')
         for (const [k, v] of Object.entries(saved.crateViews)) if (v === 'records' || v === 'tracks') p.crateViews[k] = v;
       if (RECORD_ORDER_KEYS.includes(saved.crateRecordSort?.key) && typeof saved.crateRecordSort?.down === 'boolean')
@@ -708,9 +715,9 @@ export const prefs = $state<Prefs>(read());
  *  (`undefined`): its default. */
 export const fromSaved = <K extends keyof Prefs>(key: K, value: unknown): Prefs[K] => parse(JSON.stringify({ [key]: value }))[key];
 
-/** Back to the default look; the followed source and the pins are not display matters and stay. */
+/** Back to the default look; the followed source, the pins and crates being made are not display matters and stay. */
 export function resetPrefs() {
-  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned, panelSorts: {}, filters: {} });
+  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned, crateDrafts: prefs.crateDrafts, panelSorts: {}, filters: {} });
 }
 
 /** Pin a playlist to the top of the Playlists page (after those pinned before it), or unpin it. */

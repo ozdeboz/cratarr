@@ -1,6 +1,6 @@
 // The person's preferences on their account (decision 0101 point 14): the pinned playlists, the libraries switched
-// off, the lists' filters and Radio's last choice follow the account from device to device, through the server's
-// /api/me/preferences; offline they are this device's copy (the prefs) as last known. The rule is
+// off, the lists' filters, crate drafts, Home's picture and Radio's last choice follow the account from device to
+// device, through the server's /api/me/preferences; offline they are this device's copy (the prefs) as last known. The rule is
 // lib/accountPrefsRule's: the latest change wins, the whole value. Another account's copy is never shown or sent:
 // someone else signing in here starts from the defaults until theirs come. A change on another of the account's
 // devices comes on the live channel (`changed`: preferences), and the copy is compared again whenever the channel is
@@ -10,12 +10,15 @@ import { accountKey, whenAccount } from './account';
 import { canon, meet, signedIn, type Copy } from './accountPrefsRule';
 import { getPreferences, putPreference, type HeldPreference } from './api';
 import { on, stream } from './events.svelte';
+import { homePicture, takeHomePicture } from './localCovers.svelte';
 import { fromSaved, prefs, type Prefs } from './prefs.svelte';
 
 /** Each preference on the account, by its key there: the prefs' field that holds it on this device. */
-const HELD = { hidden_libraries: 'hiddenLibraries', pinned: 'pinned', filters: 'filters', radio_last: 'radioLast' } as const satisfies Record<string, keyof Prefs>;
-type Key = keyof typeof HELD;
-const KEYS = Object.keys(HELD) as Key[];
+const HELD = { hidden_libraries: 'hiddenLibraries', pinned: 'pinned', filters: 'filters', crate_drafts: 'crateDrafts', radio_last: 'radioLast' } as const satisfies Record<string, keyof Prefs>;
+/** Home's picture: on the account like the others, but no field of the prefs (lib/localCovers keeps it). */
+const PICTURE = 'home_picture';
+type Key = keyof typeof HELD | typeof PICTURE;
+const KEYS = [...Object.keys(HELD), PICTURE] as Key[];
 
 const COPY = 'cratarr-prefs-account';
 
@@ -43,18 +46,29 @@ function keepCopy() {
 }
 
 const set = <F extends keyof Prefs>(field: F, value: Prefs[F]) => (prefs[field] = value);
-const now = (k: Key) => canon(prefs[HELD[k]]);
+const valueOf = (k: Key) => (k === PICTURE ? homePicture.held : prefs[HELD[k]]);
+const now = (k: Key) => canon(valueOf(k));
 
 /** Each preference as last seen here (read, taken from the account, or sent), so that only this device's changes are
  *  sent. */
 const seen = {} as Record<Key, string>;
 for (const k of KEYS) seen[k] = now(k);
 
-/** The account's value made this device's. */
-function take(k: Key, held: HeldPreference) {
-  const value = fromSaved(HELD[k], held.value);
+/** `saved` made this device's value: the account's, or undefined for the default. */
+function put(k: Key, saved: unknown) {
+  if (k === PICTURE) {
+    const picture = typeof saved === 'string' && saved.startsWith('data:image/') ? saved : null;
+    seen[k] = canon(picture);
+    return void takeHomePicture(picture).catch(() => {});
+  }
+  const value = fromSaved(HELD[k], saved);
   seen[k] = canon(value);
   set(HELD[k], value);
+}
+
+/** The account's value made this device's. */
+function take(k: Key, held: HeldPreference) {
+  put(k, held.value);
   copy.changed[k] = held.changed;
 }
 
@@ -68,7 +82,7 @@ function send(k: Key, wait = 0) {
     delete timers[k];
     const account = accountKey();
     if (account === null || account !== copy.account) return;
-    const value = $state.snapshot(prefs[HELD[k]]);
+    const value = $state.snapshot(valueOf(k));
     const changed = copy.changed[k] || Date.now();
     try {
       const held = await putPreference(k, value, changed);
@@ -92,9 +106,7 @@ async function compare() {
   if (was.fresh)
     for (const k of KEYS) {
       clearTimeout(timers[k]);
-      const value = fromSaved(HELD[k], undefined);
-      seen[k] = canon(value);
-      set(HELD[k], value);
+      put(k, undefined);
     }
   if (was.copy !== copy) {
     copy = was.copy;
