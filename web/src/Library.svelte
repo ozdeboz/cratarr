@@ -41,12 +41,6 @@
   let menu = $state<{ source: string; a: ListedAlbum } | null>(null);
   let menuShown = $state(false);
 
-  // The album left its library (moved, replaced, deleted): gone at once, before the list is read again.
-  function gone(source: string, id: string) {
-    const v = library.view;
-    if (v) v.sources = v.sources.map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== id) } : s));
-  }
-
   // A server's list could not be read while albums are shown (they stay): one toast says so, not a line that comes and
   // goes; it goes when the list reads again. With nothing to show, the page says it in place.
   let readError: string | null = null;
@@ -235,7 +229,6 @@
     source={m.source}
     album={m.a}
     onclose={() => (menuShown = false)}
-    ongone={() => gone(m.source, m.a.id)}
     onundone={reload}
   />
 {/if}

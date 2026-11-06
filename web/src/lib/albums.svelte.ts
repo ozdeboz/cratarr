@@ -122,7 +122,7 @@ export function copiesMoved(moved: { source: string; id: string; from?: string; 
 }
 
 /** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;
- *  else (a download from before a playlist's rows said their albums, or an album since moved) the Library's album of
+ *  else (a download from before a playlist's rows said their albums; a record's id does not move) the Library's album of
  *  that name on its server, the track's artist's when several have the name. Else its own id, or null. */
 export function albumOfDownload(t: DownloadedTrack): string | null {
   const listed = library.view && indexOf(library.view).get(t.source);

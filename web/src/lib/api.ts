@@ -2560,6 +2560,8 @@ export type Job = {
   why: string | null;
   /** The library it goes into, as a library switched off is kept (`<source>/<library>`); none on a job from before. */
   library?: string;
+  /** The library it comes from: which of a record's copies it works on. */
+  from?: string;
 };
 export const getJobs = () => quietly<Job[]>('/api/incoming/jobs');
 /** Take an album out of the queue while it waits or converts. */

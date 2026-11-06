@@ -11,7 +11,7 @@
   import { me } from './me.svelte';
 
   /** What each of a record's copies allows the viewer, by what the Library's list says of them. */
-  export const offersIn = (s: AlbumsSource, a: ListedAlbum): AlbumOffer[] => offersOf(s, a, me.admin, () => jobs.of(s.id, a.id)?.id ?? null);
+  export const offersIn = (s: AlbumsSource, a: ListedAlbum): AlbumOffer[] => offersOf(s, a, me.admin, (library) => jobs.of(s.id, a.id, library)?.id ?? null);
 </script>
 
 <script lang="ts">
@@ -50,7 +50,7 @@
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
+  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
   import { adds, deleteEntries, moveEntries, replaceEntries } from './copiesRule';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -118,7 +118,8 @@
     start?: 'menu' | 'lists' | 'cover';
     /** Its resume point was removed here (the panel's Resume goes too). */
     onresumegone?: () => void;
-    /** The album left its library (moved, replaced or deleted; not when queued to convert first). */
+    /** A copy left its library (moved, replaced or deleted; not when queued to convert first). The Library's list is
+     *  kept true here. */
     ongone?: () => void;
     /** A move's or a delete's Undo went through. */
     onundone?: () => void;
@@ -521,34 +522,39 @@
       onclose();
     }
   }
-  // Done: the album leaves its library. Queued (lossless files above the target's quality limit to convert first): its
-  // row shows the progress instead, and the queue says when it is done.
-  function moved(r: AlbumMoved, words: string) {
+  // Done: the copy leaves its library, shown at once as `left` says. Queued (lossless files above the target's quality
+  // limit to convert first): its row shows the progress instead, and the queue says when it is done.
+  function moved(r: AlbumMoved, words: string, left: () => void) {
     if (r.queued) {
       jobs.poke();
       return;
     }
     // It stays open where it is (the owner, 2026-11-01: no U-turns): its panel follows it to its new place.
+    left();
     ongone?.();
     withUndo(words, [r.undo], { undone: `${r.title} is back in ${fromName}.`, after: onundone });
   }
+  /** Deleted: the record stays while one copy does; with its last its panel closes. */
   function gone() {
     ongone?.();
-    albumGone(source, a.id);
+    for (const x of copiesGone([{ source, id: a.id, from: copy?.library }])) albumGone(x.source, x.id);
   }
   const moveIt = () =>
     act(async () => {
       if (!to) return;
-      const name = to.name;
-      moved(await moveAlbum(source, a.id, copy?.library, to.id, year.trim() || undefined), `${adding ? 'Added' : 'Moved'} ${a.title} to ${name}.`);
+      const [into, from] = [to, copy?.library];
+      const r = await moveAlbum(source, a.id, from, into.id, year.trim() || undefined);
+      moved(r, `${adding ? 'Added' : 'Moved'} ${a.title} to ${into.name}.`, () => copiesMoved([{ source, id: a.id, from, to: into.id }]));
     }, `Could not ${adding ? 'add' : 'move'} the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
       if (!to) return;
       const name = to.name;
-      const r = await replaceIncoming(source, a.id, copy?.library, to.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
-      moved(r, `Replaced ${r.title} in ${name}.`);
+      const from = copy?.library;
+      const r = await replaceIncoming(source, a.id, from, to.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
+      // The copy that took the other's place is now that one: what is listed of it comes with the next read.
+      moved(r, `Replaced ${r.title} in ${name}.`, () => void copiesGone([{ source, id: a.id, from }]));
     }, `Could not replace the ${word}`);
   /** The tag differences shown at first (the rest behind "And N more"). */
   const DIFF_SHOWN = 12;
