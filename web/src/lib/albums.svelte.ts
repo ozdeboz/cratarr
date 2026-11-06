@@ -86,6 +86,13 @@ export function libraryDots(source: string, album: Held & { id: string }): Dot[]
   return held ? dotsOf(held, s.library_info, shownIn(source)) : [];
 }
 
+/** A record as the Library's list has it, and that server's list: what its copies are and allow. */
+export function listedAlbum(source: string, id: string) {
+  const s = library.view?.sources.find((x) => x.id === source);
+  const a = s?.albums.find((x) => x.id === id);
+  return s && a ? { s, a } : null;
+}
+
 /** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;
  *  else (a download from before a playlist's rows said their albums, or an album since moved) the Library's album of
  *  that name on its server, the track's artist's when several have the name. Else its own id, or null. */

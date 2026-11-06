@@ -13,7 +13,8 @@
   // them at least and done to those it applies to. Start radio; the rating, all to the same stars; Sync to this device
   // and Remove from this device (in the app); what their libraries allow (Cancel conversion, Move to another, Delete;
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo.
-  import { adds, offerIn } from './AlbumMenu.svelte';
+  import { offersIn } from './AlbumMenu.svelte';
+  import { adds } from './copiesRule';
   import { albumOfDownload, albumRatings, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
   import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -47,7 +48,7 @@
   const word = $derived(recordsWord(items.map((x) => x.a.type)));
   const n = $derived(plural(items.length, word));
   /** What its library allows: the Library's list says (its sources carry it), else nothing. */
-  const offers = $derived(items.map((x) => ({ ...x, o: 'deletable' in x.s ? offerIn(x.s as AlbumsSource, x.a) : null })));
+  const offers = $derived(items.map((x) => ({ ...x, o: 'deletable' in x.s ? (offersIn(x.s as AlbumsSource, x.a)[0] ?? null) : null })));
 
   // Start radio (as one album's, on this device): tracks like all of theirs.
   function radio() {
@@ -103,13 +104,13 @@
   const converting = $derived(me.admin ? offers.filter((x) => x.o?.job != null) : []);
   const deletable = $derived(offers.filter((x) => x.o && x.o.job === null && x.o.deletable));
   /** One of them on its way into `to`: `add`, an Incoming record's (or one into own music), else a move. */
-  type Moving = Ticked & { to: LibraryInfo; primary: boolean; add: boolean };
+  type Moving = Ticked & { from: string | undefined; to: LibraryInfo; primary: boolean; add: boolean };
   /** Each library they can move into (by its name, whichever server's), with the albums that can. */
   const moves = $derived.by(() => {
     const by = new Map<string, Moving[]>();
     for (const x of offers)
       if (x.o && x.o.job === null)
-        for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.kind === 'main', add: adds(x.o.from, t) }]);
+        for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, from: x.o.library, to: t, primary: x.o.from?.kind === 'main', add: adds(x.o.from, t) }]);
     // Added where every one of them is (lib/AlbumMenu `adds`), else moved.
     return [...by].map(([name, them]) => ({ name, them, adding: them.every((y) => y.add) }));
   });
@@ -138,7 +139,7 @@
   }
 
   function askDelete() {
-    const them = deletable.map((x) => ({ source: x.s.id, id: x.a.id, title: x.a.title, primary: x.o!.from?.kind === 'main' }));
+    const them = deletable.map((x) => ({ source: x.s.id, id: x.a.id, from: x.o!.library, title: x.a.title, primary: x.o!.from?.kind === 'main' }));
     const days = library.view?.trash_days ?? 14;
     const music = library.view?.music ?? 'Music';
     const inMusic = them.filter((x) => x.primary).length;
@@ -157,7 +158,7 @@
         await fewAtATime(
           them,
           async (x) => {
-            tokens.push((await deleteAlbum(x.source, x.id)).undo);
+            tokens.push((await deleteAlbum(x.source, x.id, x.from)).undo);
             gone.push(x);
           },
           1,
@@ -176,7 +177,7 @@
     const ask = onask;
     close();
     const seen: { x: (typeof them)[number]; p: KeepPreview }[] = [];
-    const unread = await fewAtATime(them, async (x) => void seen.push({ x, p: await movePreview(x.s.id, x.a.id, x.to.id) }));
+    const unread = await fewAtATime(them, async (x) => void seen.push({ x, p: await movePreview(x.s.id, x.a.id, x.from, x.to.id) }));
     const go = them.flatMap((x) => seen.filter((y) => y.x === x && !y.p.refused));
     const refused = seen.filter((y) => y.p.refused);
     if (!go.length) return toast.fail(null, adding ? `None of them can be added to ${name}` : `None of them can move to ${name}`);
@@ -204,7 +205,7 @@
         await fewAtATime(
           go,
           async ({ x }) => {
-            const r = await moveAlbum(x.s.id, x.a.id, x.to.id);
+            const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id);
             // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
             if (r.queued) queued = true;
             else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id }));

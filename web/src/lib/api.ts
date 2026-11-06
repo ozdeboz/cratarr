@@ -2493,19 +2493,22 @@ export type KeepPreview = {
 /** What a move or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
 const albumPath = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
-/** What moving an album into library `to` would do (decision 0034): its folder there, or why it can't. */
-export const movePreview = (source: string, album: string, to: string, year?: string) =>
-  request<KeepPreview>(`${albumPath(source, album)}/move?to=${encodeURIComponent(to)}${year ? `&year=${encodeURIComponent(year)}` : ''}`);
-/** Move an album into another used library of its server, named and converted that library's way (Undo brings it
- *  back); with lossless files above that library's quality limit it is queued. */
-export const moveAlbum = (source: string, album: string, to: string, year?: string) =>
-  request<AlbumMoved>(`${albumPath(source, album)}/move`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(year ? { to, year } : { to }),
-  });
-/** Delete an album of any library, into that library's trash (Undo brings it back). */
-export const deleteAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, { method: 'POST' });
+/** What a preview's address says of a copy: a library's id holds `/`, so each value is encoded. */
+const copyQuery = (asked: Record<string, string | undefined>) =>
+  Object.entries(asked)
+    .flatMap(([k, v]) => (v ? `${k}=${encodeURIComponent(v)}` : []))
+    .join('&');
+const asJson = (body: unknown) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+/** What moving a record's copy in library `from` into library `to` would do (decision 0034): its folder there, or why it
+ *  can't. `from`, here and below: which copy, a library's id; one copy needs none, and with several the server refuses. */
+export const movePreview = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
+  request<KeepPreview>(`${albumPath(source, album)}/move?${copyQuery({ from, to, year })}`);
+/** Move a copy into another used library of its server, named and converted that library's way (Undo brings it back);
+ *  with lossless files above that library's quality limit it is queued. */
+export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
+  request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year }));
+/** Delete a copy, into its library's trash (Undo brings it back). The record stays while another copy does. */
+export const deleteAlbum = (source: string, album: string, from: string | undefined) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, asJson({ from }));
 /** Delete an album of someone's own music from the Users panel: an administrator's, only there. */
 export const deleteOwnAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete-own`, { method: 'POST' });
 
@@ -2533,15 +2536,12 @@ export type ReplacePreview = {
 };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
-export const replacePreview = (source: string, album: string, year?: string) =>
-  request<ReplacePreview>(`${replacePath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
-/** Replace the album in Music with an upgrade: the old files go to the trash (Undo brings them back). */
-export const replaceIncoming = (source: string, album: string, year?: string, cover?: 'keep' | 'new', carry = false) =>
-  request<AlbumMoved>(replacePath(source, album), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(year ? { year } : {}), ...(cover ? { cover } : {}), ...(carry ? { carry: true } : {}) }),
-  });
+/** `to`: the main library whose copy it takes the place of. */
+export const replacePreview = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
+  request<ReplacePreview>(`${replacePath(source, album)}?${copyQuery({ from, to, year })}`);
+/** Replace a main library's copy with an upgrade: the old files go to the trash (Undo brings them back). */
+export const replaceIncoming = (source: string, album: string, from: string | undefined, to: string, year?: string, cover?: 'keep' | 'new', carry = false) =>
+  request<AlbumMoved>(replacePath(source, album), asJson({ from, to, year, cover, carry }));
 
 /** An album in the conversion queue: waiting, converting (`done` of `total` files), or just finished. */
 export type Job = {

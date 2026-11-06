@@ -4,7 +4,7 @@
   // line says why), and its album menu (lib/AlbumMenu), where Keep, Replace and Delete are, as everywhere; a failed conversion is tried again
   // there.
   import { offers } from './capabilities.svelte';
-  import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
+  import AlbumMenu from './AlbumMenu.svelte';
   import { library, readLibrary } from './albums.svelte';
   import { albumCoverUrl, type ListedAlbum } from './api';
   import Cover from './Cover.svelte';
@@ -57,9 +57,6 @@
     <AlbumMenu
       {source}
       album={a}
-      offer={offerIn(s, a)}
-      trashDays={library.view.trash_days}
-      music={library.view.music ?? 'Music'}
       onclose={() => (menu = false)}
       ongone={() => {
         void readLibrary(true);

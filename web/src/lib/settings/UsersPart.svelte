@@ -180,7 +180,7 @@
     if (tokens.length < them.length) toast.fail(null, failure);
   }
   const moveAll = (u: User, to: LibraryInfo) =>
-    forAll(musicOf(u), async (a) => (await moveAlbum(OWN, a.id, to.id)).undo, (n) => `Moved ${plural(n, 'record')} to ${to.name}.`, 'Not all could be moved');
+    forAll(musicOf(u), async (a) => (await moveAlbum(OWN, a.id, u.own_library!, to.id)).undo, (n) => `Moved ${plural(n, 'record')} to ${to.name}.`, 'Not all could be moved');
   const deleteAll = (u: User) => forAll(musicOf(u), async (a) => (await deleteOwnAlbum(OWN, a.id)).undo, (n) => `Deleted ${plural(n, 'record')}.`, 'Not all could be deleted');
 
   // A new Cratarr account: its name, a password, and its role; the first one there is administers.
