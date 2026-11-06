@@ -400,10 +400,12 @@ class MainActivity : AppCompatActivity() {
         // `window.CratarrApp`, on Cratarr's pages only: the local address's over plain http only while it answers as
         // this app's Cratarr on this network (Reach.trusts).
         if (origins.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            WebViewCompat.addWebMessageListener(view, "CratarrApp", origins) { _, message, sourceOrigin, isMainFrame, reply ->
-                val data = message.data
-                if (isMainFrame && data != null && Reach.trusts(this, sourceOrigin.toString())) onPageMessage(data, reply)
-            }
+            Prefs.withoutRefused(origins) { rules ->
+                WebViewCompat.addWebMessageListener(view, "CratarrApp", rules) { _, message, sourceOrigin, isMainFrame, reply ->
+                    val data = message.data
+                    if (isMainFrame && data != null && Reach.trusts(this, sourceOrigin.toString())) onPageMessage(data, reply)
+                }
+            } ?: Log.w(TAG, "WebView took none of the app's origins: $origins")
         }
         frame.addView(view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         webView = view
@@ -606,7 +608,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 // The addresses as typed (empty local: none), and whether the local one is preferred. Each is kept where
                 // Cratarr answers ([Reach.find]: `https://` first when no scheme is typed), so a stray edit does not take
-                // the app off Cratarr; a local network address where nothing answers too (away from home, it cannot).
+                // the app off Cratarr; a local network address where nothing answers too (away from home, it cannot), if
+                // it is one at all: it needs an origin ([Prefs.origin]), and `htp://nas` answers nothing anywhere.
                 // One not kept is named back to the page, whose field shows the address kept again.
                 fun same(typed: String, kept: String?) = typed == kept || Prefs.normalise(typed) == kept
                 val local = if (message.has("local")) message.optString("local").trim().takeUnless { same(it, prefs.localAddress) } else null
@@ -622,11 +625,8 @@ class MainActivity : AppCompatActivity() {
                                 prefs.localAddress = null
                             } else {
                                 val (found, answered) = withContext(Dispatchers.IO) { Reach.find(this@MainActivity, local) }
-                                when {
-                                    found != null -> prefs.localAddress = found
-                                    !answered -> prefs.localAddress = Prefs.normalise(local)
-                                    else -> refused = local
-                                }
+                                val kept = found ?: Prefs.normalise(local).takeUnless { answered }
+                                if (kept != null && Prefs.originOf(kept) != null) prefs.localAddress = kept else refused = local
                             }
                         }
                         prefs.preferLocal = preferLocal
@@ -861,7 +861,8 @@ class MainActivity : AppCompatActivity() {
         val saved = prefs.pagePrefs ?: return
         val origins = prefs.origins()
         if (origins.isEmpty() || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-        pageScript = WebViewCompat.addDocumentStartJavaScript(view, "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}", origins)
+        val script = "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}"
+        pageScript = Prefs.withoutRefused(origins) { WebViewCompat.addDocumentStartJavaScript(view, script, it) }
     }
 
     /** Cratarr's address, asked for: kept where Cratarr answers ([Reach.find]); else asked again, [refused] named. */
