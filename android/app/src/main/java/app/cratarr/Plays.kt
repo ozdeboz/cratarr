@@ -106,6 +106,13 @@ object Plays {
         tell(app)
     }
 
+    /** Asks Cratarr whose this device is now (blocking), so [Who] is right before what goes by it opens. Not reached: as
+     *  it was. */
+    fun look(context: Context) {
+        val app = context.applicationContext
+        learn(app, Prefs(app).serverUrl?.trimEnd('/') ?: return)
+    }
+
     /** Tells them now and waits for it, a few seconds at most (blocking; the account signing out, decision 0101: its
      *  plays go first, where Cratarr can be reached). */
     fun flush(context: Context) {

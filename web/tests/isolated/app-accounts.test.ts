@@ -121,11 +121,36 @@ test('with sign-in off there is one user, and the app hears so', async () => {
   await loadMe();
 });
 
+test("a session ended while the app plays Local or another server: the page stays, and the app is told it is nobody's", async () => {
+  toTheApp.length = 0;
+  fromApp({ type: 'app', version: '1', mode: 'device' });
+  const signedIn = me;
+  me = () => new Response(JSON.stringify({ error: 'Sign in to Cratarr.' }), { status: 401, headers: { 'WWW-Authenticate': 'Cookie realm="Cratarr", form-action="/signin"' } });
+  await loadMe();
+  assert.equal(accountKey(), null);
+  assert.equal(goneTo, null, 'Local plays on: the sign-in page waits for Cratarr’s mode');
+  assert.deepEqual(toTheApp.filter((m) => m.type === 'nobody'), [{ type: 'nobody' }]);
+  me = signedIn;
+  fromApp({ type: 'app', version: '1', mode: 'cratarr' });
+  accountLearnt('ann');
+});
+
+test('in Cratarr’s mode the sign-in page says it: a session of the other address’s may yet be taken for it', async () => {
+  toTheApp.length = 0;
+  fromApp({ type: 'app', version: '1', mode: 'cratarr' });
+  const { toSignIn } = await import('../../src/lib/reach.svelte.ts');
+  toSignIn();
+  assert.deepEqual(toTheApp.filter((m) => m.type === 'nobody'), []);
+  assert.match(String(goneTo), /^\/signin/);
+  goneTo = null;
+  accountLearnt('ann');
+});
+
 test("signing out in the app: the app first, its answer awaited, then the page is nobody's, Cratarr's session ends, and the app's own page opens", async () => {
   toTheApp.length = 0;
   steps.length = 0;
   goneTo = null;
-  const done = signOut({} as HTMLFormElement, true);
+  const done = signOut(true);
   await turns();
   assert.deepEqual(toTheApp.filter((m) => m.type === 'sign-out'), [{ type: 'sign-out', remove: true }]);
   assert.equal(accountKey(), 'ann', 'nothing of hers is let go before what waits has gone');

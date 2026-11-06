@@ -43,6 +43,19 @@ class SessionsTest {
     }
 
     @Test
+    fun theAppIsNobodysWhenThePageHearsNoOneIsSignedInAndStays() {
+        val heard = source("MainActivity.kt").substringAfter("\"nobody\" ->").substringBefore("\n")
+        assertTrue(heard, "Who.set(this@MainActivity, null)" in heard)
+    }
+
+    @Test
+    fun theFirstPageWaitsForWhoseItIsAMomentAtMost() {
+        val start = source("MainActivity.kt").substringAfter("val looking = ").substringBefore("show(it)")
+        assertTrue("Plays.look(this@MainActivity)" in start)
+        assertTrue("within the first look's limit", start.indexOf("Plays.look") < start.indexOf("withTimeoutOrNull(FIRST_LOOK_MS)"))
+    }
+
+    @Test
     fun signingOutInTheAppEndsTheSessionOnBothAddresses() {
         val signOut = source("MainActivity.kt").substringAfter("\"sign-out\" -> {").substringBefore("\"account-downloads-remove\"")
         assertTrue("Sessions.signOutAsked()" in signOut)

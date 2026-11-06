@@ -190,6 +190,9 @@ let signInWaits: (() => void) | null = null;
 if (port)
   onSignInAsked((go) => {
     if (appInfo.version !== null && appInfo.mode === 'cratarr') return false;
+    // The page stays, so the app does not see Cratarr's sign-in page, which would have told it (Sessions.loaded): the session
+    // is over, and what the app holds of the account is not to go on showing for whoever holds the device.
+    toApp({ type: 'nobody' });
     signInWaits = go;
     return true;
   });

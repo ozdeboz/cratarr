@@ -309,7 +309,12 @@ class MainActivity : AppCompatActivity() {
             // reach); without a network, at once. An answer later from the other address moves the page there.
             shown == null -> lifecycleScope.launch {
                 if (NetState.connected(this@MainActivity)) {
-                    val looking = lifecycleScope.async(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                    val looking = lifecycleScope.async(Dispatchers.IO) {
+                        Reach.check(this@MainActivity)
+                        // The page opens as [Who] says, from the app's own copy with no server in front of it: a session that
+                        // ended with the app closed is found out now, and what opens shows nothing of the account.
+                        Plays.look(this@MainActivity)
+                    }
                     withTimeoutOrNull(FIRST_LOOK_MS) { looking.await() }
                 } else {
                     Reach.checkSoon(this@MainActivity)
@@ -470,6 +475,9 @@ class MainActivity : AppCompatActivity() {
                 val name = message.optString("name", "")
                 lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, name) }
             }
+            // Cratarr told the page no one is signed in, and in Local or a server's mode the page stays: no sign-in page for
+            // [Sessions.loaded] to see.
+            "nobody" -> lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, null) }
             // The page signing out: what waits of the account's goes first (a few seconds at most), its downloads go
             // when asked, then nobody's things show; answered, so the page signs out after.
             "sign-out" -> {
