@@ -2842,6 +2842,23 @@ mod tests {
         same_as_whole_in(&TWO_KEPT, &lacking, &two_copies());
     }
 
+    /// A record's picture is found by the copy that plays, its print made from that copy's first file. Two copies can lie in one
+    /// folder, and `songs` lists a track the row copy lacks from the other: that file sorts first, and is not its picture.
+    #[test]
+    fn a_records_art_is_its_row_copys_though_the_other_lies_beside_it() {
+        let (mut plain, mut better) = (copy_rows(1, "B/Other", 5, "MP3", 192), copy_rows(1, "C/Row", 5, "FLAC", 900));
+        plain.iter_mut().for_each(|r| tag(r, "date", "1999"));
+        better.remove(0);
+        let lib = built_with(&[(0, Kind::Main)], &[in_folder(0, [shared(plain), shared(better)].concat())]);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM copies"), 2, "two copies in one library, or this proves nothing");
+        assert_eq!(lib.file_of("tr-1").unwrap(), Some((0, "B/Other/01 One.mp3".to_string())), "the track the row copy lacks");
+        let (folder, dir, _, first) = lib.album_art("al-5").unwrap().unwrap();
+        assert_eq!((folder, dir.as_str(), first.as_deref()), (0, "C/Row", Some("C/Row/02 Two.flac")));
+        // A copy at the top of its library has no folder to go by.
+        let lib = built_with(&[(0, Kind::Main)], &[in_folder(0, copy_rows(1, "x", 5, "FLAC", 900).into_iter().map(|r| ServedRow { rel: r.rel.trim_start_matches("x/").to_string(), ..r }).collect())]);
+        assert_eq!(lib.album_art("al-5").unwrap().unwrap().3.as_deref(), Some("01 One.flac"));
+    }
+
     /// Copies share their tracks, so two songs of one persistent id are two tracks tagged alike. Going by the first folder a
     /// favourite would move to the other at the next build, whichever record holds it.
     #[test]

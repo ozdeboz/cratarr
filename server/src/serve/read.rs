@@ -1409,14 +1409,15 @@ impl Library {
     /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
     /// the catalogue folder).
     pub fn album_art(&self, album: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
-        // The copy that plays, as the cover's print was made from it. `songs` holds its files alone, and two copies can share
-        // a folder, so the folder and the first file come from that one copy, never from what else lies beside it.
+        // The copy that plays, as the cover's print was made from it. `songs` lists a track it lacks from another copy, and two
+        // copies can share a folder, so the folder and the first file come from that one copy's files, never from beside it.
         let Some(copy) = self.row_copy(album)? else { return Ok(None) };
         let db = self.db();
         let mut st = db.prepare_cached("SELECT cover FROM albums WHERE id = ?1")?;
         let Some(cover) = st.query_map([album], |r| r.get::<_, Option<String>>(0))?.next().transpose()? else { return Ok(None) };
-        let mut first = db.prepare_cached("SELECT rel FROM songs WHERE album_id = ?1 AND folder = ?2 ORDER BY rel LIMIT 1")?;
-        let Some(rel) = first.query_map(rusqlite::params![album, copy.folder], |r| r.get::<_, String>(0))?.next().transpose()? else { return Ok(None) };
+        let prefix = if copy.dir.is_empty() { String::new() } else { format!("{}/", copy.dir) };
+        let mut first = db.prepare_cached("SELECT rel FROM copy_files WHERE album = ?1 AND folder = ?2 AND substr(rel, 1, ?3) = ?4 ORDER BY rel LIMIT 1")?;
+        let Some(rel) = first.query_map(rusqlite::params![album, copy.folder, prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?.next().transpose()? else { return Ok(None) };
         Ok(Some((copy.folder, copy.dir, cover, Some(rel))))
     }
 
