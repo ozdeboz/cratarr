@@ -301,6 +301,13 @@ fn playlist_copies(data_dir: Option<&str>) -> Option<PathBuf> {
     data_dir.map(|d| PathBuf::from(d).join("playlists"))
 }
 
+/// The folder playlist lines are made from, where there is a Music folder to keep playlists over at all: the lowest in use
+/// (`InUse::first`), and not the first main library, which goes by the list's order: a main library put first moves no line.
+fn lines_folder(catalogue: &Catalogue, folders: &Folders) -> Option<String> {
+    folders.music.as_ref()?;
+    catalogue.folders().first().map(|(_, path)| path.display().to_string())
+}
+
 /// The first administrator's playlists over the Music folder (none without one), its `.m3u` files brought in first
 /// (once). Ones that could not be brought in are tried again at the next start: the store opens meanwhile, so the rest
 /// of Cratarr does.
@@ -387,7 +394,7 @@ impl Library {
         if !catalogue.ids_lost() {
             playlists_db.set_meta(TOP_KEY, &catalogue.top_id().to_string())?;
         }
-        let store = music_store(&playlists_db, &catalogue, data_dir.as_deref(), folders.music.as_deref()).await;
+        let store = music_store(&playlists_db, &catalogue, data_dir.as_deref(), lines_folder(&catalogue, &folders).as_deref()).await;
         Ok(Arc::new(Self {
             live: std::sync::RwLock::new(Arc::new(active)),
             data_dir,
@@ -716,9 +723,11 @@ impl Library {
         if folders != old {
             tracing::info!("music folder {:?}, incoming folders {:?}", folders.music, folders.incoming);
             let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&folders));
+            let lines_were = lines_folder(&self.catalogue, &old);
             tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-            let store = if folders.music != old.music {
-                Some(music_store(&self.playlists_db, &self.catalogue, self.data_dir.as_deref(), folders.music.as_deref()).await)
+            let lines_from = lines_folder(&self.catalogue, &folders);
+            let store = if lines_from != lines_were {
+                Some(music_store(&self.playlists_db, &self.catalogue, self.data_dir.as_deref(), lines_from.as_deref()).await)
             } else {
                 None
             };
