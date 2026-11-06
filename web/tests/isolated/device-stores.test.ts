@@ -78,6 +78,7 @@ const { shelf } = await import('../../src/lib/shelfStore.svelte.ts');
 const { chooseHomePicture, homePicture, localCovers, setLocalCover } = await import('../../src/lib/localCovers.svelte.ts');
 const { readHere, scrobbling, send } = await import('../../src/lib/scrobbles.svelte.ts');
 const { mine } = await import('../../src/lib/mySettings.svelte.ts');
+const { exporting } = await import('../../src/lib/export.svelte.ts');
 
 const TRACK = { source: 'cratarr', id: 'tr-1', name: 'One', artist: 'Someone', album: 'A record', album_id: 'al-1' };
 const stream = '/api/stream/cratarr/tr-1';
@@ -255,6 +256,29 @@ test("Home's picture still being made as its account goes is held by no one else
   await turns();
   assert.equal(homePicture.held, null);
   assert.equal(localStorage.getItem('cratarr-home-picture@bo'), null);
+});
+
+test("what an export was named is the account's: it follows her playlists' names, and is not to be read by the next", async () => {
+  accountLearnt('ann');
+  await turns();
+  exporting.name = 'Her road trip';
+  exporting.named = true;
+  accountLearnt('bo');
+  await turns();
+  assert.equal(exporting.name, '', 'none of hers for him');
+  assert.equal(exporting.named, false);
+  exporting.name = 'His';
+  accountForgotten();
+  await turns();
+  assert.equal(exporting.name, '', 'nor for nobody');
+  accountLearnt('ann');
+  await turns();
+  assert.equal(exporting.name, 'Her road trip');
+  assert.equal(exporting.named, true);
+  assert.equal(localStorage.getItem('cratarr-export'), null, 'nothing under a name for no one');
+  accountLearnt('bo');
+  await turns();
+  assert.equal(exporting.name, 'His', 'and his is his');
 });
 
 test('scrobbling sign-ins and what waits are each account\'s here', async () => {
