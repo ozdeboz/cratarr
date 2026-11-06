@@ -2478,11 +2478,11 @@ mod tests {
     /// the rows, never how record numbers sort as text.
     #[test]
     fn songs_are_numbered_in_the_order_of_the_rows_whatever_their_records() {
-        let rows = [copy_rows(1, "A/Album", 10, "FLAC", 900), copy_rows(3, "B/Album", 9, "FLAC", 900)].concat();
-        let mut rows = rows;
+        // Record 9's rows first: as text "al-10" sorts before "al-9", so numbered by record these would swap.
+        let mut rows = [copy_rows(1, "A/Album", 9, "FLAC", 900), copy_rows(3, "B/Album", 10, "FLAC", 900)].concat();
         rows[2..].iter_mut().for_each(|r| tag(r, "album", "Other"));
         let lib = built_with(&[(0, Kind::Main)], &[in_folder(0, rows)]);
-        assert_eq!(lib.all_song_ids().unwrap(), ["tr-1", "tr-2", "tr-3", "tr-4"], "\"al-10\" sorts before \"al-9\", and it must not show");
+        assert_eq!(lib.all_song_ids().unwrap(), ["tr-1", "tr-2", "tr-3", "tr-4"]);
     }
 
     /// A retag can put two copies of one folder in one group, so two files of one track reach one group, and `songs.id` must
