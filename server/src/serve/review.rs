@@ -22,7 +22,7 @@ pub const REJECTED: &str = "rejected";
 pub const UNREVIEWED: &str = "unreviewed";
 
 /// In a review's undo key: a Keep queued for conversion, by the server's album id (its job has the real key).
-const JOB: &str = "job:";
+pub const JOB: &str = "job:";
 
 pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()

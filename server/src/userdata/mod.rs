@@ -14,6 +14,7 @@
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
+pub mod albums;
 pub mod artists;
 mod moved;
 pub mod offline;
