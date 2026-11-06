@@ -636,9 +636,13 @@ async fn the_data_of_0_15_opens_on_its_own_tracks_end_to_end() {
     let titles = |albums: Vec<Value>| albums.iter().filter_map(|a| a["title"].as_str().map(str::to_string)).collect::<std::collections::BTreeSet<String>>();
     s.until("every library read", Duration::from_secs(180), || async { titles(ann.albums().await).len() == 20 }).await;
 
-    // Its tracks are the ones it left, every file on the id its user data names.
+    // Its tracks are the ones it left, every file on the id its user data names or on what a copy of its record took it to, as
+    // the take has built in: Both Shores' other two copies, whichever of the three a first build met first, and nothing else.
     let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
-    assert_eq!(tracks(&db), left, "nothing new, nothing moved");
+    let taken: std::collections::HashMap<i64, i64> = db.prepare("SELECT old, id FROM track_moved").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(taken.len(), 6, "{taken:?}");
+    let followed: Vec<(i64, String, i64)> = left.iter().map(|(folder, rel, track)| (*folder, rel.clone(), *taken.get(track).unwrap_or(track))).collect();
+    assert_eq!(tracks(&db), followed, "nothing new, and nothing moved but what the take moved");
     assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "and the retired one");
     let tide = ann.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
     let rows = ann.get(&format!("/api/albums/cratarr/{}", tide["id"].as_str().unwrap())).await;
