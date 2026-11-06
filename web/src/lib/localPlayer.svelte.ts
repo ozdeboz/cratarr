@@ -2027,11 +2027,14 @@ export const moveUpcoming = (from: number, to: number) => move(local.index + 1 +
 /** The queue changed from index `at` on: what the stream holds (or is fetching) from there is no longer what comes
  *  next. It is dropped, and the tick appends the new next track gaplessly after the last one kept. */
 function cutFrom(at: number) {
-  if (appending && appendingIndex >= at) {
+  // A track still coming in counts as appended only once wholly in, but its segment and its sound are in the stream
+  // already: stopped, they go too.
+  const aborted = appending && appendingIndex >= at;
+  if (aborted) {
     fetching?.abort();
     appending = false;
   }
-  if (at > lastAppended) return;
+  if (!aborted && at > lastAppended) return;
   const keep = segments.filter((s) => s.index < at);
   // An ended stream counts too (the queue's last track was in): the removal below reopens it.
   if (!keep.length || !sb || !ms || ms.readyState === 'closed') return;
@@ -2039,7 +2042,7 @@ function cutFrom(at: number) {
   const end = last.start + (last.length ?? 0);
   segments = keep;
   streamEnd = end;
-  lastAppended = at - 1;
+  lastAppended = Math.min(lastAppended, at - 1);
   (async () => {
     // An append that was under way finishes first; the aborted one adds nothing after it.
     while (sb?.updating) await waitUpdate();
