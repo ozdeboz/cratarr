@@ -209,17 +209,14 @@ impl Active {
         self.placement.entry(music?, track.path.as_deref())
     }
 
-    /// A track's playlist line, for any track Cratarr can see: its path in the Music folder, or for one in an Incoming
-    /// folder its path from there ("../lidarr-music/X/01.flac"). Keep and Replace move such a line along with the file,
-    /// and Delete takes it out (decision 0011 §6).
-    pub(super) fn line(&self, folders: &crate::settings::Folders, track: &source::Track) -> Option<String> {
-        let music = folders.music.as_deref()?;
-        if let Some(e) = self.placement.entry(music, track.path.as_deref()) {
-            return Some(e);
-        }
-        folders.incoming.iter().find_map(|f| {
-            let rel = self.placement.entry(f, track.path.as_deref())?;
-            crate::playlists::relative_to(std::path::Path::new(music), &std::path::Path::new(f).join(rel))
+    /// A track's playlist line, for any track Cratarr can see, in whichever library it lies: its path in the folder lines are
+    /// made from (`InUse::first`), or for one elsewhere its path from there ("../lidarr-music/X/01.flac"). Keep and Replace move
+    /// such a line along with the file, and Delete takes it out (decision 0011 §6).
+    pub(super) fn line(&self, folders: &crate::catalogue::InUse, track: &source::Track) -> Option<String> {
+        let (_, first) = folders.first()?;
+        folders.iter().find_map(|(_, f)| {
+            let rel = self.placement.entry(&f.to_string_lossy(), track.path.as_deref())?;
+            crate::playlists::relative_to(first, &f.join(rel))
         })
     }
 }
@@ -879,6 +876,26 @@ mod switched_off_tests {
         assert_eq!(a.kept(), ["/music", "/own/ann"]);
         assert_eq!(a.quality_of("/own/ann"), Quality::Cd, "as a main library, without a setting of its own");
         assert_eq!(a.colour_of("/own/ann").as_deref(), Some(crate::settings::PALETTE[2]), "after Incoming's and the main libraries'");
+    }
+
+    /// A second main library's track was on no list of folders here, so it could not be added to a playlist, one by one or among
+    /// others, and nothing said so. The lines start from the lowest folder in use, whichever library the list puts first.
+    #[test]
+    fn a_track_has_a_line_in_every_library() {
+        let root = |folder: &str| placement::FolderRoot { folder: folder.into(), root: format!("{folder}/") };
+        let placement = Placement { roots: vec![root("/annex"), root("/music"), root("/second"), root("/in")], libraries: Vec::new() };
+        let cfg = SourceConfig { id: "cratarr".into(), kind: crate::source::cratarr::KIND.id.into(), enabled: true, libraries: Default::default(), values: Default::default() };
+        let a = Active { cfg, source: None, placement, error: None };
+        let folders: crate::catalogue::InUse = [(0, "/music".into()), (1, "/second".into()), (2, "/in".into()), (3, "/annex".into())].into_iter().collect();
+        let line = |path: &str| {
+            let track = source::Track { id: "t".into(), title: "T".into(), artist: None, album: None, album_id: None, path: Some(path.into()), library_id: None };
+            a.line(&folders, &track)
+        };
+        assert_eq!(line("/music/A/1.flac").as_deref(), Some("A/1.flac"));
+        assert_eq!(line("/second/A/1.flac").as_deref(), Some("../second/A/1.flac"), "a second main library's");
+        assert_eq!(line("/in/A/1.flac").as_deref(), Some("../in/A/1.flac"));
+        assert_eq!(line("/annex/A/1.flac").as_deref(), Some("../annex/A/1.flac"), "one the list puts first, its id the highest");
+        assert_eq!(line("/elsewhere/A/1.flac"), None);
     }
 
     /// 0101 point 1: a main library's folder is one of the catalogue's first ones, the main libraries' (Keep's and

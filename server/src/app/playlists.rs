@@ -3932,7 +3932,7 @@ impl PlaylistService {
         let gone = || ToggleError::Refused("Those tracks are not on a connected server.".into());
         let (a, s) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id).ok_or_else(gone)?;
         let (store, name) = self.own(id)?;
-        let folders = self.lib.folders();
+        let folders = self.lib.catalogue().folders();
         let mut entries = Vec::new();
         for track in ids {
             if !crate::covers::valid_item_id(track) {
