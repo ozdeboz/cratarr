@@ -14,6 +14,7 @@
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
+mod moved;
 pub mod offline;
 pub mod overrides;
 pub mod playlists;
@@ -293,6 +294,24 @@ pub struct Annotation {
     pub rating: u8,
     /// Epoch seconds, when starred.
     pub starred_at: Option<i64>,
+}
+
+impl Annotation {
+    /// Two items' data as one, where they turn out to be one thing: plays added up (all and one's own), the later last-played,
+    /// the better rating, a star when either has one, the first of two.
+    pub fn combined(&self, other: &Annotation) -> Annotation {
+        Annotation {
+            play_count: self.play_count + other.play_count,
+            play_date: self.play_date.max(other.play_date),
+            own_count: self.own_count + other.own_count,
+            own_date: self.own_date.max(other.own_date),
+            rating: self.rating.max(other.rating),
+            starred_at: match (self.starred_at, other.starred_at) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            },
+        }
+    }
 }
 
 /// What an import last brought in for one item: the server's values then, so the next import adds only what changed

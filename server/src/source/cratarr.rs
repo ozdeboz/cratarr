@@ -830,18 +830,7 @@ impl Source for CratarrSource {
 
     /// Plays added up (all and one's own), the later last-played, the better rating, a star when either has one.
     fn combine_user_data(&self, a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Value {
-        let (a, b) = (annotation_of(a), annotation_of(b));
-        annotation_json(&Annotation {
-            play_count: a.play_count + b.play_count,
-            play_date: a.play_date.max(b.play_date),
-            own_count: a.own_count + b.own_count,
-            own_date: a.own_date.max(b.own_date),
-            rating: a.rating.max(b.rating),
-            starred_at: match (a.starred_at, b.starred_at) {
-                (Some(x), Some(y)) => Some(x.min(y)),
-                (x, y) => x.or(y),
-            },
-        })
+        annotation_json(&annotation_of(a).combined(&annotation_of(b)))
     }
 
     fn set_user_data<'a>(&'a self, item: &'a str, user: &'a str, data: &'a serde_json::Value) -> Fut<'a, ()> {
