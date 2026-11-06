@@ -1850,22 +1850,32 @@ mod tests {
         }
     }
 
-    /// Delete by the copy that plays and an administrator deletes the wrong one: what is named goes, and nothing else, each way.
+    /// One folder name in Music, Incoming and two accounts' own music, the catalogue knowing all four: by the path's end one
+    /// account's Delete lands in another's own music, and an administrator's in Incoming. What is named goes, and nothing else,
+    /// whichever it is, and its Undo brings that one back.
     #[tokio::test]
     async fn delete_names_the_copy() {
-        let (music, inc) = (folder("named-music"), folder("named-inc"));
-        let svc = on_disk(&music, &inc).await;
-        in_both(&music, &inc);
-        let gone = svc.delete_listed("cratarr", copy_at("al-1", 1, "/in", "A/Album")).await.unwrap();
-        assert!(!inc.join("A/Album").exists());
-        assert_eq!(std::fs::read(music.join("A/Album/1.flac")).unwrap(), b"kept", "the other copy stands");
-        svc.undo(&gone.undo).await.unwrap();
-        assert_eq!(std::fs::read(inc.join("A/Album/1.flac")).unwrap(), b"waiting");
-
-        svc.delete_listed("cratarr", copy_at("al-1", 0, "/m", "A/Album")).await.unwrap();
-        assert!(!music.join("A/Album").exists());
-        assert_eq!(std::fs::read(inc.join("A/Album/1.flac")).unwrap(), b"waiting", "and the other way round");
-        for d in [music, inc] {
+        let roots = [folder("named-music"), folder("named-inc"), folder("named-ann"), folder("named-bob")];
+        let svc = on_disk(&roots[0], &roots[1]).await;
+        let c = svc.lib.catalogue();
+        c.set_folders(roots.to_vec()).unwrap();
+        for (n, root) in roots.iter().enumerate() {
+            std::fs::create_dir_all(root.join("A/Album")).unwrap();
+            std::fs::write(root.join("A/Album/1.flac"), [n as u8]).unwrap();
+        }
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        let standing = |gone: Option<usize>| roots.iter().enumerate().filter(|(n, _)| Some(*n) != gone).all(|(n, r)| std::fs::read(r.join("A/Album/1.flac")).is_ok_and(|b| b == [n as u8]));
+        for (n, root) in roots.iter().enumerate() {
+            let named = svc.delete_listed("cratarr", copy_at("al-1", n as i64, &root.to_string_lossy(), "A/Album")).await.unwrap();
+            assert!(!root.join("A/Album").exists(), "the copy named went: {n}");
+            assert!(standing(Some(n)), "every other copy stands: {n}");
+            assert_eq!(crate::trash::holds(root, &format!("{}/A/Album", named.undo)), false, "the key is the journal's, not the trash's");
+            svc.undo(&named.undo).await.unwrap();
+            assert!(standing(None), "back where it was: {n}");
+        }
+        for d in roots {
             std::fs::remove_dir_all(d).ok();
         }
     }
