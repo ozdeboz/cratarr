@@ -187,9 +187,10 @@ mod tests {
         assert_eq!(folder(copy_for(&[flac(1, Kind::Own)], None, &[])), Some(1), "nothing else holds it");
     }
 
-    /// The page reads `in_order` by itself (`copyPlaying`: the first copy on, an Incoming one only when picked or nothing
-    /// kept holds the record), so that reading must come to `copy_for`'s answer for every viewer and every set of libraries
-    /// off, or the card and the stream name two copies.
+    /// The page reads `in_order` by itself (`copyPlaying`: the first copy on, an Incoming one only when picked or the list
+    /// said it plays, `PlayOrder::of`, read here with nothing off), so that reading must come to `copy_for`'s answer for every
+    /// viewer and every set of libraries off, or the card and the stream name two copies. One case cannot: of copies only in
+    /// Incoming, with the one that plays switched off since the list was read, the page knows of no other until it reads again.
     #[test]
     fn the_first_copy_on_in_order_is_what_copy_for_plays_whatever_is_off() {
         let records = [
@@ -210,7 +211,11 @@ mod tests {
                     let only_incoming = copies.iter().all(|c| c.kind == Kind::Incoming);
                     let picked = |c: &Copy| who.as_ref().is_some_and(|v| v.pick == Some(c.folder));
                     let own = |c: &Copy| who.as_ref().is_some_and(|v| v.own == Some(c.folder));
-                    let read = order.iter().find(|c| !off.contains(&c.folder) && (c.kind != Kind::Incoming || picked(c) || own(c) || only_incoming));
+                    let plays = copy_for(copies, who.as_ref(), &[]);
+                    let read = order.iter().find(|c| !off.contains(&c.folder) && (c.kind != Kind::Incoming || picked(c) || own(c) || plays == Some(*c)));
+                    if only_incoming && read.is_none() && plays.is_some_and(|p| off.contains(&p.folder)) {
+                        continue;
+                    }
                     // With no one, own music counts as off unless nothing else holds the record, and the order puts it last.
                     let shunned = |c: &&Copy| who.is_none() && c.kind == Kind::Own && copies.iter().any(|o| o.kind != Kind::Own);
                     assert_eq!(read.filter(|c| !shunned(c)), copy_for(copies, who.as_ref(), &off), "{who:?}, {off:?} off, in {order:?}");
