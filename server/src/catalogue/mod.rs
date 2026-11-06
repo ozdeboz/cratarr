@@ -831,11 +831,6 @@ impl InUse {
     pub fn first(&self) -> Option<(i64, &PathBuf)> {
         self.0.iter().next().map(|(id, p)| (*id, p))
     }
-
-    /// How many folders are in use.
-    pub fn count(&self) -> usize {
-        self.0.len()
-    }
 }
 
 impl FromIterator<(i64, PathBuf)> for InUse {

@@ -947,6 +947,23 @@ mod tests {
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
+    /// A library's folder renamed, every file as it was: only its path says the library is to be built again, and until it is
+    /// nothing is listed there and no cover found, as both go by the folders it was built with.
+    #[test]
+    fn a_library_renamed_is_built_again_though_no_file_changed() {
+        let (roots, cat, serve) = on_two_folders("renamed");
+        add(&cat, &roots[1], 1, &[("A/01 One.flac", "One")]);
+        checked_again(&serve);
+        let renamed = roots[1].with_extension("renamed");
+        std::fs::remove_dir_all(&renamed).ok();
+        std::fs::rename(&roots[1], &renamed).unwrap();
+        cat.set_folders(vec![roots[0].clone(), renamed.clone()]).unwrap();
+        checked_again(&serve);
+        assert!(serve.library.roots().contains(&(1, renamed.display().to_string())), "{:?}", serve.library.roots());
+        std::fs::remove_dir_all(&roots[0]).ok();
+        std::fs::remove_dir_all(&renamed).ok();
+    }
+
     #[test]
     fn a_cover_changed_new_or_gone_is_told_an_unchanged_one_is_not() {
         let map = |pairs: &[(&str, &str)]| pairs.iter().map(|(a, v)| (a.to_string(), v.to_string())).collect::<std::collections::HashMap<_, _>>();
