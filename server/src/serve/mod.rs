@@ -294,6 +294,13 @@ impl Serve {
         self.catalogue_cell.get().is_some()
     }
 
+    /// The song an id stands for now: one a take retired names the track that took it, and a queue or an app's list can hold
+    /// it long after (`Listener::song` plays it). Any other id is as given. Blocking.
+    pub fn song_now(&self, id: &str) -> String {
+        let taken = self.catalogue_cell.get().and_then(|c| c.track_of_source(crate::source::cratarr::KIND.id, id));
+        taken.map_or_else(|| id.to_string(), ids::song)
+    }
+
     /// The catalogue. `main` attaches it before anything that uses it runs: the API is served, and the library
     /// followed, only after.
     pub fn catalogue(&self) -> &Arc<Catalogue> {
@@ -873,6 +880,43 @@ mod tests {
         let left = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
         assert_ne!(left, song, "the first folder's copy left");
         assert_eq!((plays_of(&serve, &song), plays_of(&serve, &left)), (1, 0), "the play stays on the record's track");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// An old id plays on, in a queue no take reached, and what is heard of it counts on the track that took it.
+    #[test]
+    fn a_play_on_a_taken_id_counts_on_the_track_that_took_it() {
+        let (roots, cat, serve) = on_two_folders("heard-taken");
+        let one = [("A/01 One.flac", "One")];
+        add(&cat, &roots[0], 0, &one);
+        add(&cat, &roots[1], 1, &one);
+        serve.refresh().unwrap();
+        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
+        assert!(crate::app::listening::heard_blocking(&serve, "me", &old, &Heard::counted(100)).unwrap(), "heard");
+        assert_eq!((plays_of(&serve, &stays), plays_of(&serve, &old)), (1, 0));
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// An app's saved list can hold an old id too: a heart or a rating left on it sits on an id no list shows, and once followed
+    /// nothing moves it.
+    #[tokio::test]
+    async fn a_heart_and_a_rating_on_a_taken_id_land_on_the_track_that_took_it() {
+        let (roots, cat, serve) = on_two_folders("star-taken");
+        let one = [("A/01 One.flac", "One")];
+        add(&cat, &roots[0], 0, &one);
+        add(&cat, &roots[1], 1, &one);
+        serve.refresh().unwrap();
+        let stays = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        let old = ids::song(*cat.moved_tracks().unwrap().keys().next().expect("the second copy's id was taken"));
+        serve.users.set("me", "a password").unwrap();
+        let me = serve.users.get("me").unwrap();
+        for (method, query) in [("star", format!("id={old}")), ("setRating", format!("id={old}&rating=4"))] {
+            let said = routes::handle(&serve, &me, method, &routes::Params::parse(Some(&query), &[]), &HeaderMap::new()).await;
+            assert!(said.is_ok(), "{method}");
+        }
+        let a = serve.userdata.get("me", Item::Song, &[stays.clone()]).unwrap().remove(&stays).unwrap_or_default();
+        assert_eq!((a.starred_at.is_some(), a.rating), (true, 4));
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
