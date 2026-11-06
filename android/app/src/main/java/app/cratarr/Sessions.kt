@@ -84,6 +84,10 @@ object Sessions {
         else -> Step.NOTHING
     }
 
+    /** Whether a page loaded at [path] after [step] says nobody is signed in: Cratarr's sign-in page, with no session of
+     *  the other address's taken for it. Whoever signs in there is not known yet, and must not open on the one before's. */
+    fun nobodyAfter(path: String, step: Step): Boolean = path == SIGN_IN && step != Step.TAKE
+
     /** Whether an address about to be used ([here] its session) should take the other's ([there]) first. */
     fun lacking(here: String?, there: String?): Boolean = here == null && there != null
 
@@ -159,7 +163,8 @@ object Sessions {
         if (here !in prefs.origins()) return false
         val there = other(prefs, here)
         val theirs = there?.let(::token)
-        val step = afterLoad(Uri.parse(url).path.orEmpty(), token(here), theirs, tried[here], signingOut)
+        val path = Uri.parse(url).path.orEmpty()
+        val step = afterLoad(path, token(here), theirs, tried[here], signingOut)
         when (step) {
             Step.CLEAR -> {
                 signingOut = false
@@ -172,6 +177,7 @@ object Sessions {
             }
             Step.NOTHING -> {}
         }
+        if (nobodyAfter(path, step)) Who.set(context, null)
         return false
     }
 }

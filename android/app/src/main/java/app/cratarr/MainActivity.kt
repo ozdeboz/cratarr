@@ -479,6 +479,9 @@ class MainActivity : AppCompatActivity() {
                     Scrobblers.flush(this@MainActivity)
                     if (remove) Kept.releaseAccount(this@MainActivity, Who.current(this@MainActivity))
                     Who.set(this@MainActivity, null)
+                    // The page ends its session with a request, no page load for the client to see, and then opens the app's
+                    // own page: that load ends both addresses' (0.12), or the other's, still good, would sign it back in.
+                    Sessions.signOutAsked()
                     withContext(Dispatchers.Main) { reply.postMessage(JSONObject().put("type", "signed-out").toString()) }
                 }
             }
@@ -898,16 +901,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address:
-     *  the device's, and the person's own of the one signed in now (decision 0101). */
+     *  whose the page is, as each address's storage may have an older word for it (the one signed in now, nobody, decision
+     *  0101), the device's settings, and the person's own. */
     private fun keepPagePrefs(view: WebView) {
         pageScript?.remove()
         pageScript = null
-        val saved = prefs.pagePrefs ?: return
-        val who = Who.current(this)
-        val mine = prefs.pagePrefsOf(who)?.let { "localStorage.setItem(${JSONObject.quote("cratarr-prefs$who")}, ${JSONObject.quote(it)});" }.orEmpty()
         val origins = prefs.origins()
         if (origins.isEmpty() || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-        val script = "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}); $mine } catch (e) {}"
+        val who = Who.current(this)
+        val device = prefs.pagePrefs?.let { "localStorage.setItem('cratarr-prefs', ${JSONObject.quote(it)});" }.orEmpty()
+        val mine = prefs.pagePrefsOf(who)?.let { "localStorage.setItem(${JSONObject.quote("cratarr-prefs$who")}, ${JSONObject.quote(it)});" }.orEmpty()
+        val script = "try { localStorage.setItem('cratarr-who', ${JSONObject.quote(Who.forPage(who))}); $device $mine } catch (e) {}"
         pageScript = Prefs.withoutRefused(origins) { WebViewCompat.addDocumentStartJavaScript(view, script, it) }
     }
 
