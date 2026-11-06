@@ -454,7 +454,7 @@ const AHEAD: usize = 2;
 /// Look-ahead (decision 0046, amended): the next tracks in each playing or paused player's queue get their signals
 /// worked out before they play, so the visuals have them at once. On every change of a player (a queue being built
 /// settles first) and once a minute; only on a free turn, as a page waiting for a decode comes first.
-pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>) {
+pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>, served: Option<Arc<crate::serve::Serve>>) {
     tokio::spawn(async move {
         let mut changes = play_on.subscribe();
         loop {
@@ -467,15 +467,19 @@ pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>)
                 .list()
                 .into_iter()
                 .filter(|p| p.playing || p.state == "paused")
-                .filter_map(|p| play_on.get(&p.name))
-                .map(|v| (v.index, v.queue.unwrap_or_default().into_iter().map(|t| (t.source, t.id)).collect::<Vec<_>>()))
+                .filter_map(|p| Some((play_on.owner_of(&p.name), play_on.get(&p.name)?)))
+                .map(|(owner, v)| (owner, v.index, v.queue.unwrap_or_default().into_iter().map(|t| (t.source, t.id)).collect::<Vec<_>>()))
                 .collect::<Vec<_>>();
-            for (source, id) in upcoming(&queues) {
-                let c = cat.clone();
-                let Ok(Some((folder, rel))) = tokio::task::spawn_blocking(move || c.track_of_source(&source, &id).and_then(|t| c.file_of(t))).await else {
-                    continue;
-                };
-                ahead(cat.clone(), folder, rel).await;
+            for (owner, index, tracks) in queues {
+                // The file its owner will hear, or the beats worked out are another copy's.
+                let who = served.as_ref().map_or_else(Default::default, |s| s.listener(owner.as_deref()));
+                for (source, id) in upcoming(&[(index, tracks)]) {
+                    let (c, w) = (cat.clone(), who.clone());
+                    let Ok(Some((folder, rel))) = tokio::task::spawn_blocking(move || w.place(&c, &source, &id)).await else {
+                        continue;
+                    };
+                    ahead(cat.clone(), folder, rel).await;
+                }
             }
         }
     });

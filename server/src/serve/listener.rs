@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::api::Song;
 use super::copies::Viewer;
 use super::ids;
 use super::library::Library;
@@ -54,6 +55,20 @@ impl Listener {
             _ if files.is_empty() => None,
             _ => Some(files.swap_remove(0)),
         }
+    }
+
+    /// A track as the library serves it, with the numbers of the file that plays for this listener: its gains, tempo and
+    /// format are that file's, not the row copy's. Blocking.
+    pub fn song(&self, cat: &Catalogue, source: &str, item: &str) -> Option<Song> {
+        let library = self.library.as_ref()?;
+        let id = if source == crate::source::cratarr::KIND.id { item.to_string() } else { library.song_ids(cat.track_of_source(source, item)?).ok()??.song_id };
+        let mut song = library.songs_by_id(&[id]).ok()?.into_iter().next()?;
+        if let Some((folder, rel)) = self.place(cat, source, item)
+            && let Err(e) = library.as_played(&mut song, folder, &rel)
+        {
+            tracing::warn!(target: "library", song = %song.id, reason = %format!("{e:#}"), "the numbers of the file that plays not read");
+        }
+        Some(song)
     }
 }
 
@@ -185,4 +200,46 @@ mod tests {
         assert_eq!(t.who(None, None, &[]).place(&t.cat, "jf", "j-1"), at(1), "not the lowest folder's, nor the copy that plays");
         assert_eq!(t.who(None, None, &[]).place(&t.cat, "jf", "j-unknown"), None);
     }
-}
+
+    #[test]
+    fn the_gain_is_the_file_that_plays() {
+        let t = two("gain");
+        let gain = |who: &Listener| who.song(&t.cat, KIND.id, &t.song).and_then(|s| s.replay_gain).and_then(|g| g.track_gain);
+        assert_eq!(gain(&t.who(None, None, &[])), Some(-7.0));
+        assert_eq!(gain(&t.who(Some("ann"), Some(1), &[])), Some(-3.0), "an MP3 is levelled by its own gain, not the FLAC's");
+        let song = t.who(Some("ann"), Some(1), &[]).song(&t.cat, KIND.id, &t.song).unwrap();
+        assert_eq!((song.suffix.as_str(), song.bit_rate, song.bpm, song.content_type.as_str()), ("mp3", Some(192), Some(121), "audio/mpeg"));
+        let song = t.who(None, None, &[]).song(&t.cat, KIND.id, &t.song).unwrap();
+        assert_eq!((song.suffix.as_str(), song.bit_rate, song.bpm), ("flac", Some(900), Some(120)));
+    }
+
+    #[test]
+    fn the_waveform_is_the_file_that_plays() {
+        let t = two("wave");
+        for (folder, rel, level) in [(0, FLAC, 1u8), (1, MP3, 2)] {
+            let a = crate::analysis::Analysis {
+                version: crate::analysis::VERSION,
+                duration_secs: 200.0,
+                loudness_lufs: -14.0,
+                track_gain_db: -4.0,
+                track_peak: 0.9,
+                blocks: crate::analysis::Loudness(vec![(1, 40)]),
+                bpm: Some(120.0),
+                bpm_confidence: 0.9,
+                waveform: vec![level; crate::analysis::WAVEFORM_BINS],
+                complete: Some(true),
+                beats: None,
+                rhythm: None,
+            };
+            let (_, size, mtime) = t.cat.file_to_analyse(folder, rel).unwrap();
+            t.cat.store_analysis(folder, rel, size, mtime, &a).unwrap();
+        }
+        let wave = |who: &Listener, asked: Option<&str>| crate::api::waveform_for(&t.cat, who, KIND.id, &t.song, asked).unwrap();
+        let (row, own) = (t.who(None, None, &[]), t.who(Some("ann"), Some(1), &[]));
+        let (tag_row, bins_row) = wave(&row, None);
+        let (tag_own, bins_own) = wave(&own, None);
+        assert_eq!((bins_row.unwrap()[0], bins_own.unwrap()[0]), (1, 2));
+        assert_ne!(tag_row, tag_own, "a browser that kept one file's must not be told it is still good for the other");
+        assert_eq!(wave(&own, Some(&tag_own)).1, None, "not modified");
+        assert!(wave(&own, Some(&tag_row)).1.is_some());
+    }}

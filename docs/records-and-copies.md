@@ -42,7 +42,8 @@ track" and "how a record's copies behave"); this says how they are built, and in
 As the owner decided, the same record is the same tracks. A folder is identified once, when its files are read:
 
 1. The tracklists must match, always: as many tracks, each one's length within 2 seconds, its title the same by the
-   loose key. A folder missing a track of the release is not a copy of it.
+   loose key. A guest in a title is recognised: "Embrace (feat. X)" is the title "Embrace" with a guest, so it matches
+   "Embrace", and "Embrace (feat. Y)" does not. A folder missing a track of the release is not a copy of it.
 2. With that, the same MusicBrainz release, where tags or references say one, is the same record; two different
    releases are two records.
 3. Without a release on either side, the same album artist and title is the same record.
@@ -67,10 +68,16 @@ One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own 
 2. The viewer's own music, even at a lower quality.
 3. The best quality among the kept libraries the viewer has on: lossless before lossy, then bit depth and rate, then
    bitrate.
-4. Nothing else: an Incoming copy plays only when picked, and a copy in a library switched off never plays.
+4. Nothing else: an Incoming copy plays only when picked, and a copy in a library switched off never plays. A record only
+   in Incoming has nothing else: its copy plays.
 
-A stream resolves its file through it. `songs` holds one row per track, on the copy that plays for most people, and the
-stream asks `copy_for` with who is asking.
+A tie goes by the libraries' order, then the path. Lossless copies not read since bit depth was kept rank last.
+
+A stream resolves its file through it. `songs` holds one row per track, on the copy that plays for most people: `copy_for`
+with no viewer, where own music counts as off unless nothing else holds the record. The stream asks with who is asking;
+a copy lacking the track is passed over, and where nothing plays for them the row copy does. With no one in particular
+(a signed link while signing in is required) it is the row copy too. What is read of a track, its waveform, beats and
+gains, is the file that plays, so a waveform's ETag names the file.
 
 ## On the page
 

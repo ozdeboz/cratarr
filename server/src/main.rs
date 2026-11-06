@@ -299,7 +299,7 @@ async fn main() -> Result<()> {
     memwatch::start();
     app::analysis_pass::run(app.library.catalogue());
     // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).
-    app::analysis_pass::look_ahead(app.library.catalogue(), app.play_on.clone());
+    app::analysis_pass::look_ahead(app.library.catalogue(), app.play_on.clone(), app.served.clone());
 
     // The crates' favourites are asked for once at start, as the media server may take a minute (decision 0024).
     let warm = app.clone();

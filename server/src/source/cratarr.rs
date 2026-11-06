@@ -697,8 +697,9 @@ impl Source for CratarrSource {
     fn track_info<'a>(&'a self, track: &'a str) -> Fut<'a, Option<TrackInfo>> {
         Box::pin(async move {
             let s = server()?;
-            let (lib, id) = (s.library.clone(), track.to_string());
-            let Some(song) = blocking(move || Ok(lib.songs_by_id(std::slice::from_ref(&id))?.pop())).await? else { return Ok(None) };
+            // The codec and bitrate shown are the file that plays for whoever asks.
+            let (who, cat, id) = (s.listener(s.current_user().as_deref()), s.catalogue().clone(), track.to_string());
+            let Some(song) = blocking(move || Ok(who.song(&cat, KIND.id, &id))).await? else { return Ok(None) };
             let plays = match owner(&s) {
                 Ok(o) => s.userdata.get(&o, Item::Song, std::slice::from_ref(&song.id))?.get(&song.id).map(|a| a.play_count),
                 Err(_) => None,

@@ -914,6 +914,26 @@ impl Library {
         Ok(held.iter().find(|h| holds(copy, h)).map(|(_, folder, rel, _)| (*folder, rel.clone())))
     }
 
+    /// `song` with this file's own numbers, for a file of it that is not the row copy's: a viewer's MP3 is levelled by its
+    /// own gain, never the FLAC's. As it was for a file the library has not built yet.
+    pub fn as_played(&self, song: &mut Song, folder: i64, rel: &str) -> Result<()> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT size, suffix, kbps, duration_ms, bpm, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM copy_files WHERE folder = ?1 AND rel = ?2",
+        )?;
+        let mut rows = st.query(rusqlite::params![folder, rel])?;
+        if let Some(r) = rows.next()? {
+            song.size = r.get::<_, i64>(0)?.max(0) as u64;
+            song.suffix = r.get::<_, Option<String>>(1)?.unwrap_or_default();
+            song.content_type = content_type(&song.suffix).to_string();
+            song.bit_rate = r.get(2)?;
+            song.duration = r.get::<_, Option<i64>>(3)?.map_or(0, |d| (d.max(0) as u64 + 500) / 1000);
+            song.bpm = r.get(4)?;
+            song.replay_gain = ReplayGain::of(r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?);
+        }
+        Ok(())
+    }
+
     /// Whether a copy of this album lies in Incoming.
     pub fn in_incoming(&self, id: &str) -> Result<bool> {
         Ok(self.copies_of(id)?.iter().any(|c| c.kind == Kind::Incoming))
