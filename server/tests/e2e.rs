@@ -1722,6 +1722,75 @@ async fn the_best_copy_plays_whoever_owns_it_and_nothing_is_kept_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// What `access::signed` adds to a path's address, read from where the server keeps its secret: a link with no account behind it,
+/// as Kodi is given one.
+fn signed(data: &Path, path: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let db = rusqlite::Connection::open(data.join("sessions.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let secret: String = db.query_row("SELECT value FROM settings WHERE name = 'link_secret'", [], |r| r.get(0)).unwrap();
+    let expires = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;
+    let mut key = [0u8; 64];
+    key[..secret.len()].copy_from_slice(secret.as_bytes());
+    let (mut inner, mut outer) = (Sha256::new(), Sha256::new());
+    inner.update(key.map(|b| b ^ 0x36));
+    inner.update(format!("{path}\n{expires}"));
+    outer.update(key.map(|b| b ^ 0x5c));
+    outer.update(inner.finalize());
+    let sig: String = outer.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    format!("exp={expires}&sig={sig}")
+}
+
+/// Play from's server part: a track of such a queue names its copy on every address a player asks. `/api/file` is what the app
+/// and Kodi play, and a Kodi's link is signed, with no account behind it. It counts for that one request.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_named_is_heard_on_every_address_and_through_a_signed_link_end_to_end() {
+    let root = temp("named-copy");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    // A FLAC waiting, a second longer than Music's at its first track: its bytes and its length tell it.
+    let (music, waiting) = (library.join("music"), library.join("second"));
+    settings(&data, &[(&music, "main"), (&waiting, "incoming")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    let both = |a: &Value| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 2);
+    s.until("both copies read", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
+    let album = ann.albums().await.into_iter().find(|a| both(a)).unwrap();
+    let song = ann.get(&format!("/api/albums/cratarr/{}", album["id"].as_str().unwrap())).await["rows"][0]["id"].as_str().unwrap().to_string();
+    let (file, stream) = (format!("/api/file/cratarr/{song}"), format!("/api/stream/cratarr/{song}"));
+    let from = format!("from={}", id_of(&waiting).replace('/', "%2F"));
+    let (kept, named) = (std::fs::read(music.join(SHORES).join("01 Landing.flac")).unwrap(), std::fs::read(waiting.join(SHORES).join("01 Landing.flac")).unwrap());
+    assert!(kept != named, "two files to tell apart");
+
+    assert!(ann.bytes(&file).await.1 == kept, "the best copy");
+    assert!(ann.bytes(&format!("{file}?{from}")).await.1 == named, "the copy named");
+    assert!(ann.bytes(&file).await.1 == kept, "for that one request");
+    let (best, asked) = (ann.bytes(&stream).await.1, ann.bytes(&format!("{stream}?{from}")).await.1);
+    assert!(best != asked, "a stream of the other file");
+
+    let wind = format!("{stream}/wind?from_ms=0&dir=forward&map=1");
+    let (over_best, over_named) = (ann.get(&wind).await, ann.get(&format!("{wind}&{from}")).await);
+    assert_ne!(over_best["length_ms"], over_named["length_ms"], "a wind through the other file");
+    let rewind = format!("{stream}/rewind?from_ms=2500&ms=500");
+    let (back_best, back_named) = (ann.bytes(&rewind).await, ann.bytes(&format!("{rewind}&{from}")).await);
+    assert_eq!((back_best.0, back_named.0), (200, 200));
+    assert!(back_best.1 != back_named.1, "a rewind of the other file");
+
+    assert_eq!(s.anyone().bytes(&file).await.0, 401, "signing in is required");
+    assert_eq!(s.anyone().bytes(&format!("{file}?exp=1&sig=0")).await.0, 401, "a link not signed, and the secret comes to be");
+    let (status, bytes) = s.anyone().bytes(&format!("{file}?{from}&{}", signed(&data, &file))).await;
+    assert!(status == 200 && bytes == named, "the copy named, with no one signed in: {status}");
+    assert!(s.anyone().bytes(&format!("{file}?{}", signed(&data, &file))).await.1 == kept, "with none named, the row copy");
+    let (status, bytes) = s.anyone().bytes(&format!("{stream}?{from}&{}", signed(&data, &stream))).await;
+    assert!(status == 200 && bytes == asked, "a stream too: {status}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Replace: the new files take the place and the track ids of the old, which go to Music's trash. A copy missing a track is refused
 /// and nothing moves. Its Undo gives each library its own files and each file its own id again.
 #[tokio::test(flavor = "multi_thread")]

@@ -89,7 +89,7 @@ A tie goes by the libraries' order, then the path. Lossless copies not read sinc
 
 Nothing is remembered. A request can name a copy, `from`, a library's id: while its library is on, that copy is heard, with
 an account or without one, for that one request. "Play from" is a one-time action built on it: it starts a new queue of the
-record from that copy, and the next Play is the best copy again.
+record from that copy, each track of the queue carrying `from` (`QueueTrack.from`), and the next Play is the best copy again.
 
 The crates, the words and the taste read a track once: one `Facts`, from its row copy's file, holding the line and the folder of
 every file of it. A set kept by line finds the track through any of them.
@@ -125,6 +125,9 @@ gains, is the file that plays, so a waveform's ETag names the file.
 - An intake card is about the copy waiting, whichever plays: its tracks are that copy's files, what is heard is kept by
   (record, folder), a fix on the "Before adding" sheet writes to that copy alone, and a snippet's stream names it by `from`.
   A review is kept by (record, folder) too.
+- `from` is in the query of `/api/stream`, its wind and rewind, and `/api/file`, which is what the app and Kodi play. A queue's
+  track carries it on every player, as it carries the rest: a player asks with it, and Kodi is given addresses that hold it. A
+  copy gone or in a library off is passed over, so such a queue goes on from the best copy. Downloads keep the file they saved.
 - A stream's file is named in its validator, and `If-Range` is honoured: a seek never gets another file's bytes.
 - A tag written by Cratarr is the record's or its track's, so it goes into every copy: Health's fixes, Renumber, a match with
   MusicBrainz, the tempo, the files' facts and words. Reading stays one file a track, and writing takes every file, each saying
