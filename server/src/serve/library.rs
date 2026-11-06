@@ -845,13 +845,16 @@ impl Library {
         let mut copies = album_copies(&folders, rules);
         let kinds = self.kinds();
         copies.iter_mut().for_each(|a| a.rank = keeping(kind_in(&kinds, a.folder).0));
+        let mut print = print.to_string();
         if cat.records_unsettled() || copies.iter().any(|a| a.split) {
             // A row with no record is not served, so a build going on without them would take those albums off the lists,
             // and note itself as up to date. The library stays as it is until the next pass can give them.
             let given = cat.assign_records(&copies).context("giving the albums their records")?;
             // A row says its record, and `row_src` prints it: built from rows read before, a track given one now would
-            // build without it, and build again at the next pass.
+            // build without it, and build again at the next pass. So too for the print a take changed: noted as it was, the
+            // next check would read every folder to build nothing. Before the rows, or a file changed between would go unseen.
             if given > 0 {
+                print = self.change(cat, rules)?.1;
                 folders = read()?;
             }
         }
@@ -878,7 +881,7 @@ impl Library {
             }
         };
         self.set_built_context(&context)?;
-        self.set_built_from(print)?;
+        self.set_built_from(&print)?;
         Ok((whole, dirs))
     }
 
@@ -2578,6 +2581,14 @@ mod tests {
         add_files_to(cat, 1, &roots[1], &ONE_TWO);
         build_now(lib, cat);
         lib.db().query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_take_leaves_the_next_check_nothing_to_build() {
+        let (roots, cat, lib) = two_kept("take-print");
+        taken(&roots, &cat, &lib);
+        assert_eq!(lib.change(&cat, &Rules::default()).unwrap().0, Change::None);
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
     #[test]
