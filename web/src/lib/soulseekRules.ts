@@ -100,5 +100,6 @@ export function approvePayload(items: readonly SoulseekItem[], ticked: ReadonlyS
   return items.filter((i) => ticked.has(i.id) && tickable(i)).map((i) => (i.id in picks ? { id: i.id, folder: picks[i.id] } : { id: i.id }));
 }
 
-/** Whether the list is asked again soon: a search or a fetch under way. */
-export const underWay = (v: SoulseekView | null) => !!v?.items.some((i) => i.state === 'searching' || i.state === 'approved' || i.state === 'fetching' || i.state === 'checking');
+/** Whether the list is asked again soon: a search or a fetch under way. One held has nothing to show until its time. */
+export const underWay = (v: SoulseekView | null, now = Math.floor(Date.now() / 1000)) =>
+  !!v?.items.some((i) => (i.state === 'searching' || i.state === 'approved' || i.state === 'fetching' || i.state === 'checking') && !held(i, now));
