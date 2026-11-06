@@ -463,7 +463,8 @@ impl Serve {
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
         }
-        let moved = self.userdata.follow_pids(&self.library.pids()?, &self.library.song_ids()?)?;
+        let songs = self.library.all_song_ids()?.into_iter().collect();
+        let moved = self.userdata.follow_pids(&self.library.pids()?, &songs)?;
         if moved > 0 {
             tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
         }

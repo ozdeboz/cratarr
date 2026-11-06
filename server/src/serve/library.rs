@@ -1687,6 +1687,8 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                 files: list.iter().filter(|s| s.row.track.is_some()).map(|s| (s.folder, s.row.rel.clone())).collect(),
                 // A shared track stays with its record, wherever a file of it lies: that settles nothing.
                 split: list.iter().any(|s| s.row.record.is_none() || (s.row.record != record && !s.row.shared)),
+                // The build's to give: it knows the libraries' kinds.
+                rank: 0,
                 folder: first.folder,
                 old_id: first.group.clone(),
                 old_base: first.album_base.clone(),

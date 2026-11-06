@@ -1446,19 +1446,11 @@ impl Library {
     /// them. It says neither, and the data stays where it is: going to the first folder's, it would leave the record that
     /// holds it, whichever folder that happens to be. The price: a persistent id on two songs is followed nowhere, so after
     /// a start with its ids lost, two records of one release keep what they had on dead ids, though no song holds those
-    /// (`song_ids`): nothing here says which of the two they were.
+    /// (`all_song_ids`): nothing here says which of the two they were.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
         let mut st = db.prepare("SELECT pid, min(id) FROM songs GROUP BY pid HAVING count(*) = 1 ORDER BY pid")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    /// Every id a song holds: what lies on one stays there, whatever `pids` says (`UserData::follow_pids`).
-    pub fn song_ids(&self) -> Result<std::collections::HashSet<String>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT id FROM songs")?;
-        let rows = st.query_map([], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 }
