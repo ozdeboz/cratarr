@@ -949,7 +949,8 @@ impl Catalogue {
         };
         // A better reader may read what an older one could not.
         if cat.meta("reader").as_deref() != Some(&tags::READER_VERSION.to_string()) {
-            cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, FAILED])?;
+            // A row with nothing read has no format to go by, or it is served as read, with no tags, until it is read.
+            cat.db().execute("UPDATE files SET state = ?1, format = NULL WHERE state = ?2", params![PENDING, FAILED])?;
             // Reader 5 names ID3v2's TBPM and MP4's tmpo "bpm" as it already named Vorbis's BPM: the tags read before.
             cat.db().execute("UPDATE tags SET name = 'bpm' WHERE raw IN ('TBPM', 'tmpo') AND name IS NULL", [])?;
             // Reader 6 names a file's mood, style and grouping (0.9.7, the library's words), which no reader before kept:
