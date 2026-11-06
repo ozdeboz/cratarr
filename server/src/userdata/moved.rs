@@ -153,10 +153,10 @@ fn fold(tx: &Transaction, table: &str, key: &str, only: &str, moved: &HashMap<St
     let total = rows.len() as u64;
     for mut row in rows {
         let values = |row: &Row| keys.iter().map(|i| row[*i].clone()).collect::<Vec<_>>();
-        del.execute(params_from_iter(values(&row)))?;
         let Value::Text(old) = &row[key_at] else { continue };
-        let Some(to) = moved.get(old) else { continue };
-        row[key_at] = Value::Text(to.clone());
+        let Some(to) = moved.get(old).cloned() else { continue };
+        del.execute(params_from_iter(values(&row)))?;
+        row[key_at] = Value::Text(to);
         let at = format!("{:?}", values(&row));
         if let Some(into) = met.get_mut(&at) {
             merge(&columns, into, &row);
