@@ -32,16 +32,28 @@ export const outlived = (k: Kept, account: string | null, now: number) => !ours(
 export const stamped = <T extends Kept>(list: readonly T[], account: string): T[] => list.map((k) => (k.account === undefined ? { ...k, account } : k));
 
 /** What an answer means for the change at the head of the outbox. `sent`: taken, let go. `refused`: turned down (the
- *  playlist gone meanwhile), let go too: Cratarr's state is the truth. `wait`: not reached, not signed in, or Cratarr
- *  not well: it and all behind it wait. `again`: its first try still at work there: once more in a moment. */
+ *  playlist gone meanwhile, a playlist that is not one's own), let go too: Cratarr's state is the truth. `wait`: not
+ *  reached, not signed in, or Cratarr not well: it and all behind it wait. `again`: its first try still at work there:
+ *  once more in a moment. */
 export type Outcome = 'sent' | 'refused' | 'wait' | 'again';
 
-/** `status` null: the request did not reach Cratarr. `notReached`: lib/reach's rule for statuses that mean the same. */
-export function outcomeOf(status: number | null, retryAfter: boolean, notReached: (status: number) => boolean): Outcome {
+/** `status` null: the request did not reach Cratarr. `notReached`: lib/reach's rule for statuses that mean the same.
+ *  `worded`: the answer says why in Cratarr's words (`worded`): a 403 so is Cratarr's own, a proxy's has none. */
+export function outcomeOf(status: number | null, retryAfter: boolean, notReached: (status: number) => boolean, worded = false): Outcome {
   if (status === null) return 'wait';
   if (status === 409 && retryAfter) return 'again';
+  if (status === 403 && worded) return 'refused';
   if (notReached(status) || status === 401 || status >= 500) return 'wait';
   return status >= 200 && status < 300 ? 'sent' : 'refused';
+}
+
+/** Whether an answer says why in Cratarr's words (`{ "error": … }`), as lib/api's `fetchJson` reads them. */
+export async function worded(r: Pick<Response, 'json'>): Promise<boolean> {
+  try {
+    return typeof ((await r.json()) as { error?: unknown }).error === 'string';
+  } catch {
+    return false;
+  }
 }
 
 /** The headers a change is sent with, its first try and every resend alike. */
