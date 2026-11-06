@@ -21,7 +21,7 @@ export class TracksToPlaylist {
   again = $state<{ p: Playlist; already: number; of: number } | null>(null);
   // Asked for already (answered or on its way), outside the state, so an answer does not ask again for the others.
   readonly #asked = new Set<string>();
-  #failed = $state(false);
+  #failed = false;
 
   /** `whole`: what they are, for the sheet's words ("this album"). */
   constructor(
@@ -52,10 +52,6 @@ export class TracksToPlaylist {
   get first(): TrackState | null {
     const id = this.ids()[0];
     return id ? (this.states[id] ?? null) : null;
-  }
-  /** The first track's state is on its way: which playlists there are is not known yet. */
-  get waiting() {
-    return this.ids().length > 0 && !this.first && !this.#failed;
   }
   get addable() {
     return !!this.first?.addable;

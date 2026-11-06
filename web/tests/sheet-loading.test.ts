@@ -24,9 +24,8 @@ test('Asking is never larger than a loader where it is', () => {
 });
 
 // What a list's place says before its answer: the wait, never its emptiness.
-test('a sheet opened on playlists waits for them before it counts them', () => {
+test("a track's menu opened on its playlists waits for them before it counts them", () => {
   assert.match(read('TrackMenu.svelte'), /\{#if listsWait\}\s*<Asking \/>\s*\{:else if onServer && track\}/);
-  assert.match(read('PlaylistsStep.svelte'), /\{:else if to\.waiting\}\s*<Asking \/>\s*\{:else\}\s*<PlaylistToggles/);
 });
 
 test('a wait that failed ends: the loader is not there for ever', () => {
