@@ -1467,9 +1467,10 @@ fn grouped<'a>(rows: &[(i64, &'a ServedRow)], rules: &Rules) -> Vec<Song<'a>> {
     songs
 }
 
-/// The songs these rows serve, each with its record: the one most of its group's tracks hold, the lowest on a tie, which
-/// is `Held::most`'s vote once `assign_records` has settled them. A row with no record yet is not served, and it still had
-/// its say in the grouping, as `album_copies` must find the same albums.
+/// The songs these rows serve, each with its record: the one most of its group's tracks hold, the lowest on a tie. Once
+/// `assign_records` has settled them that is `Held::vote`'s, but for a group of shared tracks with no majority, where `Held`
+/// goes by the free ones (C29 makes the two votes one). A row with no record yet is not served, and it still had its say in
+/// the grouping, as `album_copies` must find the same albums.
 fn songs_of<'a>(rows: &[(i64, &'a ServedRow)], rules: &Rules) -> Vec<Song<'a>> {
     let mut songs = grouped(rows, rules);
     let mut votes: HashMap<String, BTreeMap<i64, usize>> = HashMap::new();
