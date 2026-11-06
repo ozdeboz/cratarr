@@ -2520,9 +2520,7 @@ impl Catalogue {
         let young: HashSet<i64> = tx.prepare("SELECT id FROM records WHERE born >= ?1")?.query_map([now - GONE_KEEP_SECS], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let alone_in_a_folder = |a: &AlbumCopy, record: i64| {
             let held_here = a.tracks.iter().filter(|t| held.record.contains_key(&t.0)).count();
-            voting.get(&record).is_some_and(|list| list.len() == 1)
-                && held.files.get(&record) == Some(&held_here)
-                && a.tracks.iter().all(|t| !held.shared.contains(&t.0) && held.record.get(&t.0).is_none_or(|r| *r == record))
+            held.files.get(&record) == Some(&held_here) && a.tracks.iter().all(|t| !held.shared.contains(&t.0))
         };
         let mut arriving: Vec<usize> = Vec::new();
         for (i, a) in albums.iter().enumerate() {
@@ -5687,22 +5685,55 @@ mod tests {
         assert_eq!(cat.moved_tracks().unwrap().len(), 3, "the same album on its first day");
     }
 
-    /// CR19: a record with a file of it elsewhere is a record of copies, and it is alone in no folder.
+    /// CR19: a record with a file of it elsewhere is a record of copies, though that file is gone for now.
     #[test]
     fn a_young_record_with_a_track_shared_joins_nothing() {
-        let cat = tracks(9);
+        let cat = tracks(6);
         let kept = lying_in(&cat, "Kept", three([1, 2, 3]));
         cat.assign_records(std::slice::from_ref(&kept)).unwrap();
         let mut young = lying_in(&cat, "Copy", three([4, 5, 6]));
         young.facts.title = identity::fold("For Now");
-        let beside = lying_in(&cat, "Beside", album("For Now", &[7]));
-        cat.assign_records(&[kept.clone(), young.clone(), beside.clone()]).unwrap();
+        cat.assign_records(&[kept.clone(), young.clone()]).unwrap();
         file_of_track(&cat, "Beside/4.flac", 4);
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE rel = 'Beside/4.flac'", []).unwrap();
         young.facts.title = identity::fold("Three");
         let record = record_of(&cat, 1);
         cat.db().execute("UPDATE records SET born = born - ?2 WHERE id = ?1", params![record, GONE_KEEP_SECS + 1]).unwrap();
         cat.assign_records(&[kept, young]).unwrap();
         assert!(cat.moved_tracks().unwrap().is_empty());
+    }
+
+    /// CR19: nor is a record with a file in another folder a folder arriving: it is alone in none of them.
+    #[test]
+    fn a_young_record_in_two_folders_joins_nothing() {
+        let cat = tracks(7);
+        let kept = lying_in(&cat, "Kept", three([1, 2, 3]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let mut young = lying_in(&cat, "Copy", three([4, 5, 6]));
+        young.facts.title = identity::fold("For Now");
+        cat.assign_records(&[kept.clone(), young.clone()]).unwrap();
+        let (record, other) = (record_of(&cat, 4), record_of(&cat, 1));
+        let beside = lying_in(&cat, "Beside", album("For Now", &[7]));
+        cat.db().execute("UPDATE tracks SET record = ?1 WHERE id = 7", [record]).unwrap();
+        young.facts.title = identity::fold("Three");
+        cat.db().execute("UPDATE records SET born = born - ?2 WHERE id = ?1", params![other, GONE_KEEP_SECS + 1]).unwrap();
+        cat.assign_records(&[kept, young, beside]).unwrap();
+        assert!(cat.moved_tracks().unwrap().is_empty());
+    }
+
+    /// CR19 goes by CR18's order: whichever came first, Music's stands.
+    #[test]
+    fn of_two_young_records_that_are_one_the_first_by_kind_stands() {
+        let cat = tracks(6);
+        let kept = AlbumCopy { rank: 2, ..lying_in(&cat, "Kept", three([1, 2, 3])) };
+        let mut waiting = lying_in(&cat, "Copy", three([4, 5, 6]));
+        waiting.facts.title = identity::fold("For Now");
+        cat.assign_records(&[waiting.clone(), kept.clone()]).unwrap();
+        let record = record_of(&cat, 1);
+        waiting.facts.title = identity::fold("Three");
+        cat.assign_records(&[waiting, kept]).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(4, 1), (5, 2), (6, 3)]));
+        assert_eq!(record_of(&cat, 1), record);
     }
 
     /// The take goes by every row of a track, gone ones too, and a let-go must as well. Left on the record's track, a file back
