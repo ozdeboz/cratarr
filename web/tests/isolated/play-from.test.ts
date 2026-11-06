@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { audio, fromRest, player, runFor, server, settle, track } from '../harness/fakeStream.ts';
 
 const { enqueue, keptHere, local, playOnCommand, playQueue, seek, setRepeat, switchLocal, windUrl } = player;
-const { perAccount } = await import('../../src/lib/account.ts');
+const { accountForgotten, accountLearnt, perAccount } = await import('../../src/lib/account.ts');
 const { library, playListedAlbum } = await import('../../src/lib/albums.svelte.ts');
 const { heardAs } = await import('../../src/lib/copiesRule.ts');
 const { endPreview, startPreview } = await import('../../src/lib/preview.svelte.ts');
@@ -137,6 +137,25 @@ test('a queue left behind keeps its copy as kept for a reload, and taken up agai
   switchLocal(keptHere.list[0].id);
   await settle();
   assert.deepEqual(asked().at(-1), ['r1', 0, COPY]);
+});
+
+test("a queue left behind is its account's on this device, its copy with it: hidden from another, and hers at her return", async () => {
+  accountLearnt('ann');
+  record(track('r1', 100));
+  await play(COPY);
+  playQueue([track('other', 100)]);
+  await settle();
+  const hers = keptHere.list.map((k) => k.id);
+  assert.equal(keptHere.list[0].tracks[0].from, COPY);
+  accountLearnt('bo');
+  assert.deepEqual(keptHere.list, [], 'none of hers for him');
+  accountForgotten();
+  assert.equal(keptHere.list.some((k) => hers.includes(k.id)), false, 'nor for nobody');
+  accountLearnt('ann');
+  assert.deepEqual(keptHere.list.map((k) => k.id), hers);
+  assert.equal(keptHere.list[0].tracks[0].from, COPY);
+  assert.equal(localStorage.getItem('cratarr-queues'), null, 'and nothing under a name for no one');
+  accountForgotten();
 });
 
 test('a queue Cratarr gives this page with a copy plays that copy', async () => {

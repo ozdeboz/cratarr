@@ -33,10 +33,10 @@ after(async () => {
 test('an account’s reads are kept as its own, the album list among them', async () => {
   await signIn(d.page, 'ann');
   await readsThroughWorker(d.page);
-  assert.ok((await cacheNames(d.page)).includes('cratarr-data@ann'));
-  assert.equal(await keptName(d.page, 'cratarr-data@ann'), 'ann');
-  assert.ok(await d.page.evaluate(async () => !!(await caches.match('/api/albums', { cacheName: 'cratarr-data@ann' }))));
-  assert.ok(await d.page.evaluate(async () => !(await caches.match('/api/albums', { cacheName: 'cratarr-v4' }))), 'not the app’s own cache');
+  assert.ok((await cacheNames(d.page)).includes('cratarr-data-2@ann'));
+  assert.equal(await keptName(d.page, 'cratarr-data-2@ann'), 'ann');
+  assert.ok(await d.page.evaluate(async () => !!(await caches.match('/api/albums', { cacheName: 'cratarr-data-2@ann' }))));
+  assert.ok(await d.page.evaluate(async () => !(await caches.match('/api/albums', { cacheName: 'cratarr-v5' }))), 'not the app’s own cache');
 });
 
 test('signed out, the worker keeps for nobody', async () => {
@@ -49,7 +49,7 @@ test('another account’s are its own, hers kept apart', async () => {
   await signIn(d.page, 'bob');
   await readsThroughWorker(d.page);
   const names = await cacheNames(d.page);
-  assert.ok(names.includes('cratarr-data@bob') && names.includes('cratarr-data@ann'));
-  assert.equal(await keptName(d.page, 'cratarr-data@bob'), 'bob');
-  assert.equal(await keptName(d.page, 'cratarr-data@ann'), 'ann');
+  assert.ok(names.includes('cratarr-data-2@bob') && names.includes('cratarr-data-2@ann'));
+  assert.equal(await keptName(d.page, 'cratarr-data-2@bob'), 'bob');
+  assert.equal(await keptName(d.page, 'cratarr-data-2@ann'), 'ann');
 });
