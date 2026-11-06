@@ -1,5 +1,7 @@
 package app.cratarr
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -83,6 +85,39 @@ class KeptFileTest {
         assertThrows(IOException::class.java) { KeptFile.list(file) }
         file.writeText("""[{"kind":"album"},"cut"]""")
         assertThrows(IOException::class.java) { KeptFile.list(file) }
+    }
+
+    private fun holders() = File(folder.root, "kept-holders.json")
+
+    @Test
+    fun the_holders_read_as_they_were_written() {
+        val file = holders()
+        KeptFile.write(file, JSONObject().put("cratarr/tr-1", JSONArray(listOf("@ann\tmanual", "@bo\talbum:cratarr/al-1"))).toString())
+        assertEquals(mapOf("cratarr/tr-1" to setOf("@ann\tmanual", "@bo\talbum:cratarr/al-1")), KeptFile.holders(file))
+    }
+
+    @Test
+    fun holders_cut_off_are_not_read_as_nothing_held() {
+        // Nothing held, one account's Remove would take every account's downloads.
+        val file = holders()
+        file.writeText("""{"cratarr/tr-1":["@ann\tman""")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+        file.writeText("")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+        file.writeText("[]")
+        assertThrows(IOException::class.java) { KeptFile.holders(file) }
+    }
+
+    @Test
+    fun no_holders_yet_are_none() {
+        assertEquals(emptyMap<String, Set<String>>(), KeptFile.holders(holders()))
+    }
+
+    @Test
+    fun a_holder_of_no_one_is_not_read() {
+        val file = holders()
+        file.writeText("""{"cratarr/tr-1":["manual"]}""")
+        assertEquals(mapOf("cratarr/tr-1" to emptySet<String>()), KeptFile.holders(file))
     }
 
     @Test

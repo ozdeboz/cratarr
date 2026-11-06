@@ -134,7 +134,7 @@ object Downloads {
             DownloadService.sendAddDownload(context, CratarrDownloadService::class.java, request, false)
             held.add(key)
         }
-        // The owner's from now on, whatever kept item also holds them (decision 0038).
+        // The account's from now on, whatever kept item also holds them (decisions 0038, 0101).
         Kept.holdManual(context, held)
     }
 

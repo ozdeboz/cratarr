@@ -11,8 +11,9 @@
  *   so the item kept longest ago shrinks first.
  * - Synced when the app starts, when an item is kept, when the settings change, and every few hours by WorkManager
  *   (KeptWorker), with the downloads' own rules: Wi-Fi unless mobile data is allowed, charging when asked.
- * - The lists are written whole (KeptFile). A list of the items that is there and cannot be read stops the sync and any
- *   keep, and what it held stays on the device: read as nothing kept, the next sync would remove it all.
+ * - The lists are written whole (KeptFile). A list, of the items or the holders, that is there and cannot be read stops
+ *   the sync and any keep, and what it held stays on the device: read as nothing kept or held, the next sync or Remove
+ *   would take it all, every account's.
  * All of it runs on one thread, so the lists are never changed at once from two places.
  */
 package app.cratarr
@@ -61,11 +62,6 @@ object Kept {
     /** Sync passes going on now (the report's `running`). */
     private val passes = java.util.concurrent.atomic.AtomicInteger(0)
 
-    /** A holder of a download: [Who]'s key and what holds it ([MANUAL] or an item's key), apart by a tab. */
-    private fun held(who: String, what: String) = "$who\t$what"
-    private fun whoOf(holder: String) = holder.substringBefore('\t')
-    private fun isManual(holder: String) = holder.substringAfter('\t') == MANUAL
-
     /** A kept item, as stored: whose it is, its tracks as Cratarr last said, and how many the budget left out. */
     private class Item(
         val who: String,
@@ -81,7 +77,7 @@ object Kept {
     ) {
         val key get() = "$kind:$source/$id"
         /** Its hold on a download. */
-        val holder get() = "$who\t$key"
+        val holder get() = KeptHolds.held(who, key)
 
         fun json(): JSONObject = JSONObject()
             .put("who", who).put("kind", kind).put("source", source).put("id", id).put("name", name).put("since", since)
@@ -120,15 +116,15 @@ object Kept {
         KeptFile.write(file(context, ITEMS_FILE), JSONArray(items.map { it.json() }).toString())
     }
 
-    /** Each download's holders ([held]), by its id (`source/id`). */
-    private fun loadHolders(context: Context): MutableMap<String, MutableSet<String>> = try {
-        val o = JSONObject(file(context, HOLDERS_FILE).readText())
-        o.keys().asSequence().associateWith { k ->
-            val a = o.getJSONArray(k)
-            (0 until a.length()).map { a.getString(it) }.filter { '\t' in it }.toMutableSet()
-        }.toMutableMap()
-    } catch (e: Exception) {
-        mutableMapOf()
+    /** Each download's holders ([KeptHolds]), by its id (`source/id`); throws when the list cannot be read, as [loadItems]. */
+    private fun loadHolders(context: Context): MutableMap<String, MutableSet<String>> = KeptFile.holders(file(context, HOLDERS_FILE))
+
+    /** The holders to show: none while the list cannot be read, so nothing shows as anyone's. */
+    private fun shownHolders(context: Context): Map<String, Set<String>> = try {
+        loadHolders(context)
+    } catch (e: IOException) {
+        Log.w(TAG, "the holders: ${e.message}")
+        emptyMap()
     }
 
     private fun saveHolders(context: Context, holders: Map<String, Set<String>>) {
@@ -143,9 +139,10 @@ object Kept {
     fun set(context: Context, kind: String, source: String, id: String, name: String, on: Boolean) {
         if (on && source == Previews.SOURCE) return
         val app = context.applicationContext
+        // The account who asked, here and below: the worker may come to it behind a long pass, another signed in by then.
+        val who = Who.current(app)
         worker.execute {
             try {
-                val who = Who.current(app)
                 val items = loadItems(app)
                 val key = "$kind:$source/$id"
                 items.removeAll { it.who == who && it.key == key }
@@ -175,11 +172,11 @@ object Kept {
     /** The account's Download: these tracks are held by its `manual` from now on (Downloads.add calls it). */
     fun holdManual(context: Context, keys: List<String>) {
         val app = context.applicationContext
+        val mine = KeptHolds.held(Who.current(app), MANUAL)
         worker.execute {
-            val mine = held(Who.current(app), MANUAL)
-            val holders = loadHolders(app)
-            for (k in keys) holders.getOrPut(k) { mutableSetOf() }.add(mine)
             try {
+                val holders = loadHolders(app)
+                for (k in keys) holders.getOrPut(k) { mutableSetOf() }.add(mine)
                 saveHolders(app, holders)
             } catch (e: IOException) {
                 Log.w(TAG, "hold: ${e.message}")
@@ -193,12 +190,15 @@ object Kept {
      */
     fun releaseManual(context: Context, keys: List<String>, all: Boolean) {
         val app = context.applicationContext
+        val mine = KeptHolds.held(Who.current(app), MANUAL)
         worker.execute {
-            val mine = held(Who.current(app), MANUAL)
-            val holders = loadHolders(app)
-            val targets = if (all) holders.filterValues { mine in it }.keys.toList() else keys
-            for (k in targets) holders[k]?.remove(mine)
-            release(app, holders)
+            try {
+                val holders = loadHolders(app)
+                val targets = if (all) holders.filterValues { mine in it }.keys.toList() else keys
+                release(app, holders, targets) { it == mine }
+            } catch (e: IOException) {
+                Log.w(TAG, "release: ${e.message}")
+            }
             onChange?.invoke()
         }
     }
@@ -213,29 +213,21 @@ object Kept {
         worker.execute {
             try {
                 saveItems(app, loadItems(app).filter { it.who != who })
+                val holders = loadHolders(app)
+                val its = holders.filterValues { h -> h.any { KeptHolds.whoOf(it) == who } }.keys.toList()
+                release(app, holders, its) { KeptHolds.whoOf(it) == who }
             } catch (e: IOException) {
                 // As a keep: nothing goes on from a list that cannot be read, and nothing here ends the app.
                 Log.w(TAG, "release: ${e.message}")
-                return@execute
             }
-            val holders = loadHolders(app)
-            for (h in holders.values) h.removeAll { whoOf(it) == who }
-            release(app, holders)
             onChange?.invoke()
         }
     }
 
-    /** The downloads nothing holds any more removed, and the holders kept. */
-    private fun release(app: Context, holders: MutableMap<String, MutableSet<String>>) {
-        for (k in downloadedKeys(app)) if (holders[k].isNullOrEmpty()) {
-            holders.remove(k)
-            DownloadService.sendRemoveDownload(app, CratarrDownloadService::class.java, k, false)
-        }
-        try {
-            saveHolders(app, holders)
-        } catch (e: IOException) {
-            Log.w(TAG, "release: ${e.message}")
-        }
+    /** The holds [gone] says on [keys] let go, the downloads nothing holds any more removed, and the holders kept. */
+    private fun release(app: Context, holders: MutableMap<String, MutableSet<String>>, keys: Collection<String>, gone: (String) -> Boolean) {
+        for (k in KeptHolds.letGo(holders, keys, gone)) DownloadService.sendRemoveDownload(app, CratarrDownloadService::class.java, k, false)
+        saveHolders(app, holders)
     }
 
     /**
@@ -245,22 +237,7 @@ object Kept {
      */
     fun heldHere(context: Context): Map<String, Boolean> {
         val app = context.applicationContext
-        val who = Who.current(app)
-        val mine = held(who, MANUAL)
-        return loadHolders(app).mapNotNull { (k, h) ->
-            val its = h.filter { whoOf(it) == who }
-            if (its.isEmpty()) null else k to (its == listOf(mine))
-        }.toMap()
-    }
-
-    /** Each account's share of this device's downloads, in bytes (a file two hold counts in both), by its [Who] key. */
-    private fun shares(holders: Map<String, Set<String>>, downloads: Map<String, Download>): Map<String, Long> {
-        val out = mutableMapOf<String, Long>()
-        for ((k, h) in holders) {
-            val bytes = downloads[k]?.bytesDownloaded ?: continue
-            for (who in h.map(::whoOf).toSet()) out[who] = (out[who] ?: 0L) + bytes
-        }
-        return out
+        return KeptHolds.seenBy(shownHolders(app), Who.current(app))
     }
 
     /** WorkManager's every few hours, with the downloads' rules as its constraints. */
@@ -275,12 +252,6 @@ object Kept {
     }
 
     // --- the sync ---
-
-    private fun downloadedKeys(context: Context): List<String> {
-        val out = mutableListOf<String>()
-        Downloads.manager(context).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) out.add(c.download.request.id) }
-        return out
-    }
 
     private fun keyOf(t: JSONObject) = "${Uri.encode(t.optString("source"))}/${Uri.encode(t.optString("id"))}"
 
@@ -297,13 +268,12 @@ object Kept {
             val ours = items.filter { it.who == who }
             if (server != null && ours.isNotEmpty()) ask(app, server, ours)
 
-            // What is on the device now, and who holds it; a download without holders (just added, its hold on its
-            // way) is the account signed in's.
+            // What is on the device now, and who holds it. A download nothing holds is left alone: it is one just added, its
+            // hold on its way, or one told to go. Given to the one signed in, that one would see and keep another's.
             val downloads = mutableMapOf<String, Download>()
             Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads[c.download.request.id] = c.download }
             val holders = loadHolders(app)
-            for (k in downloads.keys) if (holders[k].isNullOrEmpty()) holders[k] = mutableSetOf(held(who, MANUAL))
-            val manual = holders.filterValues { h -> h.any(::isManual) }.keys
+            val manual = holders.filterValues { h -> h.any(KeptHolds::isManual) }.keys
 
             // The budget: every account's downloads first, then the items, the newest kept first, each in its order.
             val budget = prefs.syncBudgetGb.let { if (it <= 0) Long.MAX_VALUE else it * 1_000_000_000L }
@@ -343,14 +313,8 @@ object Kept {
             }
 
             // Holders as they are now: every account's own Downloads stay, the items' are what the budget gave.
-            for (k in (holders.keys + wanted.keys).toSet()) {
-                val h = (holders[k]?.filter(::isManual)?.toMutableSet() ?: mutableSetOf()).apply { addAll(wanted[k] ?: emptySet()) }
-                if (h.isEmpty()) {
-                    holders.remove(k)
-                    if (k in downloads) DownloadService.sendRemoveDownload(app, CratarrDownloadService::class.java, k, false)
-                } else {
-                    holders[k] = h
-                }
+            for (k in KeptHolds.afterPass(holders, wanted)) {
+                if (k in downloads) DownloadService.sendRemoveDownload(app, CratarrDownloadService::class.java, k, false)
             }
             // New ones (and failed ones, when asked), as the owner's Download would add them.
             val missing = wanted.keys.filter { k ->
@@ -451,7 +415,7 @@ object Kept {
     fun report(context: Context): JSONObject {
         val app = context.applicationContext
         val who = Who.current(app)
-        val (items, holders) = worker.submit<Pair<List<Item>, Map<String, Set<String>>>> { shownItems(app).filter { it.who == who } to loadHolders(app) }.get()
+        val (items, holders) = worker.submit<Pair<List<Item>, Map<String, Set<String>>>> { shownItems(app).filter { it.who == who } to shownHolders(app) }.get()
         val downloads = mutableMapOf<String, Download>()
         Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads[c.download.request.id] = c.download }
         val manager = Downloads.manager(app)
@@ -508,7 +472,7 @@ object Kept {
         val budget = Prefs(app).syncBudgetGb
         // Each account's share (decision 0101), only while one is signed in: signed out, nothing of any account shows.
         val accounts = JSONArray()
-        if (who != Who.NONE) for ((w, bytes) in shares(holders, downloads)) {
+        if (who != Who.NONE) for ((w, bytes) in KeptHolds.shares(holders) { downloads[it]?.bytesDownloaded }) {
             if (w != Who.NONE) accounts.put(JSONObject().put("account", w.removePrefix("@")).put("bytes", bytes).put("here", w == who))
         }
         return JSONObject()
@@ -523,6 +487,67 @@ object Kept {
     }
 }
 
+/** Who holds what (decision 0101), apart from the stores. A holder is [Who]'s key and what holds the download ([Kept.MANUAL]
+ *  or an item's key), apart by a tab. */
+internal object KeptHolds {
+    fun held(who: String, what: String) = "$who\t$what"
+
+    fun whoOf(holder: String) = holder.substringBefore('\t')
+
+    fun isManual(holder: String) = holder.substringAfter('\t') == Kept.MANUAL
+
+    /** What [who] sees: by id, whether each is its own Download once (held by its `manual` alone). One it does not hold
+     *  is not in the map. */
+    fun seenBy(holders: Map<String, Set<String>>, who: String): Map<String, Boolean> {
+        val mine = held(who, Kept.MANUAL)
+        return holders.mapNotNull { (k, h) ->
+            val its = h.filter { whoOf(it) == who }
+            if (its.isEmpty()) null else k to (its == listOf(mine))
+        }.toMap()
+    }
+
+    /** Each account's share of this device's downloads, in bytes (a file two hold counts in both), by its [Who] key. */
+    fun shares(holders: Map<String, Set<String>>, bytesOf: (String) -> Long?): Map<String, Long> {
+        val out = mutableMapOf<String, Long>()
+        for ((k, h) in holders) {
+            val bytes = bytesOf(k) ?: continue
+            for (who in h.map(::whoOf).toSet()) out[who] = (out[who] ?: 0L) + bytes
+        }
+        return out
+    }
+
+    /** The holds [gone] says let go of on [keys]: those of them nothing holds now, out of [holders], for removing. Only
+     *  these: a download no one was asked about may be one whose hold is on its way. */
+    fun letGo(holders: MutableMap<String, MutableSet<String>>, keys: Collection<String>, gone: (String) -> Boolean): List<String> {
+        val out = mutableListOf<String>()
+        for (k in keys) {
+            val h = holders[k] ?: continue
+            h.removeAll(gone)
+            if (h.isEmpty()) {
+                holders.remove(k)
+                out.add(k)
+            }
+        }
+        return out
+    }
+
+    /** After a pass: every account's own Downloads stay, the items' holds are what the budget gave ([wanted]). Those
+     *  nothing holds now, out of [holders], for removing. */
+    fun afterPass(holders: MutableMap<String, MutableSet<String>>, wanted: Map<String, Set<String>>): List<String> {
+        val out = mutableListOf<String>()
+        for (k in (holders.keys + wanted.keys).toSet()) {
+            val h = (holders[k]?.filter(::isManual)?.toMutableSet() ?: mutableSetOf()).apply { addAll(wanted[k] ?: emptySet()) }
+            if (h.isEmpty()) {
+                holders.remove(k)
+                out.add(k)
+            } else {
+                holders[k] = h
+            }
+        }
+        return out
+    }
+}
+
 /** The kept lists as files: a stop or a full disk during a write must never read afterwards as nothing kept. */
 internal object KeptFile {
     /** The list in [file]; none there yet is an empty one. One that is there and cannot be read throws. */
@@ -531,6 +556,21 @@ internal object KeptFile {
         return try {
             val a = JSONArray(file.readText())
             (0 until a.length()).map { a.getJSONObject(it) }
+        } catch (e: JSONException) {
+            throw IOException("${file.name} cannot be read: ${e.message}", e)
+        }
+    }
+
+    /** The holders in [file], each download's, by its id; none there yet is an empty map. One that is there and cannot be
+     *  read throws, as [list]: nothing held, every account's downloads would be free to go. */
+    fun holders(file: File): MutableMap<String, MutableSet<String>> {
+        if (!file.exists()) return mutableMapOf()
+        return try {
+            val o = JSONObject(file.readText())
+            o.keys().asSequence().associateWith { k ->
+                val a = o.getJSONArray(k)
+                (0 until a.length()).map { a.getString(it) }.filter { '\t' in it }.toMutableSet()
+            }.toMutableMap()
         } catch (e: JSONException) {
             throw IOException("${file.name} cannot be read: ${e.message}", e)
         }
