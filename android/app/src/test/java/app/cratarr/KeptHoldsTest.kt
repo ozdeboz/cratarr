@@ -96,6 +96,28 @@ class KeptHoldsTest {
     }
 
     @Test
+    fun an_account_away_keeps_what_it_has_here_and_the_one_signed_in_shrinks() {
+        // A budget of 20. Hers: 18, kept on Monday, all here, and she signed out. His: 12, kept on Tuesday.
+        val hers = Triple(ann, 1L, 18L)
+        val his = Triple(bo, 2L, 12L)
+        val order = KeptHolds.inTurn(listOf(his, hers), bo, { it.first }, { it.second })
+        assertEquals("newest first would have his taken up, and hers cut to what is left", listOf(hers, his), order)
+        val room = KeptRoom(20, 0)
+        assertTrue(room.take(hers.third, away = true))
+        assertFalse(room.take(his.third, away = false))
+        assertTrue("what does fit of his still comes", room.take(2, away = false))
+        assertFalse(room.take(1, away = false))
+        assertTrue("and over the budget, what she has here stays", room.take(5, away = true))
+    }
+
+    @Test
+    fun among_the_items_of_the_one_signed_in_the_newest_comes_first_so_the_oldest_shrinks() {
+        val mine = listOf(Triple(bo, 1L, "old"), Triple(bo, 3L, "new"), Triple(bo, 2L, "between"), Triple(ann, 9L, "hers"))
+        assertEquals(listOf("hers", "new", "between", "old"), KeptHolds.inTurn(mine, bo, { it.first }, { it.second }).map { it.third })
+        assertEquals("with nobody signed in everyone is away", listOf("hers", "new", "between", "old"), KeptHolds.inTurn(mine, Who.NONE, { it.first }, { it.second }).map { it.third })
+    }
+
+    @Test
     fun each_accounts_share_counts_a_file_it_holds_once_and_one_two_hold_in_both() {
         val h = holders("hers" to setOf(manual(ann), item(ann)), "both" to setOf(manual(ann), manual(bo)), "gone_from_the_store" to setOf(manual(bo)))
         val bytes = mapOf("hers" to 10L, "both" to 5L)
@@ -122,6 +144,13 @@ class KeptHoldsTest {
         assertTrue("KeptHolds.letGo(holders, keys, gone)" in release)
         assertFalse("downloadIndex" in release)
         assertFalse("downloadedKeys" in release)
+    }
+
+    @Test
+    fun a_pass_goes_through_the_budget_as_the_tests_above_do() {
+        val pass = kept.substringAfter("private fun syncHere(").substringBefore("private fun librariesOff(")
+        assertTrue("KeptHolds.inTurn(items, who," in pass)
+        assertTrue("room.take(size, away = item.who != who)" in pass)
     }
 
     @Test

@@ -7,8 +7,9 @@
  *   its `manual` (its Download) and its kept items' keys. A file two accounts hold is stored once; an account sees only
  *   what it holds, and its items are asked after only while it is signed in (the others keep what they have).
  * - One storage budget for the device (20 GB unless set; 0 is no limit). Every account's downloads count first and
- *   are never dropped; then the items, the newest kept first, each in its own order: what does not fit is left out,
- *   so the item kept longest ago shrinks first.
+ *   are never dropped, and what the items of the accounts away have here stays too (decision 0101, point 13: hidden but
+ *   kept), whatever that leaves. Then the items of the one signed in, the newest kept first, each in its own order: what
+ *   does not fit is left out, so the item kept longest ago shrinks first.
  * - Synced when the app starts, when an item is kept, when the settings change, and every few hours by WorkManager
  *   (KeptWorker), with the downloads' own rules: Wi-Fi unless mobile data is allowed, charging when asked.
  * - The lists are written whole (KeptFile). A list, of the items or the holders, that is there and cannot be read stops
@@ -275,13 +276,13 @@ object Kept {
             val holders = loadHolders(app)
             val manual = holders.filterValues { h -> h.any(KeptHolds::isManual) }.keys
 
-            // The budget: every account's downloads first, then the items, the newest kept first, each in its order.
+            // The budget: every account's downloads first, then the items in their turn.
             val budget = prefs.syncBudgetGb.let { if (it <= 0) Long.MAX_VALUE else it * 1_000_000_000L }
             val copies = prefs.downloadQuality == Prefs.QUALITY_SMALLER
-            var used = manual.sumOf { downloads[it]?.bytesDownloaded ?: 0L }
+            val room = KeptRoom(budget, manual.sumOf { downloads[it]?.bytesDownloaded ?: 0L })
             val wanted = linkedMapOf<String, MutableSet<String>>()
             val tracks = mutableMapOf<String, JSONObject>()
-            for (item in items.sortedByDescending { it.since }) {
+            for (item in KeptHolds.inTurn(items, who, { it.who }, { it.since })) {
                 var over = 0
                 for (i in 0 until item.tracks.length()) {
                     val t = item.tracks.optJSONObject(i) ?: continue
@@ -302,8 +303,7 @@ object Kept {
                     val size = (if (copies) t.optLong("copy_size", -1) else t.optLong("size", -1)).takeIf { it > 0 }
                         ?: t.optDouble("duration_secs", Double.NaN).takeIf { !it.isNaN() }?.let { (it * 40_000).toLong() }
                         ?: UNKNOWN_SIZE
-                    if (used + size <= budget) {
-                        used += size
+                    if (room.take(size, away = item.who != who)) {
                         wanted[k] = mutableSetOf(item.holder)
                     } else {
                         over++
@@ -489,12 +489,28 @@ object Kept {
 
 /** Who holds what (decision 0101), apart from the stores. A holder is [Who]'s key and what holds the download ([Kept.MANUAL]
  *  or an item's key), apart by a tab. */
+/** One pass's room in the storage budget ([budget] bytes, [used] so far). */
+internal class KeptRoom(private val budget: Long, private var used: Long) {
+    /** A track of [size] bytes, if it has room. One of an account [away] always has: that account is not here to choose, and
+     *  coming back it would find it gone, with no way to fetch it offline. Only the one signed in shrinks. */
+    fun take(size: Long, away: Boolean): Boolean {
+        if (!away && used + size > budget) return false
+        used += size
+        return true
+    }
+}
+
 internal object KeptHolds {
     fun held(who: String, what: String) = "$who\t$what"
 
     fun whoOf(holder: String) = holder.substringBefore('\t')
 
     fun isManual(holder: String) = holder.substringAfter('\t') == Kept.MANUAL
+
+    /** The order a pass takes kept items in: the accounts' away first, what they have here staying; then those of [who], the
+     *  one signed in, the newest kept first. */
+    fun <T> inTurn(items: List<T>, who: String, whose: (T) -> String, since: (T) -> Long): List<T> =
+        items.sortedWith(compareBy<T> { whose(it) == who }.thenByDescending(since))
 
     /** What [who] sees: by id, whether each is its own Download once (held by its `manual` alone). One it does not hold
      *  is not in the map. */
