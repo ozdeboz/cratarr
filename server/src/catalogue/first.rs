@@ -117,7 +117,10 @@ fn note_albums(tx: &Connection, albums: &[AlbumCopy], records: &[Option<i64>], k
     // it lies now: a row by the place it was worked out for would read on a copy nobody reviewed, or miss the one somebody did.
     let incoming: Vec<i64> = kinds.iter().filter(|(_, kind)| *kind == Kind::Incoming).map(|(folder, _)| *folder).collect();
     let after = albums.len() as i64;
-    for (rank, a, record) in given() {
+    // Of a release on two records, the id of a place in Incoming was the copy's that lay there: Music's has one of its own.
+    let mut worked_out: Vec<_> = given().collect();
+    worked_out.sort_by_key(|(_, a, _)| !incoming.contains(&a.folder));
+    for (rank, a, record) in worked_out {
         for folder in std::iter::once(&0).chain(&incoming) {
             id.execute(params![ids::album_at(&a.pid, *folder), record, a.folder, after + rank])?;
         }
