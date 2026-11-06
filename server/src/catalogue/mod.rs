@@ -329,8 +329,8 @@ struct Held {
     shared: std::collections::HashSet<i64>,
     /// Tracks back from retirement, not yet held against their albums.
     back: std::collections::HashSet<i64>,
-    /// Where each track has a file gone a while, or there and not read: (folder, its folder there).
-    gone: HashMap<i64, Vec<Place>>,
+    /// Where each track has a file gone a while, or there and not read, by track so a let-go goes the same way every time.
+    gone: BTreeMap<i64, Vec<Place>>,
 }
 
 impl Held {
@@ -354,7 +354,7 @@ impl Held {
         let mut st = db.prepare(&format!("SELECT track, folder, rel FROM files WHERE track IS NOT NULL AND (gone_at IS NOT NULL OR ({PRESENT} AND NOT {}))", served("")))?;
         for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
             let (track, folder, rel) = row?;
-            held.gone.entry(track).or_default().push((folder, dir_of(&rel).to_string()));
+            held.gone.entry(track).or_default().push((folder, rel));
         }
         Ok(held)
     }
@@ -2508,7 +2508,7 @@ impl Catalogue {
         {
             let mut born = tx.prepare_cached("INSERT INTO records (born, title, artist, year) VALUES (?1, ?2, ?3, ?4)")?;
             let mut give = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND (record IS NULL OR (?5 AND record != ?2))")?;
-            let mut of_its_own = tx.prepare_cached("INSERT INTO tracks (born) SELECT born FROM tracks WHERE id = ?1")?;
+            let mut of_its_own = tx.prepare_cached("INSERT INTO tracks (born, disc, number) SELECT born, disc, number FROM tracks WHERE id = ?1")?;
             let mut let_go = tx.prepare_cached("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2")?;
             for (i, a) in albums.iter().enumerate() {
                 let record = match records[i] {
@@ -2528,24 +2528,36 @@ impl Catalogue {
                         }
                         // What another record keeps, its files here let go of, or they would be files of a track of that record in
                         // an album of this one, and never listed. A track of its own for each, as old as the file.
+                        let elsewhere = |kept: &i64| home.get(kept).is_some_and(|r| Some(*r) != same.map(|s| s.1));
                         let mut own: HashMap<i64, i64> = HashMap::new();
+                        let mut own_of = |kept: i64| -> rusqlite::Result<i64> {
+                            if let Some(fresh) = own.get(&kept) {
+                                return Ok(*fresh);
+                            }
+                            of_its_own.execute([kept])?;
+                            own.insert(kept, tx.last_insert_rowid());
+                            Ok(tx.last_insert_rowid())
+                        };
                         for (at, track) in tracks[i].iter_mut().enumerate() {
                             let kept = take.now(*track);
-                            if home.get(&kept).is_none_or(|r| Some(*r) == same.map(|s| s.1)) {
+                            if !elsewhere(&kept) {
                                 continue;
                             }
                             let Some((folder, rel)) = a.files.get(at) else { continue };
-                            let fresh = match own.get(&kept) {
-                                Some(fresh) => *fresh,
-                                None => {
-                                    of_its_own.execute([kept])?;
-                                    own.insert(kept, tx.last_insert_rowid());
-                                    tx.last_insert_rowid()
-                                }
-                            };
+                            let fresh = own_of(kept)?;
                             let_go.execute(params![folder, rel, fresh])?;
                             *track = fresh;
                             given += 1;
+                        }
+                        // A take goes by every row of a track, and so does this: a file beside these gone a while or not read is in
+                        // no list, and left on the track it would come back a file of that record, in an album going by its own
+                        // vote, and never be listed.
+                        let beside = |(at, rel): &Place| a.files.iter().any(|(folder, file)| folder == at && dir_of(file) == dir_of(rel));
+                        for (track, places) in held.gone.iter().filter(|(track, _)| elsewhere(&take.now(**track))) {
+                            for (folder, rel) in places.iter().filter(|place| beside(place)) {
+                                let_go.execute(params![folder, rel, own_of(take.now(*track))?])?;
+                                given += 1;
+                            }
                         }
                         let r = match same {
                             Some((j, r)) => {
@@ -2557,6 +2569,10 @@ impl Catalogue {
                                 tx.last_insert_rowid()
                             }
                         };
+                        // Those it lists are given it below, with their places.
+                        for fresh in own.values().filter(|fresh| !tracks[i].contains(fresh)) {
+                            tx.execute("UPDATE tracks SET record = ?2 WHERE id = ?1", params![fresh, r])?;
+                        }
                         records[i] = Some(r);
                         note(i, a, r, &mut by_name, &mut by_release);
                         r
@@ -5634,6 +5650,30 @@ mod tests {
         young.facts.title = identity::fold("Three");
         cat.assign_records(&[kept, young]).unwrap();
         assert!(cat.moved_tracks().unwrap().is_empty());
+    }
+
+    /// The take goes by every row of a track, gone ones too, and a let-go must as well. Left on the record's track, a file back
+    /// from a moment away is a file of the other record, in an album that goes by its own vote and never lists it.
+    #[test]
+    fn a_file_of_a_copy_that_left_comes_back_to_its_copy() {
+        let cat = tracks(7);
+        let (kept, second, _) = two_copies(&cat);
+        let rel = second.files[2].1.clone();
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE rel = ?1", [&rel]).unwrap();
+        file_of_track(&cat, "Kept/7.flac", 7);
+        let names = [(1, "One", 200_000), (2, "Two", 200_000), (3, "Three", 200_000), (7, "Four", 200_000)];
+        let mut more = copy(None, "A", "Three", &names);
+        more.files = [kept.files.clone(), vec![(0, "Kept/7.flac".to_string())]].concat();
+        let lacking = the_first(2, &second);
+        cat.assign_records(&[more.clone(), lacking.clone()]).unwrap();
+        let left = as_it_stands(&cat, &lacking);
+        assert_ne!(left.tracks[0].0, 1, "the copy left");
+
+        cat.db().execute("UPDATE files SET gone_at = NULL WHERE rel = ?1", [&rel]).unwrap();
+        let back = as_it_stands(&cat, &second);
+        assert_ne!(back.tracks[2].0, 3, "on no track of the record it left");
+        cat.assign_records(&[more, back.clone()]).unwrap();
+        assert_eq!(record_of(&cat, back.tracks[2].0), record_of(&cat, left.tracks[0].0), "in its copy's record");
     }
 
     /// Copies are held together by their ids once taken: a retag or a length fix in one is no reason to split them.
