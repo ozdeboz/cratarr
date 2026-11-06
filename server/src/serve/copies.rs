@@ -61,6 +61,16 @@ fn best<'a>(copies: impl Iterator<Item = &'a Copy>) -> Option<&'a Copy> {
     copies.min_by(|a, b| rank(b).cmp(&rank(a)).then(a.order.cmp(&b.order)).then(a.folder.cmp(&b.folder)).then(a.dir.cmp(&b.dir)))
 }
 
+/// Who keeps a record of two copies that differ, the higher first (CR18, the owner): a main library, then someone's own music,
+/// then Incoming. The track count decides only between copies of one kind.
+pub fn keeping(kind: Kind) -> u8 {
+    match kind {
+        Kind::Main => 2,
+        Kind::Own => 1,
+        Kind::Incoming => 0,
+    }
+}
+
 /// The copy that plays, of a record's `copies`: the best the kept libraries on hold, whoever's own music it lies in. `viewer` is
 /// none for no one in particular: then it is the row copy, the one that plays for most people, and own music counts as off
 /// unless nothing else holds the record (one user's FLAC is not what everyone else's Music shows). `off`: the folders of the

@@ -203,6 +203,8 @@ pub struct AlbumCopy {
     /// Worth `assign_records`' reading: a track free to move holds another record or none, or albums of one record hold
     /// different tracks.
     pub split: bool,
+    /// Who keeps a record of two copies that differ, the higher first (`copies::keeping`, CR18). All alike: the track count alone.
+    pub rank: u8,
     /// The catalogue folder it lies in, and what 0.15 knew it by: its tag hash there and in Music's form, and the persistent
     /// id both are the hash of. What the first start's map is made of (`Catalogue::first_records`).
     pub folder: i64,
@@ -321,6 +323,8 @@ struct Held {
     size: HashMap<i64, usize>,
     /// How many files of each record are here now: what says whether anything but one album holds it.
     files: HashMap<i64, usize>,
+    /// How many of them lie in albums of each rank (`ranked`).
+    in_rank: HashMap<(i64, u8), usize>,
     /// Tracks with more than one file: they stay with their record, whichever album one of them sits in.
     shared: std::collections::HashSet<i64>,
     /// Tracks back from retirement, not yet held against their albums.
@@ -367,8 +371,9 @@ impl Held {
     /// The record nothing but these tracks' album holds: every file of it here now is one of them, and one beside them
     /// stayed, as a track back from retirement says nothing of where it landed. Seven files added outside Cratarr to three of
     /// a record's are no majority for it, and without this it would go, and what names it with it. Of two such, the one it
-    /// holds most of, the lowest on a tie. A file each, as `AlbumCopy::tracks` lists them.
-    fn alone(&self, tracks: &[i64]) -> Option<i64> {
+    /// holds most of, the lowest on a tie. A file each, as `AlbumCopy::tracks` lists them. Files in albums of a lower rank do
+    /// not count: a copy that gives way to this one does not stop it being alone (CR18).
+    fn alone(&self, tracks: &[i64], rank: u8) -> Option<i64> {
         let mut held: BTreeMap<i64, (usize, bool)> = BTreeMap::new();
         for track in tracks {
             if let Some(record) = self.record.get(track) {
@@ -377,7 +382,20 @@ impl Held {
                 vote.1 |= !self.back.contains(track);
             }
         }
-        held.into_iter().filter(|(record, (n, stayed))| *stayed && self.files.get(record) == Some(n)).max_by_key(|(r, (n, _))| (*n, std::cmp::Reverse(*r))).map(|(r, _)| r)
+        let here = |record: i64| {
+            let below: usize = (0..rank).filter_map(|r| self.in_rank.get(&(record, r))).sum();
+            self.files.get(&record).map(|n| n.saturating_sub(below))
+        };
+        held.into_iter().filter(|(record, (n, stayed))| *stayed && here(*record) == Some(*n)).max_by_key(|(r, (n, _))| (*n, std::cmp::Reverse(*r))).map(|(r, _)| r)
+    }
+
+    /// Where these albums' files lie, by each one's rank.
+    fn ranked(&mut self, albums: &[AlbumCopy]) {
+        for a in albums {
+            for record in a.tracks.iter().filter_map(|t| self.record.get(&t.0)) {
+                *self.in_rank.entry((*record, a.rank)).or_default() += 1;
+            }
+        }
     }
 
     /// The record an album's tracks say it is, if they do ([`vote_of`]). Failing that, the record that has no other album to
@@ -386,7 +404,7 @@ impl Held {
     fn vote(&self, album: &AlbumCopy) -> Option<i64> {
         let tracks: Vec<i64> = album.tracks.iter().map(|t| t.0).collect();
         let said: Vec<Say> = tracks.iter().map(|t| Say { record: self.record.get(t).copied(), free: !self.shared.contains(t), back: self.back.contains(t) }).collect();
-        vote_of(&said, &|record| self.size.get(&record).copied().unwrap_or(0)).or_else(|| self.alone(&tracks))
+        vote_of(&said, &|record| self.size.get(&record).copied().unwrap_or(0)).or_else(|| self.alone(&tracks, album.rank))
     }
 }
 
@@ -2385,9 +2403,9 @@ impl Catalogue {
     ///
     /// A copy takes the record's tracks (0101), place by place: its files go to the record's track, and the id they held
     /// retires for good, with what it became in `track_moved`, for what names it to follow (`Serve::built_now`). Copies of
-    /// one record always hold the same tracks (Q8, the owner): one that no longer can leaves the record to the largest and
-    /// takes tracks of its own, as what points at them stays with the record. The tracks given a record, taken or let go of.
-    /// Blocking.
+    /// one record always hold the same tracks (Q8, the owner): one that no longer can leaves the record to the first by kind,
+    /// then the largest (CR18), and takes tracks of its own, as what points at them stays with the record. The tracks given a
+    /// record, taken or let go of. Blocking.
     pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -2399,7 +2417,8 @@ impl Catalogue {
     /// `assign_records` in the caller's transaction, as the first start's merge commits with its map (`first_records`): the
     /// tracks given a record, taken or let go of, and each album's record, none where nothing there can take one.
     fn assign_in(tx: &Connection, albums: &[AlbumCopy], now: i64) -> Result<(usize, Vec<Option<i64>>)> {
-        let held = Held::read(tx)?;
+        let mut held = Held::read(tx)?;
+        held.ranked(albums);
         // Who to hold a new album against: the albums that have a record, by name and by release, then the new ones as
         // they get theirs.
         let (mut by_name, mut by_release) = (HashMap::new(), HashMap::new());
@@ -2417,9 +2436,10 @@ impl Catalogue {
         let mut take = Take::default();
         // The tracklists must match, always, so albums voting one record hold one set of tracks. Where the ids alone differ, a
         // file replaced outside Cratarr, the track is taken. Where the tracks do, a track added to one or one disc of a double
-        // album retagged, the largest keeps the record, the first on a tie, and the others are held against the rest as a new
-        // album is: two albums, as a deluxe edition is its own record. What the ids hold together stays together whatever the
-        // tags say, or a length fix in one copy would split it. A file gone for now splits nothing.
+        // album retagged, the first by kind keeps the record, then the largest, then the first met (CR18: nobody has checked an
+        // Incoming copy, and one account's own is no one else's), and the others are held against the rest as a new album is:
+        // two albums, as a deluxe edition is its own record. What the ids hold together stays together whatever the tags say,
+        // or a length fix in one copy would split it. A file gone for now splits nothing.
         let mut voting: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
         for (i, r) in records.iter().enumerate() {
             if let Some(r) = r {
@@ -2427,7 +2447,7 @@ impl Catalogue {
             }
         }
         for (record, list) in voting.iter().filter(|(_, l)| l.len() > 1) {
-            let Some(keeps) = list.iter().copied().max_by_key(|i| (albums[*i].tracks.len(), std::cmp::Reverse(*i))) else { continue };
+            let Some(keeps) = list.iter().copied().max_by_key(|i| (albums[*i].rank, albums[*i].tracks.len(), std::cmp::Reverse(*i))) else { continue };
             for i in list.iter().copied().filter(|i| *i != keeps) {
                 if identity::same_record(&albums[i].facts, &albums[keeps].facts) {
                     take.place_by_place(&held, *record, &tracks[i], &tracks[keeps]);
