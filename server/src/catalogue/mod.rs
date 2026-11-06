@@ -5248,6 +5248,7 @@ mod tests {
         let now = as_it_stands(&cat, &second);
         cat.assign_records(&[now, kept]).unwrap();
         assert_eq!(cat.track_of(0, &replaced), Some(3), "first on the tie, the fresh file does not win");
+        assert_eq!(record_of(&cat, 7), None, "no track of the record now, or it counts as one: a track back would need a vote more");
     }
 
     /// A fresh file with no number sorts last, so its album is not the same tracks place by place: its name and length say.

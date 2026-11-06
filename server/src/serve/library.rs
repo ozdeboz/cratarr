@@ -2388,7 +2388,8 @@ mod tests {
         assert_eq!(lib.file_of(&ids::song(track)).unwrap(), Some((other, rel.to_string())), "from the copy that has it");
         let who = crate::serve::listener::Listener::default();
         assert_eq!(lib.file_for(&ids::song(track), &cat.files_of(track), &who).unwrap(), Some((other, rel.to_string())));
-        assert_eq!(cat.track_of(other, rel), Some(track), "for now: it splits nothing");
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM albums"), 1, "for now: it splits nothing");
+        assert_eq!(cat.track_of(row, "A/01 One.flac"), cat.track_of(other, "A/01 One.flac"), "and gives the copy no tracks of its own");
         // Back: the same again.
         std::fs::write(row_root.join(rel), rel).unwrap();
         cat.walk_all();
