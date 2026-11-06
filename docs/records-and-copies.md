@@ -112,7 +112,7 @@ gains, is the file that plays, so a waveform's ETag names the file.
 ## On the page
 
 - A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, bits, rate, deletable, keepable,
-  keep_to, lacks, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
+  keep_to, lacks, plays, added, size, job }]`, what the viewer may do going by the copy. They come in the order they
   would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
   first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
   copy that plays. Dots: one per copy,

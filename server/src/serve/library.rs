@@ -3136,6 +3136,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         let c = &listed[0];
         assert_eq!((c.album.id.as_str(), c.dir.as_str(), c.format.as_deref(), c.kbps, c.bits, c.rate, c.added), ("al-5", "A/Album", Some("FLAC"), Some(900), Some(16), Some(44_100), Some(9_000)));
+        assert_eq!(c.size, 40_000_000, "its two files' bytes");
         assert_eq!(lib.albums_in(0, 10).unwrap()[0].format.as_deref(), Some("MP3"), "the other library's is its own");
     }
 
