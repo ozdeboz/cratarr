@@ -1,6 +1,6 @@
 // A record and its copies (lib/copiesRule.ts, docs/records-and-copies.md): a record shows when any copy is in a library
 // switched on; its card has a dot per copy under the rule of two or more, an Incoming copy none beside a kept one; the
-// copy that plays is the first on in the server's order, an Incoming one only when picked or when the server says so.
+// copy that plays is the first on in the server's order, an Incoming one only when the server says so.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -21,7 +21,6 @@ const copy = (id: string, more: Partial<AlbumCopy> = {}): AlbumCopy => ({
   keepable: false,
   keep_to: null,
   lacks: [],
-  picked: false,
   plays: false,
   added: null,
   job: null,
@@ -122,21 +121,16 @@ test('a switch the server has not heard of yet moves what plays to the next copy
   assert.equal(copyPlaying(a, INFO, without('music'))?.library, 'more');
 });
 
-test('a pick in a library switched off never plays', () => {
-  const a = { copies: [copy('more', { picked: true }), copy('music')] };
-  assert.equal(copyPlaying(a, INFO, without('more'))?.library, 'music');
-});
-
-test('an Incoming copy plays when picked', () => {
-  const a = { copies: [copy('in', { picked: true, plays: true }), copy('music')] };
-  assert.equal(copyPlaying(a, INFO, without())?.library, 'in');
-});
-
-test('an Incoming copy not picked is passed over for the kept copy, wherever it is listed', () => {
+test('an Incoming copy is passed over for the kept copy, wherever it is listed', () => {
   assert.equal(copyPlaying({ copies: [copy('in'), copy('music')] }, INFO, without())?.library, 'music');
 });
 
-test('with the kept library off and nothing picked, an Incoming copy does not play', () => {
+test('an Incoming copy better than the kept one still does not play by itself: nobody has checked it', () => {
+  const a = { copies: [copy('in', { format: 'FLAC' }), copy('music', { format: 'MP3', kbps: 128 })] };
+  assert.equal(copyPlaying(a, INFO, without())?.library, 'music');
+});
+
+test('with the kept library off an Incoming copy does not play by itself', () => {
   assert.equal(copyPlaying(copies('music', 'in'), INFO, without('music')), null);
 });
 

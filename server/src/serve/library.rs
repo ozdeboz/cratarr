@@ -23,9 +23,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::userdata::overrides::Overrides;
 
-use super::copies::{Copy, Kind, copy_for};
+use super::copies::{Copy, Kind, copy_for, in_order, keeping};
 use super::ids;
-use crate::catalogue::{Rules, ServedRow};
+use crate::catalogue::{Rules, Say, ServedRow, vote_of};
 
 // journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
@@ -49,10 +49,9 @@ CREATE TABLE IF NOT EXISTS albums (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, artist TEXT NOT NULL, artist_id TEXT NOT NULL,
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
-  compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL, record INTEGER NOT NULL, group_id TEXT NOT NULL,
+  compilation INTEGER NOT NULL, order_name TEXT NOT NULL, record INTEGER NOT NULL,
   format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', type_why TEXT,
   set_fields TEXT NOT NULL DEFAULT '', whole_tracks INTEGER);
-CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
 CREATE INDEX IF NOT EXISTS albums_by_year ON albums (year, n);
@@ -424,7 +423,7 @@ mod release_type_tests {
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 17;
+const LAYOUT: i64 = 20;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -471,8 +470,10 @@ pub struct Library {
     /// The albums found missing tracks, by album id, with their whole release (user data `album_complete`; 0.13: typed
     /// as it).
     incomplete: Mutex<HashMap<String, Whole>>,
-    /// A record's facts set by hand (0.13), by its Music-form id (user data `record_overrides`).
+    /// A record's facts set by hand (0.13), by its id (user data `record_overrides`).
     overrides: Mutex<HashMap<String, Overrides>>,
+    /// Every artist's id for life, by `ids::artist_key`: the catalogue's, as `credit` last read them.
+    artists: Mutex<HashMap<String, i64>>,
     /// What each catalogue folder's library is, in the libraries' order (`set_kinds`).
     kinds: Mutex<Vec<(i64, Kind)>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
@@ -584,11 +585,9 @@ struct Song<'a> {
     /// with the album its file lies in.
     record: i64,
     album_id: String,
-    /// What gathers one folder's files of an album: the hash of its tags, the folder in front. Facts kept from before
-    /// the flip are found by it until the migration has moved them.
+    /// What gathers one folder's files of an album: the hash of its tags, the folder in front, its id until 0.16.
     group: String,
-    /// The album's id as it is (or would be) in Music, folder 0: what its tags are kept under, so they follow an
-    /// album kept from Incoming.
+    /// The same as it is (or would be) in Music, folder 0: what the first start finds what was kept by it through (N5).
     album_base: String,
     genres: Vec<String>,
 }
@@ -665,6 +664,7 @@ impl Library {
             release_types: Mutex::default(),
             incomplete: Mutex::default(),
             overrides: Mutex::default(),
+            artists: Mutex::default(),
             kinds: Mutex::default(),
             building: Mutex::new(()),
         })
@@ -673,6 +673,22 @@ impl Library {
     /// The added dates known better than the catalogue's (by album id); a change builds the library again.
     pub fn set_added(&self, added: HashMap<String, i64>) {
         *self.added.lock().unwrap_or_else(|p| p.into_inner()) = added;
+    }
+
+    /// The artists' ids for life, by `ids::artist_key`.
+    pub fn set_artists(&self, artists: HashMap<String, i64>) {
+        *self.artists.lock().unwrap_or_else(|p| p.into_inner()) = artists;
+    }
+
+    /// Every name these rows credit has its id, a new one given by the catalogue. What is kept is good for life, so the
+    /// catalogue is asked only for a name not among it, and a restart, which keeps nothing, asks once.
+    fn credit<'r>(&self, cat: &crate::catalogue::Catalogue, rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &Rules) -> Result<()> {
+        let names = credited_artists(rows, rules);
+        let known = |artists: &HashMap<String, i64>| names.iter().all(|n| artists.contains_key(&ids::artist_key(n)));
+        if !known(&self.artists.lock().unwrap_or_else(|p| p.into_inner())) {
+            self.set_artists(cat.artists_for(&names).context("giving the artists their ids")?);
+        }
+        Ok(())
     }
 
     /// The original years known from MusicBrainz (by MusicBrainz release); a change builds the library again.
@@ -685,7 +701,7 @@ impl Library {
         *self.release_types.lock().unwrap_or_else(|p| p.into_inner()) = types;
     }
 
-    /// The records' facts set by hand (by Music-form id, 0.13); a change builds the library again.
+    /// The records' facts set by hand (by record, 0.13); a change builds the library again.
     pub fn set_overrides(&self, overrides: HashMap<String, Overrides>) {
         *self.overrides.lock().unwrap_or_else(|p| p.into_inner()) = overrides;
     }
@@ -823,9 +839,12 @@ impl Library {
                 })
                 .collect::<Result<Vec<_>>>()
         };
+        cat.reading_albums();
         let mut folders = read()?;
         // New tracks get their records first, and strays their albums': what the library lists is what a record is.
-        let copies = album_copies(&folders, rules);
+        let mut copies = album_copies(&folders, rules);
+        let kinds = self.kinds();
+        copies.iter_mut().for_each(|a| a.rank = keeping(kind_in(&kinds, a.folder).0));
         if cat.records_unsettled() || copies.iter().any(|a| a.split) {
             // A row with no record is not served, so a build going on without them would take those albums off the lists,
             // and note itself as up to date. The library stays as it is until the next pass can give them.
@@ -837,6 +856,8 @@ impl Library {
             }
         }
         drop(copies);
+        // As for records: a new name has its id before anything written names it.
+        self.credit(cat, folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules)?;
         let covers = match &reader {
             Some(c) => crate::catalogue::cover_prints(c)?,
             None => cat.cover_prints()?,
@@ -879,13 +900,23 @@ impl Library {
             release_types: self.release_types.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             incomplete: self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             overrides: self.overrides.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            artists: self.artists.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             kinds: self.kinds(),
         }
     }
 
     #[cfg(test)]
     fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
+        self.credit_in_tests(folders, rules);
         self.build_with(&with_records(folders, rules), rules, &Covers::new())
+    }
+
+    /// Stands in for `build_from` giving these rows' names their ids, in tests that write with no catalogue.
+    #[cfg(test)]
+    fn credit_in_tests(&self, folders: &[FolderRows], rules: &Rules) {
+        for name in credited_artists(folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules) {
+            self.artists.lock().unwrap_or_else(|p| p.into_inner()).entry(ids::artist_key(&name)).or_insert(artist_number_in_tests(&name));
+        }
     }
 
     /// Builds the whole library from these files; `covers`, each folder's cover files (`catalogue::cover_prints`).
@@ -936,7 +967,7 @@ impl Library {
         // Albums whose kept facts or cover files changed. Only the copy that plays shows in `albums`, so only it is compared:
         // a cover changed in another copy changes nothing built.
         for a in self.built_albums()? {
-            if album_src(&a.id, &a.group, &a.base, a.release.as_deref(), a.folder, &a.dir, &facts, covers) != a.src {
+            if album_src(&a.id, a.release.as_deref(), a.folder, &a.dir, &facts, covers) != a.src {
                 dirs.extend(built.values().filter(|b| b.album == a.id).map(|b| (b.folder, b.dir.clone())));
             }
         }
@@ -966,7 +997,6 @@ impl Library {
         rules: &Rules,
         covers: &Covers,
     ) -> Result<usize> {
-        let facts = self.facts();
         // The folders' rows, and every folder their albums (as built, and as they would be now) reach.
         let mut rows: Vec<(i64, ServedRow)> = Vec::new();
         let mut read: BTreeSet<(i64, String)> = BTreeSet::new();
@@ -988,6 +1018,8 @@ impl Library {
         if !dirs.is_subset(&read) {
             anyhow::bail!("the albums reach further than they were followed");
         }
+        // Here, not before the rows: `update_files` gives their new names ids as it reads them.
+        let facts = self.facts();
         let refs: Vec<(i64, &ServedRow)> = rows.iter().map(|(f, r)| (*f, r)).collect();
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -1077,13 +1109,13 @@ impl Library {
             let (album, copy) = row?;
             copies.entry(album).or_default().push(copy);
         }
-        let mut st = db.prepare("SELECT id, group_id, base_id, mbid, src FROM albums")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?)))?;
+        let mut st = db.prepare("SELECT id, mbid, src FROM albums")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?)))?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, group, base, release, src) = row?;
+            let (id, release, src) = row?;
             if let Some(c) = copies.get(&id).and_then(|c| copy_for(c, None, &[])) {
-                out.push(BuiltAlbum { folder: c.folder, dir: c.dir.clone(), id, group, base, release, src });
+                out.push(BuiltAlbum { folder: c.folder, dir: c.dir.clone(), id, release, src });
             }
         }
         Ok(out)
@@ -1167,7 +1199,13 @@ impl Library {
         }
         let covers = cat.cover_prints()?;
         let roots: HashMap<i64, &str> = roots_now.iter().map(|(f, r)| (*f, r.as_str())).collect();
-        self.rebuild_dirs(dirs, &mut |folder, dir| cat.served_rows_in(folder, dir), &roots, rules, &covers)
+        // No `build_from` came first: a retag can bring a name no build has met, and after a restart no id is kept yet.
+        let mut rows_of = |folder: i64, dir: &str| -> Result<Vec<ServedRow>> {
+            let rows = cat.served_rows_in(folder, dir)?;
+            self.credit(cat, rows.iter().map(|r| (folder, r)), rules)?;
+            Ok(rows)
+        };
+        self.rebuild_dirs(dirs, &mut rows_of, &roots, rules, &covers)
     }
 
     /// Where each catalogue folder was at the last build: (folder, path).
@@ -1383,7 +1421,16 @@ struct Facts {
     release_types: HashMap<String, Kept>,
     incomplete: HashMap<String, Whole>,
     overrides: HashMap<String, Overrides>,
+    artists: HashMap<String, i64>,
     kinds: Vec<(i64, Kind)>,
+}
+
+impl Facts {
+    /// An artist's id as served. `credit` gave every name one, so one without is a fault there: a build that went on
+    /// would serve someone under no id.
+    fn artist(&self, name: &str) -> Result<String> {
+        self.artists.get(&ids::artist_key(name)).map(|id| ids::artist(*id)).with_context(|| format!("{name} has no id"))
+    }
 }
 
 /// A file as built: its folder there, its album and its row's print.
@@ -1397,8 +1444,6 @@ struct BuiltFile {
 /// A record as built: what its print was made from (`album_src`), and that print.
 struct BuiltAlbum {
     id: String,
-    group: String,
-    base: String,
     release: Option<String>,
     /// The copy that plays.
     folder: i64,
@@ -1416,15 +1461,9 @@ fn kind_in(kinds: &[(i64, Kind)], folder: i64) -> (Kind, usize) {
     }
 }
 
-/// A fact kept by album id: under the record's id, where the app found it since the flip, else under the id it had
-/// before, which only the migration moves.
-fn kept<'a, T>(facts: &'a HashMap<String, T>, album: &str, group: &str) -> Option<&'a T> {
-    facts.get(album).or_else(|| facts.get(group))
-}
-
-/// A record's Discogs types, kept as `kept` says.
-fn discogs_types<'a>(facts: &'a Facts, album: &str, group: &str) -> Option<&'a Kept> {
-    facts.release_types.get(&format!("dc:{album}")).or_else(|| facts.release_types.get(&format!("dc:{group}")))
+/// A record's Discogs types.
+fn discogs_types<'a>(facts: &'a Facts, album: &str) -> Option<&'a Kept> {
+    facts.release_types.get(&format!("dc:{album}"))
 }
 
 /// The print of the row a song is built from: everything in it (its tags, its file, its analysis); another print, a
@@ -1435,21 +1474,20 @@ fn row_src(r: &ServedRow) -> String {
 }
 
 /// The print of what an album is built from besides its songs' rows: its kept facts (added date, original year,
-/// Discogs' genres, release types, missing tracks, what is set by hand by its Music-form id `base`) and the cover files
-/// of the folder of the copy that plays. `group`: that copy's, what facts from before the flip are kept under.
-#[allow(clippy::too_many_arguments)]
-fn album_src(album: &str, group: &str, base: &str, release: Option<&str>, folder: i64, dir: &str, facts: &Facts, covers: &Covers) -> String {
+/// Discogs' genres, release types, missing tracks, what is set by hand), each by the record, and the cover files of the
+/// folder of the copy that plays.
+fn album_src(album: &str, release: Option<&str>, folder: i64, dir: &str, facts: &Facts, covers: &Covers) -> String {
     use md5::Digest;
     let said = format!(
         "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-        kept(&facts.added, album, group),
+        facts.added.get(album),
         release.and_then(|m| facts.originals.get(m)),
-        kept(&facts.extra_genres, album, group),
+        facts.extra_genres.get(album),
         release.and_then(|m| facts.release_types.get(&format!("mb:{m}"))),
-        discogs_types(facts, album, group),
+        discogs_types(facts, album),
         covers.get(&(folder, dir.to_string())),
-        kept(&facts.incomplete, album, group),
-        facts.overrides.get(base),
+        facts.incomplete.get(album),
+        facts.overrides.get(album),
     );
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
 }
@@ -1467,22 +1505,27 @@ fn grouped<'a>(rows: &[(i64, &'a ServedRow)], rules: &Rules) -> Vec<Song<'a>> {
     songs
 }
 
-/// The songs these rows serve, each with its record: the one most of its group's tracks hold, the lowest on a tie. Once
-/// `assign_records` has settled them that is `Held::vote`'s, but for a group of shared tracks with no majority, where `Held`
-/// goes by the free ones (C29 makes the two votes one). A row with no record yet is not served, and it still had its say in
-/// the grouping, as `album_copies` must find the same albums.
+/// The record a group's rows say it is: the catalogue's own vote, so a list serves an album as what `assign_records` gave it.
+/// Where that has no answer the group has yet to be settled, or holds nothing but other albums' tracks: the record most of
+/// them hold, the lowest on a tie. A row with no record has no say here.
+fn group_vote<'a>(rows: impl Iterator<Item = &'a ServedRow>) -> Option<i64> {
+    let said: Vec<Say> = rows.map(|r| Say { record: r.record, free: !r.shared, back: false }).collect();
+    vote_of(&said, &|_| 0).or_else(|| {
+        let mut held: BTreeMap<i64, usize> = BTreeMap::new();
+        said.iter().filter_map(|s| s.record).for_each(|record| *held.entry(record).or_default() += 1);
+        held.into_iter().max_by_key(|(record, n)| (*n, std::cmp::Reverse(*record))).map(|(record, _)| record)
+    })
+}
+
+/// The songs these rows serve, each with its record (`group_vote`). A row with no record yet is not served, and it still had
+/// its say in the grouping, as `album_copies` must find the same albums.
 fn songs_of<'a>(rows: &[(i64, &'a ServedRow)], rules: &Rules) -> Vec<Song<'a>> {
     let mut songs = grouped(rows, rules);
-    let mut votes: HashMap<String, BTreeMap<i64, usize>> = HashMap::new();
+    let mut groups: HashMap<&str, Vec<&ServedRow>> = HashMap::new();
     for s in &songs {
-        if let Some(record) = s.row.record {
-            *votes.entry(s.group.clone()).or_default().entry(record).or_default() += 1;
-        }
+        groups.entry(s.group.as_str()).or_default().push(s.row);
     }
-    let records: HashMap<String, i64> = votes
-        .into_iter()
-        .filter_map(|(group, held)| Some((group, held.into_iter().max_by_key(|(record, n)| (*n, std::cmp::Reverse(*record)))?.0)))
-        .collect();
+    let records: HashMap<String, i64> = groups.into_iter().filter_map(|(group, rows)| Some((group.to_string(), group_vote(rows.into_iter())?))).collect();
     songs.retain_mut(|s| {
         let held = s.row.record.is_some();
         if let Some(record) = records.get(&s.group).filter(|_| held) {
@@ -1543,17 +1586,40 @@ fn gather<'s, 'r>(songs: &'s [Song<'r>], kinds: &[(i64, Kind)]) -> BTreeMap<Stri
         .collect()
 }
 
-/// The index of the copy that plays for most people. Copies given, one always does (`copy_for`, with nothing off).
-fn row_copy_of(copies: &[Gathered]) -> usize {
+/// The indexes of these copies in the order they play for most people: the row copy first, then what would play were it
+/// gone. Copies given, one always does (`copy_for`, with nothing off).
+fn row_order(copies: &[Gathered]) -> Vec<usize> {
     let plain: Vec<Copy> = copies.iter().map(|c| c.copy.clone()).collect();
-    copy_for(&plain, None, &[]).and_then(|c| plain.iter().position(|p| p == c)).unwrap_or(0)
+    in_order(&plain, None).iter().filter_map(|c| plain.iter().position(|p| p == c)).collect()
 }
 
-/// Which of a track's files a build writes into `songs`, among those of the copies that play: the lowest wins. The one in
-/// the record the track holds, whichever album a file of it was moved into; then by record and place, so a whole build and
-/// a build of some folders write the same one.
-fn written_first<'a>(s: &'a Song) -> (bool, i64, i64, &'a str) {
-    (s.row.record != Some(s.record), s.record, s.folder, s.row.rel.as_str())
+/// Which of a track's files a build writes into `songs`: the lowest wins. The one in the record the track holds, whichever
+/// album a file of it was moved into; then the first of its record's copies in `row_order` (`place`) that holds it, so the row
+/// copy's where it has one, and a copy lacking the file leaves the record's list as it was; then by place, so a whole build
+/// and a build of some folders write the same one.
+fn written_first<'a>(s: &'a Song, place: usize) -> (bool, i64, usize, i64, &'a str) {
+    (s.row.record != Some(s.record), s.record, place, s.folder, s.row.rel.as_str())
+}
+
+/// Every name these rows credit, as a song reads them. One song at a time: at a real library's size a list of them is not
+/// worth holding for this. A song's album artists are never settled to a name no song of that folder credits, so this holds
+/// what `one_album_per_folder` leaves too.
+fn credited_artists<'r>(rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &Rules) -> BTreeSet<String> {
+    rows.filter(|(_, r)| r.track.is_some())
+        .flat_map(|(folder, r)| {
+            let s = song(r, folder, rules);
+            s.artists.into_iter().chain(s.album_artists)
+        })
+        .collect()
+}
+
+/// Stands in for the catalogue's artists in tests with no catalogue, as `with_records` does for records: a stable number from
+/// the name.
+#[cfg(test)]
+fn artist_number_in_tests(name: &str) -> i64 {
+    use md5::Digest;
+    let hash = md5::Md5::digest(ids::artist_key(name).as_bytes());
+    (u64::from_le_bytes(hash[..8].try_into().unwrap_or_default()) >> 2) as i64
 }
 
 /// Stands in for `assign_records` in tests with no catalogue: each group a record of its own, from a stable hash of it,
@@ -1574,7 +1640,7 @@ fn with_records(folders: &[FolderRows], rules: &Rules) -> Vec<FolderRows> {
 /// The albums these folders make, each as the catalogue gives it a record: the library's own grouping, so a record is
 /// what a list shows. Pure.
 pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalogue::AlbumCopy> {
-    use crate::catalogue::identity::{Listed, RecordFacts, fold, same_record};
+    use crate::catalogue::identity::{Listed, RecordFacts, fold};
     let rows: Vec<(i64, &ServedRow)> = folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))).collect();
     let songs = grouped(&rows, rules);
     let mut albums: BTreeMap<&str, Vec<&Song>> = BTreeMap::new();
@@ -1587,7 +1653,8 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
         .into_values()
         .enumerate()
         .map(|(at, mut list)| {
-            if let Some(record) = list[0].row.record {
+            let record = group_vote(list.iter().map(|s| s.row));
+            if let Some(record) = record {
                 holding.entry(record).or_default().push(at);
             }
             list.sort_by(|a, b| {
@@ -1595,6 +1662,8 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                 (ad.unwrap_or(1), an.unwrap_or(u32::MAX), &a.row.rel).cmp(&(bd.unwrap_or(1), bn.unwrap_or(u32::MAX), &b.row.rel))
             });
             let first = list[0];
+            // The file that named the album: one of a folder's that disagrees was settled to it, and its own tags say another.
+            let named = list.iter().copied().find(|s| ids::album(s.row, &s.album_artist, s.folder) == s.group).unwrap_or(first);
             crate::catalogue::AlbumCopy {
                 facts: RecordFacts {
                     release: list.iter().find_map(|s| s.row.first("musicbrainz_albumid")).map(str::to_lowercase),
@@ -1612,17 +1681,47 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                         Some((s.row.track?, disc, number))
                     })
                     .collect(),
-                split: list.iter().any(|s| s.row.record != first.row.record),
+                files: list.iter().filter(|s| s.row.track.is_some()).map(|s| (s.folder, s.row.rel.clone())).collect(),
+                // A shared track stays with its record, wherever a file of it lies: that settles nothing.
+                split: list.iter().any(|s| s.row.record.is_none() || (s.row.record != record && !s.row.shared)),
+                // The build's to give: it knows the libraries' kinds.
+                rank: 0,
+                folder: first.folder,
+                old_id: first.group.clone(),
+                old_base: first.album_base.clone(),
+                pid: ids::album_pid(named.row, &named.album_artist),
             }
         })
         .collect();
-    // Albums holding one record are its copies only if they are the same tracks. One disc of a double album retagged is an
-    // album of its own, each unanimous on the record, and of two copies only one is served: half would go from every list.
+    // Albums holding one record are its copies, and copies hold the same tracks. Ids apart are a track to take, or a copy that
+    // no longer is one: one disc of a double album retagged, each unanimous on the record, or a track added to one of two.
+    let held = |copies: &[crate::catalogue::AlbumCopy], i: usize| copies[i].tracks.iter().map(|t| t.0).collect::<BTreeSet<i64>>();
     for albums in holding.values().filter(|a| a.len() > 1) {
-        let apart: Vec<usize> = albums.iter().copied().filter(|i| albums.iter().any(|j| !same_record(&copies[*i].facts, &copies[*j].facts))).collect();
-        apart.into_iter().for_each(|i| copies[i].split = true);
+        if albums.iter().any(|i| held(&copies, *i) != held(&copies, albums[0])) {
+            albums.iter().for_each(|i| copies[*i].split = true);
+        }
     }
     copies
+}
+
+/// Every album the first start gives a record to, read from the catalogue: what the libraries list, what no list shows and can
+/// come back, and every name either credits. No build has run, and 0.15's `library.sqlite` has gone with the layout. Blocking.
+pub fn first_albums(cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<crate::catalogue::FirstAlbums> {
+    let folders = cat.folders().iter().map(|(folder, root)| Ok(FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder)? })).collect::<Result<Vec<_>>>()?;
+    let mut names = credited_artists(folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules);
+    let served = album_copies(&folders, rules);
+    drop(folders);
+    let mut unserved = Vec::new();
+    for (folder, id, rows) in cat.unserved_rows()? {
+        // By the id it was served under, so its hash is the one it had. A parked folder's rows lie under another now.
+        let away = [FolderRows { folder: id, root: String::new(), rows }];
+        names.extend(credited_artists(away[0].rows.iter().map(|r| (id, r)), rules));
+        for mut album in album_copies(&away, rules) {
+            album.files.iter_mut().for_each(|place| place.0 = folder);
+            unserved.push(album);
+        }
+    }
+    Ok(crate::catalogue::FirstAlbums { served, unserved, names })
 }
 
 /// The albums these rows make.
@@ -1631,9 +1730,9 @@ fn album_ids(rows: &[(i64, &ServedRow)], rules: &Rules) -> BTreeSet<String> {
 }
 
 /// Writes the songs and albums these rows make (their artists counted apart, `artists_again`): what a whole build
-/// and a build of some folders share. A record is one row in `albums` and, while copies hold ids of their own, the songs
-/// of the copy that plays for most people; every file of every copy has its row in `copy_files`. The albums written, and
-/// every artist they credit.
+/// and a build of some folders share. A record is one row in `albums` and a row in `songs` for each of its tracks, the file
+/// of the copy that plays for most people where it has one; every file of every copy has its row in `copy_files`. The albums
+/// written, and every artist they credit.
 fn write_albums(
     tx: &Connection,
     rows: &[(i64, &ServedRow)],
@@ -1645,20 +1744,23 @@ fn write_albums(
     let mut songs = songs_of(rows, rules);
     // Genres set by hand (0.13) are its tracks' too: the axes and crates read the tracks'.
     for s in songs.iter_mut() {
-        if let Some(g) = facts.overrides.get(&s.album_base).and_then(|o| o.genres.clone()) {
+        if let Some(g) = facts.overrides.get(&s.album_id).and_then(|o| o.genres.clone()) {
             s.genres = g;
         }
     }
     let records = gather(&songs, &facts.kinds);
-    let playing: HashMap<&str, usize> = records.iter().map(|(album, copies)| (album.as_str(), row_copy_of(copies))).collect();
+    let orders: HashMap<&str, Vec<usize>> = records.iter().map(|(album, copies)| (album.as_str(), row_order(copies))).collect();
     // A track has one row in `songs`, whichever records its files lie in: keyed by track across the whole write, not record
-    // by record, or one file moved into another album stops the library building for good.
-    let mut lead: HashMap<i64, &Song> = HashMap::new();
+    // by record, or one file moved into another album stops the library building for good. Every copy's tracks, so a copy
+    // lacking a file for now takes nothing from the record's list. With each the place of its copy in `row_order`.
+    let mut lead: HashMap<i64, (usize, &Song)> = HashMap::new();
     for (album, copies) in &records {
-        for s in copies[playing[album.as_str()]].songs.iter().copied() {
-            let held = lead.entry(s.row.track.unwrap_or_default()).or_insert(s);
-            if written_first(s) < written_first(held) {
-                *held = s;
+        for (place, copy) in orders[album.as_str()].iter().enumerate() {
+            for s in copies[*copy].songs.iter().copied() {
+                let held = lead.entry(s.row.track.unwrap_or_default()).or_insert((place, s));
+                if written_first(s, place) < written_first(held.1, held.0) {
+                    *held = (place, s);
+                }
             }
         }
     }
@@ -1705,7 +1807,7 @@ fn write_albums(
                 g.album_gain,
                 g.album_peak,
             ])?;
-            if !lead.get(&r.track.unwrap_or_default()).is_some_and(|l| std::ptr::eq(*l, s)) {
+            if !lead.get(&r.track.unwrap_or_default()).is_some_and(|l| std::ptr::eq(l.1, s)) {
                 continue;
             }
             ins_song.execute(params![
@@ -1744,21 +1846,23 @@ fn write_albums(
             ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
             ins_tri.execute(params![n, s.title])?;
             for (i, name) in s.artists.iter().enumerate() {
-                let aid = ids::artist(name);
+                let aid = facts.artist(name)?;
                 ins_artist.execute(params![id, aid, name, i as i64])?;
                 credited.insert(aid);
             }
             albums.entry(s.album_id.clone()).or_default().push(s);
         }
     }
-    // By path: rows come in the order of a whole read or of the folders a build reached, and an album's first song names it.
-    albums.values_mut().for_each(|list| list.sort_by(|a, b| a.row.rel.cmp(&b.row.rel)));
+    // The copy that plays for most people first, then by path: rows come in the order of a whole read or of the folders a
+    // build reached, and an album's first song names it.
+    let place = |s: &Song| lead.get(&s.row.track.unwrap_or_default()).map_or(0, |l| l.0);
+    albums.values_mut().for_each(|list| list.sort_by(|a, b| (place(a), &a.row.rel).cmp(&(place(b), &b.row.rel))));
     let mut ins_album = tx.prepare_cached(
         "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
-           size, discs, created, mbid, compilation, order_name, base_id, format, min_kbps, cover,
-           release_type, type_from, secondary, src, type_why, set_fields, whole_tracks, record, group_id)
+           size, discs, created, mbid, compilation, order_name, format, min_kbps, cover,
+           release_type, type_from, secondary, src, type_why, set_fields, whole_tracks, record)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-           ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+           ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
     )?;
     let mut ins_fts = tx.prepare_cached("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
     let mut ins_tri = tx.prepare_cached("INSERT INTO albums_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
@@ -1785,9 +1889,8 @@ fn write_albums(
     }
     for (album_id, songs) in &albums {
         let first = songs[0];
-        let group = first.group.as_str();
         let copies = &records[album_id];
-        let row = &copies[playing[album_id.as_str()]];
+        let row = &copies[orders[album_id.as_str()][0]];
         // What the record is: what the copy that plays says, and where it says nothing, any copy's. A record must not lack
         // a year or a release because the copy that plays came without one.
         let every = || songs.iter().copied().chain(copies.iter().flat_map(|c| c.songs.iter().copied()));
@@ -1804,7 +1907,7 @@ fn write_albums(
             (o, d) => o.or(d),
         };
         // What is set by hand wins (0.13): a year set is its original year and the one shown.
-        let set = facts.overrides.get(&first.album_base);
+        let set = facts.overrides.get(album_id);
         let original = match set.and_then(|o| o.year) {
             Some(y) => {
                 album_year = Some(y);
@@ -1818,20 +1921,20 @@ fn write_albums(
         }
         // None in any file: Discogs' genres and styles where they were asked (0.9.5; the files never written).
         if genres.is_empty()
-            && let Some(g) = kept(&facts.extra_genres, album_id, group)
+            && let Some(g) = facts.extra_genres.get(album_id)
         {
             genres = g.clone();
         }
         let dir = &row.copy.dir;
         let discs = songs.iter().filter_map(|s| s.row.first("discnumber").and_then(leading_number)).max().unwrap_or(1);
         let compilation = songs.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
-        let artist_id = ids::artist(&first.album_artists[0]);
+        let artist_id = facts.artist(&first.album_artists[0])?;
         // The art's id: the album's, with a fingerprint of its picture (see `art`).
-        let root = roots.get(&first.folder).copied().unwrap_or("");
-        let first_track = songs.iter().map(|s| &s.row.rel).min().map(|r| Path::new(root).join(r));
+        let root = roots.get(&row.copy.folder).copied().unwrap_or("");
+        let first_track = row.songs.first().map(|s| Path::new(root).join(&s.row.rel));
         let cover = super::art::album_print(&Path::new(root).join(dir), first_track.as_deref()).map(|p| format!("{album_id}_{p}"));
         let duration_ms = songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>();
-        let whole = kept(&facts.incomplete, album_id, group);
+        let whole = facts.incomplete.get(album_id);
         let shape = Shape {
             tracks: songs.len(),
             duration_ms,
@@ -1841,7 +1944,7 @@ fn write_albums(
         }
         .whole(whole);
         let (mut kind, mut type_from, mut type_why, mut secondary) =
-            release_type_of(release.and_then(|m| facts.release_types.get(&format!("mb:{m}"))), discogs_types(facts, album_id, group), &shape);
+            release_type_of(release.and_then(|m| facts.release_types.get(&format!("mb:{m}"))), discogs_types(facts, album_id), &shape);
         if let Some(k) = set.and_then(|o| o.kind.clone()) {
             (kind, type_from, type_why) = (Some(k), Some("set"), None);
         }
@@ -1861,29 +1964,27 @@ fn write_albums(
             duration_ms as i64,
             row.size,
             discs,
-            every().filter_map(|s| s.row.born).chain(kept(&facts.added, album_id, group).copied()).min(),
+            every().filter_map(|s| s.row.born).chain(facts.added.get(album_id).copied()).min(),
             release,
             compilation,
             order_name(&first.album),
-            first.album_base,
             row.copy.format,
             row.copy.min_kbps,
             cover,
             kind,
             type_from,
             secondary.join("\u{1f}"),
-            album_src(album_id, group, &first.album_base, release, row.copy.folder, dir, facts, covers),
+            album_src(album_id, release, row.copy.folder, dir, facts, covers),
             type_why,
             set.map(|o| o.fields().join("\u{1f}")).unwrap_or_default(),
             whole.map(|w| w.tracks).filter(|t| *t > songs.len()).map(|t| t as i64),
             first.record,
-            group,
         ])?;
         let n = tx.last_insert_rowid();
         ins_fts.execute(params![n, first.album, first.album_artist])?;
         ins_tri.execute(params![n, first.album])?;
         for (i, name) in first.album_artists.iter().enumerate() {
-            let aid = ids::artist(name);
+            let aid = facts.artist(name)?;
             let mbid = if i == 0 { first.row.first("musicbrainz_albumartistid") } else { None };
             ins_aa.execute(params![album_id, aid, name, i as i64, mbid])?;
             credited.insert(aid);
@@ -2139,6 +2240,7 @@ mod tests {
         let step = Library::open(None).unwrap();
         step.build(before, &rules).unwrap();
         facts(&step);
+        step.credit_in_tests(after, &rules);
         let n = step.update_rows(&with_records(after, &rules), &rules, &Covers::new()).unwrap();
         let whole = Library::open(None).unwrap();
         facts(&whole);
@@ -2251,28 +2353,40 @@ mod tests {
             let db = lib.db();
             db.query_row("SELECT id FROM albums WHERE name LIKE 'Adventures%'", [], |r| r.get::<_, String>(0)).unwrap()
         };
-        let id = orb();
-        // Under the record's id, and under the group's, where a fact from before the migration lies: the print sees both.
-        let group: String = {
-            let lib = Library::open(None).unwrap();
-            lib.build(&none, &Rules::default()).unwrap();
-            let db = lib.db();
-            db.query_row("SELECT group_id FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap()
+        let key = orb();
+        let step = Library::open(None).unwrap();
+        step.build(&none, &Rules::default()).unwrap();
+        // Discogs' genres for it came, and an earlier added date.
+        step.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
+        step.set_added(HashMap::from([(key.clone(), 1_600_000_000)]));
+        assert_eq!(step.update_rows(&with_records(&none, &Rules::default()), &Rules::default(), &Covers::new()).unwrap(), 1, "{key}");
+        let whole = Library::open(None).unwrap();
+        whole.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
+        whole.set_added(HashMap::from([(key, 1_600_000_000)]));
+        whole.build(&none, &Rules::default()).unwrap();
+        assert_eq!(dump(&step), dump(&whole));
+    }
+
+    /// C32: a build of some folders and a whole one read every kept fact by the record, so a fact set between them builds the same
+    /// album both ways, for each kind of fact: an old hash left behind would show in one and not the other.
+    #[test]
+    fn same_as_whole_with_every_fact_by_the_record() {
+        let none = with(sample(), |rows| rows[2].tags.retain(|(n, _)| n != "genre"));
+        let lib = Library::open(None).unwrap();
+        lib.build(&none, &Rules::default()).unwrap();
+        let key: String = lib.db().query_row("SELECT id FROM albums WHERE name LIKE 'Adventures%'", [], |r| r.get(0)).unwrap();
+        let facts = |lib: &Library| {
+            lib.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
+            lib.set_added(HashMap::from([(key.clone(), 1_600_000_000)]));
+            lib.set_release_types(HashMap::from([(format!("dc:{key}"), (Some("album".to_string()), vec!["live".to_string()]))]));
+            lib.set_incomplete(HashMap::from([(key.clone(), Whole { tracks: 9, duration_ms: None, longest_ms: None })]));
+            lib.set_overrides(HashMap::from([(key.clone(), Overrides { year: Some(1991), ..Overrides::default() })]));
         };
-        assert_ne!(group, id);
-        for key in [id, group] {
-            let step = Library::open(None).unwrap();
-            step.build(&none, &Rules::default()).unwrap();
-            // Discogs' genres for it came, and an earlier added date.
-            step.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
-            step.set_added(HashMap::from([(key.clone(), 1_600_000_000)]));
-            assert_eq!(step.update_rows(&with_records(&none, &Rules::default()), &Rules::default(), &Covers::new()).unwrap(), 1, "{key}");
-            let whole = Library::open(None).unwrap();
-            whole.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
-            whole.set_added(HashMap::from([(key, 1_600_000_000)]));
-            whole.build(&none, &Rules::default()).unwrap();
-            assert_eq!(dump(&step), dump(&whole));
-        }
+        assert_eq!(same_as_whole(&none, &none, facts), 1, "that album alone");
+        facts(&lib);
+        lib.build(&none, &Rules::default()).unwrap();
+        let (year, kind, whole): (i64, String, i64) = lib.db().query_row("SELECT year, secondary, whole_tracks FROM albums WHERE id = ?1", [&key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!((year, kind.as_str(), whole), (1991, "live", 9), "each of them read");
     }
 
     #[test]
@@ -2292,8 +2406,26 @@ mod tests {
         (root, cat)
     }
 
+    /// A catalogue on two folders of their own, both kept, and a library of them.
+    fn two_kept(name: &str) -> ([std::path::PathBuf; 2], crate::catalogue::Catalogue, Library) {
+        let roots = [0, 1].map(|n| std::env::temp_dir().join(format!("cratarr-records-{name}-{n}-{}", std::process::id())));
+        for root in &roots {
+            std::fs::remove_dir_all(root).ok();
+            std::fs::create_dir_all(root).unwrap();
+        }
+        let cat = crate::catalogue::Catalogue::open(None, roots.to_vec()).unwrap();
+        let lib = Library::open(None).unwrap();
+        lib.set_kinds(TWO_KEPT.to_vec());
+        (roots, cat, lib)
+    }
+
     /// These files, (path, album, title), as the catalogue holds them once read and identified.
     fn add_files(cat: &crate::catalogue::Catalogue, root: &Path, files: &[(&str, &str, &str)]) {
+        add_files_to(cat, 0, root, files);
+    }
+
+    /// `add_files` in one of a catalogue's folders.
+    fn add_files_to(cat: &crate::catalogue::Catalogue, folder: i64, root: &Path, files: &[(&str, &str, &str)]) {
         for (rel, _, _) in files {
             let path = root.join(rel);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -2302,14 +2434,386 @@ mod tests {
         cat.walk_all();
         cat.pretend_read_for_tests();
         for (rel, album, title) in files {
-            cat.tag_for_tests(0, rel, &[("album", album), ("albumartist", "Artist"), ("title", title)]);
+            cat.tag_for_tests(folder, rel, &[("album", album), ("albumartist", "Artist"), ("title", title)]);
         }
         cat.identify().unwrap();
+    }
+
+    /// Every album's folders as the catalogue reads them now: what a build gives `assign_records`.
+    fn albums_now(cat: &crate::catalogue::Catalogue) -> Vec<crate::catalogue::AlbumCopy> {
+        let folders: Vec<FolderRows> = cat.folders().iter().map(|(folder, root)| FolderRows { folder, root: root.display().to_string(), rows: cat.served_rows(folder).unwrap() }).collect();
+        album_copies(&folders, &Rules::default())
+    }
+
+    /// An album knows the hashes 0.15 served it by, and of a folder that disagrees, the one the folder was settled to: the map is
+    /// made of nothing else, so a wrong one reads as an old row that matched nothing.
+    #[test]
+    fn an_album_knows_the_ids_it_had_whatever_its_files_disagree_on() {
+        let (roots, cat, _) = two_kept("old-ids");
+        add_files_to(&cat, 1, &roots[1], &[("A/01 One.flac", "Most", "One"), ("A/02 Two.flac", "Most", "Two"), ("A/03 Odd.flac", "Odd", "Three")]);
+        let albums = albums_now(&cat);
+        let album = &albums[0];
+        assert_eq!(albums.len(), 1, "one folder, one album");
+        let by = album_pid_for_tests("Most", "Artist");
+        assert_eq!((album.folder, album.pid.as_str()), (1, by.as_str()), "the first track by place says Most, and so does the album");
+        assert_eq!(album.old_id, ids::album_at(&by, 1));
+        assert_eq!(album.old_base, ids::album_at(&by, 0));
+
+        // The first by place is the odd one out: the pid is still the album's.
+        cat.tag_for_tests(1, "A/01 One.flac", &[("album", "Odd"), ("albumartist", "Artist"), ("title", "One")]);
+        cat.tag_for_tests(1, "A/03 Odd.flac", &[("album", "Most"), ("albumartist", "Artist"), ("title", "Three")]);
+        cat.tag_for_tests(1, "A/02 Two.flac", &[("album", "Most"), ("albumartist", "Artist"), ("title", "Two")]);
+        let albums = albums_now(&cat);
+        assert_eq!((albums[0].pid.as_str(), albums[0].old_id.as_str()), (by.as_str(), ids::album_at(&by, 1).as_str()));
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// What `ids::album` hashes, from an album's title and artist alone.
+    fn album_pid_for_tests(album: &str, artist: &str) -> String {
+        ids::album_pid(&row(1, "A/01.flac", &[("album", album)]), artist)
+    }
+
+    /// CR13, read from a real catalogue: what no list shows comes under the id it was served by, its files named as they lie.
+    #[test]
+    fn the_first_albums_are_what_the_lists_show_and_what_can_come_back() {
+        let (roots, cat, _) = two_kept("first-albums");
+        add_files_to(&cat, 0, &roots[0], &[("Here/01 One.flac", "Here", "One")]);
+        add_files_to(&cat, 1, &roots[1], &[("Away/01 One.flac", "Away", "One")]);
+        cat.mark_trashed(1, "Away", "token").unwrap();
+        let found = first_albums(&cat, &Rules::default()).unwrap();
+        assert_eq!(found.served.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Here"]);
+        assert_eq!(found.unserved.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(), ["Away"]);
+        let away = &found.unserved[0];
+        let by = album_pid_for_tests("Away", "Artist");
+        assert_eq!((away.folder, away.old_id.as_str(), away.old_base.as_str()), (1, ids::album_at(&by, 1).as_str(), ids::album_at(&by, 0).as_str()));
+        assert_eq!(away.files, [(1, ".cratarr-trash/token/01 One.flac".to_string())]);
+        assert!(found.names.contains("Artist"));
+
+        // A folder out of use: its rows lie under a negative id, and its albums were known by the one it had.
+        let track = cat.track_of(0, "Here/01 One.flac");
+        cat.set_folders(vec![roots[1].clone()]).unwrap();
+        let found = first_albums(&cat, &Rules::default()).unwrap();
+        let parked = found.unserved.iter().find(|a| a.title == "Here").expect("what a parked folder held");
+        let by = album_pid_for_tests("Here", "Artist");
+        assert_eq!((parked.folder, parked.old_id.as_str()), (0, ids::album_at(&by, 0).as_str()), "by the id it had");
+        assert!(parked.files[0].0 < 0, "and it lies where the catalogue keeps it: {:?}", parked.files);
+        assert_eq!(parked.tracks[0].0, track.unwrap());
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// CR13, through: an album in a trash at the first start has its record, and its Undo brings it back to it, so what names the
+    /// album still does. With none it would come back as new, and all that stayed under its old id for good.
+    #[test]
+    fn an_album_undone_from_a_trash_comes_back_to_its_record() {
+        let (roots, cat, lib) = two_kept("first-trash");
+        add_files_to(&cat, 0, &roots[0], &[("Away/01 One.flac", "Away", "One"), ("Here/01 Two.flac", "Here", "Two")]);
+        cat.mark_trashed(0, "Away", "token").unwrap();
+        cat.first_records(first_albums(&cat, &Rules::default()).unwrap(), &TWO_KEPT).unwrap();
+        let old = ids::album_at(&album_pid_for_tests("Away", "Artist"), 0);
+        let record = cat.named_now(&old).expect("the id it was served by leads to a record");
+        build_now(&lib, &cat);
+        assert!(lib.album(&record).unwrap().is_none(), "in a trash, it is listed nowhere");
+        cat.unmark_trashed(0, "Away", "token").unwrap();
+        build_now(&lib, &cat);
+        assert_eq!(lib.album(&record).unwrap().map(|a| a.name).as_deref(), Some("Away"), "back on its record");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    const ONE_TWO: [(&str, &str, &str); 2] = [("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two")];
+
+    /// `taken` on two libraries of these kinds: the two folders, the catalogue, the library, the album and Music's first track.
+    fn a_record_in(name: &str, second: Kind) -> ([std::path::PathBuf; 2], crate::catalogue::Catalogue, Library, String, Option<i64>) {
+        let (roots, cat, lib) = two_kept(name);
+        lib.set_kinds(vec![(0, Kind::Main), (1, second)]);
+        let album = taken(&roots, &cat, &lib);
+        let track = cat.track_of(0, "A/01 One.flac");
+        assert_eq!(track, cat.track_of(1, "A/01 One.flac"), "one set of tracks");
+        (roots, cat, lib, album, track)
+    }
+
+    /// Music holds what it held: its id, its tracks and all that names them.
+    fn stays_with_music(cat: &crate::catalogue::Catalogue, lib: &Library, album: &str, track: Option<i64>) {
+        assert_eq!(cat.track_of(0, "A/01 One.flac"), track, "Music's file on its track");
+        assert_eq!(lib.album_in(0, "A").unwrap().as_deref(), Some(album), "and Music's copy the record");
+        assert_ne!(cat.track_of(1, "A/01 One.flac"), track, "the other copy left");
+        assert_ne!(lib.album_in(1, "A").unwrap().as_deref(), Some(album));
+    }
+
+    /// CR18, the owner: who keeps a record goes by kind first, and track count decides only between copies of one kind. Nobody
+    /// has checked an Incoming copy: with a track more it leaves, and what names the record stays on Music's files.
+    #[test]
+    fn a_kept_copy_keeps_its_record_from_an_incoming_copy_with_a_track_more() {
+        let (roots, cat, lib, album, track) = a_record_in("kept-more", Kind::Incoming);
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Three.flac", "A", "Three")]);
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// CR18: one bad track removed from Music must not hand the album to Incoming.
+    #[test]
+    fn a_kept_copy_keeps_its_record_from_an_incoming_copy_when_a_file_left_it() {
+        let (roots, cat, lib, album, track) = a_record_in("kept-less", Kind::Incoming);
+        std::fs::remove_file(roots[0].join("A/02 Two.flac")).unwrap();
+        cat.walk_all();
+        cat.gone_long_ago_for_tests();
+        cat.identify().unwrap();
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// CR18: Music gaining more than it held is no majority for it, and the Incoming copy still holding the record's files must
+    /// not stop it being the record's by what is kept.
+    #[test]
+    fn a_kept_copy_that_gained_more_than_it_held_keeps_its_record_from_an_incoming_copy() {
+        let (roots, cat, lib, album, track) = a_record_in("kept-grown", Kind::Incoming);
+        add_files_to(&cat, 0, &roots[0], &[("A/03 Three.flac", "A", "Three"), ("A/04 Four.flac", "A", "Four"), ("A/05 Five.flac", "A", "Five")]);
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// CR18: one account's act must not rewrite what every account has.
+    #[test]
+    fn someones_own_copy_never_takes_a_record_from_music() {
+        let (roots, cat, lib, album, track) = a_record_in("own-more", Kind::Own);
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Three.flac", "A", "Three")]);
+        build_now(&lib, &cat);
+        stays_with_music(&cat, &lib, &album, track);
+    }
+
+    /// Between copies of one kind the track count decides, as Q8 said, and CR18 leaves that as it was.
+    #[test]
+    fn of_two_copies_of_one_kind_the_one_with_more_keeps_the_record() {
+        let (roots, cat, lib, album, track) = a_record_in("main-more", Kind::Main);
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Three.flac", "A", "Three")]);
+        build_now(&lib, &cat);
+        assert_eq!(cat.track_of(1, "A/01 One.flac"), track);
+        assert_eq!(lib.album_in(1, "A").unwrap().as_deref(), Some(album.as_str()));
+        assert_ne!(cat.track_of(0, "A/01 One.flac"), track);
+    }
+
+    /// A record in the first folder, then a copy of it in the second: what the take leaves. The album's id.
+    fn taken(roots: &[std::path::PathBuf; 2], cat: &crate::catalogue::Catalogue, lib: &Library) -> String {
+        add_files_to(cat, 0, &roots[0], &ONE_TWO);
+        build_now(lib, cat);
+        add_files_to(cat, 1, &roots[1], &ONE_TWO);
+        build_now(lib, cat);
+        lib.db().query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_copy_takes_its_records_tracks_and_the_record_lists_them_once() {
+        let (roots, cat, lib) = two_kept("take");
+        let album = taken(&roots, &cat, &lib);
+        assert_eq!(cat.track_of(1, "A/02 Two.flac"), cat.track_of(0, "A/02 Two.flac"), "the second copy's file on the first's track");
+        assert_eq!(lib.counts().unwrap().0, 2, "no track twice");
+        assert_eq!(lib.album(&album).unwrap().expect("one album").song_count, 2);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM copies"), 2);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM copy_files"), 4);
+        assert!(albums_now(&cat).iter().all(|a| !a.split), "settled: nothing for the next build to read");
+        assert_eq!(build_now(&lib, &cat), (false, 0), "built with its tracks: nothing to build again");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// The row copy lacks a file for now: the record still lists the track, from the copy that has it, and a stream reaches it.
+    #[test]
+    fn a_copy_lacking_a_file_still_lists_every_track() {
+        let (roots, cat, lib) = two_kept("lacking");
+        let album = taken(&roots, &cat, &lib);
+        let (rel, track) = ("A/02 Two.flac", cat.track_of(0, "A/02 Two.flac").unwrap());
+        let row = lib.row_copy(&album).unwrap().unwrap().folder;
+        let (row_root, other) = (&roots[row as usize], 1 - row);
+        std::fs::remove_file(row_root.join(rel)).unwrap();
+        cat.walk_all();
+        build_now(&lib, &cat);
+        assert_eq!(lib.album(&album).unwrap().expect("one album").song_count, 2, "every track");
+        assert_eq!(lib.file_of(&ids::song(track)).unwrap(), Some((other, rel.to_string())), "from the copy that has it");
+        let who = crate::serve::listener::Listener::default();
+        assert_eq!(lib.file_for(&ids::song(track), &cat.files_of(track), &who).unwrap(), Some((other, rel.to_string())));
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM albums"), 1, "for now: it splits nothing");
+        assert_eq!(cat.track_of(row, "A/01 One.flac"), cat.track_of(other, "A/01 One.flac"), "and gives the copy no tracks of its own");
+        // Back: the same again.
+        std::fs::write(row_root.join(rel), rel).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        build_now(&lib, &cat);
+        assert_eq!(cat.track_of(row, rel), Some(track));
+        assert_eq!(lib.file_of(&ids::song(track)).unwrap(), Some((row, rel.to_string())), "the row copy's again");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// N3 where the file joined its album's record first, as a track Cratarr wrote does: nothing lacks a record, and only the
+    /// two copies' ids say there is a track to take. Left alone the record lists a track more.
+    #[test]
+    fn a_fresh_file_in_a_copy_is_taken_at_the_next_build() {
+        let (roots, cat, lib) = two_kept("fresh");
+        let three = [("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two"), ("A/03 Three.flac", "A", "Three")];
+        add_files_to(&cat, 0, &roots[0], &three);
+        build_now(&lib, &cat);
+        add_files_to(&cat, 1, &roots[1], &three);
+        build_now(&lib, &cat);
+        let track = cat.track_of(0, "A/03 Three.flac");
+        assert_eq!(cat.track_of(1, "A/03 Three.flac"), track);
+        // Replaced under another name, with no artist to pair the two by: a fresh id.
+        std::fs::remove_file(roots[1].join("A/03 Three.flac")).unwrap();
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Replaced.flac", "A", "Three")]);
+        assert_ne!(cat.track_of(1, "A/03 Replaced.flac"), track);
+        lib.update_files(&cat, &Rules::default(), &[roots[1].join("A/03 Replaced.flac")]).unwrap();
+        assert!(!cat.records_unsettled(), "it joined its album's record");
+        build_now(&lib, &cat);
+        assert_eq!(cat.track_of(1, "A/03 Replaced.flac"), track);
+        assert_eq!(lib.counts().unwrap().0, 3, "not a track more");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// Q8 on a real build: two albums, the one with the track added under the record's id, every track served, and a pass
+    /// with nothing left to settle.
+    #[test]
+    fn a_track_added_to_one_of_two_copies_is_two_records() {
+        let (roots, cat, lib) = two_kept("added");
+        let album = taken(&roots, &cat, &lib);
+        let first = cat.track_of(0, "A/01 One.flac");
+        add_files_to(&cat, 1, &roots[1], &[("A/03 Three.flac", "A", "Three")]);
+        build_now(&lib, &cat);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM albums"), 2);
+        assert_eq!(lib.album(&album).unwrap().expect("the copy with more tracks keeps it").song_count, 3);
+        assert_eq!(lib.album_in(1, "A").unwrap().as_deref(), Some(album.as_str()));
+        assert_eq!(cat.track_of(1, "A/01 One.flac"), first, "and its tracks");
+        assert_ne!(cat.track_of(0, "A/01 One.flac"), first, "the other takes tracks of its own");
+        assert_ne!(lib.album_in(0, "A").unwrap().as_deref(), Some(album.as_str()));
+        assert_eq!(lib.counts().unwrap().0, 5, "every file served");
+        assert!(albums_now(&cat).iter().all(|a| !a.split));
+        assert_eq!(build_now(&lib, &cat), (false, 0));
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// m1: t1, t2 shared with an album of the lower record, t3, t4 free on the higher. The catalogue gave the album the higher
+    /// record, and a list must serve it so, or `split` would stay true and every build read it all again.
+    #[test]
+    fn an_album_is_served_as_the_record_the_catalogue_gave_it() {
+        let (root, cat) = catalogue_in("one-vote");
+        add_files(&cat, &root, &[("Low/01 One.flac", "Low", "One"), ("Low/02 Two.flac", "Low", "Two")]);
+        add_files(&cat, &root, &[("High/03 Three.flac", "High", "Three"), ("High/04 Four.flac", "High", "Four")]);
+        let lib = Library::open(None).unwrap();
+        build_now(&lib, &cat);
+        let (low, high) = (record_at(&cat, "Low/01 One.flac").unwrap(), record_at(&cat, "High/03 Three.flac").unwrap());
+        assert!(low < high, "the lower record would win a tie");
+        // Two of the higher's files moved into a folder with two of the lower's, those being another file of its tracks.
+        std::fs::create_dir_all(root.join("Mix")).unwrap();
+        for name in ["03 Three.flac", "04 Four.flac"] {
+            std::fs::rename(root.join("High").join(name), root.join("Mix").join(name)).unwrap();
+        }
+        add_files(&cat, &root, &[("Mix/01 Again.flac", "Mix", "One"), ("Mix/02 Again.flac", "Mix", "Two")]);
+        for (name, title) in [("03 Three.flac", "Three"), ("04 Four.flac", "Four")] {
+            cat.tag_for_tests(0, &format!("Mix/{name}"), &[("album", "Mix"), ("albumartist", "Artist"), ("title", title)]);
+        }
+        let shared = ["Low/01 One.flac", "Low/02 Two.flac"].map(|rel| cat.track_of(0, rel));
+        cat.set_tracks(&[((0, "Mix/01 Again.flac".to_string()), shared[0]), ((0, "Mix/02 Again.flac".to_string()), shared[1])]).unwrap();
+        build_now(&lib, &cat);
+        let served: Vec<String> = lib.albums_of_files(&[(0, "Mix/03 Three.flac".to_string())]).unwrap();
+        assert_eq!(served, [ids::record(high)], "what `Held::vote` says, not the lower of a tie");
+        assert!(albums_now(&cat).iter().all(|a| !a.split), "nothing left to settle");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     fn build_now(lib: &Library, cat: &crate::catalogue::Catalogue) -> (bool, usize) {
         let (_, print) = lib.change(cat, &Rules::default()).unwrap();
         lib.build_from(cat, &Rules::default(), &print).unwrap()
+    }
+
+    /// A file's artist tags as a person's tagger leaves them, read back by the next pass.
+    fn credit(cat: &crate::catalogue::Catalogue, rel: &str, album: &str, artist: &str, title: &str) {
+        cat.tag_for_tests(0, rel, &[("album", album), ("albumartist", artist), ("artist", artist), ("title", title)]);
+    }
+
+    fn served_artists(lib: &Library) -> Vec<(String, String)> {
+        lib.db().prepare("SELECT id, name FROM artists ORDER BY name").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// An id for life (0.16): nothing a name goes through without becoming another name moves it. Spelt in capitals by a
+    /// tagger, gone from the library, back again: what the user data holds under it still finds them.
+    #[test]
+    fn an_artist_keeps_its_id_across_a_rename_of_nothing() {
+        let d = std::env::temp_dir().join(format!("cratarr-artist-for-life-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let cat = crate::catalogue::Catalogue::open(None, vec![d.clone()]).unwrap();
+        let lib = Library::open(None).unwrap();
+        add_files(&cat, &d, &[("A/01 a.flac", "Early", "One"), ("B/01 b.flac", "Later", "Two")]);
+        credit(&cat, "A/01 a.flac", "Early", "Salt Meridian", "One");
+        credit(&cat, "B/01 b.flac", "Later", "Orbit Lane", "Two");
+        build_now(&lib, &cat);
+        let id = cat.artist_of("Salt Meridian").unwrap().expect("an id, given by the build");
+        assert_eq!(id, cat.artist_of("salt meridian").unwrap().unwrap());
+        let served = ids::artist(id);
+        assert!(served.starts_with("ar-") && served[3..].parse::<i64>().is_ok(), "{served}");
+        assert!(served_artists(&lib).contains(&(served.clone(), "Salt Meridian".to_string())));
+
+        credit(&cat, "A/01 a.flac", "Early", "SALT MERIDIAN", "One");
+        build_now(&lib, &cat);
+        assert!(served_artists(&lib).contains(&(served.clone(), "SALT MERIDIAN".to_string())), "the same id, as the files now spell them");
+
+        credit(&cat, "A/01 a.flac", "Early", "Orbit Lane", "One");
+        build_now(&lib, &cat);
+        assert!(!served_artists(&lib).iter().any(|(a, _)| *a == served), "no file credits them");
+        credit(&cat, "A/01 a.flac", "Early", "Salt Meridian", "One");
+        build_now(&lib, &cat);
+        assert!(served_artists(&lib).contains(&(served, "Salt Meridian".to_string())), "back on their id");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A name first met in a build of some folders is given its id like any other, and what that build writes names it: songs,
+    /// the album's artist and the artist's own row all agree, as a whole build would have them.
+    #[test]
+    fn a_new_name_in_a_build_of_one_folder_is_served_by_its_id() {
+        let d = std::env::temp_dir().join(format!("cratarr-artist-partial-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let cat = crate::catalogue::Catalogue::open(None, vec![d.clone()]).unwrap();
+        let lib = Library::open(None).unwrap();
+        add_files(&cat, &d, &[("A/01 a.flac", "Early", "One")]);
+        build_now(&lib, &cat);
+        add_files(&cat, &d, &[("A/01 a.flac", "Early", "One"), ("B/01 b.flac", "Later", "Two")]);
+        credit(&cat, "B/01 b.flac", "Later", "Orbit Lane", "Two");
+        let (whole, _) = build_now(&lib, &cat);
+        assert!(!whole, "a build of the folder that came");
+        let orbit = ids::artist(cat.artist_of("Orbit Lane").unwrap().unwrap());
+        let of = |sql: &str| -> String { lib.db().query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(of("SELECT artist_id FROM albums WHERE name = 'Later'"), orbit);
+        assert_eq!(of("SELECT artist_id FROM song_artists WHERE name = 'Orbit Lane'"), orbit);
+        assert_eq!(of("SELECT artist_id FROM album_artists WHERE name = 'Orbit Lane'"), orbit);
+        assert_eq!(of("SELECT id FROM artists WHERE name = 'Orbit Lane'"), orbit);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Cratarr's own write builds at once by `update_files`, with no `build_from` before it: after a restart no id has been
+    /// read yet, and a retag can bring a name no build has met. Either would stop the write from showing until the next pass.
+    #[test]
+    fn a_write_after_a_restart_finds_its_artists_and_gives_a_new_name_its_id() {
+        let d = std::env::temp_dir().join(format!("cratarr-artist-write-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let (root, file, rel) = (d.join("music"), d.join("library.sqlite"), "A/01 a.flac");
+        let cat = crate::catalogue::Catalogue::open(None, vec![root.clone()]).unwrap();
+        let lib = Library::open(Some(&file)).unwrap();
+        add_files(&cat, &root, &[(rel, "Early", "One")]);
+        build_now(&lib, &cat);
+        drop(lib);
+
+        let lib = Library::open(Some(&file)).unwrap();
+        let wrote = |lib: &Library| lib.update_files(&cat, &Rules::default(), &[root.join(rel)]).unwrap();
+        cat.tag_for_tests(0, rel, &[("album", "Early"), ("albumartist", "Artist"), ("title", "One again")]);
+        assert_eq!(wrote(&lib), 1, "a name built before");
+        credit(&cat, rel, "Early", "Orbit Lane", "One again");
+        assert_eq!(wrote(&lib), 1, "a name no build has met");
+        let orbit = ids::artist(cat.artist_of("Orbit Lane").unwrap().unwrap());
+        assert!(served_artists(&lib).contains(&(orbit, "Orbit Lane".to_string())));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// `build_from` gives every name its id: one without is a fault there, and must stop the write, not reach the lists.
+    #[test]
+    fn a_build_refuses_a_name_with_no_id() {
+        let facts = Library::open(None).unwrap().facts();
+        assert!(facts.artist("Nobody").unwrap_err().to_string().contains("Nobody"));
     }
 
     fn record_at(cat: &crate::catalogue::Catalogue, rel: &str) -> Option<i64> {
@@ -2365,6 +2869,24 @@ mod tests {
         assert_eq!(build_now(&lib, &cat), (false, 1));
         assert_eq!(record_at(&cat, "A/03 Three.flac"), record_at(&cat, "A/01 One.flac"));
         assert_eq!(build_now(&lib, &cat), (false, 0), "built with its record: nothing to build again");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// m5 on a real build: a favourite names `al-<record>`, so more files added at once than it had must leave that id served.
+    #[test]
+    fn a_record_stays_served_under_its_id_when_more_came_in_than_it_had() {
+        let (root, cat) = catalogue_in("came-in");
+        add_files(&cat, &root, &[("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two"), ("A/03 Three.flac", "A", "Three")]);
+        let lib = Library::open(None).unwrap();
+        build_now(&lib, &cat);
+        let id: String = lib.db().query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap();
+        let more: Vec<(String, String)> = (4..=10).map(|n| (format!("A/{n:02} More.flac"), format!("More {n}"))).collect();
+        let more: Vec<(&str, &str, &str)> = more.iter().map(|(rel, title)| (rel.as_str(), "A", title.as_str())).collect();
+        add_files(&cat, &root, &more);
+        build_now(&lib, &cat);
+        assert_eq!(lib.counts().unwrap().0, 10);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM albums"), 1);
+        assert_eq!(lib.album(&id).unwrap().expect("still served").song_count, 10);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -2519,9 +3041,14 @@ mod tests {
         FolderRows { folder, root: format!("/library{folder}"), rows }
     }
 
-    /// Music's MP3 and a second main library's FLAC of record 5.
+    /// `rows` as a copy's after the take: each file's track has another file.
+    fn shared(rows: Vec<ServedRow>) -> Vec<ServedRow> {
+        rows.into_iter().map(|r| ServedRow { shared: true, ..r }).collect()
+    }
+
+    /// Music's MP3 and a second main library's FLAC of record 5, on one set of tracks.
     fn two_copies() -> Vec<FolderRows> {
-        vec![in_folder(0, copy_rows(1, "A/Album", 5, "MP3", 192)), in_folder(1, copy_rows(11, "A/Album", 5, "FLAC", 900))]
+        vec![in_folder(0, shared(copy_rows(1, "A/Album", 5, "MP3", 192))), in_folder(1, shared(copy_rows(1, "A/Album", 5, "FLAC", 900)))]
     }
 
     const TWO_KEPT: [(i64, Kind); 2] = [(0, Kind::Main), (1, Kind::Main)];
@@ -2541,6 +3068,7 @@ mod tests {
     fn same_as_whole_in(kinds: &[(i64, Kind)], before: &[FolderRows], after: &[FolderRows]) -> usize {
         let rules = Rules::default();
         let step = built_with(kinds, before);
+        step.credit_in_tests(after, &rules);
         let n = step.update_rows(&with_records(after, &rules), &rules, &Covers::new()).unwrap();
         let whole = built_with(kinds, after);
         let (a, b) = (dump(&step), dump(&whole));
@@ -2598,7 +3126,7 @@ mod tests {
             r.came = Some(5_000);
             tag(r, "album", "Other");
         });
-        let mut new = copy_rows(11, "A/Album", 5, "FLAC", 900);
+        let mut new = copy_rows(1, "A/Album", 5, "FLAC", 900);
         new.iter_mut().for_each(|r| {
             r.born = Some(100);
             r.came = Some(9_000);
@@ -2611,7 +3139,7 @@ mod tests {
         assert_eq!(lib.albums_in(0, 10).unwrap()[0].format.as_deref(), Some("MP3"), "the other library's is its own");
     }
 
-    /// Copies hold ids of their own until the take, so a record shows one copy's tracks, or it would show them twice.
+    /// Copies hold one set of tracks, so a record shows them once, each from the copy that plays.
     #[test]
     fn two_copies_are_one_album_with_one_set_of_songs() {
         let lib = built_with(&TWO_KEPT, &two_copies());
@@ -2624,14 +3152,61 @@ mod tests {
         assert_eq!(one_number(&lib, "SELECT count(*) FROM copies"), 2);
         let (format, kbps): (String, i64) = lib.db().query_row("SELECT format, min_kbps FROM albums", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!((format.as_str(), kbps), ("FLAC", 900), "the copy that plays");
-        assert_eq!(lib.file_of("tr-11").unwrap(), Some((1, "A/Album/01 One.flac".to_string())), "the row copy's file: `file_for` falls back on it");
-        assert_eq!(lib.file_of("tr-1").unwrap(), None, "the other copy's track has no row in `songs`");
-        assert_eq!(lib.albums_of_files(&[(0, "A/Album/01 One.mp3".to_string())]).unwrap(), ["al-5"], "and its file still says its record");
+        assert_eq!(lib.file_of("tr-1").unwrap(), Some((1, "A/Album/01 One.flac".to_string())), "the row copy's file: `file_for` falls back on it");
+        assert_eq!(lib.albums_of_files(&[(0, "A/Album/01 One.mp3".to_string())]).unwrap(), ["al-5"], "and the other copy's file says its record");
         let (folder, dir, _, first) = lib.album_art("al-5").unwrap().unwrap();
         assert_eq!((folder, dir.as_str(), first.as_deref()), (1, "A/Album", Some("A/Album/01 One.flac")));
     }
 
-    /// An Incoming copy plays only when picked, though it is the better, and it is no album of its own beside the kept one.
+    /// A track the copy that plays lacks is listed all the same, from the next copy that holds it, and a build where it changed
+    /// must come to the same. `albums`' row stays that of the copy that plays, whichever file sorts first: a path from another
+    /// library joined to its folder finds no cover, and its tags would name the record.
+    #[test]
+    fn a_record_lists_every_track_the_row_copys_file_first() {
+        let mut lacking = two_copies();
+        lacking[1].rows.remove(0);
+        lacking[1].rows.iter_mut().for_each(|r| tag(r, "album", "Album (the one that plays)"));
+        let lib = built_with(&TWO_KEPT, &lacking);
+        assert_eq!(lib.file_of("tr-2").unwrap(), Some((1, "A/Album/02 Two.flac".to_string())), "the row copy's");
+        assert_eq!(lib.file_of("tr-1").unwrap(), Some((0, "A/Album/01 One.mp3".to_string())), "the other copy's, as the row copy lacks it");
+        assert_eq!(lib.album("al-5").unwrap().expect("one album").song_count, 2);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM copy_files"), 3);
+        let name: String = lib.db().query_row("SELECT name FROM albums", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "Album (the one that plays)", "though the other copy's file sorts first");
+        let ranked: i64 = lib.db().query_row("SELECT count(*) FROM copies WHERE tracks = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(ranked, 1, "each copy counts what it holds");
+        same_as_whole_in(&TWO_KEPT, &two_copies(), &lacking);
+        same_as_whole_in(&TWO_KEPT, &lacking, &two_copies());
+    }
+
+    /// A record's picture is found by the copy that plays, its print made from that copy's first file. Two copies can lie in one
+    /// folder, and `songs` lists a track the row copy lacks from the other: that file sorts first, and is not its picture.
+    #[test]
+    fn a_records_art_is_its_row_copys_though_the_other_lies_beside_it() {
+        let (mut plain, mut better) = (copy_rows(1, "B/Other", 5, "MP3", 192), copy_rows(1, "C/Row", 5, "FLAC", 900));
+        plain.iter_mut().for_each(|r| tag(r, "date", "1999"));
+        better.remove(0);
+        let lib = built_with(&[(0, Kind::Main)], &[in_folder(0, [shared(plain), shared(better)].concat())]);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM copies"), 2, "two copies in one library, or this proves nothing");
+        assert_eq!(lib.file_of("tr-1").unwrap(), Some((0, "B/Other/01 One.mp3".to_string())), "the track the row copy lacks");
+        let (folder, dir, _, first) = lib.album_art("al-5").unwrap().unwrap();
+        assert_eq!((folder, dir.as_str(), first.as_deref()), (0, "C/Row", Some("C/Row/02 Two.flac")));
+        // A copy at the top of its library has no folder to go by.
+        let lib = built_with(&[(0, Kind::Main)], &[in_folder(0, copy_rows(1, "x", 5, "FLAC", 900).into_iter().map(|r| ServedRow { rel: r.rel.trim_start_matches("x/").to_string(), ..r }).collect())]);
+        assert_eq!(lib.album_art("al-5").unwrap().unwrap().3.as_deref(), Some("01 One.flac"));
+    }
+
+    /// Copies share their tracks, so two songs of one persistent id are two tracks tagged alike. Going by the first folder a
+    /// favourite would move to the other at the next build, whichever record holds it.
+    #[test]
+    fn a_persistent_id_on_two_tracks_says_neither() {
+        let lib = built_with(&TWO_KEPT, &[in_folder(0, copy_rows(1, "A/Album", 5, "FLAC", 900)), in_folder(1, copy_rows(3, "A/Album", 6, "FLAC", 900))]);
+        assert_eq!(lib.counts().unwrap().0, 4, "two records, or this proves nothing");
+        assert_eq!(lib.pids().unwrap(), Vec::new());
+        assert_eq!(built_with(&TWO_KEPT, &two_copies()).pids().unwrap().len(), 2, "two files of one track are one song");
+    }
+
+    /// An Incoming copy plays only when named, though it is the better, and it is no album of its own beside the kept one.
     #[test]
     fn an_incoming_copy_of_a_kept_record_is_a_copy_not_an_album() {
         let kinds = [(0, Kind::Main), (1, Kind::Incoming)];
@@ -2658,7 +3233,7 @@ mod tests {
         let dirs: Vec<(String, i64)> = lib.db().prepare("SELECT dir, tracks FROM copies").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
         assert_eq!(dirs, [("A/Album".to_string(), 2)]);
         assert_eq!(one_number(&lib, "SELECT count(DISTINCT dir) FROM copy_files"), 2);
-        let lib = built_with(&[(0, Kind::Main), (1, Kind::Main)], &[in_folder(0, discs(1, 5)), in_folder(1, copy_rows(11, "Elsewhere", 5, "MP3", 192))]);
+        let lib = built_with(&[(0, Kind::Main), (1, Kind::Main)], &[in_folder(0, discs(1, 5)), in_folder(1, copy_rows(1, "Elsewhere", 5, "MP3", 192))]);
         assert_eq!(one_number(&lib, "SELECT count(*) FROM copies"), 2, "and a second copy beside it");
         assert_eq!(lib.counts().unwrap().0, 2);
     }
@@ -2787,6 +3362,7 @@ mod tests {
         let mut rows = copy_rows(1, "A/Album", 5, "FLAC", 900);
         rows[1].record = None;
         let folders = [in_folder(0, rows)];
+        lib.credit_in_tests(&folders, &rules);
         lib.build_with(&folders, &rules, &Covers::new()).unwrap();
         assert_eq!(lib.counts().unwrap().0, 1);
         assert_eq!(one_number(&lib, "SELECT count(*) FROM copy_files"), 1);
@@ -2802,6 +3378,7 @@ mod tests {
         let covers = |at: i64, print: &str| Covers::from([((at, "A/Album".to_string()), print.to_string())]);
         let lib = Library::open(None).unwrap();
         lib.set_kinds(TWO_KEPT.to_vec());
+        lib.credit_in_tests(&folders, &rules);
         lib.build_with(&folders, &rules, &covers(1, "a")).unwrap();
         assert_eq!(lib.update_rows(&folders, &rules, &covers(1, "a")).unwrap(), 0);
         let both = Covers::from([((0, "A/Album".to_string()), "b".to_string()), ((1, "A/Album".to_string()), "a".to_string())]);
@@ -2809,25 +3386,26 @@ mod tests {
         assert_eq!(lib.update_rows(&folders, &rules, &covers(1, "c")).unwrap(), 2, "the one that plays: the record goes whole");
     }
 
-    /// Facts stay where they were kept until the migration moves them, and what the app finds from now on is kept under the
-    /// record's id: a build reads both, or either would go unseen.
+    /// A fact is the record's: the first start moved what was kept under a hash, and a row it could not move is no fact of
+    /// any album, or two albums could read one.
     #[test]
-    fn a_fact_is_found_under_the_records_id_and_under_the_id_from_before() {
+    fn a_fact_is_found_under_the_records_id_and_nowhere_else() {
         let genreless = || {
             let mut rows = copy_rows(1, "A/Album", 5, "FLAC", 900);
             rows.iter_mut().for_each(|r| r.tags.retain(|(n, _)| n != "genre"));
             vec![in_folder(0, rows)]
         };
-        let lib = built_with(&[(0, Kind::Main)], &genreless());
-        let group: String = lib.db().query_row("SELECT group_id FROM albums", [], |r| r.get(0)).unwrap();
-        assert!(group.len() > "al-5".len() && group != "al-5");
-        for key in [group, "al-5".to_string()] {
+        let genres = |key: String| {
             let lib = Library::open(None).unwrap();
-            lib.set_extra_genres(HashMap::from([(key.clone(), vec!["Dub".to_string()])]));
+            lib.set_extra_genres(HashMap::from([(key, vec!["Dub".to_string()])]));
             lib.build(&genreless(), &Rules::default()).unwrap();
             let genres: String = lib.db().query_row("SELECT genres FROM albums", [], |r| r.get(0)).unwrap();
-            assert_eq!(genres, "Dub", "{key}");
-        }
+            genres
+        };
+        assert_eq!(genres("al-5".to_string()), "Dub");
+        let rows = genreless();
+        let hash = ids::album(&rows[0].rows[0], "Artist", 0);
+        assert_eq!(genres(hash), "", "the hash it had");
     }
 
     /// A record must not read as lacking what one of its copies has: staging's Trym has no year on the copy a list could show.
@@ -2835,7 +3413,7 @@ mod tests {
     fn a_record_takes_what_its_copy_that_plays_lacks_from_another() {
         let mut plain = copy_rows(1, "A/Album", 5, "MP3", 192);
         plain.iter_mut().for_each(|r| r.tags.retain(|(n, _)| n != "date"));
-        let mut tagged = copy_rows(11, "A/Album", 5, "MP3", 128);
+        let mut tagged = copy_rows(1, "A/Album", 5, "MP3", 128);
         for r in &mut tagged {
             r.tags.push(("date".into(), "2023".into()));
             r.tags.push(("musicbrainz_albumid".into(), "abc".into()));
@@ -3219,7 +3797,7 @@ mod tests {
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();
         let homogenic: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
-        let (bjork, hunter) = (ids::artist("Björk"), ids::song(1));
+        let (bjork, hunter) = (ids::artist(artist_number_in_tests("Björk")), ids::song(1));
         let asked = [bjork.clone(), homogenic.clone(), hunter.clone(), "tr-999".to_string(), "ar-nobody".to_string(), "al-none".to_string(), "Björk".to_string()];
         let names = lib.names_of(&asked).unwrap();
         assert_eq!(names.len(), 3, "{names:?}");
@@ -3294,7 +3872,7 @@ mod tests {
             ],
         }];
         lib.refresh(&folders, &Rules::default()).unwrap();
-        let (own, on, songs) = lib.artist_works(&super::super::ids::artist("a")).unwrap();
+        let (own, on, songs) = lib.artist_works(&ids::artist(artist_number_in_tests("a"))).unwrap();
         let names = |l: &[crate::serve::api::Album]| l.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&own), ["New", "Old"]);
         assert_eq!(names(&on), ["Mix"], "credited on a track only");
@@ -3374,7 +3952,7 @@ mod tests {
         let folders = || vec![FolderRows { folder: 0, root: "/music".into(), rows: vec![track(1), track(2)] }];
         let lib = Library::open(None).unwrap();
         lib.refresh(&folders(), &Rules::default()).unwrap();
-        let base: String = lib.db().query_row("SELECT base_id FROM albums", [], |r| r.get(0)).unwrap();
+        let base: String = lib.db().query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap();
         let set = Overrides {
             kind: Some("album".into()),
             secondary: Some(vec!["live".into()]),
@@ -3566,6 +4144,7 @@ mod tests {
             tag(&mut rows[2], "title", "Perpetual Dawn");
             tag(&mut rows[2], "artist", "Orbital");
         });
+        lib.credit_in_tests(&changed, &rules);
         lib.update_rows(&with_records(&changed, &rules), &rules, &Covers::new()).unwrap();
         tri_in_step(&lib);
         assert_eq!((tri_found(&lib, "songs_tri_fts", "littlefluffyclouds"), tri_found(&lib, "songs_tri_fts", "perpetualdawn")), (0, 1));

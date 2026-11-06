@@ -466,11 +466,9 @@ fn groups(serve: &Serve, req: &Request, g: crate::source::FavoriteGroups) -> Res
     }
     for (a, at) in g.artists {
         listed.entry(Kind::Artist).or_default().insert(a.id.clone());
-        let id = ids::artist(&a.name);
-        if serve.library.has_artist(&id)? {
-            found.push((Kind::Artist, id, a.id, at));
-        } else {
-            counts.skipped += 1;
+        match serve.artist_id(&a.name)? {
+            Some(id) if serve.library.has_artist(&id)? => found.push((Kind::Artist, id, a.id, at)),
+            _ => counts.skipped += 1,
         }
     }
     for kind in [Kind::Album, Kind::Artist] {
@@ -919,6 +917,7 @@ mod tests {
         cat.record_links("jf", "lib", &links, 1).unwrap();
         let tracks = files.map(|f| cat.track_of(0, f).unwrap());
         let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.library.set_artists(cat.artists_for(&["Björk".to_string(), "The Orb".to_string()].into()).unwrap());
         serve.attach_catalogue(cat);
         let tagged = |i: usize, artist: &str, album: &str, date: &str| ServedRow {
             rel: files[i].into(),
@@ -1005,7 +1004,7 @@ mod tests {
         assert!(song(&serve, &clouds).starred_at.is_some());
         let (homogenic, a) = album(&serve, "Homogenic");
         assert_eq!((a.play_count, a.play_date, a.starred_at), (7, Some(300), Some(50)), "the songs' plays count on their album");
-        let bjork = ids::artist("Björk");
+        let bjork = serve.artist_id("Björk").unwrap().unwrap();
         assert!(serve.userdata.get("me", Kind::Artist, &[bjork.clone()]).unwrap()[&bjork].starred_at.is_some());
         let (adventures, _) = album(&serve, "Adventures");
         assert_eq!(serve.userdata.added().unwrap(), [(homogenic, 1_000), (adventures, 2_000)].into());

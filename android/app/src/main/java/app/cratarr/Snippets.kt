@@ -30,7 +30,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URLEncoder
 import kotlin.math.cos
 import kotlin.math.log10
 import kotlin.math.min
@@ -43,8 +42,8 @@ sealed class SnippetAsk {
     data class Play(val source: String, val id: String, val fromMs: Long, val toMs: Long, val fadeMs: Long, val duck: Float, val library: String? = null) : SnippetAsk() {
         val lengthMs get() = toMs - fromMs
 
-        /** The stream's word for that copy. A library's id holds `/`, which must arrive whole. */
-        val copyQuery get() = library?.let { "&from=${URLEncoder.encode(it, "UTF-8").replace("+", "%20")}" }.orEmpty()
+        /** The stream's word for that copy. */
+        val copyQuery get() = library?.let { "&${copyParam(it)}" }.orEmpty()
     }
 
     object Stop : SnippetAsk()

@@ -364,6 +364,7 @@ struct Underway(Arc<UnderwayId>);
 struct UnderwayId {
     id: EventId,
     running: Running,
+    _moving: crate::catalogue::CopiesMoving,
 }
 
 impl Drop for UnderwayId {
@@ -443,7 +444,7 @@ impl IncomingService {
         let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
         let id = self.journal.intend(now, event)?;
         running.insert(id);
-        Ok(Underway(Arc::new(UnderwayId { id, running: self.running.clone() })))
+        Ok(Underway(Arc::new(UnderwayId { id, running: self.running.clone(), _moving: self.lib.catalogue().copies_moving() })))
     }
 
     /// Where new music comes from (the saved Lidarr), when one is set.
@@ -686,11 +687,6 @@ impl IncomingService {
         waiting_copy(cache.values().filter(|v| v.id == source_id).flat_map(|v| v.albums.iter()), album_id, from)
     }
 
-    /// `account`'s own music's catalogue folder (`Library::own_folder`).
-    pub fn own_folder(&self, account: &str) -> Option<i64> {
-        self.lib.own_folder(account)
-    }
-
     /// What each catalogue folder's library is (`Library::folder_kinds`).
     pub fn folder_kinds(&self) -> Vec<(i64, crate::settings::LibraryKind)> {
         self.lib.folder_kinds()
@@ -778,31 +774,10 @@ impl IncomingService {
     /// After the files went to the trash: the catalogue rows follow (their tracks keep their ids, decision 0011: Undo
     /// brings them back unchanged). Safe to repeat.
     async fn finish_reject(&self, event: &Event) {
-        let Event::AlbumRejected { source, album_id, folder, dir, token, title, .. } = event else { return };
+        let Event::AlbumRejected { folder, dir, token, title, .. } = event else { return };
         let (c, f, rel, tok) = (self.lib.catalogue(), *folder, dir.clone(), token.clone());
         if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
             tracing::warn!("catalogue: could not mark {title} as trashed: {e:#}");
-        }
-        self.forget_picks(source, album_id, *folder, Some(dir)).await;
-    }
-
-    /// A copy left catalogue folder `folder`: the picks of it go with it, also where it went on to another library, and an Undo
-    /// does not bring them back (Q13). `dir`: where it lay, where another folder of that library can still hold the record.
-    async fn forget_picks(&self, source_id: &str, album_id: &str, folder: i64, dir: Option<&str>) {
-        let Some(library) = self.library_at(source_id, folder) else { return };
-        let (db, album, dir) = (self.lib.playlists_db().clone(), album_id.to_string(), dir.map(str::to_string));
-        let done = tokio::task::spawn_blocking(move || -> Result<()> {
-            let stays = dir.as_deref().zip(crate::serve::instance()).is_some_and(|(d, s)| s.library.copies_of(&album).is_ok_and(|c| c.iter().any(|c| c.folder == folder && c.dir != d)));
-            if stays {
-                return Ok(());
-            }
-            db.forget_copy_picks(&album, &library)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .and_then(|r| r);
-        if let Err(e) = done {
-            tracing::warn!("the picks of {album_id} not forgotten: {e:#}");
         }
     }
 
@@ -843,9 +818,15 @@ impl IncomingService {
             };
             let (title, _) = entry.event.album();
             if happened && matches!(entry.event, Event::AlbumAdopted { .. } | Event::AlbumReplaced { .. }) {
+                let moving = self.lib.catalogue().copies_moving();
                 if let Some(steps) = self.steps(&entry.event) {
-                    let files = self.files.clone();
-                    let done = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
+                    let (files, held) = (self.files.clone(), moving.clone());
+                    let done = tokio::task::spawn_blocking(move || {
+                        let _held = held;
+                        files.move_all(&steps)
+                    })
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"));
                     if let Err(e) = done.and_then(|r| r) {
                         tracing::warn!("could not finish keeping {title}: {e:#}");
                         continue;
@@ -1407,10 +1388,7 @@ impl IncomingService {
     /// `hold_gone`: tell the servers only where the files went; where they left is told later (carry-on, when the album
     /// plays: its player must not go on with an item the server already dropped).
     async fn finish_adopt(&self, event: &Event, back: bool, hold_gone: bool) {
-        let Event::AlbumAdopted { source, album_id, from_dir, moves, title, .. } = event else { return };
-        if !back {
-            self.forget_picks(source, album_id, from_dir.0, Some(&from_dir.1)).await;
-        }
+        let Event::AlbumAdopted { moves, title, .. } = event else { return };
         let c = self.lib.catalogue();
         let pairs: Vec<((i64, String), (i64, String))> =
             moves.iter().map(|m| if back { (m.to.clone(), m.from.clone()) } else { (m.from.clone(), m.to.clone()) }).collect();
@@ -1439,11 +1417,15 @@ impl IncomingService {
             return Err(ToggleError::Refused(format!("{title} is already back where it was")));
         }
         let steps = self.undo_steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
-        let files = self.files.clone();
-        tokio::task::spawn_blocking(move || files.move_all(&steps))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        let moving = self.lib.catalogue().copies_moving();
+        let (files, held) = (self.files.clone(), moving.clone());
+        tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&steps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         self.finish_adopt(&entry.event, true, false).await;
         self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
@@ -1753,6 +1735,25 @@ mod tests {
         std::fs::create_dir_all(inc.join("X/A")).unwrap();
         std::fs::write(inc.join("X/A/1.flac"), b"one").unwrap();
         std::fs::write(inc.join("X/A/2.flac"), b"two").unwrap();
+    }
+
+    /// A pass does not stop for an action, so what it reads can be a copy half way (`Catalogue::copies_moving`).
+    #[tokio::test]
+    async fn an_action_under_way_holds_the_copies_on_their_records_to_the_end_of_its_move() {
+        let (music, inc) = (folder("holding-music"), folder("holding-inc"));
+        let svc = on_disk(&music, &inc).await;
+        two_tracks(&inc);
+        let underway = svc.intend(100, &keep_of_two()).unwrap();
+        assert!(svc.lib.catalogue().copies_are_moving());
+        // The request dropped, its move still going on the blocking pool.
+        let held = underway.clone();
+        drop(underway);
+        assert!(svc.lib.catalogue().copies_are_moving(), "held for as long as the files are moving");
+        drop(held);
+        assert!(!svc.lib.catalogue().copies_are_moving());
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[tokio::test]

@@ -284,8 +284,6 @@ pub struct AlbumCopy {
     pub keep_to: Option<String>,
     /// What it lacks of what the library requires: an Incoming copy's, marked before it is added.
     pub lacks: Vec<String>,
-    /// Plays from it by the viewer's own choice.
-    pub picked: bool,
     /// The one the server plays them, as their libraries were switched when the list was read.
     pub plays: bool,
     /// When its first file came, epoch seconds.

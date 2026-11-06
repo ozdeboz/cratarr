@@ -40,13 +40,12 @@ pub struct ListedCopy {
     pub added: Option<i64>,
 }
 
-/// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id and Music-form id (what its
-/// tags and marks are kept under), name, artist, year, MusicBrainz release, its files' genres, its album artists; and
-/// (0.13) its tracks, and whether it is a mix of others' (a compilation or a soundtrack).
+/// An album as Classical and Other versions read it (0.10, `Library::work_albums`): its id (what its tags and marks are kept
+/// under), name, artist, year, MusicBrainz release, its files' genres, its album artists; and (0.13) its tracks, and whether it
+/// is a mix of others' (a compilation or a soundtrack).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkAlbum {
     pub id: String,
-    pub base: String,
     pub name: String,
     pub artist: String,
     pub year: Option<u32>,
@@ -948,7 +947,7 @@ impl Library {
         };
         let mut copies = self.copies_of(&album)?;
         copies.retain(|c| held.iter().any(|h| holds(c, h)));
-        let Some(copy) = copy_for(&copies, who.viewer(&album).as_ref(), &who.off) else { return Ok(None) };
+        let Some(copy) = copy_for(&copies, who.viewer().as_ref(), &who.off) else { return Ok(None) };
         Ok(held.iter().find(|h| holds(copy, h)).map(|(_, folder, rel, _)| (*folder, rel.clone())))
     }
 
@@ -1004,7 +1003,8 @@ impl Library {
         Ok(audio.iter().all(|f| held.contains(f)))
     }
 
-    /// A copy's files: (song id, its path in the catalogue folder, its length in ms). `songs` holds the copy that plays alone.
+    /// A copy's files: (song id, its path in the catalogue folder, its length in ms). `songs` holds one file a track, of whichever
+    /// copy, so it is no way to them.
     pub fn copy_songs(&self, album: &str, folder: i64, dir: &str) -> Result<Vec<(String, String, u64)>> {
         let db = self.db();
         let prefix = format!("{dir}/");
@@ -1028,22 +1028,21 @@ impl Library {
         Ok(!copies.is_empty() && copies.iter().all(|c| c.kind == Kind::Incoming))
     }
 
-    /// Every album's id, Music-form id, artist id and the files' genres (0.9.7: the library's words, `app::words`).
-    pub fn album_word_inputs(&self) -> Result<Vec<(String, String, String, Vec<String>)>> {
+    /// Every album's id, artist id and the files' genres (0.9.7: the library's words, `app::words`).
+    pub fn album_word_inputs(&self) -> Result<Vec<(String, String, Vec<String>)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, base_id, artist_id, genres FROM albums ORDER BY n")?;
+        let mut st = db.prepare("SELECT id, artist_id, genres FROM albums ORDER BY n")?;
         let rows = st.query_map([], |r| {
-            let genres: String = r.get(3)?;
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect()))
+            let genres: String = r.get(2)?;
+            Ok((r.get(0)?, r.get(1)?, genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect()))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// The harvest's albums (0.9.7, `app::harvest`): each Music-form id once, with its MusicBrainz release (or empty),
-    /// artist and name.
+    /// The harvest's albums (0.9.7, `app::harvest`): each record's id, with its MusicBrainz release (or empty), artist and name.
     pub fn album_subjects(&self) -> Result<Vec<(String, String, String, String)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT base_id, coalesce(max(mbid), ''), min(artist), min(name) FROM albums GROUP BY base_id ORDER BY min(n)")?;
+        let mut st = db.prepare("SELECT id, coalesce(mbid, ''), artist, name FROM albums ORDER BY n")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -1070,14 +1069,6 @@ impl Library {
             }
         }
         Ok(out)
-    }
-
-    /// Each album's Music-form id, by its id (0.11, quick crates: the crates' Album axis, Discogs' labels).
-    pub fn album_bases(&self) -> Result<HashMap<String, String>> {
-        let db = self.db();
-        let mut st = db.prepare("SELECT id, base_id FROM albums")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Each album's catalogue folders, by its id, one for each of its copies (the libraries switched on, the owner
@@ -1114,22 +1105,21 @@ impl Library {
     /// MusicBrainz release, its files' genres and its album artists, in the library's order.
     pub fn work_albums(&self) -> Result<Vec<WorkAlbum>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, base_id, name, artist, year, mbid, genres, song_count, secondary, compilation FROM albums ORDER BY n")?;
+        let mut st = db.prepare("SELECT id, name, artist, year, mbid, genres, song_count, secondary, compilation FROM albums ORDER BY n")?;
         let mut out: Vec<WorkAlbum> = st
             .query_map([], |r| {
-                let genres: String = r.get(6)?;
-                let secondary: String = r.get(8)?;
-                let mixed = r.get::<_, bool>(9)? || secondary.split('\u{1f}').any(|s| s == "compilation" || s == "soundtrack");
+                let genres: String = r.get(5)?;
+                let secondary: String = r.get(7)?;
+                let mixed = r.get::<_, bool>(8)? || secondary.split('\u{1f}').any(|s| s == "compilation" || s == "soundtrack");
                 Ok(WorkAlbum {
                     id: r.get(0)?,
-                    base: r.get(1)?,
-                    name: r.get(2)?,
-                    artist: r.get(3)?,
-                    year: r.get::<_, Option<i64>>(4)?.and_then(|y| u32::try_from(y).ok()),
-                    release: r.get::<_, Option<String>>(5)?.filter(|m| !m.is_empty()),
+                    name: r.get(1)?,
+                    artist: r.get(2)?,
+                    year: r.get::<_, Option<i64>>(3)?.and_then(|y| u32::try_from(y).ok()),
+                    release: r.get::<_, Option<String>>(4)?.filter(|m| !m.is_empty()),
                     genres: genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect(),
                     artists: Vec::new(),
-                    tracks: r.get::<_, i64>(7)?.clamp(0, i64::from(u32::MAX)) as u32,
+                    tracks: r.get::<_, i64>(6)?.clamp(0, i64::from(u32::MAX)) as u32,
                     mixed,
                 })
             })?
@@ -1264,29 +1254,9 @@ impl Library {
         Ok(out)
     }
 
-    /// An album's id as it is (or would be) in Music: what its tags are kept under.
-    pub fn album_base(&self, album: &str) -> Result<Option<String>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT base_id FROM albums WHERE id = ?1")?;
-        Ok(st.query_map([album], |r| r.get::<_, String>(0))?.next().transpose()?)
-    }
-
-    /// The albums kept under these Music-form ids (an album in Incoming and its kept copy share one), in the order
-    /// given.
-    pub fn albums_by_base(&self, bases: &[String]) -> Result<Vec<Album>> {
-        let db = self.db();
-        let mut ns = Vec::new();
-        {
-            let mut st = db.prepare_cached("SELECT n FROM albums WHERE base_id = ?1 ORDER BY (SELECT min(c.folder) FROM copies c WHERE c.album = albums.id)")?;
-            for b in bases {
-                for n in st.query_map([b], |r| r.get::<_, i64>(0))? {
-                    ns.push(n?);
-                }
-            }
-        }
-        let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
-        self.album_artists(&db, &mut albums)?;
-        Ok(albums)
+    /// Whether the library holds this album.
+    pub fn has_album(&self, album: &str) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM albums WHERE id = ?1")?.exists([album])?)
     }
 
     /// The albums of one catalogue folder, the copy that came last first, at most `limit`, with what a source's album
@@ -1409,14 +1379,15 @@ impl Library {
     /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
     /// the catalogue folder).
     pub fn album_art(&self, album: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
-        // The copy that plays, as the cover's print was made from it. `songs` holds its files alone, and two copies can share
-        // a folder, so the folder and the first file come from that one copy, never from what else lies beside it.
+        // The copy that plays, as the cover's print was made from it. `songs` lists a track it lacks from another copy, and two
+        // copies can share a folder, so the folder and the first file come from that one copy's files, never from beside it.
         let Some(copy) = self.row_copy(album)? else { return Ok(None) };
         let db = self.db();
         let mut st = db.prepare_cached("SELECT cover FROM albums WHERE id = ?1")?;
         let Some(cover) = st.query_map([album], |r| r.get::<_, Option<String>>(0))?.next().transpose()? else { return Ok(None) };
-        let mut first = db.prepare_cached("SELECT rel FROM songs WHERE album_id = ?1 AND folder = ?2 ORDER BY rel LIMIT 1")?;
-        let Some(rel) = first.query_map(rusqlite::params![album, copy.folder], |r| r.get::<_, String>(0))?.next().transpose()? else { return Ok(None) };
+        let prefix = if copy.dir.is_empty() { String::new() } else { format!("{}/", copy.dir) };
+        let mut first = db.prepare_cached("SELECT rel FROM copy_files WHERE album = ?1 AND folder = ?2 AND substr(rel, 1, ?3) = ?4 ORDER BY rel LIMIT 1")?;
+        let Some(rel) = first.query_map(rusqlite::params![album, copy.folder, prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?.next().transpose()? else { return Ok(None) };
         Ok(Some((copy.folder, copy.dir, cover, Some(rel))))
     }
 
@@ -1470,22 +1441,17 @@ impl Library {
         Ok(st.exists([id])?)
     }
 
-    /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. A
-    /// track in two folders (an album in Music and again in Incoming) is one persistent id with two songs: its data
-    /// goes to the first folder's (Music's, the library's own file), not back and forth between them on every build.
+    /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. Copies
+    /// share their tracks, so an id on two songs is two tracks tagged alike: two records, a copy that left its record among
+    /// them. It says neither, and the data stays where it is: going to the first folder's, it would leave the record that
+    /// holds it, whichever folder that happens to be. The price: a persistent id on two songs is followed nowhere, so after
+    /// a start with its ids lost, two records of one release keep what they had on dead ids, though no song holds those
+    /// (`all_song_ids`): nothing here says which of the two they were.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT pid, id FROM songs ORDER BY folder, n")?;
+        let mut st = db.prepare("SELECT pid, min(id) FROM songs GROUP BY pid HAVING count(*) = 1 ORDER BY pid")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for row in rows {
-            let (pid, id) = row?;
-            if seen.insert(pid.clone()) {
-                out.push((pid, id));
-            }
-        }
-        Ok(out)
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 }
 

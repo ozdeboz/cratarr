@@ -1,9 +1,10 @@
 // One way to change files (decision 0092; lib/fileChangeRules): a field's change as the review sheet says it, a run's
-// line, the list's groups, a kept run taking its live one's place, and the record's state line.
+// line, the list's groups, a kept run taking its live one's place, the record's state line, and a row's name.
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { asideOf, changeOf, fieldLabel, runGroups, runLine, stateLine, withRun } = await import('../src/lib/fileChangeRules.ts');
+const { asideOf, changeOf, fieldLabel, rowLabel, runGroups, runLine, stateLine, withRun } = await import('../src/lib/fileChangeRules.ts');
 
 const run = (o: Record<string, unknown>) => ({ id: 'r1', what: 'types', title: 'Types into files', state: 'done', done: 0, of: 0, failed: [], undone: false, albums: 1, ...o }) as never;
 
@@ -81,4 +82,41 @@ test("a Keep's or a move's files moved: Adding to its library, where its title s
   const run = { id: 'l1', what: 'keep', title: 'Kept into Music: Ignorance', state: 'adding' as const, done: 1, of: 1, failed: [], undone: false, albums: 1 };
   assert.equal(runLine(run), 'Adding to Music…');
   assert.equal(runLine({ ...run, title: 'Replaced: Ignorance' }), 'Adding to its library…');
+});
+
+// As the Library's list has them; the server's word for a library on a sheet is the same folder's path.
+const LIBRARIES = [
+  { id: '/music', name: 'Music' },
+  { id: '/incoming', name: 'Incoming' },
+  { id: '/own/someone', name: 'Your music' },
+];
+
+test("a cover on two copies: its rows no longer read alike, each saying its library by name", () => {
+  assert.equal(rowLabel({ field: 'cover', library: '/music' }, LIBRARIES), 'Cover · Music');
+  assert.equal(rowLabel({ field: 'cover', library: '/incoming' }, LIBRARIES), 'Cover · Incoming');
+  assert.equal(rowLabel({ field: 'cover', library: '/own/someone' }, LIBRARIES), 'Cover · Your music', "the viewer's own, as the list names it");
+});
+
+test("a track whose copies differ: its library after the track's name", () => {
+  assert.equal(rowLabel({ field: 'bpm', track: 'One', library: '/music' }, LIBRARIES), 'One · Music');
+  assert.equal(rowLabel({ field: 'bpm', track: 'One', library: '/incoming' }, LIBRARIES), 'One · Incoming');
+});
+
+test('a row with no library reads as it did', () => {
+  assert.equal(rowLabel({ field: 'cover' }, LIBRARIES), 'Cover');
+  assert.equal(rowLabel({ field: 'bpm', track: 'One' }, LIBRARIES), 'One');
+});
+
+test("a library the page has no name for goes unsaid: a row never shows a folder's path", () => {
+  assert.equal(rowLabel({ field: 'cover', library: '/elsewhere' }, LIBRARIES), 'Cover');
+  assert.equal(rowLabel({ field: 'cover', library: '/music' }, []), 'Cover', 'the list not read yet');
+});
+
+// The sheet does not run here, so this reads it.
+test("the sheet names its rows by that rule, from the Library's list, read there if nothing has yet", () => {
+  const sheet = readFileSync(new URL('../src/lib/FileChanges.svelte', import.meta.url), 'utf8');
+  assert.match(sheet, /\{rowLabel\(f, libraries\)\}/);
+  assert.doesNotMatch(sheet, /f\.track \?\? fieldLabel/);
+  assert.match(sheet, /const libraries = \$derived\(library\.view\?\.sources\.find\(\(s\) => s\.id === OWN\)\?\.library_info \?\? \[\]\);/);
+  assert.match(sheet, /if \(!library\.view\) readLibrary\(false\)/);
 });

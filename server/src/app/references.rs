@@ -307,8 +307,7 @@ pub async fn choose(app: &Arc<super::App>, album: &str, c: Choose) -> Result<Ref
                 facts.push(("year".into(), Some(serde_json::json!(y))));
             }
             if !facts.is_empty() {
-                let base = s.library.album_base(&a)?.context("That record is not in the library.")?;
-                s.userdata.set_overrides(&[base], &facts, super::moment::now_secs())?;
+                s.userdata.set_overrides(std::slice::from_ref(&a), &facts, super::moment::now_secs())?;
                 s.refresh()?;
             }
         }

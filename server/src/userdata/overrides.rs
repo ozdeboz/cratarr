@@ -1,7 +1,7 @@
 //! A record's facts set by hand (0.13, the owner: "a coherent and unified way to modify type, alongside other attributes
 //! of records"; decision 0089): its type, secondary types, year, genres and whether it is classical,
-//! each winning over its files, MusicBrainz, Discogs and the rules until it is reset. Household-wide and by the record's
-//! Music-form id (as its tags), so a setting follows a record kept from Incoming. The classical marks (0.10) are its
+//! each winning over its files, MusicBrainz, Discogs and the rules until it is reset. Household-wide and by the record, so a
+//! setting holds whichever copies it has. The classical marks (0.10) are its
 //! `classical`. A record's own words (title, artists, track numbers) are its files': those are fixed in its tags.
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::UserData;
 
 pub const SCHEMA: &str = "
--- A record's fact set by hand (0.13): by its Music-form id and the fact's name, its value as JSON, and when.
+-- A record's fact set by hand (0.13): by the record and the fact's name, its value as JSON, and when.
 CREATE TABLE IF NOT EXISTS record_overrides (album TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (album, field)) WITHOUT ROWID;
 ";
@@ -130,7 +130,7 @@ pub(super) fn move_classical_marks(conn: &Connection) -> Result<()> {
 }
 
 impl UserData {
-    /// Every record's facts set, by its Music-form id.
+    /// Every record's facts set, by its id.
     pub fn overrides(&self) -> Result<HashMap<String, Overrides>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT album, field, value FROM record_overrides")?;

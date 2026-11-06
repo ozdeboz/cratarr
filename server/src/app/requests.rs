@@ -161,14 +161,24 @@ async fn connected(lidarr: bool) -> Vec<&'static str> {
 
 /// An approved request handed to every fetcher connected (decision 0099's amendment): Lidarr told to want it, Soulseek
 /// woken to take it in (it reads the approved Requests itself; one without a release group it cannot judge); what each
-/// said (or why it could not), kept on the request.
+/// said (or why it could not), kept on the request. A release group Lidarr found by the album's names is kept on it too:
+/// its state can be read from then on, and Soulseek can judge it.
 async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
     let lidarr = fetcher(app);
     let soulseek = super::soulseek::connected().await;
+    let mut release_group = r.release_group.clone();
     let mut said = Vec::new();
     if let Some(f) = lidarr {
         said.push(match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
-            Ok(said) => said,
+            Ok(handed) => {
+                if release_group.is_none() {
+                    if let Err(e) = serve.userdata.set_request_release_group(r.id, &handed.release_group) {
+                        tracing::warn!("request {}: its release group was not kept: {e:#}", r.id);
+                    }
+                    release_group = Some(handed.release_group);
+                }
+                handed.said
+            }
             Err(e) => {
                 // In the log too (0.9.6: a Lidarr timeout the owner saw left no trace to follow).
                 tracing::warn!("request {}: not handed to Lidarr: {e:#}", r.id);
@@ -177,7 +187,7 @@ async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
         });
     }
     if soulseek {
-        said.push(if r.release_group.is_some() {
+        said.push(if release_group.is_some() {
             super::soulseek::wake();
             "Soulseek searches for it".to_string()
         } else {

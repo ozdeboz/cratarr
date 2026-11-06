@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "crates": [
+    {
+      "id": "c-shores",
+      "name": "Like both shores",
+      "conditions": [
+        {
+          "axis": "like",
+          "not": false,
+          "value": {
+            "kind": "like",
+            "of": [
+              "al-4Jx9dQszNKgnbo4mZtic7y",
+              "al-0K3QLxUBwKPLshc0VyNQJ7"
+            ],
+            "count": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "c-harbour",
+      "name": "Like the harbour",
+      "conditions": [
+        {
+          "axis": "like",
+          "not": false,
+          "value": {
+            "kind": "like",
+            "of": [
+              "ar-6ZlhpxBxPkCMTsT1I1QT0d"
+            ],
+            "count": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "c-albums",
+      "name": "Two albums",
+      "conditions": [
+        {
+          "axis": "album",
+          "not": false,
+          "value": {
+            "kind": "any_of",
+            "values": [
+              "al-4FwVmWLNdYpZZSEtkan6Uy",
+              "al-7ATEPHL21gflZtRCnZNzGM"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "favourites": {
+    "c-shores": "all"
+  },
+  "left_out": {
+    "c-shores": [
+      "Glass Harbour/Tide Tables (2012)/02 Neap.flac"
+    ]
+  },
+  "left_out_albums": {
+    "c-shores": [
+      "al-4FwVmWLNdYpZZSEtkan6Uy"
+    ],
+    "like:al-4FwVmWLNdYpZZSEtkan6Uy": [
+      "al-7ATEPHL21gflZtRCnZNzGM"
+    ]
+  },
+  "excluded": [
+    "Salt Meridian/Both Shores (2018)/01 Landing.flac"
+  ],
+  "fits": {
+    "like:al-4Jx9dQszNKgnbo4mZtic7y": {
+      "rules": [
+        {
+          "axis": "like",
+          "not": false,
+          "value": {
+            "kind": "like",
+            "of": [
+              "tr-83",
+              "al-7ATEPHL21gflZtRCnZNzGM"
+            ],
+            "count": 20
+          }
+        }
+      ],
+      "dismissed": []
+    }
+  },
+  "added": {
+    "like:ar-6ZlhpxBxPkCMTsT1I1QT0d": [
+      {
+        "axis": "album",
+        "not": true,
+        "value": {
+          "kind": "any_of",
+          "values": [
+            "al-6CJXFC1mh9bVtzcdfQX8rc"
+          ]
+        }
+      }
+    ]
+  }
+}

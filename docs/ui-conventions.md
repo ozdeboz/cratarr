@@ -193,12 +193,41 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   its heart, the large actions (Play, Resume when it has a resume point, Shuffle, Play next, Add to queue), then
   entries on rounded cards: View (not from the panel showing it), Go to each of its artists (the source's list of
   them, else the credit), Go to its genres (two at most); its rating (five stars, when its server keeps ratings; a tap
-  on the rating it has takes it off); Add to playlist, Download…, Sync to this device (in the app), Share; what its library allows
-  (decision 0034: Move to each other used library, Replace in Music for an upgrade, Delete, a second step when it is
-  in Music, Cancel conversion while queued), each question asked in the sheet; Change cover on this device (a
+  on the rating it has takes it off); Add to playlist, Download…, Sync to this device (in the app), Share; what its copies allow
+  (decision 0034; Play from, Add to, Move to, Replace in, Delete, Cancel conversion: below), each question asked in the
+  sheet; Change cover on this device (a
   picture kept in this browser, shown wherever the album's cover is; not in Cratarr's own library, where an
   administrator's Change cover is everyone's) and Use the server's cover while such a picture is chosen (no Read the cover
   again since 0.9.7: a cover's address carries its stamp, so a changed cover shows by itself); Remove resume point, Web search, Genius search.
+- **A record's copies in its menu** (decision 0101's "how a record's copies behave", `docs/records-and-copies.md`; the rules
+  are `lib/copiesRule`'s): what may be done goes by the copy, so the menu reads the Library's list itself wherever it
+  opens, reading it first if nothing has yet. A copy goes by its library's name.
+  - **Delete:** a record of one copy says "Delete EP"; of several, an entry per copy the viewer may delete, "Delete from
+    Music", "Delete from Your music", even if that is only one of them, as "Delete EP" would read as the whole record.
+    The question names the copy too, and one in a main library is asked about once more.
+  - **Add to and Move to:** each copy's targets in turn. An Incoming copy is added: where it goes by default, that entry
+    first, and by an administrator also to a main library or their own music. A kept copy moves between an
+    administrator's libraries, never into or out of own music. A library already holding a copy is no target. Two copies
+    that would say the same each add where from ("Move to Vinyl from Music"), only then.
+  - **Replace in:** an administrator's, for an Incoming copy that is an upgrade: an entry per main library it can take a
+    copy's place in.
+  - **Cancel conversion:** an administrator's. A copy with a conversion at work is not moved, replaced or deleted; the
+    record's other copies offer what they did.
+  - **Play from:** an entry per other copy in a library switched on, "Play from Incoming", leading the menu's Library card.
+    An Incoming copy counts, as this is how one waiting is heard. No entry for the copy that plays, and none where the
+    record has no other copy. It needs no account. A tap closes the menu and starts a new queue of the record from that copy, as its Play does and
+    with what Play does to the queue before it, and says nothing. The queue keeps its copy for as long as it lives, over a
+    seek, a replay and being left and taken up again; a track added to it afterwards names none. Nothing is remembered:
+    the next Play, on any button, is the best copy again, and all the while the card's quality says what Play would give.
+  - **Two folders of one library** are one copy here: one entry, which takes the first.
+  - **A copy deleted or moved** leaves the record where it is. It leaves the list, and its panel closes, only with its
+    last copy.
+  - **Several records ticked** (the selection's menu, `lib/SeveralAlbums`): Add to and Move to are an entry per library
+    they can go into; a record goes once, by the first of its copies that can, in the order they would play, as one entry
+    cannot say which. While none of them has two copies there is one Delete. With one that has, a Delete per library by
+    its name ("Delete from Music"), as Move's are, so what goes is said and a record of two copies never loses both. Each
+    is asked once for them all, with one Undo, a main library's second question said in that one. No Play from: it starts
+    one record's queue.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
   with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
   their tracks), Download…, Share, and their picture on this device. No Instant mix (the owner) and no rating.
@@ -279,8 +308,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
   above the problems' dot, in the dot's place, so the chip gets no wider. The playlist viewed in the panel has a border
   in the accent and no extra fill: fill means "holds the playing track", the border "is shown in the panel". When the playing
-  track is outside Music (it cannot go in playlists), the chips it is not in are quieter and their plus circle is
-  dashed (Finamp's mark for a playlist it cannot add to); a tap says why.
+  track cannot go in playlists (its library is not in use, or no Music library is set up), the chips it is not in are
+  quieter and their plus circle is dashed (Finamp's mark for a playlist it cannot add to); a tap says why.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
@@ -302,8 +331,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the Library, every used one (elsewhere a chip only shows a library's use), so a library is switched where its effect
   shows; the last one on stays on, so a page never filters down to nothing; and
   while one is off the funnel is lit (as the magnifier is while a search applies), the remembered filter's only trace. Every other filter lasts only for the list it was set on and is not remembered, first in the
-  sheet: Playlists' Favourites only and the Library's Favourites only, Upgrades waiting (Incoming's albums that
-  would upgrade one in Music), Not played yet and 4 stars and up (decided 2026-10-16, by your plays and ratings)
+  sheet: Playlists' Favourites only and the Library's Favourites only, Not played yet and 4 stars and up (decided
+  2026-10-16, by your plays and ratings)
   (each off again on leaving the page), the panel's Hide missing tracks (off again when
   the panel shows something else), and any still to come (a tag, a genre). While any is on, the funnel is lit too.
   Under the Library's switches, while there are any, **Excluded (N)**: Cratarr's global exclusions, a row that opens
@@ -345,7 +374,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     - Display (theme, progress bar);
     - then the server's:
       - Connections (servers: address, key, status; Lidarr the same way, shown only when an Incoming library is set);
-      - Libraries (one row per server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its
+      - Libraries (one row per server library: its use, Main library, Incoming or Not used, and the folder Cratarr sees its
         files in, or a warning when it can't; then the names, the trash, the catalogue status and tag splitting);
       - Players;
       - Users (every account, decision 0051, amended 2026-10-19: Cratarr's own, added here with "+ Add user", and a
@@ -454,18 +483,20 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   the size, the second line and the action.
 - **A large row's controls may go under its text** when the panel is narrow (Sync's settings, Repair's buttons): a
   row never scrolls sideways.
-- **The Library** (decision 0034, `Library.svelte` over `lib/AlbumShelf.svelte`, decision 0028): every album of the
-  followed server's Music and Incoming libraries as one list, the libraries switched in the filter; the order (Artist,
+- **The Library** (decision 0034, `Library.svelte` over `lib/AlbumShelf.svelte`, decision 0028): every record of the
+  followed server's used libraries as one list, one of Cratarr's own listed once with every copy in it and showing while
+  any copy is in a library switched on (an Incoming copy too), the libraries switched in the filter; the order (Artist,
   Title, Year, Added; Added newest first at first; and by how you used them, decided 2026-10-16: Plays, Last played,
   Rating, most first when chosen, Length, the longest first, the value on a tile's corner pill), Rows, Covers or a
   Table (its columns, Length among them, each also an order), and Size, in columns as the playlist chips are. The
   kinds (Records, Albums, EPs, Singles, Compilations, Classical, Other) are the filter's Type row, chosen beside back
   and in the sidebar; each record in its own kind only, unless the filter's switch says otherwise. Classical opens on
   its composers, each opening their records, its performers the records' second line.
-  Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was added,
-  and an Incoming album's lines: its conversion and how it relates to the kept libraries; a record has a dot in its
-  library's colour after its title for each library holding it, while two or more libraries are on, and an Incoming copy
-  of a kept record has none, as `lib/copiesRule` says); its menu is the album's one
+  Rows are extra large rows (the cover, the year after the title, the artist, tracks, the format of the copy that plays
+  and when it was added, and an Incoming album's lines: its conversion and how it relates to the kept libraries; a
+  record has a dot in its library's colour after its title for each library holding it that is on, or for all of them
+  on a card reached with none on (Home's crates, a search), while two or more libraries are on; an Incoming copy of a
+  kept record has none, as `lib/copiesRule` says); its menu is the album's one
   menu (above); Covers are tiles (the dot before the title). A row ends in ⋮ (its menu). **Covers** (the owner,
   2026-10-27; `lib/CoverPlay`, `lib/CoverWait`, `lib/PlayingDots`): a tap on a cover opens its album, never plays it;
   a cover that plays has **Play in its upper right corner**, which alone plays, its ring turning while it starts;
@@ -525,7 +556,9 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   "placement", "root", "entry", "line", "sync".
 - **Vocabulary:**
   - *track*, *album*, *playlist*.
-  - *Music* and *Incoming*: the two library uses, named exactly as in Settings.
+  - *Main library*, *Incoming*, *Own music* and *Not used*: the library uses, named exactly as in Settings. A library goes
+    by its own name ("Delete from Vinyl"), the viewer's own music as "Your music".
+  - *copy*: one folder's files of a record, said by its library's name.
   - *missing track*: a playlist line whose file is gone.
   - *player*: an app on a device, written "Finamp on Lenovo Tab".
   - *server*: Jellyfin and the like (not "source").
@@ -556,7 +589,7 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **Waiting:** a thin bar along the top while something the user asked for loads (`lib/ProgressBar.svelte`): only
   after 300 ms, so quick answers show nothing. Background polling and actions shown at once (the player, playlist
   taps, the favourite) never show it (`quietly` in `api.ts`). The button that was tapped shows a spinner in place of
-  its label (`aria-busy` with `disabled`) until the answer. No full-page spinners.
+  its label (`aria-busy` with `disabled`) until the answer.
 - **Leaving a panel** (the owner, 2026-10-24: Back the same everywhere). A panel that shows full screen (a phone; a
   window without room beside the page: a playlist, an album, an artist, a crate) has, top left and always there, Back
   and then Home: Back goes to the view before, and from the first one closes the panel; Home goes to Home as the
@@ -585,8 +618,16 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   buttons in place), and one unfolds at a time: the search button hides while the progress shows, the page's button
   while the search is open.
 - **Destructive actions** ask in place, naming what goes ("Delete Chill?"); nothing destructive happens on one tap.
-- **Loading:** "Loading…" in the content area; never an empty page. **Empty:** say why and what to do ("Nothing
-  incoming." / "No Music library is set. Choose one in Settings → Libraries.").
+- **Loading** (0.13; the owner, 2026-10-31: "Keep, then spinner at 300 ms"; `lib/loader`, `lib/keepWhile`): one rule for
+  every list and place. While what replaces its content is on its way, what it showed stays as it was, not blanked and
+  not dimmed, for 300 ms. A quicker answer just takes its place; a slower one finds the loader there, the mark in motion
+  (`lib/MarkLoader`, through `lib/Asking` for a list or a sheet's step and `lib/PageLoading` for a whole page or panel),
+  large on a page, small in a panel or a sheet. Words typed on keep what was shown and start the 300 ms again. With
+  nothing to keep, the loader comes after the same 300 ms, in room kept for it. "None found" never comes before the
+  answer. A page or a panel going to something else keeps nothing of the last (`lib/Hold`; the owner, 2026-10-27: never
+  old content on navigation): its own background, the same sign after the same 300 ms, then the new content whole.
+- **Empty:** say why and what to do ("Nothing incoming." / "No Music library is set. Choose one in Settings →
+  Libraries.").
 
 ## Checking
 

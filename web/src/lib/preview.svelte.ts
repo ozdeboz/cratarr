@@ -24,7 +24,9 @@ export function startPreview(t: Previewed) {
   const from = t.duration_secs ? t.duration_secs / 3 : 30;
   resume = local.index >= 0 && !local.paused;
   if (resume) togglePlay();
-  el = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}?from_ms=${Math.floor(from * 1000)}`);
+  // The row's own copy, where its queue was started from one (Play from).
+  const copy = local.queue.find((q) => q.source === t.source && q.id === t.id)?.from;
+  el = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}?from_ms=${Math.floor(from * 1000)}${copy ? `&from=${encodeURIComponent(copy)}` : ''}`);
   el.play().catch(() => endPreview());
 }
 

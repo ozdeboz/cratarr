@@ -514,15 +514,23 @@ impl IncomingService {
         // The swap: originals into the trash, converted files in their place.
         let converted = conversions(&job.dir, &job.files, stamp);
         let steps = swap_steps(&root, &job.dir, &job.files, &converted);
-        let files = self.files.clone();
+        let moving = self.lib.catalogue().copies_moving();
+        let (files, held) = (self.files.clone(), moving.clone());
         let swap = steps.clone();
-        let swapped = tokio::task::spawn_blocking(move || files.move_all(&swap)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r);
+        let swapped = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&swap)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|r| r);
         if let Err(e) = swapped {
             let (r, d) = (root.clone(), job.dir.clone());
             let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
             return Outcome::Failed(format!("the converted files could not take the originals' place: {e:#}"));
         }
         self.rename_rows(job.folder, &converted, false).await;
+        drop(moving);
         *self.owned.lock().await = None;
         // The action, on what is now a CD-format album.
         let at = Located {
@@ -581,6 +589,13 @@ impl IncomingService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: the queue reads it.
+    #[test]
+    fn the_jobs_of_0_15_are_read_as_the_queue_reads_them() {
+        let jobs: Jobs = serde_json::from_str(include_str!("../../../tests/fixtures/0.15/convert-queue.json")).unwrap();
+        assert_eq!((jobs.next, jobs.list[0].album.id.as_str(), jobs.list[0].state), (2, "al-5CBklbfbpDtbwWYNnJiHHl", State::Done));
+    }
 
     #[test]
     fn a_swap_moves_the_originals_out_before_the_converted_files_take_their_names() {
@@ -826,6 +841,25 @@ mod tests {
         for d in [music, inc] {
             std::fs::remove_dir_all(d).ok();
         }
+    }
+
+    /// What waits finds its album by its id when its turn comes, and a job's Undo finds the job by it.
+    #[test]
+    fn a_job_waiting_keeps_its_album_after_the_move() {
+        let d = std::env::temp_dir().join(format!("cratarr-queue-moved-job-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let album = serde_json::json!({ "id": "al-old", "title": "T", "tracks": 1, "tags": [] });
+        let job = serde_json::json!({
+            "id": 1, "source": "cratarr", "album": album, "folder": 1, "dir": "X", "action": "keep", "files": ["01.flac"], "done": 0, "state": "waiting", "to": "X - T",
+        });
+        std::fs::write(d.join("convert-queue.json"), serde_json::json!({ "next": 2, "list": [job] }).to_string()).unwrap();
+        let moved = crate::moved::Moved { ids: [("al-old".to_string(), "al-7".to_string())].into(), ..Default::default() };
+        let report = moved.stores(&d).unwrap();
+        let q = Queue::open(Some(d.join("convert-queue.json")));
+        assert_eq!(q.lock().list.iter().map(|j| j.album.id.as_str()).collect::<Vec<_>>(), ["al-7"], "read as a server reads it");
+        assert_eq!(report.table_named("convert-queue.json").unwrap().before, 1);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

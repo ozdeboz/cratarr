@@ -991,6 +991,11 @@ impl Facts {
         std::iter::once(self.rel.as_str()).chain(self.lines.iter().map(String::as_str))
     }
 
+    /// Its song id, as what is left out and excluded name it: none for a file no track holds yet.
+    pub fn song(&self) -> Option<String> {
+        self.track.map(crate::ids::song)
+    }
+
     /// The playlists holding it, by any of its lines, each once.
     fn lists<'a>(&self, membership: &'a HashMap<String, Vec<String>>) -> Vec<&'a String> {
         let mut lists: Vec<&String> = Vec::new();
@@ -1187,6 +1192,39 @@ pub fn named_ids(conditions: &[Condition]) -> Vec<String> {
         }
     }
     ids
+}
+
+/// The same ids moved (the first start of 0.16): `new` says what an id became, none for one that stays as it is. Two that become
+/// one are one, a seed's weight added to the seed it joined, as both counted. What `named_ids` reads and this moves must be the
+/// same places, or a saved crate shows one seed and keeps another.
+pub fn move_named(conditions: &mut [Condition], new: &mut dyn FnMut(&str) -> Option<String>) {
+    for c in conditions {
+        let (these, weights) = match (&mut c.value, c.axis.as_str()) {
+            (Value::Like { of, weights, .. }, _) => (of, Some(weights)),
+            (Value::AnyOf { values } | Value::AllOf { values }, "album") => (values, None),
+            _ => continue,
+        };
+        let (mut moved, mut weighed): (Vec<String>, Vec<f32>) = (Vec::with_capacity(these.len()), Vec::new());
+        for (i, id) in these.iter().enumerate() {
+            let id = if NameKind::of(id).is_some() { new(id).unwrap_or_else(|| id.clone()) } else { id.clone() };
+            let weight = weights.as_ref().and_then(|w| w.get(i)).copied();
+            match moved.iter().position(|m| *m == id) {
+                Some(at) => {
+                    if let (Some(w), Some(kept)) = (weight, weighed.get_mut(at)) {
+                        *kept += w;
+                    }
+                }
+                None => {
+                    moved.push(id);
+                    weighed.extend(weight);
+                }
+            }
+        }
+        *these = moved;
+        if let Some(weights) = weights {
+            *weights = weighed;
+        }
+    }
 }
 
 /// The axes with their domains in this library: genres, moods and styles most common first, the years', BPMs',
@@ -1395,7 +1433,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("fit", Value::Yes) => w.fits.is_some_and(|s| f.every_line().any(|l| s.contains(l))),
         ("four", Value::Yes) => four_on_the_floor(f),
         ("meter", Value::AnyOf { values }) => f.meter.as_ref().is_some_and(|m| values.iter().any(|v| v.eq_ignore_ascii_case(m))),
-        (LEFT_OUT, Value::AnyOf { values }) => f.every_line().any(|l| values.iter().any(|v| v == l)),
+        (LEFT_OUT, Value::AnyOf { values }) => f.song().is_some_and(|s| values.contains(&s)),
         (CREDITED, Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(v)),
         ("playlist", Value::AnyOf { values }) => {
             let lists = f.lists(w.membership);
@@ -1626,7 +1664,7 @@ impl Alike {
             sounds.push(f.sound.as_deref().map(<[f32]>::to_vec));
         }
         let lib = Library::new(&tracks, sounds);
-        // By every line: a playlist's entry or a track left out may name any copy.
+        // By every line: a playlist's entry may name any copy.
         let place = all.iter().enumerate().flat_map(|(i, f)| f.every_line().map(move |l| (l.to_string(), i))).collect();
         let of_track = all.iter().enumerate().filter_map(|(i, f)| Some((f.track?, i))).collect();
         let mut albums: HashMap<Arc<str>, Vec<usize>> = HashMap::new();
@@ -2292,17 +2330,17 @@ pub fn needs_favourites(conditions: &[Condition]) -> bool {
 
 /// A crate's conditions with its tracks left out by hand (decision 0024, amended 2026-10-19: a crate's left-out list,
 /// over its conditions and both toggles, so a favourite left out stays out). Not an axis one builds with: the crate
-/// carries it unseen.
-pub fn leaving_out(lines: &[String], conditions: &[Condition]) -> Vec<Condition> {
+/// carries it unseen. `tracks`: their song ids, which hold on whichever copy plays (0101: lines to tracks).
+pub fn leaving_out(tracks: &[String], conditions: &[Condition]) -> Vec<Condition> {
     let mut all = conditions.to_vec();
-    if !lines.is_empty() {
-        all.push(Condition::new(LEFT_OUT, true, Value::AnyOf { values: lines.to_vec() }));
+    if !tracks.is_empty() {
+        all.push(Condition::new(LEFT_OUT, true, Value::AnyOf { values: tracks.to_vec() }));
     }
     all
 }
 
-/// The left-out list's condition: a line that is one of these.
-const LEFT_OUT: &str = "line";
+/// The left-out list's condition: a track that is one of these, by its song id.
+const LEFT_OUT: &str = "track";
 
 /// A crate's conditions with the artists excluded everywhere left out (decision 0083): a file crediting one of these
 /// (their keys, `Facts::credits`) is not in it, whatever else holds. Not an axis one builds with: every crate carries
@@ -2384,12 +2422,12 @@ fn is_not_artist(c: &Condition) -> bool {
     c.axis == "artist" && c.not && matches!(c.value, Value::AnyOf { .. })
 }
 
-/// A crate's tracks left out by hand (decision 0024, amended 2026-10-19): single tracks by their lines, and whole albums
+/// A crate's tracks left out by hand (decision 0024, amended 2026-10-19): single tracks by their song ids, and whole albums
 /// by their ids, each album a rule (its tracks now and later).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeftOut {
     #[serde(default)]
-    pub lines: Vec<String>,
+    pub tracks: Vec<String>,
     #[serde(default)]
     pub albums: Vec<String>,
 }
@@ -2397,11 +2435,11 @@ pub struct LeftOut {
 impl LeftOut {
     /// How many it holds: its tracks and its albums.
     pub fn len(&self) -> usize {
-        self.lines.len() + self.albums.len()
+        self.tracks.len() + self.albums.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty() && self.albums.is_empty()
+        self.tracks.is_empty() && self.albums.is_empty()
     }
 }
 
@@ -2927,14 +2965,15 @@ mod tests {
 
     #[test]
     fn tracks_left_out_by_hand_stay_out_over_conditions_and_both_toggles() {
-        let (files, membership, favourites) = library();
+        let (mut files, membership, favourites) = library();
+        files[0].track = Some(1);
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
-        let left = vec!["a".to_string()];
+        let left = vec!["tr-1".to_string()];
         // "a" is a favourite: left out, it stays out with only favourites shown.
         assert_eq!(select(&files, &leaving_out(&left, &Favourites::Only.with(&[])), &w), vec!["b"]);
         assert_eq!(select(&files, &leaving_out(&left, &[]), &w), vec!["b", "c", "d"]);
         assert_eq!(leaving_out(&[], &[]), Vec::new(), "nothing left out, nothing added");
-        assert!(!is_axis("line"), "not an axis one builds with");
+        assert!(!is_axis(LEFT_OUT), "not an axis one builds with");
     }
 
     #[test]
@@ -3525,12 +3564,66 @@ mod tests {
         for values in [vec![], vec!["Road".to_string()]] {
             assert!(matches(&Condition::new("playlist", false, Value::AnyOf { values }), &f, &w));
         }
-        assert!(matches(&Condition::new(LEFT_OUT, false, Value::AnyOf { values: vec![other.clone()] }), &f, &w));
         let files = [f];
         assert_eq!(by_line(&files).len(), 2);
         let alike = Alike::of(&files, &membership, &HashMap::new());
         assert_eq!((alike.place_of_line("A/1.flac"), alike.place_of_line(&other)), (Some(0), Some(0)));
         assert_eq!(alike.tracks[0].playlists.len(), 1, "its playlist counts in what it is like");
+    }
+
+    /// A track left out or excluded is the track, on every copy of it (0101: lines to tracks): the file a crate reads it from
+    /// can change, and a line would have to be every line it ever went by.
+    #[test]
+    fn moving_named_ids_moves_what_named_ids_reads_and_nothing_else() {
+        let like = |of: &[&str], weights: &[f32]| {
+            Value::Like { of: of.iter().map(|s| s.to_string()).collect(), count: 5, min: None, own: None, mode: None, fresh: false, weights: weights.to_vec(), unlisted: false, avoid: Avoid::default() }
+        };
+        let values = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut conditions = vec![
+            Condition::new("like", false, like(&["al-old", "bandcamp:x", "tr-1"], &[])),
+            Condition::new("album", true, Value::AnyOf { values: values(&["al-old", "al-2"]) }),
+            Condition::new("album", false, Value::AllOf { values: values(&["al-old"]) }),
+            Condition::new("genre", false, Value::AnyOf { values: values(&["al-old"]) }),
+        ];
+        let before = named_ids(&conditions);
+        let mut asked = Vec::new();
+        move_named(&mut conditions, &mut |id| {
+            asked.push(id.to_string());
+            (id == "al-old").then(|| "al-1".to_string())
+        });
+        let mut once: Vec<String> = Vec::new();
+        asked.into_iter().for_each(|a| if !once.contains(&a) { once.push(a) });
+        assert_eq!(once, before, "the same places, each read");
+        assert_eq!(named_ids(&conditions), ["al-1", "tr-1", "al-2"]);
+        assert!(matches!(&conditions[0].value, Value::Like { of, .. } if of[1] == "bandcamp:x"), "a preview's is no library id");
+        assert!(matches!(&conditions[3].value, Value::AnyOf { values } if values[0] == "al-old"), "a genre is a name");
+    }
+
+    /// Two copies' ids were two seeds of one crate. They are one record now: one seed, and its weight, or the seeds and their
+    /// weights no longer line up and every seed after it counts as the one before.
+    #[test]
+    fn two_seeds_of_one_record_are_one_with_both_their_weights() {
+        let like = Value::Like { of: vec!["al-a".into(), "al-b".into(), "tr-1".into()], count: 5, min: None, own: None, mode: None, fresh: false, weights: vec![1.0, 2.0, 4.0], unlisted: false, avoid: Avoid::default() };
+        let mut conditions = vec![Condition::new("like", false, like)];
+        move_named(&mut conditions, &mut |id| id.starts_with("al-").then(|| "al-7".to_string()));
+        assert!(matches!(&conditions[0].value, Value::Like { of, weights, .. } if *of == ["al-7", "tr-1"] && *weights == [3.0, 4.0]), "{:?}", conditions[0].value);
+    }
+
+    #[test]
+    fn what_is_left_out_is_a_track_whichever_file_it_is_read_from() {
+        let membership = HashMap::new();
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
+        let left = |values: &[&str]| Condition::new(LEFT_OUT, false, Value::AnyOf { values: values.iter().map(|v| v.to_string()).collect() });
+        let row_copy = Facts { rel: "A/1.flac".into(), track: Some(1), ..Facts::default() };
+        let other_copy = Facts { rel: "../own/A/1.mp3".into(), lines: vec!["A/1.flac".into()], track: Some(1), ..Facts::default() };
+        for f in [&row_copy, &other_copy] {
+            assert!(matches(&left(&["tr-1"]), f, &w), "{}", f.rel);
+            assert!(!matches(&left(&["tr-2"]), f, &w), "another track");
+            assert!(!matches(&left(&["A/1.flac"]), f, &w), "a line names no track here");
+        }
+        assert!(!matches(&left(&["tr-1"]), &Facts { rel: "B/1.flac".into(), ..Facts::default() }, &w), "a file no track holds yet");
+        assert_eq!(leaving_out(&["tr-1".to_string()], &[])[0].axis, LEFT_OUT);
+        assert!(leaving_out(&[], &[]).is_empty(), "nothing left out asks nothing");
     }
 
     #[test]

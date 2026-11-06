@@ -124,10 +124,11 @@ pub(crate) fn line_exists(cat: &Catalogue, music: Option<&Path>, line: &str) -> 
     music.is_some_and(|d| entry_exists(d, line))
 }
 
-/// Where an entry leads when its own file went: its track's line now (decision 0101 point 11: an entry is its track). None
-/// while its file is there, or where its track has none. Blocking.
+/// Where an entry leads when its own file went, or no longer holds its track, as a copy that left its record takes tracks of
+/// its own: its track's line now (decision 0101 point 11: an entry is its track). None while its file is there holding it, or
+/// where its track has none. Blocking.
 fn led_to(cat: &Catalogue, music: &Path, line: &str, track: &str) -> Option<String> {
-    if line_exists(cat, Some(music), line) {
+    if line_exists(cat, Some(music), line) && cat.track_of_line(line).is_none_or(|held| held == track) {
         return None;
     }
     let now = cat.row_line(track.strip_prefix(crate::serve::ids::SONG)?.parse().ok()?)?;
@@ -1320,6 +1321,30 @@ B/2.mp3
         assert_eq!(s.entries("Mix").await.unwrap(), ["../own/A/1.mp3"], "reading writes nothing");
         s.refresh_dead().await;
         assert_eq!(s.entries("Mix").await.unwrap(), ["A/1.mp3"], "the pass writes where it read");
+    }
+
+    /// A copy that left its record (Q8) took tracks of its own, so a line on its file no longer holds the entry's track: an
+    /// entry is its track, and it goes to the copy that stayed.
+    #[tokio::test]
+    async fn an_entry_on_a_copy_that_left_its_record_goes_to_its_track() {
+        let d = Dir::new();
+        d.touch("Music/A/1.mp3");
+        d.touch("own/A/1.mp3");
+        let cat = Arc::new(Catalogue::open(None, vec![d.0.join("Music"), d.0.join("own")]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let (track, own) = (cat.track_of(0, "A/1.mp3").unwrap(), cat.track_of(1, "A/1.mp3").unwrap());
+        cat.give_track_for_tests(1, "A/1.mp3", track);
+        let s = Store::open(Arc::new(UserData::open(None).unwrap()), cat.clone(), None, d.0.join("Music"), None);
+        s.create("Mix").await.unwrap();
+        s.set_member("Mix", "../own/A/1.mp3", true).await.unwrap();
+        s.refresh_dead().await;
+        assert_eq!(s.entries("Mix").await.unwrap(), ["../own/A/1.mp3"], "a line on a copy holding its track stays on it");
+        cat.give_track_for_tests(1, "A/1.mp3", own);
+        assert_eq!(s.led_entries("Mix").await.unwrap(), ["A/1.mp3"]);
+        s.refresh_dead().await;
+        assert_eq!(s.entries("Mix").await.unwrap(), ["A/1.mp3"]);
     }
 
     #[tokio::test]

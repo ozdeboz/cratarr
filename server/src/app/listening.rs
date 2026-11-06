@@ -50,10 +50,12 @@ pub fn heard_blocking(serve: &Serve, user: &str, song: &str, h: &Heard) -> anyho
     if !serve.userdata.tracking(user) {
         return Ok(false);
     }
-    let Some((pid, album, artists)) = serve.library.play_targets(song)? else { return Ok(false) };
-    let new = serve.userdata.record(user, (song, &pid), &album, &artists, h)?;
+    // An old id plays on in a queue no take reached, and what is heard of it is the track's.
+    let song = serve.song_now(song);
+    let Some((pid, album, artists)) = serve.library.play_targets(&song)? else { return Ok(false) };
+    let new = serve.userdata.record(user, (&song, &pid), &album, &artists, h)?;
     if new {
-        tell(Event::Heard { user: user.to_string(), song: song.to_string(), at: h.at, counted: h.counts });
+        tell(Event::Heard { user: user.to_string(), song, at: h.at, counted: h.counts });
     }
     Ok(new)
 }

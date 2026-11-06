@@ -501,7 +501,6 @@ impl Source for CratarrSource {
                 let mut out = Vec::new();
                 for c in lib.albums_in(folder, limit)? {
                     let (a, dir) = (c.album, c.dir);
-                    let base = lib.album_base(&a.id)?.unwrap_or_else(|| a.id.clone());
                     let stamp = format!("{} {} {}", a.song_count, a.created.as_deref().unwrap_or(""), dir);
                     // This library's copy: `App::albums` says what the viewer may do with it, and folds a record's together.
                     let copy = AlbumCopy { library: library.clone(), bits: c.bits, rate: c.rate, added: c.added, folder, dir: dir.clone(), ..AlbumCopy::default() };
@@ -516,7 +515,7 @@ impl Source for CratarrSource {
                             format: c.format,
                             bitrate_kbps: c.kbps,
                             duration_secs: c.secs,
-                            tags: ud.tags_of(&base)?,
+                            tags: ud.tags_of(&a.id)?,
                             library: None,
                             copies: vec![copy],
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
@@ -556,13 +555,13 @@ impl Source for CratarrSource {
         })
     }
 
-    // An artist is their name's id (as Subsonic apps see them): the albums crediting it, the songs crediting it. Plays
-    // and the heart are the owner's.
+    // An artist by name, as the page asks: the albums crediting them, the songs crediting them. A name with no id is
+    // credited on nothing, so the empty id finds nothing. Plays and the heart are the owner's.
     fn artist_works<'a>(&'a self, name: &'a str) -> Fut<'a, Option<super::ArtistWorks>> {
         Box::pin(async move {
             let s = server()?;
             let o = owner(&s)?;
-            let id = crate::serve::ids::artist(name);
+            let id = s.artist_id(name)?.unwrap_or_default();
             let (lib, aid) = (s.library.clone(), id.clone());
             let (own, on, songs) = blocking(move || lib.artist_works(&aid)).await?;
             let ids: Vec<String> = songs.iter().map(|t| t.id.clone()).collect();
@@ -602,7 +601,9 @@ impl Source for CratarrSource {
         Box::pin(async move {
             let s = server()?;
             let o = owner(&s)?;
-            s.userdata.set_starred(&o, Item::Artist, &[crate::serve::ids::artist(name)], on)?;
+            // Any name: a heart on someone no file credits yet is theirs once one does, so they get their id now.
+            let id = crate::serve::ids::artist(s.catalogue().artist_for(name)?);
+            s.userdata.set_starred(&o, Item::Artist, &[id], on)?;
             Ok(on)
         })
     }
@@ -612,7 +613,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let o = owner(&s)?;
             // As artist_works reads it: the same name, the same id.
-            let id = crate::serve::ids::artist(name);
+            let Some(id) = s.artist_id(name)? else { return Ok(Some(false)) };
             Ok(Some(s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some())))
         })
     }
@@ -830,18 +831,7 @@ impl Source for CratarrSource {
 
     /// Plays added up (all and one's own), the later last-played, the better rating, a star when either has one.
     fn combine_user_data(&self, a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Value {
-        let (a, b) = (annotation_of(a), annotation_of(b));
-        annotation_json(&Annotation {
-            play_count: a.play_count + b.play_count,
-            play_date: a.play_date.max(b.play_date),
-            own_count: a.own_count + b.own_count,
-            own_date: a.own_date.max(b.own_date),
-            rating: a.rating.max(b.rating),
-            starred_at: match (a.starred_at, b.starred_at) {
-                (Some(x), Some(y)) => Some(x.min(y)),
-                (x, y) => x.or(y),
-            },
-        })
+        annotation_json(&annotation_of(a).combined(&annotation_of(b)))
     }
 
     fn set_user_data<'a>(&'a self, item: &'a str, user: &'a str, data: &'a serde_json::Value) -> Fut<'a, ()> {

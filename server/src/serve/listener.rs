@@ -2,7 +2,6 @@
 //! work (a task handed work does not carry the request, `who`), and held through it: a stream, its waveform, its beats
 //! and its gain are five requests a track, and a wind asks for up to 64 tracks at once.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::api::Song;
@@ -16,32 +15,18 @@ use crate::catalogue::Catalogue;
 pub struct Listener {
     /// None: no one in particular (a signed link while signing in is required, work of its own): the row copy.
     pub account: Option<String>,
-    /// Their own music's catalogue folder.
-    pub own: Option<i64>,
     /// The catalogue folders of the libraries they have off.
     pub off: Vec<i64>,
-    /// The library picked by hand, by record.
-    pub picks: HashMap<String, i64>,
-    /// The library this one request asks to hear, whoever asks: a pick that lasts as long as the stream, and takes over a
-    /// lasting one. An intake card's snippets are of the copy waiting.
+    /// The library this one request asks to hear, whoever asks: an intake card's snippets are of the copy waiting, and a queue
+    /// started from a copy asks for it on every stream. It lasts as long as the request.
     pub from: Option<i64>,
     pub(super) library: Option<Arc<Library>>,
 }
 
-/// An account's picks by the catalogue folder of each: a library's id is its folder, and `roots` the folders by id. One whose
-/// library is no longer in use picks nothing.
-pub fn picks_in(picks: &HashMap<String, String>, roots: &[(i64, String)]) -> HashMap<String, i64> {
-    let folder = |library: &str| roots.iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| *f);
-    picks.iter().filter_map(|(record, library)| Some((record.clone(), folder(library)?))).collect()
-}
-
 impl Listener {
-    /// As `copy_for` takes them, for this record; none for no one in particular, unless the request named a copy.
-    pub fn viewer(&self, album: &str) -> Option<Viewer> {
-        match &self.account {
-            Some(_) => Some(Viewer { own: self.own, pick: self.from.or_else(|| self.picks.get(album).copied()) }),
-            None => self.from.map(|pick| Viewer { own: None, pick: Some(pick) }),
-        }
+    /// As `copy_for` takes it: none for no one in particular, unless the request named a copy.
+    pub fn viewer(&self) -> Option<Viewer> {
+        (self.account.is_some() || self.from.is_some()).then_some(Viewer { from: self.from })
     }
 
     /// The file a server's item is for this listener: Cratarr's own id names a track, and they hear its copy that plays;
@@ -81,7 +66,8 @@ impl Listener {
     /// format are that file's, not the row copy's. Blocking.
     pub fn song(&self, cat: &Catalogue, source: &str, item: &str) -> Option<Song> {
         let library = self.library.as_ref()?;
-        let id = if source == crate::source::cratarr::KIND.id { item.to_string() } else { library.song_ids(cat.track_of_source(source, item)?).ok()??.song_id };
+        // An id a take retired names the track that took it: a queue can hold one.
+        let id = if source == crate::source::cratarr::KIND.id { cat.track_of_source(source, item).map_or(item.to_string(), ids::song) } else { library.song_ids(cat.track_of_source(source, item)?).ok()??.song_id };
         let mut song = library.songs_by_id(&[id]).ok()?.into_iter().next()?;
         if let Some((folder, rel)) = self.place(cat, source, item)
             && let Err(e) = library.as_played(&mut song, folder, &rel)
@@ -102,14 +88,13 @@ pub(crate) mod tests {
     const FLAC: &str = "A/01 One.flac";
     const MP3: &str = "B/01 One.mp3";
 
-    /// One track with a file in each of two folders, as the take will leave it: the catalogue gives both one track and
-    /// the library's `copy_files` and `copies` name one album. Folder 0 holds a FLAC, folder 1 an MP3 with its own numbers.
+    /// One track with a file in each of two folders, as the take leaves it: the catalogue gives both one track and the
+    /// library's `copy_files` and `copies` name one album. Folder 0 holds a FLAC, folder 1 an MP3 with its own numbers.
     struct Two {
         roots: [std::path::PathBuf; 2],
         cat: Catalogue,
         lib: Arc<Library>,
         song: String,
-        album: String,
     }
 
     impl Drop for Two {
@@ -149,12 +134,12 @@ pub(crate) mod tests {
             ))
             .unwrap();
         cat.set_tracks(&[((1, MP3.to_string()), ids::track_of(&song))]).unwrap();
-        Two { roots, cat, lib, song, album }
+        Two { roots, cat, lib, song }
     }
 
     impl Two {
-        fn who(&self, account: Option<&str>, own: Option<i64>, off: &[i64]) -> Listener {
-            Listener { account: account.map(str::to_string), own, off: off.to_vec(), library: Some(self.lib.clone()), ..Listener::default() }
+        fn who(&self, account: Option<&str>, off: &[i64]) -> Listener {
+            Listener { account: account.map(str::to_string), off: off.to_vec(), library: Some(self.lib.clone()), ..Listener::default() }
         }
 
         fn plays(&self, who: &Listener) -> Option<(i64, String)> {
@@ -166,26 +151,44 @@ pub(crate) mod tests {
         Some((folder, if folder == 0 { FLAC } else { MP3 }.to_string()))
     }
 
+    /// A queue can hold an id a take retired: it still names the song, and what is heard of it is what plays for the listener.
+    #[test]
+    fn an_id_a_take_retired_names_the_track_that_took_it() {
+        let t = two("taken");
+        let old = ids::song(*t.cat.moved_tracks().unwrap().keys().next().expect("one of the two was taken as the library was built"));
+        assert_ne!(old, t.song);
+        let who = t.who(Some("ann"), &[0]);
+        assert_eq!(who.song(&t.cat, KIND.id, &old).map(|s| s.id), Some(t.song.clone()));
+        assert_eq!(who.place(&t.cat, KIND.id, &old), at(1));
+    }
+
     #[test]
     fn a_stream_plays_the_copy_copy_for_chose() {
         let t = two("chose");
-        assert_eq!(t.plays(&t.who(None, None, &[])), at(0), "no one: the row copy");
-        assert_eq!(t.plays(&t.who(Some("ann"), None, &[])), at(0), "the best kept copy");
-        assert_eq!(t.plays(&t.who(Some("ann"), Some(1), &[])), at(1), "their own music, at a lower quality");
-        assert_eq!(t.plays(&t.who(Some("ann"), None, &[0])), at(1), "the other copy is off");
-        let mut picked = t.who(Some("ann"), None, &[]);
-        picked.picks.insert(t.album.clone(), 1);
-        assert_eq!(t.plays(&picked), at(1));
-        picked.account = None;
-        assert_eq!(t.plays(&picked), at(0), "no one picked anything");
+        assert_eq!(t.plays(&t.who(None, &[])), at(0), "no one: the row copy");
+        assert_eq!(t.plays(&t.who(Some("ann"), &[])), at(0), "the best kept copy");
+        assert_eq!(t.plays(&t.who(Some("ann"), &[0])), at(1), "the other copy is off");
 
-        let (path, kind, ms) = crate::stream::locate(&t.cat, &t.who(Some("ann"), Some(1), &[]), KIND.id, &t.song).unwrap();
+        let (path, kind, ms) = crate::stream::locate(&t.cat, &t.who(Some("ann"), &[0]), KIND.id, &t.song).unwrap();
         assert_eq!((path, matches!(kind, Some(crate::stream::Kind::Mp3)), ms), (t.roots[1].join(MP3), true, Some(200_000)));
-        let (path, kind, _) = crate::stream::locate(&t.cat, &t.who(None, None, &[]), KIND.id, &t.song).unwrap();
+        let (path, kind, _) = crate::stream::locate(&t.cat, &t.who(None, &[]), KIND.id, &t.song).unwrap();
         assert_eq!((path, matches!(kind, Some(crate::stream::Kind::Flac))), (t.roots[0].join(FLAC), true));
         let through = [(KIND.id.to_string(), t.song.clone()), (KIND.id.to_string(), t.song.clone())];
-        let joins = crate::stream::locate_through(&t.cat, &t.who(Some("ann"), Some(1), &[]), &through);
+        let joins = crate::stream::locate_through(&t.cat, &t.who(Some("ann"), &[0]), &through);
         assert_eq!(joins, [(t.roots[1].join(MP3), Some(200_000)), (t.roots[1].join(MP3), Some(200_000))], "a wind goes through the same file");
+    }
+
+    /// CR17: what an account hears goes by the files alone, so the same library makes the same choice for anyone, and an own copy
+    /// of a lower quality is no reason to hear it.
+    #[test]
+    fn an_account_hears_the_better_copy_though_the_other_is_its_own() {
+        let t = two("own");
+        t.lib.set_kinds(vec![(0, Kind::Main), (1, Kind::Own)]);
+        assert_eq!(t.plays(&t.who(Some("ann"), &[])), at(0), "a FLAC in Music over the MP3 of their own");
+        assert_eq!(t.plays(&t.who(Some("ann"), &[0])), at(1), "their own, with Music off");
+        t.lib.db().execute_batch("UPDATE copies SET format = 'MP3', min_kbps = 128, bits = NULL WHERE folder = 0; UPDATE copies SET format = 'FLAC', min_kbps = 900, bits = 16 WHERE folder = 1").unwrap();
+        assert_eq!(t.plays(&t.who(Some("ann"), &[])), at(1), "their own, the better now");
+        assert_eq!(t.plays(&t.who(None, &[])), at(0), "for no one the row copy: one user's FLAC is not what Music shows");
     }
 
     /// A library of one folder on the disk, of these files: each (its path, its album, its title).
@@ -229,59 +232,16 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// As `Serve::listener` makes it: this account, with its picks as kept.
-    fn with_picks(t: &Two, u: &crate::userdata::UserData, account: &str) -> Listener {
-        let roots: Vec<(i64, String)> = t.roots.iter().enumerate().map(|(f, r)| (f as i64, r.to_string_lossy().to_string())).collect();
-        Listener { picks: picks_in(&u.copy_picks_kept(account), &roots), ..t.who(Some(account), None, &[]) }
-    }
-
-    /// The design: a pick holds "until they pick another or that copy goes".
-    #[test]
-    fn a_pick_plays_until_its_copy_goes() {
-        let t = two("pick");
-        let u = crate::userdata::UserData::open(None).unwrap();
-        let (best, other) = (t.roots[0].to_string_lossy().to_string(), t.roots[1].to_string_lossy().to_string());
-        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "the best kept copy, with nothing picked");
-        u.set_copy_pick("ann", &t.album, &other).unwrap();
-        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(1), "at a lower quality, as picked");
-        u.set_copy_pick("ann", &t.album, &best).unwrap();
-        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "another pick takes its place");
-        u.set_copy_pick("ann", &t.album, &other).unwrap();
-        u.forget_copy_picks(&t.album, &best).unwrap();
-        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(1), "a copy elsewhere going leaves it");
-        u.forget_copy_picks(&t.album, &other).unwrap();
-        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "that copy went");
-        assert!(u.copy_picks("ann").unwrap().is_empty());
-    }
-
-    /// One account's choice is no one else's, and a pick in a library off still never plays.
-    #[test]
-    fn a_pick_is_the_accounts_own() {
-        let t = two("picks");
-        let u = crate::userdata::UserData::open(None).unwrap();
-        u.set_copy_pick("ann", &t.album, &t.roots[1].to_string_lossy()).unwrap();
-        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(1));
-        assert_eq!(t.plays(&with_picks(&t, &u, "bob")), at(0), "bob picked nothing");
-        assert_eq!(t.plays(&t.who(None, None, &[])), at(0), "no one in particular");
-        let off = Listener { off: vec![1], ..with_picks(&t, &u, "ann") };
-        assert_eq!(t.plays(&off), at(0), "in a library off a pick loses");
-        u.set_copy_pick("ann", &t.album, "/no/such/library").unwrap();
-        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "a library no longer in use picks nothing");
-    }
-
-    /// An intake card's snippets are of the copy waiting, which by `copy_for` plays for no one: the stream names it, and it
-    /// enters as a pick, so a library off still wins.
+    /// An intake card's snippets are of the copy waiting, which by `copy_for` plays for no one, and a Play from's queue of the copy
+    /// it started from: the stream names it, for that stream alone, and a library off still wins.
     #[test]
     fn a_stream_that_names_a_copy_hears_that_copy_while_its_library_is_on() {
         let t = two("named");
-        let named = |account: Option<&str>, off: &[i64]| Listener { from: Some(1), ..t.who(account, None, off) };
-        assert_eq!(t.plays(&t.who(Some("ann"), None, &[])), at(0), "named by no one: the best");
+        let named = |account: Option<&str>, off: &[i64]| Listener { from: Some(1), ..t.who(account, off) };
+        assert_eq!(t.plays(&t.who(Some("ann"), &[])), at(0), "named by no one: the best");
         assert_eq!(t.plays(&named(Some("ann"), &[])), at(1));
         assert_eq!(t.plays(&named(None, &[])), at(1), "no account to go by, and it is still what was asked");
         assert_eq!(t.plays(&named(Some("ann"), &[1])), at(0), "a copy in a library off never plays");
-        let mut picked = named(Some("ann"), &[]);
-        picked.picks.insert(t.album.clone(), 0);
-        assert_eq!(t.plays(&picked), at(1), "for this stream it goes before their pick");
     }
 
     /// Both copies hold the track that plays. By the track a Delete of the copy no one hears stops the player, and it never
@@ -290,20 +250,20 @@ pub(crate) mod tests {
     fn deleting_a_copy_not_playing_leaves_the_player() {
         let t = two("leaves");
         let (flac, mp3) = (vec![(0, FLAC.to_string())], vec![(1, MP3.to_string())]);
-        let on_the_flac = t.who(Some("ann"), None, &[]);
+        let on_the_flac = t.who(Some("ann"), &[]);
         assert!(!on_the_flac.hears_one_of(&t.cat, KIND.id, &t.song, &mp3), "the copy going is not the one they hear");
         assert!(on_the_flac.hears_one_of(&t.cat, KIND.id, &t.song, &flac));
-        let on_their_own = t.who(Some("ann"), Some(1), &[]);
-        assert!(on_their_own.hears_one_of(&t.cat, KIND.id, &t.song, &mp3), "as each hears it");
-        assert!(!on_their_own.hears_one_of(&t.cat, KIND.id, &t.song, &flac));
+        let on_the_mp3 = t.who(Some("ann"), &[0]);
+        assert!(on_the_mp3.hears_one_of(&t.cat, KIND.id, &t.song, &mp3), "as each hears it");
+        assert!(!on_the_mp3.hears_one_of(&t.cat, KIND.id, &t.song, &flac));
         assert!(on_the_flac.hears_one_of(&t.cat, KIND.id, "tr-999999", &mp3), "not known: stopped, the safe side");
     }
 
     #[test]
     fn a_copy_lacking_the_track_is_passed_over() {
         let t = two("lacking");
-        t.lib.db().execute("DELETE FROM copy_files WHERE folder = 1", []).unwrap();
-        assert_eq!(t.plays(&t.who(Some("ann"), Some(1), &[])), at(0));
+        t.lib.db().execute("DELETE FROM copy_files WHERE folder = 0", []).unwrap();
+        assert_eq!(t.plays(&t.who(Some("ann"), &[])), at(1), "the better copy, were it there");
     }
 
     /// Home's crates play every library, and a stream cannot tell where it came from: with no copy for this listener the
@@ -311,7 +271,7 @@ pub(crate) mod tests {
     #[test]
     fn where_nothing_plays_for_them_the_row_copy_does() {
         let t = two("nothing");
-        assert_eq!(t.plays(&t.who(Some("ann"), None, &[0, 1])), at(0));
+        assert_eq!(t.plays(&t.who(Some("ann"), &[0, 1])), at(0));
     }
 
     /// A file walked since the last build has no row in the library: it is there, and a stream must not lose it.
@@ -320,7 +280,7 @@ pub(crate) mod tests {
         let t = two("one");
         t.cat.set_tracks(&[((1, MP3.to_string()), None)]).unwrap();
         t.lib.db().execute_batch("DELETE FROM copy_files; DELETE FROM copies; DELETE FROM songs;").unwrap();
-        assert_eq!(t.plays(&t.who(Some("ann"), Some(1), &[0])), at(0));
+        assert_eq!(t.plays(&t.who(Some("ann"), &[0])), at(0));
     }
 
     #[test]
@@ -328,19 +288,19 @@ pub(crate) mod tests {
         let t = two("server");
         t.cat.record_links("jf", "music", &[("j-1".into(), 1, MP3.into())], 1).unwrap();
         assert_eq!(t.cat.track_of_source("jf", "j-1"), ids::track_of(&t.song));
-        assert_eq!(t.who(None, None, &[]).place(&t.cat, "jf", "j-1"), at(1), "not the lowest folder's, nor the copy that plays");
-        assert_eq!(t.who(None, None, &[]).place(&t.cat, "jf", "j-unknown"), None);
+        assert_eq!(t.who(None, &[]).place(&t.cat, "jf", "j-1"), at(1), "not the lowest folder's, nor the copy that plays");
+        assert_eq!(t.who(None, &[]).place(&t.cat, "jf", "j-unknown"), None);
     }
 
     #[test]
     fn the_gain_is_the_file_that_plays() {
         let t = two("gain");
         let gain = |who: &Listener| who.song(&t.cat, KIND.id, &t.song).and_then(|s| s.replay_gain).and_then(|g| g.track_gain);
-        assert_eq!(gain(&t.who(None, None, &[])), Some(-7.0));
-        assert_eq!(gain(&t.who(Some("ann"), Some(1), &[])), Some(-3.0), "an MP3 is levelled by its own gain, not the FLAC's");
-        let song = t.who(Some("ann"), Some(1), &[]).song(&t.cat, KIND.id, &t.song).unwrap();
+        assert_eq!(gain(&t.who(None, &[])), Some(-7.0));
+        assert_eq!(gain(&t.who(Some("ann"), &[0])), Some(-3.0), "an MP3 is levelled by its own gain, not the FLAC's");
+        let song = t.who(Some("ann"), &[0]).song(&t.cat, KIND.id, &t.song).unwrap();
         assert_eq!((song.suffix.as_str(), song.bit_rate, song.bpm, song.content_type.as_str()), ("mp3", Some(192), Some(121), "audio/mpeg"));
-        let song = t.who(None, None, &[]).song(&t.cat, KIND.id, &t.song).unwrap();
+        let song = t.who(None, &[]).song(&t.cat, KIND.id, &t.song).unwrap();
         assert_eq!((song.suffix.as_str(), song.bit_rate, song.bpm), ("flac", Some(900), Some(120)));
     }
 
@@ -366,11 +326,11 @@ pub(crate) mod tests {
             t.cat.store_analysis(folder, rel, size, mtime, &a).unwrap();
         }
         let wave = |who: &Listener, asked: Option<&str>| crate::api::waveform_for(&t.cat, who, KIND.id, &t.song, asked).unwrap();
-        let (row, own) = (t.who(None, None, &[]), t.who(Some("ann"), Some(1), &[]));
+        let (row, other) = (t.who(None, &[]), t.who(Some("ann"), &[0]));
         let (tag_row, bins_row) = wave(&row, None);
-        let (tag_own, bins_own) = wave(&own, None);
-        assert_eq!((bins_row.unwrap()[0], bins_own.unwrap()[0]), (1, 2));
-        assert_ne!(tag_row, tag_own, "a browser that kept one file's must not be told it is still good for the other");
-        assert_eq!(wave(&own, Some(&tag_own)).1, None, "not modified");
-        assert!(wave(&own, Some(&tag_row)).1.is_some());
+        let (tag_other, bins_other) = wave(&other, None);
+        assert_eq!((bins_row.unwrap()[0], bins_other.unwrap()[0]), (1, 2));
+        assert_ne!(tag_row, tag_other, "a browser that kept one file's must not be told it is still good for the other");
+        assert_eq!(wave(&other, Some(&tag_other)).1, None, "not modified");
+        assert!(wave(&other, Some(&tag_row)).1.is_some());
     }}

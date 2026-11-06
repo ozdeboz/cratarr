@@ -141,7 +141,7 @@ pub struct Inputs {
     pub discogs_names: HashMap<u64, Vec<String>>,
     /// Discogs' genres by a verified link (`release:<id>`, `master:<id>`).
     pub discogs_genres: HashMap<String, Vec<String>>,
-    /// By the record's Music-form id.
+    /// By the record.
     pub marks: HashMap<String, Mark>,
     /// Every composer key given out: (name, the key it is now).
     pub keys: HashMap<String, (String, Option<String>)>,
@@ -778,7 +778,7 @@ pub fn build(i: &Inputs) -> Index {
                 opened,
                 works,
                 performed: stored.is_some_and(|s| s.performed),
-                mark: i.marks.get(&a.base).copied(),
+                mark: i.marks.get(&a.id).copied(),
                 artists,
             }
         })
@@ -1134,7 +1134,6 @@ mod tests {
     fn album(id: &str, artist: &str, mbid: Option<&str>, genres: &[&str], release: Option<&str>) -> WorkAlbum {
         WorkAlbum {
             id: id.into(),
-            base: id.into(),
             name: format!("{id} record"),
             artist: artist.into(),
             year: Some(1990),

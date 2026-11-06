@@ -10,10 +10,29 @@ use serde::{Deserialize, Serialize};
 
 pub use cratarr_rules::crates::*;
 
-/// Each artist the files name, their library id by their name, for `Alike::of`: an id is a hash of the name, and a hash
-/// is no rule.
-pub fn artist_ids(all: &[Facts]) -> HashMap<String, String> {
-    credited_names(all).into_keys().map(|n| (n.to_string(), crate::serve::ids::artist(n))).collect()
+use crate::moved::Moved;
+
+/// Each artist the files name, their library id by their name, for `Alike::of`, `known` being the catalogue's ids by key: the
+/// catalogue is no rule. A part of a credit no one is named by alone has no id: nothing lists them, so nothing seeds by them.
+pub fn artist_ids(all: &[Facts], known: &HashMap<String, i64>) -> HashMap<String, String> {
+    use crate::serve::ids;
+    credited_names(all).into_keys().filter_map(|n| Some((n.to_string(), ids::artist(*known.get(&ids::artist_key(n))?)))).collect()
+}
+
+/// A crate's picture's file name: its id where that is a plain name, else the id in hex.
+pub fn image_file(id: &str) -> String {
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        format!("{id}.jpg")
+    } else {
+        format!("x{}.jpg", id.bytes().map(|b| format!("{b:02x}")).collect::<String>())
+    }
+}
+
+/// The crate a picture in hex is of: `image_file` read back. None for a plain name, whose crate is one's own and keeps it.
+pub fn image_crate(file: &str) -> Option<String> {
+    let hex = file.strip_prefix('x')?.strip_suffix(".jpg")?;
+    let bytes: Option<Vec<u8>> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()).collect();
+    String::from_utf8(bytes?).ok().filter(|id| image_file(id) == file)
 }
 
 // --- Freshness of the media server's favourites (decision 0024, issue 5) ---
@@ -61,13 +80,13 @@ struct Stored {
     /// Each crate's favourite albums setting (decision 0024, amended 2026-10-19), by id; a crate not in it shows all.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     favourite_albums: BTreeMap<String, Favourites>,
-    /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their lines, relative to Music.
+    /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their song ids.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     left_out: BTreeMap<String, Vec<String>>,
     /// Each crate's albums left out by hand, by id: the albums' ids (a rule: an album's tracks now and later).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     left_out_albums: BTreeMap<String, Vec<String>>,
-    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their lines.
+    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their song ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     excluded: Vec<String>,
     /// Each ranked crate's fit (its rules and the learned traits dismissed), by its id without a count.
@@ -78,22 +97,64 @@ struct Stored {
     added: BTreeMap<String, Vec<Condition>>,
 }
 
+impl Stored {
+    /// What names these ids names what they became, everywhere `Moved::crates` looks. Whether anything did.
+    fn follow(&mut self, moved: &Moved) -> Result<bool> {
+        if moved.ids.is_empty() {
+            return Ok(false);
+        }
+        let was = serde_json::to_value(&*self)?;
+        let mut now = was.clone();
+        moved.crates(&mut now, &mut Default::default());
+        if now == was {
+            return Ok(false);
+        }
+        *self = serde_json::from_value(now)?;
+        Ok(true)
+    }
+}
+
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
 /// beside it (`crates.json.bak`). Without a data folder they live in memory only.
 pub struct CrateStore {
     path: Option<PathBuf>,
     memory: tokio::sync::Mutex<Option<Stored>>,
+    /// The ids `follow` has moved since the start: a change that read them before writes them after, here and in whoever asked
+    /// (`crate_leave_out` reads, works out and sets), and must not bring back what went.
+    followed: std::sync::Mutex<Moved>,
 }
 
 impl CrateStore {
+    fn at(path: Option<PathBuf>) -> Self {
+        Self { path, memory: tokio::sync::Mutex::new(None), followed: Default::default() }
+    }
+
     pub fn new(data_dir: Option<&str>) -> Self {
-        Self { path: data_dir.map(|d| PathBuf::from(d).join("crates.json")), memory: tokio::sync::Mutex::new(None) }
+        Self::at(data_dir.map(|d| PathBuf::from(d).join("crates.json")))
     }
 
     /// Another account's crates (decision 0051: one's own, not shared), in its folder of the data folder.
     pub fn of_account(data_dir: Option<&str>, account: &str) -> Self {
-        let path = data_dir.map(|d| PathBuf::from(d).join("users").join(account).join("crates.json"));
-        Self { path, memory: tokio::sync::Mutex::new(None) }
+        Self::at(data_dir.map(|d| PathBuf::from(d).join("users").join(account).join("crates.json")))
+    }
+
+    /// What names these ids follows them to what they became (a take, `Serve::follow_taken`), read, changed and written in one
+    /// hold of the store, so no change lands between. The second time finds nothing to move and writes nothing. Whether what is
+    /// excluded moved: a device keeps its own copy of that list.
+    pub async fn follow(&self, moved: &Moved) -> Result<bool> {
+        let mut memory = self.memory.lock().await;
+        self.followed.lock().unwrap_or_else(|p| p.into_inner()).ids.extend(moved.ids.clone());
+        let mut s = match memory.clone() {
+            Some(s) => s,
+            None => self.read().await?,
+        };
+        let excluded = s.excluded.clone();
+        if !s.follow(moved)? {
+            return Ok(false);
+        }
+        let told = s.excluded != excluded;
+        self.written(&mut memory, s).await?;
+        Ok(told)
     }
 
     async fn stored(&self) -> Result<Stored> {
@@ -143,15 +204,15 @@ impl CrateStore {
     /// A crate's tracks and albums left out by hand (none until some are).
     pub async fn left_out(&self, id: &str) -> Result<LeftOut> {
         let s = self.stored().await?;
-        Ok(LeftOut { lines: s.left_out.get(id).cloned().unwrap_or_default(), albums: s.left_out_albums.get(id).cloned().unwrap_or_default() })
+        Ok(LeftOut { tracks: s.left_out.get(id).cloned().unwrap_or_default(), albums: s.left_out_albums.get(id).cloned().unwrap_or_default() })
     }
 
     /// Every crate's left-out list that holds any.
     pub async fn all_left_out(&self) -> Result<BTreeMap<String, LeftOut>> {
         let s = self.stored().await?;
         let mut all: BTreeMap<String, LeftOut> = BTreeMap::new();
-        for (id, lines) in s.left_out {
-            all.entry(id).or_default().lines = lines;
+        for (id, tracks) in s.left_out {
+            all.entry(id).or_default().tracks = tracks;
         }
         for (id, albums) in s.left_out_albums {
             all.entry(id).or_default().albums = albums;
@@ -161,7 +222,7 @@ impl CrateStore {
 
     pub async fn set_left_out(&self, id: &str, left: LeftOut) -> Result<()> {
         let mut s = self.stored().await?;
-        for (kept, list) in [(&mut s.left_out, left.lines), (&mut s.left_out_albums, left.albums)] {
+        for (kept, list) in [(&mut s.left_out, left.tracks), (&mut s.left_out_albums, left.albums)] {
             if list.is_empty() {
                 kept.remove(id);
             } else {
@@ -206,14 +267,14 @@ impl CrateStore {
         self.write_stored(s).await
     }
 
-    /// The tracks excluded from every automatic pick (their lines).
+    /// The tracks excluded from every automatic pick (their song ids).
     pub async fn excluded(&self) -> Result<Vec<String>> {
         Ok(self.stored().await?.excluded)
     }
 
-    pub async fn set_excluded(&self, lines: Vec<String>) -> Result<()> {
+    pub async fn set_excluded(&self, tracks: Vec<String>) -> Result<()> {
         let mut s = self.stored().await?;
-        s.excluded = lines;
+        s.excluded = tracks;
         self.write_stored(s).await
     }
 
@@ -232,7 +293,14 @@ impl CrateStore {
         self.write_stored(Stored { crates, ..s }).await
     }
 
+    /// Held to the end of the write, or `follow` could land between this reading what followed and writing what it holds.
     async fn write_stored(&self, mut s: Stored) -> Result<()> {
+        let mut memory = self.memory.lock().await;
+        s.follow(&self.followed.lock().unwrap_or_else(|p| p.into_inner()))?;
+        self.written(&mut memory, s).await
+    }
+
+    async fn written(&self, memory: &mut Option<Stored>, mut s: Stored) -> Result<()> {
         s.version = VERSION;
         if let Some(path) = &self.path {
             let bytes = serde_json::to_vec_pretty(&s)?;
@@ -246,7 +314,7 @@ impl CrateStore {
             tokio::fs::write(&tmp, bytes).await.context("writing the crates")?;
             tokio::fs::rename(&tmp, path).await.context("writing the crates")?;
         }
-        *self.memory.lock().await = Some(s);
+        *memory = Some(s);
         Ok(())
     }
 
@@ -332,11 +400,24 @@ mod tests {
     fn an_artist_seed_finds_their_songs_by_the_id_the_library_makes() {
         let (credits, credit_names) = crate::app::excluded_artists::credited(&["Air feat. Beck"]);
         let files = vec![Facts { rel: "a.flac".into(), artists: vec!["Air feat. Beck".into()], credits, credit_names, ..Facts::default() }];
-        let alike = Alike::of(&files, &HashMap::new(), &artist_ids(&files));
-        let places = |name: &str| alike.seed_places(&crate::serve::ids::artist(name));
-        assert_eq!(places("Beck"), [0], "a credit");
-        assert_eq!(places("air feat. beck"), [0], "a credit as the tags write it, any case");
-        assert!(places("Cy").is_empty());
+        use crate::serve::ids;
+        let known: HashMap<String, i64> = [(ids::artist_key("Beck"), 7), (ids::artist_key("Air feat. Beck"), 8), (ids::artist_key("Cy"), 9)].into();
+        let alike = Alike::of(&files, &HashMap::new(), &artist_ids(&files, &known));
+        let places = |id: i64| alike.seed_places(&ids::artist(id));
+        assert_eq!(places(7), [0], "a credit");
+        assert_eq!(places(8), [0], "a credit as the tags write it");
+        assert!(places(9).is_empty(), "credited on nothing here");
+        assert!(artist_ids(&files, &HashMap::new()).is_empty(), "no id is made up");
+    }
+
+    #[test]
+    fn a_pictures_name_reads_back_as_its_crate() {
+        assert_eq!(image_crate(&image_file("like:al-1")).as_deref(), Some("like:al-1"));
+        assert_eq!(image_crate(&image_file("../x")).as_deref(), Some("../x"));
+        assert_eq!(image_crate("c-12ab.jpg"), None, "one's own, by its own name");
+        assert_eq!(image_crate("xylophone.jpg"), None, "no hex");
+        assert_eq!(image_crate("xabc.jpg"), None, "half a byte");
+        assert_eq!(image_crate("x41.jpg"), None, "one's own, whose name reads as hex");
     }
 
     #[tokio::test]
@@ -364,7 +445,7 @@ mod tests {
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).favourite_albums(&id).await.unwrap(), Favourites::None, "kept, and through a change");
         // Tracks and albums left out by hand: kept per crate, through a change of it; an empty list is none.
-        let left = LeftOut { lines: vec!["x.flac".into()], albums: vec!["al-1".into()] };
+        let left = LeftOut { tracks: vec!["tr-1".into()], albums: vec!["al-1".into()] };
         again.set_left_out(&id, left.clone()).await.unwrap();
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).left_out(&id).await.unwrap(), left);
@@ -391,6 +472,92 @@ mod tests {
         first.save(None, "Late", Vec::new()).await.unwrap();
         assert_eq!(ann.list().await.unwrap().len(), 1, "a name is unique among one's own only");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn taken() -> Moved {
+        Moved { ids: [("tr-5".to_string(), "tr-1".to_string())].into(), ..Default::default() }
+    }
+
+    fn seeded(of: &[&str]) -> Vec<Condition> {
+        let of = of.iter().map(|s| s.to_string()).collect();
+        vec![Condition::new("like", false, Value::Like { of, count: 20, min: None, own: None, mode: None, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() })]
+    }
+
+    /// A take names no crate, so it walks all of a store: lists, seeds, and what goes by a Sounds like's id. A stop before the mark
+    /// goes over it again, and that second time must leave the file alone: `.bak` is the version before the last real change.
+    #[tokio::test]
+    async fn a_store_follows_a_take_once() {
+        let dir = std::env::temp_dir().join(format!("cratarr-crates-take-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = CrateStore::new(dir.to_str());
+        let id = store.save(None, "Late", seeded(&["tr-5", "al-1"])).await.unwrap();
+        let left = LeftOut { tracks: vec!["tr-5".into(), "tr-1".into(), "tr-2".into()], albums: Vec::new() };
+        store.set_left_out(&id, left).await.unwrap();
+        store.set_left_out("like:tr-5@50", LeftOut { tracks: vec!["tr-2".into()], albums: Vec::new() }).await.unwrap();
+        store.set_fit("like:tr-5", Fit { rules: seeded(&["tr-5"]), dismissed: vec!["tempo".into()] }).await.unwrap();
+        store.set_added("like:tr-5", seeded(&["tr-5"])).await.unwrap();
+        store.set_favourites("like:tr-5", Favourites::Only).await.unwrap();
+        store.set_excluded(vec!["tr-5".into(), "tr-9".into()]).await.unwrap();
+
+        assert!(store.follow(&taken()).await.unwrap(), "what is excluded moved");
+        for kept in [&store, &CrateStore::new(dir.to_str())] {
+            assert_eq!(named_ids(&kept.list().await.unwrap()[0].conditions), ["tr-1", "al-1"], "its seed");
+            assert_eq!(kept.left_out(&id).await.unwrap().tracks, ["tr-1", "tr-2"], "two ids of one track are one");
+            assert_eq!(kept.left_out("like:tr-1@50").await.unwrap().tracks, ["tr-2"], "its count stays with it");
+            assert_eq!(named_ids(&kept.fit("like:tr-1").await.unwrap().rules), ["tr-1"]);
+            assert_eq!(named_ids(&kept.added("like:tr-1").await.unwrap()), ["tr-1"]);
+            assert_eq!(kept.favourites("like:tr-1").await.unwrap(), Favourites::Only);
+            assert_eq!(kept.excluded().await.unwrap(), ["tr-1", "tr-9"]);
+            assert!(kept.left_out("like:tr-5@50").await.unwrap().is_empty(), "no key left behind");
+        }
+
+        let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
+        let (file, before) = (read("crates.json"), read("crates.json.bak"));
+        assert!(!store.follow(&taken()).await.unwrap(), "nothing moved, nothing told");
+        assert_eq!((read("crates.json"), read("crates.json.bak")), (file.clone(), before.clone()), "nothing written");
+        assert!(!CrateStore::new(dir.to_str()).follow(&taken()).await.unwrap(), "the same from the file alone");
+        assert_eq!((read("crates.json"), read("crates.json.bak")), (file, before));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_store_nobody_opened_follows_from_its_file() {
+        let dir = std::env::temp_dir().join(format!("cratarr-crates-closed-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        CrateStore::new(dir.to_str()).set_excluded(vec!["tr-5".into()]).await.unwrap();
+        assert!(CrateStore::new(dir.to_str()).follow(&taken()).await.unwrap());
+        assert_eq!(CrateStore::new(dir.to_str()).excluded().await.unwrap(), ["tr-1"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A store with no file makes none by following: an account with no crates stays one.
+    #[tokio::test]
+    async fn following_makes_no_file_for_a_store_with_nothing_in_it() {
+        let dir = std::env::temp_dir().join(format!("cratarr-crates-none-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!CrateStore::of_account(dir.to_str(), "ann").follow(&taken()).await.unwrap());
+        assert!(!dir.join("users").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `crate_leave_out` reads the list, works out the new one and sets it. A take that lands between must not lose to it: what it
+    /// sets holds the id that went, and nothing would ever follow that id again.
+    #[tokio::test]
+    async fn a_change_that_read_before_a_take_does_not_bring_its_id_back() {
+        let store = CrateStore::new(None);
+        store.set_left_out("c1", LeftOut { tracks: vec!["tr-5".into()], albums: Vec::new() }).await.unwrap();
+        store.set_excluded(vec!["tr-5".into()]).await.unwrap();
+        let (mut read, mut excluded) = (store.left_out("c1").await.unwrap(), store.excluded().await.unwrap());
+        store.follow(&taken()).await.unwrap();
+        read.tracks.push("tr-2".into());
+        excluded.push("tr-3".into());
+        store.set_left_out("c1", read).await.unwrap();
+        store.set_excluded(excluded).await.unwrap();
+        assert_eq!(store.left_out("c1").await.unwrap().tracks, ["tr-1", "tr-2"]);
+        assert_eq!(store.excluded().await.unwrap(), ["tr-1", "tr-3"]);
     }
 
     #[test]

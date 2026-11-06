@@ -222,8 +222,9 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
 export const playPlaylistFrom = async (name: string, source: string, tracks: LocalTrack[], index: number, position = 0) => port().playFrom(name, source, tracks, index, position);
 
 /** Plays an album here when the output is this browser. Whether its tracks can go in a playlist (in Music, not
- *  Incoming) the server says with each track's state. */
-export async function playAlbumHere(source: string, album: string, title?: string): Promise<boolean> {
+ *  Incoming) the server says with each track's state. `copy`: the library each of its tracks is heard from, in this
+ *  queue alone (`LocalTrack.from`). */
+export async function playAlbumHere(source: string, album: string, title?: string, copy?: string): Promise<boolean> {
   if (!port().holdsQueue) return false;
   // Out of reach (lib/away): its tracks on this device alone. A server's own (decision 0098) is reached by the app.
   if (away() && !isServerSource(source)) {
@@ -235,7 +236,7 @@ export async function playAlbumHere(source: string, album: string, title?: strin
   const r = source === DEVICE ? deviceAlbumView(album) : isServerSource(source) ? await serverAlbumView(source, album) : await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
-    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs })),
+    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs, ...(copy ? { from: copy } : {}) })),
     0,
     title ?? r.title,
   );

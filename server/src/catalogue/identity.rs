@@ -226,12 +226,17 @@ impl Listed {
     fn same_name(&self, other: &Self) -> bool {
         !self.title.is_empty() && self.title == other.title && (self.guests == other.guests || self.guests.is_empty() || other.guests.is_empty())
     }
+
+    /// One track: one name, within [`SAME_LENGTH_MS`].
+    pub fn same_track(&self, other: &Self) -> bool {
+        self.same_name(other) && (self.duration_ms - other.duration_ms).abs() <= SAME_LENGTH_MS
+    }
 }
 
 /// Whether two tracklists, in order, are the same tracks (0101: the same record is the same tracks): as many, each the
 /// same name, each within [`SAME_LENGTH_MS`]. An empty list is nothing's tracklist.
 pub fn same_tracks(a: &[Listed], b: &[Listed]) -> bool {
-    !a.is_empty() && a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same_name(y) && (x.duration_ms - y.duration_ms).abs() <= SAME_LENGTH_MS)
+    !a.is_empty() && a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same_track(y))
 }
 
 /// What decides whether two folders are copies of one record ([`same_record`]), folded.

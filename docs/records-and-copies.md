@@ -24,6 +24,7 @@ track" and "how a record's copies behave"); this says how they are built, and in
   (record, folder, dir).
 - `files` gains `came`, `bits` and `rate`. `came` is when the file first came, so a copy keeps its own date when the track
   it holds is another copy's (`tracks.born` is the track's). `bits` and `rate` are what `copy_for` ranks lossless copies by.
+- `track_moved (old, id, followed)`: a track a record's track took, what it became, and whether the user data has followed.
 
 **Served:**
 
@@ -39,7 +40,8 @@ track" and "how a record's copies behave"); this says how they are built, and in
 
 ## The same record
 
-As the owner decided, the same record is the same tracks. A folder is identified once, when its files are read:
+As the owner decided, the same record is the same tracks. A folder is identified when its files are read, once, or over its
+first day where it arrives file by file:
 
 1. The tracklists must match, always: as many tracks, each one's length within 2 seconds, its title the same by the
    loose key. A guest in a title is recognised: "Embrace (feat. X)" is the title "Embrace" with a guest, so it matches
@@ -50,28 +52,53 @@ As the owner decided, the same record is the same tracks. A folder is identified
 4. Else it is a record of its own. What cannot be told apart stays two (0100 point 4), and a deluxe edition with bonus
    tracks is its own record by this rule.
 
-A copy takes the record's track ids (0101's amendment), track by track through the same match.
+A copy takes the record's track ids (0101's amendment), track by track through the same match: its files go to the record's
+tracks, and the ids they held retire for good. A file replaced outside Cratarr in one copy, with an id of its own, takes the
+track that copy has no file of, by its name and length. `track_moved` keeps what each id became, for as long as there is
+anything that could name it: a taken id never comes back to a file, what names it follows it (plays, favourites, playlist
+entries and the rest, at the next build), an Undo from before lands on the record's track, an old id in a queue plays it,
+and AudioMuse's export finds its track by it.
 
-Once it has a record, a folder's tracks say which it is, while more than half of them hold it. Short of that it is held
-against the records as a new folder is, by the rules above. A track keeps its record for life, unless its only file now
+Copies of one record always hold the same tracks, which is what the ids say once taken: a retag or a length fix in one
+copy splits nothing. A track added to one of two copies does (the owner, 2026-11-06), as a deluxe edition is its own
+record. Who keeps the record, its id and what points at it goes by kind first: a main library, then someone's own music, then
+Incoming. So Music keeps it from an Incoming copy with a track more, and one account's own copy never takes it from Music.
+Between copies of one kind the one with more tracks keeps it, the first on an equal count. The other is held against the rest
+as a new folder is, with tracks of its own. That goes ahead of "a track keeps its record for life".
+A copy that lost a file for good leaves the same way; a file gone a while or not read splits nothing, nor does a copy an album
+action is moving, and the record lists the track from the copy that has it. Among copies of one kind, where one gained more
+than it held no majority holds it to the record, so it leaves whatever its count: the record stays with the copy that is still
+it. Copies of a lower kind do not count against it there.
+
+Once it has a record, a folder's tracks say which it is, while more than half of them hold it, or nothing else does: a
+folder holding every file of a record that is left keeps it, however many tracks came in beside them. Short of that it is
+held against the records as a new folder is, by the rules above. A track keeps its record for life, unless its only file now
 sits in another record's album: then it moves there. A track that came back from retirement was matched by its recording
 or its name, which says nothing of the album its file landed in, so it does not bring a record back or pull an album in.
 That takes a track beside it that never left, or more than half of the record's own tracks. A record whose tracks have
 all moved on is retired, as one whose tracks retired is: it was had, and it keeps what it was.
 
+A folder arriving file by file joins the record you hold (the owner, 2026-11-06). It is short of that record until its last
+file, so it is a record of its own for a while: a record less than a day old, alone in one folder, with no track shared with
+anything, is held against the others, and joins where `same_record` says yes. Its tracks are taken and the young record goes.
+Older records never merge, so nothing played or favourited moves by this.
+
 ## Which copy plays
 
 One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own and the only place that decides:
 
-1. A copy picked by hand in the record's menu. The pick is remembered for the account (`copy_picks`: account, record,
-   library) until they pick another or that copy goes.
-2. The viewer's own music, even at a lower quality.
-3. The best quality among the kept libraries the viewer has on: lossless before lossy, then bit depth and rate, then
-   bitrate.
-4. Nothing else: an Incoming copy plays only when picked, and a copy in a library switched off never plays. A record only
-   in Incoming has nothing else: its copy plays.
+1. The best quality among the kept libraries the viewer has on: lossless before lossy, then bit depth and rate, then
+   bitrate. Their own music counts as any kept library, so a FLAC in Music beats their own MP3, and their own FLAC beats
+   Music's MP3. Someone else's own music starts off, and counts only while it is on.
+2. Nothing else: an Incoming copy of a kept record never plays by itself, even when it is the better, as nobody has checked
+   it. It plays once added, or when it is the only copy. A copy in a library switched off never plays. A record only in
+   Incoming has nothing else: its copy plays.
 
 A tie goes by the libraries' order, then the path. Lossless copies not read since bit depth was kept rank last.
+
+Nothing is remembered. A request can name a copy, `from`, a library's id: while its library is on, that copy is heard, with
+an account or without one, for that one request. "Play from" is a one-time action built on it: it starts a new queue of the
+record from that copy, each track of the queue carrying `from` (`QueueTrack.from`), and the next Play is the best copy again.
 
 The crates, the words and the taste read a track once: one `Facts`, from its row copy's file, holding the line and the folder of
 every file of it. A set kept by line finds the track through any of them.
@@ -85,19 +112,19 @@ gains, is the file that plays, so a waveform's ETag names the file.
 ## On the page
 
 - A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, bits, rate, deletable, keepable,
-  keep_to, lacks, picked, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
+  keep_to, lacks, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
   would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
   first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
   copy that plays. Dots: one per copy,
   the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on, and so
   does a track, in every list and count: `crates::on_for`, the one test. An Incoming copy counts there, though it plays only
-  when picked: with the kept library off, that is where the record is found.
+  by `from`: with the kept library off, that is where the record is found.
 - A playlist's line names a file, and an entry is its track: on any copy it has the track's id and plays, what plays being
-  `copy_for`'s to say. A line written now is the row copy's. Where its copy goes the entry reads the file its track has left,
-  at once, and the minute's pass writes that line.
+  `copy_for`'s to say. A line written now is the row copy's. Where its copy goes, or leaves the record, the entry reads the file
+  its track has left, at once, and the minute's pass writes that line.
 - An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
-- Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
-  The record stays while one copy is left.
+- Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and a "Play from …" for each
+  other copy in a library on, Incoming too, shown only where there is one. The record stays while one copy is left.
 - The quality on a card is the copy that plays.
 - A record's Move, Add to, Delete and Replace take the copy: `from`, a library's id, in the query for a preview and the body
   for the act. A record of several copies with none named is refused, and nothing moves. Of two folders of one library
@@ -105,11 +132,11 @@ gains, is the file that plays, so a waveform's ETag names the file.
 - A copy goes whole only where it is alone in its folder: every audio file under its `dir` is its own, and no other copy lies
   inside. Else it reads as not seen, as `dir` is only what its files share, and can be a parent of other records or the root.
 - An intake card is about the copy waiting, whichever plays: its tracks are that copy's files, what is heard is kept by
-  (record, folder), a fix on the "Before adding" sheet writes to that copy alone, and a snippet's stream names it by `from`, a
-  pick for that one stream. A review is kept by (record, folder) too.
-- `PUT /api/albums/{source}/{album}/copy-pick` with `{ library }` is "Plays from". It tells the account's pages as the
-  preference `copy_picks`. A pick goes with its copy at Delete, Move, Add to and Replace, and Undo brings back the copy, not
-  the pick.
+  (record, folder), a fix on the "Before adding" sheet writes to that copy alone, and a snippet's stream names it by `from`.
+  A review is kept by (record, folder) too.
+- `from` is in the query of `/api/stream`, its wind and rewind, and `/api/file`, which is what the app and Kodi play. A queue's
+  track carries it on every player, as it carries the rest: a player asks with it, and Kodi is given addresses that hold it. A
+  copy gone or in a library off is passed over, so such a queue goes on from the best copy. Downloads keep the file they saved.
 - A stream's file is named in its validator, and `If-Range` is honoured: a seek never gets another file's bytes.
 - A tag written by Cratarr is the record's or its track's, so it goes into every copy: Health's fixes, Renumber, a match with
   MusicBrainz, the tempo, the files' facts and words. Reading stays one file a track, and writing takes every file, each saying
@@ -146,6 +173,35 @@ One transaction in each database, its report the `records` part:
 
 The old-to-new map is kept: old shared links open through it, and the release run rewrites Home Assistant's references
 through it (point 22). Devices start fresh (point 23). Other Subsonic apps and Kodi see new album ids once.
+
+It runs at the first start, before anything has read a store, before the first build and before the first request
+(`app::first_start`). First the catalogue, in one transaction: every album's record, the merge, each id's map (`album_moved`,
+`artist_moved`, `track_moved`). Then the journal's changes, the sync's agreed lists and the JSON stores, then the user data, in one
+transaction, the `records` part written last in it. No commit spans the databases, so each step is safe to go over again, and that
+part alone says it is over: a stop anywhere finishes at the next start, and leaves what a start that never stopped leaves. A failure
+stops the start, as Cratarr does not run on half-moved data. The way back is the copy from before (point 24).
+
+- **An old id names one copy**, so one record, and the map keeps its folder: `album_moved` form `id`. Music's form of it, `base`, can
+  name two records, as the same tags on other tracks are two records, and what went by it goes to both.
+- **Of two tracks found to be one the main library's stays:** albums come in main libraries first, in their order, then own music,
+  then Incoming, and what no list shows after all of those, so a file that went decides nothing.
+- **What no list shows gets its record too:** files gone a while, in a trash, or in a parked folder, by the id they were served
+  under. With none, an Undo or a source switched on again brings back an album that has lost what named it.
+- **An album can be named by an id it does not have now.** A Keep left its plays under the id it had in Incoming. A copy kept in Music
+  and gone left what went by Music's id while the release waits in Incoming, and that id survives only as the album's `base`, which no
+  table of ids walks. A folder's id was its place in a sorted list, so a library added in front moved the next one along, and what came
+  before lies under the place it had, beside what came after. So each album keeps the ids it would have had in Music and in each
+  Incoming folder, unless a real album holds one, and what lies under two of them folds as any two ids of one record do. Such an id is
+  of the copy where it lies now, so a review or a hearing reads on that copy and on no other. Of a release on two records, the copy in
+  Incoming comes first. Where a real album holds the id, it stands: that is what 0.15 shows on it, and one row cannot be parted.
+- **What stops it:** a library not there, which says which, and a catalogue whose ids were lost, or one lost before 0.16 remembered
+  it, as what names its ids would all read as matching nothing. Once it is over, a catalogue from before it beside user data from after
+  it stops the start too: restored alone, it would number its albums anew under every row, with no error. A generation cannot tell, as
+  a backup has the one it always had, so the catalogue's own mark is asked, and one started afresh sets it.
+- **A file's shape and beats follow it** where its library changed place, as 0.15 took `analysis` along and left these at the folder it
+  had. Where two libraries hold the path, nothing says which file a row is of: it stays, and the report counts it.
+- **What matches nothing stays and is counted,** as a tag's hash from before a retag cannot be read back. A left-out line on a file
+  in a trash stays a line too: its path went with it.
 
 ## Order of work
 

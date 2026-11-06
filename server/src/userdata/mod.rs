@@ -14,6 +14,9 @@
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
+pub mod albums;
+pub mod artists;
+mod moved;
 pub mod offline;
 pub mod overrides;
 pub mod playlists;
@@ -29,6 +32,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
+
+pub use moved::Moves;
 
 // journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
@@ -53,8 +58,8 @@ CREATE TABLE IF NOT EXISTS app_queue (
   user TEXT NOT NULL, client TEXT NOT NULL, songs TEXT NOT NULL, current INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, PRIMARY KEY (user, client)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
--- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `tracks`,
--- `records`, `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
+-- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `records`,
+-- `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
 CREATE TABLE IF NOT EXISTS migration_report (part TEXT PRIMARY KEY, at INTEGER NOT NULL, report TEXT NOT NULL) WITHOUT ROWID;
 -- What was said of a copy that waited in Incoming: `folder` is its catalogue folder, -1 from before records had copies.
 CREATE TABLE IF NOT EXISTS album_review (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
@@ -229,7 +234,7 @@ pub struct Logged {
 /// with 74.3, the week before it was only in `annotation`). One row per song last played in the seven days before the
 /// user's first row a player told: finished, counted (it was, in `annotation` already: nothing is counted again),
 /// context `backfill:annotation`, its own event so running it again adds nothing. Only the last play of each song is
-/// known. Run as the file opens.
+/// known. Run once, as the file opens (`week_before_the_log`).
 const WEEK_BEFORE_THE_LOG: &str = "
 INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event)
   SELECT a.user, a.item, a.pid, a.play_date, NULL, NULL, 'finished', 1, NULL, NULL, 'backfill:annotation',
@@ -241,6 +246,17 @@ INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted,
   WHERE a.kind = 'song' AND a.play_date >= f.first - 604800 AND a.play_date < f.first
   ON CONFLICT DO NOTHING;
 ";
+
+/// Once for a data folder, and every install has had it since 74.3.1: its event names a song by the id it had, and a merge moves
+/// the play and leaves the event, so told over it would count the play again.
+fn week_before_the_log(conn: &Connection) -> Result<()> {
+    const WRITTEN: &str = "week_before_the_log";
+    if !conn.prepare("SELECT 1 FROM meta WHERE key = ?1")?.exists([WRITTEN])? {
+        conn.execute_batch(WEEK_BEFORE_THE_LOG)?;
+        conn.execute("INSERT INTO meta (key, value) VALUES (?1, 'written')", [WRITTEN])?;
+    }
+    Ok(())
+}
 
 /// A row of the log as read.
 fn logged(r: &rusqlite::Row) -> rusqlite::Result<Logged> {
@@ -293,6 +309,26 @@ pub struct Annotation {
     pub rating: u8,
     /// Epoch seconds, when starred.
     pub starred_at: Option<i64>,
+}
+
+impl Annotation {
+    /// Two items' data as one, where they turn out to be one thing: plays added up (all and one's own), the later last-played,
+    /// the better rating, a star when either has one, the first of two.
+    pub fn combined(&self, other: &Annotation) -> Annotation {
+        Annotation {
+            play_count: self.play_count + other.play_count,
+            play_date: self.play_date.max(other.play_date),
+            own_count: self.own_count + other.own_count,
+            own_date: self.own_date.max(other.own_date),
+            rating: self.rating.max(other.rating),
+            starred_at: match (self.starred_at, other.starred_at) {
+                // A star with no date reads as 0, which says nothing of when.
+                (Some(x), Some(y)) if x == 0 || y == 0 => Some(x.max(y)),
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            },
+        }
+    }
 }
 
 /// What an import last brought in for one item: the server's values then, so the next import adds only what changed
@@ -432,8 +468,6 @@ pub struct Review {
     pub album: String,
     /// The catalogue folder of the copy that waited: a later copy of the record, elsewhere, is not reviewed by this (Q24).
     pub folder: i64,
-    /// Its Music-form id (see `serve::ids::album`), the same before and after a Keep.
-    pub base: String,
     /// "promoted" or "rejected".
     pub state: String,
     /// Epoch seconds.
@@ -452,8 +486,6 @@ pub struct UserData {
     preferences: tokio::sync::broadcast::Sender<preferences::PreferenceChanged>,
     /// The libraries each account has off, as read (`hidden_libraries_kept`).
     hidden: Mutex<std::collections::HashMap<String, std::sync::Arc<Vec<String>>>>,
-    /// Each account's copy picks as read, for every stream to ask (`copy_picks_kept`).
-    picks: Mutex<std::collections::HashMap<String, std::sync::Arc<std::collections::HashMap<String, String>>>>,
 }
 
 /// A change of favourites (stars) as `set_starred` made it, whichever way it came: a page, a Subsonic app, Home
@@ -753,8 +785,8 @@ impl UserData {
         add_release_types_rule(&conn)?;
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
-        conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
-        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default(), picks: Mutex::default() })
+        week_before_the_log(&conn).context("writing the week before the log from the last plays")?;
+        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0, hidden: Mutex::default() })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -825,7 +857,6 @@ impl UserData {
             ("album_matches", "album"),
             ("album_complete", "album"),
             ("intake_heard", "album"),
-            ("copy_picks", "record"),
             ("record_references", "album"),
             ("discogs_genres", "album"),
             ("renumber_matched", "album"),
@@ -835,6 +866,7 @@ impl UserData {
             ("discogs_facts", "subject"),
             ("change_at", "item"),
             ("preference", "value"),
+            ("related_artists", "found"),
         ];
         let db = self.db();
         let mut top = 0;
@@ -1175,8 +1207,9 @@ impl UserData {
         )?)
     }
 
-    /// Writes the week before the log from the last plays (`WEEK_BEFORE_THE_LOG`); as the file opens. Safe to repeat.
-    pub fn backfill_week(&self) -> Result<()> {
+    /// `WEEK_BEFORE_THE_LOG` over a test's own rows: the file has run it at its open, before they were there.
+    #[cfg(test)]
+    fn backfill_week(&self) -> Result<()> {
         Ok(self.db().execute_batch(WEEK_BEFORE_THE_LOG)?)
     }
 
@@ -1587,6 +1620,12 @@ impl UserData {
         Ok(())
     }
 
+    /// The release group a fetcher found a request's album by, for one asked for by its names.
+    pub fn set_request_release_group(&self, id: i64, release_group: &str) -> Result<()> {
+        self.db().execute("UPDATE request SET release_group = ?2 WHERE id = ?1", params![id, release_group])?;
+        Ok(())
+    }
+
     /// How many requests wait for an answer (Health).
     pub fn requests_waiting(&self) -> Result<usize> {
         Ok(self.db().query_row("SELECT count(*) FROM request WHERE status = 'pending'", [], |r| r.get::<_, i64>(0))? as usize)
@@ -1603,23 +1642,31 @@ impl UserData {
 
     /// Songs' annotations, and what imports brought in for them, follow their persistent ids to new song ids (the
     /// catalogue was rebuilt): `moves` is (persistent id, song id now). A persistent id given twice goes to its first
-    /// song only: two would move its data there and back every time. Returns how many annotations moved.
-    pub fn follow_pids(&self, moves: &[(String, String)]) -> Result<usize> {
-        let mut seen = std::collections::HashSet::new();
-        let moves: Vec<&(String, String)> = moves.iter().filter(|(pid, _)| seen.insert(pid.as_str())).collect();
+    /// song only: two would move its data there and back every time. Ids are for life, so what lies on one of `songs`, the
+    /// ids a song holds, stays: a copy tagged otherwise has a persistent id of its own, and the one on a row can leave with
+    /// a copy while the track stays. Returns how many annotations moved.
+    pub fn follow_pids(&self, moves: &[(String, String)], songs: &std::collections::HashSet<String>) -> Result<usize> {
+        let mut to = std::collections::HashMap::new();
+        for (pid, item) in moves {
+            to.entry(pid.as_str()).or_insert(item.as_str());
+        }
         let mut db = self.db();
         let tx = db.transaction()?;
-        let mut n = 0;
-        {
-            let mut st = tx.prepare_cached("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
-            let mut ledger = tx.prepare_cached("UPDATE OR IGNORE imported SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
-            let mut marks = tx.prepare_cached("UPDATE OR IGNORE bookmark SET item = ?2 WHERE pid = ?1 AND item != ?2")?;
-            for (pid, item) in moves {
-                n += st.execute(params![pid, item])?;
-                ledger.execute(params![pid, item])?;
-                marks.execute(params![pid, item])?;
+        let follow = |table: &str, of_songs: &str| -> Result<usize> {
+            let mut rows = tx.prepare_cached(&format!("SELECT DISTINCT pid, item FROM {table} WHERE pid IS NOT NULL{of_songs}"))?;
+            let rows: Vec<(String, String)> = rows.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            let mut go = tx.prepare_cached(&format!("UPDATE OR IGNORE {table} SET item = ?3 WHERE pid = ?1 AND item = ?2{of_songs}"))?;
+            let mut n = 0;
+            for (pid, item) in rows.iter().filter(|(_, item)| !songs.contains(item)) {
+                if let Some(now) = to.get(pid.as_str()).filter(|now| **now != item.as_str()) {
+                    n += go.execute(params![pid, item, now])?;
+                }
             }
-        }
+            Ok(n)
+        };
+        let n = follow("annotation", " AND kind = 'song'")?;
+        follow("imported", " AND kind = 'song'")?;
+        follow("bookmark", "")?;
         tx.commit()?;
         Ok(n)
     }
@@ -1932,30 +1979,30 @@ impl UserData {
     pub fn review(&self, album: &str, folder: Option<i64>) -> Result<Option<Review>> {
         let db = self.db();
         let mut st = db.prepare_cached(&format!(
-            "SELECT album, folder, base, state, at, undo, name, album_artist FROM album_review
-             WHERE (album = ?1 OR base = ?1) AND (?2 IS NULL OR folder = ?2 OR folder = {NO_FOLDER}) ORDER BY at DESC LIMIT 1"
+            "SELECT album, folder, state, at, undo, name, album_artist FROM album_review
+             WHERE album = ?1 AND (?2 IS NULL OR folder = ?2 OR folder = {NO_FOLDER}) ORDER BY at DESC LIMIT 1"
         ))?;
         Ok(st
             .query_map(params![album, folder], |r| {
                 Ok(Review {
                     album: r.get(0)?,
                     folder: r.get(1)?,
-                    base: r.get(2)?,
-                    state: r.get(3)?,
-                    at: r.get(4)?,
-                    undo: r.get(5)?,
-                    name: r.get(6)?,
-                    album_artist: r.get(7)?,
+                    state: r.get(2)?,
+                    at: r.get(3)?,
+                    undo: r.get(4)?,
+                    name: r.get(5)?,
+                    album_artist: r.get(6)?,
                 })
             })?
             .next()
             .transpose()?)
     }
 
+    /// `base` stands in the table only for the rows of 0.15, which the first start finds through it: a new one's is the record.
     pub fn set_review(&self, r: &Review) -> Result<()> {
         self.db().execute(
-            "INSERT OR REPLACE INTO album_review (album, folder, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![r.album, r.folder, r.base, r.state, r.at, r.undo, r.name, r.album_artist],
+            "INSERT OR REPLACE INTO album_review (album, folder, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?1, ?3, ?4, ?5, ?6, ?7)",
+            params![r.album, r.folder, r.state, r.at, r.undo, r.name, r.album_artist],
         )?;
         Ok(())
     }
@@ -2213,6 +2260,7 @@ mod tests {
         named("INSERT INTO words_asked (subject, source, at, ok) VALUES ('album:al-50', 's', 0, 1)", 50);
         named("INSERT INTO change_at (account, kind, item, at) VALUES ('a', 'favourite', 'album:cratarr/al-60', 0)", 60);
         named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'ar-70', 'artist')", 70);
+        named(r#"INSERT INTO related_artists (artist, at, found) VALUES ('mbid', 0, '{"artists":[{"id":"ar-80"}]}')"#, 80);
     }
 
     #[test]
@@ -2470,7 +2518,7 @@ mod tests {
     fn data_follows_a_song_to_its_new_id() {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
-        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())]).unwrap(), 1);
+        assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())], &Default::default()).unwrap(), 1);
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 1);
     }
 
@@ -2479,9 +2527,9 @@ mod tests {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
         let both = [("pid1".to_string(), "tr-5".to_string()), ("pid1".to_string(), "tr-8".to_string())];
-        assert_eq!(u.follow_pids(&both).unwrap(), 1, "moved once, to the first");
+        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 1, "moved once, to the first");
         assert_eq!(u.get("me", Kind::Song, &["tr-5".into()]).unwrap()["tr-5"].play_count, 1);
-        assert_eq!(u.follow_pids(&both).unwrap(), 0, "and it stays there");
+        assert_eq!(u.follow_pids(&both, &Default::default()).unwrap(), 0, "and it stays there");
     }
 
     const KEY: ImportKey = ImportKey { account: "me", source: "jellyfin", server_user: "u1" };
@@ -2518,7 +2566,7 @@ mod tests {
         u.apply_import(KEY, &[off]).unwrap();
         assert_eq!(u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"].starred_at, None);
         // The record follows the song to a new id with its annotation.
-        u.follow_pids(&[("p".into(), "tr-9".into())]).unwrap();
+        u.follow_pids(&[("p".into(), "tr-9".into())], &Default::default()).unwrap();
         assert!(u.imported(KEY, Kind::Song, &["tr-9".into()]).unwrap().contains_key("tr-9"));
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 8);
     }
@@ -2586,6 +2634,8 @@ mod tests {
         assert_eq!(u.requests(None, Some("pending"), 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
         u.set_request_fetched(a, "Lidarr is looking for it").unwrap();
         assert_eq!(u.request(a).unwrap().unwrap().fetched.as_deref(), Some("Lidarr is looking for it"));
+        u.set_request_release_group(a, "rg-found").unwrap();
+        assert_eq!(u.request(a).unwrap().unwrap().release_group.as_deref(), Some("rg-found"));
         assert!(u.request(99).unwrap().is_none());
     }
 
@@ -2712,7 +2762,7 @@ mod tests {
         let mine = u.bookmarks("me").unwrap();
         assert_eq!(mine.len(), 1, "one per song: the second replaced the first");
         assert_eq!((mine[0].position_ms, mine[0].comment.as_str()), (140_000, "chorus"));
-        u.follow_pids(&[("p1".into(), "tr-9".into())]).unwrap();
+        u.follow_pids(&[("p1".into(), "tr-9".into())], &Default::default()).unwrap();
         assert_eq!(u.bookmarks("me").unwrap()[0].item, "tr-9", "kept its persistent id through the update");
         u.delete_bookmark("me", "tr-9").unwrap();
         assert!(u.bookmarks("me").unwrap().is_empty());
@@ -2889,7 +2939,7 @@ mod tests {
     }
 
     fn review(folder: i64, state: &str, at: i64) -> Review {
-        Review { album: "al-1".into(), folder, base: "base".into(), state: state.into(), at, undo: None, name: "A".into(), album_artist: "B".into() }
+        Review { album: "al-1".into(), folder, state: state.into(), at, undo: None, name: "A".into(), album_artist: "B".into() }
     }
 
     /// Keyed by record, a new Incoming copy of a kept record reads "was promoted already" and can never be reviewed (Q24).
@@ -2902,7 +2952,6 @@ mod tests {
         u.set_review(&review(3, "rejected", 20)).unwrap();
         assert_eq!(u.review("al-1", Some(2)).unwrap().map(|r| r.state).as_deref(), Some("promoted"), "each keeps its own");
         assert_eq!(u.review("al-1", None).unwrap().map(|r| r.state).as_deref(), Some("rejected"), "with none waiting, the last word");
-        assert_eq!(u.review("base", Some(3)).unwrap().map(|r| r.state).as_deref(), Some("rejected"), "by its Music-form id too");
         u.clear_review("al-1", 3).unwrap();
         assert!(u.review("al-1", Some(3)).unwrap().is_none());
         assert!(u.review("al-1", Some(2)).unwrap().is_some(), "the other copy's stands");

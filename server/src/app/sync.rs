@@ -133,6 +133,11 @@ impl SyncService {
                 return;
             }
         }
+        // A track a copy took since is the same track, not one gone and another come.
+        if let Err(e) = self.lib.catalogue().moved_tracks().and_then(|moved| self.state.follow_tracks(&moved)) {
+            tracing::warn!("playlist sync: {e:#}");
+            return;
+        }
         match self.state.make_native() {
             Ok(Some(n)) => tracing::info!("playlist sync: {n} shared copies in Music are replaced by copies in your account"),
             Ok(None) => {}

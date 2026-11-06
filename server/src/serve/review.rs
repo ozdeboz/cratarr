@@ -22,7 +22,7 @@ pub const REJECTED: &str = "rejected";
 pub const UNREVIEWED: &str = "unreviewed";
 
 /// In a review's undo key: a Keep queued for conversion, by the server's album id (its job has the real key).
-const JOB: &str = "job:";
+pub const JOB: &str = "job:";
 
 pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()
@@ -60,16 +60,15 @@ pub fn state_of(serve: &Serve, album: &str, waiting: Option<i64>, in_incoming: b
     Ok(in_incoming.then(|| UNREVIEWED.to_string()))
 }
 
-/// The album as the library has it: (name, album artist, its Music-form id, its catalogue folder, its folder path).
-async fn find(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String, String, i64, String)>, Response> {
+/// The album as the library has it: (name, album artist, its catalogue folder, its folder path).
+async fn find(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String, i64, String)>, Response> {
     let (s, id) = (serve.clone(), id.to_string());
     tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
-        let base = s.library.album_base(&id)?.unwrap_or_else(|| id.clone());
         // What is reviewed is what waits in Incoming, whatever else holds the record.
         let copies = s.library.copies_of(&id)?;
         let Some(copy) = copies.iter().find(|c| c.kind == Kind::Incoming).or(copies.first()) else { return Ok(None) };
-        Ok(Some((album.name, album.artist, base, copy.folder, copy.dir.clone())))
+        Ok(Some((album.name, album.artist, copy.folder, copy.dir.clone())))
     })
     .await
     .map_err(failed)?
@@ -104,14 +103,14 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str, to: Option<Str
         Err(r) => return r,
     };
     // Of the copy that waits, so a new one of a record promoted from elsewhere is unreviewed; with none, the last word stands.
-    let waiting = found.as_ref().map(|f| f.3).filter(|folder| !in_main(&serve, *folder));
+    let waiting = found.as_ref().map(|f| f.2).filter(|folder| !in_main(&serve, *folder));
     if let Ok(Some(done)) = serve.userdata.review(&id, waiting) {
         if done.state == wanted {
             return answer(&done.name, &done.album_artist, wanted, false);
         }
         return fail(StatusCode::CONFLICT, format!("{} was {} already: take that back first", done.name, done.state));
     }
-    let Some((name, artist, base, folder, dir)) = found else { return fail(StatusCode::NOT_FOUND, "no such album") };
+    let Some((name, artist, folder, dir)) = found else { return fail(StatusCode::NOT_FOUND, "no such album") };
     if in_main(&serve, folder) {
         return fail(StatusCode::CONFLICT, format!("{name} is in the library, not in Incoming"));
     }
@@ -131,7 +130,7 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str, to: Option<Str
             Err(e) => return fail(StatusCode::CONFLICT, e.to_string()),
         }
     };
-    let review = Review { album: id, folder, base, state: wanted.into(), at: now(), undo, name: name.clone(), album_artist: artist.clone() };
+    let review = Review { album: id, folder, state: wanted.into(), at: now(), undo, name: name.clone(), album_artist: artist.clone() };
     if let Err(e) = serve.userdata.set_review(&review) {
         // Done, but not remembered: say so, so "take that back" is not promised.
         return failed(format!("{name} was {wanted}, but Cratarr could not remember it: {e:#}"));
@@ -160,8 +159,8 @@ async fn unreview(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Re
         Ok(Some(r)) => r,
         Ok(None) => {
             return match find(&serve, &id).await {
-                Ok(Some((name, artist, _, folder, _))) if !in_main(&serve, folder) => answer(&name, &artist, UNREVIEWED, false),
-                Ok(Some((name, _, _, _, _))) => fail(StatusCode::CONFLICT, format!("{name} is in the library, not in Incoming")),
+                Ok(Some((name, artist, folder, _))) if !in_main(&serve, folder) => answer(&name, &artist, UNREVIEWED, false),
+                Ok(Some((name, _, _, _))) => fail(StatusCode::CONFLICT, format!("{name} is in the library, not in Incoming")),
                 Ok(None) => fail(StatusCode::NOT_FOUND, "no such album"),
                 Err(r) => r,
             };
