@@ -2006,8 +2006,10 @@ export function removePlaying() {
     return hand('remove', { index: i, ...(entry ? { entry } : {}) });
   }
   if (last) {
-    local.index = local.queue.length - 1;
     audio?.pause();
+    // A stream of the track that stays: left on the one taken out, the clock would follow it back past the queue's end.
+    if (local.queue.length) fresh(local.queue.length - 1, 0, false);
+    else local.index = -1;
     return;
   }
   fresh(i, 0, true);
