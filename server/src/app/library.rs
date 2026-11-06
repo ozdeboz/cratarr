@@ -558,6 +558,16 @@ impl Library {
         self.kept_folders().contains(&folder)
     }
 
+    /// What each catalogue folder's library is, in the libraries' order: the main ones, own music, Incoming. What the
+    /// served library judges a copy by.
+    pub fn folder_kinds(&self) -> Vec<(i64, LibraryKind)> {
+        let f = self.folders();
+        let in_use = self.catalogue.folders();
+        let main = f.music.iter().chain(&f.more_main).map(|p| (p, LibraryKind::Main));
+        let listed = main.chain(f.own.iter().map(|p| (p, LibraryKind::Own))).chain(f.incoming.iter().map(|p| (p, LibraryKind::Incoming)));
+        listed.filter_map(|(p, kind)| in_use.iter().find(|(_, q)| q.as_path() == std::path::Path::new(p)).map(|(id, _)| (id, kind))).collect()
+    }
+
     /// `account`'s own music as a library, its id (0101 point 9): its subfolder of the own-music folder, made at its first
     /// use, when it starts off for everyone else (0101 point 6). None while no own-music folder is set.
     pub(super) async fn own_library(&self, account: &str) -> Result<Option<String>> {

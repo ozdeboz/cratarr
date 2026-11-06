@@ -628,9 +628,9 @@ impl IncomingService {
         self.delete_listed(source_id, album).await
     }
 
-    /// Whether a catalogue folder's records are kept (a main library's or own music's): not Incoming's.
-    pub fn in_main(&self, folder: i64) -> bool {
-        self.lib.is_kept(folder)
+    /// What each catalogue folder's library is (`Library::folder_kinds`).
+    pub fn folder_kinds(&self) -> Vec<(i64, crate::settings::LibraryKind)> {
+        self.lib.folder_kinds()
     }
 
     /// The catalogue folders that libraries switched off (`source/library`) leave out: those no library switched on

@@ -23,6 +23,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::userdata::overrides::Overrides;
 
+use super::copies::Kind;
 use super::ids;
 use crate::catalogue::{Rules, ServedRow};
 
@@ -471,6 +472,8 @@ pub struct Library {
     incomplete: Mutex<HashMap<String, Whole>>,
     /// A record's facts set by hand (0.13), by its Music-form id (user data `record_overrides`).
     overrides: Mutex<HashMap<String, Overrides>>,
+    /// What each catalogue folder's library is, in the libraries' order (`set_kinds`).
+    kinds: Mutex<Vec<(i64, Kind)>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
     extra_genres: Mutex<HashMap<String, Vec<String>>>,
     /// One build at a time (0.9.8): a check's build reads every row first, and must not write over the albums Cratarr's
@@ -656,6 +659,7 @@ impl Library {
             release_types: Mutex::default(),
             incomplete: Mutex::default(),
             overrides: Mutex::default(),
+            kinds: Mutex::default(),
             building: Mutex::new(()),
         })
     }
@@ -688,6 +692,27 @@ impl Library {
     /// Discogs' genres for albums whose files carry none (by album id); a change builds the library again.
     pub fn set_extra_genres(&self, genres: HashMap<String, Vec<String>>) {
         *self.extra_genres.lock().unwrap_or_else(|p| p.into_inner()) = genres;
+    }
+
+    /// What each catalogue folder's library is, in the libraries' order: what a copy is judged by, so it is set before
+    /// the first build (`main`) and again at each check. A change builds the whole library.
+    pub fn set_kinds(&self, kinds: Vec<(i64, Kind)>) {
+        *self.kinds.lock().unwrap_or_else(|p| p.into_inner()) = kinds;
+    }
+
+    pub fn kinds(&self) -> Vec<(i64, Kind)> {
+        self.kinds.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// What a folder's library is, and its place in the libraries' order. With no word from the app (a test without one;
+    /// `main` sets them before anything is served): the first folder is the Music folder, the others wait in Incoming.
+    pub fn kind_of(&self, folder: i64) -> (Kind, usize) {
+        let kinds = self.kinds.lock().unwrap_or_else(|p| p.into_inner());
+        match kinds.iter().position(|(f, _)| *f == folder) {
+            Some(i) => (kinds[i].1, i),
+            None if folder == 0 && kinds.is_empty() => (Kind::Main, 0),
+            None => (Kind::Incoming, kinds.len() + folder.max(0) as usize),
+        }
     }
 
     /// A summary of the original years, part of what the library was built from.
@@ -763,10 +788,11 @@ impl Library {
         // The analyses' part is the fingerprint's tail (`… analysis <count>/<sum of when>`).
         let (files, analyses) = served.split_once(" analysis ").unwrap_or((served.as_str(), ""));
         let songs = format!(
-            "catalogue {} {} {} rules {:x} files {}",
+            "catalogue {} {} {} kinds {:?} rules {:x} files {}",
             cat.generation(),
             cat.folders().count(),
             format!("{} originals {}", self.added_print(), self.originals_print()),
+            self.kinds(),
             {
                 use md5::Digest;
                 md5::Md5::digest(serde_json::to_string(rules)?.as_bytes())
@@ -813,7 +839,7 @@ impl Library {
             None => cat.cover_prints()?,
         };
         let roots: Vec<(i64, String)> = folders.iter().map(|f| (f.folder, f.root.clone())).collect();
-        let context = context(&cat.generation(), &roots, rules)?;
+        let context = context(&cat.generation(), &roots, &self.kinds(), rules)?;
         let (whole, dirs) = if self.built_context().as_deref() != Some(context.as_str()) {
             self.build_with(&folders, rules, &covers)?;
             (true, 0)
@@ -1087,7 +1113,7 @@ impl Library {
     pub fn update_files(&self, cat: &crate::catalogue::Catalogue, rules: &Rules, paths: &[std::path::PathBuf]) -> Result<usize> {
         let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
         let roots_now: Vec<(i64, String)> = cat.folders().iter().map(|(i, p)| (i, p.display().to_string())).collect();
-        if self.built_context().as_deref() != Some(context(&cat.generation(), &roots_now, rules)?.as_str()) {
+        if self.built_context().as_deref() != Some(context(&cat.generation(), &roots_now, &self.kinds(), rules)?.as_str()) {
             return Ok(0);
         }
         let mut dirs = BTreeSet::new();
@@ -1365,10 +1391,10 @@ fn album_src(album: &str, base: &str, folder: i64, dir: &str, first: &ServedRow,
     format!("{:x}", md5::Md5::digest(said.as_bytes()))
 }
 
-/// What the library is built from besides its files: the catalogue's generation, its folders, the rules.
-fn context(generation: &str, roots: &[(i64, String)], rules: &Rules) -> Result<String> {
+/// What the library is built from besides its files: the catalogue's generation, its folders and their kinds, the rules.
+fn context(generation: &str, roots: &[(i64, String)], kinds: &[(i64, Kind)], rules: &Rules) -> Result<String> {
     use md5::Digest;
-    Ok(format!("{LAYOUT} {generation} {} {:x}", serde_json::to_string(roots)?, md5::Md5::digest(serde_json::to_string(rules)?.as_bytes())))
+    Ok(format!("{LAYOUT} {generation} {} {} {:x}", serde_json::to_string(roots)?, serde_json::to_string(kinds)?, md5::Md5::digest(serde_json::to_string(rules)?.as_bytes())))
 }
 
 /// The songs these rows make, each folder one album (`one_album_per_folder`).
@@ -2066,6 +2092,67 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// A copy's kind decides which copy `songs` holds, so a library that changes kind leaves no album as it was.
+    #[test]
+    fn a_changed_kind_builds_whole() {
+        let (root, cat) = catalogue_in("kinds");
+        add_files(&cat, &root, &[("A/01 One.flac", "A", "One")]);
+        let lib = Library::open(None).unwrap();
+        lib.set_kinds(vec![(0, Kind::Main)]);
+        assert_eq!(build_now(&lib, &cat), (true, 0));
+        assert_eq!(lib.change(&cat, &Rules::default()).unwrap().0, Change::None);
+        lib.set_kinds(vec![(0, Kind::Incoming)]);
+        assert_eq!(lib.change(&cat, &Rules::default()).unwrap().0, Change::Songs, "a check sees it with no file changed");
+        assert_eq!(build_now(&lib, &cat), (true, 0));
+        assert_eq!(lib.change(&cat, &Rules::default()).unwrap().0, Change::None);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Folders have their ids for life: a second main library or someone's own music has an id above 0, and Incoming can
+    /// have the lowest.
+    #[test]
+    fn a_later_folder_can_be_kept() {
+        let lib = Library::open(None).unwrap();
+        let mut folders = sample();
+        let orb = folders[0].rows.pop().unwrap();
+        folders.push(FolderRows { folder: 3, root: "/more".into(), rows: vec![orb] });
+        lib.refresh(&folders, &Rules::default()).unwrap();
+        let waiting = |lib: &Library| lib.incoming_albums().unwrap().into_iter().map(|a| a.name).collect::<Vec<_>>();
+        assert_eq!(waiting(&lib), ["Adventures Beyond the Ultraworld"], "with no word from the app, as it was");
+        let orb: String = lib.db().query_row("SELECT album FROM copies WHERE folder = 3", [], |r| r.get(0)).unwrap();
+        let bjork: String = lib.db().query_row("SELECT album FROM copies WHERE folder = 0", [], |r| r.get(0)).unwrap();
+        for kept in [Kind::Main, Kind::Own] {
+            lib.set_kinds(vec![(0, Kind::Main), (3, kept)]);
+            assert!(waiting(&lib).is_empty(), "{kept:?}");
+            assert!(!lib.in_incoming(&orb).unwrap(), "{kept:?}");
+        }
+        lib.set_kinds(vec![(3, Kind::Main), (0, Kind::Incoming)]);
+        assert_eq!(waiting(&lib), ["Homogenic"], "the first folder is no longer kept");
+        assert!(lib.in_incoming(&bjork).unwrap());
+        assert_eq!(lib.kind_of(3), (Kind::Main, 0), "its place in the libraries' order, not its id");
+    }
+
+    /// `covers::place`, `record_health` and `place_track` write where a record plays for most people, not in the lowest
+    /// folder id.
+    #[test]
+    fn the_row_copy_is_the_best_kept_one_not_the_lowest_folder() {
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        let album: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
+        lib.db()
+            .execute_batch(
+                "UPDATE copies SET format = 'MP3', min_kbps = 192, bits = NULL WHERE dir = 'Björk/Homogenic (1997)';
+                 INSERT INTO copies SELECT album, 1, 'Better', 'FLAC', 900, size, added, tracks, 16, 44100 FROM copies WHERE dir = 'Björk/Homogenic (1997)';
+                 INSERT INTO copies SELECT album, 2, 'Waiting', 'FLAC', 900, size, added, tracks, 24, 96000 FROM copies WHERE dir = 'Björk/Homogenic (1997)';",
+            )
+            .unwrap();
+        lib.set_kinds(vec![(0, Kind::Main), (1, Kind::Main), (2, Kind::Incoming)]);
+        assert_eq!(lib.row_copy(&album).unwrap().map(|c| (c.folder, c.dir)), Some((1, "Better".to_string())));
+        let copy = lib.copies_of(&album).unwrap().remove(1);
+        assert_eq!((copy.kind, copy.order, copy.format.as_deref(), copy.min_kbps, copy.bits, copy.rate), (Kind::Main, 1, Some("FLAC"), Some(900), Some(16), Some(44_100)));
+        assert_eq!(lib.row_copy("al-nothing").unwrap(), None);
+    }
+
     /// A track Cratarr added shows at once, so it takes its album's record there and then. A new folder must wait: held
     /// against these few albums it would be a record of its own for life.
     #[test]
@@ -2375,7 +2462,8 @@ mod tests {
         let folders = lib.artist_albums().unwrap().into_iter().find(|r| r.3 == album).unwrap().4;
         assert_eq!(folders.into_iter().collect::<BTreeSet<i64>>(), [0, 1].into());
         assert_eq!(lib.albums_in(1, 10).unwrap().iter().map(|(a, dir, ..)| (a.id.clone(), dir.clone())).collect::<Vec<_>>(), [(album.clone(), "Elsewhere".to_string())], "the copy's own folder");
-        assert_eq!(lib.copies_of(&album).unwrap(), [(0, "Björk/Homogenic (1997)".to_string()), (1, "Elsewhere".to_string())]);
+        let copies: Vec<(i64, String)> = lib.copies_of(&album).unwrap().into_iter().map(|c| (c.folder, c.dir)).collect();
+        assert_eq!(copies, [(0, "Björk/Homogenic (1997)".to_string()), (1, "Elsewhere".to_string())]);
         assert_eq!(lib.album_in(1, "Elsewhere").unwrap(), Some(album));
     }
 

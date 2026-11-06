@@ -256,6 +256,8 @@ async fn main() -> Result<()> {
     // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
     let lan_base = app::runtime::lan_base(&runtime);
     let app = app::App::new(cfg, saved, origin, Some(served.clone())).await.context("cannot open the catalogue")?;
+    // Before the first build and the first request: which copy plays turns on them.
+    served.library.set_kinds(app.library.folder_kinds());
     // The libraries' part of the migration report, then the file as 0.16's (decision 0101): what the roles held, and
     // what the servers, answering now, do not list.
     if let (Some(mut report), Some(file), Some(d)) = (libraries_report, as_read, data_dir.as_deref()) {

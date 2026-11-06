@@ -943,7 +943,8 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
 
 /// Places a passed track in its album: where it went, and what its Undo needs (`undo_at`).
 fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Result<(PathBuf, PathBuf)> {
-    let (folder, dir) = s.library.copies_of(&wanted.album)?.into_iter().next().context("No such album in Cratarr's own library")?;
+    let copy = s.library.row_copy(&wanted.album)?.context("No such album in Cratarr's own library")?;
+    let (folder, dir) = (copy.folder, copy.dir);
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
     let (tracks, ..) = super::renumber::tracks_of(&wanted.album)?;
     let t = &wanted.track;

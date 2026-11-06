@@ -622,7 +622,7 @@ impl App {
         if let Some(served) = self.served.clone().filter(|_| source == crate::source::cratarr::KIND.id) {
             let (c, id) = (self.library.catalogue(), album.to_string());
             wrong = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(String, Item)>> {
-                let Some((folder, _)) = served.library.copies_of(&id)?.into_iter().next() else { return Ok(Vec::new()) };
+                let Some(folder) = served.library.row_copy(&id)?.map(|c| c.folder) else { return Ok(Vec::new()) };
                 let tracks = served.library.album_tracks(&id)?;
                 let rels: Vec<String> = tracks.iter().map(|t| t.2.clone()).collect();
                 let mut out = Vec::new();

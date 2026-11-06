@@ -8,6 +8,7 @@ use anyhow::Result;
 use rusqlite::{Connection, params_from_iter};
 
 use super::api::{Album, Artist, ArtistRef, GenreRef, ReplayGain, Song, content_type, iso};
+use super::copies::{Copy, Kind, copy_for};
 use super::library::{Library, fts_query};
 
 const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.artist, s.album, s.album_artist, s.track_no, s.disc_no,
@@ -857,12 +858,32 @@ impl Library {
         Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.next().transpose()?)
     }
 
-    /// An album's copies: each one's catalogue folder and folder in it, lowest catalogue folder first; none for an album
-    /// not in the library.
-    pub fn copies_of(&self, id: &str) -> Result<Vec<(i64, String)>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT folder, dir FROM copies WHERE album = ?1 ORDER BY folder, dir")?;
-        Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+    /// An album's copies, with what `copies::copy_for` chooses by, lowest catalogue folder first: an order for lists. None
+    /// for an album not in the library.
+    pub fn copies_of(&self, id: &str) -> Result<Vec<Copy>> {
+        let mut copies: Vec<Copy> = {
+            let db = self.db();
+            let mut st = db.prepare_cached("SELECT folder, dir, format, min_kbps, bits, rate FROM copies WHERE album = ?1 ORDER BY folder, dir")?;
+            st.query_map([id], |r| {
+                Ok(Copy { folder: r.get(0)?, dir: r.get(1)?, kind: Kind::Main, order: 0, format: r.get(2)?, min_kbps: r.get(3)?, bits: r.get(4)?, rate: r.get(5)? })
+            })?
+            .collect::<rusqlite::Result<_>>()?
+        };
+        for c in &mut copies {
+            (c.kind, c.order) = self.kind_of(c.folder);
+        }
+        Ok(copies)
+    }
+
+    /// The copy that plays for most people: `copy_for` with no viewer. What acts on a record as a whole and has no one's
+    /// view of it goes by this, not by the lowest folder.
+    pub fn row_copy(&self, id: &str) -> Result<Option<Copy>> {
+        Ok(copy_for(&self.copies_of(id)?, None, &[]).cloned())
+    }
+
+    /// Whether a copy of this album lies in Incoming.
+    pub fn in_incoming(&self, id: &str) -> Result<bool> {
+        Ok(self.copies_of(id)?.iter().any(|c| c.kind == Kind::Incoming))
     }
 
     /// Every album's id, Music-form id, artist id and the files' genres (0.9.7: the library's words, `app::words`).
@@ -1171,10 +1192,13 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// The albums outside the Music folder (waiting in Incoming), newest first.
+    /// The albums with a copy waiting in Incoming, newest first.
     pub fn incoming_albums(&self) -> Result<Vec<Album>> {
         let db = self.db();
-        let ns = numbers(&db, "SELECT n FROM albums a WHERE EXISTS (SELECT 1 FROM copies c WHERE c.album = a.id AND c.folder > 0) ORDER BY created DESC, n", &[])?;
+        let folders = numbers(&db, "SELECT DISTINCT folder FROM copies", &[])?;
+        let waiting: Vec<String> = folders.into_iter().filter(|f| self.kind_of(*f).0 == Kind::Incoming).map(|f| f.to_string()).collect();
+        let sql = format!("SELECT n FROM albums a WHERE EXISTS (SELECT 1 FROM copies c WHERE c.album = a.id AND c.folder IN ({})) ORDER BY created DESC, n", waiting.join(","));
+        let ns = numbers(&db, &sql, &[])?;
         let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
         self.album_artists(&db, &mut albums)?;
         Ok(albums)

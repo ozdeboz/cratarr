@@ -14,6 +14,7 @@ use axum::routing::{delete, get, post};
 use serde_json::json;
 
 use super::Serve;
+use super::copies::Kind;
 use crate::userdata::Review;
 
 pub const PROMOTED: &str = "promoted";
@@ -65,8 +66,10 @@ async fn find(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String, St
     tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
         let base = s.library.album_base(&id)?.unwrap_or_else(|| id.clone());
-        let Some((folder, dir)) = s.library.copies_of(&id)?.into_iter().next() else { return Ok(None) };
-        Ok(Some((album.name, album.artist, base, folder, dir)))
+        // What is reviewed is what waits in Incoming, whatever else holds the record.
+        let copies = s.library.copies_of(&id)?;
+        let Some(copy) = copies.iter().find(|c| c.kind == Kind::Incoming).or(copies.first()) else { return Ok(None) };
+        Ok(Some((album.name, album.artist, base, copy.folder, copy.dir.clone())))
     })
     .await
     .map_err(failed)?
@@ -87,9 +90,9 @@ fn answer(name: &str, artist: &str, review: &str, changed: bool) -> Response {
     axum::Json(json!({ "name": name, "album_artist": artist, "review": review, "changed": changed })).into_response()
 }
 
-/// Whether a catalogue folder is a main library's (0101 point 1); while Incoming is not up, the first's alone.
+/// Whether a catalogue folder's records are kept: a main library's or own music's, not Incoming's.
 fn in_main(serve: &Serve, folder: i64) -> bool {
-    serve.incoming().map_or(folder == 0, |i| i.in_main(folder))
+    serve.library.kind_of(folder).0 != Kind::Incoming
 }
 
 async fn act(serve: Arc<Serve>, id: String, wanted: &'static str, to: Option<String>) -> Response {

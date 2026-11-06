@@ -60,9 +60,9 @@ struct Place {
 fn place(album: &str) -> Result<Place> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let (release, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
-    let (folder, dir) = served.library.copies_of(album)?.into_iter().next().context("No such album in Cratarr's own library")?;
-    let root = served.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
-    Ok(Place { dir: Path::new(&root).join(dir), release: release.filter(|r| super::discogs::is_mbid(r)), artist, name })
+    let copy = served.library.row_copy(album)?.context("No such album in Cratarr's own library")?;
+    let root = served.library.roots().into_iter().find(|(f, _)| *f == copy.folder).map(|(_, r)| r).context("Its library is not there")?;
+    Ok(Place { dir: Path::new(&root).join(copy.dir), release: release.filter(|r| super::discogs::is_mbid(r)), artist, name })
 }
 
 /// What a look tells as it goes, and asks: where it is (its step's name, how many done, of how many where known), the

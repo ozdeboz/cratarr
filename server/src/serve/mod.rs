@@ -349,6 +349,10 @@ impl Serve {
     /// Builds the library again when the catalogue's files changed; after a rebuilt catalogue, user data follows its
     /// songs to their new ids. Blocking.
     pub fn refresh(&self) -> Result<bool> {
+        // The libraries as they are now: `main` set them before the first build, a change in Settings arrives here.
+        if let Some(incoming) = self.incoming() {
+            self.library.set_kinds(incoming.folder_kinds());
+        }
         // The tag rules as saved in Settings, so a change there needs no restart.
         if let Some(dir) = &self.data_dir
             && let Ok(Some(saved)) = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())
@@ -370,7 +374,8 @@ impl Serve {
         let inputs = (
             self.catalogue().last_pass(),
             format!(
-                "{}|{}|{}|{}|{}|{}|{}",
+                "{:?}|{}|{}|{}|{}|{}|{}|{}",
+                self.library.kinds(),
                 serde_json::to_string(&rules)?,
                 added.len() as i64 + added.values().sum::<i64>(),
                 originals.len() as u64 + originals.values().map(|y| u64::from(*y)).sum::<u64>(),
