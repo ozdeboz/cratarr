@@ -1403,11 +1403,10 @@ async fn a_cover_is_written_and_its_undo_puts_the_old_one_back_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A real bug, not in the gate: its name has no end_to_end in it, which is what the gate runs. On a FLAC `retag::rewrite` never sees the
-/// pictures: lofty keeps them on the file, not in the comments `remove_vorbis_comments` hands over, so they cannot be taken out.
+/// lofty keeps a FLAC's pictures on the file, not in its comments: `retag::rewrite` moves them over, or none could be taken out.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "a real bug: a cover's Undo leaves the new picture inside a FLAC (retag::rewrite cannot take a picture out of one)"]
-async fn a_covers_undo_takes_its_picture_out_of_a_flac() {
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_covers_undo_takes_its_picture_out_of_a_flac_end_to_end() {
     let (s, root, music, _) = on_the_fixtures("cover-flac-undo").await;
     let new = std::fs::read(music.join("Various Artists/Club Classics (2001)/cover.jpg")).unwrap();
     let track = music.join("Glass Harbour/Tide Tables (2012)/02 Neap.flac");
@@ -1422,11 +1421,10 @@ async fn a_covers_undo_takes_its_picture_out_of_a_flac() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// The same bug from the other side, not in the gate either: a new cover on a FLAC that holds one is added beside it, so the file
-/// keeps every picture it was ever given.
+/// The same from the other side: a new cover on a FLAC that holds one takes its place, or the file keeps every picture it was ever given.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "a real bug: a new cover on a FLAC leaves the old picture inside too (retag::rewrite cannot take a picture out of one)"]
-async fn a_new_cover_takes_the_place_of_the_old_one_inside_a_flac() {
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_new_cover_takes_the_place_of_the_old_one_inside_a_flac_end_to_end() {
     let (s, root, music, _) = on_the_fixtures("cover-flac-twice").await;
     let new = std::fs::read(music.join("Various Artists/Club Classics (2001)/cover.jpg")).unwrap();
     let dir = music.join("Noor Field/Two Rooms (2019)");
@@ -1436,6 +1434,108 @@ async fn a_new_cover_takes_the_place_of_the_old_one_inside_a_flac() {
     s.upload_cover(&album, &new).await;
     s.done_run(None).await;
     assert_eq!(pictures_inside(&track).len(), 1, "one picture inside");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Two copies of a record, on a layout: the server, where it all lies, the two libraries, its id and folder. Each copy on tracks
+/// of its own, as they are until the take: what is the record's reaches them all the same.
+async fn on_two_copies(name: &str, kinds: [&str; 2], second: &str) -> (Server, PathBuf, PathBuf, PathBuf, String) {
+    let root = temp(name);
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, other) = (library.join("music"), library.join(second));
+    settings(&data, &[(&music, kinds[0]), (&other, kinds[1])], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.read_in("Both Shores", &music).await;
+    let album = s.read_in("Both Shores", &other).await;
+    let id = album["id"].as_str().unwrap().to_string();
+    (s, root, music, other, id)
+}
+
+const SHORES: &str = "Salt Meridian/Both Shores (2018)";
+
+/// A track's release type, whatever its format calls the field.
+fn release_type(track: &Path) -> Option<String> {
+    use lofty::prelude::*;
+    let file = lofty::read_from_path(track).unwrap();
+    file.tags().iter().find_map(|t| t.get_string(lofty::tag::ItemKey::MusicBrainzReleaseType).map(str::to_string))
+}
+
+/// A cover is the record's: the picture beside and inside every copy, each copy's own back with its Undo, FLAC and MP3.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_cover_reaches_every_copy_and_its_undo_gives_each_its_own_end_to_end() {
+    let (s, root, music, incoming, id) = on_two_copies("cover-copies", ["main", "incoming"], "incoming").await;
+    let new = std::fs::read(music.join("Various Artists/Club Classics (2001)/cover.jpg")).unwrap();
+    let (kept, waiting) = (music.join(SHORES), incoming.join(SHORES));
+    std::fs::write(kept.join("cover.jpg"), b"\xff\xd8the kept copy's").unwrap();
+    let files: Vec<PathBuf> = [&kept, &waiting].iter().flat_map(|d| audio_under(d).into_iter().map(|f| d.join(f)).collect::<Vec<_>>()).collect();
+    assert_eq!(files.len(), 6);
+    let was: Vec<Vec<Vec<u8>>> = files.iter().map(|t| pictures_inside(t)).collect();
+
+    s.upload_cover(&json!({ "id": id }), &new).await;
+    let run = s.done_run(None).await;
+    assert_eq!((&run["what"], &run["failed"]), (&json!("cover"), &json!([])), "{run}");
+    assert!(std::fs::read(kept.join("cover.jpg")).unwrap() == new && std::fs::read(waiting.join("cover.jpg")).unwrap() == new, "the new picture beside both");
+    assert!(files.iter().all(|t| pictures_inside(t) == [new.clone()]), "the new picture alone inside every track of both");
+
+    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert!(std::fs::read(kept.join("cover.jpg")).unwrap().ends_with(b"the kept copy's"), "its own back");
+    assert!(!waiting.join("cover.jpg").exists(), "there was none beside");
+    assert!(files.iter().map(|t| pictures_inside(t)).collect::<Vec<_>>() == was, "each track as it was");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A fact of the record goes into every copy's files, and one Undo takes it out of all of them.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_records_fact_reaches_every_copy_and_its_undo_takes_it_out_end_to_end() {
+    let (s, root, music, incoming, _) = on_two_copies("facts-copies", ["main", "incoming"], "incoming").await;
+    let files: Vec<PathBuf> = [music.join(SHORES), incoming.join(SHORES)].iter().flat_map(|d| audio_under(d).into_iter().map(|f| d.join(f)).collect::<Vec<_>>()).collect();
+    assert!(files.iter().all(|t| release_type(t).is_none()));
+    s.ok(reqwest::Method::PUT, "/api/settings/file-facts", json!({ "on": true })).await;
+    s.write_the_sheet().await;
+    let run = s.done_run(None).await;
+    assert_eq!(run["failed"], json!([]), "{run}");
+    let written: Vec<Option<String>> = files.iter().map(|t| release_type(t)).collect();
+    assert!(written[0].is_some() && written.iter().all(|t| *t == written[0]), "the one type in every file of both: {written:?}");
+    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert!(files.iter().all(|t| release_type(t).is_none()), "taken out of them all");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A length is one file's: the copy that does not play is fixed, and the copy that plays is not touched.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_length_fix_stays_in_its_file_end_to_end() {
+    let (s, root, music, second, _) = on_two_copies("length-copies", ["main", "main"], "second").await;
+    let rel = format!("{SHORES}/01 Landing.flac");
+    let (track, other) = (second.join(&rel), music.join(&rel));
+    let (before, kept) = (std::fs::read(&track).unwrap(), std::fs::read(&other).unwrap());
+
+    // What a decode leaves, put there by hand, as in the length fix above: on that file alone.
+    let db = rusqlite::Connection::open(root.join("data/catalogue.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let heard = "INSERT INTO analysis (folder, rel, size, mtime, version, duration_secs, analysed_at)
+                 SELECT f.folder, f.rel, f.size, f.mtime, 1, 1.0, 0 FROM files f JOIN folders d ON d.id = f.folder WHERE f.rel = ?1 AND d.path = ?2";
+    assert_eq!(db.execute(heard, [rel.as_str(), &second.to_string_lossy()]).unwrap(), 1);
+    drop(db);
+
+    s.write_sheet("fix:files:sound-breaks").await;
+    let run = s.done_run(None).await;
+    assert_eq!(run["failed"], json!([]), "{run}");
+    assert!(header_ms(&track).abs_diff(1_000) < 50, "{}", header_ms(&track));
+    assert!(std::fs::read(&other).unwrap() == kept, "the other copy left alone");
+    let (status, undone) = s.undo(run["id"].as_str().unwrap()).await;
+    assert_eq!((status, &undone["undone"]), (200, &json!(true)), "{undone}");
+    assert!(std::fs::read(&track).unwrap() == before, "its original given back");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

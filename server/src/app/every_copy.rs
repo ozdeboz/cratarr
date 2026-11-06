@@ -319,3 +319,123 @@ fn a_copys_own_problem_is_the_records() {
     assert_eq!((wrong[0].0.as_str(), wrong[0].1.title.as_str(), wrong[0].1.files.as_slice()), ("unreadable", "Two", ["two.mp3".to_string()].as_slice()));
     assert_eq!(wrong[0].1.track.as_deref(), Some(c.songs()[1].as_str()));
 }
+
+/// A picture that decodes, as `covers` wants one, a shade each so two can be told apart.
+pub(super) fn picture(shade: u8) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(16, 16, |x, y| image::Rgb([shade, x as u8 * 8, y as u8 * 8]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+    out.into_inner()
+}
+
+/// The pictures a track holds, each as it lies.
+fn inside(track: &Path) -> Vec<Vec<u8>> {
+    use lofty::prelude::*;
+    lofty::read_from_path(track).unwrap().tags().iter().flat_map(|t| t.pictures()).map(|p| p.data().to_vec()).collect()
+}
+
+fn kept_of(f: &crate::journal::FileWrite) -> &Path {
+    f.whole.as_ref().unwrap().kept.as_ref().unwrap()
+}
+
+/// The kept copy with a cover of its own, beside its tracks and inside them, and the copy waiting with none: its picture.
+fn the_kept_copy_has_a_cover(c: &Copies) -> Vec<u8> {
+    let old = picture(10);
+    std::fs::write(c.flacs[0].parent().unwrap().join("cover.jpg"), &old).unwrap();
+    assert!(crate::covers_inside::replace(&c.flacs, Some((&old, "image/jpeg"))).is_empty());
+    old
+}
+
+#[test]
+fn a_cover_reaches_every_copy() {
+    let c = two_copies("cover", true);
+    the_kept_copy_has_a_cover(&c);
+    let new = picture(200);
+    let p = super::covers::proposal(&c.serve, &c.album, &new, "uploaded").unwrap();
+    let dirs: Vec<&Path> = [&c.flacs[0], &c.mp3s[0]].map(|t| t.parent().unwrap()).to_vec();
+    assert_eq!(p.files.iter().map(|f| f.path.as_path()).collect::<Vec<_>>(), dirs, "a file of the run a copy, the one that plays first");
+    assert_eq!(p.files.iter().map(|f| f.before[0].1[0].as_str()).collect::<Vec<_>>(), ["its cover", "none"], "each as it stands");
+    assert_ne!(kept_of(&p.files[0]), kept_of(&p.files[1]), "each copy's old pictures kept apart, however fast they are made");
+    for f in &p.files {
+        super::covers::write_kept(kept_of(f), || ()).unwrap();
+    }
+    for dir in dirs {
+        assert_eq!(std::fs::read(dir.join("cover.jpg")).unwrap(), new, "{}", dir.display());
+    }
+    for t in c.files() {
+        assert_eq!(inside(&t), [new.clone()], "the new picture alone: {}", t.display());
+    }
+}
+
+/// Copies hold different pictures: each gets its own back, and a copy that had none has none.
+#[test]
+fn undo_takes_a_cover_out_of_every_copy() {
+    let c = two_copies("cover-undo", true);
+    let old = the_kept_copy_has_a_cover(&c);
+    let p = super::covers::proposal(&c.serve, &c.album, &picture(200), "uploaded").unwrap();
+    for f in &p.files {
+        super::covers::write_kept(kept_of(f), || ()).unwrap();
+    }
+    for f in &p.files {
+        super::covers::undo_kept(kept_of(f)).unwrap();
+    }
+    assert_eq!(std::fs::read(c.flacs[0].parent().unwrap().join("cover.jpg")).unwrap(), old);
+    assert!(c.flacs.iter().all(|t| inside(t) == [old.clone()]), "the kept copy's own back");
+    assert!(!c.mp3s[0].parent().unwrap().join("cover.jpg").exists(), "there was none beside");
+    assert!(c.mp3s.iter().all(|t| inside(t).is_empty()), "there was none inside");
+}
+
+/// A copy's `dir` is only what its files share: what else lies under it is another record's, or nobody's.
+#[test]
+fn a_cover_goes_into_its_copys_own_files_alone() {
+    let c = two_copies("cover-own", true);
+    let dir = c.mp3s[0].parent().unwrap().join("Another Record");
+    std::fs::create_dir_all(&dir).unwrap();
+    crate::retag::fixtures::mp3(&dir.join("three.mp3"));
+    let other = std::fs::read(dir.join("three.mp3")).unwrap();
+    let p = super::covers::proposal(&c.serve, &c.album, &picture(200), "uploaded").unwrap();
+    for f in &p.files {
+        super::covers::write_kept(kept_of(f), || ()).unwrap();
+    }
+    assert_eq!(std::fs::read(dir.join("three.mp3")).unwrap(), other);
+}
+
+/// Health's cover fix: a file of the run a copy, and "Before adding"'s the copy named.
+#[test]
+fn a_cover_fix_is_a_write_a_copy() {
+    let c = two_copies("cover-fix", true);
+    let fix = super::fixes::Fix {
+        id: format!("cover:{}", c.album),
+        album: c.album.clone(),
+        field: "cover",
+        from: None,
+        to: "https://coverartarchive.org/x.jpg".into(),
+        source: "Cover Art Archive".into(),
+        certainty: "certain",
+        why: String::new(),
+        writes: Vec::new(),
+        candidates: Vec::new(),
+    };
+    let dir_of = |t: &PathBuf| t.parent().unwrap().to_path_buf();
+    let every = super::fix_plans::proposal(&c.serve, "fix:library:cover", std::slice::from_ref(&fix), None).unwrap().0;
+    assert_eq!(every.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), [dir_of(&c.flacs[0]), dir_of(&c.mp3s[0])]);
+    assert_eq!(every.records.len(), 1, "one record");
+    let one = super::fix_plans::proposal(&c.serve, "intake:al-1", &[fix], Some(&(1, "Waiting".to_string()))).unwrap().0;
+    assert_eq!(one.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), [dir_of(&c.mp3s[0])]);
+}
+
+/// A length is one file's: the fix is of the file found wrong, whichever plays, and the track's other file is left alone.
+#[test]
+fn a_length_fix_stays_in_its_file() {
+    for shared in [true, false] {
+        let c = two_copies(&format!("length-{shared}"), shared);
+        let (mp3, flac) = (&c.mp3s[1], &c.flacs[1]);
+        let fix = super::length_fixes::fix(&c.serve, "length", 1, "Waiting/two.mp3").unwrap().expect("an MP3 that gives no length");
+        let w = super::length_fixes::file_write(&c.serve, &fix).unwrap().unwrap();
+        assert_eq!((&w.path, w.album.as_str()), (mp3, c.album.as_str()), "the file found wrong, not the row copy's");
+        let (was, other) = (std::fs::read(mp3).unwrap(), std::fs::read(flac).unwrap());
+        super::length_fixes::write("length", &w.path, None, |_| Ok(())).unwrap();
+        assert_ne!(std::fs::read(mp3).unwrap(), was, "written");
+        assert_eq!(std::fs::read(flac).unwrap(), other, "the other copy left alone");
+    }
+}
