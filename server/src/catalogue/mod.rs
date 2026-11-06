@@ -16,6 +16,7 @@ pub mod walk;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -352,7 +353,7 @@ const ADDED_COLUMNS: [(&str, &str); 29] = [
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
 struct KeptFacts {
-    changes: u64,
+    written: u64,
     folders: InUse,
     built: i64,
     words: i64,
@@ -362,8 +363,39 @@ struct KeptFacts {
     facts: Arc<Vec<crate::crates::Facts>>,
 }
 
-/// The crates' facts are read again for a catalogue write or a harvested word at most this often (a build, at once).
+/// The crates' facts are read again for a write to what they are read from or a harvested word at most this often (a
+/// build, at once).
 const FACTS_EVERY: Duration = Duration::from_secs(300);
+
+/// What the crates' facts take from elsewhere that no build brings them, as one stamp: the library's words (0.9.7,
+/// `app::words::stamp`), what Classical is made of (0.10), and Discogs' labels, which were only ever seen because the
+/// connection's change count moved all the same.
+fn said_stamp(s: &crate::serve::Serve) -> i64 {
+    let said = crate::app::words::stamp(s).wrapping_mul(31).wrapping_add(crate::app::classical::stamp(s));
+    said.wrapping_mul(31).wrapping_add(s.userdata.discogs_albums_stamp().unwrap_or(0))
+}
+
+/// What the crates' facts are read from (`read_crate_facts`): a table read there goes here too, or a write to it shows
+/// only at the next build.
+const FACTS_TABLES: [&str; 6] = ["files", "tags", "tracks", "analysis", "beat_this", "audiomuse"];
+
+/// Each row written to those tables counted in `written`, whoever writes it through this connection: temporary
+/// triggers, so nothing changes on disk and no writer has to remember. The connection's change count could not be the
+/// stamp: every pass writes its time and a track first played its shape, so the facts, with every AudioMuse vector in
+/// them, were read again every five minutes on a library where nothing had changed.
+fn count_facts_writes(conn: &Connection, written: Arc<AtomicU64>) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function("facts_written", 0, FunctionFlags::SQLITE_UTF8, move |_| {
+        written.fetch_add(1, Ordering::Relaxed);
+        Ok(0)
+    })?;
+    for table in FACTS_TABLES {
+        for on in ["INSERT", "UPDATE", "DELETE"] {
+            conn.execute_batch(&format!("CREATE TEMP TRIGGER facts_{table}_{on} AFTER {on} ON main.{table} BEGIN SELECT facts_written(); END;"))?;
+        }
+    }
+    Ok(())
+}
 
 /// File states.
 const PENDING: i64 = 0;
@@ -635,8 +667,10 @@ pub struct Catalogue {
     /// long pass moving (0.9.7: a reader's reread of every file takes hours on the NAS, and Cratarr's own library
     /// looked stopped to the watch on the servers' scans).
     worked: std::sync::atomic::AtomicU64,
-    /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
+    /// The crates' facts, as of what was written to them and the folders in use (see `crate_facts`).
     facts: Mutex<Option<KeptFacts>>,
+    /// Rows written to what the crates' facts are read from (`count_facts_writes`).
+    facts_written: Arc<AtomicU64>,
     /// Its track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while the user
     /// data remembers another. No ids are given out meanwhile (`identify`).
     ids_lost: std::sync::atomic::AtomicBool,
@@ -683,6 +717,8 @@ impl Catalogue {
             conn.execute_batch("DELETE FROM tags WHERE name IS NULL; INSERT OR REPLACE INTO meta (key, value) VALUES ('tags', 'named');")?;
         }
         move_analysis_shapes(&conn)?;
+        let facts_written = Arc::new(AtomicU64::new(0));
+        count_facts_writes(&conn, facts_written.clone())?;
         let cat = Self {
             db: Mutex::new(conn),
             folders: RwLock::new(InUse::default()),
@@ -691,6 +727,7 @@ impl Catalogue {
             reread: Default::default(),
             worked: Default::default(),
             facts: Mutex::default(),
+            facts_written,
             ids_lost: Default::default(),
             file: file.map(Path::to_path_buf),
         };
@@ -1270,28 +1307,37 @@ impl Catalogue {
 
     /// The files present in every folder in use (the Music folder and the Incoming ones, decision 0024 amended
     /// 2026-10-23: a crate draws from every library switched on), newest first, each as its playlist line (`line_of`)
-    /// with its folder and what the crates' axes test: genres, year, BPM, AudioMuse's. Kept until the catalogue or its
-    /// folders change: reading them means reading every file's tags. Blocking.
+    /// with its folder and what the crates' axes test: genres, year, BPM, AudioMuse's. Kept until what they are read from
+    /// or the folders change: reading them means reading every file's tags. Blocking.
     pub fn crate_facts(&self) -> Result<Arc<Vec<crate::crates::Facts>>> {
         // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
         let served = crate::serve::instance();
-        let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
-        // And when the library's words change (0.9.7, `app::words::stamp`), or what Classical is made of (0.10).
-        let words = served.as_ref().map_or(0, |s| crate::app::words::stamp(s).wrapping_mul(31).wrapping_add(crate::app::classical::stamp(s)));
+        let (written, folders, built) = (self.facts_written.load(Ordering::Relaxed), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
+        let words = served.as_ref().map_or(0, |s| said_stamp(s));
         let marks = served.as_ref().map_or(0, |s| s.userdata.marks_stamp().unwrap_or(0));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(k) = kept.as_ref()
             && k.folders == folders
             && k.built == built
             && k.marks == marks
-            // A write to the catalogue or a word harvested reads them again only every so often (0.9.7: a reader's
-            // reread of every file writes all along for hours, the harvest a word at a time; each Home read them
-            // all again, and the sim went past 768 MB). A build or other folders read them at once.
-            && ((k.changes == changes && k.words == words) || k.at.elapsed() < FACTS_EVERY)
+            // A write to what they are read from or a word harvested reads them again only every so often (0.9.7: a
+            // reader's reread of every file writes all along for hours, the harvest a word at a time; each Home read
+            // them all again, and the sim went past 768 MB). A build or other folders read them at once.
+            && ((k.written == written && k.words == words) || k.at.elapsed() < FACTS_EVERY)
         {
             return Ok(k.facts.clone());
         }
-        let mut facts = self.read_crate_facts(&folders)?;
+        // The reading before goes first: two at once over every file is what the limit cannot hold. Its address stays
+        // taken until this one has its own, as what hangs on a reading knows it by that (`shared_alike`, `words::index`):
+        // a new one in the same place would pass for it.
+        let was = kept.take().map(|k| Arc::downgrade(&k.facts));
+        // Beside the catalogue, not under its one lock: a play starting and every writer would wait out the whole read.
+        let reader = self.reader();
+        let mut facts = match &reader {
+            Some(c) => Self::read_crate_facts(c, &folders)?,
+            None => Self::read_crate_facts(&self.db(), &folders)?,
+        };
+        drop(reader);
         if let Some(s) = &served
             && let Ok(types) = s.library.song_release_types()
         {
@@ -1334,12 +1380,12 @@ impl Catalogue {
             }
         }
         let facts = Arc::new(facts);
-        *kept = Some(KeptFacts { changes, folders, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
+        drop(was);
+        *kept = Some(KeptFacts { written, folders, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
         Ok(facts)
     }
 
-    fn read_crate_facts(&self, folders: &InUse) -> Result<Vec<crate::crates::Facts>> {
-        let db = self.db();
+    fn read_crate_facts(db: &Connection, folders: &InUse) -> Result<Vec<crate::crates::Facts>> {
         type Place = (i64, String);
         // Every file present, newest first, with its track (the one similarity finds a file by it, heard or not), its
         // length and its format and bitrate (the crates' Length and Quality).
@@ -4890,21 +4936,147 @@ mod tests {
         std::fs::remove_dir_all(d.with_extension("gone")).ok();
     }
 
+    /// As if the facts were read longer ago than FACTS_EVERY.
+    fn facts_grown_old(cat: &Catalogue) {
+        if let Some(k) = cat.facts.lock().unwrap().as_mut() {
+            k.at = std::time::Instant::now() - FACTS_EVERY - Duration::from_secs(1);
+        }
+    }
+
     #[test]
-    fn crate_facts_are_kept_until_the_catalogue_changes_and_a_while_has_passed() {
+    fn crate_facts_are_kept_until_what_they_are_read_from_changes_and_a_while_has_passed() {
         let d = music();
         let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
         cat.walk_all();
         let first = cat.crate_facts().unwrap();
         assert!(!first.is_empty());
         assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "nothing changed: the same facts");
-        cat.record_links("jellyfin", "lib", &[("t1".into(), 0, first[0].rel.clone())], 100).unwrap();
+        cat.db().execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'GENRE', 'genre', 'Jazz')", [&first[0].rel]).unwrap();
         assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change just after: still the same (0.9.7)");
-        // As if read longer ago than FACTS_EVERY.
-        if let Some(k) = cat.facts.lock().unwrap().as_mut() {
-            k.at = std::time::Instant::now() - FACTS_EVERY - Duration::from_secs(1);
+        facts_grown_old(&cat);
+        let again = cat.crate_facts().unwrap();
+        assert!(!Arc::ptr_eq(&first, &again), "a change a while after: read again");
+        assert_eq!(again.iter().find(|f| f.rel == first[0].rel).unwrap().genres, ["Jazz"]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn what_a_pass_over_an_unchanged_library_writes_leaves_the_crate_facts_kept() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let first = cat.crate_facts().unwrap();
+        // A pass with nothing to do, to its end: `link_source` writes its time every five minutes, whatever it found.
+        assert!(cat.walk_all().is_empty());
+        assert_eq!(cat.read_tags_batch(TAG_BATCH).unwrap(), 0);
+        cat.identify().unwrap();
+        cat.set_meta("pass:cratarr", "1");
+        // A media server's links, and what a track writes as it is first played: nothing a fact reads.
+        cat.record_links("jellyfin", "lib", &[("t1".into(), 0, first[0].rel.clone())], 100).unwrap();
+        cat.db().execute("INSERT INTO analysis_shape (folder, rel, spectrum) VALUES (0, ?1, x'00')", [&first[0].rel]).unwrap();
+        facts_grown_old(&cat);
+        assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "nothing they are read from changed");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_write_to_every_table_the_facts_are_read_from_counts() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let written = || cat.facts_written.load(Ordering::Relaxed);
+        let rel = cat.crate_facts().unwrap()[0].rel.clone();
+        let shape = |table: &str| format!("INSERT INTO {table} (folder, rel, size, mtime, {}) VALUES (0, ?1, 1, 1, {})", if table == "analysis" { "version, analysed_at" } else { "beats, downbeats, at" }, if table == "analysis" { "1, 1" } else { "x'00', x'00', 1" });
+        let sql = [
+            "UPDATE files SET bitrate = 320 WHERE rel = ?1".to_string(),
+            "INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'GENRE', 'genre', 'Jazz')".to_string(),
+            "DELETE FROM tags WHERE rel = ?1".to_string(),
+            "UPDATE tracks SET born = 1 WHERE id = (SELECT track FROM files WHERE rel = ?1)".to_string(),
+            shape("analysis"),
+            "UPDATE analysis SET bpm = 120 WHERE rel = ?1".to_string(),
+            shape("beat_this"),
+            "DELETE FROM beat_this WHERE rel = ?1".to_string(),
+            "INSERT INTO audiomuse (track, energy) SELECT track, 1 FROM files WHERE rel = ?1".to_string(),
+        ];
+        for q in &sql {
+            let before = written();
+            assert_eq!(cat.db().execute(q, [&rel]).unwrap(), 1, "{q}");
+            assert!(written() > before, "{q}");
         }
-        assert!(!Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change a while after: read again");
+        // AudioMuse is taken in whole: a DELETE with no WHERE, which SQLite would not go through row by row.
+        let before = written();
+        cat.replace_audiomuse(&[]).unwrap();
+        assert!(written() > before, "the whole table emptied");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_label_from_discogs_reads_the_crate_facts_again_as_a_word_does() {
+        let s = crate::serve::Serve::open(None, Rules::default(), &|_| None).unwrap();
+        let before = said_stamp(&s);
+        assert_eq!(said_stamp(&s), before, "nothing said: nothing to read");
+        s.userdata.set_discogs_facts("album:a", Some(r#"{"labels":[{"name":"Warp"}]}"#), 1).unwrap();
+        assert_ne!(said_stamp(&s), before);
+    }
+
+    #[test]
+    fn the_crate_facts_are_read_beside_the_catalogue_not_under_its_lock() {
+        let d = music();
+        let cat = Arc::new(Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![d.clone()]).unwrap());
+        cat.walk_all();
+        // A writer in the middle of something long, as far as the read can tell.
+        let lock = cat.db();
+        let (c, (tell, told)) = (cat.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || tell.send(c.crate_facts().unwrap().len()));
+        let read = told.recv_timeout(Duration::from_secs(20));
+        drop(lock);
+        assert_eq!(read, Ok(2));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn the_crate_facts_before_are_let_go_before_the_new_ones_are_read() {
+        let d = music();
+        let cat = Arc::new(Catalogue::open(None, vec![d.clone()]).unwrap());
+        cat.walk_all();
+        let before = Arc::downgrade(&cat.crate_facts().unwrap());
+        assert_eq!(before.strong_count(), 1, "only what is kept holds them");
+        cat.db().execute("UPDATE files SET bitrate = 320", []).unwrap();
+        facts_grown_old(&cat);
+        // In memory the read has only the catalogue's own connection: held here, it stops just before its first row.
+        let lock = cat.db();
+        let c = cat.clone();
+        let reading = std::thread::spawn(move || c.crate_facts().unwrap().len());
+        let waited = std::time::Instant::now();
+        while before.strong_count() > 0 && waited.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let gone = before.strong_count() == 0;
+        drop(lock);
+        assert_eq!(reading.join().unwrap(), 2);
+        assert!(gone, "two readings at once over every file are what the memory limit cannot hold");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_new_reading_is_never_at_the_address_of_the_one_before() {
+        // `shared_alike`, the crates' sorted lists and the words know a reading by its address, and would take a new one
+        // at the old address for the old one.
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        let mut was = Arc::as_ptr(&cat.crate_facts().unwrap());
+        for n in 0..500 {
+            cat.db().execute("UPDATE files SET bitrate = ?1", [n]).unwrap();
+            facts_grown_old(&cat);
+            let now = Arc::as_ptr(&cat.crate_facts().unwrap());
+            assert_ne!(now, was, "reading {n}");
+            was = now;
+        }
         std::fs::remove_dir_all(&d).ok();
     }
 
