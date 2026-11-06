@@ -198,6 +198,8 @@ stops the start, as Cratarr does not run on half-moved data. The way back is the
   it, as what names its ids would all read as matching nothing. Once it is over, a catalogue from before it beside user data from after
   it stops the start too: restored alone, it would number its albums anew under every row, with no error. A generation cannot tell, as
   a backup has the one it always had, so the catalogue's own mark is asked, and one started afresh sets it.
+- **A file's shape and beats follow it** where its library changed place, as 0.15 took `analysis` along and left these at the folder it
+  had. Where two libraries hold the path, nothing says which file a row is of: it stays, and the report counts it.
 - **What matches nothing stays and is counted,** as a tag's hash from before a retag cannot be read back. A left-out line on a file
   in a trash stays a line too: its path went with it.
 

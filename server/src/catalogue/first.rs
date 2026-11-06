@@ -46,6 +46,8 @@ pub struct First {
     pub tracks_merged: u64,
     pub bases_on_two_records: u64,
     pub artists: u64,
+    /// Rows of `analysis_shape` that followed their file to the place its library has, and those that could not say which file
+    /// they are of. `beats_*`: the same of `beat_this`.
     pub shapes_moved: u64,
     pub shapes_left: u64,
     pub beats_moved: u64,
@@ -76,6 +78,38 @@ fn done(db: &Connection) -> Result<Option<First>> {
 
 fn count(db: &Connection, sql: &str) -> Result<u64> {
     Ok(db.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
+}
+
+/// Where a library that changed place left its files' rows: 0.15's `set_folders` took `analysis` along but not these, so `analysis`
+/// says a file is done, nothing asks again, and its waveform and beats are read by nothing, or by a file that comes to that path.
+/// Each goes to the one folder that holds its path, where its own holds none. What stays beside a file with no row of its own is
+/// counted, as a path alone cannot say which of the two it is of. Music's place never moved. How many moved and stayed, by table.
+fn follow_files(tx: &Connection) -> Result<[(u64, u64); 2]> {
+    tx.execute_batch(
+        "CREATE TEMP TABLE places (rel TEXT NOT NULL, folder INTEGER NOT NULL, PRIMARY KEY (rel, folder)) WITHOUT ROWID;
+         INSERT INTO temp.places SELECT rel, folder FROM files WHERE folder >= 0;",
+    )?;
+    let follow = |table: &str| -> Result<(u64, u64)> {
+        let moved = tx.execute(
+            &format!(
+                "UPDATE OR IGNORE {table} SET folder = (SELECT p.folder FROM temp.places p WHERE p.rel = {table}.rel)
+                 WHERE rel IN (SELECT rel FROM temp.places GROUP BY rel HAVING count(*) = 1)
+                   AND NOT EXISTS (SELECT 1 FROM temp.places p WHERE p.rel = {table}.rel AND p.folder = {table}.folder)"
+            ),
+            [],
+        )?;
+        let left = count(
+            tx,
+            &format!(
+                "SELECT count(*) FROM {table} s WHERE s.folder > 0 AND EXISTS (
+                   SELECT 1 FROM temp.places p WHERE p.rel = s.rel AND p.folder <> s.folder AND NOT EXISTS (SELECT 1 FROM {table} o WHERE o.folder = p.folder AND o.rel = p.rel))"
+            ),
+        )?;
+        Ok((moved as u64, left))
+    };
+    let found = [follow("analysis_shape")?, follow("beat_this")?];
+    tx.execute_batch("DROP TABLE temp.places;")?;
+    Ok(found)
 }
 
 /// Every album in the order the map keeps, and each one's record, what lists serve first: a file that went must not decide
@@ -185,6 +219,7 @@ impl Catalogue {
         let FirstAlbums { served, unserved, names } = found;
         let (albums, records) = give_records(&tx, served, unserved, kinds, now)?;
         note_albums(&tx, &albums, &records, kinds)?;
+        let [(shapes_moved, shapes_left), (beats_moved, beats_left)] = follow_files(&tx)?;
         // As old as what it holds: to the passes after this it is no folder still arriving, and all that names it stays (CR19).
         tx.execute("UPDATE records SET born = COALESCE((SELECT min(t.born) FROM tracks t WHERE t.record = records.id), born)", [])?;
         artists::artists_in(&tx, &names, now)?;
@@ -197,7 +232,10 @@ impl Catalogue {
             tracks_merged: count(&tx, "SELECT count(*) FROM track_moved")?,
             bases_on_two_records: count(&tx, "SELECT count(*) FROM (SELECT old FROM album_moved WHERE form = 'base' GROUP BY old HAVING count(*) > 1)")?,
             artists: count(&tx, "SELECT count(*) FROM artists")?,
-            ..First::default()
+            shapes_moved,
+            shapes_left,
+            beats_moved,
+            beats_left,
         };
         tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![DONE, serde_json::to_string(&first)?])?;
         tx.commit()?;
