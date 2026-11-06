@@ -249,10 +249,11 @@ fn stripped(title: &str) -> String {
     out.trim().to_string()
 }
 
-/// The first artist credited ("Air feat. Beck", "Air & Beck", "Air, Beck" → "Air").
-fn main_artist(artist: &str) -> String {
-    let lower = artist.to_lowercase();
-    let cut = [" feat.", " feat ", " ft.", " featuring ", " & ", " and ", ", ", " x ", " vs. ", " vs ", " with "]
+/// The first artist credited ("Air feat. Beck", "Air & Beck", "Air, Beck", "Air / Beck" → "Air").
+pub fn main_artist(artist: &str) -> String {
+    // ASCII only: a letter that grows when lowered would move the cut off the artist's own bytes.
+    let lower = artist.to_ascii_lowercase();
+    let cut = [" feat.", " feat ", " ft.", " featuring ", " & ", " and ", ", ", " / ", " x ", " vs. ", " vs ", " with "]
         .iter()
         .filter_map(|s| lower.find(s))
         .min()
@@ -980,6 +981,9 @@ mod tests {
         // Nothing to strip and one artist: two rungs fall together.
         assert_eq!(ladder(&record("Boards of Canada", "Geogaddi", None)), ["Boards of Canada Geogaddi", "*oards of Canada Geogaddi"]);
         assert_eq!(main_artist("Simon & Garfunkel"), "Simon");
+        assert_eq!(main_artist("Grouch / Grouch In Dub"), "Grouch");
+        assert_eq!(main_artist("AC/DC"), "AC/DC");
+        assert_eq!(main_artist("İlhan Mimaroğlu & Freddie Hubbard"), "İlhan Mimaroğlu");
     }
 
     #[test]

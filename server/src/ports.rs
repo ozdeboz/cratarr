@@ -83,8 +83,8 @@ impl Acquisition for crate::lidarr::Lidarr {
 /// What carries out an approved request (decision 0070): Lidarr first; slskd directly, say, could take its place without
 /// the requests, their queue or their statuses changing. An album is named by its MusicBrainz release group where known.
 pub trait Fetcher: Send + Sync {
-    /// Fetch this album into Incoming. What was done, in words.
-    fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> Fut<'a, String>;
+    /// Fetch this album into Incoming. What was done, in words, and its release group.
+    fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> Fut<'a, crate::lidarr::Handed>;
     /// How far it is with each of these albums, all asked at once (the Requests page shows many).
     fn statuses<'a>(&'a self, release_groups: &'a [String]) -> Fut<'a, std::collections::HashMap<String, crate::lidarr::Progress>>;
     /// Stop fetching it (what is there already stays).
@@ -98,7 +98,7 @@ pub struct LidarrFetcher {
 }
 
 impl Fetcher for LidarrFetcher {
-    fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> Fut<'a, String> {
+    fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> Fut<'a, crate::lidarr::Handed> {
         Box::pin(self.lidarr.want(&self.with, release_group, artist, album))
     }
 
