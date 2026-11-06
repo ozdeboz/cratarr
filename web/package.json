@@ -14,7 +14,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:phone": "node scripts/check-phone.mjs",
     "test": "node --experimental-strip-types --experimental-test-isolation=none --import ./tests/ts-resolve.mjs --test tests/*.test.ts && node --experimental-strip-types --import ./tests/ts-resolve.mjs --test tests/isolated/*.test.ts",
-    "e2e:browser": "sh ../scripts/browser-e2e.sh"
+    "e2e:browser": "sh ../scripts/browser-e2e.sh",
+    "e2e:standin": "node e2e/standin-run.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
