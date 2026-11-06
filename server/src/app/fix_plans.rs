@@ -75,7 +75,7 @@ async fn fixes_of(app: &super::App, kind: &str, at: Option<(i64, String)>) -> Re
 
 /// What a plan's sheet shows of its fields besides old → new: how sure each is, and a genre's choices.
 #[derive(Debug, Default)]
-struct Notes {
+pub(super) struct Notes {
     /// (album, tag) → certain or likely.
     certainty: HashMap<(String, String), &'static str>,
     /// album → a genre's choices.
@@ -84,8 +84,7 @@ struct Notes {
 
 /// The fixes as a proposal: each track's tags now (read again from its file) → what its fixes give, said where from.
 /// Blocking.
-fn proposal(kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Proposal, Notes)> {
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+pub(super) fn proposal(served: &crate::serve::Serve, kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Proposal, Notes)> {
     let mut p = Proposal { kind: kind.to_string(), title: title_of(kind), ..Proposal::default() };
     let mut notes = Notes::default();
     let mut by_album: Vec<(String, Vec<&Fix>)> = Vec::new();
@@ -111,7 +110,7 @@ fn proposal(kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Pr
         }
         // A length's: its file written whole.
         if super::length_fixes::FIELDS.contains(&f.field) {
-            if let Some(w) = super::length_fixes::file_write(&served, f)? {
+            if let Some(w) = super::length_fixes::file_write(served, f)? {
                 if !p.records.iter().any(|r| r.album == w.album)
                     && let Some((_, artist, title)) = served.library.album_names(&w.album)?
                 {
@@ -129,7 +128,7 @@ fn proposal(kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Pr
     }
     for (album, fixes) in by_album {
         let Some((_, artist, title)) = served.library.album_names(&album)? else { continue };
-        let names: HashMap<std::path::PathBuf, String> = super::renumber::tracks_in(&album, at).map(|t| t.0.into_iter().map(|t| (t.path, t.title)).collect()).unwrap_or_default();
+        let names: HashMap<std::path::PathBuf, String> = super::renumber::files_in(served, &album, at).map(|t| t.into_iter().map(|t| (t.path, t.title)).collect()).unwrap_or_default();
         // Per file, every fix's tags, in the order the fixes come.
         let mut files: Vec<(std::path::PathBuf, Vec<(String, Vec<String>)>, Vec<(String, String)>)> = Vec::new();
         for f in &fixes {
@@ -185,8 +184,8 @@ fn proposal(kind: &str, fixes: &[Fix], at: Option<&(i64, String)>) -> Result<(Pr
 pub async fn plan(app: &super::App, kind: &str, from: Option<&str>) -> Result<PlanView> {
     let at = copy_of(app, kind, from).await?;
     let (fixes, making) = fixes_of(app, kind, at.clone()).await?;
-    let k = kind.to_string();
-    let (p, notes) = tokio::task::spawn_blocking(move || proposal(&k, &fixes, at.as_ref())).await??;
+    let (k, served) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?);
+    let (p, notes) = tokio::task::spawn_blocking(move || proposal(&served, &k, &fixes, at.as_ref())).await??;
     let mut view = file_runs::view(&p.kind, &p.title, &p.records, &p.files, false);
     for r in &mut view.records {
         for f in &mut r.fields {
@@ -215,9 +214,9 @@ pub async fn apply(app: &Arc<super::App>, kind: &str, from: Option<&str>, albums
             anyhow::bail!("{w} was not found for it");
         }
     }
-    let k = kind.to_string();
+    let (k, served) = (kind.to_string(), app.served.clone().context("Cratarr's own library is not open")?);
     let p = tokio::task::spawn_blocking(move || -> Result<Proposal> {
-        let (p, _) = proposal(&k, &fixes, at.as_ref())?;
+        let (p, _) = proposal(&served, &k, &fixes, at.as_ref())?;
         let mut p = file_runs::ticked(p, &albums, stamps.as_ref());
         choose(&mut p, &chosen);
         Ok(p)

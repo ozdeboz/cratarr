@@ -579,6 +579,31 @@ fn check_requests(served: Option<&crate::serve::Serve>) -> anyhow::Result<Vec<Fi
     Ok(vec![f])
 }
 
+/// A record's files' own problems, of every copy, each by its kind: a file wrong in one copy is that record's, whichever
+/// plays. Blocking.
+pub(super) fn files_wrong(served: &crate::serve::Serve, id: &str) -> anyhow::Result<Vec<(String, Item)>> {
+    let (tracks, files) = (served.library.album_tracks(id)?, served.library.files_of_record(id)?);
+    let folders: std::collections::BTreeSet<i64> = files.iter().map(|f| f.1).collect();
+    let mut out = Vec::new();
+    for folder in folders {
+        let rels: Vec<String> = files.iter().filter(|f| f.1 == folder).map(|f| f.2.clone()).collect();
+        for p in served.catalogue().problems_in(folder, &rels)? {
+            let Some((song, ..)) = files.iter().find(|f| f.1 == folder && f.2 == p.rel) else { continue };
+            let file = p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string();
+            let item = Item {
+                title: tracks.iter().find(|t| t.0 == *song).map_or_else(|| file.clone(), |t| t.3.clone()),
+                line: p.detail,
+                album: Some((crate::source::cratarr::KIND.id.to_string(), id.to_string())),
+                files: vec![file],
+                track: Some(song.clone()),
+                ..Item::default()
+            };
+            out.push((p.kind, item));
+        }
+    }
+    Ok(out)
+}
+
 impl App {
     /// Every domain's findings now (decision 0063), worst first, the most recent first among equals.
     pub async fn health_report(&self) -> Report {
@@ -620,28 +645,8 @@ impl App {
         let mut wrong = Vec::new();
         // Its files' problems: only the own library's records have files Cratarr read.
         if let Some(served) = self.served.clone().filter(|_| source == crate::source::cratarr::KIND.id) {
-            let (c, id) = (self.library.catalogue(), album.to_string());
-            wrong = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(String, Item)>> {
-                let Some(folder) = served.library.row_copy(&id)?.map(|c| c.folder) else { return Ok(Vec::new()) };
-                let tracks = served.library.album_tracks(&id)?;
-                let rels: Vec<String> = tracks.iter().map(|t| t.2.clone()).collect();
-                let mut out = Vec::new();
-                for p in c.problems_in(folder, &rels)? {
-                    let Some((song, _, _, title, ..)) = tracks.iter().find(|t| t.2 == p.rel) else { continue };
-                    let file = p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string();
-                    let item = Item {
-                        title: title.clone(),
-                        line: p.detail,
-                        album: Some((crate::source::cratarr::KIND.id.to_string(), id.clone())),
-                        files: vec![file],
-                        track: Some(song.clone()),
-                        ..Item::default()
-                    };
-                    out.push((p.kind, item));
-                }
-                Ok(out)
-            })
-            .await??;
+            let id = album.to_string();
+            wrong = tokio::task::spawn_blocking(move || files_wrong(&served, &id)).await??;
         }
         Ok(record(&found, &(source.to_string(), album.to_string()), &wrong))
     }

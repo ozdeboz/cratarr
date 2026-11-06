@@ -34,14 +34,13 @@ fn field_of(key: &str) -> Option<&'static str> {
 }
 
 /// A finding's fixes, one per track it lists. Blocking.
-pub fn of_finding(key: &str) -> Result<Vec<Fix>> {
+pub fn of_finding(served: &Serve, key: &str) -> Result<Vec<Fix>> {
     let Some(field) = field_of(key) else { return Ok(Vec::new()) };
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let mut out = Vec::new();
     if field == "seektable" {
         for (folder, rel) in served.catalogue().with_issue("bad_seektable")? {
             let Some((song, ..)) = served.library.song_at(folder, &rel)? else { continue };
-            if let Some(f) = fix(&served, field, &song)? {
+            if let Some(f) = fix(served, field, &song)? {
                 out.push(f);
             }
         }
@@ -52,7 +51,7 @@ pub fn of_finding(key: &str) -> Result<Vec<Fix>> {
             continue;
         }
         let Some((song, ..)) = served.library.song_at(folder, &rel)? else { continue };
-        if let Some(f) = fix(&served, field, &song)? {
+        if let Some(f) = fix(served, field, &song)? {
             out.push(f);
         }
     }

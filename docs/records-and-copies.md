@@ -111,6 +111,10 @@ gains, is the file that plays, so a waveform's ETag names the file.
   preference `copy_picks`. A pick goes with its copy at Delete, Move, Add to and Replace, and Undo brings back the copy, not
   the pick.
 - A stream's file is named in its validator, and `If-Range` is honoured: a seek never gets another file's bytes.
+- A tag written by Cratarr is the record's or its track's, so it goes into every copy: Health's fixes, Renumber, a match with
+  MusicBrainz, the tempo, the files' facts and words. Reading stays one file a track, and writing takes every file, each saying
+  for itself what it holds, so one Undo puts each file back as it was. What links two copies' files is the track, never the
+  file name. Only "Before adding" writes to one copy. Health's problems on a record's page are every copy's.
 - Incoming's verdicts go: a better copy is a copy of the record, and Replace swaps two copies of one record.
 
 ## Copy to own music
