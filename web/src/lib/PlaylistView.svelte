@@ -314,7 +314,7 @@
   $effect(() => on<{ area: string }>('changed', ({ area }) => (area === 'incoming' || area === 'collection') && album && incomingChanged++));
   // A record's files written (lib/dataChanged: a fix's lengths, tags, numbers), or another copy picked, whose quality its
   // head says: its rows read again, as after a save.
-  $effect(() => whenChanged(['files', 'words', 'picks'], () => untrack(() => album || artist) && saved++));
+  $effect(() => whenChanged(['files', 'words'], () => untrack(() => album || artist) && saved++));
 
   // The album's place in the Library's list (lib/albums.svelte.ts): its library, and what Cratarr may do with it there,
   // for its menu. Read when an album shows and the list is not known yet, and again when an album list changed (the

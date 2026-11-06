@@ -5,7 +5,7 @@
 //! renumbered.
 //!
 //! An album's hash (`album`) is no id any more: it gathers one folder's files of an album, what its tags say, and it is
-//! what facts kept from before the flip are still found under, and what the migration reads the old ids by.
+//! what the first start reads the old ids by.
 //!
 //! The hashes and persistent ids are translated from Navidrome (`model/id/id.go`, `model/metadata/persistent_ids.go`,
 //! `utils/str/str.go`, `consts/consts.go`), Copyright the Navidrome authors, GPL-3.0-or-later
@@ -85,7 +85,7 @@ fn first_group(groups: &[Vec<String>]) -> String {
 }
 
 /// The album's persistent id, Navidrome's default `musicbrainz_albumid|albumartistid,album,albumversion,releasedate`.
-fn album_pid(row: &ServedRow, album_artist: &str) -> String {
+pub(super) fn album_pid(row: &ServedRow, album_artist: &str) -> String {
     let release_date = row.first("releasedate").or(row.first("date")).unwrap_or("");
     first_group(&[
         vec![row.first("musicbrainz_albumid").unwrap_or("").to_string()],
@@ -129,12 +129,16 @@ pub fn highest_named(text: &str) -> i64 {
 
 /// What gathers one folder's files of an album, never an id: the hash of its persistent id. `album_artist` is the album
 /// artist as shown (the song's artist when the file names none). Outside folder 0 the folder goes in front, as Navidrome's
-/// library id, so two folders' files stay two copies. It keeps the form of the ids albums had until 0.16, as what was
-/// kept under those is found by it until the migration has moved it.
+/// library id, so two folders' files stay two copies. It keeps the form of the ids albums had until 0.16, as the first start
+/// finds what was kept under those by it.
 pub(super) fn album(row: &ServedRow, album_artist: &str, folder: i64) -> String {
-    let pid = album_pid(row, album_artist);
-    let pid = if folder == 0 { pid } else { format!("{folder}\\{pid}") };
-    format!("{ALBUM}{}", hash(&[&pid]))
+    album_at(&album_pid(row, album_artist), folder)
+}
+
+/// `album`, from its persistent id: what it was known by, or would have been, in `folder`.
+pub fn album_at(pid: &str, folder: i64) -> String {
+    let at = if folder == 0 { hash(&[pid]) } else { hash(&[&format!("{folder}\\{pid}")]) };
+    format!("{ALBUM}{at}")
 }
 
 /// A song's persistent id, Navidrome's default `musicbrainz_trackid|albumid,discnumber,tracknumber,title`.
@@ -207,6 +211,7 @@ mod tests {
         use std::collections::{BTreeMap, BTreeSet};
         let (catalogue, userdata) = (include_str!("../../tests/fixtures/0.15/catalogue.sql"), include_str!("../../tests/fixtures/0.15/userdata.sql"));
         let stores = [include_str!("../../tests/fixtures/0.15/crates.json"), include_str!("../../tests/fixtures/0.15/users/bob/crates.json")];
+        let more = [include_str!("../../tests/fixtures/0.15/queues.json"), include_str!("../../tests/fixtures/0.15/journal.sql"), include_str!("../../tests/fixtures/0.15/convert-queue.json"), include_str!("../../tests/fixtures/0.15/track-intake.json")];
         let db = rusqlite::Connection::open_in_memory().unwrap();
         db.execute_batch(catalogue).unwrap();
         db.execute_batch(userdata).unwrap();
@@ -235,6 +240,9 @@ mod tests {
             assert!(!album_ids.is_empty() && !artist_ids.is_empty(), "the ids there are found");
             assert!(album_ids.is_subset(&albums), "no such album: {:?}", album_ids.difference(&albums).collect::<Vec<_>>());
             assert!(artist_ids.is_subset(&artists), "no such artist: {:?}", artist_ids.difference(&artists).collect::<Vec<_>>());
+        }
+        for text in more {
+            assert!(named(text, ALBUM).is_subset(&albums), "no such album: {text}");
         }
 
         let tables: BTreeSet<String> = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();

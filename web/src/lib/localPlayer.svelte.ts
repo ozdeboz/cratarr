@@ -67,6 +67,9 @@ export type LocalTrack = {
   duration_secs?: number | null;
   /** Who asked for it, a queue request accepted (0.10). */
   asked_by?: string;
+  /** Play from: the library it is heard from, whatever would play it otherwise. It lives on the queue's tracks and nowhere
+   *  else, so nothing outlasts that queue, and a track added to it names none. */
+  from?: string;
 };
 
 export type Repeat = 'off' | 'one' | 'all';
@@ -626,6 +629,7 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
     }
     const form = formOf(t);
     if (form !== 'original') query.set('as', form);
+    if (t.from) query.set('from', t.from);
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${query.toString() ? `?${query}` : ''}`, {
       signal: ctl.signal,
     });
@@ -3168,8 +3172,9 @@ function playOnAt(index: number, secs: number) {
 }
 /** A wind's stream address: from `from`, `dir`, condensed to `to` over `D` ms (a tap, a seek) or held (`to` null), on
  *  through the queue places `through`. */
-function windUrl(t: LocalTrack, from: number, to: number | null, dir: 1 | -1, D: number, through: number[], wind: Wind, accel: { accelS: number; top: number } | null = null): string {
+export function windUrl(t: LocalTrack, from: number, to: number | null, dir: 1 | -1, D: number, through: number[], wind: Wind, accel: { accelS: number; top: number } | null = null): string {
   const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), dir: dir < 0 ? 'back' : 'forward', speed: String(wind.speed), gain_db: String(wind.gainDb) });
+  if (t.from) ask.set('from', t.from);
   // A hold: getting faster to its heard top, and past it by cutting to its flight top (flight_max).
   if (accel) for (const [k, v] of Object.entries({ accel_s: accel.accelS, max: accel.top, flight_max: FLIGHT_TOP, piece_ms: PIECE_MS })) ask.set(k, String(v));
   if (to !== null)
@@ -4373,6 +4378,7 @@ function trackOf(t: Record<string, unknown>): LocalTrack | null {
     album: typeof t.album === 'string' ? t.album : null,
     album_id: typeof t.album_id === 'string' ? t.album_id : null,
     ...(typeof t.asked_by === 'string' ? { asked_by: t.asked_by } : {}),
+    ...(typeof t.from === 'string' ? { from: t.from } : {}),
   };
 }
 const tracksOf = (v: unknown) => (Array.isArray(v) ? v.map((t) => trackOf(t as Record<string, unknown>)).filter((t): t is LocalTrack => !!t) : []);

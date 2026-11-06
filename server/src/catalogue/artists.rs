@@ -44,7 +44,6 @@ pub(super) fn artists_in(tx: &Connection, names: &BTreeSet<String>, born: i64) -
 /// Notes where each artist's id from before 0.16 went, in the transaction that gives them, as the map commits with what it
 /// maps. The table alone says: `key` is what the hash was made of, so no name needs looking up. Safe to repeat. The count of
 /// rows new here.
-#[allow(dead_code)] // the first start's (C30)
 pub(super) fn note_artists_moved(tx: &Connection) -> Result<usize> {
     let mut note = tx.prepare_cached("INSERT OR IGNORE INTO artist_moved (old, id) VALUES (?1, ?2)")?;
     let mut noted = 0;
@@ -94,7 +93,7 @@ impl Catalogue {
     }
 
     /// `note_artists_moved`, in a transaction of its own. Blocking.
-    #[allow(dead_code)] // the first start's (C30)
+    #[cfg(test)]
     pub fn note_artists_moved(&self) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -104,7 +103,6 @@ impl Catalogue {
     }
 
     /// What the user data moves by: each artist's id from before 0.16 to the id it became, both as served. Blocking.
-    #[allow(dead_code)] // the first start's (C34)
     pub fn artists_moved(&self) -> Result<HashMap<String, String>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT old, id FROM artist_moved")?;

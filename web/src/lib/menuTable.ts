@@ -56,7 +56,7 @@ export type EntryId =
   | 'repair'
   | 'sync'
   | 'queues'
-  | 'playsFrom'
+  | 'playFrom'
   | 'cancelConversion'
   | 'moveTo'
   | 'replaceIn'
@@ -104,7 +104,7 @@ export const MENUS: Record<MenuKind, Kind> = {
       { group: 'take', entries: ['download', 'keep', 'removeFromDevice', 'share'] },
       { group: 'know', entries: ['webSearch', 'geniusSearch'] },
       { group: 'change', entries: ['edit', 'changeCover', 'missingTracks', 'deviceCover', 'serverCover'] },
-      { group: 'library', label: 'Library', entries: ['playsFrom', 'cancelConversion', 'moveTo', 'replaceIn'] },
+      { group: 'library', label: 'Library', entries: ['playFrom', 'cancelConversion', 'moveTo', 'replaceIn'] },
       { group: 'remove', entries: ['removeResume', 'deleteAlbum'] },
     ],
   },

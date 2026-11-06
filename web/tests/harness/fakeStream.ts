@@ -240,6 +240,8 @@ export const server = {
   plans: new Map<string, Plan[]>(),
   /** Every request for a track: which, and from where (s). */
   asked: [] as { track: string; from: number }[],
+  /** The same requests' addresses, as the player wrote them. */
+  addresses: [] as string[],
   /** What Autoplay's next ask is answered with. */
   picks: [] as unknown[],
   /** Not reached: every stream fails to start. */
@@ -285,6 +287,7 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
   const track = decodeURIComponent(asked[1]);
   const from = Number(url.searchParams.get('from_ms') ?? 0) / 1000;
   server.asked.push({ track, from });
+  server.addresses.push(String(input));
   if (server.away) throw new TypeError('Failed to fetch');
   const length = server.lengths.get(track) ?? 0;
   return new Response(stream(track, from, init?.signal ?? undefined), {
@@ -336,7 +339,7 @@ export function track(id: string, secs: number) {
 export async function fromRest() {
   player.stop();
   Object.assign(player.local, { repeat: 'off', autoplay: null, radio: false, error: null });
-  Object.assign(server, { away: false, asked: [], picks: [] });
+  Object.assign(server, { away: false, asked: [], addresses: [], picks: [] });
   server.plans.clear();
   await settle();
 }

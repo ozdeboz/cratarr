@@ -1,0 +1,26 @@
+{
+  "next": 2,
+  "list": [
+    {
+      "id": 1,
+      "source": "cratarr",
+      "album": { "id": "al-5CBklbfbpDtbwWYNnJiHHl", "title": "Just Arrived", "artist": "Salt Meridian", "year": 2018, "added": 1760900000, "path": null, "tracks": 1, "format": "MP3", "bitrate_kbps": 128, "tags": [] },
+      "folder": 1,
+      "dir": "Salt Meridian/Just Arrived (2018)",
+      "release_group": null,
+      "action": "keep",
+      "year": "2018",
+      "files": ["01 Just Arrived.mp3"],
+      "done": 1,
+      "state": "done",
+      "to": "Salt Meridian/Just Arrived (2018)",
+      "target": 0,
+      "swap": null,
+      "event": null,
+      "undo": "kept-1",
+      "why": null,
+      "finished": 1760970000,
+      "by": "ann"
+    }
+  ]
+}

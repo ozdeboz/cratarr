@@ -1655,9 +1655,8 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
 
 /** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
  *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
- *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `picked`:
- *  the viewer's own choice (Plays from). `plays`: the one the server would play them. `job`: the conversion at work on
- *  this copy, `Job.id`. */
+ *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `plays`: the
+ *  one the server would play them. `job`: the conversion at work on this copy, `Job.id`. */
 export type AlbumCopy = {
   library: string;
   format: string | null;
@@ -1668,7 +1667,6 @@ export type AlbumCopy = {
   keepable: boolean;
   keep_to: string | null;
   lacks: string[];
-  picked: boolean;
   plays: boolean;
   added: number | null;
   job: number | null;
@@ -2510,9 +2508,6 @@ export const movePreview = (source: string, album: string, from: string | undefi
  *  with lossless files above that library's quality limit it is queued. */
 export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
   request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year }));
-/** "Plays from": the account plays this record from its copy in `library`, until it picks another or that copy goes.
- *  Through the outbox, as the account's other marks. */
-export const setCopyPick = (source: string, album: string, library: string) => laterJson<{ library: string }>(`${albumPath(source, album)}/copy-pick`, { library }, () => ({ library }), 'PUT');
 /** Delete a copy, into its library's trash (Undo brings it back). The record stays while another copy does. */
 export const deleteAlbum = (source: string, album: string, from: string | undefined) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, asJson({ from }));
 /** Delete a record's copy in someone's own music from the Users panel: an administrator's, only there. */

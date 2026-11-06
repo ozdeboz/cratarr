@@ -501,7 +501,6 @@ impl Source for CratarrSource {
                 let mut out = Vec::new();
                 for c in lib.albums_in(folder, limit)? {
                     let (a, dir) = (c.album, c.dir);
-                    let base = lib.album_base(&a.id)?.unwrap_or_else(|| a.id.clone());
                     let stamp = format!("{} {} {}", a.song_count, a.created.as_deref().unwrap_or(""), dir);
                     // This library's copy: `App::albums` says what the viewer may do with it, and folds a record's together.
                     let copy = AlbumCopy { library: library.clone(), bits: c.bits, rate: c.rate, added: c.added, folder, dir: dir.clone(), ..AlbumCopy::default() };
@@ -516,7 +515,7 @@ impl Source for CratarrSource {
                             format: c.format,
                             bitrate_kbps: c.kbps,
                             duration_secs: c.secs,
-                            tags: ud.tags_of(&base)?,
+                            tags: ud.tags_of(&a.id)?,
                             library: None,
                             copies: vec![copy],
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },

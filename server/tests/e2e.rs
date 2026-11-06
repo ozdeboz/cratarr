@@ -277,10 +277,10 @@ fn settings_0_15(data: &Path, folder: &str) {
 }
 
 /// A data folder as 0.15 left it over `--make-layout`'s files (`tests/fixtures/0.15`, written down from tag v0.15.0, as 0093
-/// keeps no binaries in git): its catalogue, so its track ids mean what its user data says they mean; its user data under
-/// 0.15's ids; each account's crates, playlists and settings. 0.15 had one Music folder, so the layout's second library is an
-/// Incoming there, and own music did not exist. The folders and each file's size and time are this run's: as they stand in
-/// the text, every file would read as changed.
+/// keeps no binaries in git): its catalogue, so its track ids mean what its user data says they mean; its user data, its journal
+/// and its sync under 0.15's ids; each account's crates, queues, jobs, playlists and settings. 0.15 had one Music folder, so the
+/// layout's second library is an Incoming there, and own music did not exist. The folders and each file's size and time are this
+/// run's: as they stand in the text, every file would read as changed.
 fn data_0_15(library: &Path, data: &Path) {
     let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/0.15");
     let (music, incoming, second) = (library.join("music"), library.join("incoming"), library.join("second"));
@@ -301,11 +301,17 @@ fn data_0_15(library: &Path, data: &Path) {
         }
     }
     drop(db);
-    rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap().execute_batch(&text("userdata.sql")).unwrap();
+    for (file, sql) in [("userdata.sqlite", "userdata.sql"), ("journal.sqlite", "journal.sql"), ("playlist-sync.sqlite", "playlist-sync.sql")] {
+        rusqlite::Connection::open(data.join(file)).unwrap().execute_batch(&text(sql)).unwrap();
+    }
     std::fs::create_dir_all(data.join("users/bob")).unwrap();
-    for file in ["crates.json", "users/bob/crates.json", "subsonic-users.json"] {
+    for file in ["crates.json", "users/bob/crates.json", "subsonic-users.json", "queues.json", "convert-queue.json", "track-intake.json"] {
         std::fs::copy(here.join(file), data.join(file)).unwrap();
     }
+    // A Sounds like's picture goes by its crate's id.
+    std::fs::create_dir_all(data.join("crate-images")).unwrap();
+    let like: String = "like:al-4Jx9dQszNKgnbo4mZtic7y".bytes().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(data.join("crate-images").join(format!("x{like}.jpg")), b"a picture").unwrap();
     std::fs::create_dir_all(music.join(".playlists/ann")).unwrap();
     for list in ["Mix.m3u", "ann/Evening.m3u"] {
         std::fs::copy(here.join("playlists").join(list), music.join(".playlists").join(list)).unwrap();
@@ -793,22 +799,83 @@ async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// What the migration's run stands on (decision 0101 point 28): 0.15's data opens on what is built now, its files found as
-/// they were left and nothing taken for new. A fixture whose rows did not fit its files would give them fresh tracks, and
-/// `tr-<n>` in the user data would point at nothing, so the proof on it would prove nothing (`ready` E10).
+/// A word of `text` that is an id from before 0.16: `al-` or `ar-` and 22 letters and digits, all of them. A record's or an
+/// artist's id for life is a number, and a track's has no hash to look for.
+fn hashes_in(text: &str) -> Vec<String> {
+    let word = |c: char| c.is_ascii_alphanumeric();
+    let mut out = Vec::new();
+    for prefix in ["al-", "ar-"] {
+        for (at, _) in text.match_indices(prefix) {
+            let rest = &text[at + prefix.len()..];
+            if !text[..at].ends_with(word) && rest.chars().take_while(|c| word(*c)).count() == 22 {
+                out.push(text[at..at + prefix.len() + 22].to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Every text in a database, each with its table: what a scan for an id goes over, as no list of tables can be left short.
+fn every_text(file: &Path) -> Vec<(String, String)> {
+    let db = rusqlite::Connection::open(file).unwrap();
+    let tables: Vec<String> = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let mut out = Vec::new();
+    for table in tables {
+        let mut st = db.prepare(&format!("SELECT * FROM \"{table}\"")).unwrap();
+        let columns = st.column_count();
+        let rows = st.query_map([], |r| Ok((0..columns).filter_map(|i| r.get::<_, String>(i).ok()).collect::<Vec<String>>())).unwrap();
+        out.extend(rows.map(Result::unwrap).flatten().map(|text| (table.clone(), text)));
+    }
+    out
+}
+
+/// What each account holds, by (user, kind, item): its plays, own plays, rating and star.
+type Held = std::collections::BTreeMap<(String, String, String), (i64, i64, i64, bool)>;
+
+fn held(data: &Path) -> Held {
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    let mut st = db.prepare("SELECT user, kind, item, play_count, own_count, rating, starred FROM annotation").unwrap();
+    st.query_map([], |r| Ok(((r.get(0)?, r.get(1)?, r.get(2)?), (r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))).unwrap().map(Result::unwrap).collect()
+}
+
+/// Every play there is: (who, when, its event, its song).
+fn plays(data: &Path) -> Vec<(String, i64, String, String)> {
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    let mut st = db.prepare("SELECT user, at, event, song FROM plays ORDER BY event").unwrap();
+    st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect()
+}
+
+/// A track of every file, by (folder, path): what the merge moves.
+fn tracks_of_files(db: &rusqlite::Connection) -> Vec<(i64, String, i64)> {
+    db.prepare("SELECT folder, rel, track FROM files ORDER BY folder, rel").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+}
+
+/// A row of a report's `tables`.
+fn table_of<'a>(part: &'a Value, name: &str) -> &'a Value {
+    part["tables"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("no {name} in {part}"))
+}
+
+/// One album no tag makes any more: a retag long ago left it under a hash nothing can read back.
+const ORPHAN: &str = "al-0retagged0long0since00";
+
+/// The migration end to end (decision 0101 points 21 and 28, C35): 0.15's data through a real first start, on real files, by the
+/// real binary. What its user data named is what it names now, every play, heart and rating told over and each table's
+/// rows accounted for; nothing that had somewhere to go is left under an old id, in a table or a store, whatever table it is; a
+/// row that cannot move stays, and is counted; an old link opens its record; a restart changes nothing.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
-async fn the_data_of_0_15_opens_on_its_own_tracks_end_to_end() {
+async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end() {
     let root = temp("data-0-15");
     let (library, data) = (root.join("library"), root.join("data"));
     std::fs::create_dir_all(&data).unwrap();
     assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
     data_0_15(&library, &data);
-    let tracks = |db: &rusqlite::Connection| -> Vec<(i64, String, i64)> {
-        db.prepare("SELECT folder, rel, track FROM files ORDER BY folder, rel").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
-    };
-    let left = tracks(&rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap());
+    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    user.execute("INSERT INTO annotation (user, item, kind, play_count, rating, starred, starred_at, own_count) VALUES ('ann', ?1, 'album', 7, 2, 1, 1760000000, 7)", [ORPHAN]).unwrap();
+    drop(user);
+    let left = tracks_of_files(&rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap());
     assert_eq!(left.len(), audio_under(&library.join("music")).len() + audio_under(&library.join("incoming")).len() + audio_under(&library.join("second")).len(), "a row for every file");
+    let (held_before, plays_before) = (held(&data), plays(&data));
 
     let s = Server::start(&data).await;
     let ann = s.sign_in("ann", "ann's password").await;
@@ -816,29 +883,278 @@ async fn the_data_of_0_15_opens_on_its_own_tracks_end_to_end() {
     // Every library read: the albums' titles, 20 of the layout's 22, as its two accounts' own have no place in 0.15.
     let titles = |albums: Vec<Value>| albums.iter().filter_map(|a| a["title"].as_str().map(str::to_string)).collect::<std::collections::BTreeSet<String>>();
     s.until("every library read", Duration::from_secs(180), || async { titles(ann.albums().await).len() == 20 }).await;
+    let both = |a: &Value| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 3);
+    s.until("the record's three copies", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
 
-    // Its tracks are the ones it left, every file on the id its user data names.
+    // The catalogue: the main library's tracks stand, the other two copies on them, and nothing new, nothing else moved.
     let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
-    assert_eq!(tracks(&db), left, "nothing new, nothing moved");
-    assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "and the retired one");
-    let tide = ann.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
-    let rows = ann.get(&format!("/api/albums/cratarr/{}", tide["id"].as_str().unwrap())).await;
-    let slack = left.iter().find(|(_, rel, _)| rel.ends_with("Slack Water.flac")).unwrap().2;
-    assert!(rows["rows"].as_array().unwrap().iter().any(|r| r["id"] == format!("tr-{slack}") && r["name"] == "Slack Water"), "{rows}");
+    let taken: std::collections::HashMap<i64, i64> = db.prepare("SELECT old, id FROM track_moved").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    assert_eq!(taken, [(19, 48), (18, 47), (17, 46), (8, 48), (7, 47), (6, 46)].into(), "Music's ids survive, each track by its place");
+    let followed: Vec<(i64, String, i64)> = left.iter().map(|(folder, rel, track)| (*folder, rel.clone(), *taken.get(track).unwrap_or(track))).collect();
+    assert_eq!(tracks_of_files(&db), followed, "nothing new, and nothing moved but what the merge moved");
+    assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "a taken id keeps its row, and the retired one stands");
+    assert_eq!(db.query_row("SELECT count(*) FROM track_moved WHERE followed = 0", [], |r| r.get::<_, i64>(0)).unwrap(), 0, "all followed");
 
-    // What is not a table came with it: the settings' roles, each account's crates, the playlists with their gone line.
+    // The report, and each table's rows told over: what met another is counted, and a row goes nowhere else.
     let report = ann.get("/api/admin/migration").await;
+    let part = report["parts"]["records"].clone();
+    assert_eq!((part["tracks_merged"].as_u64(), part["bases_on_two_records"].as_u64()), (Some(6), Some(3)), "{part}");
+    assert_eq!(part["copies"].as_u64().unwrap(), part["records"].as_u64().unwrap() + 2, "Both Shores' three copies are one record: {part}");
+    assert!(part["artists"].as_u64().unwrap() >= 4, "{part}");
+    for row in part["tables"].as_array().unwrap() {
+        let (name, before, after, merged) = (&row["name"], row["before"].as_u64().unwrap(), row["after"].as_u64().unwrap(), row["merged"].as_u64().unwrap());
+        // What goes by a base on two records goes to both, and the change log is told or cleared: no row of those can be lost.
+        let more = ["album_tags", "record_overrides", "words: albums", "words_asked: albums", "discogs_facts: albums", "change_log: tracks", "change_log: albums"];
+        if !more.iter().any(|m| name == m) {
+            assert_eq!(before - merged, after, "{row}");
+        }
+    }
+    let unmatched: Vec<&Value> = part["unmatched"].as_array().unwrap().iter().filter(|u| u["count"].as_u64() != Some(0)).collect();
+    assert_eq!(unmatched.len(), 1, "nothing unmatched that should match: {unmatched:?}");
+    assert_eq!((&unmatched[0]["what"], unmatched[0]["count"].as_u64(), &unmatched[0]["sample"]), (&json!("annotation: albums"), Some(1), &json!([ORPHAN])));
+    assert_eq!(table_of(&part, "plays")["moved"], 1, "one play was on a copy's track");
+    assert_eq!((table_of(&part, "annotation: tracks")["before"].as_u64(), table_of(&part, "annotation: tracks")["after"].as_u64()), (Some(5), Some(4)));
     assert_eq!(report["parts"]["libraries"]["sources"]["cratarr"], json!({ "main": 1, "incoming": 2 }));
     assert_eq!((report["parts"]["playlists"]["playlists"].as_u64(), report["parts"]["playlists"]["lines"].as_u64()), (Some(2), Some(4)), "{report}");
-    let crates = ann.get("/api/crates").await;
-    assert!(crates.as_array().unwrap().iter().any(|c| c["name"] == "Like both shores"), "{crates}");
+
+    // Every play, heart and rating, by the map as the owner's release run reads it: added up, the better rating, the first star.
+    let moved = ann.get("/api/admin/migration/moved").await;
+    let now = |id: &str| ["albums", "artists", "tracks"].iter().find_map(|kind| moved[*kind][id].as_str()).unwrap_or(id).to_string();
+    let mut told = Held::new();
+    for ((who, kind, item), (played, own, rating, star)) in &held_before {
+        let row = told.entry((who.clone(), kind.clone(), now(item))).or_default();
+        *row = (row.0 + played, row.1 + own, row.2.max(*rating), row.3 || *star);
+    }
+    assert_eq!(held(&data), told, "each account's, told over");
+    let expected: Vec<(String, i64, String, String)> = plays_before.iter().map(|(who, at, event, song)| (who.clone(), *at, event.clone(), now(song))).collect();
+    assert_eq!(plays(&data), expected, "every play once, on the track it is now");
+
+    // Nothing that has somewhere to go stays behind, in any table of the user data or any store. Not named here: a scan has no list.
+    let old: Vec<(String, String)> = every_text(&data.join("userdata.sqlite")).into_iter().filter(|(table, _)| table != "migration_report").flat_map(|(table, text)| hashes_in(&text).into_iter().map(move |id| (table.clone(), id))).collect();
+    assert_eq!(old, [("annotation".to_string(), ORPHAN.to_string())], "the one no tag makes, kept");
+    for store in ["crates.json", "users/bob/crates.json", "queues.json", "track-intake.json", "convert-queue.json"] {
+        let text = std::fs::read_to_string(data.join(store)).unwrap();
+        assert_eq!(hashes_in(&text), Vec::<String>::new(), "{store}");
+    }
+    let picture = format!("x{}.jpg", format!("like:{}", now("al-4Jx9dQszNKgnbo4mZtic7y")).bytes().map(|b| format!("{b:02x}")).collect::<String>());
+    assert!(data.join("crate-images").join(picture).is_file(), "a crate's picture follows its seed");
+    assert_eq!(every_text(&data.join("journal.sqlite")).iter().flat_map(|(_, text)| hashes_in(text)).collect::<Vec<_>>(), Vec::<String>::new());
+    let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6"];
+    let names_one = |text: &str| gone.iter().any(|id| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|word| word == *id));
+    assert!(!every_text(&data.join("userdata.sqlite")).iter().any(|(table, text)| table != "migration_report" && names_one(text)), "an id the merge took");
+    let sync: String = rusqlite::Connection::open(data.join("playlist-sync.sqlite")).unwrap().query_row("SELECT base FROM links", [], |r| r.get(0)).unwrap();
+    assert_eq!(sync, "[83,48,87]", "an agreed list, place by place");
+
+    // A two-copy record is listed once, on one set of tracks.
+    let shores: Vec<Value> = ann.albums().await.into_iter().filter(|a| a["title"] == "Both Shores").collect();
+    assert_eq!(shores.len(), 1, "{shores:?}");
+    let record = shores[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(now("al-4Jx9dQszNKgnbo4mZtic7y"), record, "Music's id");
+    assert_eq!(now("al-0K3QLxUBwKPLshc0VyNQJ7"), record, "Incoming's");
+    let songs = ann.get(&format!("/api/albums/cratarr/{record}")).await;
+    assert_eq!(songs["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(), ["tr-48", "tr-47", "tr-46"]);
+
+    // Old links: an album's and a Sounds like's. A crate that named both ids has them as one seed, and shows what it is.
+    let view = ann.get("/api/albums/cratarr/al-0K3QLxUBwKPLshc0VyNQJ7").await;
+    assert_eq!((view["id"].as_str(), view["title"].as_str()), (Some(&*record), Some("Both Shores")), "{view}");
+    let def = ann.get("/api/crates/like:al-0K3QLxUBwKPLshc0VyNQJ7").await;
+    assert_eq!((def["id"].as_str(), def["name"].as_str()), (Some(&*format!("like:{record}")), Some("Sounds like Both Shores")), "{def}");
+    let def = ann.get("/api/crates/c-shores").await;
+    assert_eq!((&def["conditions"][0]["value"]["of"], &def["names"][&record]["name"]), (&json!([record]), &json!("Both Shores")), "{def}");
+    let left_out = ann.get("/api/crates/c-shores/left-out").await;
+    assert_eq!(left_out["rows"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Neap"], "a line is its track, and reads as one: {left_out}");
     let bob = s.sign_in("bob", "bob's password").await;
-    let crates = bob.get("/api/crates").await;
-    assert!(crates.as_array().unwrap().iter().any(|c| c["name"] == "Like the rooms"), "{crates}");
+    let def = bob.get("/api/crates/c-rooms").await;
+    assert!(hashes_in(&def["conditions"].to_string()).is_empty(), "{def}");
+
+    // Playlists come in on the tracks that stood, and a line on what retired stays, missing, saying what it was.
     let state = ann.get("/api/state").await;
     let mix = state["playlists"].as_array().unwrap().iter().find(|p| p["name"] == "Mix").cloned().expect("Mix brought in");
     let lines = ann.get(&format!("/api/playlists/{}/rows", mix["id"].as_str().unwrap())).await;
-    assert_eq!(lines["rows"].as_array().unwrap().iter().map(|r| r["missing"].as_bool().unwrap()).collect::<Vec<_>>(), [false, false, true]);
+    let rows = lines["rows"].as_array().unwrap();
+    assert_eq!(rows.iter().map(|r| r["missing"].as_bool().unwrap()).collect::<Vec<_>>(), [false, false, true]);
+    assert_eq!((rows[1]["id"].as_str(), rows[1]["name"].as_str()), (Some("tr-48"), Some("Landing")));
+    assert!(rows[2]["file"].as_str().unwrap().ends_with("Last Seen.flac"), "{}", rows[2]);
+    let crates = ann.get("/api/crates").await;
+    assert!(crates.as_array().unwrap().iter().any(|c| c["name"] == "Like both shores"), "{crates}");
+
+    // Started again: nothing moves, the report stands as it was, and nothing that was moved reads as old.
+    let (rows_then, plays_then) = (held(&data), plays(&data));
+    let files_then = tracks_of_files(&db);
+    s.stop();
+    let s = Server::start(&data).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    s.until("the library read again", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
+    assert_eq!(ann.get("/api/admin/migration").await["parts"]["records"], part, "written once");
+    assert_eq!((held(&data), plays(&data), tracks_of_files(&db)), (rows_then, plays_then, files_then));
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A start that cannot finish ends by itself, and not well: what it said.
+fn start_refused(data: &Path) -> String {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut child = Command::new(BIN)
+        .env("CRATARR_DATA_DIR", data)
+        .env("CRATARR_BIND", format!("127.0.0.1:{port}"))
+        .env("RUST_LOG", "warn")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the server starts");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(60) {
+            child.kill().ok();
+            panic!("it went on as if nothing stopped it");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(!status.success(), "stopped, and said so");
+    let mut said = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut said).unwrap();
+    said
+}
+
+/// A real first start stopped at every place one can stop: a library not mounted, then each database and store in turn unreadable
+/// as its step comes to it, part of the stores moved, and the last statement of all refused, so the user data falls back whole. Each
+/// time it says why and goes no further, nothing reads as done, and a start that can finish leaves what one that was never stopped
+/// leaves, its report too.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_first_start_stopped_at_any_step_finishes_on_restart_end_to_end() {
+    let root = temp("first-start-stops");
+    let (library, straight, data) = (root.join("library"), root.join("straight"), root.join("data"));
+    std::fs::create_dir_all(&straight).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+
+    // What it comes to with nothing in its way: the first start is over by the time the server answers.
+    data_0_15(&library, &straight);
+    let s = Server::start(&straight).await;
+    s.stop();
+    let report = |data: &Path| -> Value {
+        let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+        let text: String = db.query_row("SELECT report FROM migration_report WHERE part = 'records'", [], |r| r.get(0)).unwrap();
+        serde_json::from_str(&text).unwrap()
+    };
+    let done = |data: &Path| -> bool {
+        let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+        db.query_row("SELECT count(*) FROM migration_report WHERE part = 'records'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0
+    };
+    let merged = |data: &Path| -> i64 { rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap().query_row("SELECT count(*) FROM track_moved", [], |r| r.get(0)).unwrap_or(0) };
+    let expected = report(&straight);
+
+    data_0_15(&library, &data);
+    let (second, away) = (library.join("second"), root.join("away"));
+    std::fs::rename(&second, &away).unwrap();
+    let said = start_refused(&data);
+    assert!(said.contains(&*second.to_string_lossy()), "it says which library: {said}");
+    assert_eq!((done(&data), merged(&data)), (false, 0), "and nothing moved");
+    std::fs::rename(&away, &second).unwrap();
+
+    // Each file unreadable as its step comes to it: the step before is done, and stays done.
+    let unreadable = |file: &str| {
+        let (file, kept) = (data.join(file), std::fs::read(data.join(file)).unwrap());
+        std::fs::write(&file, b"nothing a server could read").unwrap();
+        let said = start_refused(&data);
+        assert_eq!((done(&data), merged(&data)), (false, 6), "{}: {said}", file.display());
+        std::fs::write(&file, kept).unwrap();
+    };
+    unreadable("journal.sqlite");
+    unreadable("playlist-sync.sqlite");
+    unreadable("convert-queue.json");
+    assert!(std::fs::read_to_string(data.join("crates.json")).unwrap().contains("tr-82"), "the stores before it are moved");
+    unreadable("track-intake.json");
+
+    // The last statement of all refused: the whole of the user data's move falls back with it.
+    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    user.execute_batch("CREATE TRIGGER no_report BEFORE INSERT ON migration_report WHEN NEW.part = 'records' BEGIN SELECT RAISE(ABORT, 'stopped'); END;").unwrap();
+    let said = start_refused(&data);
+    assert!(said.contains("stopped"), "{said}");
+    assert_eq!(user.query_row("SELECT count(*) FROM annotation WHERE item = 'al-4FwVmWLNdYpZZSEtkan6Uy'", [], |r| r.get::<_, i64>(0)).unwrap(), 1, "still under its old id");
+    assert!(!done(&data));
+    user.execute_batch("DROP TRIGGER no_report").unwrap();
+    drop(user);
+
+    let s = Server::start(&data).await;
+    s.stop();
+    // The stores come as they were moved: a stop part way through them leaves the ones before counted at none on the next go.
+    let plain = |mut part: Value| {
+        for t in part["tables"].as_array_mut().unwrap() {
+            if t["name"].as_str().is_some_and(|n| n.ends_with(".json") || n == "crate-images") {
+                t["moved"] = json!(0);
+            }
+        }
+        part["unmatched"].as_array_mut().unwrap().retain(|u| u["count"].as_u64() != Some(0) && !u["what"].as_str().is_some_and(|n| n.ends_with(".json") || n == "crate-images"));
+        part
+    };
+    assert_eq!(plain(report(&data)), plain(expected), "as if nothing had stopped it");
+    let crates = |data: &Path| std::fs::read_to_string(data.join("crates.json")).unwrap();
+    assert_eq!(crates(&data), crates(&straight));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// CR14: who hears what, on real files, by a session and by Subsonic's own sign-in, by the bytes: an account's own copy for its
+/// owner where it is the better one, the kept library's for anyone else, Incoming's only when it is asked for, and a copy deleted
+/// leaves the other playing. The own copy is the better, so this holds however a viewer's own music ranks against a kept one.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn who_hears_what_by_the_bytes_on_both_streams_end_to_end() {
+    let root = temp("who-hears");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (kept, waiting, own) = (library.join("incoming"), library.join("second"), library.join("own"));
+    // Kept: the MP3s. Her own: Music's FLACs, in place of her MP3s. Waiting: the other FLACs.
+    let hers = own.join("ann").join(SHORES);
+    std::fs::remove_dir_all(&hers).unwrap();
+    std::fs::create_dir_all(&hers).unwrap();
+    for file in audio_under(&library.join("music").join(SHORES)) {
+        std::fs::copy(library.join("music").join(SHORES).join(&file), hers.join(&file)).unwrap();
+    }
+    settings(&data, &[(&kept, "main"), (&waiting, "incoming")], &own);
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let three = |a: &Value| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 3);
+    s.until("the record's three copies", Duration::from_secs(120), || async { ann.albums().await.iter().any(three) }).await;
+    let album = ann.albums().await.into_iter().find(three).unwrap();
+    let id = album["id"].as_str().unwrap().to_string();
+    let row = ann.get(&format!("/api/albums/cratarr/{id}")).await;
+    let song = row["rows"][0]["id"].as_str().unwrap().to_string();
+
+    let first_of = |dir: PathBuf| std::fs::read(dir.join(&audio_under(&dir)[0])).unwrap();
+    let (mp3, flac, other) = (first_of(kept.join(SHORES)), first_of(hers.clone()), first_of(waiting.join(SHORES)));
+    assert!(mp3 != flac && flac != other && mp3 != other, "three copies, told apart by their bytes");
+    let (stream, file) = (format!("/api/stream/cratarr/{song}"), format!("/api/file/cratarr/{song}"));
+    let subsonic = |who: &str, password: &str| format!("/rest/stream?id={song}&u={who}&p={}&v=1.16.1&c=e2e", password.replace(' ', "%20").replace('\'', "%27"));
+    let (for_ann, for_bob) = (subsonic("ann", "ann's password"), subsonic("bob", "bob's password"));
+
+    // `/api/stream` makes a FLAC into what a browser's player takes, so it is told by its kind, and the file by its bytes.
+    assert!(ann.bytes(&file).await.1 == flac && !is_mp3(&ann.bytes(&stream).await.1), "her own, the better");
+    assert!(bob.bytes(&file).await.1 == mp3 && is_mp3(&bob.bytes(&stream).await.1), "the kept library's for him, her own music being off");
+    assert!(s.anyone().bytes(&for_ann).await.1 == flac, "the same by Subsonic's sign-in");
+    assert!(s.anyone().bytes(&for_bob).await.1 == mp3);
+
+    // Incoming's only when asked for, and never a thing the next play remembers.
+    let from = id_of(&waiting).replace('/', "%2F");
+    assert!(!is_mp3(&bob.bytes(&format!("{stream}?from={from}")).await.1), "named, it plays");
+    assert!(is_mp3(&bob.bytes(&stream).await.1), "and the next play is the best kept one again");
+    assert!(other != mp3 && bob.bytes(&file).await.1 == mp3);
+
+    // Her copy deleted: the kept one plays on for her, and his never stopped.
+    ann.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{id}/delete-own"), json!({ "from": id_of(&own.join("ann")) })).await;
+    s.until("her copy gone", Duration::from_secs(120), || async { ann.bytes(&file).await.1 == mp3 }).await;
+    assert!(is_mp3(&ann.bytes(&stream).await.1));
+    assert!(s.anyone().bytes(&for_ann).await.1 == mp3, "by Subsonic's too");
+    assert!(bob.bytes(&file).await.1 == mp3);
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

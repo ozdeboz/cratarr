@@ -1,4 +1,4 @@
-//! The library's words as each source said them (0.9.7, `app::words`): by subject (`album:<its Music-form id>`,
+//! The library's words as each source said them (0.9.7, `app::words`): by subject (`album:<its id>`,
 //! `artist:<its id>`), source (musicbrainz, discogs, lastfm, files) and word, with what the source called it (genre,
 //! style, mood, tag) and its own strength (0 to 1); and when each source was last asked about each subject, so the
 //! harvest's passes ask again only when due. Household-wide, as the album tags are.
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS album_matches (album TEXT PRIMARY KEY, at INTEGER NOT
 -- no release holds it), and when. Added later (0.13): the discs its tracks are on in the release that holds it
 -- (`discs`; none: no release holds it), and the rule it was looked at by (`rule`, `COMPLETE_RULE`).
 CREATE TABLE IF NOT EXISTS album_complete (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
--- What Discogs says of a subject beyond its words (0.9.8, app::discogs_facts): an album's (`album:<its Music-form id>`),
+-- What Discogs says of a subject beyond its words (0.9.8, app::discogs_facts): an album's (`album:<its id>`),
 -- an artist's (`artist:<name key>`), a release group's (`rg:<id>`); JSON, none where Discogs has nothing; and when.
 CREATE TABLE IF NOT EXISTS discogs_facts (subject TEXT PRIMARY KEY, at INTEGER NOT NULL, facts TEXT) WITHOUT ROWID;
 -- What hearing a record waiting in Incoming found (0.14, app::intake_card): each track decoded whole and its recordings

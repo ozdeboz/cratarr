@@ -260,6 +260,7 @@ async function sendReport(withQueue = false) {
             id: q.id,
             ...(describing.server ? {} : { name: q.name, artist: q.artist, album: q.album, album_id: q.album_id }),
             ...(q.lane ? { lane: q.lane } : {}),
+            ...(q.from ? { from: q.from } : {}),
           })),
         }
       : {}),

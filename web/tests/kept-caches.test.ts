@@ -57,6 +57,10 @@ test("a stream that names its copy is that copy's, never what is kept under the 
   assert.equal(answeredFromKept('/api/stream/cratarr/tr-1?from_ms=0&from=in'), false);
 });
 
+test("a Play from queue's first ask, from the top of its track, goes to Cratarr too", () => {
+  assert.equal(answeredFromKept('/api/stream/cratarr/tr-1?from=cratarr%2F%2Fin'), false);
+});
+
 test('the player asking for a track goes on being answered from what is kept', () => {
   assert.equal(answeredFromKept('/api/stream/cratarr/tr-1?from_ms=0'), true);
 });

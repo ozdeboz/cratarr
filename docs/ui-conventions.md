@@ -194,7 +194,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   entries on rounded cards: View (not from the panel showing it), Go to each of its artists (the source's list of
   them, else the credit), Go to its genres (two at most); its rating (five stars, when its server keeps ratings; a tap
   on the rating it has takes it off); Add to playlist, Download…, Sync to this device (in the app), Share; what its copies allow
-  (decision 0034; Plays from, Add to, Move to, Replace in, Delete, Cancel conversion: below), each question asked in the
+  (decision 0034; Play from, Add to, Move to, Replace in, Delete, Cancel conversion: below), each question asked in the
   sheet; Change cover on this device (a
   picture kept in this browser, shown wherever the album's cover is; not in Cratarr's own library, where an
   administrator's Change cover is everyone's) and Use the server's cover while such a picture is chosen (no Read the cover
@@ -213,12 +213,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     copy's place in.
   - **Cancel conversion:** an administrator's. A copy with a conversion at work is not moved, replaced or deleted; the
     record's other copies offer what they did.
-  - **Plays from** (the first rule of which copy plays): "Plays from Music" leads the menu's Library card, naming the copy
-    that plays, where a record has copies in two or more libraries switched on and the viewer has an account. An Incoming
-    copy counts, as a pick is how that is heard; one in a library switched off does not, as it would never play. It opens
-    a step (`lib/ChoiceList`): each library by its name with its copy's quality, the one that plays marked. A choice
-    closes the menu and the card says so at once; it goes through the outbox, as the account's other marks. A pick is the
-    account's, left only by another pick or when its copy goes.
+  - **Play from:** an entry per other copy in a library switched on, "Play from Incoming", leading the menu's Library card.
+    An Incoming copy counts, as this is how one waiting is heard. No entry for the copy that plays, none where the record
+    has no other copy, and none while the music plays on another player, as Cratarr cannot yet tell it which copy. It
+    needs no account. A tap closes the menu and starts a new queue of the record from that copy, as its Play does and
+    with what Play does to the queue before it, and says nothing. The queue keeps its copy for as long as it lives, over a
+    seek, a replay and being left and taken up again; a track added to it afterwards names none. Nothing is remembered:
+    the next Play, on any button, is the best copy again, and all the while the card's quality says what Play would give.
   - **Two folders of one library** are one copy here: one entry, which takes the first.
   - **A copy deleted or moved** leaves the record where it is. It leaves the list, and its panel closes, only with its
     last copy.
@@ -226,8 +227,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     they can go into; a record goes once, by the first of its copies that can, in the order they would play, as one entry
     cannot say which. While none of them has two copies there is one Delete. With one that has, a Delete per library by
     its name ("Delete from Music"), as Move's are, so what goes is said and a record of two copies never loses both. Each
-    is asked once for them all, with one Undo, a main library's second question said in that one. No Plays from: that
-    stays one record's own choice.
+    is asked once for them all, with one Undo, a main library's second question said in that one. No Play from: it starts
+    one record's queue.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
   with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
   their tracks), Download…, Share, and their picture on this device. No Instant mix (the owner) and no rating.

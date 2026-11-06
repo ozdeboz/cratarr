@@ -2,8 +2,7 @@
 //! docs/records-and-copies.md). An album had two old ids and every table goes by one of them: a copy's own (`albums.id`: what
 //! was played, starred or heard), or the Music-form one (`albums.base_id`: tags, hand facts, words, so they followed an album
 //! kept from Incoming). For a Music album the two are one string, and an Incoming album's base can be a Music album's id, so
-//! the two lists stay apart all the way. What a table's rows do when they meet on one record is that table's own rule. Nothing
-//! calls this until the first start does.
+//! the two lists stay apart all the way. What a table's rows do when they meet on one record is that table's own rule.
 
 use std::collections::{HashMap, HashSet};
 
@@ -387,7 +386,7 @@ mod tests {
         assert_eq!((one_copy.state.as_str(), one_copy.name.as_str(), one_copy.folder), ("promoted", "First", 1));
         assert_eq!((another.state.as_str(), another.name.as_str(), another.folder), ("rejected", "Second", 3));
         assert!(u.review(RECORD, Some(4)).unwrap().is_none(), "a copy nobody reviewed");
-        assert_eq!(one_copy.base, RECORD, "the record is what a base was");
+        assert_eq!(one::<String>(&u, &format!("SELECT DISTINCT base FROM album_review WHERE album = '{RECORD}'")), RECORD, "the record is what a base was");
     }
 
     #[test]
@@ -407,7 +406,7 @@ mod tests {
         let u = with(&format!("INSERT INTO album_review (album, base, state, at, undo, name, album_artist) VALUES ('{OTHER}', '{MAIN}', 'promoted', 5, 'key', 'N', 'A');"));
         let report = u.move_albums(&Albums { copies: Vec::new(), bases: vec![base(MAIN, "al-1"), base(MAIN, "al-2")] }).unwrap();
         let r = u.review("al-1", None).unwrap().unwrap();
-        assert_eq!((r.album.as_str(), r.base.as_str(), r.folder, r.undo.as_deref()), ("al-1", "al-1", NO_FOLDER, Some("key")));
+        assert_eq!((r.album.as_str(), r.folder, r.undo.as_deref()), ("al-1", NO_FOLDER, Some("key")));
         assert!(u.review("al-2", None).unwrap().is_none(), "a copy's, so never copied: the main library's, where a Keep went");
         assert_eq!(report.unmatched.iter().find(|x| x.what == "album_review").unwrap().count, 0);
     }
@@ -754,7 +753,7 @@ mod tests {
         assert_eq!(count(&u, &format!("annotation WHERE kind = 'album' AND item = '{shores}'")), 1);
         assert_eq!(one::<i64>(&u, &format!("SELECT at FROM added WHERE album = '{shores}'")), 1760920000, "the earlier");
         let kept = u.review(shores, Some(1)).unwrap().unwrap();
-        assert_eq!((kept.state.as_str(), kept.base.as_str(), kept.folder), ("promoted", shores, 1));
+        assert_eq!((kept.state.as_str(), kept.folder), ("promoted", 1));
         assert_eq!(u.review(arrived, Some(1)).unwrap().unwrap().undo, Some(format!("job:{arrived}")));
         assert!(u.intake_heard(arrived, Some(1)).unwrap().is_some());
         assert_eq!(one::<String>(&u, "SELECT value FROM record_overrides WHERE album = 'al-4' AND field = 'classical'"), "true", "the marks moved at open, then with the facts");

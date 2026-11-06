@@ -9,6 +9,7 @@
 //! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
 mod artists;
+mod first;
 mod id3;
 pub mod identity;
 pub mod normalise;
@@ -25,6 +26,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
+pub use first::{First, FirstAlbums};
 pub use normalise::Rules;
 
 use crate::source::Source;
@@ -87,6 +89,14 @@ CREATE TABLE IF NOT EXISTS artists (
 CREATE INDEX IF NOT EXISTS artists_by_key ON artists (key);
 -- Where an artist's id from before 0.16 went (`ar-<hash>`): what the migration moves by, kept with what it maps, as a track's.
 CREATE TABLE IF NOT EXISTS artist_moved (old TEXT PRIMARY KEY, id INTEGER NOT NULL) WITHOUT ROWID;
+-- Where an album's ids from before 0.16 went (`Catalogue::first_records`), kept with what it maps, as a track's. `form` is `id`,
+-- what one copy was known by, or `base`, the same in Music's form, which tags and words went by. An id names one copy, so one
+-- record, where the same tags on other tracks make a base name two. `folder`: the copy's, for an `id`. `rank`: the order rows
+-- that meet on one record go in, main libraries first.
+CREATE TABLE IF NOT EXISTS album_moved (
+  old TEXT NOT NULL, form TEXT NOT NULL, record INTEGER NOT NULL, folder INTEGER, rank INTEGER NOT NULL,
+  PRIMARY KEY (old, form, record)) WITHOUT ROWID;
+CREATE UNIQUE INDEX IF NOT EXISTS album_moved_one_record ON album_moved (old) WHERE form = 'id';
 CREATE TABLE IF NOT EXISTS analysis (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, version INTEGER NOT NULL,
   duration_secs REAL, loudness_lufs REAL, track_gain_db REAL, track_peak REAL, bpm REAL, bpm_confidence REAL,
@@ -193,6 +203,12 @@ pub struct AlbumCopy {
     /// Worth `assign_records`' reading: a track free to move holds another record or none, or albums of one record hold
     /// different tracks.
     pub split: bool,
+    /// The catalogue folder it lies in, and what 0.15 knew it by: its tag hash there and in Music's form, and the persistent
+    /// id both are the hash of. What the first start's map is made of (`Catalogue::first_records`).
+    pub folder: i64,
+    pub old_id: String,
+    pub old_base: String,
+    pub pid: String,
 }
 
 /// What one file of an album says of its record ([`vote_of`]).
@@ -1536,21 +1552,20 @@ impl Catalogue {
             }
             // And with its album's id (0.11, quick crates: the Album axis, an album seed), one copy for all its
             // tracks; its labels Discogs' for its album where its tags name none, as kept (never asked for here).
-            match (s.library.album_bases(), crate::app::discogs_facts::kept_labels(s)) {
-                (Ok(bases), Ok(labels)) => {
+            match crate::app::discogs_facts::kept_labels(s) {
+                Ok(labels) => {
                     let mut shared: HashMap<&str, Arc<str>> = HashMap::new();
                     for f in &mut facts {
                         let Some(album) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))) else { continue };
-                        let Some(base) = bases.get(album) else { continue };
                         f.album = Some(shared.entry(album.as_str()).or_insert_with(|| Arc::from(album.as_str())).clone());
                         if f.labels.is_empty()
-                            && let Some(l) = labels.get(base)
+                            && let Some(l) = labels.get(album)
                         {
                             f.labels = l.clone();
                         }
                     }
                 }
-                (Err(e), _) | (_, Err(e)) => tracing::warn!("crates: albums and labels not read: {e:#}"),
+                Err(e) => tracing::warn!("crates: albums and labels not read: {e:#}"),
             }
         }
         let facts = Arc::new(facts);
@@ -2372,10 +2387,17 @@ impl Catalogue {
     /// takes tracks of its own, as what points at them stays with the record. The tracks given a record, taken or let go of.
     /// Blocking.
     pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
-        let now = now();
         let mut db = self.db();
         let tx = db.transaction()?;
-        let held = Held::read(&tx)?;
+        let (given, _) = Self::assign_in(&tx, albums, now())?;
+        tx.commit()?;
+        Ok(given)
+    }
+
+    /// `assign_records` in the caller's transaction, as the first start's merge commits with its map (`first_records`): the
+    /// tracks given a record, taken or let go of, and each album's record, none where nothing there can take one.
+    fn assign_in(tx: &Connection, albums: &[AlbumCopy], now: i64) -> Result<(usize, Vec<Option<i64>>)> {
+        let held = Held::read(tx)?;
         // Who to hold a new album against: the albums that have a record, by name and by release, then the new ones as
         // they get theirs.
         let (mut by_name, mut by_release) = (HashMap::new(), HashMap::new());
@@ -2537,8 +2559,7 @@ impl Catalogue {
                 params![record, now],
             )?;
         }
-        tx.commit()?;
-        Ok(given)
+        Ok((given, records))
     }
 
     /// What a few folders' albums can settle alone: a track with no record takes the one its album's tracks say. Nothing
@@ -3523,6 +3544,11 @@ fn rel_range(dir: Option<&str>) -> Option<(String, String)> {
 /// `served_rows`, of the files right in `dir` only where given (0.9.8: the library builds again just the albums
 /// Cratarr wrote to, `Library::update_dirs`).
 pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Vec<ServedRow>> {
+    rows_in(db, folder, dir, PRESENT)
+}
+
+/// `served_rows_in`, of the files `which` says, a condition on `files` as `f`.
+fn rows_in(db: &Connection, folder: i64, dir: Option<&str>, which: &str) -> Result<Vec<ServedRow>> {
     let range = rel_range(dir);
     let (lo, hi) = range.clone().unzip();
     let within = |col: &str| if range.is_some() { format!(" AND {col} >= ?2 AND {col} < ?3") } else { " AND ?2 IS NULL AND ?3 IS NULL".to_string() };
@@ -3531,7 +3557,7 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
     let mut st = db.prepare(&format!(
         "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime, f.bits, f.rate, f.came, t.record,
            (SELECT count(*) > 1 FROM files o WHERE o.track = f.track)
-         FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND {}{}",
+         FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {which} AND {}{}",
         served("f."),
         within("f.rel")
     ))?;
@@ -4406,7 +4432,7 @@ mod tests {
         assert!(blocks_from(ValueRef::Null).0.is_empty());
     }
 
-    fn retired(cat: &Catalogue, track: i64) -> bool {
+    pub(super) fn retired(cat: &Catalogue, track: i64) -> bool {
         cat.db().query_row("SELECT retired_at FROM tracks WHERE id = ?1", [track], |r| r.get::<_, Option<i64>>(0)).unwrap().is_some()
     }
 
@@ -4640,7 +4666,7 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
-    fn copy(release: Option<&str>, artist: &str, title: &str, tracks: &[(i64, &str, i64)]) -> AlbumCopy {
+    pub(super) fn copy(release: Option<&str>, artist: &str, title: &str, tracks: &[(i64, &str, i64)]) -> AlbumCopy {
         AlbumCopy {
             facts: identity::RecordFacts {
                 release: release.map(str::to_string),
@@ -4653,7 +4679,7 @@ mod tests {
             year: Some(2020),
             tracks: tracks.iter().enumerate().map(|(i, (id, _, _))| (*id, None, Some(i as u32 + 1))).collect(),
             files: Vec::new(),
-            split: false,
+            ..Default::default()
         }
     }
 
@@ -4693,7 +4719,7 @@ mod tests {
     }
 
     /// `n` tracks with no files.
-    fn tracks(n: usize) -> Catalogue {
+    pub(super) fn tracks(n: usize) -> Catalogue {
         let cat = Catalogue::open(None, vec![]).unwrap();
         for _ in 0..n {
             cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
@@ -4701,7 +4727,7 @@ mod tests {
         cat
     }
 
-    fn record_of(cat: &Catalogue, track: i64) -> Option<i64> {
+    pub(super) fn record_of(cat: &Catalogue, track: i64) -> Option<i64> {
         cat.db().query_row("SELECT record FROM tracks WHERE id = ?1", [track], |r| r.get(0)).unwrap()
     }
 
@@ -4728,7 +4754,7 @@ mod tests {
     }
 
     /// A file of a track, as `identify` leaves it.
-    fn file_of_track(cat: &Catalogue, rel: &str, track: i64) {
+    pub(super) fn file_of_track(cat: &Catalogue, rel: &str, track: i64) {
         cat.db().execute("INSERT INTO files (folder, rel, size, mtime, track) VALUES (0, ?1, 1, 1, ?2)", params![rel, track]).unwrap();
     }
 

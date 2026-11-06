@@ -337,8 +337,9 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/catalogue", get(catalogue_status))
             // Lost track ids started afresh (0101, the owner: a lost catalogue.sqlite stops Cratarr until this or a restore).
             .route("/api/catalogue/fresh-ids", post(catalogue_fresh_ids))
-            // The 0.16 first start's migration report (decision 0101), every part.
+            // The 0.16 first start's migration report (decision 0101), every part, and what each old id became.
             .route("/api/admin/migration", get(migration_report))
+            .route("/api/admin/migration/moved", get(migration_moved))
             .route("/api/health/report", get(health_report))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
@@ -1099,8 +1100,8 @@ async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>,
     };
     let s = ctx.serve()?;
     let (classical, kept) = tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, Option<&'static str>)> {
-        let base = s.library.album_base(&album)?.ok_or_else(|| anyhow::anyhow!("That record is not in the library."))?;
-        s.userdata.set_classical_mark(&base, mark.map(Mark::as_str), crate::app::moment::now_secs())?;
+        anyhow::ensure!(s.library.has_album(&album)?, "That record is not in the library.");
+        s.userdata.set_classical_mark(&album, mark.map(Mark::as_str), crate::app::moment::now_secs())?;
         let ix = crate::app::classical::index(&s)?;
         let r = ix.records.get(&album);
         Ok((r.is_some_and(|r| r.classical), r.and_then(|r| r.mark).map(Mark::as_str)))
@@ -1121,7 +1122,7 @@ struct SetOverrides {
 /// Records' facts set by hand (0.13, the owner; decision 0089): `{albums: [ids], set: {field: value
 /// or null}}`, Cratarr's own library's albums. A field given is set (null: reset to what Cratarr finds), one left out
 /// is left as it is; the fields are `type`, `secondary`, `year`, `genres` and `classical` (`userdata::overrides`). Kept
-/// by each record's Music-form id, household-wide; the library is built again with them before the answer, and the
+/// by each record, household-wide; the library is built again with them before the answer, and the
 /// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now.
 async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<serde_json::Value>, ApiError> {
     if b.albums.is_empty() || b.set.is_empty() {
@@ -1136,15 +1137,14 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
     let albums = b.albums;
     let b_words = facts.iter().any(|(f, _)| matches!(f.as_str(), "genres" | "styles" | "moods" | "tags"));
     let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
-        let mut bases = Vec::with_capacity(albums.len());
         for album in &albums {
-            bases.push(s.library.album_base(album)?.ok_or_else(|| anyhow::anyhow!("That record is not in the library."))?);
+            anyhow::ensure!(s.library.has_album(album)?, "That record is not in the library.");
         }
-        s.userdata.set_overrides(&bases, &facts, crate::app::moment::now_secs())?;
+        s.userdata.set_overrides(&albums, &facts, crate::app::moment::now_secs())?;
         s.refresh()?;
         let mut out = serde_json::Map::new();
-        for (album, base) in albums.iter().zip(&bases) {
-            out.insert(album.clone(), serde_json::to_value(s.userdata.overrides_of(base)?)?);
+        for album in &albums {
+            out.insert(album.clone(), serde_json::to_value(s.userdata.overrides_of(album)?)?);
         }
         Ok(out)
     })
@@ -1554,12 +1554,27 @@ async fn album_view(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> 
         Ok(v) => Ok(v),
         Err(e) => Err(e),
     };
+    // A link from before 0.16 opens its record, which the answer's id says. A record nothing plays of now is no answer: that
+    // album's fate is what its old id finds.
+    if source == crate::source::cratarr::KIND.id
+        && let Some(record) = moved_to(&app, &album).await
+        && let Ok(v) = app.playing.album_view(&source, &record).await
+        && !v.rows.is_empty()
+    {
+        return Ok(Json(v));
+    }
     match app.incoming.album_fate(&source, &album).await {
         Some(AlbumFate::Moved(now)) if now != album => Ok(Json(app.playing.album_view(&source, &now).await?)),
         Some(AlbumFate::NotYet(title)) => Err(ToggleError::Refused(format!("{title} is in Music now. The server has not added it yet.")).into()),
         Some(AlbumFate::Deleted(title)) => Err(ToggleError::Refused(format!("{title} was deleted.")).into()),
         _ => Ok(Json(failed?)),
     }
+}
+
+/// What an id from before 0.16 is now (`Catalogue::named_now`).
+async fn moved_to(app: &Arc<App>, old: &str) -> Option<String> {
+    let (catalogue, old) = (app.library.catalogue(), old.to_string());
+    tokio::task::spawn_blocking(move || catalogue.named_now(&old)).await.ok().flatten()
 }
 
 /// A Bandcamp album in the panel (decision 0071, the owner 2026-10-25: "I don't see why not"): its tracks as its page
@@ -4418,6 +4433,17 @@ async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::cat
     let c = app.library.catalogue();
     let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(status.map_err(ToggleError::from)?))
+}
+
+/// What each id that changed at the 0.16 first start became (decision 0101 point 22: what the release run rewrites Home
+/// Assistant's references by; `/api/playlists/moved`'s pattern), as served: `{albums, artists, tracks}`, old id to new. An album
+/// goes by what one copy was known by, the form a link or a reference holds.
+async fn migration_moved(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let catalogue = app.library.catalogue();
+    let moved = tokio::task::spawn_blocking(move || catalogue.moved()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
+    let of = |prefix: &str| moved.ids.iter().filter(|(old, _)| old.starts_with(prefix)).collect::<std::collections::BTreeMap<_, _>>();
+    use crate::serve::ids::{ALBUM, ARTIST, SONG};
+    Ok(Json(json!({ "albums": of(ALBUM), "artists": of(ARTIST), "tracks": of(SONG) })))
 }
 
 /// The 0.16 first start's migration report (decision 0101's rehearsal: compared with production's copy), by part:

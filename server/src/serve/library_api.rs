@@ -79,11 +79,10 @@ async fn album(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Respo
     let s = serve.clone();
     let found = blocking(move || {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
-        let base = s.library.album_base(&id)?.unwrap_or_else(|| id.clone());
         let in_incoming = s.library.in_incoming(&id)?;
         let waiting = s.library.copies_of(&id)?.into_iter().find(|c| c.kind == super::copies::Kind::Incoming).map(|c| c.folder);
         let review = super::review::state_of(&s, &id, waiting, in_incoming)?;
-        Ok(Some((album, s.userdata.tags_of(&base)?, review)))
+        Ok(Some((album, s.userdata.tags_of(&id)?, review)))
     })
     .await;
     match found {
@@ -144,7 +143,7 @@ async fn tag_key(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String)
     let id = id.to_string();
     blocking(move || {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
-        Ok(Some((album.name, s.library.album_base(&id)?.unwrap_or(id))))
+        Ok(Some((album.name, id)))
     })
     .await
 }
@@ -199,8 +198,7 @@ async fn all_tags(State(serve): State<Arc<Serve>>) -> Response {
 async fn tagged(State(serve): State<Arc<Serve>>, Path(tag): Path<String>) -> Response {
     let s = serve.clone();
     let found = blocking(move || {
-        let bases = s.userdata.albums_tagged(&tag)?;
-        s.library.albums_by_base(&bases)
+        s.library.albums_by_id(&s.userdata.albums_tagged(&tag)?)
     })
     .await;
     match found {
