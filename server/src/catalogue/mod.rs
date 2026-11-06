@@ -187,6 +187,8 @@ struct Held {
     record: HashMap<i64, i64>,
     /// How many tracks a record has, retired ones too.
     size: HashMap<i64, usize>,
+    /// How many files of each record are here now: what says whether anything but one album holds it.
+    files: HashMap<i64, usize>,
     /// Tracks with more than one file: they stay with their record, whichever album one of them sits in.
     shared: std::collections::HashSet<i64>,
     /// Tracks back from retirement, not yet held against their albums.
@@ -209,6 +211,8 @@ impl Held {
         }
         let mut st = db.prepare("SELECT track FROM files WHERE track IS NOT NULL GROUP BY track HAVING count(*) > 1")?;
         held.shared = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut st = db.prepare(&format!("SELECT t.record, count(*) FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IS NOT NULL AND {PRESENT_F} GROUP BY t.record"))?;
+        held.files = st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?.collect::<rusqlite::Result<_>>()?;
         Ok(held)
     }
 
@@ -228,13 +232,29 @@ impl Held {
         (n * 2 > tracks.len() && (stayed || n * 2 > self.size.get(&record).copied().unwrap_or(0))).then_some(record)
     }
 
+    /// The record nothing but these tracks' album holds: every file of it here now is one of them, and one beside them
+    /// stayed, as a track back from retirement says nothing of where it landed. Seven files added outside Cratarr to three of
+    /// a record's are no majority for it, and without this it would go, and what names it with it. Of two such, the one it
+    /// holds most of, the lowest on a tie. A file each, as `AlbumCopy::tracks` lists them.
+    fn alone(&self, tracks: &[i64]) -> Option<i64> {
+        let mut held: BTreeMap<i64, (usize, bool)> = BTreeMap::new();
+        for track in tracks {
+            if let Some(record) = self.record.get(track) {
+                let vote = held.entry(*record).or_default();
+                vote.0 += 1;
+                vote.1 |= !self.back.contains(track);
+            }
+        }
+        held.into_iter().filter(|(record, (n, stayed))| *stayed && self.files.get(record) == Some(n)).max_by_key(|(r, (n, _))| (*n, std::cmp::Reverse(*r))).map(|(r, _)| r)
+    }
+
     /// The record an album's tracks say it is, if they do. Failing all of them, the ones free to move: a track shared with
     /// a copy elsewhere stays with its record, so without this an album holding such tracks would never settle, a new
-    /// record born for it at every pass.
+    /// record born for it at every pass. Failing those, the record that has no other album to be in.
     fn vote(&self, album: &AlbumCopy) -> Option<i64> {
         let tracks: Vec<i64> = album.tracks.iter().map(|t| t.0).collect();
         let free: Vec<i64> = tracks.iter().copied().filter(|t| !self.shared.contains(t)).collect();
-        self.most(&tracks).or_else(|| self.most(&free))
+        self.most(&tracks).or_else(|| self.most(&free)).or_else(|| self.alone(&tracks))
     }
 }
 
@@ -2203,8 +2223,8 @@ impl Catalogue {
     }
 
     /// Give these albums their records (0100, docs/records-and-copies.md), every album there is. An album is the record
-    /// more than half of its tracks hold ([`Held::vote`]), where it is the same tracks as the largest album that says so;
-    /// else it is held against the others as a new one is: a copy of
+    /// more than half of its tracks hold, or the one nothing else holds ([`Held::vote`]), where it is the same tracks as the
+    /// largest album that says so; else it is held against the others as a new one is: a copy of
     /// the record it is the same as (`identity::same_record`), or a record of its own. A new track joins its album's
     /// record. A track keeps its record for life, unless its only file now sits in another record's album, where it
     /// moves: a retired id handed to a file of a best-of must not take that album with it. A copy keeps its own track ids
@@ -4569,32 +4589,93 @@ mod tests {
         assert!(!record_retired(&cat, old));
     }
 
-    /// Half of an album holding a record is no vote: the album is held against the others as a new one is, and its tracks
-    /// go with it.
+    /// These tracks each with a file, as the albums of a test lie.
+    fn on_files(cat: &Catalogue, tracks: std::ops::RangeInclusive<i64>) {
+        tracks.for_each(|t| file_of_track(cat, &format!("A/{t}.flac"), t));
+    }
+
+    /// Half of an album holding a record is no vote while another album holds it too: the album is held against the others
+    /// as a new one is, and its tracks go with it.
     #[test]
     fn half_of_an_album_holding_a_record_is_no_vote() {
-        let cat = tracks(4);
-        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        let cat = tracks(5);
+        on_files(&cat, 1..=5);
+        cat.assign_records(&[album("Half", &[1, 2, 3])]).unwrap();
         let old = record_of(&cat, 1);
-        assert_eq!(cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap(), 4);
-        assert_ne!(record_of(&cat, 3), old);
-        assert_eq!(record_of(&cat, 1), record_of(&cat, 3));
+        assert_eq!(cat.assign_records(&[album("Half", &[1, 2, 4, 5]), album("Rest", &[3])]).unwrap(), 4);
+        assert_ne!(record_of(&cat, 4), old);
+        assert_eq!(record_of(&cat, 1), record_of(&cat, 4));
+        assert_eq!(record_of(&cat, 3), old, "the other album keeps it");
+    }
+
+    /// m5, the owner: three tracks of a record and seven added outside Cratarr in one pass are no majority, but nothing else
+    /// holds it, so it stays, ten tracks, with all that names it.
+    #[test]
+    fn an_album_keeps_its_id_when_most_of_it_came_in_at_once() {
+        let cat = tracks(10);
+        on_files(&cat, 1..=10);
+        cat.assign_records(&[album("Grown", &[1, 2, 3])]).unwrap();
+        let (kept, made) = (record_of(&cat, 1), records_made(&cat));
+        let grown = album("Grown", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(cat.assign_records(&[grown.clone()]).unwrap(), 7);
+        assert!((1..=10).all(|t| record_of(&cat, t) == kept));
+        assert_eq!(records_made(&cat), made, "no record born for it");
+        assert_eq!(cat.assign_records(&[grown]).unwrap(), 0, "settled");
+
+        // A file of it gone a while holds nothing: what is left of the record is what is here.
+        let cat = tracks(11);
+        on_files(&cat, 1..=11);
+        cat.assign_records(&[album("Grown", &[1, 2, 3, 4])]).unwrap();
+        let kept = record_of(&cat, 1);
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE track = 4", []).unwrap();
+        cat.assign_records(&[album("Grown", &[1, 2, 3, 5, 6, 7, 8, 9, 10, 11])]).unwrap();
+        assert_eq!(record_of(&cat, 11), kept);
+    }
+
+    /// Where a record has a file in another album it has somewhere to be, and the majority rule stands.
+    #[test]
+    fn another_album_holding_the_record_leaves_the_majority_to_stand() {
+        let cat = tracks(11);
+        on_files(&cat, 1..=11);
+        cat.assign_records(&[album("Whole", &[1, 2, 3, 4])]).unwrap();
+        let kept = record_of(&cat, 1);
+        cat.assign_records(&[album("Grown", &[1, 2, 3, 5, 6, 7, 8, 9, 10, 11]), album("Left", &[4])]).unwrap();
+        assert_eq!(record_of(&cat, 4), kept);
+        assert_ne!(record_of(&cat, 11), kept);
+        assert_eq!(record_of(&cat, 1), record_of(&cat, 11), "its free tracks went with it");
+    }
+
+    /// What came back by its name says nothing of where it landed, however little is left of its record.
+    #[test]
+    fn a_returned_track_is_no_album_that_holds_its_record_alone() {
+        let cat = tracks(5);
+        on_files(&cat, 1..=5);
+        cat.assign_records(&[album("Old", &[1, 2])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[1, 2]);
+        cat.db().execute("DELETE FROM files WHERE track = 2", []).unwrap();
+        cat.assign_records(&[]).unwrap();
+        come_back(&cat, &[1]);
+        cat.assign_records(&[album("Best Of", &[1, 3, 4, 5])]).unwrap();
+        assert_ne!(record_of(&cat, 3), Some(old));
+        assert!(record_retired(&cat, old));
     }
 
     /// No track of it retired, so nothing else says it went; and left with no tracks and no retirement, it would read as a
     /// record never had, offering Want for what is here under another id.
     #[test]
     fn a_record_whose_tracks_all_moved_away_retires() {
-        let cat = tracks(4);
-        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        let cat = tracks(10);
+        on_files(&cat, 1..=10);
+        cat.assign_records(&[album("Whole", &[1, 2, 3, 4])]).unwrap();
         let old = record_of(&cat, 1).unwrap();
-        cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap();
+        cat.assign_records(&[album("One", &[1, 2, 5, 6, 7]), album("Two", &[3, 4, 8, 9, 10])]).unwrap();
         let new = record_of(&cat, 1).unwrap();
         assert_ne!(new, old);
         assert!(record_retired(&cat, old), "born anew: the tracks left it");
         assert!(!record_retired(&cat, new));
         let title: String = cat.db().query_row("SELECT title FROM records WHERE id = ?1", [old], |r| r.get(0)).unwrap();
-        assert_eq!(title, "Half", "it keeps what it was");
+        assert_eq!(title, "Whole", "it keeps what it was");
 
         let cat = tracks(4);
         cat.assign_records(&[album("Lone", &[1]), album("Big", &[2, 3, 4])]).unwrap();

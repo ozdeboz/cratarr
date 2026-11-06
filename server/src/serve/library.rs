@@ -2368,6 +2368,24 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// m5 on a real build: a favourite names `al-<record>`, so more files added at once than it had must leave that id served.
+    #[test]
+    fn a_record_stays_served_under_its_id_when_more_came_in_than_it_had() {
+        let (root, cat) = catalogue_in("came-in");
+        add_files(&cat, &root, &[("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two"), ("A/03 Three.flac", "A", "Three")]);
+        let lib = Library::open(None).unwrap();
+        build_now(&lib, &cat);
+        let id: String = lib.db().query_row("SELECT id FROM albums", [], |r| r.get(0)).unwrap();
+        let more: Vec<(String, String)> = (4..=10).map(|n| (format!("A/{n:02} More.flac"), format!("More {n}"))).collect();
+        let more: Vec<(&str, &str, &str)> = more.iter().map(|(rel, title)| (rel.as_str(), "A", title.as_str())).collect();
+        add_files(&cat, &root, &more);
+        build_now(&lib, &cat);
+        assert_eq!(lib.counts().unwrap().0, 10);
+        assert_eq!(one_number(&lib, "SELECT count(*) FROM albums"), 1);
+        assert_eq!(lib.album(&id).unwrap().expect("still served").song_count, 10);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// A copy's kind decides which copy `songs` holds, so a library that changes kind leaves no album as it was.
     #[test]
     fn a_changed_kind_builds_whole() {
