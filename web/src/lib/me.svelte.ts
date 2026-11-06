@@ -17,7 +17,10 @@ export async function loadMe() {
   // A session whose sign-out did not get through stands, and /api/me would take it up: Cratarr is told that first.
   if (signOutOwed()) return settleSignOut();
   try {
-    Object.assign(me, { app_password: undefined, devices: undefined, sessions: undefined }, await getMe(), { known: true });
+    const answer = await getMe();
+    // A sign-out began while it was asked: it speaks of a session on its way out, and the app would take her back on it.
+    if (signOutOwed()) return;
+    Object.assign(me, { app_password: undefined, devices: undefined, sessions: undefined }, answer, { known: true });
     accountLearnt(me.name);
     toApp({ type: 'account', name: me.name ?? '' });
     // Signed in (or again): what the server can do, read with the account (its list is a signed-in one).

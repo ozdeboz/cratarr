@@ -148,8 +148,10 @@ object Plays {
     }
 
     /** The account signed in, as Cratarr's `/api/me` says (blocking), this device's from now on ([Who]); null when it
-     *  did not say (not reached; nobody signed in, which [Who] learns too): nothing is told then. */
+     *  did not say (not reached; nobody signed in, which [Who] learns too): nothing is told then. An answer that no
+     *  longer [stands] changes nothing here, and its account's plays still go: Cratarr can still hear them. */
     private fun learn(app: Context, server: String): String? {
+        val asked = Who.current(app)
         var nobody = false
         val account = try {
             val c = Net.open(app, "$server/api/me")
@@ -167,12 +169,18 @@ object Plays {
             null
         }
         when {
+            !stands(asked, Who.current(app), Sessions.signingOut) -> Log.i(TAG, "an answer from before a change")
             account != null -> Who.set(app, account)
             nobody -> Who.set(app, null)
             else -> Log.i(TAG, "whose the plays are not known yet")
         }
         return account
     }
+
+    /** Whether an answer still says who is signed in: nothing moved since it was asked, with [asked] signed in then and
+     *  [now] since, and no sign-out under way ([signingOut]), where the session it names stands until the page ends it.
+     *  Taken up all the same, it signs the one leaving back in. */
+    fun stands(asked: String, now: String, signingOut: Boolean): Boolean = asked == now && !signingOut
 
     /** The account a `/api/me` answer names: its name, or "" with signing in off (one user); null when it names none. */
     fun accountOf(code: Int, body: String?): String? = when {

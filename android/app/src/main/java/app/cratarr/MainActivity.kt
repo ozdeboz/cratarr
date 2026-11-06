@@ -473,7 +473,8 @@ class MainActivity : AppCompatActivity() {
             // signing in off), at once rather than at the app's own next ask.
             "account" -> {
                 val name = message.optString("name", "")
-                lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, name) }
+                // One sent before a sign-out began names the session ending.
+                if (!Sessions.signingOut) lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, name) }
             }
             // Cratarr told the page no one is signed in, and in Local or a server's mode the page stays: no sign-in page for
             // [Sessions.loaded] to see.
@@ -482,14 +483,15 @@ class MainActivity : AppCompatActivity() {
             // when asked, then nobody's things show; answered, so the page signs out after.
             "sign-out" -> {
                 val remove = message.optBoolean("remove")
+                // First of all: the flush alone takes seconds, and an answer landing in them must not sign her back in. The
+                // page ends its session with a request, no page load for the client to see, and then opens the app's own
+                // page: that load ends both addresses' (0.12), or the other's, still good, would sign it back in.
+                Sessions.signOutAsked()
                 lifecycleScope.launch(Dispatchers.IO) {
                     Plays.flush(this@MainActivity)
                     Scrobblers.flush(this@MainActivity)
                     if (remove) Kept.releaseAccount(this@MainActivity, Who.current(this@MainActivity))
                     Who.set(this@MainActivity, null)
-                    // The page ends its session with a request, no page load for the client to see, and then opens the app's
-                    // own page: that load ends both addresses' (0.12), or the other's, still good, would sign it back in.
-                    Sessions.signOutAsked()
                     withContext(Dispatchers.Main) { reply.postMessage(JSONObject().put("type", "signed-out").toString()) }
                 }
             }

@@ -92,7 +92,8 @@ object Sessions {
     fun lacking(here: String?, there: String?): Boolean = here == null && there != null
 
     /** The page asked to sign out ([signOutAsked]): its next load ends the session on both addresses. */
-    @Volatile private var signingOut = false
+    @Volatile var signingOut = false
+        private set
     /** Per address: the other's session taken for its sign-in page, so the same one is never taken twice. */
     private val tried = ConcurrentHashMap<String, String>()
 

@@ -26,7 +26,7 @@ Object.assign(g.location as object, { assign: (to: string) => void (goneTo = to)
 /** What Cratarr was asked to do, in order. */
 const steps: string[] = [];
 const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } });
-let me: () => Response = () => json({ name: 'ann', admin: false, permissions: {} });
+let me: () => Response | Promise<Response> = () => json({ name: 'ann', admin: false, permissions: {} });
 globalThis.fetch = (async (input: string, init?: RequestInit) => {
   const path = String(input);
   if (init?.method === 'POST') steps.push(`POST ${path}`);
@@ -35,12 +35,12 @@ globalThis.fetch = (async (input: string, init?: RequestInit) => {
   return json({});
 }) as typeof fetch;
 
-const { accountKey, accountLearnt } = await import('../../src/lib/account.ts');
+const { accountKey, accountLearnt, signOutBegun, signOutTold } = await import('../../src/lib/account.ts');
 const { inApp } = await import('../../src/lib/app.svelte.ts');
 const { keepCoversAway } = await import('../../src/lib/coversAway.svelte.ts');
 const { shelf } = await import('../../src/lib/shelfStore.svelte.ts');
 const { signOut } = await import('../../src/lib/signOut.svelte.ts');
-const { loadMe } = await import('../../src/lib/me.svelte.ts');
+const { loadMe, me: signedIn } = await import('../../src/lib/me.svelte.ts');
 const { prefs } = await import('../../src/lib/prefs.svelte.ts');
 const { keepDraft } = await import('../../src/lib/crates.svelte.ts');
 
@@ -119,6 +119,28 @@ test('with sign-in off there is one user, and the app hears so', async () => {
   assert.deepEqual(toTheApp.filter((m) => m.type === 'account'), [{ type: 'account', name: '' }]);
   me = signedIn;
   await loadMe();
+});
+
+test('an answer asked for before a sign-out, landing after it began, is nobody’s: nothing of it taken up, and the app not told', async () => {
+  const answered = me;
+  accountLearnt('ann');
+  await loadMe();
+  let answer = (_: Response) => {};
+  let asked = false;
+  me = () => new Promise<Response>((done) => ((asked = true), (answer = done)));
+  const answering = loadMe();
+  await turns();
+  assert.ok(asked);
+  signOutBegun();
+  toTheApp.length = 0;
+  answer(json({ name: 'ann', admin: true, permissions: {} }));
+  await answering;
+  assert.equal(accountKey(), null);
+  assert.deepEqual(toTheApp.filter((m) => m.type === 'account'), [], 'it would sign her back in');
+  assert.equal(signedIn.admin, false, 'what it says of her is not read in');
+  signOutTold();
+  accountLearnt('ann');
+  me = answered;
 });
 
 test("a session ended while the app plays Local or another server: the page stays, and the app is told it is nobody's", async () => {

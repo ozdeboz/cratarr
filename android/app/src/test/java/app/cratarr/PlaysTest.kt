@@ -31,6 +31,15 @@ class PlaysTest {
     }
 
     @Test
+    fun anAnswerStandsOnlyIfNothingMovedWhileItWasAsked() {
+        assertTrue(Plays.stands("@ann", "@ann", false))
+        assertTrue("the first to sign in here", Plays.stands("-", "-", false))
+        assertFalse("signed out while it was asked", Plays.stands("@ann", "-", false))
+        assertFalse("and another come", Plays.stands("@ann", "@bo", false))
+        assertFalse("asked with nobody set, her session standing until the page ends it", Plays.stands("-", "-", true))
+    }
+
+    @Test
     fun nobodySignedInIsAnAnswerNotASilence() {
         assertTrue(Plays.signedOut(401, null))
         assertTrue(Plays.signedOut(404, """{"error":"No one is signed in."}"""))

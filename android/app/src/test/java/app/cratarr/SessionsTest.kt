@@ -63,6 +63,18 @@ class SessionsTest {
     }
 
     @Test
+    fun aSignOutIsKnownBeforeAnythingOfItCanWait() {
+        val main = source("MainActivity.kt")
+        val signOut = main.substringAfter("\"sign-out\" -> {")
+        assertTrue("the flush alone takes seconds, and answers land in them", signOut.indexOf("Sessions.signOutAsked()") < signOut.indexOf("Plays.flush"))
+        val account = main.substringAfter("\"account\" -> {").substringBefore("\"nobody\" ->")
+        assertTrue("the page's own answer, on its way across the bridge", "Sessions.signingOut" in account)
+        val learn = source("Plays.kt").substringAfter("private fun learn(").substringBefore("\n    }\n")
+        assertTrue("noted before asking", learn.indexOf("Who.current(app)") < learn.indexOf("Net.open"))
+        assertTrue("stands(asked, Who.current(app), Sessions.signingOut)" in learn)
+    }
+
+    @Test
     fun thePageOpensAsTheAppsAccountOnEitherAddress() {
         val keep = source("MainActivity.kt").substringAfter("private fun keepPagePrefs(").substringBefore("\n    }\n")
         assertTrue("localStorage.setItem('cratarr-who', \${JSONObject.quote(Who.forPage(who))})" in keep)
