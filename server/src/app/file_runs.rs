@@ -106,6 +106,10 @@ pub struct FieldView {
     pub field: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    /// The library it is in, as a record's `copies` name it: only where a track's copies change differently, so it shows once
+    /// a copy, and a cover's where its copies hold different ones.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
     pub before: Vec<String>,
     pub after: Vec<String>,
     pub from: String,
@@ -434,8 +438,29 @@ fn restore_one(path: &Path, after: &[(String, Vec<String>)], before: &[(String, 
     write(path, before).map(|()| true)
 }
 
+/// A field's rows that are not the same in every file of the record, by track: what a track's copies change alike is said
+/// once, and where they differ each row says its library.
+fn by_track(rows: Vec<(FieldView, Option<String>)>) -> Vec<FieldView> {
+    let same = |a: &FieldView, b: &FieldView| (&a.track, &a.before, &a.after, &a.from) == (&b.track, &b.before, &b.after, &b.from);
+    let mut kept: Vec<(FieldView, Option<String>)> = Vec::new();
+    for (row, library) in rows {
+        if !kept.iter().any(|(k, _)| same(k, &row)) {
+            kept.push((row, library));
+        }
+    }
+    let told: Vec<bool> = kept.iter().map(|(row, library)| kept.iter().any(|(other, theirs)| other.track == row.track && theirs != library)).collect();
+    kept.into_iter().zip(told).map(|((row, library), told)| FieldView { library: library.filter(|_| told), ..row }).collect()
+}
+
 /// The review sheet of a proposal (or of a run, `written` per record).
 pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite], written: bool) -> PlanView {
+    let roots: Vec<PathBuf> = crate::serve::instance().filter(|s| s.has_catalogue()).map_or_else(Vec::new, |s| s.catalogue().folders().iter().map(|(_, root)| root.to_path_buf()).collect());
+    view_in(kind, title, records, files, written, &roots)
+}
+
+/// `view`, its libraries these folders.
+fn view_in(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite], written: bool, roots: &[PathBuf]) -> PlanView {
+    let library_of = |path: &Path| roots.iter().find(|r| path.starts_with(r)).map(|r| r.display().to_string());
     let records = records
         .iter()
         .filter_map(|r| {
@@ -453,20 +478,20 @@ pub fn view(kind: &str, title: &str, records: &[RunRecord], files: &[FileWrite],
                 v
             });
             for name in names {
-                let rows: Vec<FieldView> = mine
+                let rows: Vec<(FieldView, Option<String>)> = mine
                     .iter()
                     .filter_map(|f| {
                         let after = f.after.iter().find(|(n, _)| n == name)?.1.clone();
                         let before = f.before.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_default();
                         let from = f.from.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()).unwrap_or_default();
-                        Some(FieldView { field: name.clone(), track: f.track.clone(), before, after, from, certainty: None, options: Vec::new() })
+                        Some((FieldView { field: name.clone(), track: f.track.clone(), library: None, before, after, from, certainty: None, options: Vec::new() }, library_of(&f.path)))
                     })
                     .collect();
                 // The same change in every file of the record: said once.
-                let same = rows.len() == mine.len() && rows.windows(2).all(|w| (&w[0].before, &w[0].after, &w[0].from) == (&w[1].before, &w[1].after, &w[1].from));
+                let same = rows.len() == mine.len() && rows.windows(2).all(|w| (&w[0].0.before, &w[0].0.after, &w[0].0.from) == (&w[1].0.before, &w[1].0.after, &w[1].0.from));
                 match (same, rows.first()) {
-                    (true, Some(first)) => fields.push(FieldView { track: None, ..first.clone() }),
-                    _ => fields.extend(rows),
+                    (true, Some((first, _))) => fields.push(FieldView { track: None, ..first.clone() }),
+                    _ => fields.extend(by_track(rows)),
                 }
             }
             Some(RecordView {
@@ -875,7 +900,7 @@ pub async fn run(app: &super::App, token: &str) -> Result<(Status, PlanView)> {
             Event::AlbumReplaced { album_id, title, .. } => (album_id, title, Vec::new(), Vec::new()),
             Event::AlbumRejected { album_id, title, folder, dir, .. } => (album_id, title, vec![place(&(*folder, dir.clone()))], vec!["the trash".to_string()]),
         };
-        let fields = if before.is_empty() { Vec::new() } else { vec![FieldView { field: "folder".into(), track: None, before, after, from: status.what.clone(), certainty: None, options: Vec::new() }] };
+        let fields = if before.is_empty() { Vec::new() } else { vec![FieldView { field: "folder".into(), track: None, library: None, before, after, from: status.what.clone(), certainty: None, options: Vec::new() }] };
         let record = RecordView { album: album.clone(), title: title.clone(), artist: String::new(), files: 0, fields, written: None, undone: Some(entry.undone), stamp: None };
         let sheet = PlanView { kind: status.what.clone(), title: status.title.clone(), records: vec![record], making: false };
         return Ok((status, sheet));
@@ -1555,6 +1580,60 @@ mod tests {
         let p = ticked(now, &s(&["a", "b"]), Some(&stamps));
         assert_eq!(p.files.iter().map(|f| f.album.as_str()).collect::<Vec<_>>(), ["a"], "c was not ticked; b set aside");
         assert_eq!(p.failed, vec![RunFailed { album: "b".into(), title: None, artist: None, file: None, why: "changed since it was planned".into() }]);
+    }
+
+    /// One track, two files: a change they share is one row, as the sheet shows a track. Where they differ it cannot be, and
+    /// each row says its library, or the two read the same.
+    #[test]
+    fn the_sheet_says_a_track_once_and_names_the_library_where_its_copies_differ() {
+        let file = |path: &str, track: Option<&str>, before: &str| FileWrite {
+            album: "a".into(),
+            path: path.into(),
+            track: track.map(str::to_string),
+            before: vec![("bpm".into(), s(&[before]))],
+            after: vec![("bpm".into(), s(&["60"]))],
+            from: vec![("bpm".into(), "halved".into())],
+            undone: false,
+            whole: None,
+        };
+        let records = [RunRecord { album: "a".into(), title: "A".into(), artist: "B".into() }];
+        let roots = [PathBuf::from("/music"), PathBuf::from("/incoming")];
+        let rows = |files: &[FileWrite]| -> Vec<(Option<String>, Option<String>, Vec<String>)> {
+            let v = view_in("tempo", "Tempo", &records, files, false, &roots);
+            assert_eq!(v.records[0].files, files.len(), "what changes is still every file");
+            v.records[0].fields.iter().map(|f| (f.track.clone(), f.library.clone(), f.before.clone())).collect()
+        };
+        let one = || Some("One".to_string());
+        let (music, incoming) = (Some("/music".to_string()), Some("/incoming".to_string()));
+        let files = [file("/music/1.flac", Some("One"), "120"), file("/incoming/1.mp3", Some("One"), "120"), file("/music/2.flac", Some("Two"), "100"), file("/incoming/2.mp3", Some("Two"), "100")];
+        assert_eq!(rows(&files), [(one(), None, s(&["120"])), (Some("Two".to_string()), None, s(&["100"]))]);
+        let files = [file("/music/1.flac", Some("One"), "120"), file("/incoming/1.mp3", Some("One"), "118")];
+        assert_eq!(rows(&files), [(one(), music.clone(), s(&["120"])), (one(), incoming.clone(), s(&["118"]))]);
+        // A cover, on no track: two copies' folders.
+        let files = [file("/music/A", None, "its cover"), file("/incoming/A", None, "none")];
+        assert_eq!(rows(&files), [(None, music, s(&["its cover"])), (None, incoming, s(&["none"]))]);
+        // Two tracks of one name in one library: no library tells them apart.
+        let files = [file("/music/1.flac", Some("One"), "120"), file("/music/9.flac", Some("One"), "118")];
+        assert_eq!(rows(&files), [(one(), None, s(&["120"])), (one(), None, s(&["118"]))]);
+    }
+
+    /// A stop between two copies: the first is in the entry with its Undo, and the second, not begun, is in neither.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cover_stopped_between_its_copies_undoes_the_copy_it_reached() {
+        use super::super::every_copy::{picture, two_copies};
+        let c = two_copies("cover-cut", true);
+        let p = super::super::covers::proposal(&c.serve, &c.album, &picture(200), "uploaded").unwrap();
+        let (_j, mut e) = entry(&p);
+        assert!(e.run.files.is_empty(), "a cover is in it on its way, not before");
+        let mut first = p.files[0].clone();
+        apply_whole(&mut first, Path::new("unused"), 0, |f| e.whole_file(f)).unwrap();
+        assert_eq!(e.run.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(), [first.path.clone()]);
+        assert!(reached(&e.run.files[0]).unwrap());
+        assert!(first.path.join("cover.jpg").exists());
+        let second = &p.files[1].path;
+        assert!(!second.join("cover.jpg").exists(), "the second not begun");
+        restore_whole(&first.path, first.whole.as_ref().unwrap()).unwrap();
+        assert!(!first.path.join("cover.jpg").exists(), "the copy it reached put back");
     }
 
     #[test]

@@ -2021,6 +2021,12 @@ impl Catalogue {
         self.db().execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, track]).unwrap();
     }
 
+    /// Tests elsewhere: a file found wrong, as a read would leave it.
+    #[cfg(test)]
+    pub fn issue_for_tests(&self, folder: i64, rel: &str, issue: &str, detail: &str) {
+        self.db().execute("UPDATE files SET issue = ?3, issue_detail = ?4 WHERE folder = ?1 AND rel = ?2", params![folder, rel, issue, detail]).unwrap();
+    }
+
     /// Tests elsewhere: a file's tags as a read would leave them.
     #[cfg(test)]
     pub fn tag_for_tests(&self, folder: i64, rel: &str, tags: &[(&str, &str)]) {

@@ -23,6 +23,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -137,6 +138,7 @@ class PlayerService : MediaSessionService() {
         // Its own log (decision 0045): the service's start, and a crash, written down.
         LinkLog.catchCrashes(this)
         LinkLog.add(this, "info", "playon", "service started")
+        DeviceWatch.start(this)
         prefs = Prefs(this)
         RustRules.set(this, prefs.rustRules)
         notifications = getSystemService(NotificationManager::class.java)
@@ -479,6 +481,7 @@ class PlayerService : MediaSessionService() {
      */
     private inner class Course(private val player: ExoPlayer) : Player.Listener {
         private var pastTold = -1
+        private val unprotected = DeviceWatch.Unprotected(NOT_FOREGROUND_MS)
 
         private fun log(level: String, what: String, vararg fields: Pair<String, Any?>) =
             LinkLog.add(this@PlayerService, level, "player", what, "index" to player.currentMediaItemIndex, "at_ms" to player.currentPosition, *fields)
@@ -487,6 +490,17 @@ class PlayerService : MediaSessionService() {
             override fun run() {
                 val d = player.duration
                 val i = player.currentMediaItemIndex
+                val foreground = foregroundServiceType != ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
+                if (player.isPlaying && unprotected.playing(foreground, SystemClock.elapsedRealtime())) {
+                    log(
+                        "warn",
+                        "playing, not foreground",
+                        "count" to player.mediaItemCount,
+                        "stay_ready" to prefs.stayReady,
+                        "notifications_allowed" to notifications.areNotificationsEnabled(),
+                        "notification" to notifications.activeNotifications.any { it.id == DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID },
+                    )
+                }
                 if (player.isPlaying && d != C.TIME_UNSET && player.currentPosition > d + PAST_END_MS && pastTold != i) {
                     pastTold = i
                     log("warn", "past its end", "length_ms" to d, "count" to player.mediaItemCount, "state" to player.playbackState)
@@ -506,7 +520,7 @@ class PlayerService : MediaSessionService() {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isPlaying) check.run()
+            if (isPlaying) check.run() else unprotected.stopped()
         }
     }
 
@@ -679,8 +693,14 @@ class PlayerService : MediaSessionService() {
         }
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        DeviceWatch.trimmed(this, level)
+    }
+
     override fun onDestroy() {
         LinkLog.add(this, "info", "playon", "service stopped")
+        DeviceWatch.stop()
         main.removeCallbacksAndMessages(null)
         saveDevice.run()
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
@@ -874,6 +894,8 @@ class PlayerService : MediaSessionService() {
         /** Playing on this far past a track's length is written down ([Course]), looked at this often. */
         private const val PAST_END_MS = 1_000L
         private const val PAST_CHECK_MS = 2_000L
+        /** Playing this long with the service out of the foreground is written down ([Course]). */
+        private const val NOT_FOREGROUND_MS = 30_000L
         /** The most tracks a hold winds on into past its own: the server's (0.9.14-2; 8 before, a hold back stopped at
          *  the eighth track's start). */
         private const val WIND_THROUGH = 64

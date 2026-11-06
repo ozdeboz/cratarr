@@ -136,6 +136,13 @@ class Prefs(context: Context) {
             p.edit().putBoolean(STAY_READY, value).apply()
         }
 
+    /** When the last run's end written down happened ([DeviceWatch]). */
+    var exitsSeen: Long
+        get() = p.getLong(EXITS_SEEN, 0L)
+        set(value) {
+            p.edit().putLong(EXITS_SEEN, value).apply()
+        }
+
     /** Downloads as the files are ([QUALITY_ORIGINAL]) or as Cratarr's smaller copies ([QUALITY_SMALLER]). */
     var downloadQuality: String
         get() = p.getString(DOWNLOAD_QUALITY, QUALITY_ORIGINAL) ?: QUALITY_ORIGINAL
@@ -595,6 +602,7 @@ class Prefs(context: Context) {
         const val PAGE_PREFS = "page_prefs"
         const val PLAYER_NAME = "player_name"
         const val STAY_READY = "stay_ready"
+        const val EXITS_SEEN = "exits_seen"
         const val TARGET = "target"
         const val TARGET_WHY = "target_why"
         const val TARGET_SELF = "self"

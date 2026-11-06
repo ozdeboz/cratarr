@@ -102,20 +102,20 @@ pub(crate) fn write(track: &Path, set: &[(&'static str, Option<String>)]) -> Res
     )
 }
 
-/// An album's tracks' files (as Renumber reads them).
-fn track_paths(album: &str, at: Option<&(i64, String)>) -> Result<Vec<PathBuf>> {
-    Ok(super::renumber::tracks_in(album, at)?.0.into_iter().map(|t| t.path).collect())
+/// The files a fix of an album writes: every copy's, or the copy `at` alone.
+fn track_paths(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Vec<PathBuf>> {
+    Ok(super::renumber::files_in(served, album, at)?.into_iter().map(|t| t.path).collect())
 }
 
 /// The fixes of a finding (`library:year`, `library:genre`, `library:album-artist`, `library:musicbrainz`), for each of
 /// its albums that has one, the certain first. Blocking parts apart.
 pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
     // Tracks shorter than their length (0.9.14): a fix a track.
+    let served = app.served.clone().context("Cratarr's own library is not open")?;
     if key.starts_with("files:") {
         let k = key.to_string();
-        return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&k)).await?;
+        return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&served, &k)).await?;
     }
-    let served = app.served.clone().context("Cratarr's own library is not open")?;
     let (s, k) = (served.clone(), key.to_string());
     // Year and genre from what is kept; album artist and MusicBrainz ids from a match (`matching`), its albums here.
     // Every library in use's albums, as Health finds them (the owner, 2026-11-02).
@@ -163,7 +163,7 @@ fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a
                 None => continue,
             },
         };
-        let paths = track_paths(album, at)?;
+        let paths = track_paths(served, album, at)?;
         out.push(Fix {
             id: format!("year:{album}"),
             album: album.to_string(),
@@ -190,7 +190,7 @@ fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'
         let Some(found) = stored.records.get(album) else { continue };
         let of = move |kind: Kind| found.kinds.iter().filter(move |k| k.kind == kind).flat_map(move |k| k.words.iter().map(move |w| (kind, w)));
         let Some((_, best)) = of(Kind::Genre).next() else { continue };
-        let paths = track_paths(album, at)?;
+        let paths = track_paths(served, album, at)?;
         let said = |w: &super::words::store::Word| names(&w.sources.iter().map(|s| s.name().to_string()).collect::<Vec<_>>());
         let sources = said(best);
         let candidates: Vec<Choice> = of(Kind::Genre)
@@ -237,7 +237,7 @@ pub fn ruled_albums(served: &crate::serve::Serve) -> Result<Vec<String>> {
 
 /// An album's rule fix: its tracks' genres and artists as the rules name them, where any differs (each value split as
 /// the rules split it, aliased, written joined by "; "); certain, the rules being the administrator's own.
-fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
+pub(super) fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)>) -> Result<Option<Fix>> {
     let rules = served.rules();
     if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
         return Ok(None);
@@ -250,7 +250,7 @@ fn rule_fix(served: &crate::serve::Serve, album: &str, at: Option<&(i64, String)
     ];
     let names: Vec<&str> = fields.iter().map(|f| f.0).collect();
     let (mut writes, mut said) = (Vec::new(), Vec::<String>::new());
-    for path in track_paths(album, at)? {
+    for path in track_paths(served, album, at)? {
         let now = values(&path, &names)?;
         let mut set = Vec::new();
         for ((name, aliases, seps, keep), value) in fields.iter().zip(now) {
