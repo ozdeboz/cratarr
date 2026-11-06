@@ -595,6 +595,9 @@ async function evict(keep = BEHIND) {
   await waitUpdate();
   try {
     sb.remove(sb.buffered.start(0), until);
+    // Its beginning gone, that stream is no longer one coming: a place there is fetched, not waited for (Repeat one back
+    // to the start of a stream's first track waited 4 s with the next one sounding).
+    streamFrom = null;
     await waitUpdate();
   } catch {
     /* the stream moved on; nothing to drop */
@@ -845,6 +848,9 @@ async function fresh(index: number, from = 0, play = true) {
   sb = null;
   mime = null;
   local.index = index;
+  // Before its append: the queue's last ends the stream, and repeat all goes on past it. Not all who land here go by
+  // `fill` (a wind's landing).
+  nextRound();
   local.position = from;
   local.error = null;
   wantGain(index);
@@ -921,7 +927,6 @@ function tick() {
       // set the index themselves, so they still move on.)
       if (local.repeat === 'one' && w.seg.index === local.index + 1) return jump(local.index);
       local.index = w.seg.index;
-      nextRound();
       fill();
     }
     local.position = tape.rewindPos ?? inTrack(w);
@@ -1174,6 +1179,8 @@ if (audio) {
   audio.addEventListener('play', tick);
   audio.addEventListener('pause', tick);
   audio.addEventListener('ended', () => {
+    // Repeat one on the queue's last track: no next one for the clock to see the stream cross into, so it is here.
+    if (local.repeat === 'one' && !handed()) return void fresh(local.index, 0, true);
     local.paused = true;
   });
 }
@@ -1785,8 +1792,10 @@ let filling = false;
 /** The own tracks Radio has asked inserts for (by entry, or place and id): one ask per track. */
 const insertedFor = new Set<string>();
 
-/** This page's own stream: Radio's inserts for the playing own track, and Autoplay's tracks when the queue runs low. */
+/** This page's own stream, after any change of track or of what comes next: under repeat all the next round where the
+ *  last track plays, Radio's inserts for the playing own track, and Autoplay's tracks when the queue runs low. */
 function fill() {
+  nextRound();
   insertRadio();
   fillAutoplay();
 }
@@ -1856,7 +1865,7 @@ function fillAutoplay() {
  *  amended: those added by hand play once; shuffled anew when the queue plays shuffled, not starting with the track
  *  that just played). The stream then goes on into it without a gap. */
 function nextRound() {
-  if (local.repeat !== 'all' || local.index < 0 || local.index !== local.queue.length - 1) return;
+  if (handed() || local.repeat !== 'all' || local.index < 0 || local.index !== local.queue.length - 1) return;
   const byPlace = new Map<number, LocalTrack>();
   for (const t of local.queue) if (!t.lane && t.n !== undefined) byPlace.set(t.n, t);
   let round = byPlace.size
