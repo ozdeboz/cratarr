@@ -4,9 +4,10 @@
 //! at once at the first start of 0.16.
 //!
 //! A table's rows that meet under one key fold by that table's rule: read, group, fold, delete, insert, as `UPDATE OR IGNORE`
-//! would lose what clashes. Safe to repeat: once moved, a row names no old id.
+//! would lose what clashes. Safe to repeat: once moved, a row names no old id. The first start moves the artists and the albums
+//! by the same rules (`walk`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::Result;
 use rusqlite::types::Value;
@@ -14,21 +15,23 @@ use rusqlite::{Transaction, params, params_from_iter};
 
 use super::offline::{ChangeKind, Op, item_id, log};
 use super::{Annotation, UserData};
+use crate::moved::{Report, Table};
+use crate::serve::ids;
 
 /// A table's row: its values, in the order of `Columns`.
-type Row = Vec<Value>;
+pub(super) type Row = Vec<Value>;
 
 /// A table's columns, for a rule to find its fields by name.
-struct Columns(Vec<String>);
+pub(super) struct Columns(Vec<String>);
 
 impl Columns {
-    fn at(&self, name: &str) -> usize {
+    pub(super) fn at(&self, name: &str) -> usize {
         self.0.iter().position(|c| c == name).unwrap_or_else(|| panic!("no column {name}"))
     }
 }
 
 /// A row's number in a column, none where it holds none.
-fn int(row: &[Value], at: usize) -> Option<i64> {
+pub(super) fn int(row: &[Value], at: usize) -> Option<i64> {
     match row[at] {
         Value::Integer(v) => Some(v),
         _ => None,
@@ -40,7 +43,7 @@ fn number(v: Option<i64>) -> Value {
 }
 
 /// How rows of a table that meet under one key become one: `into` is the winner's own where it had one, else the first met.
-type Merge = fn(&Columns, &mut Row, &Row);
+pub(super) type Merge = fn(&Columns, &mut Row, &Row);
 
 /// `into` takes `field` where it holds nothing: a row's own says what it is, and only an empty one takes another's.
 fn or_else(c: &Columns, into: &mut Row, from: &Row, field: &str) {
@@ -51,7 +54,7 @@ fn or_else(c: &Columns, into: &mut Row, from: &Row, field: &str) {
 }
 
 /// `combine`'s annotations: plays added up, the later dates, the better rating, the first star. The pid is the winner's.
-fn annotations(c: &Columns, into: &mut Row, from: &Row) {
+pub(super) fn annotations(c: &Columns, into: &mut Row, from: &Row) {
     let (count, date, own, own_date, rating, starred, at) =
         (c.at("play_count"), c.at("play_date"), c.at("own_count"), c.at("own_date"), c.at("rating"), c.at("starred"), c.at("starred_at"));
     let read = |r: &Row| Annotation {
@@ -75,7 +78,7 @@ fn annotations(c: &Columns, into: &mut Row, from: &Row) {
 
 /// What an import brought in, as an annotation's: plays added up, the later date, a star on either, the better rating. The
 /// server's item and the pid are the winner's.
-fn imports(c: &Columns, into: &mut Row, from: &Row) {
+pub(super) fn imports(c: &Columns, into: &mut Row, from: &Row) {
     let sum = |into: &mut Row, field: &str| {
         let at = c.at(field);
         into[at] = Value::Integer(int(into, at).unwrap_or(0) + int(from, at).unwrap_or(0));
@@ -94,7 +97,7 @@ fn imports(c: &Columns, into: &mut Row, from: &Row) {
 }
 
 /// The row with the later `field` stands, whole, under the winner's key.
-fn later(c: &Columns, into: &mut Row, from: &Row, field: &str, key: &str) {
+pub(super) fn later(c: &Columns, into: &mut Row, from: &Row, field: &str, key: &str) {
     let (at, key) = (c.at(field), c.at(key));
     if int(from, at) > int(into, at) {
         let winner = into[key].clone();
@@ -113,8 +116,13 @@ fn words(c: &Columns, into: &mut Row, from: &Row) {
     later(c, into, from, "at", "track");
 }
 
+/// `later` by when a source said a subject's word, or was last asked of it.
+pub(super) fn said(c: &Columns, into: &mut Row, from: &Row) {
+    later(c, into, from, "at", "subject");
+}
+
 /// The last change of an item: the later of the two.
-fn last_change(c: &Columns, into: &mut Row, from: &Row) {
+pub(super) fn last_change(c: &Columns, into: &mut Row, from: &Row) {
     let at = c.at("at");
     into[at] = number(int(into, at).max(int(from, at)));
 }
@@ -132,7 +140,19 @@ fn hold(tx: &Transaction, moved: &HashMap<String, String>) -> Result<()> {
 /// Rows of `table` whose `key` names a moved id, `only` saying which of them name such ids at all, fold onto what it moved to.
 /// How many moved. Each table's `moved` is as that table stores the id.
 fn fold(tx: &Transaction, table: &str, key: &str, only: &str, moved: &HashMap<String, String>, merge: Merge) -> Result<u64> {
-    hold(tx, moved)?;
+    fold_pairs(tx, table, key, only, &in_order(moved), merge)
+}
+
+/// A map as a list, by its old ids: the same each time.
+pub(super) fn in_order(moved: &HashMap<String, String>) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = moved.iter().map(|(old, new)| (old.clone(), new.clone())).collect();
+    pairs.sort();
+    pairs
+}
+
+/// `fold` by a list: rows meet in its order, so the first pair's is the first met, and an old id on two pairs goes to both, whole.
+fn fold_pairs(tx: &Transaction, table: &str, key: &str, only: &str, pairs: &[(String, String)], mut merge: impl FnMut(&Columns, &mut Row, &Row)) -> Result<u64> {
+    hold(tx, &pairs.iter().cloned().collect())?;
     let info: Vec<(String, bool)> = {
         let mut st = tx.prepare("SELECT name, pk > 0 FROM pragma_table_info(?1) ORDER BY cid")?;
         st.query_map([table], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
@@ -143,44 +163,105 @@ fn fold(tx: &Transaction, table: &str, key: &str, only: &str, moved: &HashMap<St
     let at_key = keys.iter().enumerate().map(|(n, i)| format!("{} = ?{}", columns.0[*i], n + 1)).collect::<Vec<_>>().join(" AND ");
     let row_of = |r: &rusqlite::Row<'_>| (0..columns.0.len()).map(|i| r.get::<_, Value>(i)).collect::<rusqlite::Result<Row>>();
     let rows: Vec<Row> = {
-        let mut st = tx.prepare(&format!("SELECT {names} FROM {table} WHERE {only} AND {key} IN (SELECT old FROM temp.moved_ids) ORDER BY {key}"))?;
+        let mut st = tx.prepare(&format!("SELECT {names} FROM {table} WHERE {only} AND {key} IN (SELECT old FROM temp.moved_ids)"))?;
         st.query_map([], row_of)?.collect::<rusqlite::Result<_>>()?
     };
     let key_at = columns.at(key);
+    let values = |row: &Row| keys.iter().map(|i| row[*i].clone()).collect::<Vec<_>>();
     let mut del = tx.prepare(&format!("DELETE FROM {table} WHERE {at_key}"))?;
     let mut own = tx.prepare(&format!("SELECT {names} FROM {table} WHERE {at_key}"))?;
-    let mut met: BTreeMap<String, Row> = BTreeMap::new();
-    let total = rows.len() as u64;
-    for mut row in rows {
-        let values = |row: &Row| keys.iter().map(|i| row[*i].clone()).collect::<Vec<_>>();
-        del.execute(params_from_iter(values(&row)))?;
-        let Value::Text(old) = &row[key_at] else { continue };
-        let Some(to) = moved.get(old) else { continue };
-        row[key_at] = Value::Text(to.clone());
-        let at = format!("{:?}", values(&row));
-        if let Some(into) = met.get_mut(&at) {
-            merge(&columns, into, &row);
-            continue;
+    let mut held: HashMap<&str, Vec<&Row>> = HashMap::new();
+    for row in &rows {
+        del.execute(params_from_iter(values(row)))?;
+        if let Value::Text(old) = &row[key_at] {
+            held.entry(old).or_default().push(row);
         }
-        // The winner's own row first: the fold keeps what is its own.
-        let mine = own.query_map(params_from_iter(values(&row)), row_of)?.next().transpose()?;
-        met.insert(
-            at,
-            match mine {
-                Some(mut into) => {
-                    merge(&columns, &mut into, &row);
-                    into
-                }
-                None => row,
-            },
-        );
+    }
+    let mut met: BTreeMap<String, Row> = BTreeMap::new();
+    for (old, to) in pairs {
+        for row in held.get(old.as_str()).into_iter().flatten() {
+            let mut row = (*row).clone();
+            row[key_at] = Value::Text(to.clone());
+            let at = format!("{:?}", values(&row));
+            if let Some(into) = met.get_mut(&at) {
+                merge(&columns, into, &row);
+                continue;
+            }
+            // The winner's own row first: the fold keeps what is its own.
+            let mine = own.query_map(params_from_iter(values(&row)), row_of)?.next().transpose()?;
+            met.insert(
+                at,
+                match mine {
+                    Some(mut into) => {
+                        merge(&columns, &mut into, &row);
+                        into
+                    }
+                    None => row,
+                },
+            );
+        }
     }
     let marks = vec!["?"; columns.0.len()].join(", ");
     let mut put = tx.prepare(&format!("INSERT OR REPLACE INTO {table} ({names}) VALUES ({marks})"))?;
     for row in met.values() {
         put.execute(params_from_iter(row.iter()))?;
     }
-    Ok(total)
+    Ok(rows.len() as u64)
+}
+
+/// Where a table holds ids of one kind: what the report calls it, which rows they are, how they say the id, and what becomes
+/// of two rows that meet.
+#[derive(Clone, Copy)]
+pub(super) struct Place {
+    pub name: &'static str,
+    pub table: &'static str,
+    /// The column that names the id.
+    pub key: &'static str,
+    /// Which of the table's rows hold such ids at all.
+    pub only: &'static str,
+    /// What comes before the id in `key`.
+    pub prefix: &'static str,
+    pub merge: Merge,
+    /// What two rows can say differently where one goes with its row: the report counts those (`Report::differed`). A row
+    /// that says nothing there loses nothing.
+    pub differs: &'static [&'static str],
+}
+
+/// A place's rows fold by `pairs`, in their order, and the report says what came of each. An id for life has moved already: a
+/// folder run on this build wrote under it. One no pair names stays as it is, and is counted.
+pub(super) fn walk(tx: &Transaction, place: &Place, pairs: &[(String, String)], report: &mut Report) -> Result<()> {
+    let Place { name, table, key, only, prefix, merge, differs } = *place;
+    let found: Vec<String> = tx.prepare(&format!("SELECT {key} FROM {table} WHERE {only} ORDER BY {key}"))?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let olds: HashSet<&str> = pairs.iter().map(|(old, _)| old.as_str()).collect();
+    let (mut moved, mut unmatched) = (0, Vec::new());
+    for id in &found {
+        let id = id.strip_prefix(prefix).unwrap_or(id);
+        if olds.contains(id) || ids::for_life(id) {
+            moved += 1;
+        } else {
+            unmatched.push(id.to_string());
+        }
+    }
+    let stored: Vec<(String, String)> = pairs.iter().map(|(old, new)| (format!("{prefix}{old}"), format!("{prefix}{new}"))).collect();
+    let (mut merged, mut differed) = (0, Vec::new());
+    fold_pairs(tx, table, key, only, &stored, |c, into, from| {
+        merged += 1;
+        merge(c, into, from);
+        let lost = |field: &&str| {
+            let at = c.at(field);
+            from[at] != Value::Null && from[at] != into[at]
+        };
+        if let (true, Value::Text(id)) = (differs.iter().any(lost), &from[c.at(key)]) {
+            differed.push(id.strip_prefix(prefix).unwrap_or(id).to_string());
+        }
+    })?;
+    let after: i64 = tx.query_row(&format!("SELECT count(*) FROM {table} WHERE {only}"), [], |r| r.get(0))?;
+    report.tables.push(Table { name: name.to_string(), before: found.len() as u64, after: after as u64, moved, merged });
+    report.unmatched(name, unmatched);
+    if !differs.is_empty() {
+        report.differed(name, differed);
+    }
+    Ok(())
 }
 
 /// A column with no key to meet under: every row names what its id moved to, in one pass.

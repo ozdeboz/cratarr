@@ -8,125 +8,25 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 
 use super::UserData;
+use super::moved::{Place, annotations, imports, in_order, said, walk};
 use crate::moved::Report;
 use crate::serve::ids;
 
-/// An `annotation` row under its artist's id. Two rows of one artist are read as any two annotations of one item
-/// (`combine_user_data`): plays added, the later dates, the better rating, the first star.
-const ANNOTATION: &str = "
-INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date)
-  SELECT user, ?3, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date
-  FROM annotation WHERE user = ?1 AND item = ?2 AND kind = 'artist'
-  ON CONFLICT (user, item, kind) DO UPDATE SET
-    play_count = play_count + excluded.play_count,
-    play_date = max(coalesce(play_date, excluded.play_date), coalesce(excluded.play_date, play_date)),
-    rating = max(rating, excluded.rating),
-    starred = max(starred, excluded.starred),
-    starred_at = min(coalesce(starred_at, excluded.starred_at), coalesce(excluded.starred_at, starred_at)),
-    own_count = own_count + excluded.own_count,
-    own_date = max(coalesce(own_date, excluded.own_date), coalesce(excluded.own_date, own_date));
-";
-
-/// An `imported` row under its artist's id. Two rows of one artist: plays added, the later play, a star on either, the
-/// better rating; the server's item stays the first's, as what it names on the server.
-const IMPORTED: &str = "
-INSERT INTO imported (account, source, server_user, kind, item, server_item, pid, plays, played, starred, rating, at)
-  SELECT account, source, server_user, kind, ?5, server_item, pid, plays, played, starred, rating, at
-  FROM imported WHERE account = ?1 AND source = ?2 AND server_user = ?3 AND kind = 'artist' AND item = ?4
-  ON CONFLICT (account, source, server_user, kind, item) DO UPDATE SET
-    plays = plays + excluded.plays,
-    played = max(coalesce(played, excluded.played), coalesce(excluded.played, played)),
-    starred = max(starred, excluded.starred),
-    rating = max(rating, excluded.rating),
-    at = max(at, excluded.at);
-";
-
-/// A word's row under its artist's id: of two on one word, the later.
-const WORDS: &str = "
-INSERT INTO words (subject, source, word, kind, weight, at)
-  SELECT ?2, source, word, kind, weight, at FROM words WHERE subject = ?1
-  ON CONFLICT (subject, source, word) DO UPDATE SET kind = excluded.kind, weight = excluded.weight, at = excluded.at
-  WHERE excluded.at > at;
-";
-
-/// When a source was last asked of an artist, under their id: of two, the later.
-const WORDS_ASKED: &str = "
-INSERT INTO words_asked (subject, source, at, ok)
-  SELECT ?2, source, at, ok FROM words_asked WHERE subject = ?1
-  ON CONFLICT (subject, source) DO UPDATE SET at = excluded.at, ok = excluded.ok
-  WHERE excluded.at > at;
-";
+/// Where a row's key is an artist's id. Two rows of one artist become one as any two of that table: plays added, the later
+/// dates, the better rating, the first star; of two on one word, the later.
+const PLACES: [Place; 4] = [
+    Place { name: "annotation: artists", table: "annotation", key: "item", only: "kind = 'artist'", prefix: "", merge: annotations, differs: &[] },
+    Place { name: "imported: artists", table: "imported", key: "item", only: "kind = 'artist'", prefix: "", merge: imports, differs: &[] },
+    Place { name: "words: artists", table: "words", key: "subject", only: "subject LIKE 'artist:%'", prefix: "artist:", merge: said, differs: &[] },
+    Place { name: "words_asked: artists", table: "words_asked", key: "subject", only: "subject LIKE 'artist:%'", prefix: "artist:", merge: said, differs: &[] },
+];
 
 /// Whether an id still wants moving: an id for life has moved already, so a step run again says nothing of it.
 fn old(id: &str) -> bool {
     !ids::for_life(id)
-}
-
-fn annotations(conn: &Connection, moved: &HashMap<String, String>, report: &mut Report) -> Result<()> {
-    let rows: Vec<(String, String)> = conn.prepare("SELECT user, item FROM annotation WHERE kind = 'artist'")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-    let (before, mut done, mut unmatched) = (rows.len() as u64, 0, Vec::new());
-    for (user, item) in rows {
-        match moved.get(&item) {
-            Some(new) => {
-                conn.execute(ANNOTATION, params![user, item, new])?;
-                conn.execute("DELETE FROM annotation WHERE user = ?1 AND item = ?2 AND kind = 'artist'", params![user, item])?;
-                done += 1;
-            }
-            None if old(&item) => unmatched.push(item),
-            None => {}
-        }
-    }
-    let after: i64 = conn.query_row("SELECT count(*) FROM annotation WHERE kind = 'artist'", [], |r| r.get(0))?;
-    report.table("annotation: artists", before, after as u64, done);
-    report.unmatched("annotation: artists", unmatched);
-    Ok(())
-}
-
-fn imported(conn: &Connection, moved: &HashMap<String, String>, report: &mut Report) -> Result<()> {
-    let mut st = conn.prepare("SELECT account, source, server_user, item FROM imported WHERE kind = 'artist'")?;
-    let rows: Vec<(String, String, String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
-    let (before, mut done, mut unmatched) = (rows.len() as u64, 0, Vec::new());
-    for (account, source, user, item) in rows {
-        match moved.get(&item) {
-            Some(new) => {
-                conn.execute(IMPORTED, params![account, source, user, item, new])?;
-                conn.execute("DELETE FROM imported WHERE account = ?1 AND source = ?2 AND server_user = ?3 AND kind = 'artist' AND item = ?4", params![account, source, user, item])?;
-                done += 1;
-            }
-            None if old(&item) => unmatched.push(item),
-            None => {}
-        }
-    }
-    let after: i64 = conn.query_row("SELECT count(*) FROM imported WHERE kind = 'artist'", [], |r| r.get(0))?;
-    report.table("imported: artists", before, after as u64, done);
-    report.unmatched("imported: artists", unmatched);
-    Ok(())
-}
-
-/// `artist:<id>` subjects of `table`. `upsert` writes one subject's rows under another, `?1` the old, `?2` the new.
-fn subjects(conn: &Connection, table: &str, upsert: &str, moved: &HashMap<String, String>, report: &mut Report) -> Result<()> {
-    const ARTIST: &str = "artist:";
-    let count = || -> rusqlite::Result<u64> { conn.query_row(&format!("SELECT count(*) FROM {table} WHERE subject LIKE 'artist:%'"), [], |r| r.get::<_, i64>(0)).map(|n| n as u64) };
-    let before = count()?;
-    let found: Vec<String> = conn.prepare(&format!("SELECT DISTINCT subject FROM {table} WHERE subject LIKE 'artist:%'"))?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-    let (mut done, mut unmatched) = (0, Vec::new());
-    for subject in found {
-        let id = subject.strip_prefix(ARTIST).unwrap_or(&subject);
-        match moved.get(id) {
-            Some(new) => {
-                conn.execute(upsert, params![subject, format!("{ARTIST}{new}")])?;
-                done += conn.execute(&format!("DELETE FROM {table} WHERE subject = ?1"), [&subject])? as u64;
-            }
-            None if old(id) => unmatched.push(id.to_string()),
-            None => {}
-        }
-    }
-    report.table(&format!("{table}: artists"), before, count()?, done);
-    report.unmatched(&format!("{table}: artists"), unmatched);
-    Ok(())
 }
 
 /// The library's artists inside `related_artists.found`, `artists[].id`: the row's key is a MusicBrainz id, which stays.
@@ -165,13 +65,13 @@ fn related(conn: &Connection, moved: &HashMap<String, String>, report: &mut Repo
 /// move is one, its report written last in it. Safe to repeat: a row moved is under an id no map holds. A row whose id no map
 /// holds stays as it is, and is counted: the hash of a name nothing credits now cannot be read back, so a heart on an artist
 /// whose music left stays under it.
-pub(crate) fn move_artists(conn: &Connection, moved: &HashMap<String, String>) -> Result<Report> {
+pub(crate) fn move_artists(tx: &Transaction, moved: &HashMap<String, String>) -> Result<Report> {
     let mut report = Report::default();
-    annotations(conn, moved, &mut report)?;
-    imported(conn, moved, &mut report)?;
-    subjects(conn, "words", WORDS, moved, &mut report)?;
-    subjects(conn, "words_asked", WORDS_ASKED, moved, &mut report)?;
-    related(conn, moved, &mut report)?;
+    let pairs = in_order(moved);
+    for place in &PLACES {
+        walk(tx, place, &pairs, &mut report)?;
+    }
+    related(tx, moved, &mut report)?;
     Ok(report)
 }
 
@@ -312,7 +212,7 @@ mod tests {
         let what = report.unmatched.iter().find(|x| x.what == "annotation: artists").unwrap();
         assert_eq!((what.count, what.sample.as_slice()), (1, ["ar-nobodynobodynobody000".to_string()].as_slice()), "an id for life is no old one");
         let t = report.table_named("annotation: artists").unwrap();
-        assert_eq!((t.before, t.after, t.moved), (2, 2, 0));
+        assert_eq!((t.before, t.after, t.moved), (2, 2, 1), "an id for life has moved already");
     }
 
     #[test]
@@ -323,7 +223,8 @@ mod tests {
         u.move_artists(&map()).unwrap();
         let kept = u.related_artists("mbid").unwrap();
         let again = u.move_artists(&map()).unwrap();
-        assert_eq!(again.tables.iter().map(|t| t.moved).sum::<u64>(), 0);
+        assert_eq!(again.tables.iter().map(|t| t.merged).sum::<u64>(), 0);
+        assert_eq!(again.table_named("related_artists.found").unwrap().moved, 0);
         assert_eq!(again.unmatched_count(), 0);
         assert_eq!(u.related_artists("mbid").unwrap(), kept);
         assert_eq!(u.starred("ann", Kind::Artist).unwrap(), [NEW.to_string()]);

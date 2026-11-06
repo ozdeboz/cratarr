@@ -16,17 +16,18 @@ use serde_json::Value as Json;
 use crate::crates::{self, Condition};
 use crate::serve::ids;
 
-/// A table or a store as the migration's report reads it (`userdata::put_migration_part`): its rows before and after, and
-/// how many ids in it moved.
+/// A table or a store as the migration's report reads it (`userdata::put_migration_part`): its rows before and after, how
+/// many ids in it moved, and how many rows met another under one key and became one with it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Table {
     pub name: String,
     pub before: u64,
     pub after: u64,
     pub moved: u64,
+    pub merged: u64,
 }
 
-/// What found no match in one place: how many, and up to ten of them. They stay as they were.
+/// What found no match in one place: how many, and up to ten of them, each named once. They stay as they were.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Unmatched {
     pub what: String,
@@ -37,23 +38,36 @@ pub struct Unmatched {
 /// How many samples an unmatched row keeps.
 const SAMPLES: usize = 10;
 
-/// What a step of the move found, in the report's two lists.
+/// What a step of the move found, in the report's lists. `differed`: two rows of one record said different things where only
+/// one can stand; the first met stood, so the other is gone, counted as `Unmatched` is, by the record it spoke of.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Report {
     pub tables: Vec<Table>,
     pub unmatched: Vec<Unmatched>,
+    pub differed: Vec<Unmatched>,
+}
+
+/// How a list reads in the report. An id that came several times is named once, as the rows of one id come together.
+fn listed(what: &str, mut ids: Vec<String>) -> Unmatched {
+    let count = ids.len() as u64;
+    ids.dedup();
+    ids.truncate(SAMPLES);
+    Unmatched { what: what.to_string(), count, sample: ids }
 }
 
 impl Report {
     pub fn table(&mut self, name: &str, before: u64, after: u64, moved: u64) {
-        self.tables.push(Table { name: name.to_string(), before, after, moved });
+        self.tables.push(Table { name: name.to_string(), before, after, moved, merged: 0 });
     }
 
     /// A place's ids that found no match: a row for each place, none found too, so the report says it looked.
-    pub fn unmatched(&mut self, what: &str, mut ids: Vec<String>) {
-        let count = ids.len() as u64;
-        ids.truncate(SAMPLES);
-        self.unmatched.push(Unmatched { what: what.to_string(), count, sample: ids });
+    pub fn unmatched(&mut self, what: &str, ids: Vec<String>) {
+        self.unmatched.push(listed(what, ids));
+    }
+
+    /// A place's rows where two said different things: a row for each such place, none found too.
+    pub fn differed(&mut self, what: &str, records: Vec<String>) {
+        self.differed.push(listed(what, records));
     }
 
     /// One walk over a place: its rows and what it found.
@@ -66,6 +80,7 @@ impl Report {
     pub fn extend(&mut self, other: Report) {
         self.tables.extend(other.tables);
         self.unmatched.extend(other.unmatched);
+        self.differed.extend(other.differed);
     }
 
     /// The rows of one table, by its name.
