@@ -783,6 +783,40 @@ impl UserData {
         Ok((rows, top))
     }
 
+    /// The highest record or artist id for life the user data names (`ids::highest_named`), 0 for none: with the JSON stores,
+    /// what a fresh start of lost ids must number above. Blocking.
+    pub fn top_named(&self) -> Result<i64> {
+        const COLUMNS: [(&str, &str); 18] = [
+            ("annotation", "item"),
+            ("added", "album"),
+            ("imported", "item"),
+            ("album_review", "album"),
+            ("album_tags", "album"),
+            ("record_overrides", "album"),
+            ("album_matches", "album"),
+            ("album_complete", "album"),
+            ("intake_heard", "album"),
+            ("record_references", "album"),
+            ("discogs_genres", "album"),
+            ("renumber_matched", "album"),
+            ("release_types", "key"),
+            ("words", "subject"),
+            ("words_asked", "subject"),
+            ("discogs_facts", "subject"),
+            ("change_at", "item"),
+            ("preference", "value"),
+        ];
+        let db = self.db();
+        let mut top = 0;
+        for (table, column) in COLUMNS {
+            let mut st = db.prepare(&format!("SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE '%al-%' OR {column} LIKE '%ar-%'"))?;
+            for text in st.query_map([], |r| r.get::<_, String>(0))? {
+                top = top.max(crate::serve::ids::highest_named(&text?));
+            }
+        }
+        Ok(top)
+    }
+
     /// The annotations of several items of one kind, by item; items without any are left out.
     pub fn get(&self, user: &str, kind: Kind, items: &[String]) -> Result<std::collections::HashMap<String, Annotation>> {
         let db = self.db();
@@ -2125,6 +2159,25 @@ mod tests {
         let (rows, top) = u.track_references().unwrap();
         assert_eq!(rows, vec![("annotation", 1), ("app_queue", 1)], "an album's id is no track's");
         assert_eq!(top, 40);
+    }
+
+    /// CR3: every kind of place an album id for life is written, so none is left to name another album after a fresh start.
+    #[test]
+    fn the_highest_album_id_is_found_wherever_the_user_data_names_one() {
+        let u = UserData::open(None).unwrap();
+        assert_eq!(u.top_named().unwrap(), 0);
+        let named = |sql: &str, top: i64| {
+            u.db().execute(sql, []).unwrap();
+            assert_eq!(u.top_named().unwrap(), top, "{sql}");
+        };
+        named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'al-5vcUvYmuWJAgyxLXEUmaPz', 'album')", 0);
+        named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'al-12', 'album')", 12);
+        named("INSERT INTO album_tags (album, tag, at) VALUES ('al-20', 't', 0)", 20);
+        named("INSERT INTO record_overrides (album, field, value, at) VALUES ('al-30', 'year', '1', 0)", 30);
+        named("INSERT INTO release_types (key, secondary, at) VALUES ('dc:al-40', '', 0)", 40);
+        named("INSERT INTO words_asked (subject, source, at, ok) VALUES ('album:al-50', 's', 0, 1)", 50);
+        named("INSERT INTO change_at (account, kind, item, at) VALUES ('a', 'favourite', 'album:cratarr/al-60', 0)", 60);
+        named("INSERT INTO annotation (user, item, kind) VALUES ('a', 'ar-70', 'artist')", 70);
     }
 
     #[test]

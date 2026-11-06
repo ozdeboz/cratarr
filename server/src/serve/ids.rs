@@ -87,6 +87,29 @@ pub fn record(record: i64) -> String {
     format!("{ALBUM}{record}")
 }
 
+/// The highest number named in `text` as a record's or an artist's id for life, `al-<digits>` or `ar-<digits>`, 0 for
+/// none: in a column, a key (`like:al-12`, `album:cratarr/al-12`) or a whole JSON store. A hash is no number: it runs on
+/// in letters, and 22 digits of one, if it ever came to that, are no id anyone was given.
+pub fn highest_named(text: &str) -> i64 {
+    let word = |c: u8| c.is_ascii_alphanumeric();
+    let bytes = text.as_bytes();
+    let mut top = 0;
+    for prefix in [ALBUM, ARTIST] {
+        for (at, _) in text.match_indices(prefix) {
+            if at > 0 && word(bytes[at - 1]) {
+                continue;
+            }
+            let start = at + prefix.len();
+            let digits = bytes[start..].iter().take_while(|b| b.is_ascii_digit()).count();
+            let cut_short = bytes.get(start + digits).is_some_and(|b| word(*b));
+            if (1..=15).contains(&digits) && !cut_short {
+                top = top.max(text[start..start + digits].parse().unwrap_or(0));
+            }
+        }
+    }
+    top
+}
+
 /// What gathers one folder's files of an album, never an id: the hash of its persistent id. `album_artist` is the album
 /// artist as shown (the song's artist when the file names none). Outside folder 0 the folder goes in front, as Navidrome's
 /// library id, so two folders' files stay two copies. It keeps the form of the ids albums had until 0.16, as what was
@@ -145,6 +168,20 @@ mod tests {
         let plain = row(&[("album", "Homogenic"), ("date", "1997")]);
         assert_eq!(album(&plain, "Björk", 0), album(&row(&[("album", "HOMOGENIC"), ("date", "1997")]), "björk", 0));
         assert_ne!(album(&plain, "Björk", 0), album(&row(&[("album", "Homogenic"), ("date", "1998")]), "Björk", 0));
+    }
+
+    /// What a lost catalogue's floor is taken from: an id for life wherever it is written, and never a hash that begins
+    /// with digits, or one album's name would lift every id by a number nobody chose.
+    #[test]
+    fn the_highest_id_named_is_found_in_any_text_and_a_hash_is_none() {
+        assert_eq!(highest_named("al-12"), 12);
+        assert_eq!(highest_named("album:cratarr/al-7"), 7);
+        assert_eq!(highest_named("like:ar-30"), 30);
+        assert_eq!(highest_named(r#"{"of":"al-4","seeds":["ar-9","al-2"]}"#), 9);
+        assert_eq!(highest_named("al-1 al-3 al-2"), 3);
+        assert_eq!(highest_named("al-5vcUvYmuWJAgyxLXEUmaPz"), 0, "a hash");
+        assert_eq!(highest_named("al-0000000000000000000012"), 0, "a hash of digits alone");
+        assert_eq!(highest_named("tr-99 normal-12 al-"), 0, "no record's");
     }
 
     #[test]

@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS beat_this (
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 ";
 
+/// The tables whose ids are for life and held in user data: what a fresh start of lost ids lifts. Artists and labels join
+/// when they have ids of their own.
+const IDS_FOR_LIFE: [&str; 2] = ["tracks", "records"];
+
 /// A file's beats and downbeats by Beat this! (decision 0049, amended), as heard: milliseconds from the start.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BeatThisRow {
@@ -781,20 +785,27 @@ impl Catalogue {
         self.ids_lost.store(lost, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// The highest track id it gave out. Blocking.
-    pub fn top_track(&self) -> i64 {
+    /// The highest id it gave out, of any kind in `IDS_FOR_LIFE`. Blocking.
+    pub fn top_id(&self) -> i64 {
         let db = self.db();
-        let seq: Option<i64> = db.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'tracks'", [], |r| r.get(0)).optional().ok().flatten();
-        let max: Option<i64> = db.query_row("SELECT MAX(id) FROM tracks", [], |r| r.get(0)).ok().flatten();
-        seq.unwrap_or(0).max(max.unwrap_or(0))
+        let top = |table: &str| {
+            let seq: Option<i64> = db.query_row("SELECT seq FROM sqlite_sequence WHERE name = ?1", [table], |r| r.get(0)).optional().ok().flatten();
+            let max: Option<i64> = db.query_row(&format!("SELECT MAX(id) FROM {table}"), [], |r| r.get(0)).ok().flatten();
+            seq.unwrap_or(0).max(max.unwrap_or(0))
+        };
+        IDS_FOR_LIFE.iter().map(|t| top(t)).max().unwrap_or(0)
     }
 
-    /// Its next tracks numbered above `floor` (a fresh start after lost ids: an old id then names a missing track, never
-    /// another one). Blocking.
+    /// Its next ids of every kind numbered above `floor` (a fresh start after lost ids: an old id then names something
+    /// missing, never something else, and `al-12` in a favourite must not quietly become another album). The maps of ids
+    /// that moved are kept in this same file, so a lost catalogue takes them with it: an old id has nowhere left to go,
+    /// which is why it must name nothing. Blocking.
     pub fn number_above(&self, floor: i64) -> Result<()> {
         let db = self.db();
-        if db.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'tracks'", [floor])? == 0 {
-            db.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('tracks', ?1)", [floor])?;
+        for table in IDS_FOR_LIFE {
+            if db.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = ?2", params![floor, table])? == 0 {
+                db.execute("INSERT INTO sqlite_sequence (name, seq) VALUES (?1, ?2)", params![table, floor])?;
+            }
         }
         Ok(())
     }
@@ -4631,8 +4642,27 @@ mod tests {
         cat.set_ids_lost(false);
         assert_eq!(cat.identify().unwrap(), (0, 2));
         assert!(cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap() > 2_000_000, "above every old id");
-        assert!(cat.top_track() > 2_000_000);
+        assert!(cat.top_id() > 2_000_000);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// CR3: `records` starts at 1 in a new file, so without this `al-12` in a favourite, a tag or a crate quietly names
+    /// another album, where a track's id names a missing one.
+    #[test]
+    fn a_fresh_start_numbers_records_above_every_old_album_id() {
+        let cat = Catalogue::open(None, Vec::new()).unwrap();
+        cat.number_above(3_000_000).unwrap();
+        let born = |cat: &Catalogue| {
+            cat.db().execute("INSERT INTO records (born, title) VALUES (1, 'New')", []).unwrap();
+            cat.db().last_insert_rowid()
+        };
+        assert_eq!(born(&cat), 3_000_001);
+        assert_eq!(cat.top_id(), 3_000_001, "what the user data remembers next");
+        cat.number_above(5).unwrap();
+        assert_eq!(born(&cat), 3_000_002, "a floor never lowers");
+        let fresh = Catalogue::open(None, Vec::new()).unwrap();
+        assert_eq!(born(&fresh), 1, "as any new catalogue");
+        assert_eq!(fresh.top_id(), 1, "a record counts though no track was given");
     }
 
     /// A better copy hands its id over (0101 point 11): the file arriving where Cratarr said takes the track, though no
