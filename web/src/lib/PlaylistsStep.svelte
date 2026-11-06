@@ -1,6 +1,7 @@
 <script lang="ts">
   // A menu's Add to playlist steps (an album's, an artist's; lib/tracksToPlaylist): the playlists as toggle cards, each
   // ticked when it holds them all, and when one holds some already the question: add them all again, or only the others.
+  import Asking from './Asking.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import type { ToPlaylistStep, TracksToPlaylist } from './tracksToPlaylist.svelte';
@@ -22,6 +23,8 @@
       <MenuEntry icon="check" label="Add only the others" disabled={to.adding !== null} onclick={() => to.addOthers(g.p, go)} />
     {/if}
   </div>
+{:else if to.waiting}
+  <Asking />
 {:else}
   <PlaylistToggles title="Add to playlist" playlists={to.playlists} ticked={to.holds}>
     {#snippet entry(p)}

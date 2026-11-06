@@ -11,7 +11,7 @@
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
-  import MarkLoader from './MarkLoader.svelte';
+  import Asking from './Asking.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { playCollection } from './play.svelte';
   import { clockText } from './remote.svelte';
@@ -90,7 +90,7 @@
   {#if failed}
     <p class="note" role="alert">{failed}</p>
   {:else if !view}
-    <div class="loading"><MarkLoader size={40} /></div>
+    <Asking />
   {:else if !view.recordings.length}
     <p class="note">No recordings of it in the library.</p>
   {:else}
@@ -169,11 +169,5 @@
     margin: 16px;
     color: var(--muted);
     text-align: center;
-  }
-
-  .loading {
-    display: grid;
-    place-items: center;
-    padding: 24px;
   }
 </style>

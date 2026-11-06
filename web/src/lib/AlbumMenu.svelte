@@ -110,7 +110,7 @@
   import { inOrder, type EntryId } from './menuTable';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
-  import MarkLoader from './MarkLoader.svelte';
+  import Asking from './Asking.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
@@ -740,7 +740,7 @@
   {:else if ask === 'move'}
     <div class="form">
       {#if !keep}
-        <div class="loading"><MarkLoader size={40} /></div>
+        <Asking />
       {:else if keep.refused?.kind === 'needs_year'}
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
@@ -763,7 +763,7 @@
   {:else if ask === 'replace'}
     <div class="form">
       {#if !swap}
-        <div class="loading"><MarkLoader size={40} /></div>
+        <Asking />
       {:else if swap.refused?.kind === 'needs_year'}
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
@@ -1060,10 +1060,4 @@
     font-size: 0.8rem;
   }
 
-  /* A question's answer being worked out: the loading sign, small (as the track menu's). */
-  .loading {
-    display: grid;
-    place-items: center;
-    padding: 16px 0;
-  }
-</style>
+  /* A question's answer being worked out: the loading sign, small (as the track menu's). */</style>
