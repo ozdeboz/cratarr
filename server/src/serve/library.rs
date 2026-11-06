@@ -2251,17 +2251,27 @@ mod tests {
             db.query_row("SELECT id FROM albums WHERE name LIKE 'Adventures%'", [], |r| r.get::<_, String>(0)).unwrap()
         };
         let id = orb();
-        let step = Library::open(None).unwrap();
-        step.build(&none, &Rules::default()).unwrap();
-        // Discogs' genres for it came, and an earlier added date.
-        step.set_extra_genres(HashMap::from([(id.clone(), vec!["Ambient House".to_string()])]));
-        step.set_added(HashMap::from([(id.clone(), 1_600_000_000)]));
-        assert_eq!(step.update_rows(&with_records(&none, &Rules::default()), &Rules::default(), &Covers::new()).unwrap(), 1);
-        let whole = Library::open(None).unwrap();
-        whole.set_extra_genres(HashMap::from([(id.clone(), vec!["Ambient House".to_string()])]));
-        whole.set_added(HashMap::from([(id, 1_600_000_000)]));
-        whole.build(&none, &Rules::default()).unwrap();
-        assert_eq!(dump(&step), dump(&whole));
+        // Under the record's id, and under the group's, where a fact from before the migration lies: the print sees both.
+        let group: String = {
+            let lib = Library::open(None).unwrap();
+            lib.build(&none, &Rules::default()).unwrap();
+            let db = lib.db();
+            db.query_row("SELECT group_id FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap()
+        };
+        assert_ne!(group, id);
+        for key in [id, group] {
+            let step = Library::open(None).unwrap();
+            step.build(&none, &Rules::default()).unwrap();
+            // Discogs' genres for it came, and an earlier added date.
+            step.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
+            step.set_added(HashMap::from([(key.clone(), 1_600_000_000)]));
+            assert_eq!(step.update_rows(&with_records(&none, &Rules::default()), &Rules::default(), &Covers::new()).unwrap(), 1, "{key}");
+            let whole = Library::open(None).unwrap();
+            whole.set_extra_genres(HashMap::from([(key.clone(), vec!["Ambient House".to_string()])]));
+            whole.set_added(HashMap::from([(key, 1_600_000_000)]));
+            whole.build(&none, &Rules::default()).unwrap();
+            assert_eq!(dump(&step), dump(&whole));
+        }
     }
 
     #[test]
