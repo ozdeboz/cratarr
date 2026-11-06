@@ -114,6 +114,16 @@ test('a page back from the browser\'s history after a sign-out starts over', asy
   assert.equal(reloads, 1);
 });
 
+test("a page back from history after its own sign-out starts over: its stores are nobody's, its heap is hers", async () => {
+  const a = await opened('"ann"');
+  a.accountForgotten();
+  reloads = 0;
+  fire('pageshow', { persisted: true });
+  assert.equal(reloads, 1);
+  fire('pageshow', { persisted: false });
+  assert.equal(reloads, 1, 'one opened as nobody, shown as any page is, stays');
+});
+
 test("a page just come from the sign-in page is not started over by its own showing, into the name kept", async () => {
   await opened('"ann"', 'http://cratarr.test/signin');
   reloads = 0;

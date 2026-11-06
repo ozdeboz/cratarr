@@ -93,7 +93,10 @@ if (typeof window !== 'undefined') {
     if ((e as StorageEvent).key === LS) another();
   });
   addEventListener('pageshow', (e) => {
-    if ((e as PageTransitionEvent).persisted) another();
+    if (!(e as PageTransitionEvent).persisted) return;
+    // Its own sign-out cleared the name it would be compared by: its stores are nobody's, and its memory the account's.
+    if (key === null) location.reload();
+    else another();
   });
 }
 
