@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS albums (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, artist TEXT NOT NULL, artist_id TEXT NOT NULL,
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
-  folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
+  compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
   format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', type_why TEXT,
   set_fields TEXT NOT NULL DEFAULT '', whole_tracks INTEGER);
 CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
@@ -422,7 +422,7 @@ mod release_type_tests {
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 15;
+const LAYOUT: i64 = 16;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -1028,12 +1028,12 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Each album as built: its folder and folder there, its print, and the file of its first song.
+    /// Each album as built: its copy's catalogue folder and folder there, its print, and the file of its first song.
     fn built_albums(&self) -> Result<Vec<(String, (i64, String, String, String, String))>> {
         let db = self.db();
         let mut st = db.prepare(
-            "SELECT a.id, a.folder, a.dir, a.src, (SELECT s.rel FROM songs s WHERE s.album_id = a.id ORDER BY s.n LIMIT 1), a.base_id
-             FROM albums a",
+            "SELECT a.id, c.folder, c.dir, a.src, (SELECT s.rel FROM songs s WHERE s.album_id = a.id ORDER BY s.n LIMIT 1), a.base_id
+             FROM albums a JOIN copies c ON c.album = a.id",
         )?;
         let rows = st.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, String>(5)?)))
@@ -1528,10 +1528,10 @@ fn write_albums(
     }
     let mut ins_album = tx.prepare_cached(
         "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
-           size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps, cover,
+           size, discs, created, mbid, compilation, order_name, base_id, format, min_kbps, cover,
            release_type, type_from, secondary, src, type_why, set_fields, whole_tracks)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-           ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+           ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
     )?;
     let mut ins_fts = tx.prepare_cached("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
     let mut ins_tri = tx.prepare_cached("INSERT INTO albums_tri_fts (rowid, letters) VALUES (?1, cratarr_letters(?2))")?;
@@ -1625,8 +1625,6 @@ fn write_albums(
             discs,
             songs.iter().filter_map(|s| s.row.born).chain(facts.added.get(album_id).copied()).min(),
             first.row.first("musicbrainz_albumid"),
-            first.folder,
-            dir,
             compilation,
             order_name(&first.album),
             first.album_base,
@@ -2186,7 +2184,7 @@ mod tests {
         assert_eq!(lib.counts().unwrap(), (3, 2, 2));
         let db = lib.db();
         let (count, genres, dir, year, created): (i64, String, String, i64, i64) = db
-            .query_row("SELECT song_count, genres, dir, year, created FROM albums WHERE name = 'Homogenic'", [], |r| {
+            .query_row("SELECT a.song_count, a.genres, c.dir, a.year, a.created FROM albums a JOIN copies c ON c.album = a.id WHERE a.name = 'Homogenic'", [], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })
             .unwrap();
@@ -2942,9 +2940,9 @@ mod tests {
         println!("memory: {}", status.lines().filter(|l| l.starts_with("VmHWM") || l.starts_with("VmRSS")).collect::<Vec<_>>().join(", "));
         let db = lib.db();
         let per_folder: Vec<(i64, i64)> =
-            db.prepare("SELECT folder, count(*) FROM albums GROUP BY folder").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+            db.prepare("SELECT folder, count(*) FROM copies GROUP BY folder").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
         println!("albums per folder {per_folder:?}");
-        let dirs: i64 = db.query_row("SELECT count(DISTINCT folder || '/' || dir) FROM albums", [], |r| r.get(0)).unwrap();
+        let dirs: i64 = db.query_row("SELECT count(DISTINCT folder || '/' || dir) FROM copies", [], |r| r.get(0)).unwrap();
         println!("distinct album folders {dirs}");
         // Albums whose songs lie in more than one folder, and folders split into several albums: grouping by tags vs folders.
         let split: Vec<(String, i64)> = db
