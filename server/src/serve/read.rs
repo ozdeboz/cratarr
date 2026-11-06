@@ -903,7 +903,10 @@ impl Library {
             st.query_map([song], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
         };
         held.retain(|(_, folder, rel, _)| files.is_empty() || files.iter().any(|(f, r)| f == folder && r == rel));
-        let Some(album) = held.first().map(|h| h.0.clone()) else { return Ok(None) };
+        // A file of it moved into another album holds it there too. Its copies are its own record's, the one it is written in.
+        let written = self.albums_of(&[song.to_string()])?.remove(song);
+        let Some(album) = written.filter(|a| held.iter().any(|h| h.0 == *a)).or_else(|| held.first().map(|h| h.0.clone())) else { return Ok(None) };
+        held.retain(|h| h.0 == album);
         // A copy over CD1 and CD2 has its files in folders under its own.
         let holds = |c: &Copy, (_, folder, _, dir): &(String, i64, String, String)| {
             c.folder == *folder && (c.dir.is_empty() || dir.strip_prefix(c.dir.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
@@ -934,9 +937,11 @@ impl Library {
         Ok(())
     }
 
-    /// Whether a copy of this album lies in Incoming.
+    /// Whether this record waits in Incoming: nothing else holds it. A kept record with a copy there is kept, so its review
+    /// is not "unreviewed".
     pub fn in_incoming(&self, id: &str) -> Result<bool> {
-        Ok(self.copies_of(id)?.iter().any(|c| c.kind == Kind::Incoming))
+        let copies = self.copies_of(id)?;
+        Ok(!copies.is_empty() && copies.iter().all(|c| c.kind == Kind::Incoming))
     }
 
     /// Every album's id, Music-form id, artist id and the files' genres (0.9.7: the library's words, `app::words`).
@@ -1312,15 +1317,15 @@ impl Library {
     /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
     /// the catalogue folder).
     pub fn album_art(&self, album: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
+        // The copy that plays, as the cover's print was made from it. `songs` holds its files alone, and two copies can share
+        // a folder, so the folder and the first file come from that one copy, never from what else lies beside it.
+        let Some(copy) = self.row_copy(album)? else { return Ok(None) };
         let db = self.db();
         let mut st = db.prepare_cached("SELECT cover FROM albums WHERE id = ?1")?;
         let Some(cover) = st.query_map([album], |r| r.get::<_, Option<String>>(0))?.next().transpose()? else { return Ok(None) };
-        // Folder and path from one row, and the copy from that folder: a path means nothing beside another row's folder.
-        let mut first = db.prepare_cached("SELECT folder, rel FROM songs WHERE album_id = ?1 ORDER BY rel LIMIT 1")?;
-        let Some((folder, rel)) = first.query_map([album], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?.next().transpose()? else { return Ok(None) };
-        let mut copy = db.prepare_cached("SELECT dir FROM copies WHERE album = ?1 AND folder = ?2 ORDER BY dir LIMIT 1")?;
-        let Some(dir) = copy.query_map(rusqlite::params![album, folder], |r| r.get::<_, String>(0))?.next().transpose()? else { return Ok(None) };
-        Ok(Some((folder, dir, cover, Some(rel))))
+        let mut first = db.prepare_cached("SELECT rel FROM songs WHERE album_id = ?1 AND folder = ?2 ORDER BY rel LIMIT 1")?;
+        let Some(rel) = first.query_map(rusqlite::params![album, copy.folder], |r| r.get::<_, String>(0))?.next().transpose()? else { return Ok(None) };
+        Ok(Some((copy.folder, copy.dir, cover, Some(rel))))
     }
 
     /// What a player reports about a song in Cratarr's ids (the pushed player state, decision 0031): the song id, its

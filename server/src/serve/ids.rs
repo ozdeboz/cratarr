@@ -1,12 +1,16 @@
 //! Ids the OpenSubsonic API hands out (decision 0030). Songs are Cratarr's own track ids, which survive moves
-//! (decision 0011); albums and artists are hashes of their tags, so they survive moves, renames of folders and a
-//! rebuilt catalogue. Each song also has a persistent id from its tags, by which user data finds it again when the
-//! catalogue is rebuilt and its track ids renumbered.
+//! (decision 0011). Albums are records (0100): `al-<record>`, the catalogue's number for life, whatever copies it has
+//! and wherever they lie. Artists are hashes of their names, so they survive a rebuilt catalogue. Each song also has a
+//! persistent id from its tags, by which user data finds it again when the catalogue is rebuilt and its track ids
+//! renumbered.
+//!
+//! An album's hash (`album`) is no id any more: it gathers one folder's files of an album, what its tags say, and it is
+//! what facts kept from before the flip are still found under, and what the migration reads the old ids by.
 //!
 //! The hashes and persistent ids are translated from Navidrome (`model/id/id.go`, `model/metadata/persistent_ids.go`,
 //! `utils/str/str.go`, `consts/consts.go`), Copyright the Navidrome authors, GPL-3.0-or-later
 //! (https://github.com/navidrome/navidrome). Changes: Rust; the default specs only (Navidrome makes them configurable);
-//! no library id prefix, so an album keeps its id when it moves from Incoming into Music; Cratarr's tag names
+//! no library id prefix, so an album keeps its hash when it moves from Incoming into Music; Cratarr's tag names
 //! (Navidrome's `musicbrainz_trackid` is the release track id, `musicbrainz_releasetrackid` here); ids carry a type
 //! prefix (`al-`, `ar-`), as gonic's do, so a bare id says what it is.
 
@@ -78,10 +82,16 @@ fn album_pid(row: &ServedRow, album_artist: &str) -> String {
     ])
 }
 
-/// An album's id: the hash of its persistent id. `album_artist` is the album artist as shown (the song's artist when
-/// the file names none). Outside the Music folder (`folder` 0) the folder goes in front, as Navidrome's library id:
-/// an upgrade waiting in Incoming is not the album it would replace, and once kept into Music it has that id.
-pub fn album(row: &ServedRow, album_artist: &str, folder: i64) -> String {
+/// A record's id as it is served: its number in the catalogue, for life.
+pub fn record(record: i64) -> String {
+    format!("{ALBUM}{record}")
+}
+
+/// What gathers one folder's files of an album, never an id: the hash of its persistent id. `album_artist` is the album
+/// artist as shown (the song's artist when the file names none). Outside folder 0 the folder goes in front, as Navidrome's
+/// library id, so two folders' files stay two copies. It keeps the form of the ids albums had until 0.16, as what was
+/// kept under those is found by it until the migration has moved it.
+pub(super) fn album(row: &ServedRow, album_artist: &str, folder: i64) -> String {
     let pid = album_pid(row, album_artist);
     let pid = if folder == 0 { pid } else { format!("{folder}\\{pid}") };
     format!("{ALBUM}{}", hash(&[&pid]))
@@ -127,11 +137,11 @@ mod tests {
     }
 
     #[test]
-    fn an_album_is_its_release_else_its_artist_title_and_date() {
+    fn a_folders_files_gather_by_their_release_else_their_artist_title_and_date() {
         let tagged = row(&[("album", "Homogenic"), ("musicbrainz_albumid", "b8a7c51f-362c-4dcb-a259-bc6e0095f0a6"), ("date", "1997")]);
         let retitled = row(&[("album", "Homogenic (Remaster)"), ("musicbrainz_albumid", "b8a7c51f-362c-4dcb-a259-bc6e0095f0a6")]);
         assert_eq!(album(&tagged, "Björk", 0), album(&retitled, "Björk", 0), "the release id decides");
-        assert_ne!(album(&tagged, "Björk", 0), album(&tagged, "Björk", 1), "Incoming keeps its own");
+        assert_ne!(album(&tagged, "Björk", 0), album(&tagged, "Björk", 1), "each folder gathers its own");
         let plain = row(&[("album", "Homogenic"), ("date", "1997")]);
         assert_eq!(album(&plain, "Björk", 0), album(&row(&[("album", "HOMOGENIC"), ("date", "1997")]), "björk", 0));
         assert_ne!(album(&plain, "Björk", 0), album(&row(&[("album", "Homogenic"), ("date", "1998")]), "Björk", 0));
@@ -145,5 +155,6 @@ mod tests {
         assert_eq!(song_pid(&a, "A"), song_pid(&a.clone(), "A"));
         assert_eq!(track_of(&song(42)), Some(42));
         assert_eq!(track_of("al-42"), None);
+        assert_eq!(record(42), "al-42");
     }
 }

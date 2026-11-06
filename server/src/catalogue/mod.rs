@@ -2149,8 +2149,9 @@ impl Catalogue {
             for (i, a) in albums.iter().enumerate() {
                 let record = match records[i] {
                     Some(r) => r,
-                    // Nothing here can take a record: every track stays with a copy's elsewhere.
-                    None if a.tracks.iter().all(|(track, _, _)| held.shared.contains(track)) => continue,
+                    // Nothing here can take a record: every track stays with a copy's elsewhere. One with no record has
+                    // nowhere to stay, and a row with no record is not served.
+                    None if a.tracks.iter().all(|(track, _, _)| held.shared.contains(track) && held.record.contains_key(track)) => continue,
                     None => {
                         let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
                         let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
