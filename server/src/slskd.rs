@@ -14,8 +14,9 @@ use serde_json::json;
 
 /// The folder under slskd's completed downloads that Cratarr's fetches go into.
 pub const FOLDER: &str = "cratarr";
-/// How long slskd listens for answers (its own default).
-const LISTEN_SECS: u64 = 15;
+/// How long slskd listens for answers (its own default), in milliseconds, as its API counts: 15 ended every search at
+/// once with no answers (slskd 0.26, seen 2026-11-06).
+const LISTEN_MS: u64 = 15_000;
 
 /// slskd itself could not be asked: it did not answer, would not take Cratarr's key, or says it is not up. Nothing a user
 /// did, so nothing to hold against one (`soulseek::fetch_from`, `track_intake::fetch`). Reads as the failure it carries.
@@ -183,7 +184,7 @@ impl Slskd {
     /// Starts a search; its id.
     pub async fn search(&self, text: &str) -> Result<String> {
         let id = uuid();
-        let body = json!({ "id": id, "searchText": text, "searchTimeout": LISTEN_SECS, "filterResponses": true, "minimumResponseFileCount": 1 });
+        let body = json!({ "id": id, "searchText": text, "searchTimeout": LISTEN_MS, "filterResponses": true, "minimumResponseFileCount": 1 });
         let r = self.http.post(self.at("searches")).header("X-API-Key", &self.key).json(&body).send().await.map_err(unreached)?;
         let status = r.status();
         if !status.is_success() {
@@ -413,6 +414,24 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Slskd::new(&url, "key").unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_search_listens_for_fifteen_seconds_which_slskd_counts_in_milliseconds() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
+        let kept = sent.clone();
+        let app = axum::Router::new().route(
+            "/api/v0/searches",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                *kept.lock().unwrap() = body;
+                std::future::ready(axum::Json(serde_json::json!({})))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Slskd::new(&url, "key").unwrap().search("Air Moon Safari").await.unwrap();
+        assert_eq!(sent.lock().unwrap()["searchTimeout"], 15_000);
     }
 
     fn offered() -> Vec<Offered> {
