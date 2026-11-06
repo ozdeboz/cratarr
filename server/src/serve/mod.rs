@@ -456,7 +456,7 @@ impl Serve {
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
         }
-        let moved = self.userdata.follow_pids(&self.library.pids()?)?;
+        let moved = self.userdata.follow_pids(&self.library.pids()?, &self.library.song_ids()?)?;
         if moved > 0 {
             tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
         }
@@ -835,6 +835,32 @@ mod tests {
         let two = [("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")];
         add(&cat, &roots[0], 0, &two);
         add(&cat, &roots[1], 1, &two);
+        serve.refresh().unwrap();
+        let track = cat.track_of(1, "A/01 One.flac").unwrap();
+        assert_eq!(cat.track_of(0, "A/01 One.flac"), Some(track));
+        let song = ids::song(track);
+        let (pid, _, _) = serve.library.play_targets(&song).unwrap().unwrap();
+        serve.userdata.record("me", (&song, &pid), "al-x", &[], &Heard::counted(100)).unwrap();
+
+        add(&cat, &roots[1], 1, &[("A/03 Three.flac", "Three")]);
+        checked_again(&serve);
+        let left = ids::song(cat.track_of(0, "A/01 One.flac").unwrap());
+        assert_ne!(left, song, "the first folder's copy left");
+        assert_eq!((plays_of(&serve, &song), plays_of(&serve, &left)), (1, 0), "the play stays on the record's track");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
+    /// The same for copies tagged otherwise, each with a persistent id of its own: `pids` cannot tell them for one track, and the
+    /// row copy's id goes with the copy that left. An id for life names its track, so what is on one no one lost stays.
+    #[test]
+    fn a_copy_tagged_otherwise_that_leaves_takes_nothing_that_points_at_the_record() {
+        let (roots, cat, serve) = on_two_folders("leaves-tagged");
+        let two = [("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")];
+        add(&cat, &roots[0], 0, &two);
+        add(&cat, &roots[1], 1, &two);
+        for (rel, title) in two {
+            cat.tag_for_tests(0, rel, &[("album", "Album"), ("albumartist", "Artist"), ("title", title), ("date", "1999")]);
+        }
         serve.refresh().unwrap();
         let track = cat.track_of(1, "A/01 One.flac").unwrap();
         assert_eq!(cat.track_of(0, "A/01 One.flac"), Some(track));
