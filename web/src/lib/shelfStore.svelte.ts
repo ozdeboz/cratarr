@@ -141,23 +141,26 @@ async function follow(where: ShelfWhere, held: Held[]) {
 }
 
 let filling = false;
-/** Each album still to be read: its view, then its cover, one album at a time, while Cratarr answers. */
+/** Each album still to be read: its view, then its cover, one album at a time, while Cratarr answers. For the account
+ *  whose shelf it began on: what comes for it once another's is here goes nowhere, and that one's fill starts then. */
 async function fill() {
   if (filling || !shelf.ready) return;
   filling = true;
+  const who = shelf.who;
   try {
     for (;;) {
-      if (reach.away || refusedFor() > 0) return;
+      if (shelf.who !== who || reach.away || refusedFor() > 0) return;
       const next = toFill(Object.values(shelf.tracks), Date.now())[0];
       if (!next) return;
       const { source, album_id } = next;
       try {
         const view = await albumView(source, album_id);
+        if (shelf.who !== who) return;
         await write(filled(Object.values(shelf.tracks), source, album_id, view, Date.now()), []);
       } catch (e) {
         // Not there (404): marked read, not asked again for a while. Anything else (out of reach, refused, a server
         // error): stopped until Cratarr answers again.
-        if (!(e instanceof ApiError && e.status === 404)) return;
+        if (!(e instanceof ApiError && e.status === 404) || shelf.who !== who) return;
         const now = Date.now();
         await write(Object.values(shelf.tracks).filter((r) => r.source === source && r.album_id === album_id).map((r) => ({ ...r, filled: now })), []);
       }
@@ -165,7 +168,7 @@ async function fill() {
       if (!shelf.covers[key]) {
         try {
           const blob = await smallCover(albumCoverUrl(source, album_id));
-          if (blob) await keepCover(key, blob);
+          if (blob && shelf.who === who) await keepCover(key, blob);
         } catch {
           /* no cover, or not now */
         }
@@ -173,6 +176,7 @@ async function fill() {
     }
   } finally {
     filling = false;
+    if (shelf.who !== who) void fill();
   }
 }
 

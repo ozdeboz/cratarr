@@ -1,7 +1,7 @@
 // Scrobbling, the account's way (decision 0091): from each device (the start) or through the server. This device's
 // own sign-ins and, in a browser, its queue and its sending (lib/scrobbleDevice); in the apps, their own code does the
 // sending with the sign-ins the app keeps (the page asks it: `scrobblers`). Never sent to Cratarr's server.
-import { perAccount, whenAccount } from './account';
+import { accountKey, perAccount, whenAccount, whoOf } from './account';
 import { getScrobbles } from './api';
 import { inApp, onApp, toApp } from './app.svelte';
 import { mine, setScrobbleWay } from './mySettings.svelte';
@@ -70,9 +70,10 @@ function read<T>(k: string, none: T): T {
     return none;
   }
 }
-function write(k: string, v: unknown) {
+/** `who` (lib/account's whoOf): the one signed in, or whose a send still going is. */
+function write(k: string, v: unknown, who = whoOf(accountKey())) {
   try {
-    localStorage.setItem(perAccount(k), JSON.stringify(v));
+    localStorage.setItem(k + who, JSON.stringify(v));
   } catch {
     // Kept for this page only.
   }
@@ -179,6 +180,8 @@ export async function send() {
   if (inApp || sending) return;
   if (!mine.tracking) return write(QUEUE, { plays: [], sent: { listenbrainz: [], lastfm: [] } });
   sending = true;
+  // Its sign-ins and its queue are the account's it began for, whoever has signed in by the time it answers.
+  const who = whoOf(accountKey());
   try {
     const k = read<Kept>(KEPT, {});
     const q = read<Queued>(QUEUE, { plays: [], sent: { listenbrainz: [], lastfm: [] } });
@@ -192,7 +195,7 @@ export async function send() {
           else await lastFmScrobble(k.lastfm!.key, k.lastfm!.secret, k.lastfm!.session, batch);
           q.sent[s] = [...q.sent[s], ...batch.map((p) => p.id)];
         } catch (e) {
-          if (e instanceof ScrobbleError && e.signedOut) (k[s]!.broken = e.message), write(KEPT, k);
+          if (e instanceof ScrobbleError && e.signedOut) (k[s]!.broken = e.message), write(KEPT, k, who);
           break;
         }
       }
@@ -200,7 +203,7 @@ export async function send() {
     const sent = { listenbrainz: new Set(q.sent.listenbrainz), lastfm: new Set(q.sent.lastfm) };
     const left = remaining(q.plays, services, sent, now());
     const ids = new Set(left.map((p) => p.id));
-    write(QUEUE, { plays: left, sent: { listenbrainz: q.sent.listenbrainz.filter((id) => ids.has(id)), lastfm: q.sent.lastfm.filter((id) => ids.has(id)) } });
+    write(QUEUE, { plays: left, sent: { listenbrainz: q.sent.listenbrainz.filter((id) => ids.has(id)), lastfm: q.sent.lastfm.filter((id) => ids.has(id)) } }, who);
     readHere();
   } finally {
     sending = false;

@@ -86,8 +86,11 @@ async function shrink(file: Blob, max = MAX_PX): Promise<Blob> {
 
 /** Keeps `file` on this device under `key` (its longest side at most `max`), shown from now on. */
 export async function setLocalPicture(key: string, file: Blob, max = MAX_PX) {
+  const who = ofWho;
   // Read whole first: a picked file is only a reference to it on the device, which IndexedDB may not keep.
   const small = await shrink(new Blob([await file.arrayBuffer()], { type: file.type }), max);
+  // Another account signed in meanwhile: it is not that one's choice.
+  if (who !== ofWho) return;
   await write(key, small);
   if (localCovers[key]) URL.revokeObjectURL(localCovers[key]);
   localCovers[key] = URL.createObjectURL(small);
@@ -164,10 +167,12 @@ function blobOf(data: string): Blob {
 
 /** `file` as Home's picture, here and on the account. */
 export async function chooseHomePicture(file: Blob) {
+  const who = ofWho;
   // Read whole first, as `setLocalPicture` does: it is read twice here.
   const whole = new Blob([await file.arrayBuffer()], { type: file.type });
   await setLocalPicture(HOME_HEADER, whole, HOME_HEADER_PX);
-  hold(await heldCopy(whole));
+  const copy = await heldCopy(whole);
+  if (who === ofWho) hold(copy);
 }
 
 /** No picture of one's own any more, here or on the account. */
