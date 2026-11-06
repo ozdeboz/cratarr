@@ -42,29 +42,31 @@ async function write(key: string, blob: Blob | null) {
 
 // The pictures chosen before, as the page opens, and another account's when it signs in.
 async function load() {
-  ofWho = perAccount(DB);
-  for (const k of Object.keys(localCovers)) {
-    URL.revokeObjectURL(localCovers[k]);
-    delete localCovers[k];
-  }
+  const who = ofWho;
   const db = await open();
   const tx = db.transaction(STORE, 'readonly');
   const cursor = tx.objectStore(STORE).openCursor();
   cursor.onsuccess = () => {
     const c = cursor.result;
-    if (!c) return db.close();
+    if (!c || who !== ofWho) return db.close();
     if (c.value instanceof Blob) localCovers[String(c.key)] = URL.createObjectURL(c.value);
-    // Chosen before it followed the account: its copy made now (decision 0101 point 14: the first device sends its own).
-    if (c.value instanceof Blob && c.key === HOME_HEADER && homePicture.held === null) void heldCopy(c.value).then(hold, () => {});
     c.continue();
   };
 }
-if (typeof indexedDB !== 'undefined') {
-  load().catch(() => {});
-  whenAccount.add(() => {
-    if (perAccount(DB) !== ofWho) load().catch(() => {});
-  });
-}
+if (typeof indexedDB !== 'undefined') load().catch(() => {});
+
+// Another account signed in, or nobody: nothing of the one before shows from here on, at once, its pictures read in as
+// they come. Before lib/accountPrefs hears of it, which takes what shows now for the account's and not for a change.
+whenAccount.add(() => {
+  if (perAccount(DB) === ofWho) return;
+  ofWho = perAccount(DB);
+  for (const k of Object.keys(localCovers)) {
+    URL.revokeObjectURL(localCovers[k]);
+    delete localCovers[k];
+  }
+  homePicture.held = keptHeld();
+  if (typeof indexedDB !== 'undefined') load().catch(() => {});
+});
 
 /** A picture no larger than it needs to be (JPEG, its longest side at most `max`); as it is when it cannot be read. */
 async function shrink(file: Blob, max = MAX_PX): Promise<Blob> {
@@ -109,7 +111,7 @@ const HOME_HEADER_PX = 2400;
 
 // Home's picture on the account (decision 0101 point 14), as a copy: what a preference holds is far below the picture
 // this device keeps, so the account's is the largest that fits, a data URL. The device that chose it shows its own;
-// another shows the account's. Not among the prefs: those go over to the app whole at each change.
+// another shows the account's. Not among the prefs: those go over to the app whole at each change. Each account's own.
 const HELD = 'cratarr-home-picture';
 /** The most the account keeps of a preference, as JSON (the server's MOST_BYTES), less the quotes round a string. */
 const HELD_MOST = 256 * 1024 - 2;
@@ -118,7 +120,7 @@ const HELD_SIDES = [1600, 1200, 900, 600, 400];
 
 function keptHeld(): string | null {
   try {
-    return localStorage.getItem(HELD);
+    return localStorage.getItem(perAccount(HELD));
   } catch {
     return null;
   }
@@ -130,8 +132,8 @@ export const homePicture = $state({ held: keptHeld() });
 function hold(held: string | null) {
   homePicture.held = held;
   try {
-    if (held === null) localStorage.removeItem(HELD);
-    else localStorage.setItem(HELD, held);
+    if (held === null) localStorage.removeItem(perAccount(HELD));
+    else localStorage.setItem(perAccount(HELD), held);
   } catch {
     /* not kept: asked of the account again at the next start */
   }

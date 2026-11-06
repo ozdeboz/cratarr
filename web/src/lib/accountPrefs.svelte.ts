@@ -1,13 +1,14 @@
 // The person's preferences on their account (decision 0101 point 14): the pinned playlists, the libraries switched
 // off, the lists' filters, crate drafts, Home's picture and Radio's last choice follow the account from device to
 // device, through the server's /api/me/preferences; offline they are this device's copy (the prefs) as last known. The rule is
-// lib/accountPrefsRule's: the latest change wins, the whole value. Another account's copy is never shown or sent:
-// someone else signing in here starts from the defaults until theirs come. A change on another of the account's
-// devices comes on the live channel (`changed`: preferences), and the copy is compared again whenever the channel is
-// back.
+// lib/accountPrefsRule's: the latest change wins, the whole value. Each account has its own copy here, its values
+// (lib/prefs' PERSONAL, Home's picture) and when each changed, so another one signing in is no change of anyone's: what
+// shows is the one come's, nothing is sent for it, and what the one who left could not send yet waits for its return. A
+// change on another of the account's devices comes on the live channel (`changed`: preferences), and the copy is
+// compared again whenever the channel is back.
 import { untrack } from 'svelte';
-import { accountKey, whenAccount } from './account';
-import { canon, meet, signedIn, type Copy } from './accountPrefsRule';
+import { accountKey, perAccount, whenAccount, whoOf } from './account';
+import { canon, meet, type Copy } from './accountPrefsRule';
 import { getPreferences, putPreference, type HeldPreference } from './api';
 import { on, stream } from './events.svelte';
 import { homePicture, takeHomePicture } from './localCovers.svelte';
@@ -22,24 +23,22 @@ const KEYS = [...Object.keys(HELD), PICTURE] as Key[];
 
 const COPY = 'cratarr-prefs-account';
 
+/** The copy of the account signed in; none kept: nothing of it changed on this device. */
 function readCopy(): Copy<Key> {
+  const changed: Copy<Key>['changed'] = {};
   try {
-    const c = JSON.parse(localStorage.getItem(COPY) ?? 'null');
-    if (c && typeof c === 'object' && (typeof c.account === 'string' || c.account === null)) {
-      const changed: Copy<Key>['changed'] = {};
-      for (const k of KEYS) if (Number.isFinite(c.changed?.[k])) changed[k] = c.changed[k];
-      return { account: c.account, changed };
-    }
+    const c = JSON.parse(localStorage.getItem(perAccount(COPY)) ?? 'null');
+    for (const k of KEYS) if (Number.isFinite(c?.changed?.[k])) changed[k] = c.changed[k];
   } catch {
     /* none kept */
   }
-  return { account: null, changed: {} };
+  return { account: accountKey(), changed };
 }
 
 let copy = readCopy();
 function keepCopy() {
   try {
-    localStorage.setItem(COPY, JSON.stringify(copy));
+    localStorage.setItem(COPY + whoOf(copy.account), JSON.stringify(copy));
   } catch {
     /* not kept */
   }
@@ -102,16 +101,6 @@ function send(k: Key, wait = 0) {
 async function compare() {
   const account = accountKey();
   if (account === null) return;
-  const was = signedIn(copy, account, KEYS);
-  if (was.fresh)
-    for (const k of KEYS) {
-      clearTimeout(timers[k]);
-      put(k, undefined);
-    }
-  if (was.copy !== copy) {
-    copy = was.copy;
-    keepCopy();
-  }
   let values: Record<string, HeldPreference>;
   try {
     values = await getPreferences();
@@ -146,7 +135,18 @@ function sync() {
   })().finally(() => (running = null));
 }
 
-whenAccount.add(sync);
+// Another account signed in, or nobody. Its values are in place by now (lib/prefs and lib/localCovers listen first, being
+// imported here), so what changed is no change of this device's: it is seen as it is, or it would count as made now and
+// beat what another device changed. What was waiting to go stays in the copy of the one who left, for its return.
+whenAccount.add(() => {
+  for (const k of KEYS) {
+    clearTimeout(timers[k]);
+    delete timers[k];
+    seen[k] = now(k);
+  }
+  copy = readCopy();
+  sync();
+});
 on<{ area?: string }>('changed', ({ area }) => void (area === 'preferences' && sync()));
 $effect.root(() => {
   // The channel back: what changed meanwhile is not on it, so the copy is compared again.
