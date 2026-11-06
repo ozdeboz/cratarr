@@ -849,7 +849,7 @@ async function fresh(index: number, from = 0, play = true) {
   mime = null;
   local.index = index;
   // Before its append: the queue's last ends the stream, and repeat all goes on past it. Not all who land here go by
-  // `fill` (a wind's landing).
+  // `fill` (a wind's landing, the playing track taken out).
   nextRound();
   local.position = from;
   local.error = null;

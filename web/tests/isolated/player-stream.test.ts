@@ -310,6 +310,19 @@ test('Repeat all goes round after what followed the playing track is cleared', a
   near(audio.heard()!.at, 5, 'from its start');
 });
 
+test('Repeat all goes round from a last track that takes the place of the one taken out', async () => {
+  await plays(track('a', 60), track('b', 60), track('c', 40));
+  setRepeat('all');
+  jump(1);
+  await settle();
+  removePlaying();
+  await settle();
+  assert.equal(shown(), 'c');
+  await runFor(45);
+  assert.equal(heard(), 'a');
+  near(audio.heard()!.at, 5, 'from its start');
+});
+
 test('Previous on the first track under Repeat all goes to the last, and round from there', async () => {
   await plays(track('a', 60), track('b', 40));
   setRepeat('all');
