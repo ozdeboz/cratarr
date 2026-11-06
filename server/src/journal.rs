@@ -122,7 +122,7 @@ pub enum Change {
     Crate { before: Option<crate::crates::CrateDef>, after: Option<crate::crates::CrateDef> },
     /// A crate's tracks and albums left out by hand (decision 0024, amended 2026-10-19): its list before and after.
     LeftOut { crate_id: String, before: crate::crates::LeftOut, after: crate::crates::LeftOut },
-    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19): their lines before and after.
+    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19): their song ids before and after.
     Excluded { before: Vec<String>, after: Vec<String> },
     /// The conditions an account added to a fixed crate (decision 0083: Not in this crate), by its kept id: before and
     /// after.

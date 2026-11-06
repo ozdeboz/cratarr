@@ -62,13 +62,13 @@ struct Stored {
     /// Each crate's favourite albums setting (decision 0024, amended 2026-10-19), by id; a crate not in it shows all.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     favourite_albums: BTreeMap<String, Favourites>,
-    /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their lines, relative to Music.
+    /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their song ids.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     left_out: BTreeMap<String, Vec<String>>,
     /// Each crate's albums left out by hand, by id: the albums' ids (a rule: an album's tracks now and later).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     left_out_albums: BTreeMap<String, Vec<String>>,
-    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their lines.
+    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their song ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     excluded: Vec<String>,
     /// Each ranked crate's fit (its rules and the learned traits dismissed), by its id without a count.
@@ -144,15 +144,15 @@ impl CrateStore {
     /// A crate's tracks and albums left out by hand (none until some are).
     pub async fn left_out(&self, id: &str) -> Result<LeftOut> {
         let s = self.stored().await?;
-        Ok(LeftOut { lines: s.left_out.get(id).cloned().unwrap_or_default(), albums: s.left_out_albums.get(id).cloned().unwrap_or_default() })
+        Ok(LeftOut { tracks: s.left_out.get(id).cloned().unwrap_or_default(), albums: s.left_out_albums.get(id).cloned().unwrap_or_default() })
     }
 
     /// Every crate's left-out list that holds any.
     pub async fn all_left_out(&self) -> Result<BTreeMap<String, LeftOut>> {
         let s = self.stored().await?;
         let mut all: BTreeMap<String, LeftOut> = BTreeMap::new();
-        for (id, lines) in s.left_out {
-            all.entry(id).or_default().lines = lines;
+        for (id, tracks) in s.left_out {
+            all.entry(id).or_default().tracks = tracks;
         }
         for (id, albums) in s.left_out_albums {
             all.entry(id).or_default().albums = albums;
@@ -162,7 +162,7 @@ impl CrateStore {
 
     pub async fn set_left_out(&self, id: &str, left: LeftOut) -> Result<()> {
         let mut s = self.stored().await?;
-        for (kept, list) in [(&mut s.left_out, left.lines), (&mut s.left_out_albums, left.albums)] {
+        for (kept, list) in [(&mut s.left_out, left.tracks), (&mut s.left_out_albums, left.albums)] {
             if list.is_empty() {
                 kept.remove(id);
             } else {
@@ -207,14 +207,14 @@ impl CrateStore {
         self.write_stored(s).await
     }
 
-    /// The tracks excluded from every automatic pick (their lines).
+    /// The tracks excluded from every automatic pick (their song ids).
     pub async fn excluded(&self) -> Result<Vec<String>> {
         Ok(self.stored().await?.excluded)
     }
 
-    pub async fn set_excluded(&self, lines: Vec<String>) -> Result<()> {
+    pub async fn set_excluded(&self, tracks: Vec<String>) -> Result<()> {
         let mut s = self.stored().await?;
-        s.excluded = lines;
+        s.excluded = tracks;
         self.write_stored(s).await
     }
 
@@ -368,7 +368,7 @@ mod tests {
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).favourite_albums(&id).await.unwrap(), Favourites::None, "kept, and through a change");
         // Tracks and albums left out by hand: kept per crate, through a change of it; an empty list is none.
-        let left = LeftOut { lines: vec!["x.flac".into()], albums: vec!["al-1".into()] };
+        let left = LeftOut { tracks: vec!["tr-1".into()], albums: vec!["al-1".into()] };
         again.set_left_out(&id, left.clone()).await.unwrap();
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).left_out(&id).await.unwrap(), left);

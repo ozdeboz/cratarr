@@ -453,6 +453,115 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A crate of the fixture's Undated, four tracks of one genre, on a server of its own: (server, root, the crate, its tracks).
+async fn a_crate_of_four(name: &str) -> (Server, PathBuf, String, Vec<String>) {
+    let root = temp(name);
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    settings_0_15(&data, &music.to_string_lossy());
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    let genre = json!([{ "axis": "genre", "value": { "kind": "any_of", "values": ["Downtempo"] } }]);
+    let made = s.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Downtempo", "conditions": genre })).await;
+    let id = made["id"].as_str().unwrap().to_string();
+    let tracks = row_ids(&s.get(&format!("/api/crates/{id}/rows")).await);
+    assert_eq!(tracks.len(), 4);
+    (s, root, id, tracks)
+}
+
+/// A list's rows by their ids.
+fn row_ids(list: &Value) -> Vec<String> {
+    list["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// A crate's tracks left out are tracks (0101: lines to tracks) at every door: its rows, the list that puts them back, the
+/// store, Undo, and what a Sounds like learns from what was turned down for it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_left_out_is_the_track_at_every_door_end_to_end() {
+    let (s, root, id, tracks) = a_crate_of_four("left-out").await;
+    let (rows, left) = (format!("/api/crates/{id}/rows"), format!("/api/crates/{id}/left-out"));
+    let out = s.ok(reqwest::Method::POST, &left, json!({ "ids": [tracks[0]] })).await;
+    assert_eq!(out["left_out"], 1);
+    assert_eq!(row_ids(&s.get(&rows).await), tracks[1..], "out of the crate");
+    assert_eq!(row_ids(&s.get(&left).await), tracks[..1], "on the list that puts it back");
+    let store: Value = serde_json::from_slice(&std::fs::read(root.join("data/crates.json")).unwrap()).unwrap();
+    assert_eq!(store["left_out"][&id], json!([tracks[0]]), "by its track");
+    let undone = s.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [out["undo"]] })).await;
+    assert_eq!(row_ids(&s.get(&rows).await), tracks, "undone: {undone}");
+    s.ok(reqwest::Method::POST, &left, json!({ "ids": [tracks[0]] })).await;
+    let back = s.ok(reqwest::Method::DELETE, &left, json!({ "ids": [tracks[0]] })).await;
+    assert_eq!(back["left_out"], 0);
+    assert_eq!(row_ids(&s.get(&rows).await), tracks, "put back");
+
+    // Turned down for a Sounds like: what it says of what does not fit reads the same tracks.
+    let like = format!("like:{}", tracks[1]);
+    s.ok(reqwest::Method::POST, &format!("/api/crates/{like}/left-out"), json!({ "ids": [tracks[2]] })).await;
+    assert_eq!(s.get(&format!("/api/crates/{like}/fit")).await["turned_down"], 1);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// What is excluded everywhere is a track at every door: the list, every crate, Sounds like's curve, the store.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_excluded_is_the_track_at_every_door_end_to_end() {
+    let (s, root, id, tracks) = a_crate_of_four("excluded").await;
+    let rows = format!("/api/crates/{id}/rows");
+    let curve = format!("/api/like-curve?of={}", tracks[1]);
+    let alike = s.get(&curve).await["alike"].as_array().unwrap().len();
+    assert!(alike > 1, "a curve to tell by");
+    let out = s.ok(reqwest::Method::POST, "/api/excluded", json!({ "ids": [tracks[0]] })).await;
+    assert_eq!(out["excluded"], 1);
+    assert_eq!(row_ids(&s.get("/api/excluded").await), tracks[..1], "on the list that puts it back");
+    assert_eq!(row_ids(&s.get(&rows).await), tracks[1..], "out of every crate");
+    let store: Value = serde_json::from_slice(&std::fs::read(root.join("data/crates.json")).unwrap()).unwrap();
+    assert_eq!(store["excluded"], json!([tracks[0]]), "by its track");
+    assert_eq!(s.get(&curve).await["alike"].as_array().unwrap().len(), alike - 1, "out of what is like anything");
+    let back = s.ok(reqwest::Method::DELETE, "/api/excluded", json!({ "ids": [tracks[0]] })).await;
+    assert_eq!(back["excluded"], 0);
+    assert_eq!(row_ids(&s.get(&rows).await), tracks, "put back");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A record deleted with a track of it left out, its crate's list read and the track gone from the library.
+async fn left_out_and_deleted(name: &str) -> (Server, PathBuf, String, String) {
+    let (s, root, id, tracks) = a_crate_of_four(name).await;
+    let left = format!("/api/crates/{id}/left-out");
+    s.ok(reqwest::Method::POST, &left, json!({ "ids": [tracks[0]] })).await;
+    let album = s.albums().await.into_iter().find(|a| a["title"] == "Undated").unwrap();
+    s.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()), json!({})).await;
+    s.until("the library to let it go", Duration::from_secs(120), || async { !s.albums().await.iter().any(|a| a["title"] == "Undated") }).await;
+    (s, root, left, tracks[0].clone())
+}
+
+/// The list shows what a track was once its file went, by the id it keeps: a line would say nothing but a path.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_left_out_shows_what_it_was_after_its_file_went_end_to_end() {
+    let (s, root, left, track) = left_out_and_deleted("left-out-shown").await;
+    let list = s.get(&left).await;
+    assert_eq!(row_ids(&list), [track], "{list}");
+    assert_eq!(list["rows"][0]["name"], "Morning", "{list}");
+    assert_eq!(list["rows"][0]["artist"], "Kite Theory", "{list}");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// What was left out can be put back after its file went: taken in, a track must be there, but going out it need not be.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_track_left_out_can_be_put_back_after_its_file_went_end_to_end() {
+    let (s, root, left, track) = left_out_and_deleted("left-out-back").await;
+    assert_eq!(s.ok(reqwest::Method::DELETE, &left, json!({ "ids": [track] })).await["left_out"], 0);
+    assert_eq!(s.ok(reqwest::Method::POST, &left, json!({ "ids": [track] })).await["left_out"], 0, "not there, so not taken in");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// An artist's id for life on a running server: what the library serves, the panel's heart by name, an artist seed's crate
 /// by id, and all of it the same after a restart. A heart on a name no file credits yet is kept too, as it was under the hash.
 #[tokio::test(flavor = "multi_thread")]
