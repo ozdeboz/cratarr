@@ -149,8 +149,9 @@ impl App {
         let jobs = self.incoming.jobs();
         // Who is looking (0101 point 2): the names, the rights and where Add to goes are theirs.
         let viewer = self.served.as_ref().and_then(|s| s.current_user());
+        let picks = self.served.as_ref().zip(viewer.as_ref()).map(|(s, v)| s.userdata.copy_picks_kept(v)).unwrap_or_default();
         let admin = crate::serve::access::administering();
-        let asked = self.served.as_ref().map(|s| super::requests::requesters(s)).unwrap_or_default();
+        let asked =self.served.as_ref().map(|s| super::requests::requesters(s)).unwrap_or_default();
         let requester = |al: &source::Album| al.artist.as_deref().and_then(|ar| asked.get(&super::requests::requested(ar, &al.title)));
         let mut sources: Vec<AlbumsSourceView> = ids
             .into_iter()
@@ -237,6 +238,7 @@ impl App {
                     for c in &mut a.copies {
                         (c.format, c.kbps, c.deletable, c.keepable, c.keep_to, c.lacks, c.job) = (format.clone(), kbps, deletable, keepable, keep_to.clone(), lacks.clone(), job.map(|j| j.id));
                         c.plays = true;
+                        c.picked = picks.get(&a.id).is_some_and(|l| *l == c.library);
                     }
                     a
                 };
@@ -473,6 +475,19 @@ impl App {
         let account = std::path::Path::new(to).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let made = self.library.own_library(&account).await.map_err(ToggleError::Upstream)?;
         made.ok_or_else(|| ToggleError::Refused("no own-music folder is set".into()))
+    }
+
+    /// `account` plays this record from its copy in `library`, until they pick another or that copy goes. A record of Cratarr's
+    /// own, a copy they can see; one in a library off is kept, and loses until they switch it on.
+    pub async fn pick_copy(&self, source: &str, album: &str, account: &str, library: &str) -> Result<(), ToggleError> {
+        let served = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open".into()))?;
+        let (_, a) = self.listed_album(source, album, Some(library)).await?;
+        if a.copies.is_empty() {
+            return Err(ToggleError::Refused("Only Cratarr's own records have copies to pick".into()));
+        }
+        let (account, album, library) = (account.to_string(), album.to_string(), library.to_string());
+        tokio::task::spawn_blocking(move || served.userdata.set_copy_pick(&account, &album, &library)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        Ok(())
     }
 
     /// Move a copy into another used library of its server (decision 0034).

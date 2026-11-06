@@ -28,6 +28,13 @@ pub struct Listener {
     pub(super) library: Option<Arc<Library>>,
 }
 
+/// An account's picks by the catalogue folder of each: a library's id is its folder, and `roots` the folders by id. One whose
+/// library is no longer in use picks nothing.
+pub fn picks_in(picks: &HashMap<String, String>, roots: &[(i64, String)]) -> HashMap<String, i64> {
+    let folder = |library: &str| roots.iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| *f);
+    picks.iter().filter_map(|(record, library)| Some((record.clone(), folder(library)?))).collect()
+}
+
 impl Listener {
     /// As `copy_for` takes them, for this record; none for no one in particular, unless the request named a copy.
     pub fn viewer(&self, album: &str) -> Option<Viewer> {
@@ -209,10 +216,10 @@ pub(crate) mod tests {
     fn a_dir_holding_another_records_audio_is_refused() {
         let (root, _cat, lib) = built(
             "alone",
-            &[("Artist/Live/1.flac", "Spread", "One"), ("Artist/Live/2.flac", "Lone", "Two"), ("Artist/Studio/1.flac", "Spread", "Three"), ("Box/CD1/1.flac", "Set", "Four"), ("Box/CD2/1.flac", "Set", "Five")],
+            &[("Artist/Live/1.flac", "Spread", "One"), ("Artist/Aside/1.flac", "Lone", "Two"), ("Artist/Studio/1.flac", "Spread", "Three"), ("Box/CD1/1.flac", "Set", "Four"), ("Box/CD2/1.flac", "Set", "Five")],
         );
         let album = |dir: &str| lib.album_in(0, dir).unwrap().unwrap();
-        let all = ["Artist/Live/1.flac", "Artist/Live/2.flac", "Artist/Studio/1.flac"].map(String::from);
+        let all = ["Artist/Live/1.flac", "Artist/Aside/1.flac", "Artist/Studio/1.flac"].map(String::from);
         let spread = album("Artist");
         assert!(!lib.copy_holds_all(&spread, 0, "Artist", &all).unwrap(), "the other album lies under it, and in a copy of its own folder");
         let (only_its_own, set) = (["Artist/Live/1.flac", "Artist/Studio/1.flac"].map(String::from), album("Box"));
@@ -220,6 +227,46 @@ pub(crate) mod tests {
         assert!(lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD2/1.flac"].map(String::from)).unwrap(), "two discs of one copy are that copy");
         assert!(!lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD3/new.flac"].map(String::from)).unwrap(), "a file not built yet is no file of it");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// As `Serve::listener` makes it: this account, with its picks as kept.
+    fn with_picks(t: &Two, u: &crate::userdata::UserData, account: &str) -> Listener {
+        let roots: Vec<(i64, String)> = t.roots.iter().enumerate().map(|(f, r)| (f as i64, r.to_string_lossy().to_string())).collect();
+        Listener { picks: picks_in(&u.copy_picks_kept(account), &roots), ..t.who(Some(account), None, &[]) }
+    }
+
+    /// The design: a pick holds "until they pick another or that copy goes".
+    #[test]
+    fn a_pick_plays_until_its_copy_goes() {
+        let t = two("pick");
+        let u = crate::userdata::UserData::open(None).unwrap();
+        let (best, other) = (t.roots[0].to_string_lossy().to_string(), t.roots[1].to_string_lossy().to_string());
+        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "the best kept copy, with nothing picked");
+        u.set_copy_pick("ann", &t.album, &other).unwrap();
+        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(1), "at a lower quality, as picked");
+        u.set_copy_pick("ann", &t.album, &best).unwrap();
+        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "another pick takes its place");
+        u.set_copy_pick("ann", &t.album, &other).unwrap();
+        u.forget_copy_picks(&t.album, &best).unwrap();
+        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(1), "a copy elsewhere going leaves it");
+        u.forget_copy_picks(&t.album, &other).unwrap();
+        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "that copy went");
+        assert!(u.copy_picks("ann").unwrap().is_empty());
+    }
+
+    /// One account's choice is no one else's, and a pick in a library off still never plays.
+    #[test]
+    fn a_pick_is_the_accounts_own() {
+        let t = two("picks");
+        let u = crate::userdata::UserData::open(None).unwrap();
+        u.set_copy_pick("ann", &t.album, &t.roots[1].to_string_lossy()).unwrap();
+        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(1));
+        assert_eq!(t.plays(&with_picks(&t, &u, "bob")), at(0), "bob picked nothing");
+        assert_eq!(t.plays(&t.who(None, None, &[])), at(0), "no one in particular");
+        let off = Listener { off: vec![1], ..with_picks(&t, &u, "ann") };
+        assert_eq!(t.plays(&off), at(0), "in a library off a pick loses");
+        u.set_copy_pick("ann", &t.album, "/no/such/library").unwrap();
+        assert_eq!(t.plays(&with_picks(&t, &u, "ann")), at(0), "a library no longer in use picks nothing");
     }
 
     /// An intake card's snippets are of the copy waiting, which by `copy_for` plays for no one: the stream names it, and it

@@ -91,7 +91,18 @@ gains, is the file that plays, so a waveform's ETag names the file.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
   The record stays while one copy is left.
 - The quality on a card is the copy that plays.
-- A record's Move, Add to and Delete take the copy: `from`, a library's id.
+- A record's Move, Add to, Delete and Replace take the copy: `from`, a library's id, in the query for a preview and the body
+  for the act. A record of several copies with none named is refused, and nothing moves. Of two folders of one library
+  `from` names the first. Replace also takes `to`, the main library whose copy it takes the place of.
+- A copy goes whole only where it is alone in its folder: every audio file under its `dir` is its own, and no other copy lies
+  inside. Else it reads as not seen, as `dir` is only what its files share, and can be a parent of other records or the root.
+- An intake card is about the copy waiting, whichever plays: its tracks are that copy's files, what is heard is kept by
+  (record, folder), a fix on the "Before adding" sheet writes to that copy alone, and a snippet's stream names it by `from`, a
+  pick for that one stream. A review is kept by (record, folder) too.
+- `PUT /api/albums/{source}/{album}/copy-pick` with `{ library }` is "Plays from". It tells the account's pages as the
+  preference `copy_picks`. A pick goes with its copy at Delete, Move, Add to and Replace, and Undo brings back the copy, not
+  the pick.
+- A stream's file is named in its validator, and `If-Range` is honoured: a seek never gets another file's bytes.
 - Incoming's verdicts go: a better copy is a copy of the record, and Replace swaps two copies of one record.
 
 ## Copy to own music
