@@ -148,6 +148,10 @@ pub struct FileRun {
     /// The files not written, and why.
     #[serde(default)]
     pub failed: Vec<RunFailed>,
+    /// The records whose `files` are what was planned, not what was written: those of a run still writing, or of one a stop
+    /// cut off, until its files have been read (`file_runs::settle`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planned: Vec<String>,
 }
 
 /// A record of a run: its album id, title and artist.
@@ -274,6 +278,8 @@ pub struct Journal {
     tell: tokio::sync::broadcast::Sender<EventId>,
     /// Events just undone, for handlers that put their work back (`subscribe_undone`).
     tell_undone: tokio::sync::broadcast::Sender<EventId>,
+    /// Runs still writing, by id (`run_writing`).
+    writing: Mutex<Vec<EventId>>,
 }
 
 impl Journal {
@@ -291,7 +297,7 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
-        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0 })
+        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0, writing: Mutex::default() })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -516,15 +522,36 @@ impl Journal {
         Ok(())
     }
 
-    /// The runs kept since `since` (epoch seconds), newest first: id, when, the run, whether all of it was undone.
+    /// A run kept before it wrote, and writing now: told as it goes, so `file_runs_since` leaves it out until `run_ended`.
+    /// In memory: after a restart nothing is writing, and a run cut off is listed.
+    pub fn run_writing(&self, id: EventId) {
+        self.writing.lock().unwrap_or_else(|p| p.into_inner()).push(id);
+    }
+
+    /// A run writing no more.
+    pub fn run_ended(&self, id: EventId) {
+        self.writing.lock().unwrap_or_else(|p| p.into_inner()).retain(|w| *w != id);
+    }
+
+    /// A run that came to nothing: it wrote no file and set none aside.
+    pub fn forget_run(&self, id: EventId) -> Result<()> {
+        self.db().execute("DELETE FROM file_runs WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// The runs kept since `since` (epoch seconds), newest first, those writing left out: id, when, the run, whether all of
+    /// it was undone.
     pub fn file_runs_since(&self, since: i64) -> Result<Vec<(EventId, i64, FileRun, bool)>> {
+        let writing = self.writing.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let db = self.db();
         let mut st = db.prepare_cached("SELECT id, at, run, undone_at FROM file_runs WHERE at >= ?1 ORDER BY id DESC")?;
         let rows = st.query_map([since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<i64>>(3)?)))?;
         let mut out = Vec::new();
         for row in rows {
             let (id, at, run, undone) = row?;
-            out.push((id, at, serde_json::from_str(&run)?, undone.is_some()));
+            if !writing.contains(&id) {
+                out.push((id, at, serde_json::from_str(&run)?, undone.is_some()));
+            }
         }
         Ok(out)
     }
@@ -554,7 +581,7 @@ mod change_tests {
             undone: false, whole: None,
         };
         let record = RunRecord { album: "al-1".into(), title: "Skylon".into(), artist: "Ott".into() };
-        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new() };
+        let mut run = FileRun { what: "types".into(), title: "Types and years".into(), records: vec![record], files: vec![file], failed: Vec::new(), planned: Vec::new() };
         let old = j.record_run(1_000, &run, None, 100).unwrap();
         let id = j.record_run(2_000, &run, Some("ann"), 100).unwrap();
         assert_eq!(j.file_run(old).unwrap(), None, "older than the trash keeps: forgotten");

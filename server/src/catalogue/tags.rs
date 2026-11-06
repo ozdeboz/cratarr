@@ -3,7 +3,7 @@
 //! value as stored: nothing is split or merged here (see `normalise`). Cover art is not read.
 
 /// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`).
-pub const READER_VERSION: u32 = 8;
+pub const READER_VERSION: u32 = 9;
 
 /// What is wrong with a file that could still be read (a file that cannot be read at all is an error instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

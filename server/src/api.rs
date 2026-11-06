@@ -101,6 +101,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/not-artist/{key}", delete(crate_not_artist_back))
         .route("/api/excluded", get(excluded).post(exclude).delete(include_again))
         .route("/api/me/excluded-artists", get(excluded_artists))
+        // The person's preferences on the account (decision 0101 point 14).
+        .route("/api/me/preferences", get(my_preferences))
+        .route("/api/me/preferences/{key}", put(set_my_preference))
         .route("/api/me/taste/fits", post(taste_fits))
         .route("/api/me/excluded-artists/{key}", put(exclude_artist).delete(include_artist))
         .route(
@@ -139,6 +142,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
+        // Asked of everyone: who may is the record's own (0101 point 2).
+        .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
+        .route("/api/albums/{source}/{album}/delete", post(delete_album))
         // Classical (0.10): its composers, a composer's records, a track's other versions; everyone's.
         .route("/api/classical/composers", get(classical_composers))
         .route("/api/classical/composers/{key}", get(classical_composer))
@@ -160,7 +166,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/undo", post(undo))
         .route("/api/batch/playlists/favorite", post(playlists_favorite))
         .route("/api/batch/playlists/delete", post(playlists_delete))
-        .route("/api/batch/playlists/link", post(playlists_link))
         .route("/api/batch/playlists/rows", post(playlists_rows))
 
         // For everyone: the version and when it started (About), the servers and their libraries (the filter): what
@@ -254,9 +259,9 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/library/find", get(library_find))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
+            .route("/api/batch/playlists/link", post(playlists_link))
             .route("/api/sync/targets", get(sync_targets))
-            .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
-            .route("/api/albums/{source}/{album}/delete", post(delete_album))
+            .route("/api/albums/{source}/{album}/delete-own", post(delete_own_album))
             .route("/api/albums/duplicates", get(album_duplicates))
             .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
             .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
@@ -329,6 +334,10 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
+            // Lost track ids started afresh (0101, the owner: a lost catalogue.sqlite stops Cratarr until this or a restore).
+            .route("/api/catalogue/fresh-ids", post(catalogue_fresh_ids))
+            // The 0.16 first start's migration report (decision 0101), every part.
+            .route("/api/admin/migration", get(migration_report))
             .route("/api/health/report", get(health_report))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
@@ -377,6 +386,8 @@ pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware
         res.headers_mut().insert("x-request-id", v);
     }
     res.headers_mut().insert("x-response-time-ms", HeaderValue::from(ms as u64));
+    // On every answer, what comes from a file's tags or from another server too: a browser takes it for what it says it is.
+    res.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     res
 }
 
@@ -1436,7 +1447,7 @@ async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>) -> 
     let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
         let track = cat.track_of_source(&source, &id)?;
         let (folder, rel) = cat.file_of(track)?;
-        let root = cat.folders().get(folder as usize)?.clone();
+        let root = cat.folders().get(folder)?.clone();
         let path = root.join(&rel);
         let meta = std::fs::metadata(&path).ok();
         let modified = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
@@ -2771,6 +2782,9 @@ async fn group_listen(ctx: Ctx, Path(leader): Path<String>, Query(q): Query<List
     let Some(snap) = ctx.snapcast() else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
     };
+    if !app.play_on.hears(&leader, &q.player) {
+        return refused(StatusCode::NOT_FOUND, "No such group.");
+    }
     let delay = u32::from(app.play_on.delay_of(&q.player));
     let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.listen(&leader, &q.player, delay)));
     ([(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav")), (header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], body).into_response()
@@ -2783,8 +2797,8 @@ async fn group_frames(ctx: Ctx, Path(leader): Path<String>, Query(q): Query<List
     let Some(snap) = ctx.snapcast() else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
     };
-    if let Err(e) = app.play_on.reached(&q.player) {
-        return ApiError::from(e).into_response();
+    if !app.play_on.hears(&leader, &q.player) {
+        return refused(StatusCode::NOT_FOUND, "No such group.");
     }
     let delay = u32::from(app.play_on.delay_of(&q.player));
     let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.frames(&leader, &q.player, delay)));
@@ -3812,6 +3826,16 @@ struct KeepYear {
     year: Option<String>,
 }
 
+/// Where Keep puts an album (0101 point 2): a main library's id, else the server's first main library (`keep_to`);
+/// and the year when the album's tags lack it.
+#[derive(Deserialize, Default)]
+struct KeepInto {
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    year: Option<String>,
+}
+
 /// Where a move goes (decision 0034): a library's id, and the year when the album's tags lack it.
 #[derive(Deserialize)]
 struct MoveTo {
@@ -3822,6 +3846,11 @@ struct MoveTo {
 
 async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
     Ok(Json(app.delete_album(&source, &album).await?))
+}
+
+/// An album of someone's own music deleted from the Users panel (the administrators' only way, the owner, 2026-11-04).
+async fn delete_own_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+    Ok(Json(app.delete_own_album(&source, &album).await?))
 }
 
 async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<MoveTo>) -> Result<Json<crate::app::KeepPreview>, ApiError> {
@@ -3835,18 +3864,18 @@ async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(St
 async fn keep_preview(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
-    Query(q): Query<KeepYear>,
+    Query(q): Query<KeepInto>,
 ) -> Result<Json<crate::app::KeepPreview>, ApiError> {
-    Ok(Json(app.incoming.keep_preview(&source, &album, q.year.as_deref()).await?))
+    Ok(Json(app.incoming.keep_preview(&source, &album, q.to.as_deref(), q.year.as_deref()).await?))
 }
 
 async fn keep_incoming(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
-    body: Option<Json<KeepYear>>,
+    body: Option<Json<KeepInto>>,
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
-    let year = body.map(|Json(b)| b).unwrap_or_default().year;
-    Ok(Json(app.incoming.keep(&source, &album, year.as_deref()).await?))
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    Ok(Json(app.incoming.keep(&source, &album, b.to.as_deref(), b.year.as_deref()).await?))
 }
 
 async fn replace_preview(
@@ -3904,7 +3933,8 @@ struct CoverStamp {
 async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
     match app.playing.album_cover(&source, &album).await {
         Some((content_type, bytes)) => {
-            let ct = HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
+            // Another server's album comes with what that server says.
+            let ct = HeaderValue::from_static(crate::serve::art::picture_type(Some(&content_type), &bytes));
             let keep = if q.v.is_some_and(|v| !v.is_empty()) { "private, max-age=31536000, immutable" } else { "private, max-age=3600" };
             ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static(keep))], bytes).into_response()
         }
@@ -4250,7 +4280,15 @@ async fn libraries(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value
     let sources: Vec<serde_json::Value> = v
         .sources
         .iter()
-        .map(|s| json!({ "id": s.id, "label": s.label, "status": { "server_name": s.status.server_name }, "server_libraries": s.server_libraries, "libraries": s.libraries }))
+        .map(|s| {
+            // Beside the settings' list, each account's own music (0101 point 9), named for whoever asks.
+            let own = app.own_music_seen(&s.id);
+            let listed = serde_json::to_value(&s.libraries).unwrap_or_default();
+            let libraries: Vec<serde_json::Value> = listed.as_array().cloned().unwrap_or_default().into_iter().chain(own.iter().map(|(id, _, mine)| json!({ "id": id, "kind": "own", "mine": mine }))).collect();
+            let found = serde_json::to_value(&s.server_libraries).unwrap_or_default();
+            let server_libraries: Vec<serde_json::Value> = found.as_array().cloned().unwrap_or_default().into_iter().chain(own.iter().map(|(id, name, _)| json!({ "id": id, "name": name }))).collect();
+            json!({ "id": s.id, "label": s.label, "status": { "server_name": s.status.server_name }, "server_libraries": server_libraries, "libraries": libraries })
+        })
         .collect();
     Ok(Json(json!({ "sources": sources })))
 }
@@ -4334,6 +4372,31 @@ async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::cat
     let c = app.library.catalogue();
     let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(status.map_err(ToggleError::from)?))
+}
+
+/// The 0.16 first start's migration report (decision 0101's rehearsal: compared with production's copy), by part:
+/// each when it ran (epoch s) and what it found (its `tables`, its `unmatched`, its own fields). None ran: no parts.
+async fn migration_report(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(serve) = app.served.clone() else { return Ok(Json(json!({ "parts": {} }))) };
+    let parts = tokio::task::spawn_blocking(move || serve.userdata.migration_report()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    let parts: serde_json::Map<String, serde_json::Value> = parts
+        .map_err(ToggleError::from)?
+        .into_iter()
+        .map(|(part, (at, mut report))| {
+            if let Some(m) = report.as_object_mut() {
+                m.insert("at".into(), json!(at));
+            }
+            (part, report)
+        })
+        .collect();
+    Ok(Json(json!({ "parts": parts })))
+}
+
+/// Lost track ids started afresh (`Library::fresh_track_ids`): where the new ids begin and what still names old tracks.
+async fn catalogue_fresh_ids(State(app): State<Arc<App>>) -> Result<Json<crate::app::FreshIds>, ApiError> {
+    let lib = app.library.clone();
+    let fresh = tokio::task::spawn_blocking(move || lib.fresh_track_ids()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(fresh.map_err(ToggleError::from)?))
 }
 
 /// The files with a problem: 500 of each kind at most (`Catalogue::problems`), so each kind's Health panel lists its own.
@@ -4541,6 +4604,50 @@ async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<std
 }
 
 /// The asking account and Cratarr's own library, for Discover (decision 0069).
+/// The signed-in account's library and name, for its preferences. With sign-in off and no account at all, the install's
+/// one user, kept as "" (the page's own key there), so the page needs no case of its own.
+fn preferrer(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
+    let serve = ctx.serve()?;
+    let account = match ctx.account() {
+        Some(a) => a,
+        None if !serve.sign_in_required() => String::new(),
+        None => return Err(ToggleError::Refused("Sign in first: preferences are an account's own.".into()).into()),
+    };
+    Ok((serve, account))
+}
+
+/// The person's preferences on their account (decision 0101 point 14): `{values: {<key>: {value, changed}}}`, the keys
+/// it holds.
+async fn my_preferences(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = preferrer(&ctx)?;
+    let values = tokio::task::spawn_blocking(move || serve.userdata.preferences(&account))
+        .await
+        .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
+        .map_err(ToggleError::from)?;
+    Ok(Json(json!({ "values": values })))
+}
+
+/// A preference as a device changed it: its whole value and when (epoch ms, the device's clock).
+#[derive(Deserialize)]
+struct PreferenceBody {
+    value: serde_json::Value,
+    changed: i64,
+}
+
+/// A preference changed on a device: kept when that change is later than the kept one (the latest wins, the whole
+/// value). Answers what is kept afterwards, `{value, changed}`; an unknown key or a value of the wrong shape: 400.
+async fn set_my_preference(ctx: Ctx, Path(key): Path<String>, Json(b): Json<PreferenceBody>) -> Result<Json<crate::userdata::preferences::Preference>, ApiError> {
+    if let Some(why) = crate::userdata::preferences::refusal(&key, &b.value) {
+        return Err(ToggleError::BadSettings(why).into());
+    }
+    let (serve, account) = preferrer(&ctx)?;
+    let kept = tokio::task::spawn_blocking(move || serve.userdata.set_preference(&account, &key, &b.value, b.changed))
+        .await
+        .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
+        .map_err(ToggleError::from)?;
+    Ok(Json(kept))
+}
+
 fn discoverer(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
     let serve = ctx.serve()?;
     let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: Discover is an account's own.".into()))?;
@@ -6476,7 +6583,7 @@ async fn soulseek_now(State(app): State<Arc<App>>, Path(id): Path<String>) -> Js
 
 /// A record taken off the list (not while fetched).
 async fn soulseek_drop(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::soulseek::View> {
-    Json(crate::app::soulseek::drop_item(&app, &id))
+    Json(crate::app::soulseek::drop_item(&app, &id).await)
 }
 
 /// The placed records cleared.
@@ -6916,7 +7023,7 @@ async fn file_change_runs(State(app): State<Arc<App>>, Query(q): Query<RunsSince
 
 /// A kept run, its records as written.
 async fn file_change_run(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (status, sheet) = crate::app::file_runs::run(&app, &id).map_err(file_change_refused)?;
+    let (status, sheet) = crate::app::file_runs::run(&app, &id).await.map_err(file_change_refused)?;
     Ok(Json(json!({ "run": status, "kind": sheet.kind, "title": sheet.title, "records": sheet.records })))
 }
 

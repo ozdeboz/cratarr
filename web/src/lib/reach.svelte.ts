@@ -1,6 +1,7 @@
-// Whether Cratarr answers. Away from home the proxy in front of it refuses with 403 (Cratarr itself never does); a
-// stopped Cratarr gets the proxy's empty 502 to 504; without a network the request fails. All three are out of reach:
-// the pages say so in one line, the pollers ask less often, and the app opens on its downloads (decision 0033, step 4).
+// Whether Cratarr answers. Away from home the proxy in front of it refuses with a bare 403 (Cratarr's own says why in its
+// words, and is an answer); a stopped Cratarr gets the proxy's empty 502 to 504; without a network the request fails. All
+// three are out of reach: the pages say so in one line, the pollers ask less often, and the app opens on its downloads
+// (decision 0033, step 4).
 // Without a session away from home, Cratarr asks for its sign-in instead: the page goes to the sign-in page.
 
 export const reach = $state({

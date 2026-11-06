@@ -564,15 +564,15 @@ impl Driver {
     }
 }
 
-/// The group's silence when it changes; never without a group.
+/// The group's silence when it changes; never without a group. `None`, and `m` emptied, once the group's stream went (no
+/// one fed it or heard it): the driver's loop then follows the stream made after it.
 async fn changed(m: &mut Option<tokio::sync::watch::Receiver<bool>>) -> Option<bool> {
-    match m {
-        Some(m) => match m.changed().await {
-            Ok(()) => Some(*m.borrow()),
-            Err(_) => std::future::pending().await,
-        },
-        None => std::future::pending().await,
+    let Some(silence) = m else { return std::future::pending().await };
+    if silence.changed().await.is_ok() {
+        return Some(*silence.borrow());
     }
+    *m = None;
+    None
 }
 
 /// Drives one Kodi for as long as Cratarr runs (the task is aborted when the settings change).
@@ -884,6 +884,17 @@ mod tests {
         step("stop", &d);
         let muted = was.get("muted").and_then(Value::as_bool).unwrap_or(false);
         d.rpc.call("Application.SetMute", json!({ "mute": muted })).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_group_s_silence_is_asked_for_anew_once_its_stream_went() {
+        let (stream, heard) = tokio::sync::watch::channel(false);
+        let mut silence = Some(heard);
+        stream.send_replace(true);
+        assert_eq!(changed(&mut silence).await, Some(true));
+        drop(stream);
+        assert_eq!(changed(&mut silence).await, None);
+        assert!(silence.is_none(), "so the driver's loop takes the next stream's");
     }
 
     #[test]

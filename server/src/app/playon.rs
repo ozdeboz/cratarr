@@ -1963,6 +1963,19 @@ impl PlayOn {
         }
     }
 
+    /// Whether the running request may hear `leader`'s group as player `name` (decision 0051: "Listening is private",
+    /// "Sync play admits only its own players"): `name` plays in that group, and the request reaches it. What a player's
+    /// secret is on the sync port, here over HTTP. A signed link reaches every player (`whose`), so a Kodi's goes by its
+    /// group alone.
+    pub fn hears(&self, leader: &str, name: &str) -> bool {
+        self.heard_by(whose().as_deref(), away(), leader, name)
+    }
+
+    fn heard_by(&self, user: Option<&str>, away: bool, leader: &str, name: &str) -> bool {
+        let first = first_owner();
+        self.entries().get(name).is_some_and(|e| e.leader.as_deref() == Some(leader) && user.is_none_or(|u| reach(e, u, first.as_deref(), away).is_ok()))
+    }
+
     /// Whether player `name` is the running request's own, or the request an administrator's: its settings, its log
     /// and its sharing are theirs only. A shared one of another's is refused as one not theirs (it is seen, so it says
     /// so); one not seen at all, as if there were none.
@@ -2817,20 +2830,22 @@ impl PlayOn {
             (a.map(|a| a.mode).unwrap_or_default(), a.is_some_and(|a| a.albums), q.is_some_and(|q| q.skip_favourites))
         };
         let ask = super::radio::NextRequest {
-            mode: super::radio::Mode::of(mode),
-            seed: seed.clone(),
-            exclude: seed.clone(),
-            last: None,
-            count: Some(RADIO_START),
+            ask: super::radio::Ask {
+                mode: mode.asks(),
+                seed: seed.clone(),
+                exclude: seed.clone(),
+                last: None,
+                count: Some(RADIO_START),
+                albums,
+                by: RadioBy::default(),
+                skip_favourites,
+                // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
+                similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
+                folders: None,
+            },
             within: None,
-            albums,
-            by: RadioBy::default(),
-            skip_favourites,
-            // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
-            similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
             // Its account's More music choice (0.9.5), as for its "Similar by".
             account: self.account_of(name),
-            folders: None,
         };
         let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
         let first = super::radio::next(&app, ask).await?;
@@ -3806,6 +3821,32 @@ mod tests {
         assert_eq!(seen.iter().map(|v| (v.name.as_str(), v.mine, v.shared, v.owner.as_deref())).collect::<Vec<_>>(), [("Phone", false, true, Some("ann"))]);
         assert!(p.list_for(Some("ann"))[0].mine);
         assert!(!p.forget("Phone", "bob").unwrap(), "removing stays hers");
+    }
+
+    #[tokio::test]
+    async fn a_group_is_heard_through_one_s_own_player_in_it_and_no_other_way() {
+        let p = play_on().await;
+        p.serve_sync_play(1704, 1000, None);
+        let (_tablet, _page, _his) = (p.connect("tablet").unwrap(), p.connect_browser("page", Some("tab-1")).unwrap(), p.connect("his").unwrap());
+        p.own("tablet", "ann");
+        p.own("page", "ann");
+        p.own("his", "bob");
+        p.command("page", Command::Join { to: "tablet".into() }).await.unwrap();
+        let hears = |user: &str, leader: &str, player: &str| p.heard_by(Some(user), false, leader, player);
+        assert!(hears("ann", "tablet", "page"));
+        assert!(hears("ann", "tablet", "tablet"), "the leader is in its own group");
+        assert!(!hears("bob", "tablet", "page"), "another account's player in the group");
+        assert!(!hears("bob", "tablet", "his"), "his own player, not in the group");
+        assert!(!hears("ann", "tablet", "made up"), "no such player");
+        assert!(!hears("ann", "made up", "page"), "no such group");
+        assert!(!hears("ann", "page", "page"), "a follower leads nothing");
+        // A Kodi's signed link is no one's: it goes by the group alone.
+        assert!(p.heard_by(None, false, "tablet", "page"));
+        assert!(!p.heard_by(None, false, "tablet", "his"));
+        // Shared with everyone, a player is theirs to use at home, and so is what it hears.
+        p.entries().get_mut("page").unwrap().shared = true;
+        assert!(hears("bob", "tablet", "page"));
+        assert!(!p.heard_by(Some("bob"), true, "tablet", "page"), "away from home");
     }
 
     #[tokio::test]

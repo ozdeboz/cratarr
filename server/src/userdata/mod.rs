@@ -17,6 +17,7 @@
 pub mod offline;
 pub mod overrides;
 pub mod playlists;
+pub mod preferences;
 pub mod scrobbles;
 pub mod tags;
 pub mod words;
@@ -32,6 +33,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 // journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
+-- What the user data remembers of elsewhere (0101): which catalogue its track ids are of, and the highest id given out.
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 PRAGMA journal_size_limit = 8388608;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS annotation (
@@ -50,6 +53,9 @@ CREATE TABLE IF NOT EXISTS app_queue (
   user TEXT NOT NULL, client TEXT NOT NULL, songs TEXT NOT NULL, current INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, PRIMARY KEY (user, client)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
+-- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `tracks`,
+-- `records`, `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
+CREATE TABLE IF NOT EXISTS migration_report (part TEXT PRIMARY KEY, at INTEGER NOT NULL, report TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
   name TEXT NOT NULL, album_artist TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
@@ -439,6 +445,8 @@ pub struct UserData {
     db: Mutex<Connection>,
     /// Every change of favourites, as `set_starred` makes it (`subscribe_starred`).
     starred: tokio::sync::broadcast::Sender<Starred>,
+    /// Every kept change of a preference (`subscribe_preferences`).
+    preferences: tokio::sync::broadcast::Sender<preferences::PreferenceChanged>,
 }
 
 /// A change of favourites (stars) as `set_starred` made it, whichever way it came: a page, a Subsonic app, Home
@@ -639,7 +647,51 @@ fn imported_of(r: &rusqlite::Row) -> rusqlite::Result<Imported> {
     })
 }
 
+/// One part of the 0.16 first start's migration report (decision 0101: rehearsed on staging, the report compared with
+/// production's copy), written in the caller's transaction where it has one, last in it. Every part reads alike: a common
+/// core, `tables` (`[{name, before, after}]`, each table's rows) and `unmatched` (`[{what, count, sample}]`, what found no
+/// match, with up to ten samples), the part's own fields beside them. Written again, a part replaces itself.
+pub(crate) fn put_migration_part(conn: &Connection, part: &str, report: &serde_json::Value) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO migration_report (part, at, report) VALUES (?1, ?2, ?3)",
+        params![part, now(), report.to_string()],
+    )?;
+    Ok(())
+}
+
 impl UserData {
+    /// A part of the migration report (`put_migration_part`), in a transaction of its own.
+    pub fn set_migration_part(&self, part: &str, report: &serde_json::Value) -> Result<()> {
+        put_migration_part(&self.db(), part, report)
+    }
+
+    /// Fields added to a part of the migration report written before (what a later step of it found); none: nothing.
+    pub fn add_to_migration_part(&self, part: &str, fields: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+        let db = self.db();
+        let Some(text) = db.query_row("SELECT report FROM migration_report WHERE part = ?1", [part], |r| r.get::<_, String>(0)).optional()? else {
+            return Ok(());
+        };
+        let mut report: serde_json::Value = serde_json::from_str(&text)?;
+        if let Some(map) = report.as_object_mut() {
+            map.extend(fields.clone());
+        }
+        db.execute("UPDATE migration_report SET report = ?2 WHERE part = ?1", params![part, report.to_string()])?;
+        Ok(())
+    }
+
+    /// Every part of the migration report, by part: when it ran (epoch s) and what it found.
+    pub fn migration_report(&self) -> Result<std::collections::BTreeMap<String, (i64, serde_json::Value)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT part, at, report FROM migration_report")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = std::collections::BTreeMap::new();
+        for row in rows {
+            let (part, at, report) = row?;
+            out.insert(part, (at, serde_json::from_str(&report).unwrap_or(serde_json::Value::Null)));
+        }
+        Ok(out)
+    }
+
     /// `file`: the database; `None` keeps it in memory.
     pub fn open(file: Option<&Path>) -> Result<Self> {
         let conn = crate::db::open(file)?;
@@ -656,6 +708,8 @@ impl UserData {
         offline::migrate(&conn).context("bringing the change log up to date")?;
         // The playlists (0.16, decision 0101): in the database, their `.m3u` files brought in once by the store.
         conn.execute_batch(playlists::SCHEMA).context("creating the playlists' tables")?;
+        // The person's preferences on the account (0.16, decision 0101 point 14).
+        conn.execute_batch(preferences::SCHEMA).context("creating the preferences' table")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
@@ -669,11 +723,62 @@ impl UserData {
         words::add_album_complete_discs(&conn).context("keeping the discs an album's tracks are on")?;
         add_excluded_artists(&conn).context("keeping the artists excluded everywhere")?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
-        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
+        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0, preferences: tokio::sync::broadcast::channel(64).0 })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A value the user data remembers (`set_meta`). Blocking.
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
+        Ok(())
+    }
+
+    /// Where the user data names tracks (0101: what a fresh start of lost track ids leaves pointing at nothing): per
+    /// table, the rows that name one, and the highest track id named anywhere. Blocking.
+    pub fn track_references(&self) -> Result<(Vec<(&'static str, u64)>, i64)> {
+        let db = self.db();
+        let one_each: [(&'static str, &str); 7] = [
+            ("annotation", "item"),
+            ("bookmark", "item"),
+            ("imported", "item"),
+            ("plays", "song"),
+            ("scrobble_queue", "song"),
+            ("track_words", "track"),
+            ("playlist_item", "track"),
+        ];
+        let (mut rows, mut top) = (Vec::new(), 0i64);
+        for (table, column) in one_each {
+            let (n, highest): (i64, Option<i64>) = db.query_row(
+                &format!("SELECT COUNT(*), MAX(CAST(SUBSTR({column}, 4) AS INTEGER)) FROM {table} WHERE {column} LIKE 'tr-%'"),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if n > 0 {
+                rows.push((table, n as u64));
+            }
+            top = top.max(highest.unwrap_or(0));
+        }
+        // The apps' queues: a list each.
+        let mut st = db.prepare("SELECT songs FROM app_queue")?;
+        let mut queues = 0u64;
+        for songs in st.query_map([], |r| r.get::<_, String>(0))? {
+            let ids: Vec<i64> = songs?.split(',').filter_map(crate::serve::ids::track_of).collect();
+            if let Some(highest) = ids.iter().max() {
+                queues += 1;
+                top = top.max(*highest);
+            }
+        }
+        if queues > 0 {
+            rows.push(("app_queue", queues));
+        }
+        Ok((rows, top))
     }
 
     /// The annotations of several items of one kind, by item; items without any are left out.
@@ -971,15 +1076,6 @@ impl UserData {
     pub fn scrobble_broken(&self, user: &str, target: &str, why: &str) -> Result<()> {
         self.db().execute("UPDATE scrobble_target SET broken = ?3 WHERE user = ?1 AND target = ?2", params![user, target, why])?;
         Ok(())
-    }
-
-    /// The ids of the listens imported into a user's history from `context` (an import's, decision 0067), to tell
-    /// what a preview would add.
-    pub fn heard_events(&self, user: &str, context: &str) -> Result<std::collections::HashSet<String>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT event FROM plays WHERE user = ?1 AND context = ?2 AND event IS NOT NULL")?;
-        let rows = st.query_map(params![user, context], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// An import from `context` undone (decision 0067): its listens out of the user's history. They never counted, so
@@ -2011,6 +2107,23 @@ fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0101: what the user data remembers, and where it names tracks (a fresh start's report and its floor).
+    #[test]
+    fn it_remembers_and_finds_where_it_names_tracks() {
+        let u = UserData::open(None).unwrap();
+        assert_eq!(u.meta("catalogue").unwrap(), None);
+        u.set_meta("catalogue", "g1").unwrap();
+        assert_eq!(u.meta("catalogue").unwrap().as_deref(), Some("g1"));
+        {
+            let db = u.db();
+            db.execute("INSERT INTO annotation (user, item, kind) VALUES ('a', 'tr-7', 'song'), ('a', 'al-x', 'album')", []).unwrap();
+            db.execute("INSERT INTO app_queue (user, client, songs, changed) VALUES ('a', 'p', 'tr-3,tr-40', 0)", []).unwrap();
+        }
+        let (rows, top) = u.track_references().unwrap();
+        assert_eq!(rows, vec![("annotation", 1), ("app_queue", 1)], "an album's id is no track's");
+        assert_eq!(top, 40);
+    }
 
     #[test]
     fn discogs_genres_and_covers_are_kept_and_an_album_without_any_waits() {

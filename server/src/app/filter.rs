@@ -356,7 +356,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         return Ok((answer, verdicts));
     }
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|i| i.tracks.as_slice()).collect();
-    let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
+    let mut axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses(), super::moment::now_secs());
     // The Library's Type axis counts records by their types (a record under each it has: the counts overlap).
     if let Some(kinds) = &record_kinds
         && let Some(axis) = axes.iter_mut().find(|a| a.key == "type")
@@ -569,7 +569,7 @@ fn artists_of<'a>(source: &str, albums: &[AlbumItem<'a>], look: &ArtistLook) -> 
 /// Where an album's folder is in the catalogue (folder, its path there), from the server's path for it: the server's
 /// root for it exchanged for the folder Cratarr sees there (`Placement::roots`), or the path as it is (Cratarr's own
 /// library names its folders as Cratarr sees them).
-fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathBuf], path: &str) -> Option<(i64, String)> {
+fn folder_of(roots: &[crate::placement::FolderRoot], folders: &crate::catalogue::InUse, path: &str) -> Option<(i64, String)> {
     let path = path.replace('\\', "/");
     let path = path.trim_end_matches('/');
     let seen = roots
@@ -580,9 +580,9 @@ fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathB
         })
         .unwrap_or_else(|| path.to_string());
     let seen = std::path::Path::new(&seen);
-    folders.iter().enumerate().find_map(|(i, f)| {
+    folders.iter().find_map(|(i, f)| {
         let rel = seen.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
-        (!rel.is_empty()).then_some((i as i64, rel))
+        (!rel.is_empty()).then_some((i, rel))
     })
 }
 
@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(passing(&[row(false, &["Album"]), row(true, &["Compilation"])]), [0, 1, 4]);
         assert_eq!(passing(&[row(false, &["Broadcast"])]), [5]);
         // The Type axis counts each record under every type it has, and says each value's layer.
-        let mut axis = crates::list_axes(&[], &[], None, None).into_iter().find(|a| a.key == "type").unwrap();
+        let mut axis = crates::list_axes(&[], &[], None, None, 0).into_iter().find(|a| a.key == "type").unwrap();
         kind_axis(&mut axis, &records);
         let at = |v: &str| axis.values.iter().position(|x| x == v).map(|i| (axis.counts[i], axis.layers[i]));
         assert_eq!((at("Album"), at("Live"), at("Classical"), at("Broadcast")), (Some((4, 1)), Some((2, 2)), Some((1, 3)), Some((1, 1))));
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn an_albums_folder_is_found_through_the_servers_root() {
         let roots = [crate::placement::FolderRoot { folder: "/media/Music".into(), root: "/data/music/".into() }];
-        let folders = ["/media/Music", "/media/lidarr-music"].map(std::path::PathBuf::from);
+        let folders: crate::catalogue::InUse = [(0, "/media/Music"), (1, "/media/lidarr-music")].into_iter().map(|(i, p)| (i, std::path::PathBuf::from(p))).collect();
         assert_eq!(folder_of(&roots, &folders, "/data/music/A/B (2020)/"), Some((0, "A/B (2020)".into())));
         assert_eq!(folder_of(&roots, &folders, "/media/lidarr-music/X/New"), Some((1, "X/New".into())), "Cratarr's own: as it is");
         assert_eq!(folder_of(&roots, &folders, "/data/musical/A"), None, "a root is a whole folder");

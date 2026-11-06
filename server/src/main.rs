@@ -120,13 +120,18 @@ async fn main() -> Result<()> {
             }
         });
     }
-    // The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there.
-    if std::env::args().nth(1).as_deref() == Some("--make-fixtures") {
+    // The fixture library (decision 0093): `--make-fixtures <folder>`, made anew there; `--make-layout <folder>`, every kind
+    // of library. The end-to-end suite is a program of its own: this is its way to them.
+    type Make = fn(&std::path::Path) -> Result<Vec<std::path::PathBuf>>;
+    for (flag, make) in [("--make-fixtures", fixtures::make as Make), ("--make-layout", fixtures::make_layout)] {
+        if std::env::args().nth(1).as_deref() != Some(flag) {
+            continue;
+        }
         let Some(dir) = std::env::args().nth(2) else {
-            eprintln!("--make-fixtures <folder>");
+            eprintln!("{flag} <folder>");
             std::process::exit(2);
         };
-        std::process::exit(match fixtures::make(std::path::Path::new(&dir)) {
+        std::process::exit(match make(std::path::Path::new(&dir)) {
             Ok(albums) => {
                 println!("{} albums in {dir}", albums.len());
                 0
@@ -200,6 +205,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    // A file from before 0.16 holds its libraries' roles: read as 0.16's list (decision 0101), and written so once the
+    // migration report keeps what they were.
+    let libraries_report = match &cfg.data_dir {
+        Some(d) => settings::libraries_migration(&std::path::Path::new(d).join("settings.json"))?,
+        None => None,
+    };
     // Sources saved from the page, or on first run one made from the JELLYFIN_* variables; see decision 0005.
     let saved = match &cfg.data_dir {
         Some(d) => settings::load(&std::path::Path::new(d).join("settings.json"), &env)?,
@@ -219,11 +230,12 @@ async fn main() -> Result<()> {
         s.values.insert("folders".into(), serde_json::Value::Array(found));
         carried = true;
     }
-    if carried && matches!(origin, settings::Origin::File)
+    if carried && libraries_report.is_none() && matches!(origin, settings::Origin::File)
         && let Some(d) = &cfg.data_dir
     {
         settings::save(&std::path::Path::new(d).join("settings.json"), &saved)?;
     }
+    let as_read = libraries_report.as_ref().map(|_| saved.clone());
     if saved.lidarr.is_none() {
         saved.lidarr = settings::lidarr_from_env(&env);
     }
@@ -244,6 +256,17 @@ async fn main() -> Result<()> {
     // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
     let lan_base = app::runtime::lan_base(&runtime);
     let app = app::App::new(cfg, saved, origin, Some(served.clone())).await.context("cannot open the catalogue")?;
+    // The libraries' part of the migration report, then the file as 0.16's (decision 0101): what the roles held, and
+    // what the servers, answering now, do not list.
+    if let (Some(mut report), Some(file), Some(d)) = (libraries_report, as_read, data_dir.as_deref()) {
+        let unlisted = app.library.unlisted_libraries();
+        if let Some(u) = report.get_mut("unmatched").and_then(serde_json::Value::as_array_mut) {
+            u.push(serde_json::json!({ "what": "libraries no server lists", "count": unlisted.len(), "sample": unlisted.iter().take(10).collect::<Vec<_>>() }));
+        }
+        served.userdata.set_migration_part("libraries", &report).context("cannot keep the migration report")?;
+        settings::save(&std::path::Path::new(d).join("settings.json"), &file)?;
+        tracing::info!("settings: the libraries' roles are 0.16's list now (decision 0101)");
+    }
     served.set_play_on(app.play_on.clone());
     app.play_on.set_lan_base(lan_base);
     // Sync play (decision 0037): groups' sound on Snapcast's protocol; Cratarr runs on without it if the port is taken.
@@ -280,6 +303,8 @@ async fn main() -> Result<()> {
     let warm = app.clone();
     tokio::spawn(async move { warm.playlists.warm_favourites().await });
     app.collection.follow(&app.journal);
+    // A run of file changes a stop cut off: read now, before anything can write what it was to write.
+    tokio::spawn(app::file_runs::settle_cut_off(app.journal.clone()));
 
     // One background pass keeps Cratarr in step with the sources and the library (see `App::sync`); the first runs
     // at once, so the incoming lists are ready soon after start.

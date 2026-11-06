@@ -333,6 +333,18 @@ pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<HashMap<String
     Ok(m)
 }
 
+/// An album's key among `requesters`.
+pub fn requested(artist: &str, album: &str) -> String {
+    format!("{}|{}", super::import::key(artist), super::import::key(album))
+}
+
+/// Who asked for each approved request, by its artist and album (`requested`): an Incoming record goes into its
+/// requester's own music by default, and is theirs to add or delete (0101 point 2). The newest asker of an album.
+pub fn requesters(serve: &Serve) -> HashMap<String, String> {
+    let approved = serve.userdata.requests(None, Some(APPROVED), OPEN).unwrap_or_default();
+    approved.into_iter().rev().map(|r| (requested(&r.artist, &r.album), r.user)).collect()
+}
+
 /// An album's mark, by its release group, else by its artist's and its name's key (a Bandcamp album's Want).
 pub fn mark_of(marks: &HashMap<String, Mark>, release_group: Option<&str>, artist: &str, album: &str) -> Option<Mark> {
     release_group

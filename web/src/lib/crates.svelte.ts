@@ -1,5 +1,6 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
+import { untrack } from 'svelte';
 import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
 import { noteChange } from './lastChange.svelte';
 import { port } from './player/port.svelte';
@@ -157,8 +158,8 @@ export const EDIT_CRATE = 'crate-edit:';
 export const builderOf = (viewed: string | null): { id: string | null } | null =>
   viewed === NEW_CRATE ? { id: null } : viewed?.startsWith(EDIT_CRATE) ? { id: viewed.slice(EDIT_CRATE.length) } : null;
 
-/** A crate being made or changed, kept in this browser under its own address until Save or Cancel (it survives the
- *  player over it, a page change and a reload). */
+/** A crate being made or changed, kept under its own address until Save or Cancel (it survives the player over it, a
+ *  page change and a reload), on the account with the other preferences (lib/accountPrefs). */
 /** `names`: the server's for the ids its conditions hold (0.13, decision 0088). A crate grabbed (0.13, lib/quickCrates):
  *  `sentence` its terms as they were read, `words` words still to read into it. */
 export type CrateDraft = {
@@ -168,28 +169,35 @@ export type CrateDraft = {
   sentence?: { chips: import('./quickCrate').Chip[]; min: number; modes: import('./quickCrate').Modes };
   words?: string;
 };
-const draftKey = (id: string | null) => `cratarr-crate-draft:${id ?? 'new'}`;
+const draftKey = (id: string | null) => id ?? 'new';
+// The builder reads and keeps its draft inside its effects: untracked, as a draft kept, here or from the account, is no
+// reason to start the builder over or to keep it again.
 export function keptDraft(id: string | null): CrateDraft | null {
-  try {
-    const kept = JSON.parse(localStorage.getItem(draftKey(id)) ?? 'null');
-    return kept && Array.isArray(kept.conditions) ? kept : null;
-  } catch {
-    return null;
-  }
+  const kept = untrack(() => prefs.crateDrafts[draftKey(id)]);
+  return kept ? $state.snapshot(kept) : null;
 }
 export function keepDraft(id: string | null, draft: CrateDraft) {
-  try {
-    localStorage.setItem(draftKey(id), JSON.stringify(draft));
-  } catch {
-    /* not kept */
-  }
+  untrack(() => (prefs.crateDrafts = { ...prefs.crateDrafts, [draftKey(id)]: draft }));
 }
 export function forgetDraft(id: string | null) {
-  try {
-    localStorage.removeItem(draftKey(id));
-  } catch {
-    /* nothing kept */
+  untrack(() => {
+    const { [draftKey(id)]: _, ...rest } = prefs.crateDrafts;
+    prefs.crateDrafts = rest;
+  });
+}
+// A draft from before they followed the account, each under a key of its own in this browser: taken in, to go with the
+// rest (decision 0101 point 14: the first device sends its own once).
+const OLD_DRAFT = 'cratarr-crate-draft:';
+try {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(OLD_DRAFT)) continue;
+    const kept = JSON.parse(localStorage.getItem(key) ?? 'null');
+    if (kept && Array.isArray(kept.conditions)) keepDraft(key.slice(OLD_DRAFT.length), kept);
+    localStorage.removeItem(key);
   }
+} catch {
+  /* none to take in */
 }
 /** A crate's name, or null while it is not known yet (the crates not read, a Sounds like crate's name not asked):
  *  a header shows nothing rather than its id first. */
@@ -272,11 +280,7 @@ export const seeded = (crate: string | null) => wordOf(crate) !== null || likeOf
  *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a
  *  genre's own, from the genre's view). */
 export function startCrate(name: string, conditions: Condition[] = [], more: Omit<CrateDraft, 'name' | 'conditions'> = {}) {
-  try {
-    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions, ...more }));
-  } catch {
-    /* the builder starts empty */
-  }
+  keepDraft(null, { name, conditions, ...more });
   viewOver(NEW_CRATE);
 }
 

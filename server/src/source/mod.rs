@@ -454,6 +454,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(Vec::new()) })
     }
 
+    /// Whether the source's paths are Cratarr's own: a library's folder is then where Cratarr sees it, with tracks in it
+    /// or none yet. Another server's only say where a library lies through its tracks.
+    fn paths_are_cratarrs(&self) -> bool {
+        false
+    }
+
     /// What is playing now, following the player chosen in the settings when the plugin has that notion.
     fn now_playing(&self) -> Fut<'_, Option<Playing>>;
 

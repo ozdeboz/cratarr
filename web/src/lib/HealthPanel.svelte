@@ -19,7 +19,8 @@
   import { everywhere } from './globalSearch.svelte';
   import Icon from './Icon.svelte';
   import MoreInfo from './MoreInfo.svelte';
-  import { albumCoverUrl, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
+  import { albumCoverUrl, freshTrackIds, getRecordHealth, undo, wantAlbum, type HealthItem, type RecordFinding } from './api';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { plural } from './insights.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -340,6 +341,26 @@
   /** The finding the problem is (a files kind's page key `files-<kind>` is its finding `files:<kind>`). */
   const findingKey = $derived(problem.startsWith('files-') ? `files:${problem.slice('files-'.length)}` : problem);
   const fixable = $derived(me.admin && FIXABLE.has(findingKey));
+  /** The track ids lost: the fresh start asked, and its report (the tables still naming old tracks, by their words). */
+  let freshAsk = $state(false);
+  let freshDone = $state<{ from: number; references: [string, number][] } | null>(null);
+  const TABLES: Record<string, string> = {
+    annotation: 'Plays, ratings and favourites',
+    plays: 'Listening history',
+    app_queue: 'Queues',
+    play_queue: 'Queues',
+    playlist_item: 'Playlist entries',
+    bookmark: 'Bookmarks',
+    scrobble_queue: 'Scrobbles waiting',
+  };
+  async function startFresh() {
+    try {
+      freshDone = await freshTrackIds();
+    } catch (e) {
+      toast.fail(e, "The track ids weren't started afresh");
+    }
+    loadHealth();
+  }
   // Every problem and Changes to files, in Health's areas, each area's most urgent first (as the page lists them).
   const parts = $derived([
     ...byArea(problems(), AREAS).flatMap((g) => g.problems.map((x) => ({ id: x.key, group: g.area as string, label: x.name }))),
@@ -572,6 +593,10 @@
       {#if f?.open}
         <Group><Item name={WHERE[f.open.page] ?? 'Open'} onclick={() => f && openFinding(f)} /></Group>
       {/if}
+      <!-- The track ids lost (decision 0101): an administrator's fresh start, asked by sheet, its report after. -->
+      {#if f?.key === 'library:ids-lost' && me.admin}
+        <Group><Item name="Start the track ids afresh" onclick={() => (freshAsk = true)} /></Group>
+      {/if}
     {/if}
     {#if elsewhere.length}
       <!-- The other problems the search finds, each a group of what it finds (lib/settings/Group, Item). -->
@@ -590,6 +615,24 @@
   </div>
 </div>
 
+{#if freshAsk}
+  <ConfirmSheet
+    title="Start the track ids afresh?"
+    text="Every old track id becomes missing for good: the plays, favourites, playlist entries and queues that name one show it missing. Restoring catalogue.sqlite from the nightly backup keeps them."
+    label="Start afresh"
+    onconfirm={startFresh}
+    onclose={() => (freshAsk = false)}
+  />
+{/if}
+{#if freshDone}
+  <MenuSheet label="Track ids started afresh" title="Track ids started afresh" onclose={() => (freshDone = null)}>
+    <Group>
+      {#each freshDone.references as [table, n] (table)}<Item name={TABLES[table] ?? table} value={`${n.toLocaleString()} name old tracks`} />{:else}<Item
+          name="Nothing names an old track"
+        />{/each}
+    </Group>
+  </MenuSheet>
+{/if}
 {#if coverOf}
   <AlbumMenu source="cratarr" album={{ id: coverOf.id, title: coverOf.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
 {/if}

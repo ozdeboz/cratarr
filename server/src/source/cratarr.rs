@@ -29,13 +29,29 @@ fn fields() -> Vec<Field> {
 }
 
 fn connect(values: &Values, _partial: bool) -> Result<Box<dyn Source>> {
-    Ok(Box::new(CratarrSource { folders: folders_of(values) }))
+    Ok(Box::new(CratarrSource { folders: folders_of(values), own_music: super::text(values, crate::settings::OWN_MUSIC).map(PathBuf::from) }))
 }
 
 /// The chosen folders (decision 0044), in their order: `values["folders"]`, a list of paths. None before any are chosen
 /// (an install from before has them filled once, at load, from `found_folders`).
 fn folders_of(values: &Values) -> Vec<PathBuf> {
     super::list(values, "folders").into_iter().filter(|x| !x.trim().is_empty()).map(PathBuf::from).collect()
+}
+
+/// Each account's own music (0101 point 9): the subfolders of the own-music folder, by name; a hidden one is no account.
+fn own_libraries(own: &Path) -> Vec<Library> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(own)
+        .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect())
+        .unwrap_or_default();
+    found.sort();
+    found
+        .into_iter()
+        .map(|p| {
+            let id = p.display().to_string();
+            let account = p.file_name().map_or_else(|| id.clone(), |n| n.to_string_lossy().into_owned());
+            Library { id: id.clone(), name: format!("{account}'s music"), paths: vec![id] }
+        })
+        .collect()
 }
 
 /// Audio file extensions a library is recognised by.
@@ -132,6 +148,8 @@ fn suggest(found: Vec<PathBuf>, chosen: &[String]) -> Vec<PathBuf> {
 struct CratarrSource {
     /// The chosen folders, in their order (decision 0044).
     folders: Vec<PathBuf>,
+    /// The own-music folder (0101 point 9).
+    own_music: Option<PathBuf>,
 }
 
 /// The player Cratarr follows, by name (any online one when none has anything loaded).
@@ -262,7 +280,7 @@ impl Source for CratarrSource {
     fn libraries(&self) -> Fut<'_, Vec<Library>> {
         // The chosen folders, as they are: answered also while the server starts (the app asks first thing). A chosen
         // folder that is missing now (unmounted) is still listed, so its use and policy stay; Settings shows it missing.
-        let libraries = self
+        let mut libraries: Vec<Library> = self
             .folders
             .iter()
             .map(|p| {
@@ -271,6 +289,7 @@ impl Source for CratarrSource {
                 Library { id: id.clone(), name, paths: vec![id] }
             })
             .collect();
+        libraries.extend(self.own_music.iter().flat_map(|own| own_libraries(own)));
         Box::pin(async move { Ok(libraries) })
     }
 
@@ -283,6 +302,10 @@ impl Source for CratarrSource {
 
     fn library_roots<'a>(&'a self, library_id: &'a str) -> Fut<'a, Vec<String>> {
         Box::pin(async move { Ok(vec![library_id.to_string()]) })
+    }
+
+    fn paths_are_cratarrs(&self) -> bool {
+        true
     }
 
     // --- What plays and the commands: Cratarr's own players (Play On, decision 0031), the one it follows. ---
@@ -898,6 +921,21 @@ mod tests {
         assert!(none.libraries().await.unwrap().is_empty(), "none chosen yet: no libraries (the load fills them once)");
     }
 
+    #[tokio::test]
+    async fn each_accounts_own_music_is_a_library_after_the_chosen_ones() {
+        let own = std::env::temp_dir().join(format!("cratarr-own-{}", std::process::id()));
+        for f in ["bo", "ann", ".trash"] {
+            std::fs::create_dir_all(own.join(f)).unwrap();
+        }
+        std::fs::write(own.join("a-file"), b"x").unwrap();
+        let values: Values = [("folders".to_string(), serde_json::json!(["/music"])), (crate::settings::OWN_MUSIC.to_string(), serde_json::json!(own.display().to_string()))].into();
+        let libs = connect(&values, false).unwrap().libraries().await.unwrap();
+        let names: Vec<&str> = libs.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["music", "ann's music", "bo's music"]);
+        assert_eq!(libs[1].id, own.join("ann").display().to_string());
+        std::fs::remove_dir_all(&own).ok();
+    }
+
     #[test]
     fn suggestions_leave_out_the_chosen_and_what_overlaps_them() {
         let found = ["/media/Music", "/media/Incoming", "/media/lidarr-music", "/music"].map(PathBuf::from).to_vec();
@@ -907,7 +945,7 @@ mod tests {
 
     #[test]
     fn combined_play_data_adds_up() {
-        let s = CratarrSource { folders: Vec::new() };
+        let s = CratarrSource { folders: Vec::new(), own_music: None };
         let a = serde_json::json!({ "play_count": 2, "play_date": 100, "rating": 0, "starred_at": null });
         let b = serde_json::json!({ "play_count": 3, "play_date": 50, "rating": 4, "starred_at": 7 });
         let c = annotation_of(&s.combine_user_data(&a, &b));

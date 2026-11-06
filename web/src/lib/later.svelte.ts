@@ -8,7 +8,7 @@
 // rules are lib/outbox's.
 import { accountKey, whenAccount } from './account';
 import { keep, readKept } from './keptStore';
-import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, stamped, type Op } from './outbox';
+import { headersOf, mergeOps, opsFrom, ours, outcomeOf, outlived, stale, stamped, worded, type Op } from './outbox';
 import { notReached, reach, whenReached } from './reach.svelte';
 
 export type Later = Op;
@@ -117,7 +117,7 @@ export async function sendLater() {
       } catch {
         /* not reached */
       }
-      const outcome = outcomeOf(r?.status ?? null, !!r?.headers.has('Retry-After'), notReached);
+      const outcome = outcomeOf(r?.status ?? null, !!r?.headers.has('Retry-After'), notReached, r?.status === 403 && (await worded(r)));
       if (outcome === 'wait') break;
       if (outcome === 'again') {
         await new Promise((ok) => setTimeout(ok, 1000));

@@ -19,7 +19,7 @@ import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 import { keep, readKept } from './keptStore';
 import { accountKey, whenAccount } from './account';
-import { ours, outlived, stamped } from './outbox';
+import { playsToTell } from './playsToTell';
 import { reach, whenReached } from './reach.svelte';
 
 // Which player the page drives, and what this device's queue shows of what plays: the port's (lib/player/port).
@@ -73,57 +73,24 @@ const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
 /** The queue place being heard (index and track), from when, how far it got, and whether it was told as counted. */
 type Hearing = { at: string; track: LocalTrack; started: number; heard: number; length: number | null; counted: boolean };
 let hearing: Hearing | null = null;
-/** Reports not yet taken (the server away): kept on this device (lib/keptStore; 0.12, decision 0085 step 3: no play
- *  lost when the page is closed meanwhile) and sent again with the next one or when Cratarr answers again; the latest
- *  500 kept. Each has its id: Cratarr counts a report sent twice once. `telling`: those on their way. Each carries the
- *  account it was heard under and is told only while that account is signed in (0.13, lib/account); another's wait for
- *  it, a month at most. */
+/** A report and whose it is: those not yet taken wait on this device (lib/playsToTell). */
 type Unsent = HeardEvent & { account?: string };
-let unsent: Unsent[] = [];
-let telling: Unsent[] = [];
 const PLAYS = 'plays';
-const keepPlays = () => void keep(PLAYS, [...telling, ...unsent].slice(-500));
-/** The account known: the reports carrying none take it (lib/outbox's `stamped`). */
-function stampPlays() {
-  const account = accountKey();
-  if (account !== null) unsent = stamped(unsent, account);
-}
-function tellNow() {
-  const account = accountKey();
-  if (telling.length || account === null) return;
-  unsent = unsent.filter((e) => !outlived(e, account, Date.now()));
-  telling = unsent.filter((e) => ours(e, account)).slice(-500);
-  if (!telling.length) return;
-  unsent = unsent.filter((e) => !ours(e, account));
-  let taken = false;
-  reportPlays(telling.map(({ account: _, ...e }) => e))
-    .then(
-      (r) => {
-        taken = true;
-        unsent = [...telling.filter((e) => !r.done.includes(e.id)), ...unsent];
-      },
-      () => (unsent = [...telling, ...unsent]),
-    )
-    .finally(() => {
-      telling = [];
-      keepPlays();
-      if (taken && unsent.length) tellNow();
-    });
-}
+const plays = playsToTell<Unsent>(
+  (told) => reportPlays(told.map(({ account: _, ...e }) => e)),
+  accountKey,
+  (list) => void keep(PLAYS, list),
+);
 if (typeof window !== 'undefined') {
   readKept<Unsent[]>(PLAYS).then((v) => {
     if (!Array.isArray(v) || !v.length) return;
-    const have = new Set([...telling, ...unsent].map((e) => e.id));
-    unsent = [...v.filter((e) => !have.has(e.id)), ...unsent];
-    stampPlays();
-    keepPlays();
-    if (!reach.away) tellNow();
+    plays.took(v);
+    if (!reach.away) plays.tell();
   });
-  whenReached.add(tellNow);
+  whenReached.add(plays.tell);
   whenAccount.add(() => {
-    stampPlays();
-    keepPlays();
-    tellNow();
+    plays.stamp();
+    plays.tell();
   });
 }
 /** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
@@ -142,7 +109,7 @@ function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
   const id = reportId();
   // From each device (decision 0091): the play counted is scrobbled from here too, by the same id.
   if (counts && h.track.artist) playedHere(asScrobble(h, id));
-  unsent.push({
+  plays.add({
     id,
     source: h.track.source,
     track: h.track.id,
@@ -155,8 +122,6 @@ function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
     context: keptHere.id ? `queue:${keptHere.id}` : null,
     ...(account === null ? {} : { account }),
   });
-  keepPlays();
-  tellNow();
 }
 $effect.root(() => {
   $effect(() => {

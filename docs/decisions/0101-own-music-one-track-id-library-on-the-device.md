@@ -42,9 +42,11 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
    (into their own music only); every other library stays the administrators'.
    - Move to… between main libraries renames by the target's template and applies the target's quality limit, as
      Keep does: one plan, one Undo.
-   - Keep (`/api/library/albums/{album}/promote`, serve/review.rs) takes a target library. Today it has none. The
-     default is Incoming's setting, or the requester's own music for a user's request. Replace works into any main
-     library alike, with the target's naming and limit.
+   - Keep (`/api/library/albums/{album}/promote`, serve/review.rs) takes a target library. Since 2026-11-04 it and
+     Incoming's Keep take `to`, a main library's id; without one, the server's first main library until Incoming's
+     setting and own music are in. The default is Incoming's setting, or the requester's own music for a user's
+     request. Replace works into any main library alike (the one its other copy is in), with the target's naming and
+     limit.
 3. **Already stored.** The duplicate and better-copy checks run against every library, switched on or not. A better
    copy is fetched as "another copy" of the same record (0100; below). What a request for an album already stored
    does is settled below: a shared-block copy into the requester's own music.
@@ -167,6 +169,8 @@ device, and crates and the queue on the device (0085's steps 4 and 5). A read-on
     - The foundation: 0100's records, the stable ids with the rehearsed migration, playlists in the database, equal
       libraries, own music. It runs on staging with a copy of production's data.
     - The devices: the index, each account's device data, crates and Radio offline. Then 0.16.
+    - Uploads (5) and the allocation with the disk's floor (4) go in the second preview, not the first (the owner,
+      2026-11-04).
 27. **The rules crate moves first, proved unchanged.**
     - Before the first preview, every built-in and saved crate's tracks and Radio's picks (same seed) are compared
       before and after the move, on production's copy.
@@ -263,6 +267,24 @@ favourites and every other reference point at the record's track; a copy (Music,
 upgrade) is only files of it, the best one playing. So the id never splits between copies, and Replace keeps it by
 handing the record's track a new file.
 
+## Amended 2026-11-04: how a record's copies behave (the owner, by question, in 632's session)
+
+- **The same record is the same tracks.** Two folders are one record only when their tracklists match. A deluxe edition
+  with bonus tracks is a record of its own.
+- **Which copy plays:** the viewer's own music first, even at a lower quality; else the best quality among the libraries
+  they have on. A copy in a library switched off never plays.
+- **An Incoming copy** plays only when picked in the record's menu: the kept copy plays until it is added or replaced.
+- **Delete names the copy:** with two copies the menu says "Delete from Music", "Delete from Your music". The record
+  stays while one copy is left.
+- **In lists** a record shows once, with a dot for each library that holds a copy. An Incoming copy of a kept record
+  shows only on Incoming's list until it is added: no dot on the card (2026-11-05).
+- **A copy picked by hand** is remembered for the account until they pick another or that copy goes (2026-11-05).
+- **On a disk without shared blocks** a copy into own music is a real copy, and it counts against the user's allocation
+  (2026-11-05).
+- **26's first preview holds all of 0100** (2026-11-05): records one does not have, artists, labels and their pages, and
+  Soulseek without MusicBrainz, as well as records and copies.
+- **An artist's id is for life** (2026-11-05), like a record's, given in the same migration: the name's hash goes.
+
 ## Amended 2026-11-04: what point 11 meets in the code (a5's survey, trunk 96ed26062)
 
 - **Songs are served by the catalogue's own track id already** (`tr-<tracks.id>`, since 0030). Keep, Move, Cratarr's tag
@@ -278,6 +300,12 @@ handing the record's track a new file.
   whatever the copies; the prefixes go.
 - **Libraries are positions in a list** (the catalogue's folder ids, Subsonic's music folder ids, the journal's and
   conversion jobs' folders): they get ids of their own (point 1: libraries without roles).
+  - Done 2026-11-04 (the owner, over a shortcut that kept positions and only ever appended: "is it worth to take the
+    shortcut if we want a truly robust and coherent architecture?"): **each catalogue folder keeps one id for life.** A
+    folder in use keeps its id, one that comes back takes its own again, a moved mount keeps its id under its new path,
+    and a new folder takes an id never given before. Today's positions became the ids, so no data moved. The served
+    album ids, Subsonic's music folders, the journal's Undo and queued conversions keep naming the same folder whatever
+    is added or removed; a folder's id says nothing of its kind (main, own, Incoming go by what the library is).
 - **Playlists and crates name tracks by path lines:** playlists become tracks in 632's stage 2 (point 12); crates' left
   out and excluded lines the same way.
 - **The migration** (21) rewrites album ids to records, library positions to their ids and lines to tracks, in one

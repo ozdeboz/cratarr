@@ -18,7 +18,8 @@
   import { on, stream } from './lib/events.svelte';
   import { pageView } from './lib/pageView.svelte';
   import { filterBlocked, passing } from './lib/listFilter.svelte';
-  import { libraryShown } from './lib/sources.svelte';
+  import { recordOn } from './lib/copiesRule';
+  import { shownIn } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
   import ComposerList from './lib/ComposerList.svelte';
@@ -179,7 +180,7 @@
   // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
   $effect(() => {
-    const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => !a.library || libraryShown(s.id, a.library)).length, 0);
+    const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => recordOn(a, shownIn(s.id))).length, 0);
     pageView.counted = sources ? { shown: count(shown), total: count(sources), pending: pass.pending } : null;
     return () => (pageView.counted = null);
   });

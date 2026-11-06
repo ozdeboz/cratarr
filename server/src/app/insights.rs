@@ -41,7 +41,7 @@ impl InsightsService {
             Some((a, _)) => super::library::folders_switched_off(a, without).into_iter().map(std::path::PathBuf::from).collect(),
             None => Vec::new(),
         };
-        Some(self.lib.catalogue().folders().iter().enumerate().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i as i64).collect())
+        Some(self.lib.catalogue().folders().iter().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i).collect())
     }
 
     pub(super) fn new(lib: Arc<Library>, playlists: Arc<super::playlists::PlaylistService>) -> Self {
@@ -72,11 +72,11 @@ impl InsightsService {
                 v.sort();
                 v
             }
-            None => (0..folders.len() as i64).collect(),
+            None => folders.ids().collect(),
         };
         let incoming_paths = self.lib.folders().incoming;
         let incoming: std::collections::HashSet<i64> =
-            folders.iter().enumerate().filter(|(_, f)| incoming_paths.iter().any(|p| std::path::Path::new(p) == f.as_path())).map(|(i, _)| i as i64).collect();
+            folders.iter().filter(|(_, f)| incoming_paths.iter().any(|p| std::path::Path::new(p) == f.as_path())).map(|(i, _)| i).collect();
         // The overview's figures from Cratarr's own library and the asking account's plays and stars, where it is open.
         let served = self.playlists.served();
         // Whose plays: the request's account, read here (the blocking task below is not the request's).
@@ -91,9 +91,9 @@ impl InsightsService {
                 None => None,
             };
             let came: std::collections::HashMap<(i64, &str), i64> = match &arrivals {
-                Some((albums, songs)) => {
-                    let at: std::collections::HashMap<&str, i64> = albums.iter().filter_map(|(id, _, c)| c.map(|c| (id.as_str(), c))).collect();
-                    songs.iter().filter_map(|(_, a, f, rel)| at.get(a.as_str()).map(|c| ((*f, rel.as_str()), *c))).collect()
+                Some((copies, files)) => {
+                    let at: std::collections::HashMap<&str, i64> = copies.iter().filter_map(|(id, _, c)| c.map(|c| (id.as_str(), c))).collect();
+                    files.iter().filter_map(|(_, a, f, rel)| at.get(a.as_str()).map(|c| ((*f, rel.as_str()), *c))).collect()
                 }
                 None => Default::default(),
             };
@@ -128,7 +128,7 @@ impl InsightsService {
             let by_line: std::collections::HashMap<&str, &crate::crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
             let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists, &by_line);
             report.playlists.library_tracks_in_crates = in_crates;
-            if let (Some(served), Some((albums, songs))) = (served, &arrivals) {
+            if let (Some(served), Some((copies, files))) = (served, &arrivals) {
                 let (plays, starred): (std::collections::HashMap<String, u32>, std::collections::HashSet<String>) = match &user {
                     Some(u) => (
                         served.userdata.song_plays(u)?.into_iter().map(|(id, (n, _))| (id, n)).collect(),
@@ -145,7 +145,7 @@ impl InsightsService {
                     Period::Year => (Step::Month, Some(12)),
                     Period::All => (Step::Year, None),
                 };
-                let mut overview = crate::insights::overview(albums, songs, &shown.iter().copied().collect(), &incoming, &plays, &starred, since, growth, epoch_now(), 0);
+                let mut overview = crate::insights::overview(copies, files, &shown.iter().copied().collect(), &incoming, &plays, &starred, since, growth, epoch_now(), 0);
                 // Most played by name, as the library has them.
                 let ids: Vec<String> = overview.most_played.iter().map(|t| t.id.clone()).collect();
                 let named: std::collections::HashMap<String, (String, String)> =

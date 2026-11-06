@@ -7,6 +7,7 @@
   import { untrack } from 'svelte';
   import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
   import { jobs } from './jobs.svelte';
+  import { me } from './me.svelte';
 
   /** What an album's library allows (decision 0034): moves into the server's other used libraries, Replace for an
    *  upgrade, Delete; each only when Cratarr can write the album's folder, and with a job in the conversion queue only
@@ -17,21 +18,42 @@
     /** The libraries it can move into. */
     targets: LibraryInfo[];
     replaceable: boolean;
+    /** The main library its Replace puts it in: the other copy's (decision 0101 point 2). */
+    replaceInto: LibraryInfo | null;
     deletable: boolean;
     job: number | null;
   };
 
-  /** For an album of the Library's list. One already in Music (an upgrade or a duplicate) does not move there again:
-   *  an upgrade replaces. Verdicts compare against every library now (2026-11-02, decision 0096's 0.13 fixes): only a
-   *  pair in Music replaces (`replaceable`), and only then is Music no target for a move. */
+  /** Its move into `to` as the menus say it (the owner, 2026-11-04): an Incoming record, or one into someone's own music,
+   *  is added to it ("Add to Your music", "Add to Music"); one between main libraries moves. */
+  export const adds = (from: LibraryInfo | null, to: LibraryInfo) => from?.kind === 'incoming' || to.kind === 'own';
+
+  /** For an album of the Library's list. One whose other copy is in a main library (an upgrade or a duplicate) does
+   *  not move there again: an upgrade replaces it there (`replaceable_into`, decision 0101 point 2: any main library).
+   *  An Incoming album's Add to goes first where it goes by default (`keep_to`: the requester's own music, else the
+   *  first main library), the others after it in the list's order. */
   export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
     const deletable = s.deletable.includes(a.id);
     const verdict = s.verdicts[a.id];
-    const inMusic = !!verdict?.replaceable;
+    const into = verdict?.replaceable_into ?? [];
+    const keepTo = s.keep_to[a.id];
+    const from = s.library_info.find((l) => l.id === a.library) ?? null;
+    const others = s.library_info.filter((l) => l.id !== a.library && !into.includes(l.id));
+    // An Incoming record is added where it goes by default; by an administrator also to a main library or their own
+    // music (decision 0101 point 2). A kept one moves between an administrator's libraries, never into or out of own
+    // music: that would be a copy (the owner, 2026-11-04), which comes with records and copies.
+    const targets = !deletable
+      ? []
+      : from?.kind === 'incoming'
+        ? others.filter((l) => s.keepable.includes(a.id) && (l.id === keepTo || (me.admin && (l.kind === 'main' || l.mine))))
+        : me.admin && from?.kind !== 'own'
+          ? others.filter((l) => l.kind !== 'own')
+          : [];
     return {
-      from: s.library_info.find((l) => l.id === a.library) ?? null,
-      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(inMusic && l.use === 'music')) : [],
-      replaceable: deletable && verdict?.kind === 'upgrade' && inMusic,
+      from,
+      targets: [...targets.filter((l) => l.id === keepTo), ...targets.filter((l) => l.id !== keepTo)],
+      replaceable: deletable && verdict?.kind === 'upgrade' && into.length > 0,
+      replaceInto: s.library_info.find((l) => l.id === into[0]) ?? null,
       deletable,
       job: jobs.of(s.id, a.id)?.id ?? null,
     };
@@ -110,7 +132,6 @@
   import Meter from './Meter.svelte';
   import { progressOf, tasks } from './tasks.svelte';
   import { withUndo } from './undo.svelte';
-  import { me } from './me.svelte';
   import { can, findsTracks, offers } from './capabilities.svelte';
 
   type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
@@ -400,7 +421,7 @@
   // svelte-ignore state_referenced_locally
   const fromName = offer?.from?.name ?? 'Incoming';
   // svelte-ignore state_referenced_locally
-  const primary = offer?.from?.use === 'music';
+  const primary = offer?.from?.kind === 'main';
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
@@ -410,6 +431,7 @@
   let ask = $state<false | Ask | 'really'>(false);
   /** The move's library. */
   let to = $state<LibraryInfo | null>(null);
+  const adding = $derived(!!to && adds(offer?.from ?? null, to));
   let keep = $state<KeepPreview | null>(null);
   let swap = $state<ReplacePreview | null>(null);
   /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
@@ -555,8 +577,8 @@
     act(async () => {
       if (!to) return;
       const name = to.name;
-      moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `Moved ${a.title} to ${name}.`);
-    }, `Could not move the ${word}`);
+      moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `${adding ? 'Added' : 'Moved'} ${a.title} to ${name}.`);
+    }, `Could not ${adding ? 'add' : 'move'} the ${word}`);
   /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
   const replaceIt = (carry = false) =>
     act(async () => {
@@ -677,15 +699,15 @@
       <MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />
     {/if}
   {:else if e === 'moveTo'}
-    {#if me.admin && offer && offer.job === null}
-      {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
+    {#if offer && offer.job === null}
+      {#each offer.targets as t (t.id)}<MenuEntry icon="intoBox" label={`${adds(offer.from, t) ? 'Add' : 'Move'} to ${t.name}`} onclick={() => askMove(t)} />{/each}
     {/if}
   {:else if e === 'replaceIn'}
-    {#if me.admin && offer && offer.job === null && offer.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
+    {#if me.admin && offer && offer.job === null && offer.replaceable}<MenuEntry icon="swap" label={`Replace in ${offer.replaceInto?.name ?? music}`} onclick={askReplace} />{/if}
   {:else if e === 'removeResume'}
     {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
   {:else if e === 'deleteAlbum'}
-    {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label={`Delete ${word}`} danger onclick={() => (ask = 'delete')} />{/if}
+    {#if offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label={`Delete ${word}`} danger onclick={() => (ask = 'delete')} />{/if}
   {/if}
 {/snippet}
 
@@ -723,17 +745,17 @@
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
       {:else if keep.refused}
-        <p class="ask">Can't move {a.title}: {keep.refused.detail}</p>
+        <p class="ask">Can't {adding ? 'add' : 'move'} {a.title}: {keep.refused.detail}</p>
       {:else}
         <p class="ask">
-          Move {a.title} into {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
+          {adding ? 'Add' : 'Move'} {a.title} {adding ? 'to' : 'into'} {to?.name} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
             {` ${converted(keep.convert, to?.name ?? '')}`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
       <div class="actions">
         {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>Move to {to?.name}</button>
+          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>{adding ? 'Add' : 'Move'} to {to?.name}</button>
         {/if}
         <button onclick={onclose}>Cancel</button>
       </div>

@@ -70,7 +70,7 @@
   {@const discs = new Set(c.tracks.map((t) => t.disc ?? 1)).size > 1}
   <p class="from">{[c.from.said, c.format].filter(Boolean).join(' · ')}</p>
   <Group>
-    {#if c.suggested === 'keep'}<Item lead="on" name="Keep suggested" line="Every check agrees" />{/if}
+    {#if c.suggested === 'keep'}<Item lead="on" name="Adding suggested" line="Every check agrees" />{/if}
     {#each c.checks as x (x.key)}
       <Item lead={LEAD[x.state]} name={NAME[x.key] ?? x.key} line={x.said} tone={x.state === 'red' ? 'bad' : x.state === 'amber' ? 'warn' : null} busy={x.state === 'waiting'} wrap />
     {/each}

@@ -785,6 +785,9 @@ export const undo = (tokens: string[]) => post<{ redo: string[]; restored: strin
 
 
 export const createPlaylist = (name: string) => post<{ playlist: string } & Undo>('/api/playlists', { name });
+/** The track ids started afresh, the catalogue lost (decision 0101): the first new id, and the rows of each table that
+ *  still name old tracks (shown missing from now on). An administrator's. */
+export const freshTrackIds = () => post<{ from: number; references: [string, number][] }>('/api/catalogue/fresh-ids', {});
 /** What 0.15 knew each playlist this account sees by (its name, `owner/name` another's) and its id since (decision
  *  0101). */
 export const getMovedPlaylists = () => quietly<Record<string, string>>('/api/playlists/moved');
@@ -993,17 +996,27 @@ export type SourceStatus = {
 
 export type Values = Record<string, string | string[]>;
 
-/** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
-/** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
 /** A library's quality limit on the way in (decision 0096's amendment): lossless files above it become FLAC at it as
  *  they move in or are kept into it; `none`: as they are; `hr96`, `hr48`: up to 24-bit/96 or 48 kHz; `cd`: 16/44.1. */
 export type Quality = 'none' | 'hr96' | 'hr48' | 'cd';
-/** A library's own settings (decision 0034): its quality limit, its dot's colour and its name. */
-/** `fetcher`: an Incoming library's, whose records come into it (decision 0096: one Incoming library per fetcher). */
-export type LibraryPolicy = { quality?: Quality; colour?: string | null; name?: string | null; fetcher?: Fetcher | null };
-export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
+/** A library in use, as Settings keeps it (decision 0101 point 1: no roles), in the list's order: the first main library
+ *  takes every fallback. A main library is the household's music, every one equal; an Incoming one, a fetcher's new
+ *  music waiting to be heard and added. Own music is no setting (its folder's, 0101 point 9). Its own settings
+ *  (decision 0034): its quality limit, its dot's colour and its name; an Incoming library's fetcher, whose records come
+ *  into it (decision 0096: one Incoming library per fetcher), and where Add to puts them by default (`keep_to`, a main
+ *  library; none: the first; 0101 point 2). */
+export type LibrarySetting = {
+  id: string;
+  kind: 'main' | 'incoming';
+  quality?: Quality;
+  colour?: string | null;
+  name?: string | null;
+  fetcher?: Fetcher | null;
+  keep_to?: string | null;
+};
 
-export type LibraryUse = 'music' | 'incoming' | 'unused';
+/** A server library as it is used: its kind in the list, someone's own music, or not used. */
+export type LibraryUse = LibrarySetting['kind'] | 'own' | 'unused';
 
 /** A server's music library and where Cratarr sees its files. */
 export type ServerLibrary = {
@@ -1017,7 +1030,8 @@ export type ServerLibrary = {
   read_only: boolean;
 };
 
-export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: Roles; values: Values };
+/** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
+export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: LibrarySetting[]; values: Values };
 
 export type SourceView = SourceConfig & {
   label: string;
@@ -1027,7 +1041,7 @@ export type SourceView = SourceConfig & {
   choices: Record<string, Choice[]>;
   server_libraries: ServerLibrary[];
   error: string | null;
-  /** Each used library's settings as they apply (its own, else its use's and the palette's). */
+  /** Each used library's settings as they apply (its own, else its kind's and the palette's). */
   policies?: Record<string, { quality: Quality; colour: string | null }>;
 };
 
@@ -1280,6 +1294,16 @@ export type Me = {
   sessions?: UserSession[];
 };
 export const getMe = () => quietly<Me>('/api/me');
+/** A preference kept on the account (decision 0101 point 14, lib/accountPrefs): its value, and when it was changed
+ *  (epoch ms). */
+export type HeldPreference = { value: unknown; changed: number };
+/** The account's preferences, those the server holds. */
+export const getPreferences = () => quietly<{ values: Record<string, HeldPreference> }>('/api/me/preferences').then((r) => r.values);
+/** A preference as changed on this device at `changed`: the server keeps it if that is later than what it holds (per
+ *  preference the latest change wins, the whole value; one ahead of its clock counts as now), and answers what it
+ *  holds then. */
+export const putPreference = (key: string, value: unknown, changed: number) =>
+  quietly<HeldPreference>(`/api/me/preferences/${key}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, changed }) });
 /** What this server can do (0.11, lib/capabilities): the names of what it has configured and what its code supports. */
 export const getCapabilities = () => quietly<import('./generated/Capabilities').Capabilities>('/api/capabilities');
 /** Ends one of one's own sign-ins, or takes one of one's own devices away. */
@@ -1312,15 +1336,16 @@ export const putMySettings = (base: number, settings: Record<string, unknown>) =
 /** Each server's own name and libraries, and what each library is used as, for everyone (the filter): the part of the
  *  server's settings that is not its administrators' alone. */
 export type LibrariesView = {
-  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: { music: string[]; incoming: string[] } }[];
+  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: (Pick<LibrarySetting, 'id'> & { kind: LibrarySetting['kind'] | 'own' })[] }[];
 };
 export const getLibraries = () => quietly<LibrariesView>('/api/libraries');
-/** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it). */
-export const setAppPassword = (password: string) =>
-  request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+/** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it): set with
+ *  the password they sign in with (`current`), a lasting way in being more than a page left open may make. */
+export const setAppPassword = (current: string, password: string) =>
+  request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current, password }) });
 /** Every user, for the administrators' Users panel: their profile, permissions, devices, sign-ins. `directory`: an
  *  account from the directory (its name and role set there); else Cratarr's own (decision 0051, amended 2026-10-19). */
-export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[] };
+export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[]; own_library?: string | null };
 export const getUsers = () => request<{ users: User[] }>('/api/users').then((r) => r.users);
 const putJson = (url: string, body: unknown) => request<void>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const userUrl = (name: string, what: string) => `/api/users/${encodeURIComponent(name)}/${what}`;
@@ -1625,6 +1650,27 @@ export const setReferences = (album: string, choice: { counting?: ReferenceSourc
     body: JSON.stringify(choice),
   });
 
+/** One copy of a record: one folder's files of it (docs/records-and-copies.md). `format` and `kbps` are as `ListedAlbum`'s,
+ *  `bits` and `rate` a lossless copy's, null where one of its files is not read. `deletable`, `keepable`, `keep_to` and
+ *  `lacks` are what the viewer may do with this copy and what it lacks, as `AlbumsSource` says them by album. `picked`:
+ *  the viewer's own choice (Plays from). `plays`: the one the server would play them. `job`: the conversion at work on
+ *  this copy, `Job.id`. */
+export type AlbumCopy = {
+  library: string;
+  format: string | null;
+  kbps: number | null;
+  bits: number | null;
+  rate: number | null;
+  deletable: boolean;
+  keepable: boolean;
+  keep_to: string | null;
+  lacks: string[];
+  picked: boolean;
+  plays: boolean;
+  added: number | null;
+  job: number | null;
+};
+
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
   /** Not the library's (a Bandcamp album): asked for, where it stands (lib/CoverStatus). */
@@ -1645,6 +1691,10 @@ export type ListedAlbum = {
   tags: string[];
   /** The library it was listed from (the filter's library switches). */
   library?: string;
+  /** Its copies, in the order the server would play them for the viewer; `format` and `bitrate_kbps` are the one that
+   *  plays. None from a list with no libraries; from a server of another kind, `library` alone. lib/copiesRule reads
+   *  these. */
+  copies?: AlbumCopy[];
   /** Its artists one by one, when the source credits several; absent: `artist` alone. */
   artists?: string[];
   /** Its length (s), its tracks' together; null where one of them is not known (0.10; a server before it gives none). */
@@ -1684,14 +1734,29 @@ export type ShelfSource = {
   library_info?: LibraryInfo[];
 };
 
-/** A used library of a server (decision 0034): the dot on its albums (none for the primary, Music), and its quality
- *  limit on the way in. */
-export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; quality: Quality };
+/** A used library of a server, as the page shows it (decision 0101 point 1: no roles; the list's order is the default,
+ *  the first main library taking every fallback): a main library, an Incoming (its fetcher's), or someone's own music
+ *  (`owner`; `mine`: the viewer's). `colour`: the dot on its albums (decision 0034); `quality`: its limit on the way in.
+ *  `seen`: whether Cratarr sees its files (`seen_why` when not). `naming`: a main library's template, Keep and Move
+ *  renaming by the target's. */
+export type LibraryInfo = {
+  id: string;
+  name: string;
+  kind: 'main' | 'incoming' | 'own';
+  fetcher: 'lidarr' | 'soulseek' | 'uploads' | null;
+  owner: string | null;
+  mine: boolean;
+  colour: string | null;
+  quality: Quality;
+  seen: boolean;
+  seen_why?: string;
+  naming?: string;
+};
 
-/** An album of a library other than Music, as it stands to the other used libraries (decision 0034, Music's first): an
- *  upgrade of an album there, or a duplicate. `library` is that album's folder, `library_id` the library it is in;
- *  `replaceable` only when it is in Music (Replace is Music's alone). */
-export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable: boolean };
+/** An album as it stands to the other used libraries (decision 0034): an upgrade of an album there, or a duplicate.
+ *  `library` is that album's folder, `library_id` the library it is in; `replaceable_into` the main libraries it can
+ *  replace the other copy in (decision 0101 point 2). */
+export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string; library_id: string | null; replaceable_into: string[] };
 
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
@@ -1703,6 +1768,9 @@ export type AlbumsSource = ShelfSource & {
    *  duplicates it. */
   waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
   deletable: string[];
+  /** The Incoming albums the viewer may Keep, and where each goes by default (decision 0101 point 2). */
+  keepable: string[];
+  keep_to: Record<string, string>;
 };
 export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: string | null };
 
@@ -2438,6 +2506,8 @@ export const moveAlbum = (source: string, album: string, to: string, year?: stri
   });
 /** Delete an album of any library, into that library's trash (Undo brings it back). */
 export const deleteAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, { method: 'POST' });
+/** Delete an album of someone's own music from the Users panel: an administrator's, only there. */
+export const deleteOwnAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete-own`, { method: 'POST' });
 
 /** What Replace would do with an upgrade: the album in Music it replaces, how many of its tracks the new files take
  * over, new tracks, and where it goes; or why not (`unmatched`: old tracks without a match, by title). */

@@ -76,7 +76,7 @@ async fn like_crate(served: Option<Arc<crate::serve::Serve>>, id: &str, item: &s
     let served = served.ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     if item == crates::WEEK {
         let me = asking_user(Some(&*served)).ok_or_else(|| ToggleError::Refused("Sounds like your week is an account's own: sign in.".into()))?;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let now = super::moment::now_secs();
         let since = now - crates::WEEK_SECS;
         // The history's week (decision 0064): how often and how lately each was heard; skipped ones left out too. Until
         // the log reaches back a week: the songs last played within it, alike.
@@ -383,7 +383,7 @@ fn shared_alike(files: &Arc<Vec<crates::Facts>>, membership: &HashMap<String, Ve
     }
     // The one before let go first: two at once over every file is what the limit cannot hold.
     *kept = None;
-    let made = Arc::new(crates::Alike::of(files, membership));
+    let made = Arc::new(crates::Alike::of(files, membership, &crates::artist_ids(files)));
     *kept = Some((key.0, key.1, made.clone()));
     made
 }
@@ -434,12 +434,12 @@ impl CrateLibrary {
 
     /// The files of the libraries switched on, newest first.
     pub(super) fn files(&self) -> impl Iterator<Item = &crates::Facts> {
-        self.files_of(false)
+        self.files.iter().filter(|f| !self.switched_off.contains(&f.folder))
     }
 
-    /// `files`, or every library's (`every`: what switching them all on would show).
-    fn files_of(&self, every: bool) -> impl Iterator<Item = &crates::Facts> {
-        self.files.iter().filter(move |f| every || !self.switched_off.contains(&f.folder))
+    /// This library as the rules work a crate out over it.
+    fn view<'a>(&'a self) -> crates::View<'a, impl Fn() -> &'a crates::Alike> {
+        crates::View { files: &self.files, switched_off: &self.switched_off, world: self.world(), by: &self.by, alike: || self.alike() }
     }
 
     /// What the axes test about the library as a whole.
@@ -449,7 +449,7 @@ impl CrateLibrary {
             favourites: self.favourites.as_ref(),
             favourite_albums: self.favourite_albums.as_ref(),
             uses: self.uses.as_ref(),
-            now: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64),
+            now: super::moment::now_secs(),
             fits: self.fits.as_ref(),
         }
     }
@@ -464,101 +464,33 @@ impl CrateLibrary {
         self.uses.as_ref()
     }
 
-    /// The conditions with their Sounds like worked out (`crates::resolved`), once for all the files.
+    /// The conditions with their Sounds like worked out (`crates::View::resolved`), once for all the files.
     pub(super) fn resolved(&self, conditions: &[crates::Condition]) -> Vec<crates::Condition> {
-        self.resolved_of(conditions, false)
-    }
-
-    fn resolved_of(&self, conditions: &[crates::Condition], every: bool) -> Vec<crates::Condition> {
-        let conditions = &one_spelling(conditions);
-        if !conditions.iter().any(|c| c.value.ranks()) {
-            return conditions.to_vec();
-        }
-        // The closest among what the crate may show: its libraries switched on, its other conditions held.
-        let w = self.world();
-        let among: Vec<&crates::Facts> = self.files_of(every).filter(|f| crates::holds_besides_like(conditions, f, &w)).collect();
-        crates::resolved_in(conditions, self.alike(), &among, &self.by, &self.membership)
+        self.view().resolved(&one_spelling(conditions), false)
     }
 
     /// The crate's lines, newest first; a Sounds like crate's closest first (`crates::closest_first`).
     pub(super) fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
-        self.select_of(conditions, false)
+        self.view().select(&one_spelling(conditions), false)
     }
 
-    fn select_of(&self, conditions: &[crates::Condition], every: bool) -> Vec<String> {
-        let resolved = self.resolved_of(conditions, every);
-        let mut lines: Vec<String> = crates::select(self.files_of(every), &resolved, &self.world()).into_iter().map(str::to_string).collect();
-        crates::closest_first(&mut lines, &resolved);
-        lines
-    }
-
-    /// The crate's lines as `select` gives them, why it left out what it did (decision 0095), how many it would hold
-    /// with every cause lifted, and with `explain` what keeps each track out, all read from the one judgement
-    /// (`crates::Verdicts`): `causes` among the conditions, and the libraries switched off (`without`, their keys).
-    fn select_saying(&self, conditions: &[crates::Condition], causes: &[Cause], without: &[String], explain: bool) -> (Vec<String>, Vec<crates::Reason>, usize, Option<Judged>) {
-        let resolved = self.resolved(conditions);
-        let ranked: Vec<bool> = conditions.iter().map(|c| c.value.ranks()).collect();
-        let at: Vec<std::ops::Range<usize>> = causes.iter().map(|c| c.at.clone()).collect();
-        let (lines, verdicts) = crates::select_saying(self.files.iter(), |f| self.switched_off.contains(&f.folder), &resolved, &ranked, &at, explain, &self.world());
-        let mut lines: Vec<String> = lines.into_iter().map(str::to_string).collect();
-        crates::closest_first(&mut lines, &resolved);
-        // The causes as the verdicts' bits number them: the libraries switched off last, when any of this source's is.
-        let mut named: Vec<crates::BlockCause> = causes.iter().map(|c| crates::BlockCause { kind: c.kind, key: c.key.clone(), label: c.label.clone() }).collect();
+    /// `crates::View::select_saying`: `without`, the libraries switched off on the page, this source's of them.
+    fn select_saying(&self, conditions: &[crates::Condition], causes: &[crates::Cause], without: &[String], explain: bool) -> (Vec<String>, Vec<crates::Reason>, usize, Option<crates::Judged>) {
         let mine: Vec<String> = without.iter().filter(|k| k.starts_with(&format!("{}/", self.source))).cloned().collect();
-        if !mine.is_empty() {
-            named.push(crates::Reason::libraries_off(&mine, 0).into());
-        }
-        let blocked = explain.then(|| Judged { verdicts: verdicts.clone(), causes: named.clone() });
-        if !ranked.contains(&true) {
-            return (lines, verdicts.reasons(&named), verdicts.all(), blocked);
-        }
-        // A Sounds like picks its closest among what every cause lets through: with one lifted it picks again, so the
-        // crate is selected again for the counts, once a cause, and only when nothing shows.
-        if !lines.is_empty() {
-            let n = lines.len();
-            return (lines, Vec::new(), n, blocked);
-        }
-        let lifting = |out: &[std::ops::Range<usize>]| -> Vec<crates::Condition> {
-            conditions.iter().enumerate().filter(|(i, _)| !out.iter().any(|r| r.contains(i))).map(|(_, c)| c.clone()).collect()
-        };
-        let all = self.select_of(&lifting(&at), true).len();
-        if all == 0 {
-            return (lines, Vec::new(), 0, blocked);
-        }
-        let mut backs: Vec<usize> = at.iter().map(|r| self.select(&lifting(std::slice::from_ref(r))).len()).collect();
-        backs.push(self.select_of(conditions, true).len());
-        let reasons = named
-            .iter()
-            .zip(verdicts.per_cause(named.len()))
-            .zip(backs)
-            .filter(|((_, (any, _)), _)| *any)
-            .map(|((c, _), back)| crates::Reason::new(c.kind, c.key.clone(), c.label.clone(), back))
-            .collect();
-        (lines, reasons, all, blocked)
+        self.view().select_saying(&one_spelling(conditions), causes, &mine, explain)
     }
 }
 
-/// A crate's verdicts as `explain` asks for them (decision 0095, amended 2026-11-02), with the causes their bits name:
-/// the page's search words still to be judged with them (`Judged::blocked`).
-#[derive(Debug, PartialEq)]
-struct Judged {
-    verdicts: crates::Verdicts,
-    causes: Vec<crates::BlockCause>,
-}
-
-impl Judged {
-    /// What keeps each track out, the page's search (`queries`, any of them: lib/search's, on the row's title or file,
-    /// artist and album) one more cause when it asks one; `passing` the lines the crate shows, `rows` each line's row.
-    fn blocked(mut self, passing: &[String], queries: &[String], rows: &HashMap<String, PlaylistRow>) -> crates::Blocked {
-        let queries: Vec<&str> = queries.iter().map(|q| q.trim()).filter(|q| !q.is_empty()).collect();
-        if !queries.is_empty() {
-            let bit = crates::cause_bit(self.causes.len());
-            self.causes.push(crates::BlockCause { kind: crates::Why::Search, key: None, label: "Search".into() });
-            let found = |line: &str| rows.get(line).is_some_and(|r| words_find(&queries, &[r.name.as_deref().unwrap_or(&r.file), r.artist.as_deref().unwrap_or(""), r.album.as_deref().unwrap_or("")]));
-            self.verdicts.add_cause(passing, bit, |line| !found(line));
-        }
-        self.verdicts.blocked(self.causes)
+/// What keeps each track out (`crates::Judged`), the page's search (`queries`, any of them: lib/search's, on the row's
+/// title or file, artist and album) one more cause when it asks one; `passing` the lines the crate shows, `rows` each
+/// line's row.
+fn what_blocks(judged: crates::Judged, passing: &[String], queries: &[String], rows: &HashMap<String, PlaylistRow>) -> crates::Blocked {
+    let queries: Vec<&str> = queries.iter().map(|q| q.trim()).filter(|q| !q.is_empty()).collect();
+    if queries.is_empty() {
+        return judged.blocked();
     }
+    let found = |line: &str| rows.get(line).is_some_and(|r| words_find(&queries, &[r.name.as_deref().unwrap_or(&r.file), r.artist.as_deref().unwrap_or(""), r.album.as_deref().unwrap_or("")]));
+    judged.searched(passing, |line| !found(line)).blocked()
 }
 
 /// Whether any of `queries` meets these texts as the page's search meets a row (lib/search `matches`, lib/matcher's
@@ -593,15 +525,6 @@ fn one_spelling(conditions: &[crates::Condition]) -> Vec<crates::Condition> {
             c
         })
         .collect()
-}
-
-/// A cause among a crate's conditions as it is looked at (decision 0095): its chip's kind, key and word, and the
-/// conditions it added.
-struct Cause {
-    kind: crates::Why,
-    key: Option<String>,
-    label: String,
-    at: std::ops::Range<usize>,
 }
 
 /// How a crate is looked at, besides its definition: its two toggles as the page shows them (a tap may be on its way;
@@ -1328,6 +1251,7 @@ mod undo_tests {
     async fn an_artist_is_excluded_everywhere_once_per_account_and_taken_back() {
         let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();
         served.users.set("me", "pw").unwrap();
+        served.sessions.set_required(false).unwrap();
         let (d, s) = service_with(Some(served.clone())).await;
         let (a, undo) = s.exclude_artist("The Avalanches").await.unwrap();
         assert_eq!((a.key.as_str(), a.name.as_str()), ("avalanches", "The Avalanches"));
@@ -1487,7 +1411,7 @@ async fn album_lines(served: Option<Arc<crate::serve::Serve>>, cat: Arc<crate::c
 /// crate draws from both; an Incoming song's line climbs out of Music, `Catalogue::line_of`). Blocking.
 fn songs_by_line(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue) -> HashMap<String, crate::serve::library::RelSong> {
     let mut out = HashMap::new();
-    for folder in 0..cat.folders().len() as i64 {
+    for folder in cat.folders().ids() {
         for (rel, song) in serve.library.songs_by_rel(folder).unwrap_or_default() {
             if let Some(line) = cat.line_of(folder, &rel) {
                 out.insert(line, song);
@@ -2172,14 +2096,27 @@ impl PlaylistService {
     /// playlist is not brought in yet waits for it): its spoken names, and its suggestions' crate (`like:list:<key>`,
     /// in its owner's crates: what was turned down there and its fit).
     fn moved_to_ids(&self) {
+        let db = self.lib.playlists_db().clone();
+        // What moved, added to the migration report's playlists part (decision 0101) where anything did.
+        let told = |db: &crate::userdata::UserData, field: &str, n: usize| {
+            let fields = serde_json::Map::from_iter([(field.to_string(), serde_json::json!(n))]);
+            if let Err(e) = db.add_to_migration_part("playlists", &fields) {
+                tracing::warn!("the migration report: {field} not kept: {e:#}");
+            }
+        };
+        let mut spoken = 0;
         for (old, names) in self.sync.spoken() {
             if crate::userdata::playlists::is_id(&old) {
                 continue;
             }
             let Some(id) = self.moved(&old) else { continue };
-            if let Err(e) = self.sync.set_spoken(&id, &names).and_then(|_| self.sync.set_spoken(&old, &[])) {
-                tracing::warn!("the spoken names of {old} not moved to its id: {e:#}");
+            match self.sync.set_spoken(&id, &names).and_then(|_| self.sync.set_spoken(&old, &[])) {
+                Ok(()) => spoken += 1,
+                Err(e) => tracing::warn!("the spoken names of {old} not moved to its id: {e:#}"),
             }
+        }
+        if spoken > 0 {
+            told(&db, "spoken_names_moved", spoken);
         }
         let moved = self.lib.playlists_db().playlists_moved().unwrap_or_default();
         let mut crates = Vec::new();
@@ -2195,23 +2132,29 @@ impl PlaylistService {
             return;
         }
         tokio::spawn(async move {
+            let mut suggestions = 0;
             for (store, old, new) in crates {
                 let moved = async {
-                    let left = store.left_out(&old).await?;
+                    let (left, fit) = (store.left_out(&old).await?, store.fit(&old).await?);
+                    let any = !left.is_empty() || !fit.is_empty();
                     if !left.is_empty() {
                         store.set_left_out(&new, left).await?;
                         store.set_left_out(&old, crates::LeftOut::default()).await?;
                     }
-                    let fit = store.fit(&old).await?;
                     if !fit.is_empty() {
                         store.set_fit(&new, fit).await?;
                         store.set_fit(&old, crates::Fit::default()).await?;
                     }
-                    anyhow::Ok(())
+                    anyhow::Ok(any)
                 };
-                if let Err(e) = moved.await {
-                    tracing::warn!("{old}: what was turned down for it not moved to {new}: {e:#}");
+                match moved.await {
+                    Ok(true) => suggestions += 1,
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("{old}: what was turned down for it not moved to {new}: {e:#}"),
                 }
+            }
+            if suggestions > 0 {
+                told(&db, "suggestion_crates_moved", suggestions);
             }
         });
     }
@@ -2318,6 +2261,25 @@ impl PlaylistService {
             row.added = added.get(i).copied().flatten();
             row.entry_id = ids.get(i).cloned();
         }
+        // A missing entry the catalogue has no file of any more, by what its track was (decision 0101 point 11).
+        if rows.iter().any(|row| row.missing && row.name.is_none()) {
+            let tracks = r.store.tracks(&r.name).await?;
+            let wanted: Vec<(usize, i64)> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.missing && row.name.is_none())
+                .filter_map(|(i, _)| Some((i, tracks.get(i)?.as_deref()?.strip_prefix(crate::serve::ids::SONG)?.parse().ok()?)))
+                .collect();
+            let cat = self.lib.catalogue();
+            let found = tokio::task::spawn_blocking(move || wanted.into_iter().filter_map(|(i, t)| Some((i, cat.remembered(t)?))).collect::<Vec<_>>())
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            for (i, was) in found {
+                let row = &mut rows[i];
+                (row.name, row.artist, row.album) = (was.title, row.artist.take().or(was.artist), row.album.take().or(was.album));
+                row.duration_secs = row.duration_secs.or(was.duration_ms.map(|ms| ms as f64 / 1000.0));
+            }
+        }
         // The user's plays of each track, as the user data keeps them.
         if let Some(serve) = self.served.clone()
             && let Some(me) = serve.current_user()
@@ -2415,7 +2377,7 @@ impl PlaylistService {
             let folders = c.folders();
             let place = |line: &str| {
                 let (folder, rel) = c.place_of_line(line)?;
-                Some((folders.get(usize::try_from(folder).ok()?)?.clone(), rel))
+                Some((folders.get(folder)?.clone(), rel))
             };
             crate::export::plan(lists, place, |rels| {
                 let rows = c.line_rows("", rels)?;
@@ -2463,7 +2425,7 @@ impl PlaylistService {
                 .zip(rows)
                 .map(|((label, place), row)| {
                     let (folder, rel) = place.ok_or(label)?;
-                    let path = folders.get(folder as usize).ok_or_else(|| rel.clone())?.join(&rel);
+                    let path = folders.get(folder).ok_or_else(|| rel.clone())?.join(&rel);
                     let (format, kbps) = c.format_of(folder, &rel);
                     Ok((path, rel, export_facts(row, format, kbps)))
                 })
@@ -2584,7 +2546,7 @@ impl PlaylistService {
         };
         let (songs, played) = songs_played;
         let facts: HashMap<&str, &crates::Facts> = lib.files.iter().chain(every.iter().flat_map(|e| e.files.iter())).map(|f| (f.rel.as_str(), f)).collect();
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let now = super::moment::now_secs();
         let images = self.crate_images();
         Ok(all
             .into_iter()
@@ -2961,7 +2923,7 @@ impl PlaylistService {
 
     /// `crate_shown`'s conditions, and which of them each cause added (decision 0095): its own and its left-out list
     /// first (what the crate is), then its toggles, what is excluded everywhere and each condition of the filter.
-    async fn crate_causes(&self, id: &str, look: &CrateLook) -> Result<(Vec<crates::Condition>, Vec<Cause>), ToggleError> {
+    async fn crate_causes(&self, id: &str, look: &CrateLook) -> Result<(Vec<crates::Condition>, Vec<crates::Cause>), ToggleError> {
         let def = self.crate_def(id).await?;
         // An own crate's toggles are its conditions (one truth): a built-in's as the page shows them, else as kept.
         let (fav, albums) = match crates::is_fixed(id) {
@@ -2987,7 +2949,7 @@ impl PlaylistService {
             let at = shown.len()..shown.len() + more.len();
             shown.extend(more);
             if !at.is_empty() {
-                causes.push(Cause { kind, key, label: label.to_string(), at });
+                causes.push(crates::Cause { kind, key, label: label.to_string(), at });
             }
         };
         let only = |f: crates::Favourites| f == crates::Favourites::Only;
@@ -3307,7 +3269,7 @@ impl PlaylistService {
     }
 
     /// `crate_page`, saying which of `causes` (and the libraries switched off) left what out (decision 0095).
-    async fn crate_page_saying(&self, conditions: &[crates::Condition], causes: &[Cause], want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
+    async fn crate_page_saying(&self, conditions: &[crates::Condition], causes: &[crates::Cause], want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
         let lib = self.crate_library_for(conditions, want, &look.without).await?;
         let (lines, reasons, all_back, judged) = lib.select_saying(conditions, causes, &look.without, look.explain);
         let blocked = match judged {
@@ -3321,7 +3283,7 @@ impl PlaylistService {
                     }
                     false => HashMap::new(),
                 };
-                Some(judged.blocked(&lines, &look.search, &rows))
+                Some(what_blocks(judged, &lines, &look.search, &rows))
             }
             None => None,
         };
@@ -3561,7 +3523,7 @@ impl PlaylistService {
         let lib = self.crate_library(want, false, false, without).await?;
         let one: Vec<[&crates::Facts; 1]> = lib.files().map(|f| [f]).collect();
         let items: Vec<&[&crates::Facts]> = one.iter().map(|f| f.as_slice()).collect();
-        Ok(crates::list_axes(&items, &self.own_playlist_names().await?, None, lib.uses()))
+        Ok(crates::list_axes(&items, &self.own_playlist_names().await?, None, lib.uses(), super::moment::now_secs()))
     }
 
     /// One's own playlists' names: the membership axis' values.
@@ -3854,7 +3816,7 @@ impl PlaylistService {
     /// (Insights' one) narrows the plays and skips; favourites, playlists and exclusions have no time.
     /// The sources the account switched off add nothing (decision 0094, `taste::off_of`).
     pub async fn taste(&self, want: Option<&str>, without: &[String], period: super::history::Period) -> Result<super::taste::TasteView, ToggleError> {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let now = super::moment::now_secs();
         let since = period.since(now).unwrap_or(0);
         let user = asking_user(self.served.as_deref()).ok_or_else(|| ToggleError::Refused("A taste is an account's own: sign in.".into()))?;
         let serve = self.served.clone().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -4007,7 +3969,7 @@ impl PlaylistService {
             let found = serve.library.albums_by_id(&ids)?;
             let out: HashSet<String> = found.iter().filter(|a| album_out(a, &artists)).map(|a| a.id.clone()).collect();
             let artist_of: HashMap<String, String> = found.into_iter().map(|a| (a.id, a.artist_id)).collect();
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+            let now = super::moment::now_secs();
             // How far an album is from the listening (the owner, 2026-10-23: weigh the unplayed, "the albums that are
             // totally opposite our actual listening behaviour while matching our profile"): never played, 1; played,
             // nearer the more lately (half at UNPLAYED_HALF_DAYS); an artist played much pulls it nearer, up to half.
@@ -4440,8 +4402,10 @@ mod library_tests {
         // A crate of Music's tracks only is the same whether Incoming is on or not.
         let rock = [crates::Condition::new("genre", false, crates::Value::AnyOf { values: vec!["rock".into()] })];
         assert_eq!(library(&[]).select(&rock), library(&[1]).select(&rock));
-        assert_eq!(crates::axes(library(&[1]).files(), &[]).iter().find(|a| a.key == "genre").unwrap().values, ["Dub", "Rock"], "the axes of what is on");
         let off = library(&[1]);
+        let one: Vec<[&crates::Facts; 1]> = off.files().map(|f| [f]).collect();
+        let items: Vec<&[&crates::Facts]> = one.iter().map(|f| f.as_slice()).collect();
+        assert_eq!(crates::list_axes(&items, &[], None, None, 0).iter().find(|a| a.key == "genre").unwrap().values, ["Dub", "Rock"], "the axes of what is on");
         assert_eq!((0..4).map(|i| off.on(i)).collect::<Vec<_>>(), [false, true, false, true], "the taste's places: Incoming off");
     }
 
@@ -4457,7 +4421,7 @@ mod library_tests {
         let mut hearted = library(&[]);
         hearted.favourites = Some(HashSet::from(["B/1.flac".to_string()]));
         let shown = [vec![genre("Dub")], crates::Favourites::Only.with(&[])].concat();
-        let only = [Cause { kind: crates::Why::Favourites, key: None, label: "Favourites only".into(), at: 1..2 }];
+        let only = [crates::Cause { kind: crates::Why::Favourites, key: None, label: "Favourites only".into(), at: 1..2 }];
         let heart = crates::Reason::new(crates::Why::Favourites, None, "Favourites only", 2);
         assert_eq!(hearted.select_saying(&shown, &only, &[], false), (Vec::new(), vec![heart], 2, None), "no dub favourite");
         // Asked to explain: the verdicts with their causes; the page's words judged on rows, as its search does.
@@ -4465,7 +4429,7 @@ mod library_tests {
         assert_eq!(judged.causes.len(), 1);
         let row = |entry: &str, name: &str| (entry.to_string(), PlaylistRow { entry: entry.into(), name: Some(name.into()), ..Default::default() });
         let rows: HashMap<String, PlaylistRow> = [row("A/1.flac", "Kingston Town"), row("../in/X/2.flac", "Other")].into();
-        let blocked = judged.blocked(&[], &["kingston".to_string()], &rows);
+        let blocked = what_blocks(judged, &[], &["kingston".to_string()], &rows);
         assert_eq!(blocked.causes.last().map(|c| c.kind), Some(crates::Why::Search));
         assert!(words_find(&["kings"], &["Kingston Town", "UB40"]), "a word's start, as the page's search finds it");
         assert!(!words_find(&["polka"], &["Kingston Town", "UB40"]));

@@ -73,6 +73,12 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// How many albums Discogs said something of, cheaply: one more may bring the crates a label. Not when: a round
+    /// asks old albums again all along, which changes nothing, and reading every file for that is what the stamp is for.
+    pub fn discogs_albums_stamp(&self) -> Result<i64> {
+        Ok(self.db().query_row("SELECT count(*) FROM discogs_facts WHERE subject >= 'album:' AND subject < 'album;' AND facts IS NOT NULL", [], |r| r.get(0))?)
+    }
+
     pub fn set_discogs_facts(&self, subject: &str, facts: Option<&str>, at: i64) -> Result<()> {
         self.db().execute("INSERT OR REPLACE INTO discogs_facts (subject, at, facts) VALUES (?1, ?2, ?3)", params![subject, at, facts])?;
         Ok(())
@@ -262,6 +268,20 @@ impl UserData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_album_more_moves_the_discogs_stamp_and_a_round_asking_old_ones_again_does_not() {
+        let u = UserData::open(None).unwrap();
+        u.set_discogs_facts("album:a", Some("{}"), 1).unwrap();
+        let said = u.discogs_albums_stamp().unwrap();
+        assert_eq!(said, 1);
+        u.set_discogs_facts("album:a", Some("{}"), 2).unwrap();
+        u.set_discogs_facts("album:unknown there", None, 3).unwrap();
+        u.set_discogs_facts("artist:x", Some("{}"), 3).unwrap();
+        assert_eq!(u.discogs_albums_stamp().unwrap(), said, "asked again, nothing said, and no album's");
+        u.set_discogs_facts("album:b", Some("{}"), 4).unwrap();
+        assert_eq!(u.discogs_albums_stamp().unwrap(), 2);
+    }
 
     #[test]
     fn a_source_s_words_replace_its_own_and_an_unanswered_ask_keeps_them() {

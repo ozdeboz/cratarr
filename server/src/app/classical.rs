@@ -38,8 +38,8 @@ use super::works::{Person, Stored};
 use crate::serve::read::{WorkAlbum, WorkSong};
 use crate::source::ComposerRef;
 
-/// The kind as the filter's Type axis and the page name it.
-pub const CLASSICAL: &str = "Classical";
+pub use cratarr_rules::crates::CLASSICAL;
+
 /// What the passes found counts at most this late (a mark, and a build, at once).
 const FACTS_EVERY: Duration = Duration::from_secs(60);
 
@@ -1514,7 +1514,7 @@ mod tests {
         // The Type axis offers it, with its count.
         let items: Vec<[&Facts; 1]> = facts.iter().map(|f| [f]).collect();
         let lists: Vec<&[&Facts]> = items.iter().map(|i| i.as_slice()).collect();
-        let axes = crate::crates::list_axes(&lists, &[], None, None);
+        let axes = crate::crates::list_axes(&lists, &[], None, None, 0);
         let t = axes.iter().find(|a| a.key == "type").unwrap();
         let at = t.values.iter().position(|v| v == "Classical").unwrap();
         assert_eq!(t.counts[at], 1);

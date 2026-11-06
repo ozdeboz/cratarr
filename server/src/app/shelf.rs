@@ -70,15 +70,12 @@ impl Shelves {
     /// 280% CPU and made it time out, 2026-10-13), so what was asked is kept, also across restarts.
     async fn with_details(&self, source_id: &str, s: &dyn Source, listed: Vec<source::Listed>, shelf: Shelf) -> Vec<source::Album> {
         let c = self.lib.catalogue();
-        // The Music folder comes first when one is set (library::catalogue_folders).
-        let music = i64::from(self.lib.music().is_some());
+        // The folders of what is kept (main libraries and own music) are Music's shelf, the others Incoming's: by what they
+        // are, never by their place (0101 point 1: a folder's id says nothing of its kind).
+        let kept = self.lib.kept_folders();
         // By album directory (relative to its folder); a server's path is matched by its longest such ending.
         let seen: HashMap<String, source::AlbumDetails> = tokio::task::spawn_blocking(move || {
-            let all = c.folders().len() as i64;
-            let folders = match shelf {
-                Shelf::Music => 0..music.min(all),
-                Shelf::Incoming => music..all,
-            };
+            let folders: Vec<i64> = c.folders().ids().filter(|id| kept.contains(id) == matches!(shelf, Shelf::Music)).collect();
             let mut out = HashMap::new();
             for folder in folders {
                 for f in c.album_facts(folder).unwrap_or_default() {

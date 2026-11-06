@@ -587,11 +587,17 @@ async function appendSlice(bytes: Uint8Array<ArrayBuffer>, gen: number, signal: 
 /** Drops played audio more than `keep` seconds behind the playing position. */
 async function evict(keep = BEHIND) {
   if (!sb || !audio || !sb.buffered.length) return;
+  // An ended stream holds all there is to come, and a removal would open it again: at its end the element would wait for
+  // more, not end, and the queue's last track never would.
+  if (ms?.readyState === 'ended') return;
   const until = audio.currentTime - keep;
   if (until <= sb.buffered.start(0) + 1) return;
   await waitUpdate();
   try {
     sb.remove(sb.buffered.start(0), until);
+    // Its beginning gone, that stream is no longer one coming: a place there is fetched, not waited for (Repeat one back
+    // to the start of a stream's first track waited 4 s with the next one sounding).
+    streamFrom = null;
     await waitUpdate();
   } catch {
     /* the stream moved on; nothing to drop */
@@ -599,8 +605,9 @@ async function evict(keep = BEHIND) {
 }
 
 /** Fetches queue track `index` and appends it to the stream, starting `from` seconds into it (a seek). `whole`: asked
- *  from its top all the same, placed so that `from` plays now (a stream from a moment that did not say where it began). */
-async function appendTrack(index: number, from: number, gen: number, whole = false) {
+ *  from its top all the same, placed so that `from` plays now (a stream from a moment that did not say where it began).
+ *  `again`: the rest of a track that broke while it played, asked for once; breaking too, it ends there. */
+async function appendTrack(index: number, from: number, gen: number, whole = false, again = false) {
   const t = local.queue[index];
   if (!t) return;
   wantGain(index);
@@ -637,7 +644,7 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
     if (from > 0 && !whole && res.status === 206 && !res.headers.has('x-start-ms')) {
       playback('warn', 'stream from a moment without its start', { track: t.id, source: t.source, from });
       ctl.abort();
-      return appendTrack(index, from, gen, true);
+      return appendTrack(index, from, gen, true, again);
     }
     const type = res.headers.get('content-type') ?? '';
     const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : type.includes('alac') ? ALAC : type.includes('mp4a') || type.includes('aac') ? AAC : MP4;
@@ -646,7 +653,7 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
       // The next form down, where there is one: asked again at once.
       if (demote(t, `not taken: ${kind}`) && gen === generation) {
         ctl.abort();
-        return appendTrack(index, from, gen, whole);
+        return appendTrack(index, from, gen, whole, again);
       }
       throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : kind === ALAC ? 'ALAC' : kind === AAC ? 'AAC' : 'MP3'} here.`);
     }
@@ -778,19 +785,30 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
   } catch (e) {
     if ((e as DOMException).name === 'AbortError' || gen !== generation) return;
     playback('warn', 'track failed', { track: t.id, source: t.source, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), ms: ms?.readyState ?? null, sb: !!sb, mime });
+    // Broke while it plays (a roam, a restart, a proxy tired of a paused stream): it ends at what the stream holds, so
+    // what follows goes after that, never over it. Its rest is asked for from there, once: a fresh stream would throw
+    // away the minute already in, which is all there is to play while Cratarr cannot be reached.
+    const here = where();
+    const reached = !!placedSegment && here?.seg === placedSegment;
+    if (placedSegment && here && reached) {
+      placedSegment.length = here.offset + ahead();
+      streamEnd = Math.max(streamEnd, placedSegment.start + placedSegment.length);
+      if (!again) return appendTrack(index, placedSegment.length, gen, whole, true);
+    }
     local.error = e instanceof Error ? e.message : String(e);
     errorIndex = index;
     // Skip what cannot play, as a player does. The queue's last (or only) track ends the stream there instead: the one
-    // before it plays out and the queue ends, or, playing itself, it stands (the 0.15 desktop app, 2026-11-04: a failed
-    // resume stalled silent with its clock counting on, and never moved on).
+    // before it plays out and the queue ends, or, playing itself, it plays out what is in and stands there (the 0.15
+    // desktop app, 2026-11-04: a failed resume stalled silent with its clock counting on, and never moved on).
     if (index < local.queue.length - 1) {
       lastAppended = index;
-      // Placed already (it failed midway): that segment becomes the empty one, not a second segment for the track.
-      if (placedSegment) placedSegment.length = 0;
-      else segments.push({ index, start: streamEnd, length: 0, told: null });
+      // Not reached yet, it takes no time in the stream: placed already (it failed midway), that segment becomes the
+      // empty one, not a second segment for the track.
+      if (placedSegment && !reached) placedSegment.length = 0;
+      else if (!reached) segments.push({ index, start: streamEnd, length: 0, told: null });
     } else {
       lastAppended = index;
-      if (index === local.index) {
+      if (index === local.index && !ahead()) {
         audio?.pause();
         local.starting = false;
       }
@@ -830,6 +848,9 @@ async function fresh(index: number, from = 0, play = true) {
   sb = null;
   mime = null;
   local.index = index;
+  // Before its append: the queue's last ends the stream, and repeat all goes on past it. Not all who land here go by
+  // `fill` (a wind's landing, the playing track taken out).
+  nextRound();
   local.position = from;
   local.error = null;
   wantGain(index);
@@ -906,7 +927,6 @@ function tick() {
       // set the index themselves, so they still move on.)
       if (local.repeat === 'one' && w.seg.index === local.index + 1) return jump(local.index);
       local.index = w.seg.index;
-      nextRound();
       fill();
     }
     local.position = tape.rewindPos ?? inTrack(w);
@@ -1159,6 +1179,8 @@ if (audio) {
   audio.addEventListener('play', tick);
   audio.addEventListener('pause', tick);
   audio.addEventListener('ended', () => {
+    // Repeat one on the queue's last track: no next one for the clock to see the stream cross into, so it is here.
+    if (local.repeat === 'one' && !handed()) return void fresh(local.index, 0, true);
     local.paused = true;
   });
 }
@@ -1770,8 +1792,10 @@ let filling = false;
 /** The own tracks Radio has asked inserts for (by entry, or place and id): one ask per track. */
 const insertedFor = new Set<string>();
 
-/** This page's own stream: Radio's inserts for the playing own track, and Autoplay's tracks when the queue runs low. */
+/** This page's own stream, after any change of track or of what comes next: under repeat all the next round where the
+ *  last track plays, Radio's inserts for the playing own track, and Autoplay's tracks when the queue runs low. */
 function fill() {
+  nextRound();
   insertRadio();
   fillAutoplay();
 }
@@ -1841,7 +1865,7 @@ function fillAutoplay() {
  *  amended: those added by hand play once; shuffled anew when the queue plays shuffled, not starting with the track
  *  that just played). The stream then goes on into it without a gap. */
 function nextRound() {
-  if (local.repeat !== 'all' || local.index < 0 || local.index !== local.queue.length - 1) return;
+  if (handed() || local.repeat !== 'all' || local.index < 0 || local.index !== local.queue.length - 1) return;
   const byPlace = new Map<number, LocalTrack>();
   for (const t of local.queue) if (!t.lane && t.n !== undefined) byPlace.set(t.n, t);
   let round = byPlace.size
@@ -1865,10 +1889,13 @@ function replaceUpcoming(upcoming: LocalTrack[]) {
 }
 
 /** Takes out everything after the playing track (the queue sheet's clear button); returns it, for its Undo. Autoplay,
- *  when on, fills again at the next track. */
+ *  when on, fills again at once: no next track is left to ask at. */
 export function clearUpcoming(): LocalTrack[] {
   const removed = local.queue.slice(local.index + 1);
-  if (removed.length) replaceUpcoming([]);
+  if (removed.length) {
+    replaceUpcoming([]);
+    fill();
+  }
   return removed;
 }
 
@@ -1976,6 +2003,7 @@ export function remove(index: number) {
   local.queue = local.queue.filter((_, i) => i !== index);
   if (handed()) return hand('remove', { index, ...(entry ? { entry } : {}) });
   cutFrom(index);
+  fill();
 }
 
 /** As `remove`, counted in what comes next. */
@@ -1994,8 +2022,10 @@ export function removePlaying() {
     return hand('remove', { index: i, ...(entry ? { entry } : {}) });
   }
   if (last) {
-    local.index = local.queue.length - 1;
     audio?.pause();
+    // A stream of the track that stays: left on the one taken out, the clock would follow it back past the queue's end.
+    if (local.queue.length) fresh(local.queue.length - 1, 0, false);
+    else local.index = -1;
     return;
   }
   fresh(i, 0, true);
@@ -2015,11 +2045,14 @@ export const moveUpcoming = (from: number, to: number) => move(local.index + 1 +
 /** The queue changed from index `at` on: what the stream holds (or is fetching) from there is no longer what comes
  *  next. It is dropped, and the tick appends the new next track gaplessly after the last one kept. */
 function cutFrom(at: number) {
-  if (appending && appendingIndex >= at) {
+  // A track still coming in counts as appended only once wholly in, but its segment and its sound are in the stream
+  // already: stopped, they go too.
+  const aborted = appending && appendingIndex >= at;
+  if (aborted) {
     fetching?.abort();
     appending = false;
   }
-  if (at > lastAppended) return;
+  if (!aborted && at > lastAppended) return void endIfLast();
   const keep = segments.filter((s) => s.index < at);
   // An ended stream counts too (the queue's last track was in): the removal below reopens it.
   if (!keep.length || !sb || !ms || ms.readyState === 'closed') return;
@@ -2027,16 +2060,28 @@ function cutFrom(at: number) {
   const end = last.start + (last.length ?? 0);
   segments = keep;
   streamEnd = end;
-  lastAppended = at - 1;
+  lastAppended = Math.min(lastAppended, at - 1);
+  const gen = generation;
   (async () => {
     // An append that was under way finishes first; the aborted one adds nothing after it.
     while (sb?.updating) await waitUpdate();
+    if (gen !== generation) return;
     try {
       sb?.remove(end, Infinity);
     } catch {
       /* nothing appended there */
     }
+    await endIfLast();
   })();
+}
+
+/** Nothing of the queue is left to come after what the stream holds: the stream ends there. An appended track ends it
+ *  itself when it is the queue's last; this is for a queue that became shorter. Left open, the element would reach the
+ *  end of what it holds and wait for more for ever. */
+async function endIfLast() {
+  const gen = generation;
+  while (sb?.updating) await waitUpdate();
+  if (gen === generation && !appending && lastAppended === local.queue.length - 1 && ms?.readyState === 'open') ms.endOfStream();
 }
 
 /** Plays or pauses; `plain`: with no Start and stop (a switch between devices; the owner, 2026-10-27). */
@@ -4399,6 +4444,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       const keep = local.index + 1;
       local.queue = [...local.queue.slice(0, keep), ...tracksOf(m.tracks)];
       cutFrom(keep);
+      fill();
       return false;
     }
     case 'jump': {

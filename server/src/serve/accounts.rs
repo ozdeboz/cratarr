@@ -81,6 +81,7 @@ fn devices_of(serve: &Serve, user: &str) -> Vec<serde_json::Value> {
 fn view(serve: &Serve, u: &User, current: Option<&str>) -> serde_json::Value {
     json!({
         "name": u.name, "display_name": u.display_name, "admin": u.admin, "active": u.active, "directory": u.directory, "permissions": u.permissions,
+        "own_library": serve.own_music().map(|o| o.join(&u.name)).filter(|p| p.is_dir()).map(|p| p.display().to_string()),
         "app_password": !u.password.is_empty(), "devices": devices_of(serve, &u.name), "sessions": sessions_of(serve, &u.name, current),
     })
 }
@@ -102,11 +103,19 @@ struct AppPassword {
 }
 
 /// One's own OpenSubsonic password, for an account from the directory (none until then: its apps sign in with this). A
-/// Cratarr account's own password is its OpenSubsonic one too (`/api/me/password`).
-async fn set_app_password(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<AppPassword>) -> Response {
+/// Cratarr account's own password is its OpenSubsonic one too (`/api/me/password`). Asked with a sign-in and the
+/// password it signs in with (`current`), as what it sets is a lasting way in: a key, or a page left open, may not make
+/// one.
+async fn set_app_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json(b): axum::Json<OwnPassword>) -> Response {
+    if !super::access::signed_in() {
+        return refused(StatusCode::FORBIDDEN, "This takes a sign-in, not a key.");
+    }
     let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
     if serve.users.get(&me).is_some_and(|u| !u.directory) {
         return refused(StatusCode::CONFLICT, "Your password is your app password too: change that.");
+    }
+    if let Err(r) = super::access::reauthenticate(&serve, &headers, &b.current).await {
+        return r;
     }
     match serve.users.set_app_password(&me, &b.password) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -215,6 +224,9 @@ struct OwnPassword {
 /// One's own password, for a Cratarr account (any user; the directory keeps its own accounts'): the current one asked.
 /// The other sign-ins end.
 async fn change_own_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json(b): axum::Json<OwnPassword>) -> Response {
+    if !super::access::signed_in() {
+        return refused(StatusCode::FORBIDDEN, "This takes a sign-in, not a key.");
+    }
     let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
     if serve.users.get(&me).is_some_and(|u| u.directory) {
         return refused(StatusCode::CONFLICT, "Set in the directory.");
@@ -241,6 +253,7 @@ async fn create_user(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<
     match serve.users.create(&b.name, &b.password, b.admin) {
         Ok(u) => {
             tracing::info!(target: "signin", user = %u.name, admin = u.admin, "account made");
+            serve.others_own_off(&u.name);
             axum::Json(view(&serve, &u, None)).into_response()
         }
         Err(r) => refusal(r),

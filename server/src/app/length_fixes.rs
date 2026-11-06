@@ -8,8 +8,9 @@
 //!   MP3's info frame's counts (one written where it has none), a FLAC's STREAMINFO total. Replacing the track is the
 //!   album's single-track replacement (`track_fetch`), which the finding's items lead to.
 //!
-//! A file is written in place (its folder's owner and group kept), as a run on the one path (`fix_plans`, decision
-//! 0092): the run keeps its original first, and its Undo copies it back (`file_runs`).
+//! A file is changed through a copy beside it, which takes its place whole with its owner and rights (decision 0092: never
+//! the library's own file), as a run on the one path (`fix_plans`): the run keeps its original first, and its Undo puts
+//! it back the same way (`file_runs`).
 
 use std::path::{Path, PathBuf};
 
@@ -61,7 +62,7 @@ pub fn of_finding(key: &str) -> Result<Vec<Fix>> {
 /// The file a song is.
 fn file_of(served: &Serve, song: &str) -> Result<Option<(i64, String, PathBuf, String, String)>> {
     let Some((folder, rel, album, title)) = served.library.song_file(song)? else { return Ok(None) };
-    let dir = usize::try_from(folder).ok().and_then(|i| served.catalogue().folders().get(i).cloned()).context("its folder is not in use")?;
+    let dir = served.catalogue().folders().get(folder).cloned().context("its folder is not in use")?;
     Ok(Some((folder, rel.clone(), dir.join(&rel), album, title)))
 }
 
@@ -118,16 +119,20 @@ pub fn fix(served: &Serve, field: &str, song: &str) -> Result<Option<Fix>> {
     }))
 }
 
-/// Writes a length's change into a file in place (`op`: length, trim, seektable; `ms` a FLAC's length to set): the run on
-/// the one path keeps its original first (`file_runs`). Blocking.
-pub fn write(op: &str, path: &Path, ms: Option<i64>) -> Result<()> {
-    match op {
-        "seektable" => crate::catalogue::tags::flac_drop_seektable(path),
-        "length" | "trim" if is_flac(path) => set_flac_total(path, ms.context("its sound's length is not known")?),
-        "length" | "trim" => set_mp3_length(path),
-        "reread" => Ok(()),
-        _ => bail!("no such change: {op}"),
-    }
+/// Writes a length's change into a file (`op`: length, trim, seektable; `ms` a FLAC's length to set), through a copy: on an
+/// error, or a stop, the file is as it was. `ready` has the copy, as made, before it takes the file's place. The run on the
+/// one path keeps its original first (`file_runs`). Blocking.
+pub fn write(op: &str, path: &Path, ms: Option<i64>, ready: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    crate::moves::replace_through_part(path, |copy| {
+        std::fs::copy(path, copy).with_context(|| format!("copying {}", path.display()))?;
+        match op {
+            "seektable" => crate::catalogue::tags::flac_drop_seektable(copy),
+            "length" | "trim" if is_flac(path) => set_flac_total(copy, ms.context("its sound's length is not known")?),
+            "length" | "trim" => set_mp3_length(copy),
+            _ => bail!("no such change: {op}"),
+        }?;
+        ready(copy)
+    })
 }
 
 /// A length's fix as a file of a run: its track, the length now → after (a seek table's broken → by its frames), and
@@ -198,7 +203,6 @@ fn set_mp3_length(path: &Path) -> Result<()> {
     new.extend_from_slice(&old[..start]);
     new.extend_from_slice(&frame);
     new.extend_from_slice(&old[start..]);
-    // In place (its owner, group and rights kept), not a new file renamed over it.
     std::fs::write(path, new)?;
     Ok(())
 }

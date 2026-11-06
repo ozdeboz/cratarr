@@ -145,9 +145,9 @@ impl CollectionService {
         self.lib
             .connected()
             .into_iter()
-            .filter(|(a, _)| !a.cfg.libraries.music.is_empty())
+            .filter(|(a, _)| !a.kept().is_empty())
             .map(|(a, s)| {
-                let ids = a.cfg.libraries.music.clone();
+                let ids = a.kept();
                 (a, s, ids)
             })
             .collect()

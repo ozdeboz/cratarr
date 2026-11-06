@@ -14,6 +14,8 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
+pub use cratarr_rules::names::{key, loose};
+
 /// A track as a source knows it.
 #[derive(Debug, Clone, Default)]
 pub struct Track<'a> {
@@ -23,67 +25,6 @@ pub struct Track<'a> {
     pub title: &'a str,
     pub album: Option<&'a str>,
     pub length_secs: Option<f64>,
-}
-
-/// A name to match by: lower case, letters and digits only.
-pub fn key(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
-}
-
-/// A name to match by when its own key finds nothing: accents folded, "&" as "and", without what is in brackets, a
-/// "feat." part or a leading "the" ("Beyoncé feat. Jay-Z" is "beyonce"; "The Wall (Remastered)" is "wall").
-pub fn loose(s: &str) -> String {
-    let lower: String = s.chars().map(fold).collect::<String>().to_lowercase().replace('&', " and ");
-    let mut kept = String::new();
-    let mut depth = 0u32;
-    for c in lower.chars() {
-        match c {
-            '(' | '[' => depth += 1,
-            ')' | ']' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => kept.push(c),
-            _ => {}
-        }
-    }
-    let words: Vec<&str> = kept.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    let end = words.iter().position(|w| matches!(*w, "feat" | "ft" | "featuring")).unwrap_or(words.len());
-    let start = usize::from(words.first() == Some(&"the") && end > 1);
-    let out: String = words[start..end].concat();
-    if out.is_empty() { key(s) } else { out }
-}
-
-/// A letter without its accent (the Latin ones; others as they are).
-fn fold(c: char) -> char {
-    match c {
-        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
-        'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' | 'Ă' | 'Ą' => 'A',
-        'ç' | 'ć' | 'č' => 'c',
-        'Ç' | 'Ć' | 'Č' => 'C',
-        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => 'e',
-        'È' | 'É' | 'Ê' | 'Ë' | 'Ē' | 'Ė' | 'Ę' | 'Ě' => 'E',
-        'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' => 'i',
-        'Ì' | 'Í' | 'Î' | 'Ï' | 'Ī' | 'Į' => 'I',
-        'ñ' | 'ń' | 'ň' => 'n',
-        'Ñ' | 'Ń' | 'Ň' => 'N',
-        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' => 'o',
-        'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' | 'Ő' => 'O',
-        'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' => 'u',
-        'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ū' | 'Ů' | 'Ű' => 'U',
-        'ý' | 'ÿ' => 'y',
-        'Ý' | 'Ÿ' => 'Y',
-        'š' | 'ś' => 's',
-        'Š' | 'Ś' => 'S',
-        'ž' | 'ź' | 'ż' => 'z',
-        'Ž' | 'Ź' | 'Ż' => 'Z',
-        'ł' => 'l',
-        'Ł' => 'L',
-        'ř' => 'r',
-        'Ř' => 'R',
-        'đ' => 'd',
-        'Đ' => 'D',
-        'ß' => 's',
-        '’' | '‘' | '`' => '\'',
-        c => c,
-    }
 }
 
 /// A song of the library, as a candidate: its id and length (seconds).
@@ -302,6 +243,8 @@ pub struct Listened<'a> {
     pub track: Track<'a>,
     pub at: i64,
     pub event: String,
+    /// The player it was heard on, where the source knows: else [`into_history`]'s, the source's own name.
+    pub player: Option<&'a str>,
 }
 
 /// Another listen of the same song this near (seconds) is the same listen (a scrobbler that fed two services).
@@ -345,7 +288,7 @@ pub fn into_history(
                 length_secs: l.track.length_secs,
                 ended: crate::userdata::Ended::Finished,
                 counts: false,
-                player: Some(player.to_string()),
+                player: Some(l.player.unwrap_or(player).to_string()),
                 output: None,
                 context: Some(context.to_string()),
                 event: Some(l.event.clone()),
@@ -406,12 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn loosely_accents_brackets_feat_and_the_count_for_nothing() {
-        assert_eq!(loose("Beyoncé feat. Jay-Z"), "beyonce");
-        assert_eq!(loose("The Wall (Remastered 2011)"), "wall");
-        assert_eq!(loose("Simon & Garfunkel"), "simonandgarfunkel");
-        assert_eq!(loose("The The"), "the", "a name that is only \"the\" keeps it");
-        assert_eq!(loose("(Untitled)"), "untitled", "nothing but brackets: its own key");
+    fn a_name_is_found_loosely_when_its_key_finds_nothing() {
         let mut m = Matcher::default();
         m.add("tr-1", "Halo", Some("Beyoncé"), "I Am... Sasha Fierce", None, None);
         m.add_album("al-1", "Homogenic", Some("Björk"));

@@ -4,6 +4,8 @@
 //! and logged as heard: finished, not counted (the plays they were reached the counts by Jellyfin's import already),
 //! context `listenbrainz`. A listen's own id (its time and recording) makes an import safe to run again. One import
 //! (decision 0067): found by the shared matcher (`app::import`), previewed before, undone as a whole (by its context).
+//! It goes in by the one routine for listens (`import::into_history`): one the history has from anywhere is not added
+//! twice, and that includes every listen Cratarr itself sent to ListenBrainz.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,8 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::import::{Counter, Matcher, Tally, Track};
-use crate::userdata::{Ended, Heard};
+use super::import::{Listened, Matcher, Tally, Track, into_history};
 use super::reach::Sent as _;
 
 const API: &str = "https://api.listenbrainz.org/1/user";
@@ -135,6 +136,13 @@ fn event(l: &Listen) -> String {
 /// What the history calls an imported listen's context: how its undo finds it.
 const CONTEXT: &str = "listenbrainz";
 
+/// The listens through the one routine for listens (decision 0067): what they bring to `account`'s history, written
+/// unless `preview`. Blocking.
+fn into_log(serve: &crate::serve::Serve, songs: &Matcher, account: &str, listens: &[Listen], preview: bool) -> Result<Tally> {
+    let listened: Vec<Listened> = listens.iter().map(|l| Listened { track: track(l), at: l.at, event: event(l), player: l.player.as_deref() }).collect();
+    into_history(serve, songs, account, CONTEXT, "ListenBrainz", &listened, preview)
+}
+
 /// What importing a ListenBrainz user's listens into `account`'s history would bring (decision 0067): nothing written.
 pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, progress: &super::lastfm::Progress) -> Result<Tally> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
@@ -147,15 +155,7 @@ pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str
     let (serve, account) = (serve.clone(), account.to_string());
     tokio::task::spawn_blocking(move || -> Result<Tally> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
-        let there = serve.userdata.heard_events(&account, CONTEXT)?;
-        let mut c = Counter::default();
-        for l in &listens {
-            match songs.find(&track(l)) {
-                Some(_) => c.found(!there.contains(&event(l))),
-                None => c.missed(&track(l)),
-            }
-        }
-        Ok(c.tally())
+        into_log(&serve, &songs, &account, &listens, true)
     })
     .await?
 }
@@ -182,32 +182,7 @@ pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str,
     let (serve, account) = (serve.clone(), account.to_string());
     let tally = tokio::task::spawn_blocking(move || -> Result<Tally> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
-        let mut c = Counter::default();
-        for l in &listens {
-            let Some(song) = songs.find(&track(l)) else {
-                c.missed(&track(l));
-                continue;
-            };
-            let Some((pid, album, artists)) = serve.library.play_targets(song)? else {
-                c.missed(&track(l));
-                continue;
-            };
-            let secs = l.duration_ms.map(|d| d as f64 / 1000.0);
-            let heard = Heard {
-                at: l.at,
-                heard_secs: secs,
-                length_secs: secs,
-                ended: Ended::Finished,
-                counts: false,
-                player: l.player.clone(),
-                output: None,
-                context: Some(CONTEXT.into()),
-                event: Some(event(l)),
-                followed: false,
-            };
-            c.found(serve.userdata.record(&account, (song, &pid), &album, &artists, &heard)?);
-        }
-        Ok(c.tally())
+        into_log(&serve, &songs, &account, &listens, false)
     })
     .await?;
     match stopped {
@@ -222,4 +197,70 @@ pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str,
 /// How many of a tally's listens were found in the library (what went in).
 fn listens_in(t: &Result<Tally>) -> u64 {
     t.as_ref().map_or(0, |t| t.found as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalogue::{Catalogue, Rules, ServedRow};
+    use crate::serve::library::FolderRows;
+    use crate::userdata::Heard;
+
+    /// One song served, Hunter by Björk; its id and a matcher that knows it.
+    fn one_song(name: &str) -> (std::path::PathBuf, Arc<crate::serve::Serve>, String, Matcher) {
+        let d = std::env::temp_dir().join(format!("cratarr-listenbrainz-{name}-{}", std::process::id()));
+        let file = "Björk/Homogenic (1997)/01 Hunter.mp3";
+        std::fs::create_dir_all(d.join(file).parent().unwrap()).unwrap();
+        std::fs::write(d.join(file), file).unwrap();
+        let cat = Arc::new(Catalogue::open(None, vec![d.clone()]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let track = cat.track_of(0, file).unwrap();
+        let serve = crate::serve::Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(cat);
+        let tags = [("title", "Hunter"), ("artist", "Björk"), ("albumartist", "Björk"), ("album", "Homogenic"), ("date", "1997"), ("tracknumber", "1")];
+        let row = ServedRow { rel: file.into(), track: Some(track), size: 1, mtime: 1, tags: tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..ServedRow::default() };
+        serve.library.refresh(&[FolderRows { folder: 0, root: d.display().to_string(), rows: vec![row] }], &Rules::default()).unwrap();
+        let song = crate::serve::ids::song(track);
+        let mut songs = Matcher::default();
+        songs.add(&song, "Hunter", Some("Björk"), "Homogenic", None, Some(250.0));
+        (d, serve, song, songs)
+    }
+
+    fn listen(at: i64, msid: &str, player: Option<&str>) -> Listen {
+        Listen { at, msid: msid.into(), recording: None, artist: "Björk".into(), title: "Hunter".into(), release: None, duration_ms: Some(250_000), player: player.map(Into::into) }
+    }
+
+    #[test]
+    fn a_listen_cratarr_sent_comes_back_as_the_play_it_was_not_a_second_one() {
+        let (d, serve, song, songs) = one_song("sent");
+        let (pid, album, artists) = serve.library.play_targets(&song).unwrap().unwrap();
+        // A live play: no event of ListenBrainz's to know it by, as `plays` is unique on nothing else.
+        serve.userdata.record("me", (&song, &pid), &album, &artists, &Heard { event: Some("the-players-own".into()), ..Heard::counted(1_000) }).unwrap();
+        let back = [listen(1_000, "m1", Some("Cratarr"))];
+        let said = into_log(&serve, &songs, "me", &back, true).unwrap();
+        assert_eq!((said.found, said.new), (1, 0), "the preview says it is there");
+        let brought = into_log(&serve, &songs, "me", &back, false).unwrap();
+        assert_eq!((brought.found, brought.new), (1, 0));
+        let log = serve.userdata.heard_since("me", 0).unwrap();
+        assert_eq!(log.len(), 1, "one row, Insights' plays and the taste as they were");
+        assert_eq!(undo(&serve, "me").unwrap(), 0, "and nothing an Undo would take");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_listen_the_history_has_not_comes_in_once_however_often_it_is_imported() {
+        let (d, serve, _, songs) = one_song("new");
+        let old = [listen(1_000, "m1", Some("Jellyfin")), listen(9_000, "m2", None)];
+        assert_eq!(into_log(&serve, &songs, "me", &old, true).unwrap().new, 2, "a preview writes nothing");
+        assert!(serve.userdata.heard_since("me", 0).unwrap().is_empty());
+        assert_eq!(into_log(&serve, &songs, "me", &old, false).unwrap().new, 2);
+        assert_eq!(into_log(&serve, &songs, "me", &old, true).unwrap().new, 0, "run again it brings nothing");
+        assert_eq!(into_log(&serve, &songs, "me", &old, false).unwrap().new, 0);
+        let log = serve.userdata.heard_since("me", 0).unwrap();
+        assert_eq!(log.iter().map(|l| (l.at, l.counted, l.context.as_deref())).collect::<Vec<_>>(), [(1_000, false, Some(CONTEXT)), (9_000, false, Some(CONTEXT))], "finished, not counted, its context how its Undo finds it");
+        assert_eq!(undo(&serve, "me").unwrap(), 2);
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

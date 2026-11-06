@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn the_taste_leans_to_the_liked_and_its_words_are_net_of_the_avoided() {
         let files = vec![file("a.flac", "Jazz", 1960.0), file("b.flac", "Jazz", 1965.0), file("c.flac", "Techno", 1995.0), file("d.flac", "Techno", 1998.0), file("e.flac", "Folk", 1970.0)];
-        let alike = Alike::of(&files, &HashMap::new());
+        let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
         let at = |rel: &str| alike.place_of_line(rel).unwrap();
         let sources = Sources {
             favourites: vec![at("a.flac")],
@@ -271,7 +271,7 @@ mod tests {
         let off = off_in(&serde_json::json!({ "taste_off": ["skipped", "nonsense", "favourites"] }));
         assert_eq!(off, ["favourites", "skipped"]);
         let files = vec![file("a.flac", "Jazz", 1960.0), file("b.flac", "Techno", 1995.0)];
-        let alike = Alike::of(&files, &HashMap::new());
+        let alike = Alike::of(&files, &HashMap::new(), &HashMap::new());
         let at = |rel: &str| alike.place_of_line(rel).unwrap();
         let sources = Sources { favourites: vec![at("a.flac")], skipped: vec![(at("b.flac"), 3)], plays: vec![(at("b.flac"), 2)], ..Sources::default() };
         let (taste, avoid) = profiles(&alike, &sources, &off);

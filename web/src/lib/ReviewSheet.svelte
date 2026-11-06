@@ -10,7 +10,7 @@
     review.thing?.startsWith('run:')
       ? 'Written to files'
       : review.thing?.startsWith('intake:')
-        ? 'Before Keep'
+        ? 'Before adding'
         : review.thing?.startsWith('renumber:')
           ? 'Renumber'
           : 'Review the fixes',

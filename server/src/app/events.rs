@@ -83,6 +83,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut tasks = super::tasks::tasks().subscribe();
     // The account's favourites as they change, by any way (userdata `Starred`), where Cratarr's own library is open.
     let mut starred = app.served.as_ref().map(|s| s.userdata.subscribe_starred());
+    // The account's preferences as another of its devices changes them (decision 0101 point 14).
+    let mut preferences = app.served.as_ref().map(|s| s.userdata.subscribe_preferences());
     // Albums' covers as they change (0.9.7): their new stamps.
     let mut covers = app.served.as_ref().map(|s| s.subscribe_covers());
     // Single-track replacement's downloads as they go (0.9.8).
@@ -216,6 +218,30 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                     Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => true,
                     Err(broadcast::error::RecvError::Closed) => {
                         starred = None;
+                        true
+                    }
+                },
+                r = async {
+                    match preferences.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match r {
+                    // Only to the account's own pages: which preference changed, the page reads them again.
+                    Ok(p) if account.as_deref() == Some(p.account.as_str()) => {
+                        match Message::of("changed", &serde_json::json!({ "area": "preferences", "key": p.key })) {
+                            Some(m) => out.send(m).await.is_ok(),
+                            None => true,
+                        }
+                    }
+                    Ok(_) => true,
+                    // Some went by unheard: whichever they were, the page reads them all again.
+                    Err(broadcast::error::RecvError::Lagged(_)) => match Message::of("changed", &serde_json::json!({ "area": "preferences" })) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
+                    Err(broadcast::error::RecvError::Closed) => {
+                        preferences = None;
                         true
                     }
                 },

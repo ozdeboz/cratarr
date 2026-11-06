@@ -360,14 +360,15 @@ impl Users {
         })
     }
 
-    /// A new password for an account, given its current one.
+    /// A new password for an account, given its current one. One without (a directory's, before its app password) has
+    /// none to give: an empty one is not it.
     pub fn change_password(&self, name: &str, current: &str, new: &str) -> Result<(), &'static str> {
         if new.is_empty() {
             return Err("Choose a password.");
         }
         let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
         let Some(u) = users.iter_mut().find(|u| u.name == name) else { return Err("There is no such account.") };
-        if !same(&u.password, current) {
+        if u.password.is_empty() || !same(&u.password, current) {
             return Err("The current password is wrong.");
         }
         let old = std::mem::replace(&mut u.password, new.to_string());

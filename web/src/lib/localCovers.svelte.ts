@@ -1,6 +1,7 @@
 // An album's cover on this device (Symfonium's "Change local thumbnail", decided 2026-10-16): a picture chosen here,
 // kept in this browser (IndexedDB) and shown wherever the album's cover is (lib/api's albumCoverUrl); and a cover read
-// again from the server (Symfonium's "Remove cached images"). Neither reaches the server or another device.
+// again from the server (Symfonium's "Remove cached images"). Neither reaches the server or another device; Home's
+// picture alone does, as a copy on the account.
 
 const DB = 'cratarr-covers';
 const STORE = 'covers';
@@ -43,6 +44,8 @@ async function load() {
     const c = cursor.result;
     if (!c) return db.close();
     if (c.value instanceof Blob) localCovers[String(c.key)] = URL.createObjectURL(c.value);
+    // Chosen before it followed the account: its copy made now (decision 0101 point 14: the first device sends its own).
+    if (c.value instanceof Blob && c.key === HOME_HEADER && homePicture.held === null) void heldCopy(c.value).then(hold, () => {});
     c.continue();
   };
 }
@@ -85,10 +88,86 @@ export const setLocalCover = (source: string, album: string, file: Blob) => setL
 /** The server's cover again. */
 export const removeLocalCover = (source: string, album: string) => removeLocalPicture(coverKey(source, album));
 
-/** Home's header picture chosen on this device in place of the weather's sky (the owner, 2026-10-24); wide, so kept
- *  larger than a cover. */
+/** Home's header picture chosen in place of the weather's sky (the owner, 2026-10-24); wide, so kept larger than a cover. */
 export const HOME_HEADER = 'home/header';
-export const HOME_HEADER_PX = 2400;
+const HOME_HEADER_PX = 2400;
+
+// Home's picture on the account (decision 0101 point 14), as a copy: what a preference holds is far below the picture
+// this device keeps, so the account's is the largest that fits, a data URL. The device that chose it shows its own;
+// another shows the account's. Not among the prefs: those go over to the app whole at each change.
+const HELD = 'cratarr-home-picture';
+/** The most the account keeps of a preference, as JSON (the server's MOST_BYTES), less the quotes round a string. */
+const HELD_MOST = 256 * 1024 - 2;
+/** The longest sides tried for the copy, largest first. */
+const HELD_SIDES = [1600, 1200, 900, 600, 400];
+
+function keptHeld(): string | null {
+  try {
+    return localStorage.getItem(HELD);
+  } catch {
+    return null;
+  }
+}
+
+/** Home's picture as the account holds it: a data URL; null: none. */
+export const homePicture = $state({ held: keptHeld() });
+
+function hold(held: string | null) {
+  homePicture.held = held;
+  try {
+    if (held === null) localStorage.removeItem(HELD);
+    else localStorage.setItem(HELD, held);
+  } catch {
+    /* not kept: asked of the account again at the next start */
+  }
+}
+
+/** The largest copy `copyAt` makes of `sides` (largest first) within `most` characters; null where none is. */
+export async function fittedCopy(sides: number[], most: number, copyAt: (side: number) => Promise<string>): Promise<string | null> {
+  for (const side of sides) {
+    const copy = await copyAt(side);
+    if (copy.length <= most) return copy;
+  }
+  return null;
+}
+
+const dataUrl = (b: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(b);
+  });
+const heldCopy = (file: Blob) => fittedCopy(HELD_SIDES, HELD_MOST, async (side) => dataUrl(await shrink(file, side)));
+
+function blobOf(data: string): Blob {
+  const [head, body] = data.split(',');
+  return new Blob([Uint8Array.from(atob(body), (c) => c.charCodeAt(0))], { type: head.slice('data:'.length, head.indexOf(';')) });
+}
+
+/** `file` as Home's picture, here and on the account. */
+export async function chooseHomePicture(file: Blob) {
+  // Read whole first, as `setLocalPicture` does: it is read twice here.
+  const whole = new Blob([await file.arrayBuffer()], { type: file.type });
+  await setLocalPicture(HOME_HEADER, whole, HOME_HEADER_PX);
+  hold(await heldCopy(whole));
+}
+
+/** No picture of one's own any more, here or on the account. */
+export async function dropHomePicture() {
+  hold(null);
+  await removeLocalPicture(HOME_HEADER);
+}
+
+/** The account's picture, or none, made this device's: shown as one chosen here. */
+export async function takeHomePicture(held: string | null) {
+  const blob = held === null ? null : blobOf(held);
+  hold(held);
+  if (localCovers[HOME_HEADER]) URL.revokeObjectURL(localCovers[HOME_HEADER]);
+  if (blob) localCovers[HOME_HEADER] = URL.createObjectURL(blob);
+  else delete localCovers[HOME_HEADER];
+  await write(HOME_HEADER, blob);
+}
 
 /** Reads the album's cover from the server again, past the browser's copy (`url`: its plain address). */
 export async function refreshCover(source: string, album: string, url: string) {

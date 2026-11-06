@@ -1,11 +1,12 @@
 //! The catalogue (decision 0008): every audio file in the playlist folder and the extra folders, its tags as stored,
-//! and each server's id for it. Derived data in one SQLite file in the data folder (or in memory without one):
-//! deleting it costs only a refill.
+//! and each server's id for it, in one SQLite file in the data folder (or in memory without one). Its track ids are the
+//! truth everything else names (0101): a lost file is restored from the nightly backup, never made anew in passing (a new
+//! one gives out no ids until an administrator starts them afresh; `Library::fresh_track_ids`).
 //!
 //! Passes run in the background (`run`): walk the folders (size and modification time decide what changed), read
 //! the tags of new and changed files a batch at a time, then ask every server for its tracks (paged, then only what
-//! changed) and link each to a file. A folder that cannot be read keeps its rows and reports the error: an
-//! unmounted folder must never look like "everything was deleted".
+//! changed) and link each to a file. A folder that cannot be read, or that walks to nothing where it had files, keeps its
+//! rows and reports it: an unmounted folder must never look like "everything was deleted".
 
 mod id3;
 pub mod identity;
@@ -15,6 +16,7 @@ pub mod walk;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -61,7 +63,18 @@ CREATE TABLE IF NOT EXISTS source_ids (
   seen INTEGER NOT NULL, PRIMARY KEY (source, track_id)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS source_ids_by_file ON source_ids (folder, rel);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- 0101 point 11: a file Cratarr is putting in an old one's place (a better copy, its Undo) takes that track when it is
+-- identified (`Catalogue::hand_over`); forgotten after a day unclaimed.
+CREATE TABLE IF NOT EXISTS handovers (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, track INTEGER NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER);
+-- 0100: a record's id for life, as a track's is, owned or not: one with no tracks, not retired, is a record not had.
+-- Its facts are here, so a retired one keeps what it was. Its copies are its tracks' files, one folder's each
+-- (docs/records-and-copies.md).
+CREATE TABLE IF NOT EXISTS records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER,
+  title TEXT, artist TEXT, year INTEGER, kind TEXT, counting TEXT);
 CREATE TABLE IF NOT EXISTS analysis (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, version INTEGER NOT NULL,
   duration_secs REAL, loudness_lufs REAL, track_gain_db REAL, track_peak REAL, bpm REAL, bpm_confidence REAL,
@@ -124,14 +137,185 @@ const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NU
 /// How long a folder out of use keeps its rows (parked) before they are forgotten.
 const PARKED_KEEP_SECS: i64 = 30 * 24 * 3600;
 
+/// How many of a folder's files `set_folders` looks for at a path, to tell whether those rows are that folder's.
+const SAMPLE: i64 = 20;
+
 /// The meta key of `Catalogue::generation`.
 const GENERATION: &str = "generation";
 
 /// How long a gone file waits to be recognised as moved before its track id is retired (decision 0011 §4).
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
+/// Every table holding a row per file, by folder and path: what a move, a parked folder or a retirement takes along.
+const FILE_TABLES: [&str; 6] = ["files", "tags", "source_ids", "analysis", "analysis_shape", "beat_this"];
+
+/// What a retiring track was, from its file and tags while they are still there (`tracks`' kept columns).
+const REMEMBER: &str = "was_rel = (SELECT rel FROM files WHERE track = tracks.id LIMIT 1),
+  was_ms = (SELECT duration_ms FROM files WHERE track = tracks.id LIMIT 1),
+  was_title = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'title' ORDER BY t.n LIMIT 1),
+  was_artist = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'artist' ORDER BY t.n LIMIT 1),
+  was_album = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'album' ORDER BY t.n LIMIT 1),
+  was_recording = (SELECT t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE f.track = tracks.id AND t.name = 'musicbrainz_trackid' ORDER BY t.n LIMIT 1)";
+
+/// Whether a folder shows nothing, or is not there: how a mount that is not up looks, and no sign its files are gone.
+fn holds_nothing(path: &str) -> bool {
+    std::fs::read_dir(path).map_or(true, |mut d| !d.any(|e| e.is_ok_and(|e| !e.file_name().to_string_lossy().starts_with('.'))))
+}
+
+/// An album's files in one folder as the library groups them: what [`Catalogue::assign_records`] gives a record.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlbumCopy {
+    pub facts: identity::RecordFacts,
+    /// As shown, for the record's own facts.
+    pub title: String,
+    pub artist: String,
+    pub year: Option<u32>,
+    /// In the order of `facts.tracks`: (track id, disc, number).
+    pub tracks: Vec<(i64, Option<u32>, Option<u32>)>,
+    /// Its tracks do not all hold one record: a stray, or one with none yet.
+    pub split: bool,
+}
+
+/// What the tracks hold, as an album's are counted ([`Held::vote`]).
+#[derive(Default)]
+struct Held {
+    /// Each track's record.
+    record: HashMap<i64, i64>,
+    /// How many tracks a record has, retired ones too.
+    size: HashMap<i64, usize>,
+    /// Tracks with more than one file: they stay with their record, whichever album one of them sits in.
+    shared: std::collections::HashSet<i64>,
+    /// Tracks back from retirement, not yet held against their albums.
+    back: std::collections::HashSet<i64>,
+}
+
+impl Held {
+    fn read(db: &Connection) -> Result<Self> {
+        let mut held = Held::default();
+        let mut st = db.prepare("SELECT id, record, back IS NOT NULL FROM tracks WHERE record IS NOT NULL OR back IS NOT NULL")?;
+        for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, bool>(2)?)))? {
+            let (track, record, back) = row?;
+            if let Some(record) = record {
+                held.record.insert(track, record);
+                *held.size.entry(record).or_default() += 1;
+            }
+            if back {
+                held.back.insert(track);
+            }
+        }
+        let mut st = db.prepare("SELECT track FROM files WHERE track IS NOT NULL GROUP BY track HAVING count(*) > 1")?;
+        held.shared = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(held)
+    }
+
+    /// The record more than half of these tracks hold: one held track says nothing of the other seventeen. A track back
+    /// from retirement was matched by its recording or its name, which says nothing of the album its file landed in. So
+    /// where none beside it stayed, it takes more than half of the record's own tracks to bring the record back.
+    fn most(&self, tracks: &[i64]) -> Option<i64> {
+        let mut votes: BTreeMap<i64, (usize, bool)> = BTreeMap::new();
+        for track in tracks {
+            if let Some(record) = self.record.get(track) {
+                let vote = votes.entry(*record).or_default();
+                vote.0 += 1;
+                vote.1 |= !self.back.contains(track);
+            }
+        }
+        let (record, (n, stayed)) = votes.into_iter().max_by_key(|(r, (n, _))| (*n, std::cmp::Reverse(*r)))?;
+        (n * 2 > tracks.len() && (stayed || n * 2 > self.size.get(&record).copied().unwrap_or(0))).then_some(record)
+    }
+
+    /// The record an album's tracks say it is, if they do. Failing all of them, the ones free to move: a track shared with
+    /// a copy elsewhere stays with its record, so without this an album holding such tracks would never settle, a new
+    /// record born for it at every pass.
+    fn vote(&self, album: &AlbumCopy) -> Option<i64> {
+        let tracks: Vec<i64> = album.tracks.iter().map(|t| t.0).collect();
+        let free: Vec<i64> = tracks.iter().copied().filter(|t| !self.shared.contains(t)).collect();
+        self.most(&tracks).or_else(|| self.most(&free))
+    }
+}
+
+/// What a track is or was ([`Catalogue::remembered`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Remembered {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// MusicBrainz recording id.
+    pub recording: Option<String>,
+    pub duration_ms: Option<i64>,
+    /// Retired: what it was when its file was last seen.
+    pub retired: bool,
+}
+
+/// A file taking the place of `from` (moved outside Cratarr, or a better copy handed its track) came when that one did:
+/// to the copy it is the same file. It keeps its own date where `from` has none.
+fn carry_came(db: &Connection, to: (i64, &str), from: (i64, &str)) -> rusqlite::Result<usize> {
+    db.execute(
+        "UPDATE files SET came = COALESCE((SELECT came FROM files WHERE folder = ?3 AND rel = ?4), came) WHERE folder = ?1 AND rel = ?2",
+        params![to.0, to.1, from.0, from.1],
+    )
+}
+
+/// The retired tracks that share a MusicBrainz recording, a file name, or a title and artist with any of `new`, with
+/// what they were as identity's facts (folded).
+fn retired_like(db: &Connection, new: &[identity::FileFacts]) -> Result<Vec<(i64, identity::FileFacts)>> {
+    let recordings: std::collections::HashSet<&str> = new.iter().filter_map(|f| f.recording.as_deref()).collect();
+    let names: std::collections::HashSet<&str> = new.iter().map(|f| f.name.as_str()).filter(|n| !n.is_empty()).collect();
+    let titled: std::collections::HashSet<(&str, &str)> =
+        new.iter().filter_map(|f| Some((f.title.as_deref()?, f.artist.as_deref()?))).collect();
+    let mut st = db.prepare("SELECT id, was_rel, was_ms, was_recording, was_title, was_artist FROM tracks WHERE retired_at IS NOT NULL")?;
+    let rows = st.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<String>>(4)?,
+            r.get::<_, Option<String>>(5)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, rel, duration_ms, recording, title, artist) = row?;
+        let fold = |v: Option<String>| v.map(|v| identity::fold(&v)).filter(|v| !v.is_empty());
+        let f = identity::FileFacts {
+            name: rel.as_deref().map(identity::name_of).unwrap_or_default(),
+            duration_ms,
+            recording: fold(recording),
+            title: fold(title),
+            artist: fold(artist),
+            ..Default::default()
+        };
+        let shares = f.recording.as_deref().is_some_and(|r| recordings.contains(r))
+            || (!f.name.is_empty() && names.contains(f.name.as_str()))
+            || matches!((f.title.as_deref(), f.artist.as_deref()), (Some(t), Some(a)) if titled.contains(&(t, a)));
+        if shares {
+            out.push((id, f));
+        }
+    }
+    Ok(out)
+}
+
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 14] = [
+const ADDED_COLUMNS: [(&str, &str); 29] = [
+    // 0100: the record a track is of, and its place there.
+    ("tracks", "record INTEGER"),
+    ("tracks", "disc INTEGER"),
+    ("tracks", "number INTEGER"),
+    // A retired track a file took back, until it has been held against the album that file is in (`Held::most`).
+    ("tracks", "back INTEGER"),
+    // 0101 point 1 (the owner, 2026-11-04): a folder's id for life, kept while it is parked under a negative id, so it
+    // comes back as itself (`set_folders`).
+    ("folders", "home INTEGER"),
+    // 0101 point 11: what a track was, kept as it retires (its tags go with its file): a missing entry shows it, and a
+    // file that is it again takes the id back. Its last path, its length, and its title, artist, album and MusicBrainz
+    // recording as tagged.
+    ("tracks", "was_rel TEXT"),
+    ("tracks", "was_ms INTEGER"),
+    ("tracks", "was_title TEXT"),
+    ("tracks", "was_artist TEXT"),
+    ("tracks", "was_album TEXT"),
+    ("tracks", "was_recording TEXT"),
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -157,12 +341,20 @@ const ADDED_COLUMNS: [(&str, &str); 14] = [
     // The time signature from Beat this!'s downbeats: beats a bar (0: none sure), and how sure; NULL: not worked out yet.
     ("beat_this", "meter INTEGER"),
     ("beat_this", "meter_sure REAL"),
+    // What a file handed a track replaces, in the same folder: the one gone row that lets go of it.
+    ("handovers", "replaces TEXT"),
+    // A file's bit depth and sample rate (0.16, reader 9): what ranks one lossless copy above another. NULL: lossy, or not
+    // read since they were kept, which ranks it last until the reader gets there.
+    ("files", "bits INTEGER"),
+    ("files", "rate INTEGER"),
+    // When the file first came (docs/records-and-copies.md): a copy keeps its own date, where `tracks.born` is the track's.
+    ("files", "came INTEGER"),
 ];
 
 /// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
 struct KeptFacts {
-    changes: u64,
-    folders: Vec<PathBuf>,
+    written: u64,
+    folders: InUse,
     built: i64,
     words: i64,
     /// The classical marks as read (0.10): a mark reads them again at once.
@@ -171,8 +363,39 @@ struct KeptFacts {
     facts: Arc<Vec<crate::crates::Facts>>,
 }
 
-/// The crates' facts are read again for a catalogue write or a harvested word at most this often (a build, at once).
+/// The crates' facts are read again for a write to what they are read from or a harvested word at most this often (a
+/// build, at once).
 const FACTS_EVERY: Duration = Duration::from_secs(300);
+
+/// What the crates' facts take from elsewhere that no build brings them, as one stamp: the library's words (0.9.7,
+/// `app::words::stamp`), what Classical is made of (0.10), and Discogs' labels, which were only ever seen because the
+/// connection's change count moved all the same.
+fn said_stamp(s: &crate::serve::Serve) -> i64 {
+    let said = crate::app::words::stamp(s).wrapping_mul(31).wrapping_add(crate::app::classical::stamp(s));
+    said.wrapping_mul(31).wrapping_add(s.userdata.discogs_albums_stamp().unwrap_or(0))
+}
+
+/// What the crates' facts are read from (`read_crate_facts`): a table read there goes here too, or a write to it shows
+/// only at the next build.
+const FACTS_TABLES: [&str; 6] = ["files", "tags", "tracks", "analysis", "beat_this", "audiomuse"];
+
+/// Each row written to those tables counted in `written`, whoever writes it through this connection: temporary
+/// triggers, so nothing changes on disk and no writer has to remember. The connection's change count could not be the
+/// stamp: every pass writes its time and a track first played its shape, so the facts, with every AudioMuse vector in
+/// them, were read again every five minutes on a library where nothing had changed.
+fn count_facts_writes(conn: &Connection, written: Arc<AtomicU64>) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function("facts_written", 0, FunctionFlags::SQLITE_UTF8, move |_| {
+        written.fetch_add(1, Ordering::Relaxed);
+        Ok(0)
+    })?;
+    for table in FACTS_TABLES {
+        for on in ["INSERT", "UPDATE", "DELETE"] {
+            conn.execute_batch(&format!("CREATE TEMP TRIGGER facts_{table}_{on} AFTER {on} ON main.{table} BEGIN SELECT facts_written(); END;"))?;
+        }
+    }
+    Ok(())
+}
 
 /// File states.
 const PENDING: i64 = 0;
@@ -316,6 +539,13 @@ pub struct ServedRow {
     pub tags: Vec<(String, String)>,
     /// Its analysis (decision 0035), while the file is as it was then.
     pub analysis: Option<RowAnalysis>,
+    /// Bit depth and sample rate (Hz), once reader 9 has read the file.
+    pub bits: Option<u32>,
+    pub rate: Option<u32>,
+    /// When the file first came, epoch seconds; `born` is the track's.
+    pub came: Option<i64>,
+    /// The record its track is of (0100), once it has one.
+    pub record: Option<i64>,
 }
 
 /// What the served library takes from a file's analysis: its gain and peak, its tempo when confident, and its album's
@@ -371,10 +601,63 @@ impl ServedRow {
     }
 }
 
+/// The folders in use, by their ids for life (0101 point 1, the owner 2026-11-04): a folder keeps its id while it is
+/// used and takes it again when it comes back; a new one takes an id never given before. So nothing that names a folder
+/// by its id (served album ids, Subsonic's music folders, the journal, queued conversions) changes when libraries come
+/// and go. The lowest id in use is the folder playlist lines are made from (Music's, 0, since the first start).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InUse(std::collections::BTreeMap<i64, PathBuf>);
+
+impl InUse {
+    /// A folder by its id.
+    pub fn get(&self, id: i64) -> Option<&PathBuf> {
+        self.0.get(&id)
+    }
+
+    /// Each folder with its id, by id.
+    pub fn iter(&self) -> impl Iterator<Item = (i64, &PathBuf)> {
+        self.0.iter().map(|(id, p)| (*id, p))
+    }
+
+    /// The folders' ids, in order.
+    pub fn ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.0.keys().copied()
+    }
+
+    /// The folders' paths, by id.
+    pub fn paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.0.values()
+    }
+
+    /// The id of the folder at `path`.
+    pub fn id_of(&self, path: &Path) -> Option<i64> {
+        self.0.iter().find(|(_, p)| p.as_path() == path).map(|(id, _)| *id)
+    }
+
+    /// The folder playlist lines are made from, and its id: the lowest in use.
+    pub fn first(&self) -> Option<(i64, &PathBuf)> {
+        self.0.iter().next().map(|(id, p)| (*id, p))
+    }
+
+    /// How many folders are in use.
+    pub fn count(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl FromIterator<(i64, PathBuf)> for InUse {
+    fn from_iter<T: IntoIterator<Item = (i64, PathBuf)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+/// The meta key of the highest folder id ever given (`set_folders`).
+const FOLDER_TOP: &str = "folder_top";
+
 pub struct Catalogue {
     db: Mutex<Connection>,
-    /// Index = folder id; 0 is the playlist folder.
-    folders: RwLock<Vec<PathBuf>>,
+    /// The folders in use, by their ids for life.
+    folders: RwLock<InUse>,
     progress: Mutex<Progress>,
     /// Asks the background loop for a pass now (settings changed, a playlist was edited…).
     poke: tokio::sync::Notify,
@@ -384,8 +667,13 @@ pub struct Catalogue {
     /// long pass moving (0.9.7: a reader's reread of every file takes hours on the NAS, and Cratarr's own library
     /// looked stopped to the watch on the servers' scans).
     worked: std::sync::atomic::AtomicU64,
-    /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
+    /// The crates' facts, as of what was written to them and the folders in use (see `crate_facts`).
     facts: Mutex<Option<KeptFacts>>,
+    /// Rows written to what the crates' facts are read from (`count_facts_writes`).
+    facts_written: Arc<AtomicU64>,
+    /// Its track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while the user
+    /// data remembers another. No ids are given out meanwhile (`identify`).
+    ids_lost: std::sync::atomic::AtomicBool,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
     file: Option<PathBuf>,
 }
@@ -409,7 +697,16 @@ impl Catalogue {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}"))?;
             }
         }
-        conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track);")?;
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track); CREATE INDEX IF NOT EXISTS tracks_by_record ON tracks (record);")?;
+        // A folder in use before ids for life: its place is its id from now on.
+        conn.execute_batch("UPDATE folders SET home = id WHERE id >= 0 AND home IS NULL;")?;
+        // Once, before any copy takes another's track: a file came when its track was born, the one date there was. After
+        // that every row carries its own, and a date from a track would be another copy's.
+        let came: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = 'came'", [], |r| r.get(0)).optional()?;
+        if came.is_none() {
+            conn.execute("UPDATE files SET came = COALESCE((SELECT born FROM tracks WHERE id = files.track), ?1) WHERE came IS NULL", [now()])?;
+            conn.execute_batch("INSERT OR REPLACE INTO meta (key, value) VALUES ('came', 'filled');")?;
+        }
         fill_meters(&conn).context("working out the time signatures")?;
         // Once: the tags no query reads go, the unnamed ones (lyrics, pictures' text: 63,000 rows of 455,000 here) and the
         // index by name and value (73 MB of a 200 MB catalogue), so what is read fits in a small container's memory.
@@ -420,14 +717,18 @@ impl Catalogue {
             conn.execute_batch("DELETE FROM tags WHERE name IS NULL; INSERT OR REPLACE INTO meta (key, value) VALUES ('tags', 'named');")?;
         }
         move_analysis_shapes(&conn)?;
+        let facts_written = Arc::new(AtomicU64::new(0));
+        count_facts_writes(&conn, facts_written.clone())?;
         let cat = Self {
             db: Mutex::new(conn),
-            folders: RwLock::new(Vec::new()),
+            folders: RwLock::new(InUse::default()),
             progress: Mutex::default(),
             poke: Default::default(),
             reread: Default::default(),
             worked: Default::default(),
             facts: Mutex::default(),
+            facts_written,
+            ids_lost: Default::default(),
             file: file.map(Path::to_path_buf),
         };
         // A better reader may read what an older one could not.
@@ -446,6 +747,14 @@ impl Catalogue {
             if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 8) {
                 cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2 AND format = 'FLAC'", params![PENDING, READ])?;
             }
+            // Reader 9 keeps bit depth and rate (0.16): only lossless copies rank by them, so only they are read again (an
+            // MP4 at a lossless rate is ALAC, as `export::kind_guessed` tells it). Served as read until then.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 9) {
+                cat.db().execute(
+                    "UPDATE files SET state = ?1 WHERE state = ?2 AND (format IN ('FLAC', 'WAV', 'AIFF', 'APE', 'WAVPACK') OR (format = 'MP4' AND bitrate >= 500))",
+                    params![PENDING, READ],
+                )?;
+            }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
         // Track ids are this catalogue's own: one made afresh numbers them anew, and what holds ids from the old one
@@ -463,11 +772,38 @@ impl Catalogue {
         self.meta(GENERATION).unwrap_or_default()
     }
 
+    /// Whether its track ids were lost (`set_ids_lost`): no ids are given out until it is restored or started afresh.
+    pub fn ids_lost(&self) -> bool {
+        self.ids_lost.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_ids_lost(&self, lost: bool) {
+        self.ids_lost.store(lost, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The highest track id it gave out. Blocking.
+    pub fn top_track(&self) -> i64 {
+        let db = self.db();
+        let seq: Option<i64> = db.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'tracks'", [], |r| r.get(0)).optional().ok().flatten();
+        let max: Option<i64> = db.query_row("SELECT MAX(id) FROM tracks", [], |r| r.get(0)).ok().flatten();
+        seq.unwrap_or(0).max(max.unwrap_or(0))
+    }
+
+    /// Its next tracks numbered above `floor` (a fresh start after lost ids: an old id then names a missing track, never
+    /// another one). Blocking.
+    pub fn number_above(&self, floor: i64) -> Result<()> {
+        let db = self.db();
+        if db.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'tracks'", [floor])? == 0 {
+            db.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('tracks', ?1)", [floor])?;
+        }
+        Ok(())
+    }
+
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub fn folders(&self) -> Vec<PathBuf> {
+    pub fn folders(&self) -> InUse {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
@@ -478,62 +814,83 @@ impl Catalogue {
             let mut q = db.prepare(&format!("SELECT folder, count(*) FROM files WHERE {PRESENT} GROUP BY folder"))?;
             q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u64)))?.collect::<rusqlite::Result<_>>()?
         };
-        Ok(self.folders().into_iter().enumerate().map(|(i, p)| (p, counts.get(&(i as i64)).copied().unwrap_or(0))).collect())
+        Ok(self.folders().iter().map(|(id, p)| (p.clone(), counts.get(&id).copied().unwrap_or(0))).collect())
     }
 
-    /// Use these folders (index = id). A folder whose path changed keeps its rows when the same files are there under
-    /// the new path (a mount moved, say `/music` to `/media/Music`), and nothing is read again.
+    /// Use these folders, each by its id for life (0101 point 1, the owner 2026-11-04): a folder in use keeps its id, one
+    /// that comes back takes its own id again, and a new one takes an id never given before (`InUse`). A folder whose
+    /// path changed keeps its id and rows when the same files are there under the new path (a mount moved, say `/music`
+    /// to `/media/Music`), and nothing is read again.
     ///
     /// A folder that is no longer in use is parked, not forgotten: its rows (files, tags, links to the servers' ids)
-    /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, at any place
-    /// in the list, with its files where they were, it picks them up again: the same ids, only changed files read
-    /// again. A source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked
-    /// folders are forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path.
+    /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, with its files
+    /// where they were, it picks them up again under its own id: the same track ids, only changed files read again. A
+    /// source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked folders are
+    /// forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path. "The same files" is more than half
+    /// of a sample spread over the folder: one album gone while it was away forgets nothing (rows go one by one, once the
+    /// walk misses them), and nothing at all there is no other files, but a mount not up (`holds_nothing`).
     pub fn set_folders(&self, folders: Vec<PathBuf>) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let wanted: Vec<String> = folders.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let mut wanted: Vec<String> = Vec::new();
+        for p in &folders {
+            let p = p.to_string_lossy().into_owned();
+            if !wanted.contains(&p) {
+                wanted.push(p);
+            }
+        }
+        // Spread, as a folder's first rows are its first album: that album gone must not forget a folder, and that album
+        // alike at another path must not hand a folder over. The moved mount's case asks no more than half: a mount moved
+        // with a few files lost must keep its ids, and two folders alike in more than half of an even sample are one.
         let same_files = |id: i64, at: &str| -> Result<bool> {
-            let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND gone_at IS NULL AND trashed IS NULL LIMIT 20")?;
-            let rels: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-            Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(at).join(rel).is_file()))
+            let mut st = tx.prepare(
+                "SELECT rel FROM (SELECT rel, row_number() OVER (ORDER BY rel) - 1 AS n, count(*) OVER () AS total
+                                  FROM files WHERE folder = ?1 AND gone_at IS NULL AND trashed IS NULL)
+                 WHERE n % ((total + ?2 - 1) / ?2) = 0",
+            )?;
+            let rels: Vec<String> = st.query_map(params![id, SAMPLE], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let there = rels.iter().filter(|rel| Path::new(at).join(rel).is_file()).count();
+            Ok(there * 2 > rels.len())
         };
         let rekey = |from: i64, to: i64| -> Result<()> {
-            for table in ["files", "tags", "source_ids", "analysis"] {
+            for table in FILE_TABLES {
                 tx.execute(&format!("UPDATE {table} SET folder = ?2 WHERE folder = ?1"), params![from, to])?;
             }
             tx.execute("UPDATE folders SET id = ?2 WHERE id = ?1", params![from, to])?;
             Ok(())
         };
-        let known = |tx: &rusqlite::Transaction| -> Result<Vec<(i64, String)>> {
-            let mut st = tx.prepare("SELECT id, path FROM folders")?;
-            Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        // Each folder known: its id now (negative: parked), its path, its id for life.
+        let known = |tx: &rusqlite::Transaction| -> Result<Vec<(i64, String, Option<i64>)>> {
+            let mut st = tx.prepare("SELECT id, path, home FROM folders")?;
+            Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?)
         };
         let now_s = now();
-        // 1. Every folder in use that is not where it is wanted steps aside (parked), freeing its place.
-        let mut lowest = known(&tx)?.iter().map(|(id, _)| *id).min().unwrap_or(0).min(0);
+        // The highest id ever given: a new folder's is above it, so no id names two folders over time.
+        let given: Option<i64> = tx.query_row("SELECT value FROM meta WHERE key = ?1", [FOLDER_TOP], |r| r.get::<_, String>(0)).optional()?.and_then(|v| v.parse().ok());
+        let mut top = known(&tx)?.iter().flat_map(|(id, _, home)| [Some(*id), *home]).flatten().chain(given).max().unwrap_or(-1);
+        // 1. Every folder in use that is no longer wanted steps aside (parked), its id for life kept.
+        let mut lowest = known(&tx)?.iter().map(|(id, _, _)| *id).min().unwrap_or(0).min(0);
         let mut stepped: Vec<i64> = Vec::new();
-        for (id, path) in known(&tx)? {
-            if id < 0 || wanted.get(id as usize) == Some(&path) {
+        for (id, path, _) in known(&tx)? {
+            if id < 0 || wanted.contains(&path) {
                 continue;
             }
             lowest -= 1;
             rekey(id, lowest)?;
             stepped.push(lowest);
         }
-        // 2. Each wanted folder takes the rows kept under its path (parked a while, or only just stepped aside), when its
-        //    files are still there; else the rows of a folder that stepped aside and whose files are here now (a mount
-        //    that moved, say `/music` to `/media/Music`).
+        // 2. Each wanted folder not in use takes the rows kept under its path (parked a while, or only just stepped
+        //    aside), when its files are still there; else the rows of a folder that stepped aside and whose files are
+        //    here now (a mount that moved). Either comes back under its own id; anything else is new, with a new id.
         let mut forget: Vec<i64> = Vec::new();
-        for (i, path) in wanted.iter().enumerate() {
-            let i = i as i64;
+        for path in &wanted {
             let rows = known(&tx)?;
-            if rows.iter().any(|(id, p)| *id == i && p == path) {
+            if rows.iter().any(|(id, p, _)| *id >= 0 && p == path) {
                 continue;
             }
-            let own = rows.iter().find(|(id, p)| *id < 0 && p == path).map(|(id, _)| *id);
+            let own = rows.iter().find(|(id, p, _)| *id < 0 && p == path).map(|(id, _, _)| *id);
             let taken = match own {
-                Some(p) if same_files(p, path)? => Some(p),
+                Some(p) if same_files(p, path)? || holds_nothing(path) => Some(p),
                 Some(p) => {
                     forget.push(p);
                     None
@@ -545,7 +902,7 @@ impl Catalogue {
                 None => {
                     let mut moved = None;
                     for &p in &stepped {
-                        let unclaimed = rows.iter().any(|(id, q)| *id == p && !wanted.contains(q));
+                        let unclaimed = rows.iter().any(|(id, q, _)| *id == p && !wanted.contains(q));
                         if unclaimed && same_files(p, path)? {
                             moved = Some(p);
                             break;
@@ -554,21 +911,35 @@ impl Catalogue {
                     moved
                 }
             };
-            if let Some(p) = taken {
-                rekey(p, i)?;
-                tx.execute("UPDATE folders SET path = ?2 WHERE id = ?1", params![i, path])?;
-                tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
-                stepped.retain(|s| *s != p);
-                tracing::info!("catalogue: {path} is in use again, with its rows");
-                // Links may have gone stale while it was away: every server lists its tracks again.
-                tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
+            // Its own id again where it has one that no folder in use holds (a folder parked before ids for life has
+            // none); else a new one.
+            let home = taken
+                .and_then(|p| rows.iter().find(|(id, _, _)| *id == p).and_then(|(_, _, home)| *home))
+                .filter(|h| *h >= 0 && !rows.iter().any(|(id, _, _)| id == h));
+            let id = home.unwrap_or_else(|| {
+                top += 1;
+                top
+            });
+            match taken {
+                Some(p) => {
+                    rekey(p, id)?;
+                    tx.execute("UPDATE folders SET path = ?2, home = ?1 WHERE id = ?1", params![id, path])?;
+                    tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
+                    stepped.retain(|s| *s != p);
+                    tracing::info!("catalogue: {path} is in use again, with its rows");
+                    // Links may have gone stale while it was away: every server lists its tracks again.
+                    tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
+                }
+                None => {
+                    tx.execute("INSERT INTO folders (id, path, home) VALUES (?1, ?2, ?1)", params![id, path])?;
+                }
             }
         }
         // 3. What stepped aside and was not taken is parked, from now on; parked too long, it is forgotten.
         for p in &stepped {
             tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)", params![format!("parked:{p}"), now_s.to_string()])?;
         }
-        for (p, path) in known(&tx)?.into_iter().filter(|(id, _)| *id < 0) {
+        for (p, path, _) in known(&tx)?.into_iter().filter(|(id, _, _)| *id < 0) {
             let since: i64 = tx
                 .query_row("SELECT value FROM meta WHERE key = ?1", [format!("parked:{p}")], |r| r.get::<_, String>(0))
                 .optional()?
@@ -583,10 +954,13 @@ impl Catalogue {
         }
         for p in forget {
             tx.execute(
-                "UPDATE tracks SET retired_at = ?2 WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)",
+                &format!(
+                    "UPDATE tracks SET retired_at = ?2, {REMEMBER} WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)
+                     AND NOT EXISTS (SELECT 1 FROM files o WHERE o.track = tracks.id AND o.folder != ?1)"
+                ),
                 params![p, now_s],
             )?;
-            for table in ["files", "tags", "source_ids", "analysis"] {
+            for table in FILE_TABLES {
                 tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [p])?;
             }
             tx.execute("DELETE FROM folders WHERE id = ?1", [p])?;
@@ -594,13 +968,11 @@ impl Catalogue {
             // Its links to the servers' tracks went with it: every server lists all its tracks again on the next pass.
             tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
         }
-        let wanted: HashMap<i64, String> = wanted.into_iter().enumerate().map(|(i, p)| (i as i64, p)).collect();
-        for (id, path) in &wanted {
-            tx.execute("INSERT OR REPLACE INTO folders (id, path) VALUES (?1, ?2)", params![id, path])?;
-        }
+        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![FOLDER_TOP, top.to_string()])?;
+        let in_use: InUse = known(&tx)?.into_iter().filter(|(id, _, _)| *id >= 0).map(|(id, path, _)| (id, PathBuf::from(path))).collect();
         tx.commit()?;
         drop(db);
-        *self.folders.write().unwrap_or_else(|p| p.into_inner()) = folders;
+        *self.folders.write().unwrap_or_else(|p| p.into_inner()) = in_use;
         self.poke.notify_one();
         Ok(())
     }
@@ -634,14 +1006,26 @@ impl Catalogue {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).doing = doing;
     }
 
-    /// Walk every folder and record what is new, changed or gone. Returns problems (unreadable folders). Blocking.
+    /// Whether a folder holds a file that counts, gone and trashed ones not being such: what Keep and Delete leave behind
+    /// them is no reason for alarm. Blocking.
+    fn has_present(&self, folder: i64) -> Result<bool> {
+        Ok(self.db().prepare_cached(&format!("SELECT 1 FROM files WHERE folder = ?1 AND {PRESENT} LIMIT 1"))?.exists([folder])?)
+    }
+
+    /// Walk every folder and record what is new, changed or gone. Returns problems (unreadable folders, and those that read
+    /// as empty where they had files). Blocking.
     pub fn walk_all(&self) -> Vec<String> {
         let mut problems = Vec::new();
-        for (id, folder) in self.folders().into_iter().enumerate() {
-            match walk::walk_with_covers(&folder) {
+        for (id, folder) in self.folders().iter() {
+            match walk::walk_with_covers(folder) {
+                // A bind mount whose source is not up, an NFS share gone, read as an empty folder: treated as unreadable.
+                // So is a library someone really emptied, which stays listed until 0.17's library safety can tell them apart.
+                Ok((found, ..)) if found.is_empty() && self.has_present(id).unwrap_or(true) => {
+                    problems.push(format!("{} reads empty: is it mounted? Its files stay listed", folder.display()));
+                }
                 Ok((found, covers, skipped)) => {
                     self.work(1);
-                    if let Err(e) = self.record_walk(id as i64, &found).and_then(|()| self.record_covers(id as i64, &covers)) {
+                    if let Err(e) = self.record_walk(id, &found).and_then(|()| self.record_covers(id, &covers)) {
                         problems.push(format!("{}: {e:#}", folder.display()));
                     }
                     if skipped > 0 {
@@ -663,9 +1047,10 @@ impl Catalogue {
             let mut st = tx.prepare("SELECT rel, size, mtime, gone_at IS NOT NULL FROM files WHERE folder = ?1 AND trashed IS NULL")?;
             st.query_map([folder], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))?.collect::<rusqlite::Result<_>>()?
         };
+        let now = now();
         {
             let mut upsert = tx.prepare(
-                "INSERT INTO files (folder, rel, size, mtime, state) VALUES (?1, ?2, ?3, ?4, 0)
+                "INSERT INTO files (folder, rel, size, mtime, state, came) VALUES (?1, ?2, ?3, ?4, 0, ?5)
                  ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL, gone_at = NULL",
             )?;
             let mut back = tx.prepare("UPDATE files SET gone_at = NULL WHERE folder = ?1 AND rel = ?2")?;
@@ -677,7 +1062,7 @@ impl Catalogue {
                         }
                     }
                     _ => {
-                        upsert.execute(params![folder, f.rel, f.size as i64, f.mtime])?;
+                        upsert.execute(params![folder, f.rel, f.size as i64, f.mtime, now])?;
                     }
                 }
             }
@@ -685,7 +1070,6 @@ impl Catalogue {
         // Missing now: gone, not deleted. It keeps its track id and tags until it is recognised elsewhere (a move made
         // outside Cratarr) or `GONE_KEEP_SECS` pass. Its server links go at once: they point at a file that is not there.
         let present: std::collections::HashSet<&str> = found.iter().map(|f| f.rel.as_str()).collect();
-        let now = now();
         for rel in known.iter().filter(|(r, k)| !k.2 && !present.contains(r.as_str())).map(|(r, _)| r) {
             tx.execute("UPDATE files SET gone_at = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, now])?;
             tx.execute("DELETE FROM source_ids WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
@@ -746,10 +1130,10 @@ impl Catalogue {
         let folders = self.folders();
         let mut todo = Vec::new();
         for path in paths {
-            let Some((folder, rel)) = folders.iter().enumerate().find_map(|(i, root)| {
+            let Some((folder, rel)) = folders.iter().find_map(|(id, root)| {
                 let rel = path.strip_prefix(root).ok()?;
                 let rel: Vec<&str> = rel.components().filter_map(|c| c.as_os_str().to_str()).collect();
-                (!rel.is_empty()).then(|| (i as i64, rel.join("/")))
+                (!rel.is_empty()).then(|| (id, rel.join("/")))
             }) else {
                 continue;
             };
@@ -793,7 +1177,7 @@ impl Catalogue {
         let results: Vec<(i64, String, Result<(tags::FileTags, Option<(tags::Issue, String)>)>)> = todo
             .into_iter()
             .map(|(folder, rel)| {
-                let r = match folders.get(folder as usize) {
+                let r = match folders.get(folder) {
                     Some(root) => tags::read(&root.join(&rel)),
                     None => Err(anyhow::anyhow!("unknown folder")),
                 };
@@ -807,7 +1191,7 @@ impl Catalogue {
             match r {
                 Ok((t, issue)) => {
                     tx.execute(
-                        "UPDATE files SET state = ?3, format = ?4, bitrate = ?5, duration_ms = ?6, error = NULL, issue = ?7, issue_detail = ?8
+                        "UPDATE files SET state = ?3, format = ?4, bitrate = ?5, duration_ms = ?6, error = NULL, issue = ?7, issue_detail = ?8, bits = ?9, rate = ?10
                          WHERE folder = ?1 AND rel = ?2",
                         params![
                             folder,
@@ -817,7 +1201,9 @@ impl Catalogue {
                             t.bitrate_kbps.map(i64::from),
                             t.duration_ms.map(|d| d as i64),
                             issue.as_ref().map(|(i, _)| i.code()),
-                            issue.as_ref().map(|(_, d)| d.as_str())
+                            issue.as_ref().map(|(_, d)| d.as_str()),
+                            t.bit_depth.map(i64::from),
+                            t.sample_rate_hz.map(i64::from)
                         ],
                     )?;
                     let mut ins = tx.prepare_cached("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
@@ -921,28 +1307,37 @@ impl Catalogue {
 
     /// The files present in every folder in use (the Music folder and the Incoming ones, decision 0024 amended
     /// 2026-10-23: a crate draws from every library switched on), newest first, each as its playlist line (`line_of`)
-    /// with its folder and what the crates' axes test: genres, year, BPM, AudioMuse's. Kept until the catalogue or its
-    /// folders change: reading them means reading every file's tags. Blocking.
+    /// with its folder and what the crates' axes test: genres, year, BPM, AudioMuse's. Kept until what they are read from
+    /// or the folders change: reading them means reading every file's tags. Blocking.
     pub fn crate_facts(&self) -> Result<Arc<Vec<crate::crates::Facts>>> {
         // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
         let served = crate::serve::instance();
-        let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
-        // And when the library's words change (0.9.7, `app::words::stamp`), or what Classical is made of (0.10).
-        let words = served.as_ref().map_or(0, |s| crate::app::words::stamp(s).wrapping_mul(31).wrapping_add(crate::app::classical::stamp(s)));
+        let (written, folders, built) = (self.facts_written.load(Ordering::Relaxed), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
+        let words = served.as_ref().map_or(0, |s| said_stamp(s));
         let marks = served.as_ref().map_or(0, |s| s.userdata.marks_stamp().unwrap_or(0));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(k) = kept.as_ref()
             && k.folders == folders
             && k.built == built
             && k.marks == marks
-            // A write to the catalogue or a word harvested reads them again only every so often (0.9.7: a reader's
-            // reread of every file writes all along for hours, the harvest a word at a time; each Home read them
-            // all again, and the sim went past 768 MB). A build or other folders read them at once.
-            && ((k.changes == changes && k.words == words) || k.at.elapsed() < FACTS_EVERY)
+            // A write to what they are read from or a word harvested reads them again only every so often (0.9.7: a
+            // reader's reread of every file writes all along for hours, the harvest a word at a time; each Home read
+            // them all again, and the sim went past 768 MB). A build or other folders read them at once.
+            && ((k.written == written && k.words == words) || k.at.elapsed() < FACTS_EVERY)
         {
             return Ok(k.facts.clone());
         }
-        let mut facts = self.read_crate_facts(&folders)?;
+        // The reading before goes first: two at once over every file is what the limit cannot hold. Its address stays
+        // taken until this one has its own, as what hangs on a reading knows it by that (`shared_alike`, the crates' sorted
+        // lists, `words::search_index`): a new one in the same place would pass for it.
+        let was = kept.take().map(|k| Arc::downgrade(&k.facts));
+        // Beside the catalogue, not under its one lock: a play starting and every writer would wait out the whole read.
+        let reader = self.reader();
+        let mut facts = match &reader {
+            Some(c) => Self::read_crate_facts(c, &folders)?,
+            None => Self::read_crate_facts(&self.db(), &folders)?,
+        };
+        drop(reader);
         if let Some(s) = &served
             && let Ok(types) = s.library.song_release_types()
         {
@@ -985,12 +1380,12 @@ impl Catalogue {
             }
         }
         let facts = Arc::new(facts);
-        *kept = Some(KeptFacts { changes, folders, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
+        drop(was);
+        *kept = Some(KeptFacts { written, folders, built, words, marks, at: std::time::Instant::now(), facts: facts.clone() });
         Ok(facts)
     }
 
-    fn read_crate_facts(&self, folders: &[PathBuf]) -> Result<Vec<crate::crates::Facts>> {
-        let db = self.db();
+    fn read_crate_facts(db: &Connection, folders: &InUse) -> Result<Vec<crate::crates::Facts>> {
         type Place = (i64, String);
         // Every file present, newest first, with its track (the one similarity finds a file by it, heard or not), its
         // length and its format and bitrate (the crates' Length and Quality).
@@ -1171,18 +1566,19 @@ impl Catalogue {
     /// climbs out of it.
     pub fn path_of_line(&self, line: &str) -> Option<PathBuf> {
         let (folder, rel) = self.place_of_line(line)?;
-        Some(self.folders().get(usize::try_from(folder).ok()?)?.join(rel))
+        Some(self.folders().get(folder)?.join(rel))
     }
 
-    /// Where a playlist line points: (folder, rel). Lines are relative to the Music folder (folder 0); a line for a file
-    /// in another folder climbs out of it ("../lidarr-music/X/01.flac", an Incoming track). None for a line that lands
-    /// in no folder of the catalogue.
+    /// Where a playlist line points: (folder, rel). Lines are relative to the Music folder (the first in use,
+    /// `InUse::first`); a line for a file in another folder climbs out of it ("../lidarr-music/X/01.flac", an Incoming
+    /// track). None for a line that lands in no folder of the catalogue.
     pub fn place_of_line(&self, line: &str) -> Option<(i64, String)> {
-        if !line.starts_with("../") {
-            return Some((0, line.to_string()));
-        }
         let folders = self.folders();
-        let mut target = folders.first()?.clone();
+        let (first, root) = folders.first()?;
+        if !line.starts_with("../") {
+            return Some((first, line.to_string()));
+        }
+        let mut target = root.clone();
         for part in line.split('/') {
             match part {
                 ".." => {
@@ -1194,9 +1590,9 @@ impl Catalogue {
                 p => target.push(p),
             }
         }
-        folders.iter().enumerate().skip(1).find_map(|(i, f)| {
+        folders.iter().filter(|(id, _)| *id != first).find_map(|(id, f)| {
             let rel = target.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
-            (!rel.is_empty()).then_some((i as i64, rel))
+            (!rel.is_empty()).then_some((id, rel))
         })
     }
 
@@ -1510,14 +1906,14 @@ impl Catalogue {
         })?;
         rows.map(|r| {
             let (folder, rel, kind, detail) = r?;
-            Ok(Problem { folder: folders.get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default(), rel, kind, detail })
+            Ok(Problem { folder: folders.get(folder).map(|p| p.display().to_string()).unwrap_or_default(), rel, kind, detail })
         })
         .collect()
     }
 
     /// The problems of these files of a folder (0.14, a record's own Health): those that have one, in their order.
     pub fn problems_in(&self, folder: i64, rels: &[String]) -> Result<Vec<Problem>> {
-        let path = self.folders().get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default();
+        let path = self.folders().get(folder).map(|p| p.display().to_string()).unwrap_or_default();
         let db = self.db();
         let mut st = db.prepare_cached(&format!("SELECT issue, issue_detail FROM files WHERE folder = ?1 AND rel = ?2 AND issue IS NOT NULL AND {PRESENT}"))?;
         let mut out = Vec::new();
@@ -1535,13 +1931,28 @@ impl Catalogue {
         self.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
     }
 
+    /// Tests elsewhere: a file's tags as a read would leave them.
+    #[cfg(test)]
+    pub fn tag_for_tests(&self, folder: i64, rel: &str, tags: &[(&str, &str)]) {
+        let db = self.db();
+        db.execute("DELETE FROM tags WHERE folder = ?1 AND rel = ?2", params![folder, rel]).unwrap();
+        for (n, (name, value)) in tags.iter().enumerate() {
+            db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, ?3, ?4, ?4, ?5)", params![folder, rel, n as i64, name, value]).unwrap();
+        }
+    }
+
     // ----- Track identity (decision 0011 §4) -----
 
     /// Give every identified file a track id: a new file that is a gone one moved (by the rules of
-    /// `identity::match_moves`) takes its id; any other gets a new one. Files whose tags are not read yet wait. Gone
+    /// `identity::match_moves`) takes its id, else one that is a retired track takes that id back (0101); any other gets a
+    /// new one. Files whose tags are not read yet wait. Gone
     /// files nobody claimed within `GONE_KEEP_SECS`, and trashed files whose trash was emptied, retire their ids.
     /// Returns (moves recognised, new ids). Blocking.
     pub fn identify(&self) -> Result<(usize, usize)> {
+        // Its ids lost: nothing given out, nothing retired, until it is restored or started afresh (0101).
+        if self.ids_lost() {
+            return Ok((0, 0));
+        }
         let now = now();
         let folders = self.folders();
         let mut db = self.db();
@@ -1551,19 +1962,49 @@ impl Catalogue {
             let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         };
-        let new = facts(&format!(
+        let mut new = facts(&format!(
             "SELECT folder, rel, duration_ms, track FROM files WHERE track IS NULL AND state != {PENDING} AND {PRESENT}"
         ))?;
-        let gone = facts("SELECT folder, rel, duration_ms, track FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
         let mut moved = 0;
         let mut claimed: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
+        // Files Cratarr handed a track to (a better copy in its old one's place, or its Undo): theirs before any rule, the
+        // gone file it replaces letting go. That file only: any other gone row of the track is another copy, in this
+        // folder or elsewhere, away for a moment, that comes back to the same track. Unclaimed for a day: forgotten.
+        {
+            let mut st = tx.prepare("SELECT folder, rel, track, replaces FROM handovers")?;
+            let handed: Vec<(i64, String, i64, Option<String>)> =
+                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
+            drop(st);
+            for (folder, rel, track, replaces) in handed {
+                if !new.iter().any(|(f, r, _, _)| *f == folder && *r == rel) {
+                    continue;
+                }
+                let mut st = tx.prepare("SELECT rel FROM files WHERE track = ?1 AND folder = ?2 AND rel = ?3 AND gone_at IS NOT NULL")?;
+                let old: Vec<String> = st.query_map(params![track, folder, replaces], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+                drop(st);
+                for r in old {
+                    carry_came(&tx, (folder, &rel), (folder, &r))?;
+                    for table in ["files", "tags"] {
+                        tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, r])?;
+                    }
+                }
+                tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, track])?;
+                tx.execute("UPDATE tracks SET retired_at = NULL WHERE id = ?1", [track])?;
+                tx.execute("DELETE FROM handovers WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
+                claimed.insert((folder, rel));
+                moved += 1;
+            }
+            tx.execute("DELETE FROM handovers WHERE at < ?1", [now - GONE_KEEP_SECS])?;
+            new.retain(|(f, r, _, _)| !claimed.contains(&(*f, r.clone())));
+        }
+        let gone = facts("SELECT folder, rel, duration_ms, track FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
         let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        if !new.is_empty() && !gone.is_empty() {
+        if !new.is_empty() {
             let mut tag = tx.prepare_cached(
                 "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('musicbrainz_trackid', 'title', 'artist') ORDER BY n",
             )?;
-            let mut file_facts = |(folder, rel, ms, _): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
-                let mut f = identity::FileFacts { name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
+            let mut file_facts = |(folder, rel, ms, track): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
+                let mut f = identity::FileFacts { folder: *folder, track: *track, name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
                 for row in tag.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
                     let (name, value) = row?;
                     let slot = match name.as_str() {
@@ -1580,15 +2021,36 @@ impl Catalogue {
             let new_facts = new.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
             let gone_facts = gone.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
             drop(tag);
-            for (n, g) in identity::match_moves(&new_facts, &gone_facts) {
+            for (n, g) in identity::match_moves_by_folder(&new_facts, &gone_facts) {
                 let ((nf, nr, _, _), (gf, gr, _, track)) = (&new[n], &gone[g]);
                 tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
+                carry_came(&tx, (*nf, nr), (*gf, gr))?;
                 for table in ["files", "tags"] {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![gf, gr])?;
                 }
                 claimed.insert((*nf, nr.clone()));
                 taken.insert(g);
                 moved += 1;
+            }
+            // A retired track comes back as itself (0101 point 11: a missing entry relinks by itself): a file moved
+            // outside Cratarr after the gone files' day, or fetched again, by the same rules, among the retired tracks
+            // that share something with a new file (there may be thousands).
+            let free: Vec<usize> = (0..new.len()).filter(|&n| !claimed.contains(&(new[n].0, new[n].1.clone()))).collect();
+            if !free.is_empty() {
+                let free_facts: Vec<identity::FileFacts> = free.iter().map(|&n| new_facts[n].clone()).collect();
+                let retired = retired_like(&tx, &free_facts)?;
+                let retired_facts: Vec<identity::FileFacts> = retired.iter().map(|(_, f)| f.clone()).collect();
+                for (i, r) in identity::match_moves(&free_facts, &retired_facts) {
+                    let (folder, rel, _, _) = &new[free[i]];
+                    // Its old row went as it retired: when the track was born is what is left of when it came.
+                    tx.execute(
+                        "UPDATE files SET track = ?3, came = (SELECT born FROM tracks WHERE id = ?3) WHERE folder = ?1 AND rel = ?2",
+                        params![folder, rel, retired[r].0],
+                    )?;
+                    tx.execute("UPDATE tracks SET retired_at = NULL, back = 1 WHERE id = ?1", [retired[r].0])?;
+                    claimed.insert((*folder, rel.clone()));
+                    moved += 1;
+                }
             }
         }
         let mut fresh = 0;
@@ -1616,7 +2078,7 @@ impl Catalogue {
             let mut st = tx.prepare("SELECT DISTINCT folder, trashed FROM files WHERE trashed IS NOT NULL")?;
             let trashed: Vec<(i64, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
             for (folder, token) in trashed {
-                let still = folders.get(folder as usize).is_some_and(|f| f.join(crate::trash::TRASH_DIR).join(&token).exists());
+                let still = folders.get(folder).is_some_and(|f| f.join(crate::trash::TRASH_DIR).join(&token).exists());
                 if !still {
                     let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND trashed = ?2")?;
                     let rels: Vec<String> = st.query_map(params![folder, token], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -1624,17 +2086,141 @@ impl Catalogue {
                 }
             }
         }
+        // A track lives while any copy holds a file of it, gone a while or in a trash included: the last one retires it.
         for (folder, rel) in &retire {
             tx.execute(
-                "UPDATE tracks SET retired_at = ?3 WHERE id = (SELECT track FROM files WHERE folder = ?1 AND rel = ?2)",
+                &format!(
+                    "UPDATE tracks SET retired_at = ?3, {REMEMBER} WHERE id = (SELECT track FROM files WHERE folder = ?1 AND rel = ?2)
+                     AND NOT EXISTS (SELECT 1 FROM files o WHERE o.track = tracks.id AND (o.folder != ?1 OR o.rel != ?2))"
+                ),
                 params![folder, rel, now],
             )?;
-            for table in ["files", "tags", "source_ids", "analysis"] {
+            for table in FILE_TABLES {
                 tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel])?;
             }
         }
         tx.commit()?;
         Ok((moved, fresh))
+    }
+
+    /// Whether a track in use has no record yet, or is back from retirement and not yet held against its album: only then,
+    /// or with a stray in an album (`AlbumCopy::split`), is [`Self::assign_records`] worth its reading. Blocking.
+    pub fn records_unsettled(&self) -> bool {
+        self.db()
+            .prepare_cached("SELECT 1 FROM tracks WHERE (record IS NULL OR back IS NOT NULL) AND retired_at IS NULL LIMIT 1")
+            .and_then(|mut st| st.exists([]))
+            .unwrap_or(false)
+    }
+
+    /// Give these albums their records (0100, docs/records-and-copies.md), every album there is. An album is the record
+    /// more than half of its tracks hold ([`Held::vote`]); else it is held against the others as a new one is: a copy of
+    /// the record it is the same as (`identity::same_record`), or a record of its own. A new track joins its album's
+    /// record. A track keeps its record for life, unless its only file now sits in another record's album, where it
+    /// moves: a retired id handed to a file of a best-of must not take that album with it. A copy keeps its own track ids
+    /// for now. The tracks given a record. Blocking.
+    pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
+        let now = now();
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let held = Held::read(&tx)?;
+        // Who to hold a new album against: the albums that have a record, by name and by release, then the new ones as
+        // they get theirs.
+        let (mut by_name, mut by_release) = (HashMap::new(), HashMap::new());
+        type ByName = HashMap<(String, String), Vec<(usize, i64)>>;
+        type ByRelease = HashMap<String, Vec<(usize, i64)>>;
+        fn note(i: usize, a: &AlbumCopy, record: i64, by_name: &mut ByName, by_release: &mut ByRelease) {
+            by_name.entry((a.facts.artist.clone(), a.facts.title.clone())).or_default().push((i, record));
+            if let Some(r) = &a.facts.release {
+                by_release.entry(r.clone()).or_default().push((i, record));
+            }
+        }
+        let mut records: Vec<Option<i64>> = albums.iter().map(|a| held.vote(a)).collect();
+        for (i, a) in albums.iter().enumerate() {
+            if let Some(r) = records[i] {
+                note(i, a, r, &mut by_name, &mut by_release);
+            }
+        }
+        let mut given = 0;
+        // The records a track moved out of.
+        let mut left = std::collections::HashSet::new();
+        {
+            let mut born = tx.prepare_cached("INSERT INTO records (born, title, artist, year) VALUES (?1, ?2, ?3, ?4)")?;
+            let mut give = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND (record IS NULL OR (?5 AND record != ?2))")?;
+            for (i, a) in albums.iter().enumerate() {
+                let record = match records[i] {
+                    Some(r) => r,
+                    // Nothing here can take a record: every track stays with a copy's elsewhere.
+                    None if a.tracks.iter().all(|(track, _, _)| held.shared.contains(track)) => continue,
+                    None => {
+                        let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
+                        let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
+                        let same = named.chain(released).find(|(j, _)| identity::same_record(&a.facts, &albums[*j].facts)).map(|(_, r)| *r);
+                        let r = match same {
+                            Some(r) => r,
+                            None => {
+                                born.execute(params![now, a.title, a.artist, a.year])?;
+                                tx.last_insert_rowid()
+                            }
+                        };
+                        records[i] = Some(r);
+                        note(i, a, r, &mut by_name, &mut by_release);
+                        r
+                    }
+                };
+                for (track, disc, number) in &a.tracks {
+                    let changed = give.execute(params![track, record, disc, number, !held.shared.contains(track)])?;
+                    given += changed;
+                    if changed > 0 {
+                        left.extend(held.record.get(track).copied());
+                    }
+                }
+            }
+            // Held against their albums now, they count as any other track from here.
+            let mut settled = tx.prepare_cached("UPDATE tracks SET back = NULL WHERE id = ?1")?;
+            for (track, _, _) in albums.iter().flat_map(|a| &a.tracks).filter(|(track, _, _)| held.back.contains(track)) {
+                settled.execute([track])?;
+            }
+        }
+        // A record lives while a track of it does (one that never had tracks is a record not had).
+        tx.execute_batch(
+            "UPDATE records SET retired_at = NULL WHERE retired_at IS NOT NULL
+               AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL);",
+        )?;
+        tx.execute(
+            "UPDATE records SET retired_at = ?1 WHERE retired_at IS NULL AND EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)
+               AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id AND t.retired_at IS NULL)",
+            [now],
+        )?;
+        // Every track moved on, none retired: nothing in the rows now tells this record from one not had, so it goes here,
+        // while the pass still knows it had them.
+        for record in &left {
+            tx.execute(
+                "UPDATE records SET retired_at = ?2 WHERE id = ?1 AND retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.record = records.id)",
+                params![record, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(given)
+    }
+
+    /// What a few folders' albums can settle alone: a track with no record takes the one its album's tracks say. Nothing
+    /// is born and nothing moves, as both need every album there is: a new folder held against a few would be a record
+    /// of its own for life. The next [`Self::assign_records`] does the rest. The tracks given a record. Blocking.
+    pub fn join_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let held = Held::read(&tx)?;
+        let mut given = 0;
+        {
+            let mut join = tx.prepare_cached("UPDATE tracks SET record = ?2, disc = ?3, number = ?4 WHERE id = ?1 AND record IS NULL")?;
+            for (a, record) in albums.iter().filter_map(|a| Some((a, held.vote(a)?))) {
+                for (track, disc, number) in &a.tracks {
+                    given += join.execute(params![track, record, disc, number])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(given)
     }
 
     /// An album folder (or file) Cratarr moved into the trash of its folder: its rows follow it there, keep their
@@ -1672,7 +2258,7 @@ impl Catalogue {
         for rel in &rels {
             let new_rel = format!("{to}{}", &rel[from.len()..]);
             if (to_folder, new_rel.as_str()) != (from_folder, rel.as_str()) {
-                for table in ["files", "tags", "source_ids", "analysis"] {
+                for table in FILE_TABLES {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![to_folder, new_rel])?;
                 }
             }
@@ -1681,9 +2267,9 @@ impl Catalogue {
                 "UPDATE files SET folder = ?3, rel = ?4, trashed = ?5, gone_at = NULL WHERE folder = ?1 AND rel = ?2",
                 params![from_folder, rel, to_folder, new_rel, trashed],
             )?;
-            tx.execute("UPDATE tags SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
-            tx.execute("UPDATE analysis SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
-            tx.execute("UPDATE analysis_shape SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
+            for table in ["tags", "analysis", "analysis_shape", "beat_this"] {
+                tx.execute(&format!("UPDATE {table} SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2"), params![from_folder, rel, to_folder, new_rel])?;
+            }
         }
         tx.commit()?;
         Ok(rels.len())
@@ -1744,8 +2330,8 @@ impl Catalogue {
     /// or no such library in use. Blocking.
     #[allow(dead_code)] // the playlists' entries as tracks (0101 point 12, 632's stage 2)
     pub fn track_by_path(&self, folder: &str, rel: &str) -> Option<String> {
-        let at = self.folders().iter().position(|f| f.as_path() == std::path::Path::new(folder))?;
-        self.track_of(at as i64, rel).map(crate::serve::ids::song)
+        let at = self.folders().id_of(std::path::Path::new(folder))?;
+        self.track_of(at, rel).map(crate::serve::ids::song)
     }
 
     /// The stable track id a playlist line names, as served: where the line points ([`Self::place_of_line`]), then that
@@ -1754,6 +2340,75 @@ impl Catalogue {
     pub fn track_of_line(&self, line: &str) -> Option<String> {
         let (folder, rel) = self.place_of_line(line)?;
         self.track_of(folder, &rel).map(crate::serve::ids::song)
+    }
+
+    /// What a track is or was (0101 point 11: a missing entry shows it): its title, artist, album, MusicBrainz recording
+    /// and length, from its file while it has one (here, or gone a while), else as kept when it retired. None: no such
+    /// track. Blocking.
+    #[allow(dead_code)] // playlists' missing entries (632's stage 2)
+    pub fn remembered(&self, track: i64) -> Option<Remembered> {
+        let db = self.db();
+        let file: Option<(i64, String, Option<i64>)> = db
+            .query_row(
+                "SELECT folder, rel, duration_ms FROM files WHERE track = ?1 ORDER BY gone_at IS NOT NULL LIMIT 1",
+                [track],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        if let Some((folder, rel, duration_ms)) = file {
+            let tag = |name: &str| {
+                db.query_row(
+                    "SELECT value FROM tags WHERE folder = ?1 AND rel = ?2 AND name = ?3 ORDER BY n LIMIT 1",
+                    params![folder, rel, name],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+            };
+            return Some(Remembered {
+                title: tag("title"),
+                artist: tag("artist"),
+                album: tag("album"),
+                recording: tag("musicbrainz_trackid"),
+                duration_ms,
+                retired: false,
+            });
+        }
+        db.query_row(
+            "SELECT was_title, was_artist, was_album, was_recording, was_ms, retired_at IS NOT NULL FROM tracks WHERE id = ?1",
+            [track],
+            |r| Ok(Remembered { title: r.get(0)?, artist: r.get(1)?, album: r.get(2)?, recording: r.get(3)?, duration_ms: r.get(4)?, retired: r.get(5)? }),
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// Where a file is in the catalogue's terms: its folder's id and its path there; None outside them.
+    pub fn place_of_path(&self, path: &Path) -> Option<(i64, String)> {
+        self.folders().iter().find_map(|(i, f)| {
+            let rel = path.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
+            (!rel.is_empty()).then_some((i, rel))
+        })
+    }
+
+    /// The file arriving at `path` (not walked yet: a better copy Cratarr is putting in its old one's place, or its Undo)
+    /// takes `track` when it is identified, rather than a rule's match or a new id (0101 point 11: a better copy hands
+    /// its id over as Replace does); `replaced`, the file that held it there, lets go once gone. Both callers place within
+    /// one folder. Forgotten after a day unclaimed. Blocking.
+    pub fn hand_over(&self, path: &Path, replaced: &Path, track: i64) -> Result<()> {
+        let Some((folder, rel)) = self.place_of_path(path) else {
+            anyhow::bail!("{} is in no library", path.display());
+        };
+        let replaces = self.place_of_path(replaced).filter(|(f, _)| *f == folder).map(|(_, r)| r);
+        self.db().execute(
+            "INSERT OR REPLACE INTO handovers (folder, rel, track, at, replaces) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![folder, rel, track, now(), replaces],
+        )?;
+        Ok(())
     }
 
     /// The track a server's item id stands for (decision 0012), when the item is linked to a file the catalogue
@@ -1852,7 +2507,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, given, heard) = row?;
-            if let Some(dir) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) {
+            if let Some(dir) = folders.get(folder) {
                 out.push((folder, rel.clone(), dir.join(&rel), given, heard));
             }
         }
@@ -2058,7 +2713,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, size, mtime) = row?;
-            if let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) {
+            if let Some(root) = folders.get(folder) {
                 let path = root.join(&rel);
                 out.push((folder, rel, path, size, mtime));
             }
@@ -2126,7 +2781,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, size, mtime) = row?;
-            let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) else { continue };
+            let Some(root) = folders.get(folder) else { continue };
             out.push((folder, rel.clone(), root.join(&rel), size, mtime));
         }
         Ok(out)
@@ -2161,7 +2816,7 @@ impl Catalogue {
 
     /// A present file's path, size and mtime (an analysis worked out when it is asked for). Blocking.
     pub fn file_to_analyse(&self, folder: i64, rel: &str) -> Option<(PathBuf, u64, i64)> {
-        let root = usize::try_from(folder).ok().and_then(|i| self.folders().get(i).cloned())?;
+        let root = self.folders().get(folder).cloned()?;
         let (size, mtime): (i64, i64) = self
             .db()
             .query_row(&format!("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
@@ -2192,7 +2847,7 @@ impl Catalogue {
         let mut out = Vec::new();
         for row in rows {
             let (folder, rel, size, mtime) = row?;
-            let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) else { continue };
+            let Some(root) = folders.get(folder) else { continue };
             out.push((folder, rel.clone(), root.join(&rel), size, mtime));
         }
         Ok(out)
@@ -2225,7 +2880,7 @@ impl Catalogue {
     /// Where a track's file is, or was last seen while it is away (gone, not yet retired). Blocking.
     pub fn file_of_any(&self, track: i64) -> Option<(i64, String)> {
         self.db()
-            .query_row("SELECT folder, rel FROM files WHERE track = ?1 ORDER BY gone_at IS NOT NULL LIMIT 1", [track], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT folder, rel FROM files WHERE track = ?1 ORDER BY gone_at IS NOT NULL, folder, rel LIMIT 1", [track], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()
             .ok()
             .flatten()
@@ -2255,11 +2910,10 @@ impl Catalogue {
         let folders = self
             .folders()
             .iter()
-            .enumerate()
             .map(|(i, p)| {
                 Ok(FolderStatus {
                     path: p.display().to_string(),
-                    files: count(&format!("SELECT COUNT(*) FROM files WHERE folder = ?1 AND {PRESENT}"), &[&(i as i64)])?,
+                    files: count(&format!("SELECT COUNT(*) FROM files WHERE folder = ?1 AND {PRESENT}"), &[&i])?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2292,11 +2946,12 @@ impl Catalogue {
 }
 
 /// A file's playlist line among these folders (see `Catalogue::line_of`).
-fn line_in(folders: &[PathBuf], folder: i64, rel: &str) -> Option<String> {
-    if folder == 0 {
+fn line_in(folders: &InUse, folder: i64, rel: &str) -> Option<String> {
+    let (first, root) = folders.first()?;
+    if folder == first {
         return Some(rel.to_string());
     }
-    crate::playlists::relative_to(folders.first()?, &folders.get(usize::try_from(folder).ok()?)?.join(rel))
+    crate::playlists::relative_to(root, &folders.get(folder)?.join(rel))
 }
 
 /// Where a server's paths lie in each folder: the prefix to strip, per folder id. Found from the catalogue's own
@@ -2317,7 +2972,7 @@ impl Roots {
         // Unknown so far: strip leading folders until the rest is a catalogued file.
         let absolute = norm.starts_with('/');
         let segs: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
-        for folder in 0..cat.folders().len() as i64 {
+        for folder in cat.folders().ids() {
             for i in 0..segs.len().saturating_sub(1) {
                 let rel = segs[i..].join("/");
                 if crate::placement::safe_relative(&rel) && cat.has_file(folder, &rel) {
@@ -2332,7 +2987,7 @@ impl Roots {
 }
 
 /// One server: link its tracks to files, a page at a time. A full listing when due, else only what changed.
-async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -> Result<()> {
+pub(crate) async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -> Result<()> {
     if !source.lists_tracks() {
         return Ok(());
     }
@@ -2342,7 +2997,7 @@ async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -
     let last_pass: i64 = cat.meta(&format!("pass:{id}")).and_then(|v| v.parse().ok()).unwrap_or(0);
     // Also when the folders changed since the last full listing: a folder added later (Lidarr's, 2026-10-14) got
     // only the tracks the server changed since, and its older ones stayed unplayable until the next day's listing.
-    let folders = cat.folders().iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join("
+    let folders = cat.folders().paths().map(|f| f.display().to_string()).collect::<Vec<_>>().join("
 ");
     let full = started - last_full >= FULL_EVERY_SECS || cat.meta(&format!("full-folders:{id}")).as_deref() != Some(&folders);
     let since = (!full).then_some(last_pass);
@@ -2488,7 +3143,7 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
     let mut rows: Vec<ServedRow> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut st = db.prepare(&format!(
-        "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime
+        "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime, f.bits, f.rate, f.came, t.record
          FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND {}{}",
         served("f."),
         within("f.rel")
@@ -2505,6 +3160,10 @@ pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result
             mtime: r.get(7)?,
             tags: Vec::new(),
             analysis: None,
+            bits: r.get(8)?,
+            rate: r.get(9)?,
+            came: r.get(10)?,
+            record: r.get(11)?,
         })
     })?;
     for f in files {
@@ -2807,7 +3466,7 @@ fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
 
 /// See `Catalogue::file_of`.
 fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
-    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
+    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel LIMIT 1"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()
         .ok()
         .flatten()
@@ -3086,6 +3745,61 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// A folder's first file given an analysis, with its shape, and Beat this!'s beats.
+    fn heard(cat: &Catalogue, folder: i64) -> (String, BeatThisRow) {
+        let (_, one, _, size, mtime) = cat.unanalysed(10).unwrap().into_iter().find(|t| t.0 == folder && t.1.ends_with("One.mp3")).unwrap();
+        cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
+        let row = BeatThisRow { folder, rel: one.clone(), size, mtime, beats: vec![500, 1_000], downbeats: vec![500] };
+        cat.store_beat_this(std::slice::from_ref(&row)).unwrap();
+        (one, row)
+    }
+
+    /// How many rows of a file's shape and beats are kept at a place.
+    fn parts_at(cat: &Catalogue, folder: i64, rel: &str) -> (i64, i64) {
+        let count = |table: &str| cat.db().query_row(&format!("SELECT COUNT(*) FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel], |r| r.get(0)).unwrap();
+        (count("analysis_shape"), count("beat_this"))
+    }
+
+    /// Beats left behind would list the file for hearing again, and a row a walk left in the way would break the shape's key.
+    #[test]
+    fn a_moved_file_keeps_its_beats_and_shape() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let (one, row) = heard(&cat, 0);
+        let moved = one.replace("A - B (2020)", "A - B (2020) moved");
+        cat.store_beat_this(&[BeatThisRow { rel: moved.clone(), beats: vec![9], ..row }]).unwrap();
+        cat.db().execute("INSERT INTO analysis_shape (folder, rel) VALUES (0, ?1)", [&moved]).unwrap();
+        cat.move_files(0, "A - B (2020)", 0, "A - B (2020) moved").unwrap();
+        assert_eq!(cat.beat_this_of(0, &moved).map(|(beats, _)| beats), Some(vec![0.5, 1.0]), "its own beats, not what stood there");
+        assert_eq!(cat.analysis_of(0, &moved).unwrap().waveform.len(), 512, "its shape came along");
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "nothing left behind");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_parked_folder_keeps_its_beats_and_shape_and_a_forgotten_one_leaves_none() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let (one, _) = heard(&cat, 0);
+        cat.set_folders(vec![b.clone()]).unwrap();
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0), "parked, with its files");
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1), "back, with them");
+        assert!(cat.beat_this_of(0, &one).is_some());
+        cat.set_folders(vec![b.clone()]).unwrap();
+        std::fs::remove_dir_all(a.join("A - B (2020)")).unwrap();
+        std::fs::write(a.join("other.mp3"), "x").unwrap();
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        let left: i64 = cat.db().query_row("SELECT (SELECT COUNT(*) FROM analysis_shape) + (SELECT COUNT(*) FROM beat_this)", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "its files gone from its path: forgotten, and all of theirs with them");
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
+    }
+
     #[test]
     fn a_changed_file_is_served_as_it_was_read_until_it_is_read_again() {
         let d = music();
@@ -3322,6 +4036,708 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// 0101 point 11: a retired track keeps what it was (its tags go with its file), and a file that is it again, days
+    /// later and elsewhere, takes its id back rather than a new one.
+    #[test]
+    fn a_retired_track_keeps_what_it_was_and_comes_back_as_itself() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        for (n, (name, value)) in [("title", "One"), ("artist", "A"), ("album", "B"), ("musicbrainz_trackid", "rec-1")].into_iter().enumerate() {
+            cat.db()
+                .execute(
+                    "INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'A - B (2020)/01 One.mp3', ?1, ?2, ?2, ?3)",
+                    params![n as i64, name, value],
+                )
+                .unwrap();
+        }
+        assert_eq!(cat.remembered(one).unwrap().title.as_deref(), Some("One"), "from its file while it has one");
+        std::fs::remove_file(d.join("A - B (2020)/01 One.mp3")).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        assert!(retired(&cat, one));
+        let r = cat.remembered(one).unwrap();
+        assert_eq!(
+            (r.title.as_deref(), r.artist.as_deref(), r.album.as_deref(), r.recording.as_deref(), r.duration_ms, r.retired),
+            (Some("One"), Some("A"), Some("B"), Some("rec-1"), Some(200_000), true),
+            "kept as it retired"
+        );
+        // The same recording, back elsewhere days later: the old id.
+        std::fs::create_dir_all(d.join("Elsewhere")).unwrap();
+        std::fs::write(d.join("Elsewhere/1-01 Uno.mp3"), b"again").unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.db()
+            .execute(
+                "INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Elsewhere/1-01 Uno.mp3', 0, 'musicbrainz_trackid', 'musicbrainz_trackid', 'rec-1')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(cat.identify().unwrap(), (1, 0), "recognised as the retired track: no new id");
+        assert_eq!(cat.track_of(0, "Elsewhere/1-01 Uno.mp3"), Some(one));
+        assert!(!retired(&cat, one), "back in use");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A copy keeps its own date (docs/records-and-copies.md): the row Cratarr moves, and a file that takes a gone row's
+    /// place, whichever way. A date made anew, or read from the track, would be another copy's once tracks are shared.
+    #[test]
+    fn a_file_keeps_when_it_came_across_a_move() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let came = |rel: &str| cat.db().query_row("SELECT came FROM files WHERE folder = 0 AND rel = ?1", [rel], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        assert!(came("A - B (2020)/01 One.mp3").is_some_and(|at| at > 1_000_000_000), "a new file came now");
+        // Long ago, and not when the track was born: a date made anew or read from the track would show.
+        cat.db().execute_batch("UPDATE files SET came = 100; UPDATE tracks SET born = 50;").unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        // Renamed outside Cratarr: a new row pairs with the gone one.
+        std::fs::rename(d.join("A - B (2020)"), d.join("A - B")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (2, 0));
+        assert_eq!(came("A - B/01 One.mp3"), Some(100), "renamed outside");
+        // Moved by Cratarr: the same row.
+        std::fs::rename(d.join("A - B"), d.join("Moved")).unwrap();
+        cat.move_files(0, "A - B", 0, "Moved").unwrap();
+        assert_eq!(came("Moved/01 One.mp3"), Some(100), "moved by Cratarr");
+        // A better copy handed the track.
+        std::fs::remove_file(d.join("Moved/01 One.mp3")).unwrap();
+        std::fs::write(d.join("Moved/01 One.flac"), b"better").unwrap();
+        cat.hand_over(&d.join("Moved/01 One.flac"), &d.join("Moved/01 One.mp3"), one).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (1, 0));
+        assert_eq!(came("Moved/01 One.flac"), Some(100), "handed its track");
+        assert_eq!(cat.served_rows(0).unwrap().iter().find(|r| r.rel == "Moved/01 One.flac").and_then(|r| r.came), Some(100), "and served so");
+        // Retired and back days later: its row went, so when the track was born stands in.
+        std::fs::remove_file(d.join("Moved/01 One.flac")).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        assert!(retired(&cat, one));
+        std::fs::create_dir_all(d.join("Back")).unwrap();
+        std::fs::write(d.join("Back/01 One.flac"), b"again").unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (1, 0), "the retired track");
+        assert_eq!(came("Back/01 One.flac"), Some(50), "back from retirement");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A catalogue from before 0.16: its files take their tracks' dates, once. Filled again later, a date would be the
+    /// track's, which by then may be another copy's.
+    #[test]
+    fn a_file_from_before_came_when_its_track_was_born_and_only_once() {
+        let d = music();
+        let file = d.join("catalogue.sqlite");
+        let (one, two) = ("A - B (2020)/01 One.mp3", "A - B (2020)/02 Two.flac");
+        let came = |cat: &Catalogue, rel: &str| cat.db().query_row("SELECT came FROM files WHERE folder = 0 AND rel = ?1", [rel], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        {
+            let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+            cat.walk_all();
+            read_as_audio(&cat);
+            cat.identify().unwrap();
+            cat.db().execute_batch("UPDATE files SET came = NULL; UPDATE tracks SET born = 50; DELETE FROM meta WHERE key = 'came';").unwrap();
+            cat.db().execute("UPDATE files SET track = NULL WHERE rel = ?1", [two]).unwrap();
+        }
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        assert_eq!(came(&cat, one), Some(50));
+        assert!(came(&cat, two).is_some_and(|at| at > 1_000_000_000), "no track yet: it comes now");
+        cat.db().execute_batch("UPDATE files SET came = NULL;").unwrap();
+        drop(cat);
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        assert_eq!(came(&cat, one), None, "once");
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// N7: only lossless copies rank by bit depth and rate, and reading every file again takes hours on the NAS. What
+    /// waits for it is served as it was read.
+    #[test]
+    fn reader_9_rereads_lossless_files_only() {
+        let d = music();
+        let file = d.join("catalogue.sqlite");
+        {
+            let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+            for (rel, format, kbps) in [("a.flac", "FLAC", 900), ("b.mp3", "MP3", 320), ("c.m4a", "MP4", 1000), ("d.m4a", "MP4", 256), ("e.opus", "OPUS", 128), ("f.wav", "WAV", 1411)] {
+                cat.db().execute("INSERT INTO files (folder, rel, size, mtime, state, format, bitrate) VALUES (0, ?1, 1, 1, ?2, ?3, ?4)", params![rel, READ, format, kbps]).unwrap();
+            }
+            cat.set_meta("reader", "8");
+        }
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        let waiting: Vec<String> = cat.db().prepare("SELECT rel FROM files WHERE state = ?1 ORDER BY rel").unwrap().query_map([PENDING], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(waiting, ["a.flac", "c.m4a", "f.wav"]);
+        assert_eq!(cat.meta("reader").as_deref(), Some("9"));
+        assert_eq!(cat.served_rows(0).unwrap().len(), 6, "served as read until then");
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// What `copy_for` ranks lossless copies by comes from the file, where its read lands.
+    #[test]
+    fn a_read_keeps_a_files_bit_depth_and_rate() {
+        let d = music();
+        let (rate, block, bits) = (48_000u32, 6u16, 24u16);
+        let audio = vec![0u8; rate as usize * usize::from(block) / 2];
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + audio.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * u32::from(block)).to_le_bytes());
+        wav.extend_from_slice(&block.to_le_bytes());
+        wav.extend_from_slice(&bits.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(audio.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&audio);
+        std::fs::write(d.join("A - B (2020)/03 Three.wav"), wav).unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        cat.read_tags_batch(10).unwrap();
+        let rows = cat.served_rows(0).unwrap();
+        let row = rows.iter().find(|r| r.rel.ends_with("Three.wav")).expect("read");
+        assert_eq!((row.bits, row.rate), (Some(24), Some(48_000)));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    fn copy(release: Option<&str>, artist: &str, title: &str, tracks: &[(i64, &str, i64)]) -> AlbumCopy {
+        AlbumCopy {
+            facts: identity::RecordFacts {
+                release: release.map(str::to_string),
+                artist: identity::fold(artist),
+                title: identity::fold(title),
+                tracks: tracks.iter().map(|(_, t, ms)| identity::Listed { title: identity::fold(t), duration_ms: *ms }).collect(),
+            },
+            title: title.to_string(),
+            artist: artist.to_string(),
+            year: Some(2020),
+            tracks: tracks.iter().enumerate().map(|(i, (id, _, _))| (*id, None, Some(i as u32 + 1))).collect(),
+            split: false,
+        }
+    }
+
+    /// 0100: the same tracks are one record, a deluxe edition its own; a track keeps its record, a new one joins.
+    #[test]
+    fn albums_get_their_records() {
+        let cat = Catalogue::open(None, vec![]).unwrap();
+        for _ in 0..7 {
+            cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
+        }
+        let record = |t: i64| cat.db().query_row("SELECT record FROM tracks WHERE id = ?1", [t], |r| r.get::<_, Option<i64>>(0)).unwrap();
+        assert!(cat.records_unsettled());
+        let music = copy(None, "A", "B", &[(1, "One", 200_000), (2, "Two", 180_000)]);
+        let own = copy(None, "A", "B", &[(3, "One", 201_000), (4, "Two", 180_000)]);
+        let deluxe = copy(None, "A", "B", &[(5, "One", 200_000), (6, "Two", 180_000), (7, "Bonus", 90_000)]);
+        assert_eq!(cat.assign_records(&[music.clone(), own.clone(), deluxe.clone()]).unwrap(), 7);
+        assert!(!cat.records_unsettled());
+        assert_eq!(record(1), record(3), "the same tracks: one record");
+        assert_ne!(record(1), record(5), "a deluxe edition is its own");
+        let first = record(1);
+        let (title, year): (String, u32) = cat.db().query_row("SELECT title, year FROM records WHERE id = ?1", [first], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((title.as_str(), year), ("B", 2020));
+        assert_eq!(cat.assign_records(&[music, own, deluxe]).unwrap(), 0, "for life: nothing to give again");
+        cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
+        let grown = copy(None, "A", "B", &[(1, "One", 200_000), (2, "Two", 180_000), (8, "Three", 100_000)]);
+        assert_eq!(cat.assign_records(&[grown]).unwrap(), 1);
+        assert_eq!(record(8), record(1), "a new track joins its album's record");
+        let gone = record(5).unwrap();
+        cat.db().execute("UPDATE tracks SET retired_at = 5 WHERE record = ?1", [gone]).unwrap();
+        cat.assign_records(&[]).unwrap();
+        let retired = |r: i64| cat.db().query_row("SELECT retired_at IS NOT NULL FROM records WHERE id = ?1", [r], |x| x.get::<_, bool>(0)).unwrap();
+        assert!(retired(gone), "its last track went");
+        cat.db().execute("UPDATE tracks SET retired_at = NULL WHERE id = 5", []).unwrap();
+        cat.assign_records(&[]).unwrap();
+        assert!(!retired(gone), "a track came back");
+    }
+
+    /// `n` tracks with no files.
+    fn tracks(n: usize) -> Catalogue {
+        let cat = Catalogue::open(None, vec![]).unwrap();
+        for _ in 0..n {
+            cat.db().execute("INSERT INTO tracks (born) VALUES (1)", []).unwrap();
+        }
+        cat
+    }
+
+    fn record_of(cat: &Catalogue, track: i64) -> Option<i64> {
+        cat.db().query_row("SELECT record FROM tracks WHERE id = ?1", [track], |r| r.get(0)).unwrap()
+    }
+
+    fn record_retired(cat: &Catalogue, record: i64) -> bool {
+        cat.db().query_row("SELECT retired_at IS NOT NULL FROM records WHERE id = ?1", [record], |r| r.get(0)).unwrap()
+    }
+
+    fn records_made(cat: &Catalogue) -> i64 {
+        cat.db().query_row("SELECT count(*) FROM records", [], |r| r.get(0)).unwrap()
+    }
+
+    /// These tracks retired, as their last files' day passing leaves them.
+    fn retire(cat: &Catalogue, ids: &[i64]) {
+        for id in ids {
+            cat.db().execute("UPDATE tracks SET retired_at = 5 WHERE id = ?1", [id]).unwrap();
+        }
+    }
+
+    /// These tracks back from retirement, as `identify` leaves them.
+    fn come_back(cat: &Catalogue, ids: &[i64]) {
+        for id in ids {
+            cat.db().execute("UPDATE tracks SET retired_at = NULL, back = 1 WHERE id = ?1", [id]).unwrap();
+        }
+    }
+
+    /// A file of a track, as `identify` leaves it.
+    fn file_of_track(cat: &Catalogue, rel: &str, track: i64) {
+        cat.db().execute("INSERT INTO files (folder, rel, size, mtime, track) VALUES (0, ?1, 1, 1, ?2)", params![rel, track]).unwrap();
+    }
+
+    /// One album of `tracks`, each given a title and length by its id.
+    fn album(title: &str, tracks: &[i64]) -> AlbumCopy {
+        let names: Vec<String> = tracks.iter().map(|t| format!("Track {t}")).collect();
+        let list: Vec<(i64, &str, i64)> = tracks.iter().zip(&names).map(|(t, n)| (*t, n.as_str(), 200_000)).collect();
+        copy(None, "A", title, &list)
+    }
+
+    /// A file of a best-of takes a retired track's id back by its name. One track of three is no vote: the album is a
+    /// record of its own, and neither takes the old record's id, favourites and facts nor brings it back.
+    #[test]
+    fn one_returned_track_does_not_pull_an_album_into_its_record() {
+        let d = music();
+        // Another album stays: a folder that walks to nothing keeps its rows.
+        std::fs::create_dir_all(d.join("Stays")).unwrap();
+        std::fs::write(d.join("Stays/01 Here.mp3"), b"not really an mp3").unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, two) = (cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap(), cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap());
+        let here = cat.track_of(0, "Stays/01 Here.mp3").unwrap();
+        cat.assign_records(&[copy(None, "A", "B", &[(one, "One", 200_000), (two, "Two", 200_000)]), copy(None, "C", "Stays", &[(here, "Here", 200_000)])]).unwrap();
+        let old = record_of(&cat, one).unwrap();
+        std::fs::remove_dir_all(d.join("A - B (2020)")).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        cat.assign_records(&[]).unwrap();
+        assert!(record_retired(&cat, old));
+        std::fs::create_dir_all(d.join("Best Of")).unwrap();
+        for name in ["01 One.mp3", "02 Another.mp3", "03 Third.mp3"] {
+            std::fs::write(d.join("Best Of").join(name), name).unwrap();
+        }
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (1, 2), "its name and length: the old id");
+        assert_eq!(cat.track_of(0, "Best Of/01 One.mp3"), Some(one));
+        let (another, third) = (cat.track_of(0, "Best Of/02 Another.mp3").unwrap(), cat.track_of(0, "Best Of/03 Third.mp3").unwrap());
+        let best = copy(None, "Various", "Best Of", &[(one, "One", 200_000), (another, "Another", 200_000), (third, "Third", 200_000)]);
+        assert_eq!(cat.assign_records(&[best.clone()]).unwrap(), 3);
+        let new = record_of(&cat, another).unwrap();
+        assert_ne!(new, old, "a record of its own");
+        assert_eq!(record_of(&cat, one), Some(new), "the track's only file is in it, so the track moved");
+        assert!(record_retired(&cat, old), "its old record stays gone");
+        assert!(!cat.records_unsettled());
+        assert_eq!(cat.assign_records(&[best]).unwrap(), 0, "settled");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// One track alone is the whole of its album, so it holds the vote; but it came back by its name, and a single with that
+    /// recording is not the record, gone or still in use.
+    #[test]
+    fn a_returned_track_alone_in_an_album_is_not_its_record() {
+        let cat = tracks(3);
+        cat.assign_records(&[album("Long", &[1, 2, 3])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[1, 2, 3]);
+        cat.assign_records(&[]).unwrap();
+        come_back(&cat, &[1]);
+        assert!(cat.records_unsettled(), "held against its album, though it has a record");
+        cat.assign_records(&[album("Single", &[1])]).unwrap();
+        assert_ne!(record_of(&cat, 1), Some(old));
+        assert!(record_retired(&cat, old), "gone, it stays gone");
+
+        let cat = tracks(3);
+        cat.assign_records(&[album("Long", &[1, 2, 3])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[3]);
+        come_back(&cat, &[3]);
+        cat.assign_records(&[album("Long", &[1, 2]), album("Single", &[3])]).unwrap();
+        assert_ne!(record_of(&cat, 3), Some(old), "in use, it takes in no album either");
+        assert_eq!(record_of(&cat, 1), Some(old));
+    }
+
+    /// Beside a track that stayed, a track back from retirement is simply home, even in an album of two.
+    #[test]
+    fn a_returned_track_in_its_own_album_keeps_its_record() {
+        let cat = tracks(2);
+        cat.assign_records(&[album("Two", &[1, 2])]).unwrap();
+        let old = record_of(&cat, 1);
+        retire(&cat, &[2]);
+        come_back(&cat, &[2]);
+        assert_eq!(cat.assign_records(&[album("Two", &[1, 2])]).unwrap(), 0);
+        assert_eq!(record_of(&cat, 2), old);
+        assert!(!cat.records_unsettled(), "it counts as any other track now");
+    }
+
+    /// A folder moved back after its day, or fetched again: most of a record's tracks together are the record.
+    #[test]
+    fn most_of_a_record_coming_back_brings_it_back() {
+        let cat = tracks(3);
+        cat.assign_records(&[album("Three", &[1, 2, 3])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[1, 2, 3]);
+        cat.assign_records(&[]).unwrap();
+        assert!(record_retired(&cat, old));
+        come_back(&cat, &[1, 2]);
+        assert_eq!(cat.assign_records(&[album("Three", &[1, 2])]).unwrap(), 0);
+        assert_eq!(record_of(&cat, 1), Some(old));
+        assert!(!record_retired(&cat, old));
+    }
+
+    /// Half of an album holding a record is no vote: the album is held against the others as a new one is, and its tracks
+    /// go with it.
+    #[test]
+    fn half_of_an_album_holding_a_record_is_no_vote() {
+        let cat = tracks(4);
+        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        let old = record_of(&cat, 1);
+        assert_eq!(cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap(), 4);
+        assert_ne!(record_of(&cat, 3), old);
+        assert_eq!(record_of(&cat, 1), record_of(&cat, 3));
+    }
+
+    /// No track of it retired, so nothing else says it went; and left with no tracks and no retirement, it would read as a
+    /// record never had, offering Want for what is here under another id.
+    #[test]
+    fn a_record_whose_tracks_all_moved_away_retires() {
+        let cat = tracks(4);
+        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap();
+        let new = record_of(&cat, 1).unwrap();
+        assert_ne!(new, old);
+        assert!(record_retired(&cat, old), "born anew: the tracks left it");
+        assert!(!record_retired(&cat, new));
+        let title: String = cat.db().query_row("SELECT title FROM records WHERE id = ?1", [old], |r| r.get(0)).unwrap();
+        assert_eq!(title, "Half", "it keeps what it was");
+
+        let cat = tracks(4);
+        cat.assign_records(&[album("Lone", &[1]), album("Big", &[2, 3, 4])]).unwrap();
+        let (lone, big) = (record_of(&cat, 1).unwrap(), record_of(&cat, 2).unwrap());
+        cat.assign_records(&[album("Big", &[2, 3, 4, 1])]).unwrap();
+        assert_eq!(record_of(&cat, 1), Some(big));
+        assert!(record_retired(&cat, lone), "its one track went to a record already there");
+    }
+
+    /// Only a record tracks left retires for having none: one that never had any is one not had, whatever else a pass moves.
+    #[test]
+    fn a_record_that_never_had_tracks_is_not_retired() {
+        let cat = tracks(4);
+        cat.db().execute("INSERT INTO records (born, title) VALUES (1, 'Wanted')", []).unwrap();
+        let wanted = cat.db().last_insert_rowid();
+        cat.assign_records(&[album("Half", &[1, 2])]).unwrap();
+        cat.assign_records(&[album("Half", &[1, 2, 3, 4])]).unwrap();
+        assert!(!record_retired(&cat, wanted));
+    }
+
+    /// Gone before its last track moved on, a record stays gone from when it went.
+    #[test]
+    fn a_retired_record_keeps_its_date_when_a_returned_track_moves_on() {
+        let cat = tracks(3);
+        cat.assign_records(&[album("Single", &[1])]).unwrap();
+        let old = record_of(&cat, 1).unwrap();
+        retire(&cat, &[1]);
+        cat.assign_records(&[]).unwrap();
+        cat.db().execute("UPDATE records SET retired_at = 5 WHERE id = ?1", [old]).unwrap();
+        come_back(&cat, &[1]);
+        cat.assign_records(&[album("Best Of", &[1, 2, 3])]).unwrap();
+        assert_ne!(record_of(&cat, 1), Some(old));
+        let at: i64 = cat.db().query_row("SELECT retired_at FROM records WHERE id = ?1", [old], |r| r.get(0)).unwrap();
+        assert_eq!(at, 5);
+    }
+
+    /// `tracks.record` is for life but for this: a track whose only file went to another record's album.
+    #[test]
+    fn a_track_moves_when_its_only_file_sits_in_another_records_album() {
+        let cat = tracks(6);
+        cat.assign_records(&[album("First", &[1, 2, 3]), album("Second", &[4, 5, 6])]).unwrap();
+        let (first, second) = (record_of(&cat, 1), record_of(&cat, 4));
+        assert_ne!(first, second);
+        assert_eq!(cat.assign_records(&[album("First", &[1, 2]), album("Second", &[4, 5, 6, 3])]).unwrap(), 1);
+        assert_eq!(record_of(&cat, 3), second);
+        let number: i64 = cat.db().query_row("SELECT number FROM tracks WHERE id = 3", [], |r| r.get(0)).unwrap();
+        assert_eq!(number, 4, "its place is in that record now");
+        assert!(!record_retired(&cat, first.unwrap()), "two tracks are left in it");
+    }
+
+    /// A shared track has a copy's file in its own record's album: one file elsewhere does not take it away.
+    #[test]
+    fn a_track_with_a_file_in_its_own_album_stays_with_its_record() {
+        let cat = tracks(6);
+        cat.assign_records(&[album("First", &[1, 2, 3]), album("Second", &[4, 5, 6])]).unwrap();
+        let first = record_of(&cat, 1);
+        file_of_track(&cat, "First/03.flac", 3);
+        file_of_track(&cat, "Second/03.flac", 3);
+        assert_eq!(cat.assign_records(&[album("First", &[1, 2, 3]), album("Second", &[4, 5, 6, 3])]).unwrap(), 0);
+        assert_eq!(record_of(&cat, 3), first);
+    }
+
+    /// Shared tracks cannot move, so an album of them with no vote must settle all the same, or a record is born for it at
+    /// every build.
+    #[test]
+    fn an_album_of_shared_tracks_settles_once() {
+        let cat = tracks(6);
+        cat.assign_records(&[album("First", &[1, 2]), album("Second", &[3, 4])]).unwrap();
+        for track in [1, 2, 3, 4] {
+            file_of_track(&cat, &format!("Elsewhere/{track}.flac"), track);
+            file_of_track(&cat, &format!("Together/{track}.flac"), track);
+        }
+        let made = records_made(&cat);
+        let half_new = album("Half new", &[1, 2, 5, 6]);
+        assert_eq!(cat.assign_records(&[half_new.clone()]).unwrap(), 2);
+        assert_eq!(records_made(&cat), made + 1);
+        assert_eq!(record_of(&cat, 5), record_of(&cat, 6));
+        assert_eq!(cat.assign_records(&[half_new]).unwrap(), 0);
+        assert_eq!(records_made(&cat), made + 1, "born once");
+        assert_eq!(cat.assign_records(&[album("Mixed", &[1, 3])]).unwrap(), 0);
+        assert_eq!(records_made(&cat), made + 1, "nothing here to give a record to");
+    }
+
+    /// What a few folders' albums settle alone is what their tracks say. Nothing moves there, nothing is born, and a vote
+    /// counts as it does in a whole pass.
+    #[test]
+    fn a_join_gives_only_what_a_vote_says() {
+        let cat = tracks(9);
+        cat.assign_records(&[album("Grown", &[1, 2]), album("Other", &[3, 4, 5])]).unwrap();
+        let made = records_made(&cat);
+        assert_eq!(cat.join_records(&[album("Grown", &[1, 2, 6])]).unwrap(), 1);
+        assert_eq!(record_of(&cat, 6), record_of(&cat, 1));
+        assert_eq!(cat.join_records(&[album("New", &[7, 8])]).unwrap(), 0, "no vote: nothing given");
+        assert_eq!(cat.join_records(&[album("Other", &[3, 9, 7, 8])]).unwrap(), 0, "one of four is no vote");
+        assert_eq!(record_of(&cat, 9), None);
+        assert_eq!(cat.join_records(&[album("Other", &[1, 3, 4, 5])]).unwrap(), 0, "a stray stays for the whole pass");
+        assert_ne!(record_of(&cat, 1), record_of(&cat, 3));
+        assert_eq!(records_made(&cat), made);
+    }
+
+    #[test]
+    fn a_retired_file_leaves_no_beats() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, _) = heard(&cat, 0);
+        assert_eq!(parts_at(&cat, 0, &one), (1, 1));
+        std::fs::remove_file(d.join(&one)).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        assert_eq!(parts_at(&cat, 0, &one), (0, 0));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A track is the record's (0101): two copies hold its id, and it lives until the last of them goes.
+    #[test]
+    fn a_track_with_two_copies_retires_with_the_last() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let one = cat.track_of(0, rel).unwrap();
+        cat.set_tracks(&[((1, rel.to_string()), Some(one))]).unwrap();
+        let lost = |dir: &PathBuf| {
+            std::fs::remove_file(dir.join(rel)).unwrap();
+            cat.walk_all();
+            cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+            cat.identify().unwrap();
+        };
+        lost(&b);
+        assert!(!retired(&cat, one), "a copy is left");
+        assert_eq!(cat.file_of(one), Some((0, rel.to_string())));
+        lost(&a);
+        assert!(retired(&cat, one), "the last copy went");
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
+    }
+
+    /// Lost track ids (0101, the owner): nothing is given out while they are lost; started afresh, the new ids come above
+    /// the floor, so an old id names no new track.
+    #[test]
+    fn lost_ids_give_nothing_out_and_a_fresh_start_numbers_above_the_old() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.set_ids_lost(true);
+        assert_eq!(cat.identify().unwrap(), (0, 0), "lost: no ids");
+        assert_eq!(cat.track_of(0, "A - B (2020)/01 One.mp3"), None);
+        cat.number_above(2_000_000).unwrap();
+        cat.set_ids_lost(false);
+        assert_eq!(cat.identify().unwrap(), (0, 2));
+        assert!(cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap() > 2_000_000, "above every old id");
+        assert!(cat.top_track() > 2_000_000);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A better copy hands its id over (0101 point 11): the file arriving where Cratarr said takes the track, though no
+    /// rule would pair it (another format, another length), and the replaced file's gone row lets go.
+    #[test]
+    fn a_file_handed_a_track_takes_it() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        assert_eq!(cat.place_of_path(&d.join("A - B (2020)/01 One.mp3")), Some((0, "A - B (2020)/01 One.mp3".to_string())));
+        std::fs::remove_file(d.join("A - B (2020)/01 One.mp3")).unwrap();
+        std::fs::write(d.join("A - B (2020)/01 One.flac"), b"better").unwrap();
+        cat.hand_over(&d.join("A - B (2020)/01 One.flac"), &d.join("A - B (2020)/01 One.mp3"), one).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET state = 1, duration_ms = 260000 WHERE state = 0", []).unwrap();
+        assert_eq!(cat.identify().unwrap(), (1, 0), "handed over: no new id");
+        assert_eq!(cat.track_of(0, "A - B (2020)/01 One.flac"), Some(one));
+        let rows: i64 = cat.db().query_row("SELECT COUNT(*) FROM files WHERE track = ?1", [one], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "the replaced file's row let go");
+        let nowhere = std::env::temp_dir().join("nowhere/x.flac");
+        assert!(cat.hand_over(&nowhere, &nowhere, one).is_err(), "in no library");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Each new file fits the gone rows of both copies: as a whole that is no pair, and fresh ids would split the track.
+    #[test]
+    fn both_copies_renamed_outside_keep_their_track() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (one, two) = ("01 One.mp3", "02 Two.flac");
+        let track_of = |name: &str| cat.track_of(0, &format!("A - B (2020)/{name}")).unwrap();
+        let (track_one, track_two) = (track_of(one), track_of(two));
+        cat.set_tracks(&[((1, format!("A - B (2020)/{one}")), Some(track_one)), ((1, format!("A - B (2020)/{two}")), Some(track_two))]).unwrap();
+        for d in [&a, &b] {
+            std::fs::rename(d.join("A - B (2020)"), d.join("A - B (2020) [FLAC]")).unwrap();
+        }
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (4, 0), "each paired in its own folder: no new ids");
+        for folder in [0, 1] {
+            assert_eq!(cat.track_of(folder, &format!("A - B (2020) [FLAC]/{one}")), Some(track_one));
+            assert_eq!(cat.track_of(folder, &format!("A - B (2020) [FLAC]/{two}")), Some(track_two));
+        }
+        assert!(!retired(&cat, track_one) && !retired(&cat, track_two));
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
+    }
+
+    /// A copy is a record's files in one directory, so two can sit in one library: a rename above both leaves each new file
+    /// fitting both gone rows on every rule, in its own folder too. They are one track's rows: fresh ids would retire it.
+    #[test]
+    fn both_copies_in_one_folder_renamed_outside_keep_their_track() {
+        let d = music();
+        let (one, two) = ("01 One.mp3", "02 Two.flac");
+        std::fs::create_dir_all(d.join("A/B [MP3]")).unwrap();
+        std::fs::rename(d.join("A - B (2020)"), d.join("A/B")).unwrap();
+        for name in [one, two] {
+            std::fs::copy(d.join("A/B").join(name), d.join("A/B [MP3]").join(name)).unwrap();
+        }
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let (track_one, track_two) = (cat.track_of(0, &format!("A/B/{one}")).unwrap(), cat.track_of(0, &format!("A/B/{two}")).unwrap());
+        cat.set_tracks(&[((0, format!("A/B [MP3]/{one}")), Some(track_one)), ((0, format!("A/B [MP3]/{two}")), Some(track_two))]).unwrap();
+        std::fs::rename(d.join("A"), d.join("A again")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (4, 0), "one track's gone rows are one fit: no new ids");
+        for dir in ["A again/B", "A again/B [MP3]"] {
+            assert_eq!(cat.track_of(0, &format!("{dir}/{one}")), Some(track_one));
+            assert_eq!(cat.track_of(0, &format!("{dir}/{two}")), Some(track_two));
+        }
+        assert!(!retired(&cat, track_one) && !retired(&cat, track_two));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A better copy in one directory, the record's other copy in the same library away for a moment: only the file it
+    /// replaces lets go, or that copy comes back with a fresh id and the track splits.
+    #[test]
+    fn a_claim_leaves_another_directorys_gone_copy_alone() {
+        let d = music();
+        let (rel, copy, better) = ("A - B (2020)/01 One.mp3", "A - B (2020) [MP3]/01 One.mp3", "A - B (2020)/01 One.flac");
+        std::fs::create_dir_all(d.join("A - B (2020) [MP3]")).unwrap();
+        std::fs::copy(d.join(rel), d.join(copy)).unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, rel).unwrap();
+        cat.set_tracks(&[((0, copy.to_string()), Some(one))]).unwrap();
+        std::fs::remove_file(d.join(rel)).unwrap();
+        std::fs::write(d.join(better), b"better").unwrap();
+        cat.hand_over(&d.join(better), &d.join(rel), one).unwrap();
+        let away = d.join("one.away");
+        std::fs::rename(d.join(copy), &away).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET state = 1, duration_ms = 260000 WHERE state = 0", []).unwrap();
+        assert_eq!(cat.identify().unwrap(), (1, 0), "handed over: no new id");
+        assert_eq!(cat.track_of(0, better), Some(one));
+        let gone: Vec<String> = {
+            let db = cat.db();
+            let mut st = db.prepare("SELECT rel FROM files WHERE track = ?1 AND gone_at IS NOT NULL").unwrap();
+            st.query_map([one], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(gone, vec![copy.to_string()], "the replaced file let go; the other copy's row stayed");
+        std::fs::rename(&away, d.join(copy)).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.track_of(0, copy), Some(one), "back, the same track");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A mount away for a moment leaves a copy's rows gone: a better file claiming the track in another folder must leave
+    /// them, or that copy comes back with a fresh id and the track splits.
+    #[test]
+    fn a_claim_leaves_another_folders_gone_copy_alone() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let one = cat.track_of(0, rel).unwrap();
+        cat.set_tracks(&[((1, rel.to_string()), Some(one))]).unwrap();
+        let better = "A - B (2020)/01 One.flac";
+        std::fs::remove_file(a.join(rel)).unwrap();
+        std::fs::write(a.join(better), b"better").unwrap();
+        cat.hand_over(&a.join(better), &a.join(rel), one).unwrap();
+        let away = b.join("one.away");
+        std::fs::rename(b.join(rel), &away).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.file_of_any(one), Some((0, rel.to_string())), "both away: by folder and path");
+        cat.db().execute("UPDATE files SET state = 1, duration_ms = 260000 WHERE state = 0", []).unwrap();
+        assert_eq!(cat.identify().unwrap(), (1, 0), "handed over: no new id");
+        assert_eq!(cat.track_of(0, better), Some(one));
+        let rows = |folder: i64| -> i64 { cat.db().query_row("SELECT COUNT(*) FROM files WHERE track = ?1 AND folder = ?2", params![one, folder], |r| r.get(0)).unwrap() };
+        assert_eq!((rows(0), rows(1)), (1, 1), "the replaced file let go; the other copy's row stayed");
+        std::fs::rename(&away, b.join(rel)).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.track_of(1, rel), Some(one), "back, the same track");
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
+    }
+
     #[test]
     fn trashed_files_keep_their_ids_until_the_trash_is_emptied() {
         let d = music();
@@ -3520,21 +4936,129 @@ mod tests {
         std::fs::remove_dir_all(d.with_extension("gone")).ok();
     }
 
+    /// As if the facts were read longer ago than FACTS_EVERY.
+    fn facts_grown_old(cat: &Catalogue) {
+        if let Some(k) = cat.facts.lock().unwrap().as_mut() {
+            k.at = std::time::Instant::now() - FACTS_EVERY - Duration::from_secs(1);
+        }
+    }
+
     #[test]
-    fn crate_facts_are_kept_until_the_catalogue_changes_and_a_while_has_passed() {
+    fn crate_facts_are_kept_until_what_they_are_read_from_changes_and_a_while_has_passed() {
         let d = music();
         let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
         cat.walk_all();
         let first = cat.crate_facts().unwrap();
         assert!(!first.is_empty());
         assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "nothing changed: the same facts");
-        cat.record_links("jellyfin", "lib", &[("t1".into(), 0, first[0].rel.clone())], 100).unwrap();
+        cat.db().execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'GENRE', 'genre', 'Jazz')", [&first[0].rel]).unwrap();
         assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change just after: still the same (0.9.7)");
-        // As if read longer ago than FACTS_EVERY.
-        if let Some(k) = cat.facts.lock().unwrap().as_mut() {
-            k.at = std::time::Instant::now() - FACTS_EVERY - Duration::from_secs(1);
+        facts_grown_old(&cat);
+        let again = cat.crate_facts().unwrap();
+        assert!(!Arc::ptr_eq(&first, &again), "a change a while after: read again");
+        assert_eq!(again.iter().find(|f| f.rel == first[0].rel).unwrap().genres, ["Jazz"]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn what_a_pass_over_an_unchanged_library_writes_leaves_the_crate_facts_kept() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let first = cat.crate_facts().unwrap();
+        // A pass with nothing to do, to its end: `link_source` writes its time every five minutes, whatever it found.
+        assert!(cat.walk_all().is_empty());
+        assert_eq!(cat.read_tags_batch(TAG_BATCH).unwrap(), 0);
+        cat.identify().unwrap();
+        cat.set_meta("pass:cratarr", "1");
+        // A media server's links, and what a track writes as it is first played: nothing a fact reads.
+        cat.record_links("jellyfin", "lib", &[("t1".into(), 0, first[0].rel.clone())], 100).unwrap();
+        cat.db().execute("INSERT INTO analysis_shape (folder, rel, spectrum) VALUES (0, ?1, x'00')", [&first[0].rel]).unwrap();
+        facts_grown_old(&cat);
+        assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "nothing they are read from changed");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_write_to_every_table_the_facts_are_read_from_counts() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        let written = || cat.facts_written.load(Ordering::Relaxed);
+        let rel = cat.crate_facts().unwrap()[0].rel.clone();
+        let shape = |table: &str| format!("INSERT INTO {table} (folder, rel, size, mtime, {}) VALUES (0, ?1, 1, 1, {})", if table == "analysis" { "version, analysed_at" } else { "beats, downbeats, at" }, if table == "analysis" { "1, 1" } else { "x'00', x'00', 1" });
+        let sql = [
+            "UPDATE files SET bitrate = 320 WHERE rel = ?1".to_string(),
+            "INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'GENRE', 'genre', 'Jazz')".to_string(),
+            "DELETE FROM tags WHERE rel = ?1".to_string(),
+            "UPDATE tracks SET born = 1 WHERE id = (SELECT track FROM files WHERE rel = ?1)".to_string(),
+            shape("analysis"),
+            "UPDATE analysis SET bpm = 120 WHERE rel = ?1".to_string(),
+            shape("beat_this"),
+            "DELETE FROM beat_this WHERE rel = ?1".to_string(),
+            "INSERT INTO audiomuse (track, energy) SELECT track, 1 FROM files WHERE rel = ?1".to_string(),
+        ];
+        for q in &sql {
+            let before = written();
+            assert_eq!(cat.db().execute(q, [&rel]).unwrap(), 1, "{q}");
+            assert!(written() > before, "{q}");
         }
-        assert!(!Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change a while after: read again");
+        // AudioMuse is taken in whole: a DELETE with no WHERE, which SQLite would not go through row by row.
+        let before = written();
+        cat.replace_audiomuse(&[]).unwrap();
+        assert!(written() > before, "the whole table emptied");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_label_from_discogs_reads_the_crate_facts_again_as_a_word_does() {
+        let s = crate::serve::Serve::open(None, Rules::default(), &|_| None).unwrap();
+        let before = said_stamp(&s);
+        assert_eq!(said_stamp(&s), before, "nothing said: nothing to read");
+        s.userdata.set_discogs_facts("album:a", Some(r#"{"labels":[{"name":"Warp"}]}"#), 1).unwrap();
+        assert_ne!(said_stamp(&s), before);
+    }
+
+    #[test]
+    fn the_crate_facts_are_read_beside_the_catalogue_not_under_its_lock() {
+        let d = music();
+        let cat = Arc::new(Catalogue::open(Some(&d.join("catalogue.sqlite")), vec![d.clone()]).unwrap());
+        cat.walk_all();
+        // A writer in the middle of something long, as far as the read can tell.
+        let lock = cat.db();
+        let (c, (tell, told)) = (cat.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || tell.send(c.crate_facts().unwrap().len()));
+        let read = told.recv_timeout(Duration::from_secs(20));
+        drop(lock);
+        assert_eq!(read, Ok(2));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn the_crate_facts_before_are_let_go_before_the_new_ones_are_read() {
+        let d = music();
+        let cat = Arc::new(Catalogue::open(None, vec![d.clone()]).unwrap());
+        cat.walk_all();
+        let before = Arc::downgrade(&cat.crate_facts().unwrap());
+        assert_eq!(before.strong_count(), 1, "only what is kept holds them");
+        cat.db().execute("UPDATE files SET bitrate = 320", []).unwrap();
+        facts_grown_old(&cat);
+        // In memory the read has only the catalogue's own connection: held here, it stops just before its first row.
+        let lock = cat.db();
+        let c = cat.clone();
+        let reading = std::thread::spawn(move || c.crate_facts().unwrap().len());
+        let waited = std::time::Instant::now();
+        while before.strong_count() > 0 && waited.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let gone = before.strong_count() == 0;
+        drop(lock);
+        assert_eq!(reading.join().unwrap(), 2);
+        assert!(gone, "two readings at once over every file are what the memory limit cannot hold");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -3630,6 +5154,38 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// 0101 point 1 (the owner, 2026-11-04): a folder keeps its id for life. A folder added, wherever it is asked for in
+    /// the list, takes a new id and moves no other; one taken out moves no other either; the ids and the tracks under
+    /// them stay put, so what names a folder by its id (album ids, Subsonic's folders, the journal) never points
+    /// elsewhere.
+    #[test]
+    fn a_folder_keeps_its_id_for_life_whatever_comes_and_goes() {
+        let (a, b, c) = (music(), music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let in_b = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
+        let ids = |cat: &Catalogue| [&a, &b, &c].map(|p| cat.folders().id_of(p));
+        // Asked for first, the new one still comes after the others.
+        cat.set_folders(vec![c.clone(), a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        assert_eq!(ids(&cat), [Some(0), Some(1), Some(2)]);
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(in_b), "b's tracks where they were");
+        // The first taken out: no other moves up into its place.
+        cat.set_folders(vec![b.clone(), c.clone()]).unwrap();
+        assert_eq!(ids(&cat), [None, Some(1), Some(2)]);
+        assert_eq!(cat.folders().first().map(|(id, _)| id), Some(1), "lines start from the first in use");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(in_b));
+        // And back: its own id again.
+        cat.set_folders(vec![a.clone(), b.clone(), c.clone()]).unwrap();
+        assert_eq!(ids(&cat), [Some(0), Some(1), Some(2)]);
+        assert_eq!(cat.status().unwrap().files, 6);
+        for d in [&a, &b, &c] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
     #[test]
     fn changing_a_folder_drops_only_its_rows() {
         let (a, b) = (music(), music());
@@ -3690,6 +5246,183 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_that_reads_empty_keeps_its_rows_and_says_so_and_nothing_is_lost_when_it_is_back() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let rel = "A - B (2020)/01 One.mp3";
+        let one = cat.track_of(0, rel).unwrap();
+        cat.record_links("jf", "music", &[("j-1".into(), 0, rel.into())], 1).unwrap();
+        let (size, mtime): (i64, i64) = cat.db().query_row("SELECT size, mtime FROM files WHERE rel = ?1", [rel], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        cat.store_analysis(0, rel, size as u64, mtime, &an_analysis(-3.0, 500)).unwrap();
+        // The mount not up: a folder there, readable, nothing in it.
+        let away = d.with_extension("away");
+        let _ = std::fs::remove_dir_all(&away);
+        std::fs::rename(&d, &away).unwrap();
+        std::fs::create_dir_all(&d).unwrap();
+
+        let problems = cat.walk_all();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains(&d.display().to_string()), "{problems:?}");
+        assert_eq!(cat.status().unwrap().files, 2, "the library lists what it listed");
+        assert_eq!(cat.track_of_source("jf", "j-1"), Some(one), "its links to the servers stand");
+        let gone: i64 = cat.db().query_row("SELECT COUNT(*) FROM files WHERE gone_at IS NOT NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(gone, 0, "so no day's wait runs out on them");
+        cat.identify().unwrap();
+        assert_eq!(cat.track_of(0, rel), Some(one));
+        assert!(cat.analysis_of(0, rel).is_some());
+
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::rename(&away, &d).unwrap();
+        assert!(cat.walk_all().is_empty(), "back: nothing to say");
+        assert_eq!(cat.track_of(0, rel), Some(one));
+        assert!(cat.analysis_of(0, rel).is_some(), "nothing to analyse again");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_library_keep_and_delete_emptied_is_no_problem() {
+        let (a, b, c) = (music(), music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone(), c.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        // Keep of a's last album: the files and the rows go together.
+        std::fs::rename(a.join("A - B (2020)"), b.join("C - D (2021)")).unwrap();
+        cat.move_files(0, "A - B (2020)", 1, "C - D (2021)").unwrap();
+        // Delete of c's: into its trash, the rows marked.
+        let token = crate::trash::trash(&c, "A - B (2020)", 100).unwrap();
+        cat.mark_trashed(2, "A - B (2020)", &token).unwrap();
+        assert_eq!(cat.walk_all(), Vec::<String>::new());
+        for d in [a, b, c] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_folder_that_was_never_anything_but_empty_is_no_problem() {
+        let d = std::env::temp_dir().join(format!("cratarr-cat-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        assert!(cat.walk_all().is_empty());
+        std::fs::remove_dir_all(d).ok();
+    }
+
+    /// A folder of ten albums of ten tracks, `A00` first, read and given track ids.
+    fn shelf() -> (PathBuf, Catalogue) {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("cratarr-shelf-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for album in 0..10 {
+            shelve(&d, album);
+        }
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        (d, cat)
+    }
+
+    fn shelve(at: &Path, album: usize) {
+        std::fs::create_dir_all(at.join(format!("A{album:02}"))).unwrap();
+        for track in 0..10 {
+            std::fs::write(at.join(format!("A{album:02}/{track:02}.mp3")), b"not really an mp3").unwrap();
+        }
+    }
+
+    fn elsewhere(d: &Path) -> PathBuf {
+        let e = d.with_extension("elsewhere");
+        let _ = std::fs::remove_dir_all(&e);
+        std::fs::create_dir_all(&e).unwrap();
+        std::fs::write(e.join("kept.mp3"), b"another folder").unwrap();
+        e
+    }
+
+    #[test]
+    fn the_album_that_sorts_first_gone_from_a_parked_folder_forgets_nothing_else() {
+        let (d, cat) = shelf();
+        let other = elsewhere(&d);
+        let track = cat.track_of(0, "A05/03.mp3").unwrap();
+        cat.set_folders(vec![other.clone()]).unwrap();
+        std::fs::remove_dir_all(d.join("A00")).unwrap();
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&d), Some(0), "its own id");
+        assert_eq!(cat.track_of(0, "A05/03.mp3"), Some(track), "the rest of its rows came back with it");
+        for d in [d, other] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_parked_folder_with_most_of_its_files_gone_is_another_folder() {
+        let (d, cat) = shelf();
+        let other = elsewhere(&d);
+        cat.set_folders(vec![other.clone()]).unwrap();
+        for album in 0..7 {
+            std::fs::remove_dir_all(d.join(format!("A{album:02}"))).unwrap();
+        }
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        assert_ne!(cat.folders().id_of(&d), Some(0));
+        for d in [d, other] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_mount_moved_with_an_album_lost_keeps_the_rest_of_its_rows() {
+        let (d, cat) = shelf();
+        let track = cat.track_of(0, "A05/03.mp3").unwrap();
+        let moved = d.with_extension("moved");
+        let _ = std::fs::remove_dir_all(&moved);
+        std::fs::rename(&d, &moved).unwrap();
+        std::fs::remove_dir_all(moved.join("A00")).unwrap();
+        cat.set_folders(vec![moved.clone()]).unwrap();
+        assert_eq!(cat.track_of(0, "A05/03.mp3"), Some(track));
+        std::fs::remove_dir_all(moved).ok();
+    }
+
+    /// Two libraries made by one template can hold the same album under the same names: what is first in the one is no
+    /// proof that the other is the same library.
+    #[test]
+    fn a_folder_alike_in_its_first_albums_is_not_handed_another_folder_s_rows() {
+        let (d, cat) = shelf();
+        let alike = d.with_extension("alike");
+        let _ = std::fs::remove_dir_all(&alike);
+        shelve(&alike, 0);
+        shelve(&alike, 1);
+        cat.set_folders(vec![alike.clone()]).unwrap();
+        assert_eq!(cat.track_of(0, "A00/00.mp3"), None, "those rows stay parked");
+        assert_ne!(cat.folders().id_of(&alike), Some(0));
+        for d in [d, alike] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn a_mount_not_up_when_its_library_is_switched_on_forgets_nothing() {
+        let (d, cat) = shelf();
+        let other = elsewhere(&d);
+        let track = cat.track_of(0, "A00/00.mp3").unwrap();
+        cat.set_folders(vec![other.clone()]).unwrap();
+        // A folder there, as a mount point is, and nothing in it.
+        let away = d.with_extension("away");
+        let _ = std::fs::remove_dir_all(&away);
+        std::fs::rename(&d, &away).unwrap();
+        std::fs::create_dir_all(d.join(".cratarr-trash")).unwrap();
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&d), Some(0));
+        assert_eq!(cat.track_of(0, "A00/00.mp3"), Some(track), "its rows are its own again");
+        assert_eq!(cat.walk_all().len(), 1, "said so");
+        assert_eq!(cat.track_of(0, "A00/00.mp3"), Some(track), "and the walk keeps them");
+        for d in [d, other, away] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
     fn a_folder_out_of_use_is_parked_and_comes_back_with_its_track_ids() {
         let (a, b) = (music(), music());
         let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
@@ -3708,19 +5441,22 @@ mod tests {
         assert_eq!(cat.status().unwrap().files, 2, "only the folder in use counts");
         assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), None);
         assert_eq!(cat.track_of_source("cratarr", &own), None, "a parked track does not play");
-        // Back, even at another place in the list: the same track id, and the servers list again.
+        // Back, whatever its place in the list asked: under its own folder id, with the same track id, and the servers
+        // list again.
         cat.set_folders(vec![b.clone(), a.clone()]).unwrap();
-        assert_eq!(cat.track_of(0, "A - B (2020)/01 One.mp3"), Some(one), "the same id after the break");
+        assert_eq!(cat.folders().id_of(&b), Some(1), "its own id for life");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "the same id after the break");
         assert_eq!(cat.meta("full-folders:jf"), None, "links checked again after a break");
         assert_eq!(cat.status().unwrap().files, 4);
-        // Parked, then other files at that path: forgotten.
+        // Parked, then other files at that path: forgotten, and back as a new folder with an id never given before.
         cat.set_folders(vec![a.clone()]).unwrap();
         std::fs::remove_dir_all(&b).unwrap();
         std::fs::create_dir_all(b.join("X")).unwrap();
         std::fs::write(b.join("X/other.mp3"), "x").unwrap();
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
         cat.walk_all();
-        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), None, "those files are gone: their rows with them");
+        assert_eq!(cat.folders().id_of(&b), Some(2), "its old id is never given again");
+        assert_eq!(cat.track_of(2, "A - B (2020)/01 One.mp3"), None, "those files are gone: their rows with them");
         assert_eq!(cat.status().unwrap().files, 3);
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();

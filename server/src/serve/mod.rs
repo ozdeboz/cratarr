@@ -146,13 +146,17 @@ impl Serve {
     pub fn open(data_dir: Option<&std::path::Path>, rules: Rules, env: &dyn Fn(&str) -> Option<String>) -> Result<Arc<Self>> {
         let library = Arc::new(library::Library::open(data_dir.map(|d| d.join("library.sqlite")).as_deref())?);
         let userdata = Arc::new(UserData::open(data_dir.map(|d| d.join("userdata.sqlite")).as_deref())?);
-        // A new install (no logins kept yet) requires a sign-in everywhere from the start; one from before decision 0043
-        // keeps it off until the owner switches it on, once its clients have their keys.
-        let fresh = data_dir.is_some_and(|d| !d.join("subsonic-users.json").exists());
         let users = users::Users::open(data_dir)?;
         let sessions = sessions::Sessions::open(data_dir.map(|d| d.join("sessions.sqlite")).as_deref())?;
+        // No word on the requirement: on, whatever else the folder holds (decision 0043, amended). Off is only what
+        // Settings says with the password: a file lost from a restore, or deleted as corrupt, must not open the server to
+        // anyone as its owner. With accounts here it is lost, not new, and its keys with it: say so, as every client is
+        // refused from now on.
         if sessions.required().is_none() {
-            sessions.set_required(fresh)?;
+            sessions.set_required(true)?;
+            if !users.names().is_empty() {
+                tracing::warn!(target: "signin", "sessions.sqlite says nothing of the sign-in: required, and the keys it held are gone");
+            }
         }
         if let (Some(u), Some(p)) = (env("CRATARR_SUBSONIC_USER"), env("CRATARR_SUBSONIC_PASSWORD"))
             && !u.trim().is_empty()
@@ -195,19 +199,43 @@ impl Serve {
         // one when the directory was unreachable. Cratarr's own account of the same name (not from the directory) is that
         // account.
         let account = |a: &str, said: Option<ldap::Said>| match said {
-            Some(said) => match self.users.from_directory(a, said.admin, said.display_name.as_deref()) {
-                Ok(u) => u.active.then_some(u.name),
-                Err(e) => {
-                    tracing::warn!(target: "signin", user = %a, "the account from the directory could not be kept: {e:#}");
-                    None
+            Some(said) => {
+                let new = self.users.get(a).is_none();
+                match self.users.from_directory(a, said.admin, said.display_name.as_deref()) {
+                    Ok(u) => {
+                        if new {
+                            self.others_own_off(&u.name);
+                        }
+                        u.active.then_some(u.name)
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: "signin", user = %a, "the account from the directory could not be kept: {e:#}");
+                        None
+                    }
                 }
-            },
+            }
             None => self.users.get(a).filter(|u| u.active).map(|u| u.name),
         };
         if let Some(account) = self.directory.sign_in(name, password, &account, now()).await {
             return Some(account);
         }
-        self.users.sign_in(name, password).map(|u| u.name)
+        // All a directory's account holds here is its app password, for OpenSubsonic apps: never a way past the directory
+        // that just said no, or a password changed there goes on working, and one a third-party app leaked signs in as an
+        // administrator. Refused after the check, so how long it takes tells nothing (`Users::sign_in`).
+        let directory_on = self.directory.config().enabled;
+        self.users.sign_in(name, password).filter(|u| !(directory_on && u.directory)).map(|u| u.name)
+    }
+
+    /// Whether `password` is `account`'s, for what asks for it again (`access::reauthenticate`): whether it signs in as that
+    /// account by any name it goes by. A session knows the account, and the directory may know it by another name; and a
+    /// name may sign in as another account than the one of its name, whose password this is not.
+    pub async fn password_of(&self, account: &str, password: &str) -> bool {
+        for name in self.directory.names_of(account) {
+            if self.sign_in(&name, password).await.as_deref() == Some(account) {
+                return true;
+            }
+        }
+        false
     }
 
     /// The account the running request acts for (decision 0051): the one signed in, or, while signing in is not required
@@ -226,6 +254,28 @@ impl Serve {
         }
     }
 
+
+    /// The own-music folder as Settings keeps it (0101 point 9).
+    pub fn own_music(&self) -> Option<PathBuf> {
+        let dir = self.data_dir.as_ref()?;
+        let saved = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok()).ok().flatten()?;
+        saved.sources.iter().find_map(|s| s.own_music())
+    }
+
+    /// Everyone else's own music switched off for `account`, new here (0101 point 6: others' start off).
+    pub fn others_own_off(&self, account: &str) {
+        let Some(own) = self.own_music() else { return };
+        for folder in std::fs::read_dir(own).map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>()).unwrap_or_default() {
+            let Some(name) = folder.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+            if !folder.is_dir() || name.starts_with('.') || name == account {
+                continue;
+            }
+            let key = format!("{}/{}", crate::source::cratarr::KIND.id, folder.display());
+            if let Err(e) = self.userdata.switch_library_off(&[account.to_string()], &key) {
+                tracing::warn!("{name}'s music not switched off for {account}: {e:#}");
+            }
+        }
+    }
 
     /// Whether every request needs a sign-in now (decision 0043): when switched on, and once there is an account to
     /// sign in with.
@@ -481,7 +531,7 @@ impl Serve {
         let id = song.to_string();
         let found = tokio::task::spawn_blocking(move || lib.file_of(&id)).await??;
         let folders = self.catalogue().folders();
-        Ok(found.and_then(|(folder, rel)| folders.get(folder as usize).map(|root| root.join(rel))))
+        Ok(found.and_then(|(folder, rel)| folders.get(folder).map(|root| root.join(rel))))
     }
 
     /// The album an art id (an album's, a song's or an artist's, maybe with a fingerprint after `_`) stands for, and the

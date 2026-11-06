@@ -237,6 +237,7 @@ fn label_of(key: &str) -> Option<(&'static str, &'static str)> {
         "server:slow" => ("Responses", "slow"),
         "server:settings-file" => ("Settings file", "unreadable"),
         "servers:lidarr" => ("Lidarr", "unreachable"),
+        "library:ids-lost" => ("Track ids", "lost"),
         "requests:waiting" => ("Requests", "waiting"),
         "words:genre" => ("Genres", "differ in the files"),
         "words:style" => ("Styles", "differ in the files"),
@@ -467,17 +468,14 @@ fn agreed_total(totals: &[u32]) -> u32 {
     by.iter().rev().find(|(_, n)| **n >= 2).map_or(0, |(t, _)| *t)
 }
 
-/// A better copy Replace can take: an upgrade of Music's album (`incoming`'s upgrades; any other verdict is an album in
-/// two libraries at once).
+/// A better copy Replace can take: an upgrade of a main library's album (`incoming`'s upgrades; any other verdict is an
+/// album in two libraries at once).
 fn replaces(v: &super::incoming::VerdictView) -> bool {
-    v.kind == "upgrade" && v.replaceable
+    v.kind == "upgrade" && v.main_folder.is_some()
 }
 
 /// Where a verdict's other copy is, for an item's line: Music, else its library as named.
 fn paired_in<'a>(v: &super::incoming::VerdictView, libraries: &'a [super::albums::LibraryView]) -> &'a str {
-    if v.replaceable {
-        return "Music";
-    }
     v.library_id.as_ref().and_then(|id| libraries.iter().find(|l| &l.id == id)).map_or("another library", |l| l.name.as_str())
 }
 
@@ -547,6 +545,23 @@ fn lidarr_root_finding(root: &str, roots: &[String], incoming: &str, folders: &[
         None => format!("Its root folder is {shown}, and none of its root folders is {incoming}'s folder. Add that folder in Lidarr, then choose it here."),
     });
     f.open = Some(Open { page: "settings", switch: None, thing: Some("lidarr") });
+    Some(f)
+}
+
+/// The catalogue's track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while
+/// the user data remembers another. No new ids until it is restored from the nightly backup, or an administrator starts
+/// afresh (`POST /api/catalogue/fresh-ids`).
+pub fn track_ids(lost: bool) -> Option<Finding> {
+    if !lost {
+        return None;
+    }
+    // No count: they are lost or not ("Track ids · lost"; the page leaves a 0 out).
+    let mut f = finding("library", "library:ids-lost", Level::Critical, 0, "The track ids were lost");
+    f.detail = Some(
+        "catalogue.sqlite was made anew, so no new track ids are given out. Restore it from the nightly backup, or start the \
+         track ids afresh: what named an old track then shows it missing."
+            .into(),
+    );
     Some(f)
 }
 
@@ -710,7 +725,8 @@ impl App {
                 off.push((id, name, artist, line));
             }
         }
-        let mut out = library(&rows, &off, &discs);
+        let mut out: Vec<Finding> = track_ids(served.catalogue().ids_lost()).into_iter().collect();
+        out.extend(library(&rows, &off, &discs));
         out.extend(self.check_incomplete(&served).await?);
         out.extend(self.check_references(&served).await?);
         // Each kind of word the Catalogue sheet writes (0.15, decision 0097): the records whose files differ.
@@ -975,8 +991,8 @@ impl App {
         let (Some(cfg), Some(client)) = (cfg.filter(|c| c.enabled), client) else { return Ok(None) };
         let live = self.library.live();
         let incoming = live.iter().find_map(|a| {
-            let (id, _) = a.cfg.libraries.policies.iter().find(|(id, p)| p.fetcher.as_deref() == Some("lidarr") && a.cfg.libraries.incoming.contains(id))?;
-            a.placement.libraries.iter().find(|l| &l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
+            let id = a.cfg.libraries.fetched_by("lidarr")?;
+            a.placement.libraries.iter().find(|l| l.id == id).map(|l| (l.name.clone(), l.folders.clone()))
         });
         let Some((name, folders)) = incoming else { return Ok(None) };
         let roots = client.options().await?.roots;
@@ -1237,9 +1253,24 @@ mod tests {
             library: "Arp/Zebra".into(),
             why: String::new(),
             library_id: library_id.map(Into::into),
-            replaceable,
+            main_folder: replaceable.then_some(0),
+            replaceable_into: if replaceable { library_id.map(Into::into).into_iter().collect() } else { Vec::new() },
         };
-        let libraries = [crate::app::albums::LibraryView { id: "new".into(), name: "New music".into(), use_: "incoming", colour: None, quality: crate::settings::Quality::None }];
+        let library = |id: &str, name: &str, kind: &'static str| crate::app::albums::LibraryView {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            fetcher: None,
+            owner: None,
+            mine: false,
+            colour: None,
+            quality: crate::settings::Quality::None,
+            seen: true,
+            seen_why: None,
+            naming: None,
+        };
+        // Libraries are equal (0101 point 1): a main library is named by its own name, as any other.
+        let libraries = [library("music", "Music", "main"), library("new", "New music", "incoming")];
         assert!(replaces(&v("upgrade", Some("music"), true)));
         assert!(!replaces(&v("upgrade", Some("new"), false)), "a better copy of another Incoming library's: in two libraries at once");
         assert!(!replaces(&v("duplicate", Some("music"), true)));

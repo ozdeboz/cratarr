@@ -459,11 +459,21 @@ impl Store {
 
     /// Entries whose file went, led to where their track's file is now (decision 0101 point 11: an entry is its
     /// track; a file renamed or moved where Cratarr did not move it, a copy of the record playing now), each such
-    /// playlist's copy written out again.
+    /// playlist's copy written out again; and entries without a track given the one their line names, once the
+    /// catalogue knows its file (written before the catalogue read it, at the import of a library not read yet).
     async fn follow_tracks(&self) {
         let _one_writer = self.write.lock().await;
         let (db, cat, owner, base) = (self.db.clone(), self.cat.clone(), self.owner(), self.base.clone());
         let done = tokio::task::spawn_blocking(move || -> Result<Vec<(String, Vec<String>)>> {
+            let given: Vec<(String, String, String)> = db
+                .untracked_entries(&owner)?
+                .into_iter()
+                .filter(|(_, _, line)| entry_exists(&base, line))
+                .filter_map(|(name, entry, line)| Some((name, entry, cat.track_of_line(&line)?)))
+                .collect();
+            if !given.is_empty() {
+                db.give_tracks(&owner, &given)?;
+            }
             let mut moves = Vec::new();
             for (name, entry, line, track) in db.tracked_entries(&owner)? {
                 if entry_exists(&base, &line) {
@@ -509,6 +519,15 @@ impl Store {
         }
         let name = id.to_string();
         self.ask(move |db, owner| db.playlist_entries(owner, &name)).await?.ok_or(StoreError::Unknown)
+    }
+
+    /// The tracks of a playlist's entries, in order (decision 0101 point 11): what a missing one was.
+    pub async fn tracks(&self, id: &str) -> Result<Vec<Option<String>>, StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Unknown);
+        }
+        let name = id.to_string();
+        self.ask(move |db, owner| db.playlist_tracks(owner, &name)).await?.ok_or(StoreError::Unknown)
     }
 
     /// A playlist as its text (`text_of`), for its copies and its undo; `None` when there is no such playlist.
@@ -1197,6 +1216,25 @@ B/2.mp3
         let again = Store::in_music(db, cat, &d.0, Some(out)).await.unwrap();
         assert_eq!(again.entries("Chill").await.unwrap(), ["A/1.mp3", "gone/2.mp3", "B/3.mp3"], "brought in once");
         assert_eq!(music_playlists(&d.0).unwrap(), ["Chill"], "Music's own copies, by name");
+    }
+
+    #[tokio::test]
+    async fn an_entry_written_before_the_catalogue_read_its_file_gets_its_track_in_the_minute_pass() {
+        let d = Dir::new();
+        d.touch("A/1.mp3");
+        let cat = Arc::new(Catalogue::open(None, vec![d.0.clone()]).unwrap());
+        let db = Arc::new(UserData::open(None).unwrap());
+        let s = Store::open(db.clone(), cat.clone(), None, &d.0, None);
+        s.create("Mix").await.unwrap();
+        s.set_member("Mix", "A/1.mp3", true).await.unwrap();
+        assert!(db.tracked_entries("").unwrap().is_empty(), "the catalogue has not read its file yet");
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        s.refresh_dead().await;
+        let track = cat.track_of_line("A/1.mp3").expect("the record's track");
+        assert_eq!(db.tracked_entries("").unwrap().into_iter().map(|(_, _, l, t)| (l, t)).collect::<Vec<_>>(), [("A/1.mp3".to_string(), track)]);
+        assert_eq!(s.entries("Mix").await.unwrap(), ["A/1.mp3"], "its line as it was");
     }
 
     #[tokio::test]

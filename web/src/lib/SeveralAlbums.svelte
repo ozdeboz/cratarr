@@ -13,7 +13,7 @@
   // them at least and done to those it applies to. Start radio; the rating, all to the same stars; Sync to this device
   // and Remove from this device (in the app); what their libraries allow (Cancel conversion, Move to another, Delete;
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo.
-  import { offerIn } from './AlbumMenu.svelte';
+  import { adds, offerIn } from './AlbumMenu.svelte';
   import { albumOfDownload, albumRatings, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
   import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -98,16 +98,20 @@
     onedit(them);
   }
 
-  // What their libraries allow (administrators): a job in the conversion queue only Cancel, else Move and Delete.
+  // What their libraries allow, by what the server says of each: a job in the conversion queue (administrators) only
+  // Cancel, else Add to, Move and Delete.
   const converting = $derived(me.admin ? offers.filter((x) => x.o?.job != null) : []);
-  const deletable = $derived(me.admin ? offers.filter((x) => x.o && x.o.job === null && x.o.deletable) : []);
+  const deletable = $derived(offers.filter((x) => x.o && x.o.job === null && x.o.deletable));
+  /** One of them on its way into `to`: `add`, an Incoming record's (or one into own music), else a move. */
+  type Moving = Ticked & { to: LibraryInfo; primary: boolean; add: boolean };
   /** Each library they can move into (by its name, whichever server's), with the albums that can. */
   const moves = $derived.by(() => {
-    const by = new Map<string, (Ticked & { to: LibraryInfo; primary: boolean })[]>();
-    if (me.admin)
-      for (const x of offers)
-        if (x.o && x.o.job === null) for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.use === 'music' }]);
-    return [...by].map(([name, them]) => ({ name, them }));
+    const by = new Map<string, Moving[]>();
+    for (const x of offers)
+      if (x.o && x.o.job === null)
+        for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.kind === 'main', add: adds(x.o.from, t) }]);
+    // Added where every one of them is (lib/AlbumMenu `adds`), else moved.
+    return [...by].map(([name, them]) => ({ name, them, adding: them.every((y) => y.add) }));
   });
 
   /** Gone from the Library's list at once (as its page's `gone`), before it is read again; `deleted`: from the panel
@@ -134,7 +138,7 @@
   }
 
   function askDelete() {
-    const them = deletable.map((x) => ({ source: x.s.id, id: x.a.id, title: x.a.title, primary: x.o!.from?.use === 'music' }));
+    const them = deletable.map((x) => ({ source: x.s.id, id: x.a.id, title: x.a.title, primary: x.o!.from?.kind === 'main' }));
     const days = library.view?.trash_days ?? 14;
     const music = library.view?.music ?? 'Music';
     const inMusic = them.filter((x) => x.primary).length;
@@ -167,7 +171,7 @@
 
   // Move: what each would become asked first, then one question for them all (those refused named, left out).
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch these ${word}s again.`);
-  async function askMove(name: string, them: (Ticked & { to: LibraryInfo; primary: boolean })[]) {
+  async function askMove(name: string, them: Moving[], adding: boolean) {
     // Read before closing: the menu (and this) is gone by the time the previews are in.
     const ask = onask;
     close();
@@ -175,12 +179,12 @@
     const unread = await fewAtATime(them, async (x) => void seen.push({ x, p: await movePreview(x.s.id, x.a.id, x.to.id) }));
     const go = them.flatMap((x) => seen.filter((y) => y.x === x && !y.p.refused));
     const refused = seen.filter((y) => y.p.refused);
-    if (!go.length) return toast.fail(null, `None of them can move to ${name}`);
+    if (!go.length) return toast.fail(null, adding ? `None of them can be added to ${name}` : `None of them can move to ${name}`);
     const convert = go.reduce((k, y) => k + y.p.convert, 0);
     const why = (p: KeepPreview) => (p.refused?.kind === 'needs_year' ? 'no year in the tags' : p.refused?.kind === 'other' ? p.refused.detail : '');
     const text = [
       `${named(go.map((y) => y.x.a.title))}.`,
-      refused.length ? `Not moved: ${refused.slice(0, 8).map((y) => `${y.x.a.title} (${why(y.p)})`).join(', ')}${refused.length > 8 ? ` and ${refused.length - 8} more` : ''}.` : '',
+      refused.length ? `${adding ? 'Not added' : 'Not moved'}: ${refused.slice(0, 8).map((y) => `${y.x.a.title} (${why(y.p)})`).join(', ')}${refused.length > 8 ? ` and ${refused.length - 8} more` : ''}.` : '',
       unread.length ? `${plural(unread.length, word)} couldn't be looked at.` : '',
       convert ? `${plural(convert, 'lossless file')} above ${name}'s quality limit ${convert === 1 ? 'is' : 'are'} converted to FLAC first.` : '',
       go.some((y) => !y.p.acquisition && !y.x.primary) ? NO_LIDARR : '',
@@ -189,9 +193,9 @@
       .join(' ');
     const m = plural(go.length, word);
     ask({
-      title: `Move ${m} to ${name}?`,
+      title: `${adding ? 'Add' : 'Move'} ${m} to ${name}?`,
       text,
-      label: `Move to ${name}`,
+      label: `${adding ? 'Add' : 'Move'} to ${name}`,
       icon: 'intoBox',
       go: async () => {
         const tokens: (string | null)[] = [];
@@ -209,8 +213,8 @@
         );
         if (queued) jobs.poke();
         leave(gone);
-        if (gone.length) withUndo(`Moved ${doneOf(gone.length, go.length)} to ${name}.`, tokens, { after: reread });
-        else if (!queued) toast.fail(null, `Could not move the ${word}s`);
+        if (gone.length) withUndo(`${adding ? 'Added' : 'Moved'} ${doneOf(gone.length, go.length)} to ${name}.`, tokens, { after: reread });
+        else if (!queued) toast.fail(null, `Could not ${adding ? 'add' : 'move'} the ${word}s`);
       },
     });
   }
@@ -251,7 +255,7 @@
 </MenuGroup>
 <MenuGroup label="Library">
   {#if converting.length}<MenuEntry icon="close" label="Cancel conversion" onclick={cancelAll} />{/if}
-  {#each moves as mv (mv.name)}<MenuEntry icon="intoBox" label={`Move to ${mv.name}`} onclick={() => askMove(mv.name, mv.them)} />{/each}
+  {#each moves as mv (mv.name)}<MenuEntry icon="intoBox" label={`${mv.adding ? 'Add' : 'Move'} to ${mv.name}`} onclick={() => askMove(mv.name, mv.them, mv.adding)} />{/each}
 </MenuGroup>
 <!-- Remove, last. -->
 <MenuGroup>

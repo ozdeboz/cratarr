@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { approvePayload, folderLine, itemLine, searchable, tickable } = await import('../src/lib/soulseekRules.ts');
+const { approvePayload, folderLine, itemLine, itemTone, searchable, tickable, underWay } = await import('../src/lib/soulseekRules.ts');
 
 const folder = (user: string, lossless = true) => ({ user, dir: `Music\\${user}\\Late Set`, format: lossless ? 'flac' : 'mp3', lossless, free_slot: true, queue: 0, speed: 2_500_000, extra: 0 });
 const item = (id: string, state: string, extra: Record<string, unknown> = {}) =>
@@ -29,6 +29,26 @@ test("a record's row says where it stands", () => {
   assert.equal(itemLine(item('1', 'waiting', { misses: 3, due: 1_000 + 86_400 }), 1_000), 'M. Rivers · 1998 · Not found · 3 times · again tomorrow');
   assert.equal(itemLine(item('1', 'fetching', { percent: 42.4 })), 'M. Rivers · 1998 · Fetching · 42%');
   assert.equal(itemLine(item('1', 'stuck', { why: 'No release to judge it by', set_aside: [{ user: 'x', path: 'p', why: {} }] })), 'M. Rivers · 1998 · No release to judge it by · 1 folder set aside');
+});
+
+test("a record held on its way says what it waits for, and goes back to its row's own words at its time", () => {
+  const held = (state: string) => item('1', state, { why: 'AcoustID could not be reached', due: 1_900 });
+  for (const state of ['approved', 'fetching', 'checking']) {
+    assert.equal(itemLine(held(state), 1_000), 'M. Rivers · 1998 · AcoustID could not be reached · again within the hour');
+    assert.equal(itemTone(held(state), 1_000), 'warn');
+  }
+  assert.equal(itemLine(held('checking'), 1_900), 'M. Rivers · 1998 · Checking its files', 'being taken up again');
+  assert.equal(itemTone(held('checking'), 1_900), null);
+  // A why left from a folder before it, with no time to wait for, is not a hold.
+  assert.equal(itemLine(item('1', 'approved', { why: 'bo is offline' }), 1_000), 'M. Rivers · 1998 · To be fetched');
+});
+
+test('the list is asked again soon for what is at work, not for what an outage holds', () => {
+  const held = item('1', 'checking', { why: 'slskd could not be reached', due: 1_900 });
+  assert.equal(underWay({ items: [item('1', 'checking')] }, 1_000), true);
+  assert.equal(underWay({ items: [held] }, 1_000), false);
+  assert.equal(underWay({ items: [held, item('2', 'fetching')] }, 1_000), true);
+  assert.equal(underWay({ items: [held] }, 1_900), true, 'its time come');
 });
 
 test('only found records are ticked; Fetch sends the ticked, each with its picked folder', () => {

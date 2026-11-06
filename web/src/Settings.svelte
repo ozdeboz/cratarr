@@ -102,7 +102,7 @@
       case 'libraries': {
         if (!s) return '';
         const names = s.sources.filter((v) => v.enabled).flatMap((v) =>
-          [...v.libraries.music, ...v.libraries.incoming].map((id) => v.server_libraries.find((l) => l.id === id)?.name ?? id),
+          v.libraries.map(({ id }) => v.server_libraries.find((l) => l.id === id)?.name ?? id),
         );
         return names.join(' · ') || 'None in use';
       }

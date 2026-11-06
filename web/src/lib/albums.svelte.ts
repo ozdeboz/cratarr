@@ -26,7 +26,8 @@ import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
 import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
-import { libraryShown } from './sources.svelte';
+import { dotsOf, type Dot, type Held } from './copiesRule';
+import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
 
@@ -59,7 +60,7 @@ export function readLibrary(fresh: boolean): Promise<void> {
 
 // The Library's albums by server: their ids, and the albums of each title. Made once per list read (the downloads
 // look theirs up on every report of the app's).
-type Index = Map<string, { ids: Set<string>; titled: Map<string, ListedAlbum[]>; library: Map<string, string> }>;
+type Index = Map<string, { ids: Set<string>; titled: Map<string, ListedAlbum[]>; held: Map<string, Held> }>;
 const indexes = new WeakMap<AlbumsView, Index>();
 function indexOf(view: AlbumsView): Index {
   let index = indexes.get(view);
@@ -68,25 +69,21 @@ function indexOf(view: AlbumsView): Index {
     for (const s of view.sources) {
       const titled = new Map<string, ListedAlbum[]>();
       for (const a of s.albums) titled.set(a.title, [...(titled.get(a.title) ?? []), a]);
-      const library = new Map<string, string>();
-      for (const a of s.albums) if (a.library) library.set(a.id, a.library);
-      index.set(s.id, { ids: new Set(s.albums.map((a) => a.id)), titled, library });
+      index.set(s.id, { ids: new Set(s.albums.map((a) => a.id)), titled, held: new Map(s.albums.map((a) => [a.id, a])) });
     }
     indexes.set(view, index);
   }
   return index;
 }
 
-/** An album's library as a dot in its colour, wherever an album shows (decision 0034; 0.9.3, the owner: album cards,
- *  the album panel's header, search results): none for the primary (Music), none while only one of the server's
- *  libraries shows. Its library its own where it says, else the Library's list's (none until that is read). */
-export function libraryDot(source: string, album: { id: string; library?: string }): { colour: string; name: string } | null {
+/** A record's libraries as dots in their colours, wherever one shows (decision 0034; 0.9.3, the owner: album cards, the
+ *  album panel's header, search results), by lib/copiesRule. Its copies its own where it says, else the Library's
+ *  list's (none until that is read). */
+export function libraryDots(source: string, album: Held & { id: string }): Dot[] {
   const s = library.view?.sources.find((x) => x.id === source);
-  const info = s?.library_info;
-  if (!info || info.filter((l) => libraryShown(source, l.id)).length < 2) return null;
-  const lib = album.library ?? indexOf(library.view!).get(source)?.library.get(album.id);
-  const l = info.find((x) => x.id === lib);
-  return l?.colour ? { colour: l.colour, name: l.name } : null;
+  if (!s) return [];
+  const held = album.copies || album.library ? album : indexOf(library.view!).get(source)?.held.get(album.id);
+  return held ? dotsOf(held, s.library_info, shownIn(source)) : [];
 }
 
 /** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;

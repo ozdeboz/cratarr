@@ -171,12 +171,14 @@ pub enum Step {
     Year,
 }
 
-/// The overview from the library's albums (id, folder, arrival) and songs (id, album), the folders switched on, the
-/// Incoming folders, and the account's play counts and starred songs; `now` and `tz` (seconds east of UTC) for the months.
+/// The overview from the library's copies (album, folder, arrival) and files (song, album, folder), the folders switched
+/// on, the Incoming folders, and the account's play counts and starred songs; `now` and `tz` (seconds east of UTC) for the
+/// months. A record is a row per copy and a track a row per file, so both are counted by id: once, however many there are,
+/// and only from the folders in question.
 #[allow(clippy::too_many_arguments)]
 pub fn overview(
-    albums: &[(String, i64, Option<i64>)],
-    songs: &[(String, String, i64, String)],
+    copies: &[(String, i64, Option<i64>)],
+    files: &[(String, String, i64, String)],
     shown: &HashSet<i64>,
     incoming: &HashSet<i64>,
     plays: &HashMap<String, u32>,
@@ -187,9 +189,11 @@ pub fn overview(
     tz: i64,
 ) -> Overview {
     let mut out = Overview::default();
-    let inc: Vec<Option<i64>> = albums.iter().filter(|(_, f, _)| incoming.contains(f)).map(|(_, _, c)| *c).collect();
+    // A record's arrival is the record's, the same on each of its copies: any row will do.
+    let arrivals = |folders: &HashSet<i64>| -> HashMap<&str, Option<i64>> { copies.iter().filter(|(_, f, _)| folders.contains(f)).map(|(id, _, c)| (id.as_str(), *c)).collect() };
+    let inc = arrivals(incoming);
     out.incoming_albums = inc.len();
-    out.incoming_since = inc.into_iter().flatten().min();
+    out.incoming_since = inc.into_values().flatten().min();
     // Each step as a number, local time: days since 1970, Mondays (as days), year * 12 + month0, years.
     let (step, count) = growth;
     let key = |t: i64| {
@@ -203,11 +207,11 @@ pub fn overview(
         }
     };
     let back = |k: i64, n: i64| if step == Step::Week { k - 7 * n } else { k - n };
-    let shown_albums: HashSet<&str> = albums.iter().filter(|(_, f, _)| shown.contains(f)).map(|(id, _, _)| id.as_str()).collect();
+    let shown_albums = arrivals(shown);
     let this = key(now);
     let first = match count {
         Some(n) => back(this, n - 1),
-        None => albums.iter().filter(|(id, _, _)| shown_albums.contains(id.as_str())).filter_map(|(_, _, c)| c.map(key)).min().unwrap_or(this).min(this),
+        None => shown_albums.values().filter_map(|c| c.map(key)).min().unwrap_or(this).min(this),
     };
     let mut added: BTreeMap<i64, usize> = BTreeMap::new();
     let mut k = this;
@@ -216,7 +220,7 @@ pub fn overview(
         k = back(k, 1);
     }
     // Growth and Heard both of the period (`since`: the albums that came then).
-    for (_, _, created) in albums.iter().filter(|(id, _, _)| shown_albums.contains(id.as_str())) {
+    for created in shown_albums.values() {
         if let Some(n) = created.and_then(|c| added.get_mut(&key(c))) {
             *n += 1;
         }
@@ -236,20 +240,24 @@ pub fn overview(
         Step::Month => "month",
         Step::Year => "year",
     };
-    let period_albums: HashSet<&str> = albums
-        .iter()
-        .filter(|(id, _, c)| shown_albums.contains(id.as_str()) && since.is_none_or(|s| c.is_some_and(|c| c >= s)))
-        .map(|(id, _, _)| id.as_str())
-        .collect();
+    let period_albums: HashSet<&str> = shown_albums.iter().filter(|(_, c)| since.is_none_or(|s| c.is_some_and(|c| c >= s))).map(|(id, _)| *id).collect();
     let mut heard_albums: HashSet<&str> = HashSet::new();
     let mut buckets = [0usize; PLAY_BUCKETS.len()];
     let mut most: Vec<(&str, u32)> = Vec::new();
-    for (id, album, _, _) in songs.iter().filter(|(_, a, _, _)| period_albums.contains(a.as_str())) {
-        out.tracks += 1;
+    let mut counted: HashSet<&str> = HashSet::new();
+    // A record shown in one library may have a copy in another: only the files shown are its tracks here.
+    for (id, album, _, _) in files.iter().filter(|(_, a, f, _)| shown.contains(f) && period_albums.contains(a.as_str())) {
         let n = plays.get(id).copied().unwrap_or(0);
+        // Before the track's second file is passed over: that file may be another record's, and heard there as well.
+        if n > 0 {
+            heard_albums.insert(album);
+        }
+        if !counted.insert(id) {
+            continue;
+        }
+        out.tracks += 1;
         if n > 0 {
             out.tracks_heard += 1;
-            heard_albums.insert(album);
             most.push((id, n));
         }
         buckets[PLAY_BUCKETS.iter().rposition(|(least, _)| n >= *least).unwrap_or(0)] += 1;
@@ -753,6 +761,61 @@ mod tests {
         assert_eq!(o.most_played.iter().map(|t| (t.id.as_str(), t.plays)).collect::<Vec<_>>(), [("s1", 3)]);
         let m = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), Some(now - 30 * day), (Step::Week, Some(5)), now, 0);
         assert_eq!((m.tracks, m.tracks_heard, m.albums, m.albums_never, m.added.iter().map(|c| c.n).sum::<usize>()), (2, 1, 1, 0, 1));
+    }
+
+    /// (song, album, folder, place) for the overview's files.
+    fn files_of(rows: &[(&str, &str, i64)]) -> Vec<(String, String, i64, String)> {
+        rows.iter().map(|(s, a, f)| (s.to_string(), a.to_string(), *f, format!("{f}/{s}"))).collect()
+    }
+
+    /// r1 is in Music and in an Incoming that is switched off. It is one album, and what only Incoming holds is not shown.
+    #[test]
+    fn a_record_also_in_a_library_not_shown_counts_once_and_by_the_files_shown() {
+        let now = 1_792_800_000; // 2026-10-23
+        let copies = vec![("r1".to_string(), 0, Some(now - 10)), ("r1".to_string(), 1, Some(now - 10)), ("r2".to_string(), 1, Some(now - 10))];
+        let files = files_of(&[("t1", "r1", 0), ("t1", "r1", 1), ("t2", "r1", 1), ("t3", "r2", 1)]);
+        let plays: HashMap<String, u32> = [("t2".to_string(), 4), ("t3".to_string(), 2)].into();
+        let starred = HashSet::from(["t2".to_string()]);
+        let o = overview(&copies, &files, &HashSet::from([0]), &HashSet::from([1]), &plays, &starred, None, (Step::Year, None), now, 0);
+        assert_eq!(o.added.iter().map(|c| c.n).sum::<usize>(), 1, "one record, and it is not two for having a copy out of sight");
+        assert_eq!((o.albums, o.tracks, o.tracks_heard, o.favourites, o.albums_never), (1, 1, 0, 0, 1), "t2 and t3 are Incoming's, and Incoming is off");
+        assert_eq!(o.plays.iter().map(|c| c.n).collect::<Vec<_>>(), [1, 0, 0, 0, 0, 0]);
+        assert!(o.most_played.is_empty(), "{:?}", o.most_played);
+        assert_eq!(o.incoming_albums, 2, "r1 and r2 both wait there");
+    }
+
+    /// From the take a track has a file in each copy, under one id.
+    #[test]
+    fn a_track_with_a_file_in_each_copy_is_one_track() {
+        let now = 1_792_800_000; // 2026-10-23
+        let copies = vec![("r1".to_string(), 0, Some(now - 10)), ("r1".to_string(), 2, Some(now - 10))];
+        let files = files_of(&[("t1", "r1", 0), ("t1", "r1", 2), ("t2", "r1", 0), ("t2", "r1", 2)]);
+        let plays: HashMap<String, u32> = [("t1".to_string(), 3)].into();
+        let starred = HashSet::from(["t1".to_string()]);
+        let o = overview(&copies, &files, &HashSet::from([0, 2]), &HashSet::new(), &plays, &starred, None, (Step::Year, None), now, 0);
+        assert_eq!(o.added.iter().map(|c| c.n).sum::<usize>(), 1, "both copies shown, one record");
+        assert_eq!((o.albums, o.tracks, o.tracks_heard, o.favourites, o.albums_never), (1, 2, 1, 1, 0));
+        assert_eq!(o.plays.iter().map(|c| c.n).collect::<Vec<_>>(), [1, 0, 1, 0, 0, 0]);
+        assert_eq!(o.most_played.iter().map(|t| (t.id.as_str(), t.plays)).collect::<Vec<_>>(), [("t1", 3)], "listed once");
+    }
+
+    /// One track's files can sit in two records (a file moved outside Cratarr), and its plays are heard in both.
+    #[test]
+    fn a_track_in_two_records_counts_once_and_both_records_are_heard() {
+        let now = 1_792_800_000; // 2026-10-23
+        let copies = vec![("r1".to_string(), 0, Some(now - 10)), ("r2".to_string(), 0, Some(now - 10))];
+        let files = files_of(&[("t1", "r1", 0), ("t1", "r2", 0)]);
+        let plays: HashMap<String, u32> = [("t1".to_string(), 1)].into();
+        let o = overview(&copies, &files, &HashSet::from([0]), &HashSet::new(), &plays, &HashSet::new(), None, (Step::Year, None), now, 0);
+        assert_eq!((o.albums, o.tracks, o.tracks_heard, o.albums_never), (2, 1, 1, 0));
+    }
+
+    #[test]
+    fn a_record_in_two_incoming_folders_is_one_album_waiting() {
+        let now = 1_792_800_000; // 2026-10-23
+        let copies = vec![("r1".to_string(), 1, Some(now - 10)), ("r1".to_string(), 2, Some(now - 10)), ("r2".to_string(), 2, Some(now - 90))];
+        let o = overview(&copies, &[], &HashSet::new(), &HashSet::from([1, 2]), &HashMap::new(), &HashSet::new(), None, (Step::Year, None), now, 0);
+        assert_eq!((o.incoming_albums, o.incoming_since), (2, Some(now - 90)));
     }
 
     #[test]

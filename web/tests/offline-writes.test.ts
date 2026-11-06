@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS, ours, outlived, stamped, OTHERS_MS } = await import('../src/lib/outbox.ts');
+(globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
+const { outcomeOf, headersOf, mergeOps, opsFrom, stale, STALE_MS, ours, outlived, stamped, OTHERS_MS, worded } = await import('../src/lib/outbox.ts');
 const { readChanges, favouriteOf } = await import('../src/lib/changeLog.ts');
 const { opsFor, applyOps } = await import('../src/lib/playlistOps.ts');
 
@@ -21,6 +22,19 @@ test('what an answer means for the change at the head', () => {
   assert.equal(outcomeOf(401, false, notReached), 'wait');
   assert.equal(outcomeOf(503, false, notReached), 'wait');
   assert.equal(outcomeOf(500, false, notReached), 'wait');
+});
+
+test("a 403 in Cratarr's own words is turned down; a proxy's bare one is out of reach", async () => {
+  const { notReached: reachRule } = await import('../src/lib/reach.svelte.ts');
+  assert.equal(outcomeOf(403, false, reachRule), 'wait');
+  assert.equal(outcomeOf(403, false, reachRule, false), 'wait');
+  assert.equal(outcomeOf(403, false, reachRule, true), 'refused');
+  // Words change nothing else: a server's failure waits, whatever it says.
+  assert.equal(outcomeOf(503, false, reachRule, true), 'wait');
+  assert.equal(outcomeOf(401, false, reachRule, true), 'wait');
+  const answer = (body: string) => new Response(body, { status: 403 });
+  assert.equal(await worded(answer('{"error":"Only its owner changes it: copy it into your own."}')), true);
+  for (const bare of ['', '<html>Forbidden</html>', '{"message":"Forbidden"}', '{"error":403}', 'null']) assert.equal(await worded(answer(bare)), false, bare);
 });
 
 test('a change goes with its op id and its time, first try and resend alike', () => {
