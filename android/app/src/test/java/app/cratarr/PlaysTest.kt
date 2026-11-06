@@ -37,5 +37,6 @@ class PlaysTest {
         assertFalse("one user", Plays.signedOut(404, """{"error":"Signing in is off: there is one user."}"""))
         assertFalse(Plays.signedOut(200, """{"name":"ann"}"""))
         assertFalse("not reached", Plays.signedOut(502, null))
+        assertFalse("the proxy's refusal, away from home: the account's things stay", Plays.signedOut(403, null))
     }
 }

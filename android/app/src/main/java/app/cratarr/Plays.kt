@@ -174,9 +174,11 @@ object Plays {
         else -> null
     }
 
-    /** A `/api/me` answer saying nobody is signed in (not one that only did not come). */
+    /** A `/api/me` answer saying nobody is signed in (not one that only did not come). The proxy's bare 403, away from
+     *  home, says nothing of the kind: taken for it, the account's downloads and queue would go just when they are all
+     *  there is. */
     fun signedOut(code: Int, body: String?): Boolean =
-        code == 401 || code == 403 || (code == 404 && body?.contains("No one is signed in") == true)
+        code == 401 || (code == 404 && body?.contains("No one is signed in") == true)
 
     /** Whether a play is [account]'s: only those are told. */
     fun ours(play: JSONObject, account: String): Boolean = play.has("account") && play.optString("account") == account
