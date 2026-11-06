@@ -587,6 +587,9 @@ async function appendSlice(bytes: Uint8Array<ArrayBuffer>, gen: number, signal: 
 /** Drops played audio more than `keep` seconds behind the playing position. */
 async function evict(keep = BEHIND) {
   if (!sb || !audio || !sb.buffered.length) return;
+  // An ended stream holds all there is to come, and a removal would open it again: at its end the element would wait for
+  // more, not end, and the queue's last track never would.
+  if (ms?.readyState === 'ended') return;
   const until = audio.currentTime - keep;
   if (until <= sb.buffered.start(0) + 1) return;
   await waitUpdate();
@@ -1877,10 +1880,13 @@ function replaceUpcoming(upcoming: LocalTrack[]) {
 }
 
 /** Takes out everything after the playing track (the queue sheet's clear button); returns it, for its Undo. Autoplay,
- *  when on, fills again at the next track. */
+ *  when on, fills again at once: no next track is left to ask at. */
 export function clearUpcoming(): LocalTrack[] {
   const removed = local.queue.slice(local.index + 1);
-  if (removed.length) replaceUpcoming([]);
+  if (removed.length) {
+    replaceUpcoming([]);
+    fill();
+  }
   return removed;
 }
 
@@ -1988,6 +1994,7 @@ export function remove(index: number) {
   local.queue = local.queue.filter((_, i) => i !== index);
   if (handed()) return hand('remove', { index, ...(entry ? { entry } : {}) });
   cutFrom(index);
+  fill();
 }
 
 /** As `remove`, counted in what comes next. */
@@ -2036,7 +2043,7 @@ function cutFrom(at: number) {
     fetching?.abort();
     appending = false;
   }
-  if (!aborted && at > lastAppended) return;
+  if (!aborted && at > lastAppended) return void endIfLast();
   const keep = segments.filter((s) => s.index < at);
   // An ended stream counts too (the queue's last track was in): the removal below reopens it.
   if (!keep.length || !sb || !ms || ms.readyState === 'closed') return;
@@ -2045,15 +2052,27 @@ function cutFrom(at: number) {
   segments = keep;
   streamEnd = end;
   lastAppended = Math.min(lastAppended, at - 1);
+  const gen = generation;
   (async () => {
     // An append that was under way finishes first; the aborted one adds nothing after it.
     while (sb?.updating) await waitUpdate();
+    if (gen !== generation) return;
     try {
       sb?.remove(end, Infinity);
     } catch {
       /* nothing appended there */
     }
+    await endIfLast();
   })();
+}
+
+/** Nothing of the queue is left to come after what the stream holds: the stream ends there. An appended track ends it
+ *  itself when it is the queue's last; this is for a queue that became shorter. Left open, the element would reach the
+ *  end of what it holds and wait for more for ever. */
+async function endIfLast() {
+  const gen = generation;
+  while (sb?.updating) await waitUpdate();
+  if (gen === generation && !appending && lastAppended === local.queue.length - 1 && ms?.readyState === 'open') ms.endOfStream();
 }
 
 /** Plays or pauses; `plain`: with no Start and stop (a switch between devices; the owner, 2026-10-27). */
@@ -4416,6 +4435,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       const keep = local.index + 1;
       local.queue = [...local.queue.slice(0, keep), ...tracksOf(m.tracks)];
       cutFrom(keep);
+      fill();
       return false;
     }
     case 'jump': {
