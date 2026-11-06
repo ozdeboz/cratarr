@@ -384,9 +384,8 @@ impl Library {
             }
         }
         // Here, as nothing has read a store yet, and no list has been built: `playlists::import` below reads what it leaves.
-        let unplaced = active.iter().flat_map(|a| &a.placement.libraries).filter(|l| l.folders.is_empty()).flat_map(|l| l.paths.iter().chain([&l.id])).map(PathBuf::from).collect();
         let kinds = kinds_of(&folders, &catalogue.folders());
-        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, unplaced, rules: tag_rules.clone() };
+        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, rules: tag_rules.clone() };
         start.run().await.context("the first start of 0.16 did not finish")?;
         if !catalogue.ids_lost() {
             playlists_db.set_meta(TOP_KEY, &catalogue.top_id().to_string())?;

@@ -28,8 +28,6 @@ pub(super) struct FirstStart {
     pub data: Option<PathBuf>,
     /// Each catalogue folder's library, in the libraries' order.
     pub kinds: Vec<(i64, Kind)>,
-    /// The paths of the libraries a server lists with no folder there now.
-    pub unplaced: Vec<PathBuf>,
     pub rules: Rules,
 }
 
@@ -67,7 +65,7 @@ impl FirstStart {
             return Ok(());
         }
         // Q26: the safe side of "never dropped": a library not mounted is no library that lost its music.
-        let away = self.catalogue.folders_not_there(&self.unplaced)?;
+        let away = self.catalogue.folders_not_there()?;
         anyhow::ensure!(away.is_empty(), "every library must be there, and {} shows nothing: mount it and start again", away.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
         tracing::info!(target: "library", "the first start of 0.16: every album gets its record");
         let first = match self.catalogue.first_records_done()? {
@@ -165,7 +163,6 @@ mod tests {
                 userdata: Arc::new(UserData::open(Some(&self.data.join("userdata.sqlite"))).unwrap()),
                 data: Some(self.data.clone()),
                 kinds: vec![(0, Kind::Main), (1, Kind::Incoming), (2, Kind::Incoming)],
-                unplaced: Vec::new(),
                 rules: Rules::default(),
             }
         }
@@ -441,11 +438,10 @@ mod tests {
         left.start().steps(&|_| Ok(())).unwrap();
         left.gone();
 
-        // A folder gone altogether: no server finds it, so `open` parks its rows, and only the library's path says it is missed.
+        // A folder gone altogether: no server finds it, so `open` parks its rows, and its id for life says it is missed.
         let left = Left::new("gone");
-        let mut start = left.start();
+        let start = left.start();
         start.catalogue.set_folders(left.libraries[..2].to_vec()).unwrap();
-        start.unplaced = vec![left.libraries[2].clone()];
         let refused = start.steps(&|_| Ok(())).unwrap_err().to_string();
         assert!(refused.contains(&*left.libraries[2].to_string_lossy()), "{refused}");
         left.gone();
@@ -642,7 +638,6 @@ mod tests {
             userdata: Arc::new(UserData::open(Some(&d.join("userdata.sqlite"))).unwrap()),
             data: Some(d.clone()),
             kinds: vec![(0, Kind::Main)],
-            unplaced: Vec::new(),
             rules: Rules::default(),
         };
         start.steps(&|_| Ok(())).unwrap();
