@@ -2466,8 +2466,33 @@ impl Catalogue {
                 }
             }
         }
+        // CR19, the owner: a folder arriving file by file is short of a record you hold at every pass, so it is a record of its own
+        // until its last file. A record less than a day old, alone in one folder, with no track shared with anything, is held
+        // against the others as a new album is. Older ones never merge, so nothing played or favourited moves by this.
+        let young: HashSet<i64> = tx.prepare("SELECT id FROM records WHERE born >= ?1")?.query_map([now - GONE_KEEP_SECS], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let alone_in_a_folder = |a: &AlbumCopy, record: i64| {
+            let held_here = a.tracks.iter().filter(|t| held.record.contains_key(&t.0)).count();
+            voting.get(&record).is_some_and(|list| list.len() == 1)
+                && held.files.get(&record) == Some(&held_here)
+                && a.tracks.iter().all(|t| !held.shared.contains(&t.0) && held.record.get(&t.0).is_none_or(|r| *r == record))
+        };
+        let mut arriving: Vec<usize> = Vec::new();
         for (i, a) in albums.iter().enumerate() {
-            if let Some(r) = records[i] {
+            match records[i] {
+                Some(r) if young.contains(&r) && alone_in_a_folder(a, r) => arriving.push(i),
+                Some(r) => note(i, a, r, &mut by_name, &mut by_release),
+                None => {}
+            }
+        }
+        // Of two that are one, the first by kind stands for them.
+        arriving.sort_by_key(|i| std::cmp::Reverse(albums[*i].rank));
+        for i in arriving {
+            let (a, Some(r)) = (&albums[i], records[i]) else { continue };
+            let named = by_name.get(&(a.facts.artist.clone(), a.facts.title.clone())).into_iter().flatten();
+            let released = a.facts.release.iter().flat_map(|r| by_release.get(r)).flatten();
+            if named.chain(released).any(|(j, _)| identity::same_record(&a.facts, &albums[*j].facts)) {
+                records[i] = None;
+            } else {
                 note(i, a, r, &mut by_name, &mut by_release);
             }
         }
@@ -5546,6 +5571,69 @@ mod tests {
         cat.assign_records(&[as_it_stands(&cat, &kept), renamed, other]).unwrap();
         assert!(!cat.moved_tracks().unwrap().contains_key(&9));
         assert_eq!(record_of(&cat, 7), elsewhere);
+    }
+
+    /// CR19, the owner: a folder arriving file by file joins the record you hold. Each pass sees it short of the record, so it
+    /// is a record of its own until its last file, and a young one is held against the others as a new folder is.
+    #[test]
+    fn a_folder_that_comes_in_over_three_passes_becomes_a_copy() {
+        let cat = tracks(6);
+        let kept = lying_in(&cat, "Kept", three([1, 2, 3]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let record = record_of(&cat, 1);
+        let names = [(4, "One", 200_000), (5, "Two", 200_000), (6, "Three", 200_000)];
+        let arriving = |n: usize| {
+            let mut a = copy(None, "A", "Three", &names[..n]);
+            a.files = names[..n].iter().map(|(t, _, _)| (0, format!("Copy/{t}.flac"))).collect();
+            a
+        };
+        for n in 1..=3 {
+            file_of_track(&cat, &format!("Copy/{}.flac", n + 3), n as i64 + 3);
+            cat.assign_records(&[kept.clone(), arriving(n)]).unwrap();
+        }
+        assert_eq!(cat.moved_tracks().unwrap(), HashMap::from([(4, 1), (5, 2), (6, 3)]));
+        assert_eq!(record_of(&cat, 1), record);
+        assert_eq!(cat.assign_records(&[kept, as_it_stands(&cat, &arriving(3))]).unwrap(), 0, "settled");
+        let young = cat.db().query_row("SELECT count(*) FROM records WHERE retired_at IS NULL", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(young, 1, "the record it was for a while went with its tracks");
+    }
+
+    /// CR19: only the young. Past a day a record has what names it, and nothing merges two records.
+    #[test]
+    fn a_record_past_its_first_day_joins_nothing() {
+        let cat = tracks(6);
+        let kept = lying_in(&cat, "Kept", three([1, 2, 3]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let mut older = lying_in(&cat, "Copy", three([4, 5, 6]));
+        older.facts.title = identity::fold("For Now");
+        cat.assign_records(&[kept.clone(), older.clone()]).unwrap();
+        let record = record_of(&cat, 4);
+        assert_ne!(record, record_of(&cat, 1));
+        older.facts.title = identity::fold("Three");
+        cat.db().execute("UPDATE records SET born = born - ?2 WHERE id = ?1", params![record, GONE_KEEP_SECS + 1]).unwrap();
+        cat.assign_records(&[kept.clone(), older.clone()]).unwrap();
+        assert!(cat.moved_tracks().unwrap().is_empty());
+        assert_eq!(record_of(&cat, 4), record);
+
+        cat.db().execute("UPDATE records SET born = ?2 WHERE id = ?1", params![record, now()]).unwrap();
+        cat.assign_records(&[kept, older]).unwrap();
+        assert_eq!(cat.moved_tracks().unwrap().len(), 3, "the same album on its first day");
+    }
+
+    /// CR19: a record with a file of it elsewhere is a record of copies, and it is alone in no folder.
+    #[test]
+    fn a_young_record_with_a_track_shared_joins_nothing() {
+        let cat = tracks(9);
+        let kept = lying_in(&cat, "Kept", three([1, 2, 3]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let mut young = lying_in(&cat, "Copy", three([4, 5, 6]));
+        young.facts.title = identity::fold("For Now");
+        let beside = lying_in(&cat, "Beside", album("For Now", &[7]));
+        cat.assign_records(&[kept.clone(), young.clone(), beside.clone()]).unwrap();
+        file_of_track(&cat, "Beside/4.flac", 4);
+        young.facts.title = identity::fold("Three");
+        cat.assign_records(&[kept, young]).unwrap();
+        assert!(cat.moved_tracks().unwrap().is_empty());
     }
 
     /// Copies are held together by their ids once taken: a retag or a length fix in one is no reason to split them.

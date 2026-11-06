@@ -77,6 +77,11 @@ or its name, which says nothing of the album its file landed in, so it does not 
 That takes a track beside it that never left, or more than half of the record's own tracks. A record whose tracks have
 all moved on is retired, as one whose tracks retired is: it was had, and it keeps what it was.
 
+A folder arriving file by file joins the record you hold (the owner, 2026-11-06). It is short of that record until its last
+file, so it is a record of its own for a while: a record less than a day old, alone in one folder, with no track shared with
+anything, is held against the others, and joins where `same_record` says yes. Its tracks are taken and the young record goes.
+Older records never merge, so nothing played or favourited moves by this.
+
 ## Which copy plays
 
 One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own and the only place that decides:
