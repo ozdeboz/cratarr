@@ -10,6 +10,7 @@ use rusqlite::{Connection, params_from_iter};
 use super::api::{Album, Artist, ArtistRef, GenreRef, ReplayGain, Song, content_type, iso};
 use super::copies::{Copy, Kind, copy_for};
 use super::library::{Library, fts_query};
+use super::listener::Listener;
 
 const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.artist, s.album, s.album_artist, s.track_no, s.disc_no,
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
@@ -879,6 +880,38 @@ impl Library {
     /// view of it goes by this, not by the lowest folder.
     pub fn row_copy(&self, id: &str) -> Result<Option<Copy>> {
         Ok(copy_for(&self.copies_of(id)?, None, &[]).cloned())
+    }
+
+    /// Which of a song's present `files` plays for `who`: of the copies that hold it, as `copy_for` chooses; where it
+    /// finds none (a library off and Home's crates cannot be told apart at a stream), the row copy. None only where the
+    /// song has no file at all. `files` empty: the library's word alone.
+    pub fn file_for(&self, song: &str, files: &[(i64, String)], who: &Listener) -> Result<Option<(i64, String)>> {
+        if let Some(chosen) = self.chosen_file(song, files, who)? {
+            return Ok(Some(chosen));
+        }
+        Ok(match self.file_of(song)? {
+            Some(row) if files.is_empty() || files.contains(&row) => Some(row),
+            _ => files.first().cloned(),
+        })
+    }
+
+    /// The file of the copy `copy_for` chose among those holding this song. A copy missing it for now is passed over.
+    fn chosen_file(&self, song: &str, files: &[(i64, String)], who: &Listener) -> Result<Option<(i64, String)>> {
+        let mut held: Vec<(String, i64, String, String)> = {
+            let db = self.db();
+            let mut st = db.prepare_cached("SELECT album, folder, rel, dir FROM copy_files WHERE song = ?1 ORDER BY folder, rel")?;
+            st.query_map([song], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        held.retain(|(_, folder, rel, _)| files.is_empty() || files.iter().any(|(f, r)| f == folder && r == rel));
+        let Some(album) = held.first().map(|h| h.0.clone()) else { return Ok(None) };
+        // A copy over CD1 and CD2 has its files in folders under its own.
+        let holds = |c: &Copy, (_, folder, _, dir): &(String, i64, String, String)| {
+            c.folder == *folder && (c.dir.is_empty() || dir.strip_prefix(c.dir.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
+        };
+        let mut copies = self.copies_of(&album)?;
+        copies.retain(|c| held.iter().any(|h| holds(c, h)));
+        let Some(copy) = copy_for(&copies, who.viewer(&album).as_ref(), &who.off) else { return Ok(None) };
+        Ok(held.iter().find(|h| holds(copy, h)).map(|(_, folder, rel, _)| (*folder, rel.clone())))
     }
 
     /// Whether a copy of this album lies in Incoming.

@@ -2417,18 +2417,37 @@ impl Catalogue {
         track_of_source(&self.db(), source, item)
     }
 
-    /// Each of these server tracks' file (folder id, relative path) and length, nearest first, as `track_of_source`,
-    /// `file_of` and `duration_of` find them one by one; up to the first it has no file of. In one hold of the catalogue
-    /// (0.10.2: the slow answers of 2026-10-30): a wind through the queue looked up its 64 tracks with three takes of
-    /// the lock each, 192 waits behind whatever else held it, before its headers went. Blocking.
-    pub fn files_of_sources(&self, items: &[(&str, &str)]) -> Vec<(i64, String, Option<u64>)> {
+    /// The file a server's item names (decision 0012): for another server its link says one file, whichever copy that is;
+    /// Cratarr's own ids name a track, so any present file. Blocking.
+    pub fn place_of_source(&self, source: &str, item: &str) -> Option<(i64, String)> {
+        place_of_source(&self.db(), source, item)
+    }
+
+    /// Every present file of a track, by folder and path: a file in each copy of it. Blocking.
+    pub fn files_of(&self, track: i64) -> Vec<(i64, String)> {
+        files_of(&self.db(), track)
+    }
+
+    /// Each of these server tracks and what may play of it, nearest first: Cratarr's own ids every present file, another
+    /// server's the one its item names, each with its length; up to the first it has no file of. Which plays is the
+    /// listener's (`Listener::among`). In one hold of the catalogue (0.10.2: the slow answers of 2026-10-30): a wind
+    /// through the queue looked up its 64 tracks with three takes of the lock each, 192 waits behind whatever else held
+    /// it, before its headers went. Blocking.
+    pub fn files_of_sources(&self, items: &[(&str, &str)]) -> Vec<(i64, Vec<(i64, String, Option<u64>)>)> {
         let db = self.db();
         items
             .iter()
             .map_while(|(source, item)| {
-                let (folder, rel) = file_of(&db, track_of_source(&db, source, item)?)?;
-                let duration_ms = duration_of(&db, folder, &rel);
-                Some((folder, rel, duration_ms))
+                let track = track_of_source(&db, source, item)?;
+                let files = if *source == crate::source::cratarr::KIND.id { files_of(&db, track) } else { place_of_source(&db, source, item).into_iter().collect() };
+                let files: Vec<_> = files
+                    .into_iter()
+                    .map(|(folder, rel)| {
+                        let duration_ms = duration_of(&db, folder, &rel);
+                        (folder, rel, duration_ms)
+                    })
+                    .collect();
+                (!files.is_empty()).then_some((track, files))
             })
             .collect()
     }
@@ -3470,6 +3489,31 @@ fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
         .optional()
         .ok()
         .flatten()
+}
+
+/// See `Catalogue::files_of`.
+fn files_of(db: &Connection, track: i64) -> Vec<(i64, String)> {
+    let Ok(mut st) = db.prepare_cached(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT} ORDER BY folder, rel")) else { return Vec::new() };
+    st.query_map([track], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+}
+
+/// See `Catalogue::place_of_source`.
+fn place_of_source(db: &Connection, source: &str, item: &str) -> Option<(i64, String)> {
+    if source == crate::source::cratarr::KIND.id {
+        return file_of(db, track_of_source(db, source, item)?);
+    }
+    db.query_row(
+        &format!(
+            "SELECT f.folder, f.rel FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
+             WHERE s.source = ?1 AND s.track_id = ?2 AND f.track IS NOT NULL AND {}",
+            PRESENT_F
+        ),
+        params![source, item],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .ok()
+    .flatten()
 }
 
 /// See `Catalogue::duration_of`.
@@ -5237,7 +5281,7 @@ mod tests {
                 .collect()
         };
         let asked = [("cratarr", two.as_str()), ("jf", "j-2"), ("cratarr", one.as_str()), ("jf", "j-unknown"), ("cratarr", one.as_str())];
-        let found = cat.files_of_sources(&asked);
+        let found: Vec<(i64, String, Option<u64>)> = cat.files_of_sources(&asked).into_iter().map(|(_, mut files)| files.remove(0)).collect();
         assert_eq!(found, each(&asked));
         assert_eq!(found.len(), 3, "up to the first it has no file of: {found:?}");
         assert_eq!(found[1], (0, "A - B (2020)/02 Two.flac".to_string(), Some(200_000)), "a server's id, linked");

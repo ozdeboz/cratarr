@@ -628,6 +628,11 @@ impl IncomingService {
         self.delete_listed(source_id, album).await
     }
 
+    /// `account`'s own music's catalogue folder (`Library::own_folder`).
+    pub fn own_folder(&self, account: &str) -> Option<i64> {
+        self.lib.own_folder(account)
+    }
+
     /// What each catalogue folder's library is (`Library::folder_kinds`).
     pub fn folder_kinds(&self) -> Vec<(i64, crate::settings::LibraryKind)> {
         self.lib.folder_kinds()

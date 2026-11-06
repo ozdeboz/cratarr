@@ -270,7 +270,7 @@ async fn unfavourite(State(serve): State<Arc<Serve>>, Path(track): Path<String>)
 
 /// A song's original file with byte ranges, for players that play Cratarr's own ids.
 async fn file(State(serve): State<Arc<Serve>>, Path(track): Path<String>, headers: HeaderMap) -> Response {
-    match serve.song_path(&track).await {
+    match serve.song_path(&track, serve.current_user().as_deref()).await {
         Ok(Some(path)) => super::files::serve_file(&path, &headers, false).await,
         Ok(None) => fail(StatusCode::NOT_FOUND, "no such track"),
         Err(e) => failed(e),

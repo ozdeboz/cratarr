@@ -12,6 +12,7 @@ use super::library::{Library, label_of};
 use std::collections::{HashMap, HashSet};
 
 use crate::crates::{self, CrateDef};
+use crate::serve::listener::Listener;
 use crate::journal::{Change, EventId, Journal, TextChange, fingerprint};
 use crate::playlists::{Edited, PlaylistView, Repair, Repairs, Store};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
@@ -2364,19 +2365,27 @@ impl PlaylistService {
     /// An export's plan (decision 0007): the playlists' lines as files, each file once, with its size, the tags its name
     /// needs and its format for the estimates. Each line's file wherever the catalogue places it: the Music folder's, or
     /// another library's for a line that climbs out of it (an Incoming track), never outside the catalogue's folders.
-    /// Read from the disk and the catalogue; no request to the server.
-    pub async fn export_plan(&self, names: &[String]) -> Result<crate::export::Plan, ToggleError> {
+    /// A line on a copy in a library `who` has off goes by its track to the copy that plays for them. Read from the disk
+    /// and the catalogue; no request to the server.
+    pub async fn export_plan(&self, names: &[String], who: &Listener) -> Result<crate::export::Plan, ToggleError> {
         self.lib.music().ok_or(ToggleError::NoMusicFolder)?;
         let mut lists = Vec::new();
         for n in names {
             let r = self.reach(n)?;
             lists.push((r.name.clone(), r.store.entries(&r.name).await?));
         }
-        let c = self.lib.catalogue();
+        let (c, who) = (self.lib.catalogue(), who.clone());
         let plan = tokio::task::spawn_blocking(move || {
             let folders = c.folders();
-            let place = |line: &str| {
+            let file_of_line = |line: &str| {
                 let (folder, rel) = c.place_of_line(line)?;
+                if !who.off.contains(&folder) {
+                    return Some((folder, rel));
+                }
+                c.track_of(folder, &rel).and_then(|t| who.among(t, c.files_of(t))).or(Some((folder, rel)))
+            };
+            let place = |line: &str| {
+                let (folder, rel) = file_of_line(line)?;
                 Some((folders.get(folder)?.clone(), rel))
             };
             crate::export::plan(lists, place, |rels| {
@@ -2385,7 +2394,7 @@ impl PlaylistService {
                     .iter()
                     .zip(rows)
                     .map(|(rel, row)| {
-                        let (format, kbps) = c.place_of_line(rel).map(|(f, r)| c.format_of(f, &r)).unwrap_or_default();
+                        let (format, kbps) = file_of_line(rel).map(|(f, r)| c.format_of(f, &r)).unwrap_or_default();
                         export_facts(row, format, kbps)
                     })
                     .collect())
@@ -2400,9 +2409,10 @@ impl PlaylistService {
     /// a queue): each track's file wherever the catalogue has it (the Music folder or another library's), with what it
     /// knows of it. A track it cannot place is left out, named in the report by its server and id; so is a Bandcamp
     /// preview's.
-    pub async fn export_tracks(&self, name: &str, tracks: Vec<(String, String)>) -> Result<crate::export::Plan, ToggleError> {
+    pub async fn export_tracks(&self, name: &str, tracks: Vec<(String, String)>, who: &Listener) -> Result<crate::export::Plan, ToggleError> {
+        let who = who.clone();
         self.export_places(name, move |c: &crate::catalogue::Catalogue| {
-            tracks.iter().map(|(s, id)| (format!("{s} {id}"), export_place(c, s, id))).collect()
+            tracks.iter().map(|(s, id)| (format!("{s} {id}"), export_place(c, &who, s, id))).collect()
         })
         .await
     }
@@ -4295,13 +4305,13 @@ pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>
     }
 }
 
-/// Where an export finds a track by its server's id: its file wherever the catalogue has it. Never a Bandcamp
-/// preview's (decision 0071: played, never downloaded), whatever the catalogue holds: it is left out as missing.
-fn export_place(c: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String)> {
+/// Where an export finds a track by its server's id: the file that plays for `who`. Never a Bandcamp preview's (decision
+/// 0071: played, never downloaded), whatever the catalogue holds: it is left out as missing.
+fn export_place(c: &crate::catalogue::Catalogue, who: &Listener, source: &str, id: &str) -> Option<(i64, String)> {
     if source == crate::bandcamp::SOURCE {
         return None;
     }
-    c.track_of_source(source, id).and_then(|t| c.file_of(t))
+    who.place(c, source, id)
 }
 
 #[cfg(test)]
@@ -4321,9 +4331,10 @@ mod export_place_tests {
         let link = [("t1".to_string(), 0, "A/01.mp3".to_string())];
         cat.record_links("jellyfin", "lib", &link, 1).unwrap();
         cat.record_links(crate::bandcamp::SOURCE, "lib", &link, 1).unwrap();
-        assert_eq!(export_place(&cat, "jellyfin", "t1"), Some((0, "A/01.mp3".to_string())));
-        assert_eq!(export_place(&cat, crate::bandcamp::SOURCE, "t1"), None, "left out as missing");
-        assert_eq!(export_place(&cat, crate::bandcamp::SOURCE, "https://x.bandcamp.com/album/y#1"), None);
+        let who = Listener::default();
+        assert_eq!(export_place(&cat, &who, "jellyfin", "t1"), Some((0, "A/01.mp3".to_string())));
+        assert_eq!(export_place(&cat, &who, crate::bandcamp::SOURCE, "t1"), None, "left out as missing");
+        assert_eq!(export_place(&cat, &who, crate::bandcamp::SOURCE, "https://x.bandcamp.com/album/y#1"), None);
         std::fs::remove_dir_all(&root).ok();
     }
 }

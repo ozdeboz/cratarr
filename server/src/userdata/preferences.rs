@@ -4,9 +4,10 @@
 //! mean anything to the server (Subsonic's music folders); the others are the page's, kept and handed back.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::Result;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use super::UserData;
 
@@ -82,6 +83,9 @@ impl UserData {
             db.query_row("SELECT value, changed FROM preference WHERE account = ?1 AND key = ?2", params![account, key], |r| Ok((r.get(0)?, r.get(1)?)))?;
         drop(db);
         if kept {
+            if key == HIDDEN_LIBRARIES {
+                self.hidden.lock().unwrap_or_else(|p| p.into_inner()).remove(account);
+            }
             let _ = self.preferences.send(PreferenceChanged { account: account.to_string(), key: key.to_string() });
         }
         Ok(Preference { value: serde_json::from_str(&value).unwrap_or(serde_json::Value::Null), changed })
@@ -89,8 +93,27 @@ impl UserData {
 
     /// The libraries `account` has switched off, as `source/library`. Blocking.
     pub fn hidden_libraries(&self, account: &str) -> Result<Vec<String>> {
-        let value = self.preferences(account)?.remove(HIDDEN_LIBRARIES).map(|p| p.value);
-        Ok(value.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default())
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT value FROM preference WHERE account = ?1 AND key = ?2")?;
+        let value: Option<String> = st.query_row(params![account, HIDDEN_LIBRARIES], |r| r.get(0)).optional()?;
+        Ok(value.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+    }
+
+    /// `hidden_libraries` as every stream asks for it: read once and kept until the account changes it, where the change
+    /// is told (`set_preference`). The lock held over the read, so a change landing meanwhile cannot leave the old list.
+    /// One that cannot be read counts as nothing off, and is asked again.
+    pub fn hidden_libraries_kept(&self, account: &str) -> Arc<Vec<String>> {
+        let mut kept = self.hidden.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(list) = kept.get(account) {
+            return list.clone();
+        }
+        match self.hidden_libraries(account) {
+            Ok(list) => kept.entry(account.to_string()).or_insert(Arc::new(list)).clone(),
+            Err(e) => {
+                tracing::warn!(account, reason = %format!("{e:#}"), "the libraries switched off not read");
+                Arc::default()
+            }
+        }
     }
 
     /// `library` (`source/library`) switched off for each of `accounts`, beside what they have off: a library that starts
@@ -167,8 +190,10 @@ mod tests {
         assert!(refusal(HIDDEN_LIBRARIES, &json!(["cratarr/m", 3])).is_some());
         assert!(refusal("filters", &json!("x".repeat(MOST_BYTES + 1))).is_some(), "too big");
         assert_eq!(refusal(HIDDEN_LIBRARIES, &json!(["cratarr/m"])), None);
+        assert_eq!(*u.hidden_libraries_kept("ann"), Vec::<String>::new());
         assert_eq!(u.hidden_libraries("ann").unwrap(), Vec::<String>::new());
         u.set_preference("ann", HIDDEN_LIBRARIES, &json!(["cratarr/m", "jf/x"]), 5).unwrap();
         assert_eq!(u.hidden_libraries("ann").unwrap(), ["cratarr/m", "jf/x"]);
+        assert_eq!(*u.hidden_libraries_kept("ann"), ["cratarr/m", "jf/x"], "a stream hears of a switch at once");
     }
 }

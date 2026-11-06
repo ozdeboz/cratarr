@@ -558,6 +558,16 @@ impl Library {
         self.kept_folders().contains(&folder)
     }
 
+    /// `account`'s own music's catalogue folder, while it is in use. Read only, and on every stream: `own_library` takes the
+    /// lock of those who change the libraries, and makes the folder.
+    pub fn own_folder(&self, account: &str) -> Option<i64> {
+        self.live().iter().find_map(|a| {
+            let used = a.libraries().into_iter().find(|u| u.kind == LibraryKind::Own && u.owner.as_deref() == Some(account))?;
+            let place = a.placement.libraries.iter().find(|l| l.id == used.id)?.folders.first()?.clone();
+            self.catalogue.folders().iter().find(|(_, p)| p.as_path() == std::path::Path::new(&place)).map(|(id, _)| id)
+        })
+    }
+
     /// What each catalogue folder's library is, in the libraries' order: the main ones, own music, Incoming. What the
     /// served library judges a copy by.
     pub fn folder_kinds(&self) -> Vec<(i64, LibraryKind)> {

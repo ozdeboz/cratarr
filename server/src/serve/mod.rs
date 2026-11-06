@@ -15,6 +15,7 @@ pub mod import;
 pub mod ldap;
 pub mod library;
 pub mod library_api;
+pub mod listener;
 pub mod playlists;
 pub mod proxy;
 pub mod queues;
@@ -531,11 +532,29 @@ impl Serve {
         });
     }
 
-    /// The file of a song.
-    pub async fn song_path(&self, song: &str) -> Result<Option<PathBuf>> {
-        let lib = self.library.clone();
-        let id = song.to_string();
-        let found = tokio::task::spawn_blocking(move || lib.file_of(&id)).await??;
+    /// Who a stream for `account` is for (none: no one in particular). No lock on the way: the libraries as they stand,
+    /// and the account's switches as kept.
+    pub fn listener(&self, account: Option<&str>) -> listener::Listener {
+        let mut who = listener::Listener { library: Some(self.library.clone()), ..Default::default() };
+        let Some(name) = account else { return who };
+        who.account = Some(name.to_string());
+        if let Some(incoming) = self.incoming() {
+            who.own = incoming.own_folder(name);
+            who.off = incoming.folders_off(&self.userdata.hidden_libraries_kept(name));
+        }
+        who
+    }
+
+    /// Which file of a song plays for `who`: the copy `copy_for` chose, else the row copy. Blocking.
+    pub fn file_for(&self, song: &str, who: &listener::Listener) -> Result<Option<(i64, String)>> {
+        let files = ids::track_of(song).map(|t| self.catalogue().files_of(t)).unwrap_or_default();
+        self.library.file_for(song, &files, who)
+    }
+
+    /// The file of a song, as it plays for `account`.
+    pub async fn song_path(self: &Arc<Self>, song: &str, account: Option<&str>) -> Result<Option<PathBuf>> {
+        let (me, id, who) = (self.clone(), song.to_string(), self.listener(account));
+        let found = tokio::task::spawn_blocking(move || me.file_for(&id, &who)).await??;
         let folders = self.catalogue().folders();
         Ok(found.and_then(|(folder, rel)| folders.get(folder).map(|root| root.join(rel))))
     }
