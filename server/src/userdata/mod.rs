@@ -322,6 +322,8 @@ impl Annotation {
             own_date: self.own_date.max(other.own_date),
             rating: self.rating.max(other.rating),
             starred_at: match (self.starred_at, other.starred_at) {
+                // A star with no date reads as 0, which says nothing of when.
+                (Some(x), Some(y)) if x == 0 || y == 0 => Some(x.max(y)),
                 (Some(x), Some(y)) => Some(x.min(y)),
                 (x, y) => x.or(y),
             },
