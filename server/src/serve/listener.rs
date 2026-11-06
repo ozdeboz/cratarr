@@ -22,13 +22,19 @@ pub struct Listener {
     pub off: Vec<i64>,
     /// The library picked by hand, by record.
     pub picks: HashMap<String, i64>,
+    /// The library this one request asks to hear, whoever asks: a pick that lasts as long as the stream, and takes over a
+    /// lasting one. An intake card's snippets are of the copy waiting.
+    pub from: Option<i64>,
     pub(super) library: Option<Arc<Library>>,
 }
 
 impl Listener {
-    /// As `copy_for` takes them, for this record; none for no one in particular.
+    /// As `copy_for` takes them, for this record; none for no one in particular, unless the request named a copy.
     pub fn viewer(&self, album: &str) -> Option<Viewer> {
-        self.account.as_ref().map(|_| Viewer { own: self.own, pick: self.picks.get(album).copied() })
+        match &self.account {
+            Some(_) => Some(Viewer { own: self.own, pick: self.from.or_else(|| self.picks.get(album).copied()) }),
+            None => self.from.map(|pick| Viewer { own: None, pick: Some(pick) }),
+        }
     }
 
     /// The file a server's item is for this listener: Cratarr's own id names a track, and they hear its copy that plays;
@@ -80,7 +86,7 @@ impl Listener {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::catalogue::Rules;
     use crate::serve::copies::Kind;
@@ -141,7 +147,7 @@ mod tests {
 
     impl Two {
         fn who(&self, account: Option<&str>, own: Option<i64>, off: &[i64]) -> Listener {
-            Listener { account: account.map(str::to_string), own, off: off.to_vec(), picks: HashMap::new(), library: Some(self.lib.clone()) }
+            Listener { account: account.map(str::to_string), own, off: off.to_vec(), library: Some(self.lib.clone()), ..Listener::default() }
         }
 
         fn plays(&self, who: &Listener) -> Option<(i64, String)> {
@@ -176,7 +182,7 @@ mod tests {
     }
 
     /// A library of one folder on the disk, of these files: each (its path, its album, its title).
-    fn built(name: &str, files: &[(&str, &str, &str)]) -> (std::path::PathBuf, Catalogue, Library) {
+    pub(crate) fn built(name: &str, files: &[(&str, &str, &str)]) -> (std::path::PathBuf, Catalogue, Library) {
         let root = std::env::temp_dir().join(format!("cratarr-listener-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         for (rel, ..) in files {
@@ -214,6 +220,21 @@ mod tests {
         assert!(lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD2/1.flac"].map(String::from)).unwrap(), "two discs of one copy are that copy");
         assert!(!lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD3/new.flac"].map(String::from)).unwrap(), "a file not built yet is no file of it");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// An intake card's snippets are of the copy waiting, which by `copy_for` plays for no one: the stream names it, and it
+    /// enters as a pick, so a library off still wins.
+    #[test]
+    fn a_stream_that_names_a_copy_hears_that_copy_while_its_library_is_on() {
+        let t = two("named");
+        let named = |account: Option<&str>, off: &[i64]| Listener { from: Some(1), ..t.who(account, None, off) };
+        assert_eq!(t.plays(&t.who(Some("ann"), None, &[])), at(0), "named by no one: the best");
+        assert_eq!(t.plays(&named(Some("ann"), &[])), at(1));
+        assert_eq!(t.plays(&named(None, &[])), at(1), "no account to go by, and it is still what was asked");
+        assert_eq!(t.plays(&named(Some("ann"), &[1])), at(0), "a copy in a library off never plays");
+        let mut picked = named(Some("ann"), &[]);
+        picked.picks.insert(t.album.clone(), 0);
+        assert_eq!(t.plays(&picked), at(1), "for this stream it goes before their pick");
     }
 
     /// Both copies hold the track that plays. By the track a Delete of the copy no one hears stops the player, and it never

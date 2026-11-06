@@ -742,6 +742,7 @@ impl UserData {
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
         add_review_folder(&conn).context("keeping reviews by the copy that waited")?;
+        words::add_heard_folder(&conn).context("keeping what was heard by the copy it was heard of")?;
         conn.execute_batch(scrobbles::SCHEMA).context("keeping the plays devices hand over")?;
         scrobbles::add_named(&conn).context("queueing plays the library does not know")?;
         add_answer_names(&conn)?;
@@ -2902,6 +2903,35 @@ mod tests {
         u.clear_review("al-1", 3).unwrap();
         assert!(u.review("al-1", Some(3)).unwrap().is_none());
         assert!(u.review("al-1", Some(2)).unwrap().is_some(), "the other copy's stands");
+    }
+
+    /// What was heard is of one copy's files: a new copy of the record has not been heard. From before copies, it goes for any.
+    #[test]
+    fn what_was_heard_is_of_the_copy_heard() {
+        let dir = std::env::temp_dir().join(format!("cratarr-heard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("user.sqlite");
+        std::fs::remove_file(&file).ok();
+        {
+            let u = UserData::open(Some(&file)).unwrap();
+            u.db()
+                .execute_batch(
+                    "DROP TABLE intake_heard;
+                     CREATE TABLE intake_heard (album TEXT PRIMARY KEY, at INTEGER NOT NULL, heard TEXT NOT NULL) WITHOUT ROWID;
+                     INSERT INTO intake_heard VALUES ('al-old', 1, 'then');",
+                )
+                .unwrap();
+        }
+        let u = UserData::open(Some(&file)).unwrap();
+        assert_eq!(u.intake_heard("al-old", Some(4)).unwrap(), Some((1, "then".to_string())));
+        u.set_intake_heard("al-1", Some(2), 5, "mp3s").unwrap();
+        assert_eq!(u.intake_heard("al-1", Some(2)).unwrap(), Some((5, "mp3s".to_string())));
+        assert_eq!(u.intake_heard("al-1", Some(3)).unwrap(), None, "another copy is not heard yet");
+        u.set_intake_heard("al-1", Some(3), 6, "flacs").unwrap();
+        assert_eq!(u.intake_heard("al-1", Some(2)).unwrap(), Some((5, "mp3s".to_string())), "each its own");
+        assert_eq!(u.intake_heard("al-1", None).unwrap(), Some((6, "flacs".to_string())), "with none named, the last heard");
+        drop(u);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A database from before copies: its reviews stand for the whole record, and the table takes more than one per record.

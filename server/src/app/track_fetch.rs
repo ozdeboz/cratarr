@@ -1312,7 +1312,7 @@ mod tests {
         });
         let mut view = release_of(&v);
         assert_eq!((view.year, view.artist.as_str(), view.tracks.len()), (Some(2023), "Arushi Jain", 2));
-        let files = vec![super::super::renumber::Track { id: "f1".into(), path: PathBuf::from("/m/a/01 Euphoria.flac"), file: "01 Euphoria.flac".into(), title: "Euphoria".into(), secs: 301, disc: Some(1), track: Some(1) }];
+        let files = vec![super::super::renumber::Track { id: "f1".into(), path: PathBuf::from("/m/a/01 Euphoria.flac"), place: (0, "a/01 Euphoria.flac".into()), file: "01 Euphoria.flac".into(), title: "Euphoria".into(), secs: 301, disc: Some(1), track: Some(1) }];
         place(&mut view, &files);
         assert_eq!(view.tracks[0].have.as_ref().map(|h| h.id.as_str()), Some("f1"));
         assert!(view.tracks[1].have.is_none(), "Bloom is missing");

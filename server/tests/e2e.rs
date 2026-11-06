@@ -1079,6 +1079,71 @@ async fn the_copy_named_is_the_copy_touched_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// The intake card is about the copy waiting, though the record plays from Music: its tracks are those files, what is heard is
+/// heard of them and kept under that copy, and a snippet streams from it. A plan for it writes to it alone.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_card_hears_the_incoming_copy_end_to_end() {
+    let root = temp("card");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, incoming) = (library.join("music"), library.join("incoming"));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &library.join("own"));
+    // A rule, so a plan has something to write in any copy of the record.
+    let mut saved: Value = serde_json::from_slice(&std::fs::read(data.join("settings.json")).unwrap()).unwrap();
+    saved["tag_rules"] = json!({ "genre_aliases": [{ "from": ["Electronic"], "to": "Electronica" }] });
+    std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&saved).unwrap()).unwrap();
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    let dir = "Salt Meridian/Both Shores (2018)";
+    let album = loop {
+        let found = ann.albums().await.into_iter().find(|a| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 2));
+        if let Some(a) = found {
+            break a;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    let id = album["id"].as_str().unwrap();
+    assert_eq!(album["format"], "FLAC", "the record plays from Music");
+    let waiting = tracks_at(&data, &incoming, dir);
+    let from = incoming.to_string_lossy().replace('/', "%2F");
+
+    let card = ann.get(&format!("/api/albums/cratarr/{id}/card?from={from}")).await;
+    assert!(card["format"].as_str().unwrap().starts_with("MP3"), "{card}");
+    assert_eq!(card["library"].as_str(), Some(&*incoming.to_string_lossy()));
+    let listed: Vec<String> = card["tracks"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(listed, waiting, "its tracks are the copy's files, not the songs of the one that plays");
+
+    // Heard once, in the background, by its own files' names.
+    s.until("the copy heard", Duration::from_secs(120), || async {
+        let card = ann.get(&format!("/api/albums/cratarr/{id}/card?from={from}")).await;
+        card["checks"].as_array().unwrap().iter().any(|c| c["key"] == "sound" && c["state"] != "waiting")
+    })
+    .await;
+    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    let (folder, heard): (i64, String) = user.query_row("SELECT folder, heard FROM intake_heard WHERE album = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert!(folder >= 0 && heard.contains(".mp3") && !heard.contains(".flac"), "{folder} {heard}");
+
+    let (status, bytes) = ann.bytes(&format!("/api/stream/cratarr/{}?from={from}", waiting[0])).await;
+    assert_eq!(status, 200);
+    assert!(bytes.starts_with(b"ID3") || bytes.first() == Some(&0xff), "the copy's MP3 as it lies");
+
+    // "Before adding" writes to the copy waiting alone, wherever the record plays from (Q20).
+    let (kept, before) = (as_it_lies(&music.join(dir)), as_it_lies(&incoming.join(dir)));
+    let sheet = ann.get(&format!("/api/file-changes/plans/intake:{id}?from={from}")).await;
+    let record = sheet["records"].as_array().unwrap().first().unwrap_or_else(|| panic!("the rule has something to write: {sheet}"));
+    let stamps = json!({ id: record["stamp"] });
+    ann.ok(reqwest::Method::POST, &format!("/api/file-changes/plans/intake:{id}/apply?from={from}"), json!({ "albums": [id], "stamps": stamps })).await;
+    s.until("the copy written", Duration::from_secs(60), || async { as_it_lies(&incoming.join(dir)) != before }).await;
+    assert!(as_it_lies(&music.join(dir)) == kept, "nothing of the kept copy");
+    assert_eq!(vorbis(&music.join(dir).join("01 Landing.flac"), "GENRE"), ["Electronic"]);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Replace: the new files take the place and the track ids of the old, which go to Music's trash. A copy missing a track is refused
 /// and nothing moves. Its Undo gives each library its own files and each file its own id again.
 #[tokio::test(flavor = "multi_thread")]

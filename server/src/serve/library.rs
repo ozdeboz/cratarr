@@ -533,7 +533,7 @@ fn total_of(r: &ServedRow) -> Option<u32> {
     r.first("tracknumber").and_then(|v| v.split_once('/')).and_then(|(_, t)| leading_number(t)).or_else(|| r.first("totaltracks").and_then(leading_number))
 }
 
-fn leading_number(v: &str) -> Option<u32> {
+pub(crate) fn leading_number(v: &str) -> Option<u32> {
     let digits: String = v.trim().chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok().filter(|n| *n > 0)
 }

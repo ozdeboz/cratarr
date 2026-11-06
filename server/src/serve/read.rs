@@ -986,6 +986,15 @@ impl Library {
         Ok(audio.iter().all(|f| held.contains(f)))
     }
 
+    /// A copy's files: (song id, its path in the catalogue folder, its length in ms). `songs` holds the copy that plays alone.
+    pub fn copy_songs(&self, album: &str, folder: i64, dir: &str) -> Result<Vec<(String, String, u64)>> {
+        let db = self.db();
+        let prefix = format!("{dir}/");
+        let mut st = db.prepare_cached("SELECT song, rel, coalesce(duration_ms, 0) FROM copy_files WHERE folder = ?1 AND album = ?2 AND substr(rel, 1, ?3) = ?4 ORDER BY rel")?;
+        let rows = st.query_map(rusqlite::params![folder, album, prefix.chars().count() as i64, prefix], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)?.max(0) as u64)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The first file of a copy, by its path in the catalogue folder: where its picture lies when no cover file does.
     pub fn first_file_of(&self, album: &str, folder: i64, dir: &str) -> Result<Option<String>> {
         let db = self.db();

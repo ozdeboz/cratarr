@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS album_complete (album TEXT PRIMARY KEY, at INTEGER NO
 CREATE TABLE IF NOT EXISTS discogs_facts (subject TEXT PRIMARY KEY, at INTEGER NOT NULL, facts TEXT) WITHOUT ROWID;
 -- What hearing a record waiting in Incoming found (0.14, app::intake_card): each track decoded whole and its recordings
 -- as AcoustID knows them (JSON), and when.
-CREATE TABLE IF NOT EXISTS intake_heard (album TEXT PRIMARY KEY, at INTEGER NOT NULL, heard TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS intake_heard (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, at INTEGER NOT NULL, heard TEXT NOT NULL, PRIMARY KEY (album, folder)) WITHOUT ROWID;
 -- What was chosen of a record's references (0.14, app::references): the source that counts, links pasted, checked by
 -- hand (JSON).
 CREATE TABLE IF NOT EXISTS record_references (album TEXT PRIMARY KEY, chosen TEXT NOT NULL) WITHOUT ROWID;
@@ -53,6 +53,23 @@ pub(super) fn add_album_complete_discs(conn: &rusqlite::Connection) -> Result<()
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('album_complete') WHERE name = 'discs'")?.exists([])?;
     if !has {
         conn.execute_batch("ALTER TABLE album_complete ADD COLUMN discs INTEGER; ALTER TABLE album_complete ADD COLUMN rule INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    Ok(())
+}
+
+/// What was heard before a record had copies: by album alone, the key a table cannot change in place. It goes for every copy
+/// of its record. Safe to repeat.
+pub(super) fn add_heard_folder(conn: &rusqlite::Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('intake_heard') WHERE name = 'folder'")?.exists([])?;
+    if !has {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE intake_heard RENAME TO intake_heard_by_album;
+             CREATE TABLE intake_heard (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, at INTEGER NOT NULL, heard TEXT NOT NULL, PRIMARY KEY (album, folder)) WITHOUT ROWID;
+             INSERT INTO intake_heard (album, at, heard) SELECT album, at, heard FROM intake_heard_by_album;
+             DROP TABLE intake_heard_by_album;
+             COMMIT;",
+        )?;
     }
     Ok(())
 }
@@ -156,15 +173,16 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// What hearing a record found (`app::intake_card`), and when.
-    pub fn intake_heard(&self, album: &str) -> Result<Option<(i64, String)>> {
+    /// What hearing a record's copy in catalogue folder `folder` found (`app::intake_card`), and when; with none named, the
+    /// last heard of the record. One from before copies goes for any.
+    pub fn intake_heard(&self, album: &str, folder: Option<i64>) -> Result<Option<(i64, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT at, heard FROM intake_heard WHERE album = ?1")?;
-        Ok(st.query_map([album], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
+        let mut st = db.prepare_cached(&format!("SELECT at, heard FROM intake_heard WHERE album = ?1 AND (?2 IS NULL OR folder = ?2 OR folder = {}) ORDER BY at DESC LIMIT 1", super::NO_FOLDER))?;
+        Ok(st.query_map(params![album, folder], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
     }
 
-    pub fn set_intake_heard(&self, album: &str, at: i64, heard: &str) -> Result<()> {
-        self.db().execute("INSERT OR REPLACE INTO intake_heard (album, at, heard) VALUES (?1, ?2, ?3)", params![album, at, heard])?;
+    pub fn set_intake_heard(&self, album: &str, folder: Option<i64>, at: i64, heard: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO intake_heard (album, folder, at, heard) VALUES (?1, ?2, ?3, ?4)", params![album, folder.unwrap_or(super::NO_FOLDER), at, heard])?;
         Ok(())
     }
 

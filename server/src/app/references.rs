@@ -110,7 +110,7 @@ pub async fn of(app: &Arc<super::App>, album: &str) -> Result<References> {
         let mbid = s.library.album_names(&a)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m));
         let matched: Option<super::matching::Match> = s.userdata.album_matches(std::slice::from_ref(&a))?.remove(&a).and_then(|(_, j)| serde_json::from_str(&j?).ok());
         let discogs = super::discogs_facts::album_kept(&s, &a).ok().flatten();
-        let heard: Option<super::intake_card::Heard> = s.userdata.intake_heard(&a)?.and_then(|(_, j)| serde_json::from_str(&j).ok());
+        let heard: Option<super::intake_card::Heard> = s.userdata.intake_heard(&a, None)?.and_then(|(_, j)| serde_json::from_str(&j).ok());
         let chosen = chosen_of(&s, &a)?;
         let types = s.userdata.release_types()?;
         Ok((rec, mbid, matched, discogs, heard, chosen, types))

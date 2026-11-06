@@ -2713,6 +2713,10 @@ struct StreamFrom {
     /// for, as a page that does not read the header would place the sound at 0).
     #[serde(default)]
     mp3_from: Option<u8>,
+    /// The copy to hear, a library's id: the intake card's snippets are of the copy waiting, which plays for no one else. It
+    /// counts as a pick for this stream, so a copy in a library off still never plays.
+    #[serde(default)]
+    from: Option<String>,
 }
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
@@ -3146,7 +3150,8 @@ async fn stream(ctx: Ctx, Path((source, id)): Path<(String, String)>, Query(q): 
         // place in the file it is at; else the player's own range.
         return bandcamp_relay(&id, headers.get(header::RANGE).and_then(|v| v.to_str().ok()), q.from_ms).await;
     }
-    let (cat, who) = (app.library.catalogue(), ctx.listener());
+    let (cat, mut who) = (app.library.catalogue(), ctx.listener());
+    who.from = q.from.as_deref().and_then(|l| ctx.served.as_ref()?.folder_of_library(l));
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &who, &source, &id)).await.ok().flatten();
     let Some((path, kind, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
@@ -6785,16 +6790,17 @@ async fn choose_references(
     Ok(Json(crate::app::references::choose(&app, &album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
-/// One record's intake card.
-async fn intake_card(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::intake_card::Card>, ApiError> {
+/// One record's intake card: of its copy in Incoming, in library `from` where it waits in several.
+async fn intake_card(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<NamedCopy>) -> Result<Json<crate::app::intake_card::Card>, ApiError> {
     own_album(&source)?;
     let view = app.incoming.list(Some(&source)).await;
-    let (library, verdict) = view
+    let waiting = |a: &&crate::source::Album| a.id == album && q.from.as_ref().is_none_or(|f| a.library.as_ref() == Some(f));
+    let (at, library, verdict) = view
         .sources
         .iter()
-        .find_map(|s| s.albums.iter().find(|a| a.id == album).map(|a| (a.library.clone(), s.verdicts.get(&album).cloned())))
-        .unwrap_or((None, None));
-    Ok(Json(crate::app::intake_card::card(&app, &album, library, verdict.as_ref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+        .find_map(|s| s.albums.iter().find(waiting).map(|a| (a.copies.first().map(|c| (c.folder, c.dir.clone())), a.library.clone(), s.verdicts.get(&album).cloned())))
+        .unwrap_or((None, None, None));
+    Ok(Json(crate::app::intake_card::card(&app, &album, at, library, verdict.as_ref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// The findings Health has of one record, each with only its items, and its tracks' file problems (0.14).
@@ -6987,6 +6993,14 @@ async fn file_facts_switch(Json(b): Json<SwitchedOn>) -> Result<Json<crate::app:
 struct PlanOf {
     /// Album ids, comma-separated: only these records.
     albums: Option<String>,
+    /// `intake:<album>`: the library of the copy it is about (a library's id holds `/`, so not in the kind).
+    from: Option<String>,
+}
+
+/// The copy an intake's plan is about.
+#[derive(Deserialize)]
+struct PlanOfCopy {
+    from: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -7019,7 +7033,7 @@ async fn file_change_plan(State(app): State<Arc<App>>, Path(kind): Path<String>,
         // A kind of word the Catalogue sheet writes (`fix:words:<kind>`, 0.15): before Health's other fixes.
         k if crate::app::file_words::owns(k) => Ok(Json(crate::app::file_words::plan(k, albums).await.map_err(file_change_refused)?)),
         // Health's fixes (`fix:<finding>`) and an arrival's (`intake:<album>`): decision 0092's writers' map.
-        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::plan(&app, k).await.map_err(file_change_refused)?)),
+        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::plan(&app, k, q.from.as_deref()).await.map_err(file_change_refused)?)),
         k if k.starts_with("renumber:") => {
             let account = crate::serve::who::current().map(|w| w.user).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
             Ok(Json(crate::app::renumber::plan(&account, &k["renumber:".len()..]).await.map_err(file_change_refused)?))
@@ -7029,12 +7043,12 @@ async fn file_change_plan(State(app): State<Arc<App>>, Path(kind): Path<String>,
 }
 
 /// The ticked records of a kind's sheet written (an administrator's yes): the run's first status.
-async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>, Json(b): Json<Ticked>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
+async fn file_change_apply(State(app): State<Arc<App>>, Path(kind): Path<String>, Query(q): Query<PlanOfCopy>, Json(b): Json<Ticked>) -> Result<Json<crate::app::file_runs::Status>, ApiError> {
     let albums = b.albums.unwrap_or_default();
     match kind.as_str() {
         crate::app::file_facts::KIND => Ok(Json(crate::app::file_facts::apply(&app, albums, b.stamps).await.map_err(file_change_refused)?)),
         k if crate::app::file_words::owns(k) => Ok(Json(crate::app::file_words::apply(&app, k, albums, b.stamps).await.map_err(file_change_refused)?)),
-        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::apply(&app, k, albums, b.stamps, b.chosen).await.map_err(file_change_refused)?)),
+        k if crate::app::fix_plans::owns(k) => Ok(Json(crate::app::fix_plans::apply(&app, k, q.from.as_deref(), albums, b.stamps, b.chosen).await.map_err(file_change_refused)?)),
         k if k.starts_with("renumber:") => {
             let account = crate::serve::who::current().map(|w| w.user).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
             Ok(Json(crate::app::renumber::apply_plan(&app, &account, &k["renumber:".len()..], b.stamps).await.map_err(file_change_refused)?))

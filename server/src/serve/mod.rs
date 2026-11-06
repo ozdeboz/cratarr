@@ -619,6 +619,46 @@ impl Serve {
         .await?
     }
 
+    /// A record's copy in `library`, else with none named its copy waiting in Incoming, as (catalogue folder, folder in it).
+    /// Blocking.
+    pub fn waiting_copy(&self, album: &str, library: Option<&str>) -> Result<Option<(i64, String)>> {
+        let copies = self.library.copies_of(album)?;
+        let place = |c: &copies::Copy| (c.folder, c.dir.clone());
+        match library {
+            Some(l) => {
+                let folder = self.folder_of_library(l);
+                let copy = copies.iter().find(|c| Some(c.folder) == folder).ok_or_else(|| anyhow::anyhow!("It has no copy in that library"))?;
+                Ok(Some(place(copy)))
+            }
+            None => Ok(copies.iter().find(|c| c.kind == copies::Kind::Incoming).map(place)),
+        }
+    }
+
+    /// What a record's copy at (`folder`, `dir`) lacks: the row copy's are the library's, and another's only its own files can
+    /// say, as `albums` holds the row copy's facts. None where it lacks nothing, or is not there. Blocking.
+    pub fn lacks_at(&self, album: &str, folder: i64, dir: &str) -> Result<Option<library::Lacks>> {
+        if self.library.row_copy(album)?.is_some_and(|c| c.folder == folder && c.dir == dir) {
+            return self.library.lacks_of(album);
+        }
+        let Some((_, artist, name)) = self.library.album_names(album)? else { return Ok(None) };
+        let tags: Vec<crate::naming::Tags> = self.catalogue().album_tags(folder, dir)?.into_iter().map(|(_, t)| crate::naming::Tags(t)).collect();
+        let on_all = |n: &str| tags.iter().all(|t| t.first(n).is_some());
+        let on_any = |n: &str| tags.iter().any(|t| t.first(n).is_some());
+        let first = self.library.first_file_of(album, folder, dir)?;
+        let lacks = library::Lacks {
+            id: album.to_string(),
+            name,
+            artist,
+            cover: self.art_at(folder, dir, first)?.is_none(),
+            year: !tags.iter().any(|t| t.release_year().is_some()),
+            genre: !on_any("genre"),
+            album_artist: !on_all("albumartist"),
+            track_no: !on_all("tracknumber"),
+            musicbrainz: !on_any("musicbrainz_albumid"),
+        };
+        Ok(lacks.any().then_some(lacks))
+    }
+
     /// The catalogue folder of one of Cratarr's own libraries: a library's id is its folder.
     pub fn folder_of_library(&self, library: &str) -> Option<i64> {
         self.library.roots().into_iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| f)
