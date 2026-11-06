@@ -599,8 +599,9 @@ async function evict(keep = BEHIND) {
 }
 
 /** Fetches queue track `index` and appends it to the stream, starting `from` seconds into it (a seek). `whole`: asked
- *  from its top all the same, placed so that `from` plays now (a stream from a moment that did not say where it began). */
-async function appendTrack(index: number, from: number, gen: number, whole = false) {
+ *  from its top all the same, placed so that `from` plays now (a stream from a moment that did not say where it began).
+ *  `again`: the rest of a track that broke while it played, asked for once; breaking too, it ends there. */
+async function appendTrack(index: number, from: number, gen: number, whole = false, again = false) {
   const t = local.queue[index];
   if (!t) return;
   wantGain(index);
@@ -637,7 +638,7 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
     if (from > 0 && !whole && res.status === 206 && !res.headers.has('x-start-ms')) {
       playback('warn', 'stream from a moment without its start', { track: t.id, source: t.source, from });
       ctl.abort();
-      return appendTrack(index, from, gen, true);
+      return appendTrack(index, from, gen, true, again);
     }
     const type = res.headers.get('content-type') ?? '';
     const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : type.includes('alac') ? ALAC : type.includes('mp4a') || type.includes('aac') ? AAC : MP4;
@@ -646,7 +647,7 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
       // The next form down, where there is one: asked again at once.
       if (demote(t, `not taken: ${kind}`) && gen === generation) {
         ctl.abort();
-        return appendTrack(index, from, gen, whole);
+        return appendTrack(index, from, gen, whole, again);
       }
       throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : kind === ALAC ? 'ALAC' : kind === AAC ? 'AAC' : 'MP3'} here.`);
     }
@@ -778,19 +779,30 @@ async function appendTrack(index: number, from: number, gen: number, whole = fal
   } catch (e) {
     if ((e as DOMException).name === 'AbortError' || gen !== generation) return;
     playback('warn', 'track failed', { track: t.id, source: t.source, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), ms: ms?.readyState ?? null, sb: !!sb, mime });
+    // Broke while it plays (a roam, a restart, a proxy tired of a paused stream): it ends at what the stream holds, so
+    // what follows goes after that, never over it. Its rest is asked for from there, once: a fresh stream would throw
+    // away the minute already in, which is all there is to play while Cratarr cannot be reached.
+    const here = where();
+    const reached = !!placedSegment && here?.seg === placedSegment;
+    if (placedSegment && here && reached) {
+      placedSegment.length = here.offset + ahead();
+      streamEnd = Math.max(streamEnd, placedSegment.start + placedSegment.length);
+      if (!again) return appendTrack(index, placedSegment.length, gen, whole, true);
+    }
     local.error = e instanceof Error ? e.message : String(e);
     errorIndex = index;
     // Skip what cannot play, as a player does. The queue's last (or only) track ends the stream there instead: the one
-    // before it plays out and the queue ends, or, playing itself, it stands (the 0.15 desktop app, 2026-11-04: a failed
-    // resume stalled silent with its clock counting on, and never moved on).
+    // before it plays out and the queue ends, or, playing itself, it plays out what is in and stands there (the 0.15
+    // desktop app, 2026-11-04: a failed resume stalled silent with its clock counting on, and never moved on).
     if (index < local.queue.length - 1) {
       lastAppended = index;
-      // Placed already (it failed midway): that segment becomes the empty one, not a second segment for the track.
-      if (placedSegment) placedSegment.length = 0;
-      else segments.push({ index, start: streamEnd, length: 0, told: null });
+      // Not reached yet, it takes no time in the stream: placed already (it failed midway), that segment becomes the
+      // empty one, not a second segment for the track.
+      if (placedSegment && !reached) placedSegment.length = 0;
+      else if (!reached) segments.push({ index, start: streamEnd, length: 0, told: null });
     } else {
       lastAppended = index;
-      if (index === local.index) {
+      if (index === local.index && !ahead()) {
         audio?.pause();
         local.starting = false;
       }
