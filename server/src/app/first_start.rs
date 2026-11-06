@@ -284,6 +284,8 @@ mod tests {
     fn a_change_from_before_says_what_the_stores_say() {
         let left = moved("journal");
         let change = |id: i64| serde_json::from_str::<Json>(&left.sql::<String>("journal.sqlite", &format!("SELECT change FROM changes WHERE id = {id}"))).unwrap();
+        let journal = Journal::open(Some(&left.data.join("journal.sqlite"))).unwrap();
+        assert!(matches!(journal.change(1).unwrap().unwrap().0, crate::journal::Change::LeftOut { .. }), "read as Undo reads it");
         assert_eq!(change(1)["after"]["tracks"], json!(["tr-82"]));
         assert_eq!(change(2)["after"], json!(["tr-48"]));
         assert_eq!(table(&part(&left), "journal: changes")["moved"], 4);

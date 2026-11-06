@@ -773,11 +773,7 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let songs = ann.get(&format!("/api/albums/cratarr/{record}")).await;
     assert_eq!(songs["rows"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(), ["tr-48", "tr-47", "tr-46"]);
 
-    // Old links: an album's and a Sounds like's. A crate that named both ids has them as one seed, and shows what it is.
-    let view = ann.get("/api/albums/cratarr/al-0K3QLxUBwKPLshc0VyNQJ7").await;
-    assert_eq!((view["id"].as_str(), view["title"].as_str()), (Some(&*record), Some("Both Shores")), "{view}");
-    let def = ann.get("/api/crates/like:al-0K3QLxUBwKPLshc0VyNQJ7").await;
-    assert_eq!((def["id"].as_str(), def["name"].as_str()), (Some(&*format!("like:{record}")), Some("Sounds like Both Shores")), "{def}");
+    // A crate that named both ids has them as one seed, and shows what it is.
     let def = ann.get("/api/crates/c-shores").await;
     assert_eq!((&def["conditions"][0]["value"]["of"], &def["names"][&record]["name"]), (&json!([record]), &json!("Both Shores")), "{def}");
     let left_out = ann.get("/api/crates/c-shores/left-out").await;
@@ -806,6 +802,40 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     s.until("the library read again", Duration::from_secs(120), || async { ann.albums().await.iter().any(both) }).await;
     assert_eq!(ann.get("/api/admin/migration").await["parts"]["records"], part, "written once");
     assert_eq!((held(&data), plays(&data), tracks_of_files(&db)), (rows_then, plays_then, files_then));
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A link kept from before 0.16 opens what it named, as the map says: a copy's own id, the id a Keep's album had in Incoming, which
+/// no album has now, and a Sounds like by its seed. One the map does not hold finds its fate as before.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_old_album_link_opens_the_record_end_to_end() {
+    let root = temp("old-links");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    data_0_15(&library, &data);
+    let s = Server::start(&data).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let both = |a: &Value| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == 3);
+    s.until("the record's three copies", Duration::from_secs(180), || async { ann.albums().await.iter().any(both) }).await;
+    let record = ann.albums().await.into_iter().find(both).unwrap()["id"].as_str().unwrap().to_string();
+
+    let view = ann.get("/api/albums/cratarr/al-0K3QLxUBwKPLshc0VyNQJ7").await;
+    assert_eq!((view["id"].as_str(), view["title"].as_str()), (Some(&*record), Some("Both Shores")), "Incoming's copy: {view}");
+    assert_eq!(view["rows"].as_array().unwrap().len(), 3);
+    let tide = ann.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap()["id"].as_str().unwrap().to_string();
+    let moved = ann.get("/api/admin/migration/moved").await;
+    let worked_out: Vec<&String> = moved["albums"].as_object().unwrap().iter().filter(|(old, now)| now.as_str() == Some(&*tide) && *old != "al-4FwVmWLNdYpZZSEtkan6Uy").map(|(old, _)| old).collect();
+    assert_eq!(worked_out.len(), 2, "what it would have been in each Incoming: {moved}");
+    let view = ann.get(&format!("/api/albums/cratarr/{}", worked_out[0])).await;
+    assert_eq!((view["id"].as_str(), view["title"].as_str()), (Some(&*tide), Some("Tide Tables")), "a Keep's old id: {view}");
+
+    let def = ann.get("/api/crates/like:al-0K3QLxUBwKPLshc0VyNQJ7@50").await;
+    assert_eq!((def["id"].as_str(), def["name"].as_str()), (Some(&*format!("like:{record}@50")), Some("Sounds like Both Shores")), "{def}");
+    assert_eq!(ann.send(reqwest::Method::GET, "/api/albums/cratarr/al-5vcUvYmuWJAgyxLXEUmaPz", Value::Null).await.1["rows"].as_array().map(Vec::len).unwrap_or(0), 0, "one no map holds opens nothing else");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

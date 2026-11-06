@@ -171,8 +171,8 @@ stops the start, as Cratarr does not run on half-moved data. The way back is the
 
 - **An old id names one copy**, so one record, and the map keeps its folder: `album_moved` form `id`. Music's form of it, `base`, can
   name two records, as the same tags on other tracks are two records, and what went by it goes to both.
-- **Of two tracks found to be one the main library's stays:** albums come in main libraries first, in their order, and what no list
-  shows after all of those, so a file that went decides nothing.
+- **Of two tracks found to be one the main library's stays:** albums come in main libraries first, in their order, then own music,
+  then Incoming, and what no list shows after all of those, so a file that went decides nothing.
 - **What no list shows gets its record too:** files gone a while, in a trash, or in a parked folder, by the id they were served
   under. With none, an Undo or a source switched on again brings back an album that has lost what named it.
 - **A Keep left its plays under the id it had in Incoming**, which no album has now. That id is worked out for each Incoming folder

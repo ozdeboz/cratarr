@@ -582,6 +582,13 @@ impl IncomingService {
 mod tests {
     use super::*;
 
+    /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: the queue reads it.
+    #[test]
+    fn the_jobs_of_0_15_are_read_as_the_queue_reads_them() {
+        let jobs: Jobs = serde_json::from_str(include_str!("../../../tests/fixtures/0.15/convert-queue.json")).unwrap();
+        assert_eq!((jobs.next, jobs.list[0].album.id.as_str(), jobs.list[0].state), (2, "al-5CBklbfbpDtbwWYNnJiHHl", State::Done));
+    }
+
     #[test]
     fn a_swap_moves_the_originals_out_before_the_converted_files_take_their_names() {
         let root = std::env::temp_dir().join(format!("cratarr-queue-{}", std::process::id()));

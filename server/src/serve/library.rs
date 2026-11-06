@@ -2496,6 +2496,24 @@ mod tests {
         roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
+    /// CR13, through: an album in a trash at the first start has its record, and its Undo brings it back to it, so what names the
+    /// album still does. With none it would come back as new, and all that stayed under its old id for good.
+    #[test]
+    fn an_album_undone_from_a_trash_comes_back_to_its_record() {
+        let (roots, cat, lib) = two_kept("first-trash");
+        add_files_to(&cat, 0, &roots[0], &[("Away/01 One.flac", "Away", "One"), ("Here/01 Two.flac", "Here", "Two")]);
+        cat.mark_trashed(0, "Away", "token").unwrap();
+        cat.first_records(first_albums(&cat, &Rules::default()).unwrap(), &TWO_KEPT).unwrap();
+        let old = ids::album_at(&album_pid_for_tests("Away", "Artist"), 0);
+        let record = cat.named_now(&old).expect("the id it was served by leads to a record");
+        build_now(&lib, &cat);
+        assert!(lib.album(&record).unwrap().is_none(), "in a trash, it is listed nowhere");
+        cat.unmark_trashed(0, "Away", "token").unwrap();
+        build_now(&lib, &cat);
+        assert_eq!(lib.album(&record).unwrap().map(|a| a.name).as_deref(), Some("Away"), "back on its record");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
+    }
+
     const ONE_TWO: [(&str, &str, &str); 2] = [("A/01 One.flac", "A", "One"), ("A/02 Two.flac", "A", "Two")];
 
     /// A record in the first folder, then a copy of it in the second: what the take leaves. The album's id.
