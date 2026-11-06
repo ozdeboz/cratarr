@@ -511,6 +511,7 @@ mod tests {
             album_id: format!("al-{album}"),
             album_n: album,
             like: Track { artists: vec![artist], genres: vec![genre], year: Some(year), playlists: playlists.to_vec(), ..Track::default() },
+            folders: vec![0],
             ..Song::default()
         }
     }
@@ -545,7 +546,6 @@ mod tests {
     #[test]
     fn a_song_is_in_every_library_that_holds_a_copy() {
         let mut index = library();
-        index.songs.iter_mut().for_each(|s| s.folders = vec![0]);
         for s in index.songs.iter_mut().filter(|s| s.id.starts_with('x')) {
             s.folders = vec![0, 1];
         }
