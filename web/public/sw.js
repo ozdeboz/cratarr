@@ -207,7 +207,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(caches.match(req).then((hit) => hit || fresh));
     return;
   }
-  if (STREAM.test(url.pathname) && url.searchParams.get('whole') !== '1') {
+  // A stream naming its copy (an intake card's snippet) is that copy's: what is kept under the track's address may be
+  // another's bytes, so it goes to Cratarr.
+  if (STREAM.test(url.pathname) && url.searchParams.get('whole') !== '1' && !url.searchParams.has('from')) {
     event.respondWith(caches.match(url.pathname, { cacheName: OFFLINE }).then((hit) => hit || fetch(req)));
     return;
   }

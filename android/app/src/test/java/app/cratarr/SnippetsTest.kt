@@ -21,6 +21,21 @@ class SnippetsTest {
     }
 
     @Test
+    fun an_intake_cards_snippet_names_its_copy_and_a_librarys_slashes_arrive_whole() {
+        val ask = SnippetAsk.of(play("source" to "cratarr", "id" to "tr-1", "from" to "cratarr//own/cy", "from_ms" to 0, "to_ms" to 1_000)) as SnippetAsk.Play
+        assertEquals("cratarr//own/cy", ask.library)
+        assertEquals("&from=cratarr%2F%2Fown%2Fcy", ask.copyQuery)
+        assertEquals("&from=My%20music", ask.copy(library = "My music").copyQuery)
+    }
+
+    @Test
+    fun a_snippet_naming_no_copy_asks_for_the_one_that_plays() {
+        val ask = SnippetAsk.of(play("source" to "cratarr", "id" to "tr-1", "from_ms" to 0, "to_ms" to 1_000)) as SnippetAsk.Play
+        assertNull(ask.library)
+        assertEquals("", ask.copyQuery)
+    }
+
+    @Test
     fun a_stop_is_a_stop() {
         assertSame(SnippetAsk.Stop, SnippetAsk.of(JSONObject().put("type", "snippet").put("stop", true)))
     }

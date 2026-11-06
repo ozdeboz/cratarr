@@ -42,3 +42,21 @@ test('the list of tracks held goes with their cache, or it lists what the worker
   assert.notEqual(name(OFFLINE, 'INDEX'), name(OFFLINE, 'OLD_INDEX'));
   assert.match(OFFLINE, /localStorage\.removeItem\(OLD_INDEX\)/);
 });
+
+/** Whether the real worker answers a stream's address from what is kept, on stand-ins. */
+function answeredFromKept(address: string) {
+  const on: Record<string, (e: unknown) => void> = {};
+  const self = { addEventListener: (type: string, f: (e: unknown) => void) => (on[type] = f), location: { origin: 'http://cratarr.test' }, navigator: {}, skipWaiting() {} };
+  new Function('self', 'caches', SW)(self, { match: async () => new Response('') });
+  let taken = false;
+  on.fetch({ request: { method: 'GET', url: `http://cratarr.test${address}` }, respondWith: () => (taken = true), waitUntil() {} });
+  return taken;
+}
+
+test("a stream that names its copy is that copy's, never what is kept under the track's address", () => {
+  assert.equal(answeredFromKept('/api/stream/cratarr/tr-1?from_ms=0&from=in'), false);
+});
+
+test('the player asking for a track goes on being answered from what is kept', () => {
+  assert.equal(answeredFromKept('/api/stream/cratarr/tr-1?from_ms=0'), true);
+});
