@@ -4,7 +4,7 @@
 //! across a restart. Everything is thrown away after. The Dockerfile's test and `e2e` stages run them by name, so a test
 //! here ends its name in `end_to_end` or the gate never runs it: `cargo test --workspace -- --ignored fixtures:: end_to_end`.
 //! What the records' rewrite must not break has a test of its own, each with its Undo: Keep, Delete, Replace, a length's fix
-//! and a cover, and a second run waiting for the one writing.
+//! and a cover, and a second run waiting for the one writing. Last, a library changing place, for everything a listener holds.
 //!
 //! `Server` calls as nobody, which a server with no accounts takes for its administrator. `Server::sign_in` gives a
 //! `Caller` that is an account, `settings` writes 0.16's settings for the whole layout (`--make-layout`), `settings_0_15`
@@ -331,15 +331,17 @@ fn data_0_15(library: &Path, data: &Path) {
     std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
 }
 
-/// Settings as 0.16 writes them: version 4, these libraries in order, each (folder, kind), and the own-music folder.
-fn settings(data: &Path, libraries: &[(&Path, &str)], own_music: &Path) {
+/// Cratarr's own source as 0.16 keeps it and the page sends it: these libraries in order, each (folder, kind), and the own-music
+/// folder.
+fn own_source(libraries: &[(&Path, &str)], own_music: &Path) -> Value {
     let folders: Vec<String> = libraries.iter().map(|(folder, _)| folder.to_string_lossy().to_string()).collect();
     let list: Vec<Value> = folders.iter().zip(libraries).map(|(id, (_, kind))| json!({ "id": id, "kind": kind })).collect();
-    let settings = json!({
-        "version": 4,
-        "music_folder": folders[0],
-        "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": list, "values": { "folders": folders, "own_music": own_music.to_string_lossy() } }],
-    });
+    json!({ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": list, "values": { "folders": folders, "own_music": own_music.to_string_lossy() } })
+}
+
+/// Settings as 0.16 writes them: version 4, these libraries in order, each (folder, kind), and the own-music folder.
+fn settings(data: &Path, libraries: &[(&Path, &str)], own_music: &Path) {
+    let settings = json!({ "version": 4, "music_folder": libraries[0].0.to_string_lossy(), "sources": [own_source(libraries, own_music)] });
     std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
 }
 
@@ -2686,4 +2688,641 @@ async fn a_second_run_waits_while_the_first_writes_end_to_end() {
     assert!(std::fs::read(&cover).unwrap() == new, "written in its turn");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// The account of the proof below, and the albums it is given: each case of what a listener can lose, by where it lies.
+const ANN: (&str, &str) = ("ann", "ann's password");
+const TIDE: &str = "Glass Harbour/Tide Tables (2012)";
+const PARTIAL: &str = "Glass Harbour/Partial Shore (2011)";
+const CLUB: &str = "Various Artists/Club Classics (2001)";
+const JUNK: &str = "Orbit Lane/Junk Dates (1)";
+const CUT: &str = "Salt Meridian/Long Cut (2018)";
+const BONUS: &str = "Salt Meridian/Bonus Round (2018)";
+const ARRIVED: &str = "Salt Meridian/Just Arrived (2018)";
+const MEASURE: &str = "Salt Meridian/Short Measure (2018)";
+
+/// How long what a start or a change sets going may take, on a PC running the whole suite at once.
+const SETTLES: Duration = Duration::from_secs(60);
+
+/// One library of `Shelves`: where it lies now, its kind, and what the proof calls it, whatever its folder is called.
+struct Shelf {
+    at: PathBuf,
+    kind: &'static str,
+    name: &'static str,
+}
+
+/// A server's libraries in Settings' order, under the build's own folder: Settings takes only a folder inside a mount
+/// (`chosen_folders_ok`), and the temporary folder is none, where that one is, on a PC as in the Dockerfile's stages.
+struct Shelves {
+    root: PathBuf,
+    data: PathBuf,
+    list: Vec<Shelf>,
+}
+
+impl Shelves {
+    /// The whole layout's two main libraries and its Incoming, nothing read yet.
+    fn made(name: &str) -> Shelves {
+        let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cratarr-e2e-{name}"));
+        std::fs::remove_dir_all(&root).ok();
+        let (library, data) = (root.join("library"), root.join("data"));
+        std::fs::create_dir_all(&data).unwrap();
+        assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+        // A cover in the library that goes first, and a recording to know a file by, as a tagger leaves one.
+        std::fs::copy(library.join("music").join(TIDE).join("cover.jpg"), library.join("second").join(FAR).join("cover.jpg")).unwrap();
+        set_vorbis(&library.join("music").join(JUNK).join("01 Zero.flac"), "MUSICBRAINZ_TRACKID", "00000000-0000-4000-8000-000000000301");
+        let shelf = |folder: &str, kind, name| Shelf { at: library.join(folder), kind, name };
+        let list = vec![shelf("music", "main", "music"), shelf("second", "main", "second"), shelf("incoming", "incoming", "incoming")];
+        let shelves = Shelves { root, data, list };
+        shelves.write();
+        shelves
+    }
+
+    fn at(&self, name: &str) -> &Path {
+        &self.list.iter().find(|s| s.name == name).unwrap().at
+    }
+
+    fn libraries(&self) -> Vec<(&Path, &str)> {
+        self.list.iter().map(|s| (s.at.as_path(), s.kind)).collect()
+    }
+
+    /// The settings file as they stand: a person's edit while the server is down.
+    fn write(&self) {
+        settings(&self.data, &self.libraries(), &self.root.join("no-own-music"));
+    }
+
+    /// Settings as they stand, sent as the page sends them.
+    async fn save(&self, who: &Caller<'_>) {
+        who.ok(reqwest::Method::PUT, "/api/settings", json!({ "sources": [own_source(&self.libraries(), &self.root.join("no-own-music"))] })).await;
+    }
+
+    /// A library's folder under another name, as a mount renamed. What Settings says is the caller's.
+    fn rename(&mut self, name: &str, to: &str) {
+        let shelf = self.list.iter_mut().find(|s| s.name == name).unwrap();
+        let to = shelf.at.with_file_name(to);
+        std::fs::rename(&shelf.at, &to).unwrap();
+        shelf.at = to;
+    }
+
+    /// An answer with each library by what the proof calls it, so a name as it stands now reads the same as before, and an answer
+    /// naming a place a library left reads as what it is.
+    fn plain(&self, answer: &Value) -> Value {
+        let mut shelves: Vec<&Shelf> = self.list.iter().collect();
+        // Longest first: a library's path can start another's.
+        shelves.sort_by_key(|s| std::cmp::Reverse(s.at.as_os_str().len()));
+        let text = shelves.iter().fold(answer.to_string(), |text, s| text.replace(&*s.at.to_string_lossy(), &format!("<{}>", s.name)));
+        serde_json::from_str(&text).unwrap()
+    }
+}
+
+/// What ann did with the library, by what `held_by` looks it up.
+struct Mine {
+    playlists: Vec<String>,
+    crate_id: String,
+    heard: Vec<String>,
+    shaped: Vec<String>,
+    covered: Vec<String>,
+}
+
+/// The body of a Subsonic answer to ann's app. An answer says a failure in itself, with a 200.
+async fn ask(who: &Caller<'_>, method: &str, query: &str) -> Value {
+    let sign_in = format!("u={}&p={}&v=1.16.1&c=e2e", ANN.0, ANN.1.replace(' ', "%20").replace('\'', "%27"));
+    who.server.anyone().get(&format!("/rest/{method}?{sign_in}&{query}")).await["subsonic-response"].clone()
+}
+
+/// `answer`'s `fields`, those it has.
+fn only(answer: &Value, fields: &[&str]) -> Value {
+    Value::Object(fields.iter().filter_map(|f| Some((f.to_string(), answer.get(*f)?.clone()))).collect())
+}
+
+/// A list's ids, in order of the ids: `list` is an array of objects holding one.
+fn ids_in(list: &Value) -> Vec<String> {
+    in_order(list.as_array().into_iter().flatten().map(|x| x["id"].as_str().unwrap().to_string()).collect())
+}
+
+/// The ids of a list's rows that have one, in order of the ids: while a library is away a row can name what no track holds.
+fn shown_ids(list: &Value) -> Vec<String> {
+    in_order(list["rows"].as_array().into_iter().flatten().filter_map(|r| r["id"].as_str().map(str::to_string)).collect())
+}
+
+fn print_of(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    bytes.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// What a file sounds like, whatever its tags say: its bytes past them, a FLAC's metadata blocks and an MP3's ID3v2. What tells that a
+/// play is still on the same music after a retag.
+fn sound_of(bytes: &[u8]) -> String {
+    let mut at = 0;
+    if bytes.starts_with(b"fLaC") {
+        at = 4;
+        loop {
+            let (last, length) = (bytes[at] & 0x80 != 0, u32::from_be_bytes([0, bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize);
+            at += 4 + length;
+            if last {
+                break;
+            }
+        }
+    } else if bytes.starts_with(b"ID3") {
+        at = 10 + bytes[6..10].iter().fold(0, |n, b| n << 7 | usize::from(*b));
+    }
+    print_of(&bytes[at..])
+}
+
+/// The album of `title` with a copy in `library`.
+async fn album_id(who: &Caller<'_>, title: &str, library: &Path) -> String {
+    let at = library.to_string_lossy();
+    let there = |a: &Value| a["copies"].as_array().is_some_and(|c| c.iter().any(|c| c["library"].as_str() == Some(&*at)));
+    let found = who.albums().await.into_iter().find(|a| a["title"] == title && there(a));
+    found.unwrap_or_else(|| panic!("{title} in {at}"))["id"].as_str().unwrap().to_string()
+}
+
+/// The library built from what the catalogue has now, once the pass after a start is over: left alone, a start's first look at the
+/// catalogue is a minute and a half away (`FIRST_AFTER`). A fact reset that was never set changes nothing, and looks at once.
+async fn built(who: &Caller<'_>) {
+    let start = Instant::now();
+    loop {
+        let progress = who.get("/api/catalogue").await["progress"].clone();
+        if progress["doing"].is_null() && !progress["last_pass"].is_null() {
+            break;
+        }
+        if start.elapsed() > SETTLES * 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if let Some(album) = who.albums().await.first() {
+        who.send(reqwest::Method::PUT, "/api/albums/overrides", json!({ "albums": [album["id"]], "set": { "year": null } })).await;
+    }
+}
+
+/// A file's analysis as the first pass over a library brings it in, its waveform all `level`.
+async fn analysed(who: &Caller<'_>, library: &Path, rel: &str, level: u8) {
+    let meta = std::fs::metadata(library.join(rel)).unwrap();
+    let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let analysis = json!({ "version": 1, "duration_secs": 2.0, "loudness_lufs": -12.0, "track_gain_db": -6.0, "track_peak": 0.98, "blocks": [[520, 30]], "bpm": 128.0, "bpm_confidence": 0.9, "waveform": vec![level; 512] });
+    let line = json!({ "rel": rel, "size": meta.len(), "mtime": mtime, "analysis": analysis }).to_string();
+    let sent = who.request(reqwest::Method::POST, &format!("/api/analysis/import?folder={}", library.display())).body(line).send().await.unwrap();
+    let counts: Value = sent.json().await.unwrap();
+    assert_eq!(counts["stored"], 1, "{rel}: {counts}");
+}
+
+/// An account's listening over the layout, each thing on what it is likeliest to lose it by: a track of a record in three libraries, one
+/// in one library alone, and a track of a record tagged just like one in another library, which only its id tells apart.
+async fn listen(who: &Caller<'_>, shelves: &Shelves) -> Mine {
+    let (music, second, incoming, data) = (shelves.at("music"), shelves.at("second"), shelves.at("incoming"), &shelves.data);
+    let (tide, shores, partial) = (tracks_at(data, music, TIDE), tracks_at(data, music, SHORES), tracks_at(data, music, PARTIAL));
+    let (club, junk) = (tracks_at(data, music, CLUB), tracks_at(data, music, JUNK));
+    let (far, cut, bonus) = (tracks_at(data, second, FAR), tracks_at(data, second, CUT), tracks_at(data, second, BONUS));
+    let (arrived, measure) = (tracks_at(data, incoming, ARRIVED), tracks_at(data, incoming, MEASURE));
+
+    // Ten tracks: Insights' list of them holds ten, and past that a title changed moves where it is cut.
+    let heard = [&tide[0], &tide[0], &far[0], &cut[0], &bonus[3], &shores[0], &arrived[0], &measure[0], &partial[0], &junk[0], &club[0]];
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    for (n, song) in heard.iter().enumerate() {
+        ask(who, "scrobble", &format!("id={song}&time={}", (now - 3600 * (n as u64 + 1)) * 1000)).await;
+    }
+    who.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{}/played", tide[0]), json!({})).await;
+    for album in [album_id(who, "Far Bank", second).await, album_id(who, "Long Cut", second).await, album_id(who, "Both Shores", music).await] {
+        who.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{album}/favorite?on=true"), json!({})).await;
+    }
+    for song in [&far[0], &cut[0], &shores[0], &arrived[0], &club[0], &junk[0]] {
+        who.ok(reqwest::Method::POST, &format!("/api/track/cratarr/{song}/favorite?on=true"), json!({})).await;
+    }
+    for (album, stars) in [(album_id(who, "Tide Tables", music).await, 4), (album_id(who, "Partial Shore", music).await, 3)] {
+        who.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{album}/rating?stars={stars}"), json!({})).await;
+    }
+    for (song, rating) in [(&tide[0], 5), (&cut[0], 2)] {
+        ask(who, "setRating", &format!("id={song}&rating={rating}")).await;
+    }
+
+    // A list made by an app, and one by the page, a line in each library.
+    let lines = [&tide[0], &far[0], &arrived[0], &cut[0], &shores[1]];
+    let songs: Vec<String> = lines.iter().map(|s| format!("songId={s}")).collect();
+    let by_app = ask(who, "createPlaylist", &format!("name=Both%20rooms&{}", songs.join("&"))).await["playlist"]["id"].as_str().unwrap().to_string();
+    let by_page = who.ok(reqwest::Method::POST, "/api/playlists", json!({ "name": "One room" })).await["playlist"].as_str().unwrap().to_string();
+    let added = who.ok(reqwest::Method::POST, &format!("/api/playlists/{by_page}/append"), json!({ "source": "cratarr", "ids": lines })).await;
+    assert_eq!(added["added"], lines.len(), "a line in every library: {added}");
+
+    let like = json!({ "axis": "like", "not": false, "value": { "kind": "like", "of": [far[0]], "count": 200 } });
+    let crate_id = who.ok(reqwest::Method::POST, "/api/crates", json!({ "name": "Like the far bank", "conditions": [like] })).await["id"].as_str().unwrap().to_string();
+    who.ok(reqwest::Method::POST, &format!("/api/crates/{crate_id}/left-out"), json!({ "ids": [cut[1]] })).await;
+
+    analysed(who, second, &format!("{FAR}/01 Far Bank.flac"), 40).await;
+    // In every library, as which copy plays goes by what they are, and a waveform is the file's that plays.
+    analysed(who, music, &format!("{SHORES}/01 Landing.flac"), 80).await;
+    analysed(who, second, &format!("{SHORES}/01 Landing.flac"), 80).await;
+    analysed(who, incoming, &format!("{SHORES}/01 Landing.mp3"), 80).await;
+    analysed(who, incoming, &format!("{ARRIVED}/01 Just Arrived.mp3"), 120).await;
+    analysed(who, music, &format!("{TIDE}/01 Slack Water.flac"), 160).await;
+
+    let (two_rooms, tide_album, far_album) = (album_id(who, "Two Rooms", music).await, album_id(who, "Tide Tables", music).await, album_id(who, "Far Bank", second).await);
+    Mine {
+        playlists: vec![by_app, by_page],
+        crate_id,
+        heard: heard.iter().map(|s| s.to_string()).collect(),
+        shaped: vec![far[0].clone(), shores[0].clone(), arrived[0].clone(), tide[0].clone()],
+        covered: vec![tide_album, far_album, two_rooms],
+    }
+}
+
+/// What the account's rows say, not what any door makes of them: a heart on no list is still held, or still gone.
+fn rows_kept(data: &Path) -> Value {
+    let rows: serde_json::Map<String, Value> = held(data).into_iter().map(|((who, kind, item), row)| (format!("{who} {kind} {item}"), json!(row))).collect();
+    let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    let mut st = db.prepare("SELECT user, song, at FROM plays ORDER BY at, song").unwrap();
+    let plays: Vec<(String, String, i64)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect();
+    json!({ "annotation": rows, "plays": plays })
+}
+
+/// What an account holds of the library, each thing as a door of the API answers it, each library by the name `Shelves` has for it: what
+/// a step must leave as it found it. `owned` is what is the listener's, `facts` what the files say.
+async fn held_by(who: &Caller<'_>, shelves: &Shelves, mine: &Mine) -> Value {
+    const OWNED: [&str; 4] = ["playCount", "played", "starred", "userRating"];
+    let mut albums = serde_json::Map::new();
+    for a in who.albums().await {
+        let id = a["id"].as_str().unwrap().to_string();
+        let got = ask(who, "getAlbum", &format!("id={id}")).await["album"].clone();
+        let of_song = |s: &Value| json!({ "owned": only(s, &OWNED), "facts": only(s, &["title", "album", "albumId", "artist", "artistId", "track", "discNumber", "year", "genre", "duration", "created", "path"]) });
+        let songs: serde_json::Map<String, Value> = got["song"].as_array().into_iter().flatten().map(|s| (s["id"].as_str().unwrap().to_string(), of_song(s))).collect();
+        // By name: which of two equal copies comes first goes by where they sort, which is no listener's.
+        let mut copies: Vec<Value> = a["copies"].as_array().into_iter().flatten().map(|c| shelves.plain(&only(c, &["library", "format", "added", "plays"]))).collect();
+        copies.sort_by_key(|c| c["library"].as_str().unwrap_or("").to_string());
+        let facts = only(&got, &["name", "artist", "artistId", "songCount", "duration", "year", "genre", "created"]);
+        albums.insert(id, json!({ "owned": only(&got, &OWNED), "facts": facts, "listed": only(&a, &["title", "artist", "year", "added", "tracks", "path"]), "copies": copies, "songs": songs }));
+    }
+    let starred = ask(who, "getStarred2", "").await["starred2"].clone();
+    let favourites = json!({
+        "albums": in_order(serde_json::from_value(who.get("/api/favorites/cratarr/albums").await).unwrap()),
+        "tracks": shown_ids(&who.send(reqwest::Method::GET, "/api/favorites/cratarr/tracks", Value::Null).await.1),
+        "starred albums": ids_in(&starred["album"]),
+        "starred songs": ids_in(&starred["song"]),
+    });
+    let history = who.get("/api/history/listening?period=year").await;
+    let top = |list: &str| -> serde_json::Map<String, Value> { history[list].as_array().into_iter().flatten().map(|t| (t["id"].as_str().unwrap().to_string(), only(t, &["name", "by", "plays"]))).collect() };
+    let state = who.get("/api/state").await;
+    let mut playlists = serde_json::Map::new();
+    for id in &mine.playlists {
+        let rows = who.get(&format!("/api/playlists/{id}/rows")).await;
+        let rows: Vec<Value> = rows["rows"].as_array().unwrap().iter().map(|r| only(r, &["entry_id", "id", "name", "artist", "album", "album_id", "track", "missing", "play_count", "last_played", "added"])).collect();
+        let listed = state["playlists"].as_array().unwrap().iter().find(|p| p["id"] == id.as_str()).map(|p| only(p, &["name", "count", "dead"]));
+        playlists.insert(id.clone(), json!({ "listed": listed, "rows": rows }));
+    }
+    let id = &mine.crate_id;
+    let left_out = who.get(&format!("/api/crates/{id}/left-out")).await;
+    let left_out: Vec<Value> = left_out["rows"].as_array().unwrap().iter().map(|r| only(r, &["id", "name", "artist"])).collect();
+    let def = who.get(&format!("/api/crates/{id}")).await;
+    let the_crate = json!({ "def": only(&def, &["name", "conditions", "names"]), "rows": shown_ids(&who.send(reqwest::Method::GET, &format!("/api/crates/{id}/rows"), Value::Null).await.1), "left_out": left_out });
+    let mut waveforms = serde_json::Map::new();
+    for id in &mine.shaped {
+        let (status, bins) = who.bytes(&format!("/api/track/cratarr/{id}/waveform")).await;
+        waveforms.insert(id.clone(), json!({ "status": status, "bins": print_of(&bins) }));
+    }
+    let mut sounds = serde_json::Map::new();
+    for id in &mine.heard {
+        let (status, file) = who.bytes(&format!("/api/file/cratarr/{id}")).await;
+        sounds.insert(id.clone(), if status == 200 { json!(sound_of(&file)) } else { json!(status) });
+    }
+    let mut covers = serde_json::Map::new();
+    for id in &mine.covered {
+        let (status, picture) = who.bytes(&format!("/api/albums/cratarr/{id}/cover")).await;
+        covers.insert(id.clone(), json!({ "status": status, "picture": print_of(&picture) }));
+    }
+    // An app keeps a library by its number (`musicFolderId`), and a listing says it beside the folder's name as it stands now.
+    let numbers = ask(who, "getMusicFolders", "").await;
+    let by_name = |f: &Value| shelves.list.iter().find(|s| s.at.file_name().and_then(|n| n.to_str()) == f["name"].as_str()).map_or(f["name"].to_string(), |s| s.name.to_string());
+    let folders: serde_json::Map<String, Value> = numbers["musicFolders"]["musicFolder"].as_array().into_iter().flatten().map(|f| (by_name(f), f["id"].clone())).collect();
+    let catalogue = who.get("/api/catalogue").await;
+    shelves.plain(&json!({
+        "folders": folders,
+        "albums": albums,
+        "favourites": favourites,
+        "uses": who.get("/api/album-uses/cratarr").await,
+        "history": { "plays": history["plays"], "artists": top("artists"), "albums": top("albums"), "tracks": top("tracks") },
+        "playlists": playlists,
+        "crate": the_crate,
+        "waveforms": waveforms,
+        "sounds": sounds,
+        "covers": covers,
+        "rows": rows_kept(&shelves.data),
+        // What says something went wrong: nothing new may turn up in any of these.
+        "moved": who.get("/api/admin/migration/moved").await,
+        "report": who.get("/api/admin/migration").await,
+        "repairs": who.get("/api/repairs").await,
+        "catalogue": only(&catalogue, &["tags_failed", "issues"]),
+        "problems": catalogue["progress"]["problems"],
+    }))
+}
+
+/// Where two answers differ, each place by its path: the snapshot's helper, as a whole tree in an assert says nothing.
+fn differences(at: &str, want: &Value, got: &Value, out: &mut Vec<String>) {
+    match (want, got) {
+        (Value::Object(w), Value::Object(g)) => {
+            for key in w.keys().chain(g.keys().filter(|k| !w.contains_key(*k))) {
+                differences(&format!("{at}/{key}"), w.get(key).unwrap_or(&Value::Null), g.get(key).unwrap_or(&Value::Null), out);
+            }
+        }
+        (Value::Array(w), Value::Array(g)) if w.len() == g.len() => {
+            for (n, (w, g)) in w.iter().zip(g).enumerate() {
+                differences(&format!("{at}/{n}"), w, g, out);
+            }
+        }
+        _ if want != got => out.push(format!("{at}: {want} became {got}")),
+        _ => {}
+    }
+}
+
+/// What still differs by `differ` in what `who` holds, once a start or a change has had its time: nothing, or what never came.
+async fn settled(who: &Caller<'_>, shelves: &Shelves, mine: &Mine, differ: impl Fn(&Value) -> Vec<String>) -> Vec<String> {
+    let start = Instant::now();
+    loop {
+        built(who).await;
+        let left = differ(&held_by(who, shelves, mine).await);
+        if left.is_empty() || start.elapsed() > SETTLES {
+            return left;
+        }
+        // A pass ending in the second of the last look goes unseen (`Serve::refresh`), and a change outside Cratarr waits for a pass.
+        ask(who, "startScan", "").await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// `want`, against what `settled` read.
+fn from(want: &Value) -> impl Fn(&Value) -> Vec<String> + '_ {
+    |got| {
+        let mut out = Vec::new();
+        differences("", want, got, &mut out);
+        out
+    }
+}
+
+/// `from`, for what was only just saved or seen: a list's counts are read again at the minute's pass, as files come and go with no
+/// playlist changing (`refresh_dead`), so they are up to a minute behind a library coming back. A start reads them at once, and the
+/// compare after one has them.
+fn from_at_once(want: &Value) -> impl Fn(&Value) -> Vec<String> {
+    let but_the_counts = |held: &Value| {
+        let mut held = held.clone();
+        held["playlists"].as_object_mut().unwrap().values_mut().for_each(|p| drop(p.as_object_mut().unwrap().remove("listed")));
+        held
+    };
+    let want = but_the_counts(want);
+    move |got| {
+        let mut out = Vec::new();
+        differences("", &want, &but_the_counts(got), &mut out);
+        out
+    }
+}
+
+/// What must stand while a library is away: every row of the account's, what each album left has by its id, each list's lines and the
+/// crate's own. Not what a door makes of it, as a record gone from every list has nothing to show its play on. `gone`: the albums lying
+/// only there.
+fn kept_while_away(held: &Value, gone: &[String]) -> Value {
+    let album = |a: &Value| {
+        let songs: serde_json::Map<String, Value> = a["songs"].as_object().unwrap().iter().map(|(id, s)| (id.clone(), s["owned"].clone())).collect();
+        json!({ "owned": a["owned"], "songs": songs })
+    };
+    let albums: serde_json::Map<String, Value> = held["albums"].as_object().unwrap().iter().filter(|(id, _)| !gone.contains(id)).map(|(id, a)| (id.clone(), album(a))).collect();
+    let lines = |p: &Value| -> Vec<Value> { p["rows"].as_array().unwrap().iter().map(|r| only(r, &["entry_id", "name"])).collect() };
+    let playlists: serde_json::Map<String, Value> = held["playlists"].as_object().unwrap().iter().map(|(id, p)| (id.clone(), json!(lines(p)))).collect();
+    json!({ "albums": albums, "playlists": playlists, "conditions": held["crate"]["def"]["conditions"], "left_out": held["crate"]["left_out"], "rows": held["rows"], "moved": held["moved"], "report": held["report"] })
+}
+
+/// The albums of `want` lying in `library` alone.
+fn lying_only_in(want: &Value, library: &str) -> Vec<String> {
+    let there = format!("<{library}>");
+    let only_there = |a: &Value| a["copies"].as_array().unwrap().iter().all(|c| c["library"] == there.as_str());
+    want["albums"].as_object().unwrap().iter().filter(|(_, a)| only_there(a)).map(|(id, _)| id.clone()).collect()
+}
+
+/// What differs from `want` while `library` is away, by `kept_while_away`, and a line of a record gone that does not say it is missing.
+fn from_while_away<'a>(want: &'a Value, library: &'a str) -> impl Fn(&Value) -> Vec<String> + 'a {
+    move |got| {
+        let gone = lying_only_in(want, library);
+        let mut out = Vec::new();
+        differences("", &kept_while_away(want, &gone), &kept_while_away(got, &[]), &mut out);
+        for (id, list) in want["playlists"].as_object().unwrap() {
+            for (n, row) in list["rows"].as_array().unwrap().iter().enumerate() {
+                let is_gone = gone.iter().any(|a| row["album_id"] == a.as_str());
+                if got["playlists"][id]["rows"][n]["missing"] != is_gone {
+                    out.push(format!("{id}: line {n}, {}, missing is not {is_gone}: {}", row["name"], got["playlists"][id]["rows"][n]));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// `want` taking what `got` has at `at`, a thing a step brought: named one by one, so nothing else slips in with it.
+fn taking(want: &mut Value, got: &Value, at: &str) {
+    let (parent, key) = at.rsplit_once('/').unwrap();
+    want.pointer_mut(parent).unwrap().as_object_mut().unwrap().insert(key.to_string(), got.pointer(at).cloned().unwrap_or(Value::Null));
+}
+
+/// `taking`, where all that was there must still be.
+fn growing(want: &mut Value, got: &Value, at: &str, findings: &mut Vec<String>) {
+    let kept = match (want.pointer(at), got.pointer(at)) {
+        (Some(Value::Array(was)), Some(Value::Array(is))) => was.iter().all(|x| is.contains(x)),
+        (Some(Value::Object(was)), Some(Value::Object(is))) => was.iter().all(|(k, v)| is.get(k) == Some(v)),
+        _ => false,
+    };
+    if kept {
+        taking(want, got, at);
+    } else {
+        findings.push(format!("{at}: {} is not all still in {}", want.pointer(at).unwrap_or(&Value::Null), got.pointer(at).unwrap_or(&Value::Null)));
+    }
+}
+
+/// `held` with text as a change outside Cratarr left it, the same wherever it is said.
+fn retold(held: &Value, was: &str, is: &str) -> Value {
+    serde_json::from_str(&held.to_string().replace(was, is)).unwrap()
+}
+
+/// The server stopped and started again on what it has.
+async fn restarted(s: Server, data: &Path) -> Server {
+    s.stop();
+    Server::start(data).await
+}
+
+fn say(findings: &mut Vec<String>, step: &str, left: Vec<String>) {
+    findings.extend(left.into_iter().map(|l| format!("{step}: {l}")));
+}
+
+/// A library with a record of its own, from a file copied in and tagged as nothing there is.
+fn a_new_library(at: &Path, title: &str, from: &Path) {
+    let dir = at.join("Salt Meridian").join(format!("{title} (2018)"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("01 {title}.flac"));
+    std::fs::copy(from, &file).unwrap();
+    set_vorbis(&file, "ALBUM", title);
+    set_vorbis(&file, "TITLE", title);
+}
+
+/// The whole chain for a listener (the owner, 2026-11-06: "importing/resyncing libraries while preserving database integrity is
+/// important"): on 0.15, adding a library shifted folder numbers, and hearts, plays and waveforms went out of view. An account's listening on
+/// two main libraries and an Incoming one, through the real binary on real files, read at every door as a person's page and apps read
+/// it; then each thing that moves a library, through Settings and a restart, as a person would. After each, every id is what it was, and
+/// everything held points at the same music. Every step is gone through whatever one before it found, so one run says all there is.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_library_changing_place_changes_nothing_a_listener_owns_end_to_end() {
+    let mut shelves = Shelves::made("resync");
+    let mut findings: Vec<String> = Vec::new();
+    let s = Server::start(&shelves.data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": ANN.0, "password": ANN.1, "admin": true })).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    let copies_of = |a: &Value, n: usize| a["title"] == "Both Shores" && a["copies"].as_array().is_some_and(|c| c.len() == n);
+    s.until("every library read", Duration::from_secs(180), || async {
+        built(&ann).await;
+        let albums = ann.albums().await;
+        ["Far Bank", "Just Arrived", "Tide Tables"].iter().all(|t| albums.iter().any(|a| a["title"] == *t)) && albums.iter().any(|a| copies_of(a, 3))
+    })
+    .await;
+    let mine = listen(&ann, &shelves).await;
+    let mut want = held_by(&ann, &shelves, &mine).await;
+    let shores = album_id(&ann, "Both Shores", shelves.at("music")).await;
+    // What the proof stands on: all of it there to lose.
+    assert!(want["sounds"].as_object().unwrap().values().all(Value::is_string), "every play has a file to hear: {}", want["sounds"]);
+    assert!(want["waveforms"].as_object().unwrap().values().all(|w| w["status"] == 200), "{}", want["waveforms"]);
+    assert!(want["covers"].as_object().unwrap().values().all(|c| c["status"] == 200), "{}", want["covers"]);
+    assert_eq!(want["crate"]["left_out"].as_array().unwrap().len(), 1, "{}", want["crate"]);
+    assert!(want["playlists"].as_object().unwrap().values().all(|p| p["listed"]["count"] == 5 && p["listed"]["dead"] == 0), "{}", want["playlists"]);
+
+    // Nothing changed: a restart alone moves nothing, or no step below could say what moved it.
+    let s = restarted(s, &shelves.data).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    say(&mut findings, "a restart", settled(&ann, &shelves, &mine, from(&want)).await);
+
+    // 1. A library that sorts before the others, as a capital does before every small letter, added in Settings: Incoming's folders are
+    // sorted, so production's new library went in front of the one there. It brings an album of its own and a copy of a record held.
+    let landed = shelves.root.join("library/Landed");
+    let far = shelves.at("second").join(FAR).join("01 Far Bank.flac");
+    a_new_library(&landed, "First Light", &far);
+    let (from_shores, to_shores) = (shelves.at("incoming").join(SHORES), landed.join(SHORES));
+    std::fs::create_dir_all(&to_shores).unwrap();
+    for file in audio_under(&from_shores) {
+        std::fs::copy(from_shores.join(&file), to_shores.join(&file)).unwrap();
+    }
+    shelves.list.push(Shelf { at: landed.clone(), kind: "incoming", name: "landed" });
+    shelves.save(&ann).await;
+    s.until("the new library read", SETTLES, || async {
+        built(&ann).await;
+        ask(&ann, "startScan", "").await;
+        ann.albums().await.iter().any(|a| a["title"] == "First Light")
+    })
+    .await;
+    let first_light = album_id(&ann, "First Light", &landed).await;
+    let got = held_by(&ann, &shelves, &mine).await;
+    // What was added is what changes: the library with a number of its own, the new album, the copy on its record, what the copy's new
+    // files were taken by, and a crate that draws on every library.
+    taking(&mut want, &got, "/folders/landed");
+    taking(&mut want, &got, &format!("/albums/{first_light}"));
+    taking(&mut want, &got, &format!("/albums/{shores}/copies"));
+    growing(&mut want, &got, "/moved/tracks", &mut findings);
+    growing(&mut want, &got, "/crate/rows", &mut findings);
+    say(&mut findings, "a library added", settled(&ann, &shelves, &mine, from_at_once(&want)).await);
+    let s = restarted(s, &shelves.data).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    say(&mut findings, "a library added, started again", settled(&ann, &shelves, &mine, from(&want)).await);
+
+    // A main library put first in the list, as the page can: it takes every fallback from now on, and nothing that was held goes with it.
+    let annex = shelves.root.join("library/Annex");
+    a_new_library(&annex, "Annexed", &shelves.at("second").join(FAR).join("01 Far Bank.flac"));
+    shelves.list.insert(0, Shelf { at: annex.clone(), kind: "main", name: "annex" });
+    shelves.save(&ann).await;
+    s.until("the new main library read", SETTLES, || async {
+        built(&ann).await;
+        ask(&ann, "startScan", "").await;
+        ann.albums().await.iter().any(|a| a["title"] == "Annexed")
+    })
+    .await;
+    let annexed = album_id(&ann, "Annexed", &annex).await;
+    let got = held_by(&ann, &shelves, &mine).await;
+    taking(&mut want, &got, "/folders/annex");
+    taking(&mut want, &got, &format!("/albums/{annexed}"));
+    growing(&mut want, &got, "/crate/rows", &mut findings);
+    say(&mut findings, "a main library put first", settled(&ann, &shelves, &mine, from_at_once(&want)).await);
+    let s = restarted(s, &shelves.data).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    say(&mut findings, "a main library put first, started again", settled(&ann, &shelves, &mine, from(&want)).await);
+
+    // 2. A library's folder renamed, mount and settings together, with the server down, as a mount takes a restart. By a new name, and
+    // only by case, which turned production's two Incoming folders round, and the first main library's too.
+    let mut s = s;
+    for (name, to) in [("second", "shelf"), ("landed", "landed"), ("music", "Music")] {
+        s.stop();
+        shelves.rename(name, to);
+        shelves.write();
+        s = Server::start(&shelves.data).await;
+        let ann = s.sign_in(ANN.0, ANN.1).await;
+        say(&mut findings, &format!("{name} renamed {to}"), settled(&ann, &shelves, &mine, from(&want)).await);
+    }
+
+    // In two moves, the way a mount is changed first: it starts with the library not there, and Settings is told afterwards.
+    s.stop();
+    shelves.rename("second", "rack");
+    s = Server::start(&shelves.data).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    shelves.save(&ann).await;
+    say(&mut findings, "second renamed rack, then told", settled(&ann, &shelves, &mine, from_at_once(&want)).await);
+
+    // 3. A library removed, the server restarted, and the library added back. While it is away what lies only there is off every list and
+    // its lines read as missing, as nobody could hear it; nothing it holds is touched. Each kind of library, and the first of all.
+    for name in ["second", "incoming", "music"] {
+        let ann = s.sign_in(ANN.0, ANN.1).await;
+        let at = shelves.list.iter().position(|l| l.name == name).unwrap();
+        let shelf = shelves.list.remove(at);
+        shelves.save(&ann).await;
+        say(&mut findings, &format!("{name} removed"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
+        s = restarted(s, &shelves.data).await;
+        let ann = s.sign_in(ANN.0, ANN.1).await;
+        say(&mut findings, &format!("{name} removed, started again"), settled(&ann, &shelves, &mine, from_while_away(&want, name)).await);
+        shelves.list.insert(at, shelf);
+        shelves.save(&ann).await;
+        say(&mut findings, &format!("{name} added back"), settled(&ann, &shelves, &mine, from_at_once(&want)).await);
+        s = restarted(s, &shelves.data).await;
+        let ann = s.sign_in(ANN.0, ANN.1).await;
+        say(&mut findings, &format!("{name} added back, started again"), settled(&ann, &shelves, &mine, from(&want)).await);
+    }
+
+    // 4. Files changed outside Cratarr, as a tagger and a file manager do, with the server running.
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    let (music, second) = (shelves.at("music").to_path_buf(), shelves.at("second").to_path_buf());
+    // Retagged where they lie: a track's title, and an album's on all its tracks. What the files say is what shows, so those words change
+    // wherever they are shown. The track's waveform goes out of view until the pass has been over it: an analysis is of the file as it
+    // was, and nothing here says the sound is what it was.
+    set_vorbis(&music.join(TIDE).join("01 Slack Water.flac"), "TITLE", "Slack Water Retold");
+    for file in audio_under(&music.join(PARTIAL)) {
+        set_vorbis(&music.join(PARTIAL).join(file), "ALBUM", "Partial Shore Retold");
+    }
+    want = retold(&want, "\"Slack Water\"", "\"Slack Water Retold\"");
+    want = retold(&want, "\"Partial Shore\"", "\"Partial Shore Retold\"");
+    want["waveforms"][mine.shaped[3].as_str()] = json!({ "status": 404, "bins": print_of(&[]) });
+    // Renamed, the tags as they were, and a title changed with the name at once, which its recording tells: their paths say so, and that
+    // title. Not asked here: both at once with no recording. Tags alone never pair two files, so that is a new id rather than a wrong one
+    // (`identity`, decision 0011).
+    std::fs::rename(music.join(CLUB).join("01 One.flac"), music.join(CLUB).join("A1 One.flac")).unwrap();
+    want = retold(&want, &format!("<music>/{CLUB}/01 One.flac"), &format!("<music>/{CLUB}/A1 One.flac"));
+    set_vorbis(&music.join(JUNK).join("01 Zero.flac"), "TITLE", "Nought");
+    std::fs::rename(music.join(JUNK).join("01 Zero.flac"), music.join(JUNK).join("01 Nought.flac")).unwrap();
+    want = retold(&want, "\"Zero\"", "\"Nought\"");
+    want = retold(&want, &format!("<music>/{JUNK}/01 Zero.flac"), &format!("<music>/{JUNK}/01 Nought.flac"));
+    // A whole album's folder moved inside its library, one lying there alone and a copy of a record: its paths say so, and nothing else.
+    std::fs::create_dir_all(second.join("Moved")).unwrap();
+    std::fs::rename(second.join(FAR), second.join("Moved/Far Bank")).unwrap();
+    want = retold(&want, &format!("<second>/{FAR}"), "<second>/Moved/Far Bank");
+    std::fs::create_dir_all(music.join("Moved")).unwrap();
+    std::fs::rename(music.join(SHORES), music.join("Moved/Both Shores")).unwrap();
+    want = retold(&want, &format!("<music>/{SHORES}"), "<music>/Moved/Both Shores");
+    ask(&ann, "startScan", "").await;
+    say(&mut findings, "files changed outside", settled(&ann, &shelves, &mine, from_at_once(&want)).await);
+    let s = restarted(s, &shelves.data).await;
+    let ann = s.sign_in(ANN.0, ANN.1).await;
+    say(&mut findings, "files changed outside, started again", settled(&ann, &shelves, &mine, from(&want)).await);
+
+    assert!(findings.is_empty(), "{} found:\n{}", findings.len(), findings.join("\n"));
+    s.stop();
+    std::fs::remove_dir_all(&shelves.root).ok();
 }
