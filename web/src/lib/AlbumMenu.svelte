@@ -73,8 +73,7 @@
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { recordWord } from './recordTypeRules';
-  import { playPlaylistFrom, playsHere } from './output.svelte';
-  import { followedLeader } from './playOn.svelte';
+  import { playPlaylistFrom } from './output.svelte';
   import { shuffled } from './shuffle';
   import { albumGone, albumSubject, panel, viewOver } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
@@ -382,9 +381,8 @@
   const primary = $derived(copy?.from?.kind === 'main');
   const severalCopies = $derived(copyOffers.length > 1);
   // Play from: a queue of the record from another of its copies. It goes with that queue, so it needs no account and
-  // nothing is asked first. `from` reaches only what streams on this device: a player elsewhere is told its queue through
-  // Cratarr, which keeps no `from`, and would play the best copy under this entry's name.
-  const playFrom = $derived(listedHere && playsHere() && !followedLeader() && !followingNow() ? playFromEntries(listedHere.a, listedHere.s.library_info, shownIn(source)) : []);
+  // nothing is asked first. Each track carries `from` wherever the queue goes, a player elsewhere too.
+  const playFrom = $derived(listedHere ? playFromEntries(listedHere.a, listedHere.s.library_info, shownIn(source)) : []);
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,

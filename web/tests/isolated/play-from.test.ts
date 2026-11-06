@@ -185,9 +185,9 @@ test("Play from closes the menu first and goes through the record's own Play", (
   assert.match(read('AlbumMenu.svelte'), /onclick=\{\(\) => run\(\(\) => playListedAlbum\(source, a as ListedAlbum, p\.library\)\)\}/);
 });
 
-test('Play from is offered only where the stream is this device\'s, and asks no account', () => {
+test('Play from is offered wherever the queue would go, and asks no account', () => {
   const line = read('AlbumMenu.svelte').match(/const playFrom = \$derived\(([^\n]+)\);/)?.[1] ?? '';
-  assert.match(line, /^listedHere && playsHere\(\) && !followedLeader\(\) && !followingNow\(\) \? playFromEntries\(/);
+  assert.match(line, /^listedHere \? playFromEntries\(/);
   assert.doesNotMatch(line, /me\./);
 });
 
