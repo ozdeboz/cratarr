@@ -65,7 +65,7 @@ pub fn complete(dir: &Path) -> Result<Done> {
     Ok(done)
 }
 
-/// An album's audio files (`tracks_under`), for a cover changed by hand (app::covers).
+/// An album's audio files (`tracks_under`), for what comes with a Replace.
 pub fn tracks_of(dir: &Path) -> Vec<PathBuf> {
     tracks_under(dir)
 }
@@ -247,6 +247,49 @@ mod tests {
         assert_eq!(crate::serve::art::embedded(&one).unwrap().1, old);
         write_file(&d.join("cover.jpg"), &new).unwrap();
         assert_eq!(std::fs::read(d.join("cover.jpg")).unwrap(), new);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// The pictures a FLAC holds, each as it lies.
+    fn pictures_of(track: &Path) -> Vec<(lofty::picture::PictureType, Vec<u8>)> {
+        use lofty::prelude::*;
+        lofty::read_from_path(track).unwrap().tags().iter().flat_map(|t| t.pictures()).map(|p| (p.pic_type(), p.data().to_vec())).collect()
+    }
+
+    /// A FLAC's pictures lie on the file, not in its comments: a new one takes the old one's place, and none takes it out.
+    #[test]
+    fn a_flacs_front_cover_is_replaced_and_taken_out_and_nothing_else_goes_with_it() {
+        use lofty::picture::{MimeType, Picture, PictureType};
+        let d = dir("flac-pictures");
+        let one = flac(&d, "01");
+        let (old, new) = (jpeg(&d.join("old.jpg")), b"a new picture".to_vec());
+        let back = Picture::unchecked(b"the back".to_vec()).pic_type(PictureType::CoverBack).mime_type(MimeType::Jpeg).build();
+        crate::retag::rewrite(&one, |t| t.push_picture(back), |_| Ok(())).unwrap();
+        let tracks = [one.clone()];
+        let audio = audio_of(&std::fs::read(&one).unwrap(), Kind::Flac).unwrap().to_vec();
+
+        assert!(replace(&tracks, Some((&old, "image/jpeg"))).is_empty());
+        assert!(replace(&tracks, Some((&new, "image/jpeg"))).is_empty());
+        let mut held = pictures_of(&one);
+        held.sort_by_key(|(_, b)| b.len());
+        assert_eq!(held, [(PictureType::CoverBack, b"the back".to_vec()), (PictureType::CoverFront, new.clone())], "one front cover, the new one");
+        assert_eq!(crate::serve::art::embedded(&one).unwrap().1, new);
+
+        assert!(replace(&tracks, None).is_empty());
+        assert_eq!(pictures_of(&one), [(PictureType::CoverBack, b"the back".to_vec())], "only the front cover goes");
+        assert_eq!(audio_of(&std::fs::read(&one).unwrap(), Kind::Flac).unwrap(), audio.as_slice(), "the audio as it was");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A tag written beside a picture leaves the picture as it was.
+    #[test]
+    fn a_tag_written_into_a_flac_leaves_its_picture() {
+        let d = dir("flac-keeps");
+        let one = flac(&d, "01");
+        let picture = jpeg(&d.join("cover.jpg"));
+        complete(&d).unwrap();
+        crate::retag::set_bpm(&one, Some(90)).unwrap();
+        assert_eq!(pictures_of(&one).into_iter().map(|p| p.1).collect::<Vec<_>>(), [picture]);
         std::fs::remove_dir_all(&d).ok();
     }
 
