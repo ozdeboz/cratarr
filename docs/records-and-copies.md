@@ -42,7 +42,8 @@ track" and "how a record's copies behave"); this says how they are built, and in
 As the owner decided, the same record is the same tracks. A folder is identified once, when its files are read:
 
 1. The tracklists must match, always: as many tracks, each one's length within 2 seconds, its title the same by the
-   loose key. A folder missing a track of the release is not a copy of it.
+   loose key. A guest in a title is recognised: "Embrace (feat. X)" is the title "Embrace" with a guest, so it matches
+   "Embrace", and "Embrace (feat. Y)" does not. A folder missing a track of the release is not a copy of it.
 2. With that, the same MusicBrainz release, where tags or references say one, is the same record; two different
    releases are two records.
 3. Without a release on either side, the same album artist and title is the same record.
@@ -67,20 +68,49 @@ One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own 
 2. The viewer's own music, even at a lower quality.
 3. The best quality among the kept libraries the viewer has on: lossless before lossy, then bit depth and rate, then
    bitrate.
-4. Nothing else: an Incoming copy plays only when picked, and a copy in a library switched off never plays.
+4. Nothing else: an Incoming copy plays only when picked, and a copy in a library switched off never plays. A record only
+   in Incoming has nothing else: its copy plays.
 
-A stream resolves its file through it. `songs` holds one row per track, on the copy that plays for most people, and the
-stream asks `copy_for` with who is asking.
+A tie goes by the libraries' order, then the path. Lossless copies not read since bit depth was kept rank last.
+
+The crates, the words and the taste read a track once: one `Facts`, from its row copy's file, holding the line and the folder of
+every file of it. A set kept by line finds the track through any of them.
+
+A stream resolves its file through it. `songs` holds one row per track, on the copy that plays for most people: `copy_for`
+with no viewer, where own music counts as off unless nothing else holds the record. The stream asks with who is asking;
+a copy lacking the track is passed over, and where nothing plays for them the row copy does. With no one in particular
+(a signed link while signing in is required) it is the row copy too. What is read of a track, its waveform, beats and
+gains, is the file that plays, so a waveform's ETag names the file.
 
 ## On the page
 
-- A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, deletable }]`. Dots: one per copy,
-  the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on.
+- A record is listed once. `Album.library` becomes `copies: [{ library, format, kbps, bits, rate, deletable, keepable,
+  keep_to, lacks, picked, plays, added, job }]`, what the viewer may do going by the copy. They come in the order they
+  would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
+  first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
+  copy that plays. Dots: one per copy,
+  the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on, and so
+  does a track, in every list and count: `crates::on_for`, the one test. An Incoming copy counts there, though it plays only
+  when picked: with the kept library off, that is where the record is found.
+- A playlist's line names a file, and an entry is its track: on any copy it has the track's id and plays, what plays being
+  `copy_for`'s to say. A line written now is the row copy's. Where its copy goes the entry reads the file its track has left,
+  at once, and the minute's pass writes that line.
 - An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
   The record stays while one copy is left.
 - The quality on a card is the copy that plays.
-- A record's Move, Add to and Delete take the copy: `from`, a library's id.
+- A record's Move, Add to, Delete and Replace take the copy: `from`, a library's id, in the query for a preview and the body
+  for the act. A record of several copies with none named is refused, and nothing moves. Of two folders of one library
+  `from` names the first. Replace also takes `to`, the main library whose copy it takes the place of.
+- A copy goes whole only where it is alone in its folder: every audio file under its `dir` is its own, and no other copy lies
+  inside. Else it reads as not seen, as `dir` is only what its files share, and can be a parent of other records or the root.
+- An intake card is about the copy waiting, whichever plays: its tracks are that copy's files, what is heard is kept by
+  (record, folder), a fix on the "Before adding" sheet writes to that copy alone, and a snippet's stream names it by `from`, a
+  pick for that one stream. A review is kept by (record, folder) too.
+- `PUT /api/albums/{source}/{album}/copy-pick` with `{ library }` is "Plays from". It tells the account's pages as the
+  preference `copy_picks`. A pick goes with its copy at Delete, Move, Add to and Replace, and Undo brings back the copy, not
+  the pick.
+- A stream's file is named in its validator, and `If-Range` is honoured: a seek never gets another file's bytes.
 - Incoming's verdicts go: a better copy is a copy of the record, and Replace swaps two copies of one record.
 
 ## Copy to own music

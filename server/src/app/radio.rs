@@ -574,7 +574,7 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             excluded: false,
             taste: None,
             skipped: 0.0,
-            folder,
+            folders: vec![folder],
             album_n: albums.of(&album_id),
             like: Track {
                 playlists: member.get(&id).cloned().unwrap_or_default(),

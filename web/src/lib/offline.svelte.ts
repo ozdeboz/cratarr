@@ -9,11 +9,13 @@ import { desktop } from './desktop';
 import { losslessAs, playsSmaller } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 
-/** The cache the service worker reads kept streams from; the covers' and data's are its own. */
-const OFFLINE = 'cratarr-offline';
-const COVERS = 'cratarr-covers';
-const DATA = 'cratarr-data';
-const INDEX = 'cratarr-offline-index';
+/** The cache the service worker reads kept streams from; the covers' and data's are its own. Their names are public/sw.js's:
+ *  raised there, here too, and the list of what is held with them, or it would list what the worker let go. */
+const OFFLINE = 'cratarr-offline-2';
+const COVERS = 'cratarr-covers-2';
+const DATA = 'cratarr-data-2';
+const INDEX = 'cratarr-offline-index-2';
+const OLD_INDEX = 'cratarr-offline-index';
 
 /** A kept track: what the queue and Downloads show of it, and how much it holds. */
 export type KeptTrack = {
@@ -44,6 +46,7 @@ export const streamKey = (t: { source: string; id: string }) => `/api/stream/${e
 export const isKept = (t: { source: string; id: string }) => !!offline.kept[keyOf(t)];
 
 try {
+  localStorage.removeItem(OLD_INDEX);
   const saved = JSON.parse(localStorage.getItem(INDEX) ?? '{}');
   if (saved && typeof saved === 'object') offline.kept = saved;
 } catch {

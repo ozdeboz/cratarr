@@ -80,8 +80,9 @@ async fn album(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Respo
     let found = blocking(move || {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
         let base = s.library.album_base(&id)?.unwrap_or_else(|| id.clone());
-        let in_incoming = s.library.album_dir(&id)?.is_some_and(|(folder, _)| folder > 0);
-        let review = super::review::state_of(&s, &id, in_incoming)?;
+        let in_incoming = s.library.in_incoming(&id)?;
+        let waiting = s.library.copies_of(&id)?.into_iter().find(|c| c.kind == super::copies::Kind::Incoming).map(|c| c.folder);
+        let review = super::review::state_of(&s, &id, waiting, in_incoming)?;
         Ok(Some((album, s.userdata.tags_of(&base)?, review)))
     })
     .await;
@@ -270,7 +271,7 @@ async fn unfavourite(State(serve): State<Arc<Serve>>, Path(track): Path<String>)
 
 /// A song's original file with byte ranges, for players that play Cratarr's own ids.
 async fn file(State(serve): State<Arc<Serve>>, Path(track): Path<String>, headers: HeaderMap) -> Response {
-    match serve.song_path(&track).await {
+    match serve.song_path(&track, serve.current_user().as_deref()).await {
         Ok(Some(path)) => super::files::serve_file(&path, &headers, false).await,
         Ok(None) => fail(StatusCode::NOT_FOUND, "no such track"),
         Err(e) => failed(e),

@@ -2,15 +2,18 @@
   // The library's words of each kind (the crate builder's values, most common first), read once for every Edit.
   import { getCrateAxes, type WordKind } from './api';
   import { prefs } from './prefs.svelte';
-  const knownOf = $state<{ value: Partial<Record<WordKind, string[]>> | null }>({ value: null });
+  const knownOf = $state<{ value: Partial<Record<WordKind, string[]>> | null; reading: boolean }>({ value: null, reading: false });
   let asked = false;
   function readKnown() {
     if (asked) return;
     asked = true;
-    getCrateAxes(prefs.source || undefined).then(
-      (axes) => (knownOf.value = Object.fromEntries((['genre', 'style', 'mood', 'tag'] as const).map((k) => [k, axes.find((x) => x.key === k)?.values ?? []]))),
-      () => (asked = false),
-    );
+    knownOf.reading = true;
+    getCrateAxes(prefs.source || undefined)
+      .then(
+        (axes) => (knownOf.value = Object.fromEntries((['genre', 'style', 'mood', 'tag'] as const).map((k) => [k, axes.find((x) => x.key === k)?.values ?? []]))),
+        () => (asked = false),
+      )
+      .finally(() => (knownOf.reading = false));
   }
 </script>
 
@@ -19,6 +22,7 @@
   // by hand. A field to find one, the chosen first as pressed chips, then the library's of that kind; Enter adds what is
   // typed (as the library spells it where it has it). Mood is AudioMuse's words only (the owner, 2026-11-02: one
   // meaning per kind): chosen among them, never typed. `reset`: back to what the words were before the hand.
+  import Asking from './Asking.svelte';
   import MenuEntry from './MenuEntry.svelte';
 
   let {
@@ -64,6 +68,7 @@
     <button class="chip" aria-pressed={chosen.includes(g)} onclick={() => toggle(g)}>{g}</button>
   {/each}
 </div>
+{#if knownOf.reading}<Asking />{/if}
 {#if reset}<MenuEntry icon="reset" label={reset.label} onclick={reset.onclick} />{/if}
 
 <style>

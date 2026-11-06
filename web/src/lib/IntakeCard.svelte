@@ -78,7 +78,8 @@
   <Group title={plural(c.tracks.length, 'track')}>
     <ol class="tracks">
       {#each c.tracks as t (t.id)}
-        {@const heard = { source: c.source, id: t.id, name: t.title, duration_secs: t.length_ms ? t.length_ms / 1000 : null }}
+        <!-- The copy waiting is what the card is about, whichever plays. -->
+        {@const heard = { source: c.source, id: t.id, from: c.library, name: t.title, duration_secs: t.length_ms ? t.length_ms / 1000 : null }}
         <li>
           <span class="num">{number(t, discs)}</span>
           <span class="name">{t.title}</span>

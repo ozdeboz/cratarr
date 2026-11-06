@@ -70,7 +70,7 @@ class PlayerService : MediaSessionService() {
      * runs. A hold pauses the track under it (the owner, 2026-10-27: "the play pause button flashes"), and the lock
      * screen, the notification and the page heard that pause before; they see playing throughout.
      */
-    private inner class Shown(private val l: Player.Listener) : Player.Listener by l {
+    private inner class Shown(private val l: Player.Listener) : ListenerRelay(l) {
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = l.onPlayWhenReadyChanged(startStop.committed ?: playWhenReady, reason)
 
         override fun onIsPlayingChanged(isPlaying: Boolean) = l.onIsPlayingChanged(startStop.committed ?: isPlaying)
@@ -720,14 +720,14 @@ class PlayerService : MediaSessionService() {
         /**
          * A media key held (decision 0074; the owner, 2026-10-27): rewind and fast forward held, and previous and next held
          * past [HOLD_MS] (a headset's, a car's, Bluetooth's), wind while held and brake on letting go; a short press of
-         * previous or next stays a press. Other keys as ever.
+         * previous or next stays a press. Other keys as ever, and these too while the controls point elsewhere ([MediaKeys]).
          */
         override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo, intent: Intent): Boolean {
             @Suppress("DEPRECATION")
             val e = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return false
             val code = e.keyCode
+            if (!MediaKeys.ours(code, prefs.driven, keyDown != null || keyHeld)) return false
             val wind = code == KeyEvent.KEYCODE_MEDIA_REWIND || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-            if (!wind && code != KeyEvent.KEYCODE_MEDIA_PREVIOUS && code != KeyEvent.KEYCODE_MEDIA_NEXT) return false
             val back = code == KeyEvent.KEYCODE_MEDIA_REWIND || code == KeyEvent.KEYCODE_MEDIA_PREVIOUS
             val press = { if (back) sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem() }
             val holdNow = { keyHeld = true; startStop.windStart(back) { press() } }
@@ -900,5 +900,19 @@ class PlayerService : MediaSessionService() {
             }
             Ready.ensure(context, "app opened")
         }
+    }
+}
+
+/** Which media keys the service answers itself, always on the device's own player. */
+object MediaKeys {
+    /**
+     * Whether the key [code] is the service's: previous, next, rewind and fast forward, unless the controls point at the
+     * player [driven]. Then Media3 sends it to the session's player, [RemotePlayer], as every other control goes where the
+     * target is (decision 0062). A key [going] since before they turned stays the service's until let go: only that stops
+     * its wind.
+     */
+    fun ours(code: Int, driven: String?, going: Boolean): Boolean = when (code) {
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> driven == null || going
+        else -> false
     }
 }

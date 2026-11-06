@@ -9,6 +9,7 @@
   // 2026-10-29: "This is where snapshots should be"). An example is Cratarr's own, as Standard: a tap brings it, it is
   // not renamed or deleted.
   import { deleteVisualsSnapshot, getVisualsSnapshots, renameVisualsSnapshot, saveOverVisualsSnapshot, saveVisualsSnapshot, type VisualsSnapshot } from '../api';
+  import Asking from '../Asking.svelte';
   import Cover from '../Cover.svelte';
   import Icon from '../Icon.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -44,11 +45,14 @@
   let saving = $state(false);
   let editing = $state<string | null>(null);
   let editName = $state('');
+  let reading = $state(true);
 
-  getVisualsSnapshots().then(
-    (got) => (list = got),
-    () => {},
-  );
+  getVisualsSnapshots()
+    .then(
+      (got) => (list = got),
+      () => {},
+    )
+    .finally(() => (reading = false));
   // The library's other groups (the examples), after the saved ones this sheet keeps itself.
   const others = $derived(libraryGroups(libraryOf(list)).filter((g) => g.id !== 'saved'));
 
@@ -171,6 +175,7 @@
       {/each}
     {/each}
   </div>
+  {#if reading}<Asking />{/if}
 </MenuSheet>
 
 <style>

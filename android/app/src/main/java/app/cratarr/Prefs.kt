@@ -96,7 +96,8 @@ class Prefs(context: Context) {
             p.edit().putString(PAGE_PREFS, value).apply()
         }
 
-    /** The origins of the two addresses: the pages that stay in the app and may talk to it. */
+    /** The origins of the two addresses: the pages that stay in the app and may talk to it. One kept from before Settings
+     *  refused it has none ([origin]): it is left out, and shown in the field to be typed again. */
     fun origins(): Set<String> = listOfNotNull(localAddress, publicAddress).mapNotNull(::originOf).toSet()
 
     /** How Home Assistant and the other players see this one; the device's model until set. */
@@ -617,9 +618,53 @@ class Prefs(context: Context) {
         /** `scheme://host[:port]` of an address: the only origin whose pages may talk to the app. */
         fun originOf(url: String): String? {
             val u = Uri.parse(url)
-            val scheme = u.scheme?.lowercase() ?: return null
-            val host = u.host?.lowercase() ?: return null
-            return if (u.port == -1) "$scheme://$host" else "$scheme://$host:${u.port}"
+            return origin(u.scheme, u.host, u.port)
+        }
+
+        /**
+         * The origin of an address's parts; null for what WebView does not take as a rule, which it says by throwing at
+         * every start: only http and https have a host there, and the host and port must be real ones. A `*` goes too: in
+         * a rule it is a pattern, and an address is one origin.
+         */
+        internal fun origin(scheme: String?, host: String?, port: Int): String? {
+            val s = scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
+            val h = host?.lowercase()?.takeIf(::realHost) ?: return null
+            return when (port) {
+                -1 -> "$s://$h"
+                in 1..65535 -> "$s://$h:$port"
+                else -> null
+            }
+        }
+
+        /** A name of dotted parts (a last dot is allowed), or an IPv6 address in its brackets. */
+        private fun realHost(host: String): Boolean =
+            if (host.startsWith("[")) {
+                host.endsWith("]") && host.removeSurrounding("[", "]").let { a -> ':' in a && a.all { it in "0123456789abcdef:." } }
+            } else {
+                host.length <= 253 && host.removeSuffix(".").split('.').all { part ->
+                    part.isNotEmpty() && part.all { it.isLetterOrDigit() || it == '-' || it == '_' }
+                }
+            }
+
+        /**
+         * [add] given [rules], less any WebView refuses; null when it takes none. [origin] keeps out what is known: this is
+         * for what it did not foresee, which must cost that rule and not the app, or the page its way to the app. WebView
+         * throws for the whole call and does not say which rule, so each is left out in turn, one first, then two: there
+         * are three at most.
+         */
+        internal fun <T : Any> withoutRefused(rules: Set<String>, add: (Set<String>) -> T): T? {
+            var tries = listOf(rules)
+            while (tries.first().isNotEmpty()) {
+                for (these in tries) {
+                    try {
+                        return add(these)
+                    } catch (e: IllegalArgumentException) {
+                        // not these: the next
+                    }
+                }
+                tries = tries.flatMap { these -> these.map { these - it } }.distinct()
+            }
+            return null
         }
     }
 }

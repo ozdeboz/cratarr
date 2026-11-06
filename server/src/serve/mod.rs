@@ -7,6 +7,7 @@ pub mod along;
 pub mod api;
 pub mod art;
 pub mod auth_check;
+pub mod copies;
 pub mod files;
 pub mod guest;
 pub mod ids;
@@ -14,6 +15,7 @@ pub mod import;
 pub mod ldap;
 pub mod library;
 pub mod library_api;
+pub mod listener;
 pub mod playlists;
 pub mod proxy;
 pub mod queues;
@@ -349,6 +351,10 @@ impl Serve {
     /// Builds the library again when the catalogue's files changed; after a rebuilt catalogue, user data follows its
     /// songs to their new ids. Blocking.
     pub fn refresh(&self) -> Result<bool> {
+        // The libraries as they are now: `main` set them before the first build, a change in Settings arrives here.
+        if let Some(incoming) = self.incoming() {
+            self.library.set_kinds(incoming.folder_kinds());
+        }
         // The tag rules as saved in Settings, so a change there needs no restart.
         if let Some(dir) = &self.data_dir
             && let Ok(Some(saved)) = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())
@@ -370,7 +376,8 @@ impl Serve {
         let inputs = (
             self.catalogue().last_pass(),
             format!(
-                "{}|{}|{}|{}|{}|{}|{}",
+                "{:?}|{}|{}|{}|{}|{}|{}|{}",
+                self.library.kinds(),
                 serde_json::to_string(&rules)?,
                 added.len() as i64 + added.values().sum::<i64>(),
                 originals.len() as u64 + originals.values().map(|y| u64::from(*y)).sum::<u64>(),
@@ -525,11 +532,33 @@ impl Serve {
         });
     }
 
-    /// The file of a song.
-    pub async fn song_path(&self, song: &str) -> Result<Option<PathBuf>> {
-        let lib = self.library.clone();
-        let id = song.to_string();
-        let found = tokio::task::spawn_blocking(move || lib.file_of(&id)).await??;
+    /// Who a stream for `account` is for (none: no one in particular). No lock on the way: the libraries as they stand,
+    /// and the account's switches as kept.
+    pub fn listener(&self, account: Option<&str>) -> listener::Listener {
+        let mut who = listener::Listener { library: Some(self.library.clone()), ..Default::default() };
+        let Some(name) = account else { return who };
+        who.account = Some(name.to_string());
+        if let Some(incoming) = self.incoming() {
+            who.own = incoming.own_folder(name);
+            who.off = incoming.folders_off(&self.userdata.hidden_libraries_kept(name));
+        }
+        let picks = self.userdata.copy_picks_kept(name);
+        if !picks.is_empty() {
+            who.picks = listener::picks_in(&picks, &self.library.roots());
+        }
+        who
+    }
+
+    /// Which file of a song plays for `who`: the copy `copy_for` chose, else the row copy. Blocking.
+    pub fn file_for(&self, song: &str, who: &listener::Listener) -> Result<Option<(i64, String)>> {
+        let files = ids::track_of(song).map(|t| self.catalogue().files_of(t)).unwrap_or_default();
+        self.library.file_for(song, &files, who)
+    }
+
+    /// The file of a song, as it plays for `account`.
+    pub async fn song_path(self: &Arc<Self>, song: &str, account: Option<&str>) -> Result<Option<PathBuf>> {
+        let (me, id, who) = (self.clone(), song.to_string(), self.listener(account));
+        let found = tokio::task::spawn_blocking(move || me.file_for(&id, &who)).await??;
         let folders = self.catalogue().folders();
         Ok(found.and_then(|(folder, rel)| folders.get(folder).map(|root| root.join(rel))))
     }
@@ -556,25 +585,87 @@ impl Serve {
     /// its first track. Blocking.
     fn art_of(&self, album: &str) -> Result<Option<(String, Vec<u8>, String)>> {
         let Some((folder, dir, cover, first)) = self.library.album_art(album)? else { return Ok(None) };
+        let print = cover.as_deref().and_then(|c| c.split_once('_')).map(|(_, p)| p.to_string()).unwrap_or_default();
+        Ok(self.art_at(folder, &dir, first)?.map(|(ct, bytes)| (ct, bytes, print)))
+    }
+
+    /// The picture of what lies at (`folder`, `dir`): its cover file, else what is inside `first`, its first file.
+    fn art_at(&self, folder: i64, dir: &str, first: Option<String>) -> Result<Option<(String, Vec<u8>)>> {
         let Some(root) = self.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| PathBuf::from(r)) else {
             return Ok(None);
         };
-        let print = cover.as_deref().and_then(|c| c.split_once('_')).map(|(_, p)| p.to_string()).unwrap_or_default();
-        if let Some(file) = art::cover_file(&root.join(&dir))
+        if let Some(file) = art::cover_file(&root.join(dir))
             && std::fs::metadata(&file).is_ok_and(|m| m.len() <= art::MAX_BYTES)
             && let Ok(bytes) = std::fs::read(&file)
         {
             let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let ct = crate::covers::content_type(name).unwrap_or_else(|| art::sniff(&bytes));
-            return Ok(Some((ct.to_string(), bytes, print)));
+            return Ok(Some((ct.to_string(), bytes)));
         }
-        Ok(first.and_then(|rel| art::embedded(&root.join(rel))).map(|(ct, bytes)| (ct, bytes, print)))
+        Ok(first.and_then(|rel| art::embedded(&root.join(rel))))
     }
 
     /// An album's cover image as it is: (content type, bytes); `None` when it has none.
     pub async fn cover_bytes(self: &Arc<Self>, album: &str) -> Result<Option<(String, Vec<u8>)>> {
         let (me, album) = (self.clone(), album.to_string());
         Ok(tokio::task::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
+    }
+
+    /// The cover of a record's copy in `library`, as `cover_bytes` has it; none where it has no copy there.
+    pub async fn copy_cover_bytes(self: &Arc<Self>, album: &str, library: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let (me, album, library) = (self.clone(), album.to_string(), library.to_string());
+        tokio::task::spawn_blocking(move || {
+            let Some(folder) = me.folder_of_library(&library) else { return Ok(None) };
+            let Some(copy) = me.library.copies_of(&album)?.into_iter().find(|c| c.folder == folder) else { return Ok(None) };
+            let first = me.library.first_file_of(&album, folder, &copy.dir)?;
+            me.art_at(folder, &copy.dir, first)
+        })
+        .await?
+    }
+
+    /// A record's copy in `library`, else with none named its copy waiting in Incoming, as (catalogue folder, folder in it).
+    /// Blocking.
+    pub fn waiting_copy(&self, album: &str, library: Option<&str>) -> Result<Option<(i64, String)>> {
+        let copies = self.library.copies_of(album)?;
+        let place = |c: &copies::Copy| (c.folder, c.dir.clone());
+        match library {
+            Some(l) => {
+                let folder = self.folder_of_library(l);
+                let copy = copies.iter().find(|c| Some(c.folder) == folder).ok_or_else(|| anyhow::anyhow!("It has no copy in that library"))?;
+                Ok(Some(place(copy)))
+            }
+            None => Ok(copies.iter().find(|c| c.kind == copies::Kind::Incoming).map(place)),
+        }
+    }
+
+    /// What a record's copy at (`folder`, `dir`) lacks: the row copy's are the library's, and another's only its own files can
+    /// say, as `albums` holds the row copy's facts. None where it lacks nothing, or is not there. Blocking.
+    pub fn lacks_at(&self, album: &str, folder: i64, dir: &str) -> Result<Option<library::Lacks>> {
+        if self.library.row_copy(album)?.is_some_and(|c| c.folder == folder && c.dir == dir) {
+            return self.library.lacks_of(album);
+        }
+        let Some((_, artist, name)) = self.library.album_names(album)? else { return Ok(None) };
+        let tags: Vec<crate::naming::Tags> = self.catalogue().album_tags(folder, dir)?.into_iter().map(|(_, t)| crate::naming::Tags(t)).collect();
+        let on_all = |n: &str| tags.iter().all(|t| t.first(n).is_some());
+        let on_any = |n: &str| tags.iter().any(|t| t.first(n).is_some());
+        let first = self.library.first_file_of(album, folder, dir)?;
+        let lacks = library::Lacks {
+            id: album.to_string(),
+            name,
+            artist,
+            cover: self.art_at(folder, dir, first)?.is_none(),
+            year: !tags.iter().any(|t| t.release_year().is_some()),
+            genre: !on_any("genre"),
+            album_artist: !on_all("albumartist"),
+            track_no: !on_all("tracknumber"),
+            musicbrainz: !on_any("musicbrainz_albumid"),
+        };
+        Ok(lacks.any().then_some(lacks))
+    }
+
+    /// The catalogue folder of one of Cratarr's own libraries: a library's id is its folder.
+    pub fn folder_of_library(&self, library: &str) -> Option<i64> {
+        self.library.roots().into_iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| f)
     }
 
     /// An album's (or a song's, or an artist's) cover, at most `size` pixels on its longer side when asked. An id with

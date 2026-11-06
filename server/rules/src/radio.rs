@@ -146,8 +146,8 @@ pub struct Song {
     pub taste: Option<f64>,
     /// How like it is to what the listener skips, 0 to 1 (decision 0094): it comes later and less often.
     pub skipped: f64,
-    /// Its catalogue folder: its library (Radio and Autoplay's choice of libraries, 0.9.5).
-    pub folder: i64,
+    /// The catalogue folders it lies in: its libraries (Radio and Autoplay's choice of libraries, 0.9.5).
+    pub folders: Vec<i64>,
 }
 
 /// The library, ready to choose from.
@@ -199,6 +199,9 @@ impl Index {
                     t.playlists = std::mem::take(&mut s.like.playlists);
                     t.artists = std::mem::take(&mut s.like.artists);
                     s.like = t;
+                    if !f.folders.is_empty() {
+                        s.folders = f.folders.clone();
+                    }
                 }
                 None => s.like.genres.clear(),
             }
@@ -276,7 +279,7 @@ pub fn choose(index: &Index, req: &Ask, recent: &HashMap<String, i64>, within: O
     if within.is_none()
         && let Some(folders) = &req.folders
     {
-        all.retain(|&i| folders.contains(&index.songs[i].folder));
+        all.retain(|&i| index.songs[i].folders.iter().any(|f| folders.contains(f)));
     }
     if req.skip_favourites {
         all.retain(|&i| !index.songs[i].favourite);
@@ -508,6 +511,7 @@ mod tests {
             album_id: format!("al-{album}"),
             album_n: album,
             like: Track { artists: vec![artist], genres: vec![genre], year: Some(year), playlists: playlists.to_vec(), ..Track::default() },
+            folders: vec![0],
             ..Song::default()
         }
     }
@@ -540,16 +544,31 @@ mod tests {
     }
 
     #[test]
-    fn radio_chooses_only_from_the_libraries_switched_on_and_seeds_still_seed() {
+    fn a_song_is_in_every_library_that_holds_a_copy() {
         let mut index = library();
         for s in index.songs.iter_mut().filter(|s| s.id.starts_with('x')) {
-            s.folder = 1;
+            s.folders = vec![0, 1];
         }
         let only = Ask { folders: Some(vec![1]), count: Some(5), ..ask(Mode::Similar) };
         let picked = ids(&index, &choose(&index, &only, &HashMap::new(), None, &mut Rng::seeded(3)));
         assert_eq!(picked.len(), 5);
         assert!(picked.iter().all(|id| id.starts_with('x')), "{picked:?}");
-        index.songs.iter_mut().for_each(|s| s.folder = 0);
+        let one = Song { id: "tr-1".into(), folders: vec![0], ..Song::default() };
+        let told = Index::new(vec![one]).with_facts(&[Facts { track: Some(1), folders: vec![0, 2], ..Facts::default() }]);
+        assert_eq!(told.songs[0].folders, [0, 2], "as the catalogue's facts have it");
+    }
+
+    #[test]
+    fn radio_chooses_only_from_the_libraries_switched_on_and_seeds_still_seed() {
+        let mut index = library();
+        for s in index.songs.iter_mut().filter(|s| s.id.starts_with('x')) {
+            s.folders = vec![1];
+        }
+        let only = Ask { folders: Some(vec![1]), count: Some(5), ..ask(Mode::Similar) };
+        let picked = ids(&index, &choose(&index, &only, &HashMap::new(), None, &mut Rng::seeded(3)));
+        assert_eq!(picked.len(), 5);
+        assert!(picked.iter().all(|id| id.starts_with('x')), "{picked:?}");
+        index.songs.iter_mut().for_each(|s| s.folders = vec![0]);
         let none = Ask { folders: Some(vec![1]), ..ask(Mode::Similar) };
         assert!(choose(&index, &none, &HashMap::new(), None, &mut Rng::seeded(3)).is_empty());
     }
@@ -835,7 +854,7 @@ mod tests {
         s.extend((0..6).map(|n| song(&format!("x{n}"), 20 + n, 20 + n, 2, 2010, &[])));
         s[1].excluded = true;
         s[2].favourite = true;
-        s[3].folder = 1;
+        s[3].folders = vec![1];
         let req = Ask { mode: Mode::Random, seed: (0..6).map(|n| format!("s{n}")).collect(), exclude: vec!["s0".into()], last: None, count: Some(2), ..Ask::default() };
         (Index::new(s), req)
     }
@@ -870,7 +889,7 @@ mod tests {
         // Album 1 is the seed's, so album 2 is the one to come: e2 a favourite, e3 in library 1.
         let mut a = vec![song("s1", 1, 1, 1, 2000, &[]), song("s2", 1, 1, 1, 2000, &[]), song("e1", 2, 2, 9, 1996, &[]), song("e2", 2, 2, 9, 1996, &[]), song("e3", 2, 2, 9, 1996, &[])];
         a[3].favourite = true;
-        a[4].folder = 1;
+        a[4].folders = vec![1];
         let index = Index::new(a);
         let picked = |req: &Ask, within: Option<&[usize]>| ids(&index, &choose(&index, req, &HashMap::new(), within, &mut Rng::seeded(2)));
         let whole = Ask { albums: true, count: Some(5), ..ask(Mode::Similar) };

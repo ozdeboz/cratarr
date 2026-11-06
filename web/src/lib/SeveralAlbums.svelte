@@ -11,10 +11,12 @@
   // Several ticked albums' own entries in the selection's menu (lib/SelectionMenu's `extra`; the owner, 2026-10-27:
   // what one has, several have): as an album's menu (lib/AlbumMenu) has them, each offered when it applies to one of
   // them at least and done to those it applies to. Start radio; the rating, all to the same stars; Sync to this device
-  // and Remove from this device (in the app); what their libraries allow (Cancel conversion, Move to another, Delete;
-  // administrators, decision 0034), Move and Delete asked once for them all, with one Undo.
-  import { adds, offerIn } from './AlbumMenu.svelte';
-  import { albumOfDownload, albumRatings, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
+  // and Remove from this device (in the app); what their copies allow (Cancel conversion, Move to another, Delete;
+  // administrators, decision 0034), Move and Delete asked once for them all, with one Undo. Of records with several
+  // copies Delete is an entry per library, as Move's; Plays from stays one record's own choice.
+  import { offersIn } from './AlbumMenu.svelte';
+  import { deleteGroups, moveGroups, type AlbumOffer } from './copiesRule';
+  import { albumOfDownload, albumRatings, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';
   import { cancelJob, deleteAlbum, moveAlbum, movePreview, type AlbumsSource, type KeepPreview, type LibraryInfo, type ListedAlbum, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { DEVICE } from './deviceMusic.svelte';
@@ -46,8 +48,8 @@
   // Named by their one type where they share it (3 EPs), else records (lib/recordTypeRules).
   const word = $derived(recordsWord(items.map((x) => x.a.type)));
   const n = $derived(plural(items.length, word));
-  /** What its library allows: the Library's list says (its sources carry it), else nothing. */
-  const offers = $derived(items.map((x) => ({ ...x, o: 'deletable' in x.s ? offerIn(x.s as AlbumsSource, x.a) : null })));
+  /** What each of its copies allows: the Library's list says (its sources carry it), else nothing. */
+  const offers = $derived(items.map((x) => ({ ...x, offers: 'deletable' in x.s ? offersIn(x.s as AlbumsSource, x.a) : ([] as AlbumOffer[]) })));
 
   // Start radio (as one album's, on this device): tracks like all of theirs.
   function radio() {
@@ -98,30 +100,21 @@
     onedit(them);
   }
 
-  // What their libraries allow, by what the server says of each: a job in the conversion queue (administrators) only
+  // What their copies allow, by what the server says of each: a job in the conversion queue (administrators) only
   // Cancel, else Add to, Move and Delete.
-  const converting = $derived(me.admin ? offers.filter((x) => x.o?.job != null) : []);
-  const deletable = $derived(offers.filter((x) => x.o && x.o.job === null && x.o.deletable));
+  const converting = $derived(me.admin ? [...new Set(offers.flatMap((x) => x.offers.flatMap((o) => o.job ?? [])))] : []);
+  const deletes = $derived(deleteGroups(offers));
   /** One of them on its way into `to`: `add`, an Incoming record's (or one into own music), else a move. */
-  type Moving = Ticked & { to: LibraryInfo; primary: boolean; add: boolean };
-  /** Each library they can move into (by its name, whichever server's), with the albums that can. */
-  const moves = $derived.by(() => {
-    const by = new Map<string, Moving[]>();
-    for (const x of offers)
-      if (x.o && x.o.job === null)
-        for (const t of x.o.targets) by.set(t.name, [...(by.get(t.name) ?? []), { s: x.s, a: x.a, to: t, primary: x.o.from?.kind === 'main', add: adds(x.o.from, t) }]);
-    // Added where every one of them is (lib/AlbumMenu `adds`), else moved.
-    return [...by].map(([name, them]) => ({ name, them, adding: them.every((y) => y.add) }));
-  });
+  type Moving = Ticked & { from: string | undefined; to: LibraryInfo; primary: boolean; add: boolean };
+  /** Each library they can move into, with the copies that would go. */
+  const moves = $derived(
+    moveGroups(offers).map(({ name, adding, them }) => ({
+      name,
+      adding,
+      them: them.map(({ item, offer, to, add }): Moving => ({ s: item.s, a: item.a, from: offer.library, to, primary: offer.from?.kind === 'main', add })),
+    })),
+  );
 
-  /** Gone from the Library's list at once (as its page's `gone`), before it is read again; `deleted`: from the panel
-   *  too (a moved one stays open, its panel following it). */
-  function leave(gone: { source: string; id: string }[], deleted = false) {
-    const out = new Set(gone.map((x) => `${x.source}/${x.id}`));
-    if (deleted) for (const x of gone) albumGone(x.source, x.id);
-    const v = library.view;
-    if (v) v.sources = v.sources.map((s) => ({ ...s, albums: s.albums.filter((a) => !out.has(`${s.id}/${a.id}`)) }));
-  }
   const reread = () => readLibrary(true);
   /** "Moved 5 records", or "Moved 4 of 5 records" when some were refused. */
   const doneOf = (done: number, of: number) => (done === of ? plural(of, word) : `${done} of ${plural(of, word)}`);
@@ -129,7 +122,7 @@
   const named = (titles: string[]) => (titles.length > 8 ? `${titles.slice(0, 8).join(', ')} and ${titles.length - 8} more` : titles.join(', '));
 
   function cancelAll() {
-    const ids = converting.map((x) => x.o!.job!);
+    const ids = converting;
     close();
     fewAtATime(ids, cancelJob).then((failed) => {
       if (failed.length) toast.fail(null, failed.length === ids.length ? 'Could not cancel them' : "Not all were cancelled");
@@ -137,18 +130,19 @@
     });
   }
 
-  function askDelete() {
-    const them = deletable.map((x) => ({ source: x.s.id, id: x.a.id, title: x.a.title, primary: x.o!.from?.kind === 'main' }));
+  function askDelete(group: (typeof deletes)[number]) {
+    const them = group.them.map(({ item: x, offer: o }) => ({ source: x.s.id, id: x.a.id, from: o.library, title: x.a.title, main: o.from?.kind === 'main' ? o.name : null }));
     const days = library.view?.trash_days ?? 14;
-    const music = library.view?.music ?? 'Music';
-    const inMusic = them.filter((x) => x.primary).length;
+    const mains = [...new Set(them.flatMap((x) => x.main ?? []))];
+    const inMain = them.filter((x) => x.main).length;
     const m = plural(them.length, word);
+    const where = group.name ? ` from ${group.name}` : '';
     close();
-    // Asked once for them all; the primary library's extra step said in it (decision 0034).
+    // Asked once for them all; a main library's extra step said in it (decision 0034).
     onask({
-      title: `Delete ${m}?`,
-      text: `They stay in the trash for ${plural(days, 'day')}.${inMusic ? ` ${inMusic === them.length ? (inMusic === 1 ? 'It is' : 'All are') : `${inMusic} are`} in ${music}, your main library.` : ''}`,
-      label: `Delete ${m}`,
+      title: `Delete ${m}${where}?`,
+      text: `They stay in the trash for ${plural(days, 'day')}.${inMain ? ` ${inMain === them.length ? (inMain === 1 ? 'It is' : 'All are') : `${inMain} are`} in ${mains.join(' and ')}, your main ${mains.length > 1 ? 'libraries' : 'library'}.` : ''}`,
+      label: `Delete ${group.name ? `from ${group.name}` : m}`,
       icon: 'trash',
       go: async () => {
         const tokens: string[] = [];
@@ -157,12 +151,13 @@
         await fewAtATime(
           them,
           async (x) => {
-            tokens.push((await deleteAlbum(x.source, x.id)).undo);
+            tokens.push((await deleteAlbum(x.source, x.id, x.from)).undo);
             gone.push(x);
           },
           1,
         );
-        leave(gone, true);
+        // A record that stays stays open; one that went with its last copy closes.
+        for (const x of copiesGone(gone)) albumGone(x.source, x.id);
         if (!gone.length) return toast.fail(null, `Could not delete the ${word}s`);
         withUndo(gone.length === 1 && them.length === 1 ? `Deleted ${gone[0].title}.` : `Deleted ${doneOf(gone.length, them.length)}.`, tokens, { after: reread });
       },
@@ -176,7 +171,7 @@
     const ask = onask;
     close();
     const seen: { x: (typeof them)[number]; p: KeepPreview }[] = [];
-    const unread = await fewAtATime(them, async (x) => void seen.push({ x, p: await movePreview(x.s.id, x.a.id, x.to.id) }));
+    const unread = await fewAtATime(them, async (x) => void seen.push({ x, p: await movePreview(x.s.id, x.a.id, x.from, x.to.id) }));
     const go = them.flatMap((x) => seen.filter((y) => y.x === x && !y.p.refused));
     const refused = seen.filter((y) => y.p.refused);
     if (!go.length) return toast.fail(null, adding ? `None of them can be added to ${name}` : `None of them can move to ${name}`);
@@ -199,20 +194,20 @@
       icon: 'intoBox',
       go: async () => {
         const tokens: (string | null)[] = [];
-        const gone: { source: string; id: string }[] = [];
+        const gone: { source: string; id: string; from?: string; to: string }[] = [];
         let queued = false;
         await fewAtATime(
           go,
           async ({ x }) => {
-            const r = await moveAlbum(x.s.id, x.a.id, x.to.id);
+            const r = await moveAlbum(x.s.id, x.a.id, x.from, x.to.id);
             // Queued (lossless files above the quality limit to convert first): its row shows the progress instead.
             if (r.queued) queued = true;
-            else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id }));
+            else (tokens.push(r.undo), gone.push({ source: x.s.id, id: x.a.id, from: x.from, to: x.to.id }));
           },
           1,
         );
         if (queued) jobs.poke();
-        leave(gone);
+        copiesMoved(gone);
         if (gone.length) withUndo(`${adding ? 'Added' : 'Moved'} ${doneOf(gone.length, go.length)} to ${name}.`, tokens, { after: reread });
         else if (!queued) toast.fail(null, `Could not ${adding ? 'add' : 'move'} the ${word}s`);
       },
@@ -259,7 +254,7 @@
 </MenuGroup>
 <!-- Remove, last. -->
 <MenuGroup>
-  {#if deletable.length}<MenuEntry icon="trash" label={`Delete ${word}s`} danger onclick={askDelete} />{/if}
+  {#each deletes as g (g.name)}<MenuEntry icon="trash" label={g.name ? `Delete from ${g.name}` : `Delete ${word}s`} danger onclick={() => askDelete(g)} />{/each}
 </MenuGroup>
 
 <style>

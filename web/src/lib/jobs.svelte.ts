@@ -28,9 +28,10 @@ class Jobs {
     return this.list.filter(open);
   }
 
-  /** The album's job while it waits or converts. */
-  of(source: string, album: string): Job | undefined {
-    return this.list.find((j) => j.source === source && j.album_id === album && open(j));
+  /** A record's job while it waits or converts: of its copy in `library`, as its other copies go on as they are; with
+   *  none named, of any copy (a row's meter). */
+  of(source: string, album: string, library?: string): Job | undefined {
+    return this.list.find((j) => j.source === source && j.album_id === album && open(j) && (!library || !j.from || j.from === library));
   }
 
   async #refresh() {

@@ -565,7 +565,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "createPlaylist" | "updatePlaylist" | "deletePlaylist" if !user.permissions.playlists => Err(not_permitted("change playlists")),
         "stream" | "download" => {
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
-            let path = serve.song_path(&id).await?.ok_or_else(|| not_found("Song"))?;
+            let path = serve.song_path(&id, Some(&user.name)).await?.ok_or_else(|| not_found("Song"))?;
             Ok(Answer::Raw(super::files::serve_file(&path, headers, method == "download").await))
         }
         "getCoverArt" => {

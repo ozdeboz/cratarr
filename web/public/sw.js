@@ -6,14 +6,18 @@
 // Vite's fingerprinted assets and the icons never change, so they are cache-first. The covers of the albums downloaded
 // in the app are kept apart, as the page lists them (lib/coversAway.svelte.ts), so they show away from home, where only
 // downloads play (decision 0033, step 4).
-const CACHE = 'cratarr-v4';
-const COVERS = 'cratarr-covers';
+// Every cache here carries a number, raised when what is kept stops being true (0.16: a record's id replaced an album's and
+// `copies` the one `library`, so the first paint would read the old shape, and a read Cratarr is slow to answer an album
+// view under an id gone). Activation lets go of every other name, as devices start fresh (decision 0101 point 23).
+// lib/offline.svelte.ts names three of them too.
+const CACHE = 'cratarr-v5';
+const COVERS = 'cratarr-covers-2';
 // The last copy of what the pages read (the owner, 2026-10-26: with the server down, playlists and the rest showed
 // nothing): kept per account (the page names it, `account`), each read tried on the network first; one that does not
 // answer within KEPT_AFTER_MS, or fails, or meets the proxy's refusal, is answered with its last copy, marked
 // `X-Cratarr-Kept` (when it was kept) so the page says it is offline. Live reads (the event stream, players, tasks,
 // sign-in, sound) are never kept.
-const DATA = 'cratarr-data';
+const DATA = 'cratarr-data-2';
 const KEPT_AFTER_MS = 4000;
 // Known to be out of reach (the owner, 2026-10-28: no 4 s wait each time): no network, the page saying so (lib/reach,
 // the app's network report), or a read here that did not reach Cratarr. Then a read waits only this long for the
@@ -33,7 +37,7 @@ const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
 // Tracks kept for offline play in the installed page (0.9.8, lib/offline): each one's stream, whole from its start, under
 // the track's address alone. The player's own stream request for it is answered from there, whatever position or form it
 // asks (the player cuts what lies before the position); the page's fetch of the whole copy (?whole=1) passes.
-const OFFLINE = 'cratarr-offline';
+const OFFLINE = 'cratarr-offline-2';
 const STREAM = /^\/api\/stream\/[^/]+\/[^/]+$/;
 
 /** Keeps every file of the build that is not kept yet, and lets go of those of earlier builds. */
@@ -203,7 +207,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(caches.match(req).then((hit) => hit || fresh));
     return;
   }
-  if (STREAM.test(url.pathname) && url.searchParams.get('whole') !== '1') {
+  // A stream naming its copy (an intake card's snippet) is that copy's: what is kept under the track's address may be
+  // another's bytes, so it goes to Cratarr.
+  if (STREAM.test(url.pathname) && url.searchParams.get('whole') !== '1' && !url.searchParams.has('from')) {
     event.respondWith(caches.match(url.pathname, { cacheName: OFFLINE }).then((hit) => hit || fetch(req)));
     return;
   }

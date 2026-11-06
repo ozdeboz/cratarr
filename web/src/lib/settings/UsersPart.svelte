@@ -162,9 +162,9 @@
   let askedOnce = false;
   let moving = $state<LibraryInfo | null>(null);
   const reread = () => readLibrary(true);
-  async function deleteOne(a: ListedAlbum) {
+  async function deleteOne(a: ListedAlbum, from: string) {
     try {
-      const r = await deleteOwnAlbum(OWN, a.id);
+      const r = await deleteOwnAlbum(OWN, a.id, from);
       await reread();
       withUndo(`Deleted ${a.title}.`, [r.undo], { after: reread });
     } catch (e) {
@@ -180,8 +180,8 @@
     if (tokens.length < them.length) toast.fail(null, failure);
   }
   const moveAll = (u: User, to: LibraryInfo) =>
-    forAll(musicOf(u), async (a) => (await moveAlbum(OWN, a.id, to.id)).undo, (n) => `Moved ${plural(n, 'record')} to ${to.name}.`, 'Not all could be moved');
-  const deleteAll = (u: User) => forAll(musicOf(u), async (a) => (await deleteOwnAlbum(OWN, a.id)).undo, (n) => `Deleted ${plural(n, 'record')}.`, 'Not all could be deleted');
+    forAll(musicOf(u), async (a) => (await moveAlbum(OWN, a.id, u.own_library!, to.id)).undo, (n) => `Moved ${plural(n, 'record')} to ${to.name}.`, 'Not all could be moved');
+  const deleteAll = (u: User) => forAll(musicOf(u), async (a) => (await deleteOwnAlbum(OWN, a.id, u.own_library!)).undo, (n) => `Deleted ${plural(n, 'record')}.`, 'Not all could be deleted');
 
   // A new Cratarr account: its name, a password, and its role; the first one there is administers.
   const firstOwn = $derived(!!users && !users.some((u) => !u.directory));
@@ -317,7 +317,7 @@
 {/if}
 {#if deleting}
   {@const a = deleting}
-  <ConfirmSheet title={`Delete ${a.title}?`} text={`From ${open?.name}'s music, into the trash.`} label="Delete" onconfirm={() => deleteOne(a)} onclose={() => (deleting = null)} />
+  <ConfirmSheet title={`Delete ${a.title}?`} text={`From ${open?.name}'s music, into the trash.`} label="Delete" onconfirm={() => deleteOne(a, open!.own_library!)} onclose={() => (deleting = null)} />
 {/if}
 {#if moving && open}
   {@const u = open}

@@ -256,6 +256,8 @@ async fn main() -> Result<()> {
     // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
     let lan_base = app::runtime::lan_base(&runtime);
     let app = app::App::new(cfg, saved, origin, Some(served.clone())).await.context("cannot open the catalogue")?;
+    // Before the first build and the first request: which copy plays turns on them.
+    served.library.set_kinds(app.library.folder_kinds());
     // The libraries' part of the migration report, then the file as 0.16's (decision 0101): what the roles held, and
     // what the servers, answering now, do not list.
     if let (Some(mut report), Some(file), Some(d)) = (libraries_report, as_read, data_dir.as_deref()) {
@@ -297,7 +299,7 @@ async fn main() -> Result<()> {
     memwatch::start();
     app::analysis_pass::run(app.library.catalogue());
     // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).
-    app::analysis_pass::look_ahead(app.library.catalogue(), app.play_on.clone());
+    app::analysis_pass::look_ahead(app.library.catalogue(), app.play_on.clone(), app.served.clone());
 
     // The crates' favourites are asked for once at start, as the media server may take a minute (decision 0024).
     let warm = app.clone();

@@ -234,14 +234,14 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
 }
 
 /// The fixes a match gives a finding's albums (`library:album-artist`: the album artist; `library:musicbrainz`: the
-/// release's and the tracks' ids).
-pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, albums: Vec<String>) -> Result<Vec<Fix>> {
+/// release's and the tracks' ids). `at`: the copy written to, where they are one copy's and not the record's.
+pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, albums: Vec<String>, at: Option<(i64, String)>) -> Result<Vec<Fix>> {
     let matched = kept_or_find(served, albums).await?;
     let finding = finding.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Fix>> {
         let mut out = Vec::new();
         for (album, m) in matched {
-            let (tracks, ..) = super::renumber::tracks_of(&album)?;
+            let (tracks, ..) = super::renumber::tracks_in(&album, at.as_ref())?;
             let path_of = |file: &str| tracks.iter().find(|t| t.file == file).map(|t| t.path.clone());
             let certainty = if m.certain { "certain" } else { "likely" };
             let fix = match finding.as_str() {

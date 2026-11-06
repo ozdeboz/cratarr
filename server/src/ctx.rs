@@ -10,6 +10,7 @@ use axum::http::request::Parts;
 
 use crate::app::{App, ToggleError};
 use crate::serve::Serve;
+use crate::serve::listener::Listener;
 use crate::serve::who::{self, Who};
 
 /// A handler's way to the app (`api::router`'s state), Cratarr's own library, sync play and who asks.
@@ -36,6 +37,11 @@ impl Ctx {
     /// The account the request acts for (`Serve::user_for`): none without Cratarr's own library.
     pub fn account(&self) -> Option<String> {
         self.served.as_ref().and_then(|s| s.user_for(self.who.as_ref()))
+    }
+
+    /// Who a stream is for: read here, before the blocking work, which has no request of its own.
+    pub fn listener(&self) -> Listener {
+        self.served.as_ref().map_or_else(Listener::default, |s| s.listener(self.account().as_deref()))
     }
 
     /// The sync play server, once it listens (`main`).

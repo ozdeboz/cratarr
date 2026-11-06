@@ -312,7 +312,8 @@ impl AlbumPlaces {
             }
             match best {
                 Some((b, _)) if shared < b => {}
-                Some((b, _)) if shared == b => tie = true,
+                // Two copies of one record are one answer: only another record makes it a tie.
+                Some((b, found)) if shared == b => tie |= found != id.as_str(),
                 _ => {
                     best = Some((shared, id.as_str()));
                     tie = false;
@@ -821,6 +822,18 @@ mod tests {
         assert_eq!(places.find("/srv/Björk/Homogenic (1997)"), None, "as near to both: neither");
         assert_eq!(places.find("/srv/Homogenic (1997)"), None, "the album's own folders must all match");
         assert_eq!(places.find("/data/media/Music/Nobody/Nothing"), None);
+    }
+
+    /// `album_places` gives a row per copy, so a record's two copies are two candidates with one id: as near to both is
+    /// still that record, where two records are nothing to go on.
+    #[test]
+    fn two_copies_of_one_record_do_not_tie() {
+        let roots: crate::catalogue::InUse = [(0, PathBuf::from("/media/Music")), (1, PathBuf::from("/media/lidarr-music"))].into_iter().collect();
+        let dir = "Björk/Homogenic (1997)";
+        let copies = AlbumPlaces::new(vec![("al-7".into(), 0, dir.into()), ("al-7".into(), 1, dir.into())], &roots);
+        assert_eq!(copies.find("/srv/Björk/Homogenic (1997)"), Some("al-7"));
+        let records = AlbumPlaces::new(vec![("al-7".into(), 0, dir.into()), ("al-7".into(), 1, dir.into()), ("al-8".into(), 1, dir.into())], &roots);
+        assert_eq!(records.find("/srv/Björk/Homogenic (1997)"), None, "a third row of another record ties them");
     }
 
     /// A media server whose data the tests change between imports. Tracks come two to a page.

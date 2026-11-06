@@ -25,6 +25,8 @@ const DISCOGS_RELEASES: usize = 4;
 pub struct Track {
     pub id: String,
     pub path: PathBuf,
+    /// Its catalogue folder and its path in it.
+    pub place: (i64, String),
     pub file: String,
     pub title: String,
     pub secs: u32,
@@ -339,23 +341,64 @@ async fn discogs(rg: Option<&str>, artist: &str, title: &str, tell: &(dyn Fn(u64
 
 pub(super) fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let (folder, _, mbid, artist, name) = served.library.album_place(album)?.context("No such album in Cratarr's own library")?;
-    let root = served.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+    let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
+    let roots = served.library.roots();
     let tracks = served
         .library
         .album_tracks(album)?
         .into_iter()
-        .map(|(id, rel, title, ms, disc, track)| Track {
-            id,
-            file: Path::new(&rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.clone()),
-            path: Path::new(&root).join(&rel),
-            title,
-            secs: (ms / 1000) as u32,
-            disc,
-            track,
+        .map(|(id, folder, rel, title, ms, disc, track)| {
+            let root = roots.iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+            Ok(Track {
+                id,
+                file: Path::new(&rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.clone()),
+                path: Path::new(root).join(&rel),
+                place: (folder, rel),
+                title,
+                secs: (ms / 1000) as u32,
+                disc,
+                track,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((tracks, mbid.filter(|m| super::discogs::is_mbid(m)), artist, name))
+}
+
+/// The tracks of a record's copy at (catalogue folder, folder in it), in its order, or of the record with none named. A copy
+/// that does not play has no rows in `songs`: its files and what their tags say are all there is of it.
+pub(super) fn tracks_in(album: &str, at: Option<&(i64, String)>) -> Result<(Vec<Track>, Option<String>, String, String)> {
+    let Some((folder, dir)) = at else { return tracks_of(album) };
+    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
+    let tracks = copy_tracks(&served.library, &served.catalogue(), album, *folder, dir)?;
+    Ok((tracks, mbid.filter(|m| super::discogs::is_mbid(m)), artist, name))
+}
+
+/// `tracks_in`'s reading of a copy's files.
+pub(super) fn copy_tracks(lib: &crate::serve::library::Library, cat: &crate::catalogue::Catalogue, album: &str, folder: i64, dir: &str) -> Result<Vec<Track>> {
+    let root = lib.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+    let tags: std::collections::HashMap<String, crate::naming::Tags> = cat.album_tags(folder, dir)?.into_iter().map(|(rel, t)| (rel, crate::naming::Tags(t))).collect();
+    let mut tracks: Vec<Track> = lib
+        .copy_songs(album, folder, dir)?
+        .into_iter()
+        .map(|(id, rel, ms)| {
+            let of = tags.get(&rel);
+            let number = |name: &str| of.and_then(|t| t.first(name)).and_then(crate::serve::library::leading_number);
+            let file = Path::new(&rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.clone());
+            Track {
+                id,
+                path: Path::new(&root).join(&rel),
+                title: of.and_then(|t| t.first("title")).map_or_else(|| file.clone(), str::to_string),
+                secs: (ms / 1000) as u32,
+                disc: number("discnumber"),
+                track: number("tracknumber"),
+                file,
+                place: (folder, rel),
+            }
         })
         .collect();
-    Ok((tracks, mbid.filter(|m| super::discogs::is_mbid(m)), artist, name))
+    tracks.sort_by(|a, b| (a.disc.unwrap_or(1), a.track, &a.place.1).cmp(&(b.disc.unwrap_or(1), b.track, &b.place.1)));
+    Ok(tracks)
 }
 
 async fn look(album: &str, progress: &(dyn Fn(&str, u64, Option<u64>) + Send + Sync)) -> Result<Preview> {
@@ -596,7 +639,7 @@ mod tests {
     }
 
     fn track(id: &str, title: &str, secs: u32) -> Track {
-        Track { id: id.into(), path: PathBuf::from(format!("{id}.flac")), file: format!("{id}.flac"), title: title.into(), secs, disc: None, track: None }
+        Track { id: id.into(), path: PathBuf::from(format!("{id}.flac")), place: (0, format!("{id}.flac")), file: format!("{id}.flac"), title: title.into(), secs, disc: None, track: None }
     }
 
     fn release(format: &str, media: &[&[(&str, u32)]]) -> Release {

@@ -102,16 +102,25 @@ impl InsightsService {
                 Some(s) if arrivals.is_some() => came.get(&(folder, rel)).is_some_and(|c| *c >= s),
                 _ => true,
             };
+            // The crates' facts by playlist line: the map's Sound (0.15), and which track a file is.
+            let facts = catalogue.crate_facts()?;
+            let by_line = crate::crates::by_line(facts.iter());
             let rows = catalogue.track_rows(0)?;
             let (mut on_rows, mut shown_rows) = (Vec::new(), Vec::new());
-            let mut in_crates = 0;
+            // By track: a crate names a track by the line of its row copy, whichever of its files is listed here, and a track
+            // of two files is one in a crate.
+            let mut in_crates: std::collections::HashSet<&str> = Default::default();
             for &folder in &shown {
                 let folder_rows = if folder == 0 { rows.clone() } else { catalogue.track_rows(folder)? };
                 for mut r in folder_rows {
                     let keep = in_period(folder, &r.rel);
                     // A crate names a track by its playlist line (an Incoming one's climbs out of Music).
-                    if keep && !crated.is_empty() && catalogue.line_of(folder, &r.rel).is_some_and(|l| crated.contains(&l)) {
-                        in_crates += 1;
+                    if keep
+                        && !crated.is_empty()
+                        && let Some(f) = catalogue.line_of(folder, &r.rel).and_then(|l| by_line.get(l.as_str()).copied())
+                        && crated.contains(&f.rel)
+                    {
+                        in_crates.insert(f.rel.as_str());
                     }
                     // Another folder's albums are its own, whatever their path inside it.
                     if folder != 0 {
@@ -123,11 +132,8 @@ impl InsightsService {
                     on_rows.push(r);
                 }
             }
-            // The crates' facts by playlist line: the map's Sound (0.15).
-            let facts = catalogue.crate_facts()?;
-            let by_line: std::collections::HashMap<&str, &crate::crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
             let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists, &by_line);
-            report.playlists.library_tracks_in_crates = in_crates;
+            report.playlists.library_tracks_in_crates = in_crates.len();
             if let (Some(served), Some((copies, files))) = (served, &arrivals) {
                 let (plays, starred): (std::collections::HashMap<String, u32>, std::collections::HashSet<String>) = match &user {
                     Some(u) => (

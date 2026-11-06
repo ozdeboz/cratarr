@@ -38,7 +38,7 @@ pub struct TempoChange {
 
 /// A track's file: its folder in the catalogue, its path there, and where it is.
 pub(super) fn place(cat: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String, PathBuf)> {
-    let (folder, rel) = cat.track_of_source(source, id).and_then(|t| cat.file_of(t))?;
+    let (folder, rel) = cat.place_of_source(source, id)?;
     let path = cat.folders().get(folder)?.join(&rel);
     Some((folder, rel, path))
 }
@@ -87,7 +87,7 @@ pub(super) fn proposal(cat: &crate::catalogue::Catalogue, ids: &[String], how: A
         }
         let Some((_, _, album, title)) = served.library.song_file(id)? else { continue };
         if !p.records.iter().any(|r| r.album == album)
-            && let Some((_, _, _, artist, name)) = served.library.album_place(&album)?
+            && let Some((_, artist, name)) = served.library.album_names(&album)?
         {
             p.records.push(crate::journal::RunRecord { album: album.clone(), title: name, artist });
         }

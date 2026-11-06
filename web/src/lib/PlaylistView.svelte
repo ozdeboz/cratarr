@@ -125,7 +125,7 @@
   import { reach } from './reach.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
-  import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
+  import AlbumMenu from './AlbumMenu.svelte';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
@@ -137,7 +137,7 @@
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { away, here } from './away.svelte';
-  import { addedOn, artistPictureId, goToArtist, library, libraryDots, mainArtist, readLibrary } from './albums.svelte';
+  import { addedOn, artistPictureId, goToArtist, library, libraryDots, listedAlbum, mainArtist, readLibrary } from './albums.svelte';
   import { librariesOf } from './copiesRule';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
@@ -312,8 +312,9 @@
   // changes.
   let incomingChanged = $state(0);
   $effect(() => on<{ area: string }>('changed', ({ area }) => (area === 'incoming' || area === 'collection') && album && incomingChanged++));
-  // A record's files written (lib/dataChanged: a fix's lengths, tags, numbers): its rows read again, as after a save.
-  $effect(() => whenChanged(['files', 'words'], () => untrack(() => album || artist) && saved++));
+  // A record's files written (lib/dataChanged: a fix's lengths, tags, numbers), or another copy picked, whose quality its
+  // head says: its rows read again, as after a save.
+  $effect(() => whenChanged(['files', 'words', 'picks'], () => untrack(() => album || artist) && saved++));
 
   // The album's place in the Library's list (lib/albums.svelte.ts): its library, and what Cratarr may do with it there,
   // for its menu. Read when an album shows and the list is not known yet, and again when an album list changed (the
@@ -342,12 +343,7 @@
     });
     return () => (off(), clearTimeout(t));
   });
-  const listedHere = $derived.by(() => {
-    const a = album;
-    const s = a ? library.view?.sources.find((x) => x.id === a.source) : undefined;
-    const la = s?.albums.find((x) => x.id === a!.id);
-    return s && la ? { s, a: la } : null;
-  });
+  const listedHere = $derived(album ? listedAlbum(album.source, album.id) : null);
   const filesLine = $derived(album ? stateLine(filesState ?? listedHere?.a.files_state) : null);
   // Its own Health problems (the owner, 2026-11-02: "on its page", a line each under its title; its missing tracks one
   // of them): an administrator's, as Health is; a tap opens that problem narrowed to this record, Back returns here.
@@ -2988,9 +2984,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     cover={covers[0] ?? null}
     tracks={rows ? tracksOf(playable) : null}
     genres={listGenres}
-    offer={listedHere ? offerIn(listedHere.s, listedHere.a) : null}
-    trashDays={library.view?.trash_days ?? 14}
-    music={library.view?.music ?? 'Music'}
     viewable={false}
     onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}

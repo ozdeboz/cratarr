@@ -2,7 +2,7 @@
 //! use, the Music folder's playlist store and the catalogue. The other services read it; changes to the servers go
 //! through `switch_to`, one at a time.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -245,6 +245,16 @@ fn ids_state(remembered: Option<&str>, generation: &str) -> Ids {
     }
 }
 
+/// The highest record or artist id for life the JSON stores in the data folder name: crates, everyone's, the players'
+/// queues and the jobs waiting. A store that cannot be read names nothing.
+fn top_in_stores(data: &Path) -> i64 {
+    let mut stores: Vec<PathBuf> = ["crates.json", "queues.json", "convert-queue.json", "track-intake.json"].into_iter().map(|f| data.join(f)).collect();
+    if let Ok(users) = std::fs::read_dir(data.join("users")) {
+        stores.extend(users.flatten().map(|u| u.path().join("crates.json")));
+    }
+    stores.iter().filter_map(|f| std::fs::read_to_string(f).ok()).map(|text| crate::serve::ids::highest_named(&text)).max().unwrap_or(0)
+}
+
 /// A fresh start of lost track ids: where the new ids begin, and what still names an old track (rows per table).
 #[derive(Debug, serde::Serialize)]
 pub struct FreshIds {
@@ -353,7 +363,7 @@ impl Library {
             }
         }
         if !catalogue.ids_lost() {
-            playlists_db.set_meta(TOP_KEY, &catalogue.top_track().to_string())?;
+            playlists_db.set_meta(TOP_KEY, &catalogue.top_id().to_string())?;
         }
         let store = music_store(&playlists_db, &catalogue, data_dir.as_deref(), folders.music.as_deref()).await;
         Ok(Arc::new(Self {
@@ -444,15 +454,17 @@ impl Library {
         *self.tag_rules.write().unwrap_or_else(|p| p.into_inner()) = rules;
     }
 
-    /// Starts the track ids afresh after they were lost (the owner's choice for a lost catalogue.sqlite, 0101): the new
-    /// catalogue's ids become the truth, numbered from the next million above every old id the user data remembers or
-    /// names (an old id then names a missing track, never another one); what names an old track is counted. Blocking;
-    /// the administrators' (the API's guard).
+    /// Starts the ids afresh after they were lost (the owner's choice for a lost catalogue.sqlite, 0101): the new
+    /// catalogue's tracks and records become the truth, numbered from the next million above every old id the user data
+    /// remembers or names, in its tables and its JSON stores (an old id then names something missing, never something
+    /// else). The maps of ids that moved went with the lost file, so nothing leads an old id to its new one. What names an
+    /// old track is counted. Blocking; the administrators' (the API's guard).
     pub fn fresh_track_ids(&self) -> Result<FreshIds> {
         let ud = &self.playlists_db;
         let (references, named) = ud.track_references()?;
         let remembered: i64 = ud.meta(TOP_KEY)?.and_then(|v| v.parse().ok()).unwrap_or(0);
-        let floor = (remembered.max(named) / 1_000_000 + 1) * 1_000_000;
+        let stores = self.data_dir.as_deref().map_or(0, |d| top_in_stores(Path::new(d)));
+        let floor = (remembered.max(named).max(ud.top_named()?).max(stores) / 1_000_000 + 1) * 1_000_000;
         self.catalogue.number_above(floor)?;
         ud.set_meta(CATALOGUE_KEY, &self.catalogue.generation())?;
         ud.set_meta(TOP_KEY, &floor.to_string())?;
@@ -556,6 +568,26 @@ impl Library {
     /// Whether a catalogue folder's records are kept: not an Incoming library's.
     pub(super) fn is_kept(&self, folder: i64) -> bool {
         self.kept_folders().contains(&folder)
+    }
+
+    /// `account`'s own music's catalogue folder, while it is in use. Read only, and on every stream: `own_library` takes the
+    /// lock of those who change the libraries, and makes the folder.
+    pub fn own_folder(&self, account: &str) -> Option<i64> {
+        self.live().iter().find_map(|a| {
+            let used = a.libraries().into_iter().find(|u| u.kind == LibraryKind::Own && u.owner.as_deref() == Some(account))?;
+            let place = a.placement.libraries.iter().find(|l| l.id == used.id)?.folders.first()?.clone();
+            self.catalogue.folders().iter().find(|(_, p)| p.as_path() == std::path::Path::new(&place)).map(|(id, _)| id)
+        })
+    }
+
+    /// What each catalogue folder's library is, in the libraries' order: the main ones, own music, Incoming. What the
+    /// served library judges a copy by.
+    pub fn folder_kinds(&self) -> Vec<(i64, LibraryKind)> {
+        let f = self.folders();
+        let in_use = self.catalogue.folders();
+        let main = f.music.iter().chain(&f.more_main).map(|p| (p, LibraryKind::Main));
+        let listed = main.chain(f.own.iter().map(|p| (p, LibraryKind::Own))).chain(f.incoming.iter().map(|p| (p, LibraryKind::Incoming)));
+        listed.filter_map(|(p, kind)| in_use.iter().find(|(_, q)| q.as_path() == std::path::Path::new(p)).map(|(id, _)| (id, kind))).collect()
     }
 
     /// `account`'s own music as a library, its id (0101 point 9): its subfolder of the own-music folder, made at its first
@@ -716,6 +748,22 @@ impl Library {
 #[cfg(test)]
 mod switched_off_tests {
     use super::*;
+
+    /// CR3: crates, queues and waiting jobs name albums too, in a store no table scan sees.
+    #[test]
+    fn the_stores_in_the_data_folder_are_read_for_ids_in_use() {
+        let d = std::env::temp_dir().join(format!("cratarr-top-stores-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(d.join("users/ann")).unwrap();
+        assert_eq!(top_in_stores(&d), 0, "nothing there yet");
+        std::fs::write(d.join("crates.json"), r#"{"crates":[{"conditions":[{"value":{"of":"al-12"}}]}]}"#).unwrap();
+        assert_eq!(top_in_stores(&d), 12);
+        std::fs::write(d.join("users/ann/crates.json"), r#"{"favourites":{"like:al-40":true}}"#).unwrap();
+        assert_eq!(top_in_stores(&d), 40, "someone else's crates");
+        std::fs::write(d.join("queues.json"), r#"[{"tracks":[{"album_id":"al-90","id":"tr-5000"}]}]"#).unwrap();
+        assert_eq!(top_in_stores(&d), 90, "an album's, and no track's: those are `track_references`'");
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn own_music_is_each_subfolder_with_its_account_on_cratarrs_own_source() {

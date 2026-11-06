@@ -10,6 +10,8 @@
  *   longest ago shrinks first.
  * - Synced when the app starts, when an item is kept, when the settings change, and every few hours by WorkManager
  *   (KeptWorker), with the downloads' own rules: Wi-Fi unless mobile data is allowed, charging when asked.
+ * - The lists are written whole (KeptFile). A list of the items that is there and cannot be read stops the sync and any
+ *   keep, and what it held stays on the device: read as nothing kept, the next sync would remove it all.
  * All of it runs on one thread, so the lists are never changed at once from two places.
  */
 package app.cratarr
@@ -30,8 +32,13 @@ import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -87,15 +94,20 @@ object Kept {
 
     private fun file(context: Context, name: String) = File(context.applicationContext.filesDir, name)
 
-    private fun loadItems(context: Context): MutableList<Item> = try {
-        val a = JSONArray(file(context, ITEMS_FILE).readText())
-        (0 until a.length()).map { Item.of(a.getJSONObject(it)) }.toMutableList()
-    } catch (e: Exception) {
-        mutableListOf()
+    /** The kept items; throws when the list cannot be read ([KeptFile.list]), so nothing goes on from a list that is not it. */
+    private fun loadItems(context: Context): MutableList<Item> =
+        KeptFile.list(file(context, ITEMS_FILE)).map { Item.of(it) }.toMutableList()
+
+    /** The kept items to show: none while the list cannot be read. Only what changes things has to stop. */
+    private fun shownItems(context: Context): List<Item> = try {
+        loadItems(context)
+    } catch (e: IOException) {
+        Log.w(TAG, "the list: ${e.message}")
+        emptyList()
     }
 
     private fun saveItems(context: Context, items: List<Item>) {
-        file(context, ITEMS_FILE).writeText(JSONArray(items.map { it.json() }).toString())
+        KeptFile.write(file(context, ITEMS_FILE), JSONArray(items.map { it.json() }).toString())
     }
 
     /** Each download's holders, by its id (`source/id`). */
@@ -112,7 +124,7 @@ object Kept {
     private fun saveHolders(context: Context, holders: Map<String, Set<String>>) {
         val o = JSONObject()
         for ((k, v) in holders) if (v.isNotEmpty()) o.put(k, JSONArray(v.toList()))
-        file(context, HOLDERS_FILE).writeText(o.toString())
+        KeptFile.write(file(context, HOLDERS_FILE), o.toString())
     }
 
     // --- what the page and the other parts call ---
@@ -122,11 +134,17 @@ object Kept {
         if (on && source == Previews.SOURCE) return
         val app = context.applicationContext
         worker.execute {
-            val items = loadItems(app)
-            val key = "$kind:$source/$id"
-            items.removeAll { it.key == key }
-            if (on) items.add(Item(kind, source, id, name.ifEmpty { id }, System.currentTimeMillis(), null, JSONArray(), null, 0))
-            saveItems(app, items)
+            try {
+                val items = loadItems(app)
+                val key = "$kind:$source/$id"
+                items.removeAll { it.key == key }
+                if (on) items.add(Item(kind, source, id, name.ifEmpty { id }, System.currentTimeMillis(), null, JSONArray(), null, 0))
+                saveItems(app, items)
+            } catch (e: IOException) {
+                // A list that cannot be read is not written over, and a full disk is no reason to end the app and its player.
+                Log.w(TAG, "keep: ${e.message}")
+                return@execute
+            }
             syncHere(app, retryFailed = false)
         }
     }
@@ -149,7 +167,11 @@ object Kept {
         worker.execute {
             val holders = loadHolders(app)
             for (k in keys) holders.getOrPut(k) { mutableSetOf() }.add(MANUAL)
-            saveHolders(app, holders)
+            try {
+                saveHolders(app, holders)
+            } catch (e: IOException) {
+                Log.w(TAG, "hold: ${e.message}")
+            }
         }
     }
 
@@ -172,7 +194,11 @@ object Kept {
                     holders[k] = h
                 }
             }
-            saveHolders(app, holders)
+            try {
+                saveHolders(app, holders)
+            } catch (e: IOException) {
+                Log.w(TAG, "release: ${e.message}")
+            }
             onChange?.invoke()
         }
     }
@@ -214,6 +240,7 @@ object Kept {
         try {
             val prefs = Prefs(app)
             val server = prefs.serverUrl?.trimEnd('/')
+            // A list that cannot be read ends the pass here, before anything is removed or saved.
             val items = loadItems(app)
             if (server != null && items.isNotEmpty()) ask(app, server, items)
 
@@ -354,7 +381,7 @@ object Kept {
         val app = context.applicationContext
         return worker.submit<Map<String, String>> {
             val out = mutableMapOf<String, String>()
-            for (item in loadItems(app)) for (i in 0 until item.tracks.length()) {
+            for (item in shownItems(app)) for (i in 0 until item.tracks.length()) {
                 val t = item.tracks.optJSONObject(i) ?: continue
                 if (!t.isNull("album_id")) t.optString("album_id").takeIf { it.isNotEmpty() }?.let { out.putIfAbsent(keyOf(t), it) }
             }
@@ -366,7 +393,7 @@ object Kept {
 
     fun report(context: Context): JSONObject {
         val app = context.applicationContext
-        val items = worker.submit<List<Item>> { loadItems(app) }.get()
+        val items = worker.submit<List<Item>> { shownItems(app) }.get()
         val downloads = mutableMapOf<String, Download>()
         Downloads.manager(app).downloadIndex.getDownloads().use { c -> while (c.moveToNext()) downloads[c.download.request.id] = c.download }
         val manager = Downloads.manager(app)
@@ -429,6 +456,36 @@ object Kept {
             .put("waiting", waiting ?: JSONObject.NULL)
             .put("running", running)
             .put("current", current ?: JSONObject.NULL)
+    }
+}
+
+/** The kept lists as files: a stop or a full disk during a write must never read afterwards as nothing kept. */
+internal object KeptFile {
+    /** The list in [file]; none there yet is an empty one. One that is there and cannot be read throws. */
+    fun list(file: File): List<JSONObject> {
+        if (!file.exists()) return emptyList()
+        return try {
+            val a = JSONArray(file.readText())
+            (0 until a.length()).map { a.getJSONObject(it) }
+        } catch (e: JSONException) {
+            throw IOException("${file.name} cannot be read: ${e.message}", e)
+        }
+    }
+
+    /**
+     * [text] in [file], whole or not at all: written aside by [put], then put in its place in one step. As LinkLog's trim,
+     * but one that fails says so: `renameTo` answers false, and a save would be lost without a word.
+     */
+    fun write(file: File, text: String, put: (File, String) -> Unit = ::onDisk) {
+        val aside = File(file.parentFile, "${file.name}.new")
+        put(aside, text)
+        Files.move(aside.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE)
+    }
+
+    /** On the disk itself before it takes the list's place, or a power cut could leave an empty file there. */
+    private fun onDisk(file: File, text: String) = FileOutputStream(file).use { out ->
+        out.write(text.toByteArray())
+        out.fd.sync()
     }
 }
 

@@ -243,7 +243,7 @@ fn hand_of(o: &crate::userdata::overrides::Overrides) -> HashMap<store::Kind, Ve
 pub fn index(facts: &[crate::crates::Facts], album_of: &HashMap<String, String>, off: &HashSet<i64>) -> Vec<(&'static str, String, usize)> {
     let mut by: HashMap<(&'static str, String), (HashMap<String, usize>, HashSet<&str>)> = HashMap::new();
     // Of the libraries switched on (`off`: the folders of those switched off): what a word's crate holds.
-    for f in facts.iter().filter(|f| !off.contains(&f.folder)) {
+    for f in facts.iter().filter(|f| crate::crates::on_for(&f.folders, off)) {
         let Some(album) = f.track.and_then(|t| album_of.get(&crate::serve::ids::song(t))) else { continue };
         for (kind, list) in [("genre", &f.genres), ("style", &f.styles), ("mood", &f.moods), ("tag", &f.tags), ("label", &f.labels)] {
             for w in list {

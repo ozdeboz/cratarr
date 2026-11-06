@@ -3,6 +3,7 @@
   // whether Cratarr's words are written into the files' tags, a switch each; genre, types and years on to begin with.
   // Nothing is written without you: Health lists the records whose files differ, and writes them when you tap Write.
   // Types and years are one switch (0.13's, which also writes Classical as a genre).
+  import Asking from '../Asking.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { KIND_NAMES, kindOf, setWrite, words } from '../words.svelte';
   import type { CatalogueKind } from '../api';
@@ -31,7 +32,7 @@
         {/if}
       {/each}
     </Group>
-    {#if words.error && !words.value}<Group><Item lead="bad" name={words.error} wrap /></Group>{/if}
+    {#if words.error && !words.value}<Group><Item lead="bad" name={words.error} wrap /></Group>{:else if !words.value}<Asking />{/if}
   </div>
 </MenuSheet>
 

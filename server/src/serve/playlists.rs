@@ -24,11 +24,9 @@ pub fn song_of_line(cat: &Catalogue, line: &str) -> Option<String> {
     cat.track_of(folder, &rel).map(ids::song)
 }
 
-/// A song's playlist line: its path relative to the Music folder (as `app::sync`'s `line`).
+/// A song's playlist line: its row copy's path relative to the Music folder (as `app::sync`'s `line`).
 pub fn line_of_song(cat: &Catalogue, song: &str) -> Option<String> {
-    let track: i64 = song.strip_prefix(ids::SONG)?.parse().ok()?;
-    let (folder, rel) = cat.file_of(track)?;
-    cat.line_of(folder, &rel)
+    cat.row_line(song.strip_prefix(ids::SONG)?.parse().ok()?)
 }
 
 /// The lines of a playlist after removing the shown songs at `remove` (positions among the shown songs) and adding

@@ -26,7 +26,7 @@ import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
 import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
-import { dotsOf, type Dot, type Held } from './copiesRule';
+import { dotsOf, withCopyMoved, withCopyPicked, withoutCopy, type Dot, type Held } from './copiesRule';
 import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
@@ -39,8 +39,8 @@ let reading: Promise<void> | null = null;
 let lastRead: { text: string; sources: AlbumsView['sources'] | null } = { text: '', sources: null };
 /** Reads it (`fresh`: past the service worker's copy); one read at a time. */
 // The Library's list read again whenever its records' files or places changed (lib/dataChanged: a fix's titles, years
-// or lengths written; a record kept or moved), once it has been read.
-whenChanged(['files', 'collection', 'words'], () => void (library.view && readLibrary(true).catch(() => {})));
+// or lengths written; a record kept or moved; another copy picked), once it has been read.
+whenChanged(['files', 'collection', 'words', 'picks'], () => void (library.view && readLibrary(true).catch(() => {})));
 
 export function readLibrary(fresh: boolean): Promise<void> {
   reading ??= getAlbums(prefs.source || undefined, fresh)
@@ -86,8 +86,48 @@ export function libraryDots(source: string, album: Held & { id: string }): Dot[]
   return held ? dotsOf(held, s.library_info, shownIn(source)) : [];
 }
 
+/** A record as the Library's list has it, and that server's list: what its copies are and allow. */
+export function listedAlbum(source: string, id: string) {
+  const s = library.view?.sources.find((x) => x.id === source);
+  const a = s?.albums.find((x) => x.id === id);
+  return s && a ? { s, a } : null;
+}
+
+/** Each listed record `changes` names, changed at once, before the list is read again: the Library's list and what its
+ *  ids are found by are replaced whole, and it is not taken for the list as last read. */
+function changeListed(changes: { source: string; id: string }[], change: (a: ListedAlbum, i: number) => ListedAlbum | null) {
+  const v = library.view;
+  if (!v) return;
+  const at = new Map(changes.map((c, i) => [`${c.source}/${c.id}`, i]));
+  const sources = v.sources.map((s) => ({
+    ...s,
+    albums: s.albums.flatMap((a) => {
+      const i = at.get(`${s.id}/${a.id}`);
+      return i === undefined ? a : (change(a, i) ?? []);
+    }),
+  }));
+  library.view = { ...v, sources };
+}
+
+/** Copies gone (deleted, or taken in by a Replace). Answers the records that went with them: a record stays while one
+ *  copy does, and it is what stays that the page goes on showing. */
+export function copiesGone<G extends { source: string; id: string; from?: string }>(gone: G[]): G[] {
+  changeListed(gone, (a, i) => withoutCopy(a, gone[i].from));
+  return gone.filter((g) => !listedAlbum(g.source, g.id));
+}
+
+/** Copies moved: their records stay, each copy in its new library. */
+export function copiesMoved(moved: { source: string; id: string; from?: string; to: string }[]) {
+  changeListed(moved, (a, i) => withCopyMoved(a, moved[i].from, moved[i].to));
+}
+
+/** A copy picked to play from: its card says so at once, the server's word coming with the next read. */
+export function copyPicked(source: string, id: string, chosen: string) {
+  changeListed([{ source, id }], (a) => withCopyPicked(a, chosen));
+}
+
 /** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;
- *  else (a download from before a playlist's rows said their albums, or an album since moved) the Library's album of
+ *  else (a download from before a playlist's rows said their albums; a record's id does not move) the Library's album of
  *  that name on its server, the track's artist's when several have the name. Else its own id, or null. */
 export function albumOfDownload(t: DownloadedTrack): string | null {
   const listed = library.view && indexOf(library.view).get(t.source);
@@ -250,9 +290,10 @@ export async function rateAlbum(source: string, id: string, stars: number) {
 /** An artist's picture on this device: kept as an album's cover is (lib/localCovers), under an id no album has. */
 export const artistPictureId = (name: string) => `artist:${name}`;
 
-export const lossless = (a: ListedAlbum) => a.format === 'FLAC';
+type Quality = Pick<ListedAlbum, 'format' | 'bitrate_kbps'>;
+export const lossless = (a: Quality) => a.format === 'FLAC';
 /** "FLAC", "MP3 256 kbps", "Mixed formats". */
-export const quality = (a: ListedAlbum) =>
+export const quality = (a: Quality) =>
   [a.format ?? 'Mixed formats', lossless(a) || a.bitrate_kbps === null ? null : `${a.bitrate_kbps} kbps`].filter(Boolean).join(' ');
 /** Lossy below 320 kbps somewhere. */
 export const weak = (a: ListedAlbum) => !lossless(a) && a.bitrate_kbps !== null && a.bitrate_kbps < 320;

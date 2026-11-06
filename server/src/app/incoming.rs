@@ -31,14 +31,34 @@ const PLAYDATA: &str = "playdata";
 /// What each moved file's old item held (plays, favourites…), read before the move: the server forgets it after.
 const PLAYDATA_PLAN: &str = "playdata-plan";
 
-/// One user's data on one moved file's old server item, to give to its new item.
+/// One user's data on one moved file's old server item, to give to its new item. Another server's: Cratarr's own item is the
+/// track, which a move does not change.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct PlayData {
     source: String,
     track: i64,
     old_item: String,
+    /// Where the file went: its item is found by this, as a track in two folders has an item for each.
+    to: (i64, String),
     user: String,
     data: serde_json::Value,
+}
+
+/// The item a moved file has at its new place, once the server has it and a sync pass linked it.
+fn new_item(c: &crate::catalogue::Catalogue, p: &PlayData) -> Option<String> {
+    let mut items = c.track_ids(&p.source, p.to.0, std::slice::from_ref(&p.to.1)).ok()?;
+    items.pop().flatten().filter(|new| *new != p.old_item)
+}
+
+/// An album of a list as `hidden` knows it: a copy is hidden, never a record.
+fn hidden_key(a: &source::Album) -> (String, String) {
+    (a.id.clone(), a.library.clone().unwrap_or_default())
+}
+
+/// Whether a copy's id still reaches the server's list: `listed` is every copy on Incoming's lists. What a list no longer has
+/// needs no hiding, and a copy of the record in another library says nothing of this one.
+fn still_hidden(hidden: &mut std::collections::HashSet<(String, String)>, listed: &std::collections::HashSet<(String, String)>) {
+    hidden.retain(|key| listed.contains(key));
 }
 
 /// What Keep would do with an album, for the page to show before asking.
@@ -219,7 +239,11 @@ fn verdicts(
     order.sort_by_key(|(f, _)| (!main.contains(f), *f));
     let mut out = BTreeMap::new();
     for a in albums {
-        let own = a.path.as_deref().and_then(|p| incoming_dir(incoming, p));
+        // Cratarr's own says where it lies: by the path's end alone, two libraries' folders of one name are one.
+        let own = match a.copies.first() {
+            Some(c) => incoming.iter().find(|d| d.folder == c.folder && d.dir == c.dir),
+            None => a.path.as_deref().and_then(|p| incoming_dir(incoming, p)),
+        };
         let facts = AlbumFacts {
             release_group: own.and_then(|d| d.release_group.clone()),
             artist: a.artist.clone().unwrap_or_default(),
@@ -256,6 +280,35 @@ fn quality_in(a: &Active, folder: &std::path::Path) -> settings::Quality {
 /// The catalogue's album directory behind a server path (the server's paths and Cratarr's differ in front).
 fn incoming_dir<'a>(incoming: &'a [IncomingDir], path: &str) -> Option<&'a IncomingDir> {
     incoming.iter().filter(|d| !d.dir.is_empty() && path.ends_with(&format!("/{}", d.dir))).max_by_key(|d| d.dir.len())
+}
+
+/// A record's entry among Incoming's `listed`, each one library's copy: the one in library `from`. Several and none named is
+/// refused: Keep, Delete and Replace land on one copy, and a record can wait in two Incoming libraries at once.
+fn waiting_copy<'a>(listed: impl Iterator<Item = &'a source::Album>, album_id: &str, from: Option<&str>) -> Result<source::Album, ToggleError> {
+    let mut found = listed.filter(|a| a.id == album_id && from.is_none_or(|f| a.library.as_deref() == Some(f)));
+    let first = found.next().cloned().ok_or_else(|| ToggleError::Refused("that album is no longer in Incoming".into()))?;
+    match (from, found.next()) {
+        (None, Some(_)) => Err(ToggleError::Refused("It is in several libraries: say which copy".into())),
+        _ => Ok(first),
+    }
+}
+
+/// Whether what lies under a copy's `dir` is that copy alone, as Delete and Move take the folder whole. `dir` is what its
+/// files share, so it can be a parent of other records' folders, or the library's root: an album in two artists' folders has
+/// the root for its `dir` (files A33). Blocking.
+fn whole_copy(album: &str, folder: i64, root: &std::path::Path, dir: &str) -> Result<bool> {
+    if dir.is_empty() {
+        return Ok(false);
+    }
+    let Some(served) = crate::serve::instance() else { return Ok(true) };
+    let audio: Vec<String> = files_under(&root.join(dir)).into_iter().filter(|f| crate::catalogue::walk::is_audio(f)).map(|f| format!("{dir}/{f}")).collect();
+    served.library.copy_holds_all(album, folder, dir, &audio)
+}
+
+/// The release group a copy's files name, the first in their order: what Lidarr is told to stop fetching. Blocking.
+fn release_group_of(c: &crate::catalogue::Catalogue, folder: i64, dir: &str) -> Option<String> {
+    let files = c.album_tags(folder, dir).ok()?;
+    files.into_iter().flat_map(|(_, tags)| tags).find(|(name, value)| name == "musicbrainz_releasegroupid" && !value.trim().is_empty()).map(|(_, value)| value)
 }
 
 /// How long a folder's write test is trusted (a remount needs a restart anyway, but ownership can be fixed live).
@@ -334,8 +387,8 @@ pub struct IncomingService {
     owned: Mutex<Option<Owned>>,
     /// Optional, from Settings: asked to stop fetching albums deleted from Incoming. Swapped in whole on save.
     lidarr: std::sync::RwLock<LidarrPair>,
-    /// Incoming albums deleted here, hidden until the server's list no longer has them.
-    hidden: Mutex<std::collections::HashSet<String>>,
+    /// Copies deleted here, by id and library, hidden until the server's list no longer has them.
+    hidden: Mutex<std::collections::HashSet<(String, String)>>,
     /// What happened, for the handlers and for Undo (survives restarts).
     journal: Arc<Journal>,
     /// See `Underway`.
@@ -469,7 +522,7 @@ impl IncomingService {
         }
         let hidden = self.hidden.lock().await.clone();
         for view in &mut sources {
-            view.albums.retain(|a| !hidden.contains(&a.id));
+            view.albums.retain(|a| !hidden.contains(&hidden_key(a)));
         }
         // What each album lacks, where it is Cratarr's own (its ids are the library's).
         let lacking: std::collections::HashMap<String, Vec<&'static str>> = match crate::serve::instance() {
@@ -498,7 +551,10 @@ impl IncomingService {
                 view.verdicts = verdicts(&view.albums, &libraries, &main, &incoming, library_of);
                 let mut deletable = Vec::new();
                 for a in &view.albums {
-                    let folder = a.path.as_deref().and_then(|p| incoming_dir(&incoming, p)).and_then(|d| folders.get(d.folder));
+                    let folder = match a.copies.first() {
+                        Some(c) => folders.get(c.folder),
+                        None => a.path.as_deref().and_then(|p| incoming_dir(&incoming, p)).and_then(|d| folders.get(d.folder)),
+                    };
                     if let Some(f) = folder
                         && self.can_write(f).await
                     {
@@ -583,7 +639,8 @@ impl IncomingService {
     /// keeps the previous list. Cheap: only new or changed albums cost more than one request (see the
     /// server).
     pub async fn refresh(&self) {
-        let ids = |v: &IncomingSourceView| v.albums.iter().map(|a| a.id.clone()).collect::<std::collections::BTreeSet<_>>();
+        // By id and library: a copy of a record leaving one Incoming library for another changes the list.
+        let ids = |v: &IncomingSourceView| v.albums.iter().map(hidden_key).collect::<std::collections::BTreeSet<_>>();
         let mut keep = std::collections::HashSet::new();
         let mut changed = false;
         for (a, s, libraries) in self.incoming_sources() {
@@ -606,31 +663,37 @@ impl IncomingService {
             let _ = self.lists_changed.send(());
         }
         // A deleted album stays hidden until the server's fresh list no longer has it (or Undo brings it back).
-        let listed: std::collections::HashSet<String> =
-            self.cache.lock().await.values().flat_map(|v| v.albums.iter().map(|a| a.id.clone())).collect();
-        self.hidden.lock().await.retain(|id| listed.contains(id));
+        let listed: std::collections::HashSet<(String, String)> = self.cache.lock().await.values().flat_map(|v| v.albums.iter().map(hidden_key)).collect();
+        still_hidden(&mut *self.hidden.lock().await, &listed);
+    }
+
+    /// An action on a copy undone: it is listed again. With its library not known any more, every copy of the record is.
+    async fn unhide(&self, source_id: &str, album_id: &str, folder: i64) {
+        let library = self.library_at(source_id, folder);
+        self.hidden.lock().await.retain(|(id, l)| id != album_id || library.as_ref().is_some_and(|at| at != l));
     }
 
     /// Delete an Incoming album: into the trash inside its folder (Undo brings it back; emptied after
     /// the trash days set in Settings), and Lidarr stops fetching it.
-    pub async fn delete(&self, source_id: &str, album_id: &str) -> Result<DeleteResult, ToggleError> {
-        self.refuse_if_queued(album_id)?;
-        let album = self
-            .cache
-            .lock()
-            .await
-            .values()
-            .filter(|v| v.id == source_id)
-            .flat_map(|v| v.albums.iter())
-            .find(|a| a.id == album_id)
-            .cloned()
-            .ok_or_else(|| ToggleError::Refused("that album is no longer in Incoming".into()))?;
+    pub async fn delete(&self, source_id: &str, album_id: &str, from: Option<&str>) -> Result<DeleteResult, ToggleError> {
+        let album = self.waiting(source_id, album_id, from).await?;
         self.delete_listed(source_id, album).await
     }
 
-    /// Whether a catalogue folder's records are kept (a main library's or own music's): not Incoming's.
-    pub fn in_main(&self, folder: i64) -> bool {
-        self.lib.is_kept(folder)
+    /// A record's entry on Incoming's lists: its copy in library `from` (`waiting_copy`).
+    async fn waiting(&self, source_id: &str, album_id: &str, from: Option<&str>) -> Result<source::Album, ToggleError> {
+        let cache = self.cache.lock().await;
+        waiting_copy(cache.values().filter(|v| v.id == source_id).flat_map(|v| v.albums.iter()), album_id, from)
+    }
+
+    /// `account`'s own music's catalogue folder (`Library::own_folder`).
+    pub fn own_folder(&self, account: &str) -> Option<i64> {
+        self.lib.own_folder(account)
+    }
+
+    /// What each catalogue folder's library is (`Library::folder_kinds`).
+    pub fn folder_kinds(&self) -> Vec<(i64, crate::settings::LibraryKind)> {
+        self.lib.folder_kinds()
     }
 
     /// The catalogue folders that libraries switched off (`source/library`) leave out: those no library switched on
@@ -659,8 +722,8 @@ impl IncomingService {
     /// Delete a listed album of any used library (decision 0034): into that library's own trash (each library keeps
     /// its own, the owner, 2026-10-16), Undo for the trash days.
     pub async fn delete_listed(&self, source_id: &str, album: source::Album) -> Result<DeleteResult, ToggleError> {
-        self.refuse_if_queued(&album.id)?;
         let at = self.locate_listed(source_id, album).await?;
+        self.refuse_if_queued(&at.album.id, at.dir.folder)?;
         let (album, dir, folder) = (at.album, at.dir, at.root);
         let catalogue = self.lib.catalogue();
         if !self.can_write(&folder).await {
@@ -681,14 +744,15 @@ impl IncomingService {
             release_group: if self.lib.is_kept(dir.folder) { None } else { dir.release_group.clone() },
         };
         // Deleting the album that plays: the player stops first (a player going on with an item the server then drops
-        // reports on it, which Jellyfin refuses; decision 0013). Nothing is played after: it is gone.
+        // reports on it, which Jellyfin refuses; decision 0013). Nothing is played after: it is gone. Playing another copy
+        // of the record, it goes on.
         let (c, f, d) = (catalogue.clone(), dir.folder, dir.dir.clone());
-        let tracks: Vec<i64> = tokio::task::spawn_blocking(move || {
-            c.album_tags(f, &d).unwrap_or_default().into_iter().filter_map(|(rel, _)| c.track_of(f, &rel)).collect()
+        let (tracks, leaving): (Vec<i64>, Vec<(i64, String)>) = tokio::task::spawn_blocking(move || {
+            c.album_tags(f, &d).unwrap_or_default().into_iter().filter_map(|(rel, _)| Some((c.track_of(f, &rel)?, (f, rel)))).unzip()
         })
         .await
         .unwrap_or_default();
-        if let Some(mut p) = self.playing_among(&tracks, &tracks.iter().map(|t| (*t, *t)).collect::<Vec<_>>()).await {
+        if let Some(mut p) = self.playing_among(&tracks, &tracks.iter().map(|t| (*t, *t)).collect::<Vec<_>>(), &leaving).await {
             self.hold(&mut p).await;
         }
         let underway = self.intend(now, &event)?;
@@ -706,7 +770,7 @@ impl IncomingService {
         }
         self.finish_reject(&event).await;
         self.journal.applied(id)?;
-        self.hidden.lock().await.insert(album.id.clone());
+        self.hidden.lock().await.insert(hidden_key(&album));
         catalogue.poke();
         Ok(DeleteResult { undo: id.to_string(), title: album.title })
     }
@@ -714,10 +778,31 @@ impl IncomingService {
     /// After the files went to the trash: the catalogue rows follow (their tracks keep their ids, decision 0011: Undo
     /// brings them back unchanged). Safe to repeat.
     async fn finish_reject(&self, event: &Event) {
-        let Event::AlbumRejected { folder, dir, token, title, .. } = event else { return };
+        let Event::AlbumRejected { source, album_id, folder, dir, token, title, .. } = event else { return };
         let (c, f, rel, tok) = (self.lib.catalogue(), *folder, dir.clone(), token.clone());
         if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
             tracing::warn!("catalogue: could not mark {title} as trashed: {e:#}");
+        }
+        self.forget_picks(source, album_id, *folder, Some(dir)).await;
+    }
+
+    /// A copy left catalogue folder `folder`: the picks of it go with it, also where it went on to another library, and an Undo
+    /// does not bring them back (Q13). `dir`: where it lay, where another folder of that library can still hold the record.
+    async fn forget_picks(&self, source_id: &str, album_id: &str, folder: i64, dir: Option<&str>) {
+        let Some(library) = self.library_at(source_id, folder) else { return };
+        let (db, album, dir) = (self.lib.playlists_db().clone(), album_id.to_string(), dir.map(str::to_string));
+        let done = tokio::task::spawn_blocking(move || -> Result<()> {
+            let stays = dir.as_deref().zip(crate::serve::instance()).is_some_and(|(d, s)| s.library.copies_of(&album).is_ok_and(|c| c.iter().any(|c| c.folder == folder && c.dir != d)));
+            if stays {
+                return Ok(());
+            }
+            db.forget_copy_picks(&album, &library)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|r| r);
+        if let Err(e) = done {
+            tracing::warn!("the picks of {album_id} not forgotten: {e:#}");
         }
     }
 
@@ -805,7 +890,7 @@ impl IncomingService {
         let gone = || ToggleError::Refused("that deletion can no longer be undone".into());
         let id: EventId = key.parse().map_err(|_| gone())?;
         let entry = self.journal.get(id)?.filter(|e| e.applied).ok_or_else(gone)?;
-        let Event::AlbumRejected { album_id, title, folder, dir, token, .. } = &entry.event else { return Err(gone()) };
+        let Event::AlbumRejected { source, album_id, title, folder, dir, token, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back")));
         }
@@ -826,21 +911,33 @@ impl IncomingService {
         }
         self.journal.mark_undone(id, epoch_now())?;
         self.resume_fetching(id, title).await;
-        self.hidden.lock().await.remove(album_id);
+        self.unhide(source, album_id, *folder).await;
         catalogue.poke();
         Ok(title.clone())
     }
 
-    /// Find a listed album on disk, in any of the catalogue's folders (the main libraries' too).
+    /// Find a listed album on disk: of Cratarr's own the copy it names, where it says it lies; another server's by its path.
     async fn locate_listed(&self, source_id: &str, album: source::Album) -> Result<Located, ToggleError> {
+        let Some((folder, dir)) = album.copies.first().map(|c| (c.folder, c.dir.clone())) else { return self.locate_by_path(source_id, album).await };
+        let root = self.root_of(folder)?;
+        let (c, id, at, d) = (self.lib.catalogue(), album.id.clone(), root.clone(), dir.clone());
+        let found = tokio::task::spawn_blocking(move || -> Result<Option<Option<String>>> { Ok(whole_copy(&id, folder, &at, &d)?.then(|| release_group_of(&c, folder, &d))) })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let release_group = found.ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
+        Ok(Located { source: source_id.to_string(), album, dir: IncomingDir { folder, dir, release_group }, root })
+    }
+
+    /// Find another server's album on disk by the end of its path, in its own library's folder where the listing says
+    /// which: two libraries can each hold a folder of that name.
+    async fn locate_by_path(&self, source_id: &str, album: source::Album) -> Result<Located, ToggleError> {
         let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
         let (libraries, main, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        // A main library's album in its own library's folder where the listing says which: two main libraries can each
-        // hold a folder of that name.
         let own = album.library.as_deref().and_then(|l| {
             let live = self.lib.live();
             self.folder_of(live.iter().find(|a| a.cfg.id == source_id)?, l).ok()
         });
+        let incoming: Vec<IncomingDir> = incoming.iter().filter(|d| own.is_none_or(|o| o == d.folder)).cloned().collect();
         let in_main: Vec<IncomingDir> = libraries
             .iter()
             .filter(|(f, _)| main.contains(f) && own.is_none_or(|o| o == *f))
@@ -854,31 +951,10 @@ impl IncomingService {
         Ok(Located { source: source_id.to_string(), album, dir, root })
     }
 
-    /// Find an Incoming album on disk.
-    async fn locate(&self, source_id: &str, album_id: &str) -> Result<Located, ToggleError> {
-        let album = self
-            .cache
-            .lock()
-            .await
-            .values()
-            .filter(|v| v.id == source_id)
-            .flat_map(|v| v.albums.iter())
-            .find(|a| a.id == album_id)
-            .cloned()
-            .ok_or_else(|| ToggleError::Refused("that album is no longer in Incoming".into()))?;
-        let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
-        let (_, _, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        let dir = incoming_dir(&incoming, &path)
-            .cloned()
-            .ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
-        let root = self
-            .lib
-            .catalogue()
-            .folders()
-            .get(dir.folder)
-            .cloned()
-            .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
-        Ok(Located { source: source_id.to_string(), album, dir, root })
+    /// Find an Incoming album on disk: its copy in library `from`.
+    async fn locate(&self, source_id: &str, album_id: &str, from: Option<&str>) -> Result<Located, ToggleError> {
+        let album = self.waiting(source_id, album_id, from).await?;
+        self.locate_listed(source_id, album).await
     }
 
     /// Work out Keep for an album into the main library in catalogue folder `target`: its new names, or why not. Reads
@@ -913,8 +989,8 @@ impl IncomingService {
 
     /// What Keep would do with an album (decision 0013) into `to` (`keep_target`), for the page to show before asking.
     /// Changes nothing.
-    pub async fn keep_preview(&self, source_id: &str, album_id: &str, to: Option<&str>, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
-        let at = self.locate(source_id, album_id).await?;
+    pub async fn keep_preview(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
+        let at = self.locate(source_id, album_id, from).await?;
         let (target, quality) = self.keep_target(source_id, to)?;
         let (_, plan) = self.plan_keep(&at, target, year).await?;
         let convert = self.to_convert(&at, quality).await.len();
@@ -949,9 +1025,9 @@ impl IncomingService {
     /// (handlers). Undo puts it all back.
     /// Lossless files above the target's quality limit are converted first, in the queue: the plan is checked now, so
     /// a refusal shows at once.
-    pub async fn keep(&self, source_id: &str, album_id: &str, to: Option<&str>, year: Option<&str>) -> Result<KeepResult, ToggleError> {
-        self.refuse_if_queued(album_id)?;
-        let at = self.locate(source_id, album_id).await?;
+    pub async fn keep(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let at = self.locate(source_id, album_id, from).await?;
+        self.refuse_if_queued(album_id, at.dir.folder)?;
         let (target, quality) = self.keep_target(source_id, to)?;
         self.move_located(source_id, at, target, quality, year).await
     }
@@ -995,6 +1071,12 @@ impl IncomingService {
         }
     }
 
+    /// The id of a server's used library in catalogue folder `folder`.
+    fn library_at(&self, source_id: &str, folder: i64) -> Option<String> {
+        let (live, folders) = (self.lib.live(), self.lib.catalogue().folders());
+        library_in(live.iter().find(|a| a.cfg.id == source_id)?, folders.get(folder)?)
+    }
+
     /// What a server calls its used library in catalogue folder `folder`, for what Keep, Move and Replace say; else
     /// "that library".
     fn library_name(&self, source_id: &str, folder: i64) -> String {
@@ -1011,8 +1093,8 @@ impl IncomingService {
     /// the album's folder as it is) and its quality limit (lossless files above it converted first, in the queue).
     /// `album` is the listed album (a main library's or another library's).
     pub async fn move_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
-        self.refuse_if_queued(&album.id)?;
         let at = self.locate_listed(source_id, album).await?;
+        self.refuse_if_queued(&at.album.id, at.dir.folder)?;
         let (target, quality) = self.target_of(source_id, to)?;
         if target == at.dir.folder {
             return Err(ToggleError::Refused("the album is in that library already".into()));
@@ -1100,16 +1182,26 @@ impl IncomingService {
         let run = super::file_runs::track(what, title);
         let done = self.keep_moving(at, target, year, converted, job).await;
         match &done {
-            Ok(k) => {
-                let (lib, journal, source, album) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone());
-                run.moved(k.undo.clone(), move || {
-                    let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
-                    async move { matches!(fate_of(&lib, &journal, &source, &album).await, Some(AlbumFate::Moved(_))) }
-                });
-            }
+            Ok(k) => run.moved(k.undo.clone(), self.read_in(at, target)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
         }
         done
+    }
+
+    /// What says a copy that went into catalogue folder `target` has been read there, for Health's "adding". Cratarr's own:
+    /// the record has a copy there, as its ids tell nothing, and a copy that does not serve has no link to tell by (files
+    /// B5). Another server: its tracks' new items name an album.
+    fn read_in(&self, at: &Located, target: i64) -> impl Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> + Send + 'static {
+        let (lib, journal, source, album, own) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone(), !at.album.copies.is_empty());
+        move || {
+            let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
+            Box::pin(async move {
+                match own {
+                    true => copy_dir_in(&album, target).await.is_some(),
+                    false => matches!(fate_of(&lib, &journal, &source, &album).await, Some(AlbumFate::Moved(_))),
+                }
+            })
+        }
     }
 
     /// Keep's moving (`converted`: what conversion did just before). `job`: the queued job doing it, told the event's
@@ -1138,9 +1230,10 @@ impl IncomingService {
             .iter()
             .map(|(rel, to)| TrackMove { track: c.track_of(at.dir.folder, &from(rel)), from: (at.dir.folder, from(rel)), to: (target, to.clone()), was: None })
             .collect();
-        // Before anything moves: what users did with the old server items (the server forgets them after).
+        // Before anything moves: what users did with the old server items (the server forgets them after). Cratarr's own item
+        // is the track, which stays.
         let mut play: Vec<PlayData> = Vec::new();
-        for (source, s) in self.lib.connected_sources() {
+        for (source, s) in self.lib.connected_sources().into_iter().filter(|(source, _)| source != crate::source::cratarr::KIND.id) {
             let rels: Vec<String> = moves.iter().map(|m| m.from.1.clone()).collect();
             let items = c.track_ids(&source, at.dir.folder, &rels).unwrap_or_default();
             for (m, item) in moves.iter().zip(items) {
@@ -1150,6 +1243,7 @@ impl IncomingService {
                         source: source.clone(),
                         track,
                         old_item: item.clone(),
+                        to: m.to.clone(),
                         user,
                         data,
                     })),
@@ -1177,11 +1271,11 @@ impl IncomingService {
         }
         self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
         // Playing from this album: carried on with its new copy after the move (the old items go).
-        let order: Vec<i64> = match &event {
-            Event::AlbumAdopted { moves, .. } => moves.iter().filter_map(|m| m.track).collect(),
-            _ => Vec::new(),
+        let (order, leaving): (Vec<i64>, Vec<(i64, String)>) = match &event {
+            Event::AlbumAdopted { moves, .. } => moves.iter().filter_map(|m| Some((m.track?, m.from.clone()))).unzip(),
+            _ => Default::default(),
         };
-        let mut playing = self.playing_among(&order, &order.iter().map(|t| (*t, *t)).collect::<Vec<_>>()).await;
+        let mut playing = self.playing_among(&order, &order.iter().map(|t| (*t, *t)).collect::<Vec<_>>(), &leaving).await;
         if let Some(p) = playing.as_mut() {
             self.hold(p).await;
         }
@@ -1199,7 +1293,7 @@ impl IncomingService {
         }
         self.finish_adopt(&event, false, playing.is_some()).await;
         self.journal.applied(id)?;
-        self.hidden.lock().await.insert(at.album.id.clone());
+        self.hidden.lock().await.insert(hidden_key(&at.album));
         *self.owned.lock().await = None;
         c.poke();
         if let Some(p) = playing {
@@ -1233,9 +1327,9 @@ impl IncomingService {
         fate_of(&self.lib, &self.journal, source_id, album_id).await
     }
 
-    /// Refused while the album waits in the conversion queue (Cancel it first).
-    fn refuse_if_queued(&self, album_id: &str) -> Result<(), ToggleError> {
-        match self.queue.busy(album_id) {
+    /// Refused while this copy waits in the conversion queue (Cancel it first). A record's other copies are free.
+    fn refuse_if_queued(&self, album_id: &str, folder: i64) -> Result<(), ToggleError> {
+        match self.queue.busy(album_id, folder) {
             true => Err(ToggleError::Refused("that album is being converted".into())),
             false => Ok(()),
         }
@@ -1313,7 +1407,10 @@ impl IncomingService {
     /// `hold_gone`: tell the servers only where the files went; where they left is told later (carry-on, when the album
     /// plays: its player must not go on with an item the server already dropped).
     async fn finish_adopt(&self, event: &Event, back: bool, hold_gone: bool) {
-        let Event::AlbumAdopted { moves, title, .. } = event else { return };
+        let Event::AlbumAdopted { source, album_id, from_dir, moves, title, .. } = event else { return };
+        if !back {
+            self.forget_picks(source, album_id, from_dir.0, Some(&from_dir.1)).await;
+        }
         let c = self.lib.catalogue();
         let pairs: Vec<((i64, String), (i64, String))> =
             moves.iter().map(|m| if back { (m.to.clone(), m.from.clone()) } else { (m.from.clone(), m.to.clone()) }).collect();
@@ -1337,7 +1434,7 @@ impl IncomingService {
 
     /// Undo a Keep: the files back into Incoming, the catalogue rows with them, Lidarr fetching as before.
     async fn undo_keep(&self, entry: &Entry) -> Result<String, ToggleError> {
-        let Event::AlbumAdopted { album_id, title, .. } = &entry.event else { unreachable!() };
+        let Event::AlbumAdopted { source, album_id, title, from_dir, .. } = &entry.event else { unreachable!() };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back where it was")));
         }
@@ -1351,14 +1448,15 @@ impl IncomingService {
         self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;
-        self.hidden.lock().await.remove(album_id);
+        self.unhide(source, album_id, from_dir.0).await;
         *self.owned.lock().await = None;
         self.lib.catalogue().poke();
         Ok(title.clone())
     }
 
     /// Give the moved files' new server items the play data their old items had (read before the move). Waits until
-    /// the server has the new items and Cratarr has linked them (a scan, then a sync pass); safe to repeat.
+    /// the server has the new items and Cratarr has linked them (a scan, then a sync pass); safe to repeat. A plan from
+    /// before these knew where their file went reads as nothing, and so does one of Cratarr's own, which could only wait.
     async fn carry_play_data(&self, entry: &Entry) {
         if self.journal.result(entry.id, PLAYDATA).ok().flatten().is_some() {
             return;
@@ -1370,10 +1468,9 @@ impl IncomingService {
         let mut ready = Vec::new();
         for p in &plan {
             let Some(s) = sources.get(&p.source) else { return };
-            match c.source_id_of(&p.source, p.track) {
-                Some(new) if new != p.old_item => ready.push((s.clone(), new, p)),
-                _ => return, // not scanned or linked yet: the next pass tries again
-            }
+            // Not scanned or linked yet: the next pass tries again.
+            let Some(new) = new_item(&c, p) else { return };
+            ready.push((s.clone(), new, p));
         }
         for (s, new, p) in ready {
             if let Err(e) = s.set_user_data(&new, &p.user, &p.data).await {
@@ -1606,6 +1703,7 @@ mod tests {
             duration_secs: None,
             tags: Vec::new(),
             library: None,
+            copies: Vec::new(),
             artists: Vec::new(),
             release: Default::default(),
         }
@@ -1762,6 +1860,145 @@ mod tests {
         }
     }
 
+    /// A library's list entry for its copy of `id`, lying at `dir` in catalogue folder `folder`.
+    fn copy_at(id: &str, folder: i64, library: &str, dir: &str) -> source::Album {
+        let copy = source::AlbumCopy { library: library.into(), folder, dir: dir.into(), ..Default::default() };
+        source::Album { library: Some(library.into()), copies: vec![copy], ..album(id, &format!("{library}/{dir}"), "FLAC") }
+    }
+
+    /// Two copies of one record, one folder name in each library: the case where the path's end cannot tell them apart.
+    fn in_both(music: &std::path::Path, inc: &std::path::Path) {
+        for (root, body) in [(music, b"kept".as_slice()), (inc, b"waiting".as_slice())] {
+            std::fs::create_dir_all(root.join("A/Album")).unwrap();
+            std::fs::write(root.join("A/Album/1.flac"), body).unwrap();
+        }
+    }
+
+    /// One folder name in Music, Incoming and two accounts' own music, the catalogue knowing all four: by the path's end one
+    /// account's Delete lands in another's own music, and an administrator's in Incoming. What is named goes, and nothing else,
+    /// whichever it is, and its Undo brings that one back.
+    #[tokio::test]
+    async fn delete_names_the_copy() {
+        let roots = [folder("named-music"), folder("named-inc"), folder("named-ann"), folder("named-bob")];
+        let svc = on_disk(&roots[0], &roots[1]).await;
+        let c = svc.lib.catalogue();
+        c.set_folders(roots.to_vec()).unwrap();
+        for (n, root) in roots.iter().enumerate() {
+            std::fs::create_dir_all(root.join("A/Album")).unwrap();
+            std::fs::write(root.join("A/Album/1.flac"), [n as u8]).unwrap();
+        }
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        let standing = |gone: Option<usize>| roots.iter().enumerate().filter(|(n, _)| Some(*n) != gone).all(|(n, r)| std::fs::read(r.join("A/Album/1.flac")).is_ok_and(|b| b == [n as u8]));
+        for (n, root) in roots.iter().enumerate() {
+            let named = svc.delete_listed("cratarr", copy_at("al-1", n as i64, &root.to_string_lossy(), "A/Album")).await.unwrap();
+            assert!(!root.join("A/Album").exists(), "the copy named went: {n}");
+            assert!(standing(Some(n)), "every other copy stands: {n}");
+            assert_eq!(crate::trash::holds(root, &format!("{}/A/Album", named.undo)), false, "the key is the journal's, not the trash's");
+            svc.undo(&named.undo).await.unwrap();
+            assert!(standing(None), "back where it was: {n}");
+        }
+        for d in roots {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// A move finds what it moves by the copy too: with both folders named alike, the path's end would find Incoming's first
+    /// whichever was asked, and "already in that library" would never be said.
+    #[tokio::test]
+    async fn move_cannot_hit_the_other_copy() {
+        let (music, inc) = (folder("moved-music"), folder("moved-inc"));
+        let svc = on_disk(&music, &inc).await;
+        in_both(&music, &inc);
+        let (kept, waiting) = (svc.locate_listed("cratarr", copy_at("al-1", 0, "/m", "A/Album")).await.unwrap(), svc.locate_listed("cratarr", copy_at("al-1", 1, "/in", "A/Album")).await.unwrap());
+        assert_eq!((kept.dir.folder, kept.root.as_path()), (0, music.as_path()));
+        assert_eq!((waiting.dir.folder, waiting.root.as_path()), (1, inc.as_path()));
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// An album over two artists' folders has the library's root for its `dir`: taken whole, that is the library. As not found.
+    #[tokio::test]
+    async fn a_copy_at_the_root_of_its_library_is_never_taken_whole() {
+        let (music, inc) = (folder("root-music"), folder("root-inc"));
+        let svc = on_disk(&music, &inc).await;
+        in_both(&music, &inc);
+        let refused = svc.delete_listed("cratarr", copy_at("al-1", 1, "/in", "")).await.err().unwrap();
+        assert!(matches!(&refused, ToggleError::Refused(why) if why.contains("cannot see")), "{refused:?}");
+        assert_eq!(std::fs::read(inc.join("A/Album/1.flac")).unwrap(), b"waiting");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Delete Music's copy and Incoming's is still waiting: by id it would vanish from Incoming's list and stay hidden for as
+    /// long as that list has it.
+    #[test]
+    fn a_hidden_copy_does_not_hide_the_record() {
+        let (music, waiting) = (copy_at("al-1", 0, "/m", "A/Album"), copy_at("al-1", 1, "/in", "A/Album"));
+        let mut hidden = std::collections::HashSet::from([hidden_key(&music), hidden_key(&copy_at("al-2", 1, "/in", "B/Album"))]);
+        assert!(!hidden.contains(&hidden_key(&waiting)), "the other copy shows");
+        let listed = [hidden_key(&waiting), hidden_key(&copy_at("al-2", 1, "/in", "B/Album"))].into_iter().collect();
+        still_hidden(&mut hidden, &listed);
+        assert_eq!(hidden.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["al-2"], "gone from every list it was on, a copy needs no hiding; the one still listed does");
+    }
+
+    /// A copy of the record in another folder has an item of its own, and `source_id_of` takes any: a user's plays must reach the
+    /// item at the place the file moved to.
+    #[tokio::test]
+    async fn play_data_goes_to_the_item_where_the_file_went() {
+        let (music, inc) = (folder("items-music"), folder("items-inc"));
+        let svc = on_disk(&music, &inc).await;
+        in_both(&music, &inc);
+        let c = svc.lib.catalogue();
+        c.walk_all();
+        c.pretend_read_for_tests();
+        c.identify().unwrap();
+        let rel = "A/Album/1.flac".to_string();
+        c.record_links("jf", "m", &[("in-music".into(), 0, rel.clone())], 1).unwrap();
+        c.record_links("jf", "in", &[("waiting".into(), 1, rel.clone())], 1).unwrap();
+        let plan = |to: i64, old: &str| PlayData { source: "jf".into(), track: 1, old_item: old.into(), to: (to, rel.clone()), user: "u".into(), data: serde_json::Value::Null };
+        assert_eq!(new_item(&c, &plan(0, "gone")).as_deref(), Some("in-music"));
+        assert_eq!(new_item(&c, &plan(1, "gone")).as_deref(), Some("waiting"), "whichever a lookup by track would have found");
+        assert_eq!(new_item(&c, &plan(1, "waiting")), None, "the old item: not linked anew yet");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Cratarr's own item is its track, so `new != old_item` was never true: a Keep of a played album stayed pending for the
+    /// trash days. Its plan reads as nothing now, and is done with.
+    #[tokio::test]
+    async fn a_keep_of_cratarrs_own_leaves_no_play_data_waiting() {
+        let (music, inc) = (folder("own-music"), folder("own-inc"));
+        let svc = on_disk(&music, &inc).await;
+        two_tracks(&inc);
+        let id = svc.journal.intend(100, &keep_of_two()).unwrap();
+        svc.journal.applied(id).unwrap();
+        let before_this = serde_json::json!([{ "source": "cratarr", "track": 1, "old_item": "tr-1", "user": "ann", "data": {} }]);
+        svc.journal.done(id, PLAYDATA_PLAN, 100, &before_this).unwrap();
+        let entry = svc.journal.get(id).unwrap().unwrap();
+        svc.carry_play_data(&entry).await;
+        assert_eq!(svc.journal.result(id, PLAYDATA).unwrap(), Some(serde_json::json!(0)), "not left pending");
+        for d in [music, inc] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Two Incoming libraries can hold one record: Keep, Delete and Replace each land on one, so which is said or refused.
+    #[test]
+    fn a_record_waiting_in_two_libraries_must_be_told_which() {
+        let listed = [copy_at("al-1", 1, "lidarr", "A/Album"), copy_at("al-1", 2, "soulseek", "A/Album"), copy_at("al-2", 1, "lidarr", "B/Album")];
+        let named = |id: &str, from: Option<&str>| waiting_copy(listed.iter(), id, from).map(|a| a.copies[0].folder);
+        assert_eq!(named("al-1", Some("soulseek")).unwrap(), 2);
+        assert_eq!(named("al-1", Some("lidarr")).unwrap(), 1);
+        assert!(matches!(named("al-1", None), Err(ToggleError::Refused(why)) if why.contains("which")));
+        assert_eq!(named("al-2", None).unwrap(), 1, "one copy: nothing to tell");
+        assert!(matches!(named("al-2", Some("soulseek")), Err(ToggleError::Refused(why)) if why.contains("no longer")), "not waiting there");
+    }
+
     #[test]
     fn an_incoming_album_is_judged_against_every_other_library_but_its_own() {
         // Music lacks it; one Incoming library has it at 320 kbps, another lossless.
@@ -1858,13 +2095,25 @@ mod tests {
     }
 }
 
-/// What became of an album that left a library (`IncomingService::album_fate`).
+/// Where a record's copy in catalogue folder `folder` lies. Cratarr's own alone: another server's id is no record.
+pub(super) async fn copy_dir_in(album: &str, folder: i64) -> Option<String> {
+    let (served, id) = (crate::serve::instance()?, album.to_string());
+    let copies = tokio::task::spawn_blocking(move || served.library.copies_of(&id)).await.ok()?.ok()?;
+    copies.into_iter().find(|c| c.folder == folder).map(|c| c.dir)
+}
+
+/// What became of an album that left a library (`IncomingService::album_fate`). Asked only of an album no longer found, so
+/// `Deleted` holds though a record's other copies could have stayed: none did. Moved is another server's: its files get new
+/// items and the album a new id, where a record of Cratarr's own keeps its id and is only not read yet.
 async fn fate_of(lib: &Library, journal: &Journal, source_id: &str, album_id: &str) -> Option<AlbumFate> {
     let event = journal.album_fate(source_id, album_id).ok()??;
     let (moves, title) = match &event {
         Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
         Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
     };
+    if source_id == crate::source::cratarr::KIND.id {
+        return Some(AlbumFate::NotYet(title.clone()));
+    }
     let s = lib.connected_sources().into_iter().find(|(id, _)| id == source_id).map(|(_, s)| s)?;
     // Its tracks' new items (once a sync pass linked them), and the album the server put them in.
     let Some(folder) = moves.first().map(|m| m.to.0) else { return Some(AlbumFate::NotYet(title.clone())) };

@@ -99,10 +99,51 @@ pub struct JobView {
     /// The library it moves into (`source/library`), where known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
+    /// The library it comes from: which of a record's copies this is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Its catalogue folder and its folder there, which tell two folders of one library apart. Not the page's.
+    #[serde(skip)]
+    pub place: (i64, String),
     /// Once done: pass to undo.
     pub undo: Option<String>,
     /// Once failed: why.
     pub why: Option<String>,
+}
+
+impl JobView {
+    /// Whether it is yet to finish.
+    pub fn at_work(&self) -> bool {
+        matches!(self.state, State::Waiting | State::Converting)
+    }
+
+    /// A Keep of this copy being converted, for what reads the queue.
+    #[cfg(test)]
+    pub fn converting(id: u64, source: &str, album: &str, from: &str, folder: i64, dir: &str) -> Self {
+        JobView {
+            id,
+            source: source.into(),
+            album_id: album.into(),
+            title: album.into(),
+            action: Action::Keep,
+            state: State::Converting,
+            done: 0,
+            part: 0.0,
+            total: 1,
+            folder: dir.into(),
+            library: None,
+            from: Some(from.into()),
+            place: (folder, dir.into()),
+            undo: None,
+            why: None,
+        }
+    }
+
+    /// That job, done.
+    #[cfg(test)]
+    pub fn done(self) -> Self {
+        JobView { state: State::Done, ..self }
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -248,9 +289,9 @@ impl Queue {
         self.update(id, |j| j.event = Some(event));
     }
 
-    /// Whether an album waits or is being converted.
-    pub(super) fn busy(&self, album_id: &str) -> bool {
-        self.lock().list.iter().any(|j| j.album.id == album_id && matches!(j.state, State::Waiting | State::Converting))
+    /// Whether a record's copy in catalogue folder `folder` waits or is being converted.
+    pub(super) fn busy(&self, album_id: &str, folder: i64) -> bool {
+        self.lock().list.iter().any(|j| j.album.id == album_id && j.folder == folder && matches!(j.state, State::Waiting | State::Converting))
     }
 
     /// The next job to work on: one cut short first, else the oldest waiting.
@@ -282,6 +323,8 @@ fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
             total: j.files.len(),
             folder: j.to.clone(),
             library: j.library.clone(),
+            from: j.album.library.clone(),
+            place: (j.folder, j.dir.clone()),
             undo: j.undo.clone(),
             why: j.why.clone(),
         })
@@ -490,7 +533,8 @@ impl IncomingService {
         };
         let done = match job.action {
             Action::Keep => self.keep_now(&at, job.target, job.year.as_deref(), converted.clone(), Some(job.id)).await,
-            Action::Replace => self.replace_now(&at, job.year.as_deref(), converted.clone(), Some(job.id)).await,
+            // The copy that was previewed, not whichever a match finds now.
+            Action::Replace => self.replace_now(&at, job.target, job.year.as_deref(), converted.clone(), Some(job.id)).await,
         };
         let outcome = match done {
             Ok(r) => Outcome::Done(r.undo),
@@ -573,6 +617,58 @@ mod tests {
         clear_staging(&root, "X/A");
         assert!(!root.join(STAGING_DIR).exists(), "an empty staging folder goes");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Converting the Incoming copy must not block a Delete of the kept one beside it.
+    #[test]
+    fn a_job_keeps_only_its_own_copy_busy() {
+        let album = source::Album {
+            id: "al-1".into(),
+            title: "A".into(),
+            artist: None,
+            year: None,
+            added: None,
+            path: None,
+            tracks: 1,
+            format: None,
+            bitrate_kbps: None,
+            duration_secs: None,
+            tags: Vec::new(),
+            library: Some("/in".into()),
+            copies: Vec::new(),
+            artists: Vec::new(),
+            release: Default::default(),
+        };
+        let job = Job {
+            id: 1,
+            source: "cratarr".into(),
+            album,
+            folder: 2,
+            dir: "A/Album".into(),
+            release_group: None,
+            action: Action::Keep,
+            year: None,
+            files: vec!["1.flac".into()],
+            limit: cd(),
+            done: 0,
+            part: 0.0,
+            state: State::Waiting,
+            to: "A/Album".into(),
+            target: 0,
+            swap: None,
+            event: None,
+            undo: None,
+            why: None,
+            finished: None,
+            by: None,
+            library: None,
+        };
+        let queue = Queue::open(None);
+        queue.change(|jobs| jobs.list.push(job));
+        assert!(queue.busy("al-1", 2));
+        assert!(!queue.busy("al-1", 0), "the record's copy in Music");
+        assert!(!queue.busy("al-2", 2));
+        assert_eq!(queue.views()[0].place, (2, "A/Album".to_string()), "the page's job says which copy");
     }
 
     fn folder(tag: &str) -> PathBuf {
@@ -753,6 +849,7 @@ mod tests {
                 duration_secs: None,
                 tags: Vec::new(),
                 library: None,
+                copies: Vec::new(),
                 artists: Vec::new(),
                 release: Default::default(),
             },
@@ -787,7 +884,7 @@ mod tests {
         let q = Queue::open(Some(file));
         assert_eq!(q.views().iter().map(|v| v.id).collect::<Vec<_>>(), vec![1, 2], "the old finished job is gone");
         assert_eq!(q.next(), Some(2), "a job cut short goes first");
-        assert!(q.busy("a1") && q.busy("a2") && !q.busy("a3"));
+        assert!(q.busy("a1", 1) && q.busy("a2", 1) && !q.busy("a3", 1));
         let mut rx = q.subscribe();
         q.update(1, |j| j.done = 1);
         assert_eq!(rx.try_recv().unwrap().iter().find(|v| v.id == 1).map(|v| v.done), Some(1), "every change is told, whole");

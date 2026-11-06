@@ -55,7 +55,7 @@
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
   import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, searchNone, USE_ORDERS, explainHidden } from './pageView.svelte';
-  import { dotsOf, recordOn } from './copiesRule';
+  import { dotsOf, heardAs, recordOn } from './copiesRule';
   import { libraryShown, shownIn } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
@@ -242,7 +242,8 @@
   };
   const found = $derived(
     sources.map((s) => {
-      const albums = s.albums.filter((a) => recordOn(a, shownIn(s.id)) && matches(s, a)).sort(compareIn(s.id)[order]);
+      const on = shownIn(s.id);
+      const albums = s.albums.filter((a) => recordOn(a, on) && matches(s, a)).map((a) => heardAs(a, s.library_info, on)).sort(compareIn(s.id)[order]);
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );

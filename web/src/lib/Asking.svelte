@@ -3,20 +3,25 @@
   // owner, 2026-10-31: a spinner while the page swaps its content for the search's). `now`: what the list showed was
   // kept until the loader was due (lib/keepWhile), so it shows at once; else nothing was there to keep, and it comes
   // LOADER_AFTER_MS after the wait began, as it would have. Its room is kept from the start, so its coming moves nothing.
+  // In a panel or a sheet it is the small one (lib/loader), as every loader there.
   import MarkLoader from './MarkLoader.svelte';
-  import { LOADER_AFTER_MS } from './loader';
+  import { LOADER_AFTER_MS, LOADER_LARGE, loaderSizeIn } from './loader';
 
   let { size = 48, now = false }: { size?: number; now?: boolean } = $props();
 
+  let el: HTMLDivElement;
+  /** The most a loader is where this is. */
+  let most = $state(LOADER_LARGE);
   let due = $state(false);
   $effect(() => {
+    most = loaderSizeIn(el);
     const t = setTimeout(() => (due = true), LOADER_AFTER_MS);
     return () => clearTimeout(t);
   });
 </script>
 
-<div class="asking" aria-busy="true">
-  {#if now || due}<MarkLoader {size} />{/if}
+<div class="asking" aria-busy="true" bind:this={el}>
+  {#if now || due}<MarkLoader size={Math.min(size, most)} />{/if}
 </div>
 
 <style>

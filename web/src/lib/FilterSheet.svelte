@@ -20,6 +20,7 @@
   import { filterList, getCrateAxes, getLibraries, getStatus, type LibrariesView, type LibraryUse } from './api';
   import Icon from './Icon.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
+  import { keepWhile } from './keepWhile.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import { prefs, type PanelKind } from './prefs.svelte';
   import { known, libraryShown, noChoice, remember, showLibrary } from './sources.svelte';
@@ -41,6 +42,12 @@
     counted?: { shown: number; total: number; pending?: boolean } | null;
     onclose: () => void;
   } = $props();
+
+  // The count stays as it is while a changed filter's answer comes; a slow one dims it, the sign after it (lib/loader).
+  const countWait = keepWhile(
+    () => null,
+    () => !!counted?.pending,
+  );
 
   // Discover's Spotify lists filter as their own kind (lib/spotify).
   const list = $derived(page === 'discover' && inSpotify() ? SPOTIFY_FILTER : (page ?? kind ?? ''));
@@ -173,10 +180,10 @@
   {onclose}
 >
   <div class="cards">
-    <!-- While a changed filter's answer is on its way: the last count, dimmed, the loading sign after it (the owner,
-         2026-10-27: it took long with nothing saying so). -->
-    {#if counted && filtersOn(list)}<p class="count" class:pending={counted.pending} aria-busy={counted.pending}>
-        {counted.shown.toLocaleString()} of {counted.total.toLocaleString()}{#if counted.pending}<MarkLoader size={18} />{/if}
+    <!-- While a changed filter's answer is on its way: the last count, at 300 ms dimmed with the loading sign after it
+         (the owner, 2026-10-27: it took long with nothing saying so). -->
+    {#if counted && filtersOn(list)}<p class="count" class:pending={countWait.loader} aria-busy={counted.pending}>
+        {counted.shown.toLocaleString()} of {counted.total.toLocaleString()}{#if countWait.loader}<MarkLoader size={18} />{/if}
       </p>{/if}
     {#if conditioned}
       <div>

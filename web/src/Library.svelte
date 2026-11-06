@@ -9,7 +9,7 @@
   import { ApiError, type AlbumsSource, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
-  import AlbumMenu, { offerIn, type AlbumOffer } from './lib/AlbumMenu.svelte';
+  import AlbumMenu from './lib/AlbumMenu.svelte';
   import { library, readLibrary } from './lib/albums.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
@@ -32,21 +32,14 @@
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
-  const trashDays = $derived(library.view?.trash_days ?? 14);
   /** The primary library, by its own name. */
   const music = $derived(library.view?.music ?? 'Music');
 
   // An album's menu (lib/AlbumMenu), the same as everywhere.
   // Closing it hides it and keeps its album: what the menu does after it closes (Play, Share, a chosen cover) still
   // reads it.
-  let menu = $state<{ source: string; a: ListedAlbum; offer: AlbumOffer } | null>(null);
+  let menu = $state<{ source: string; a: ListedAlbum } | null>(null);
   let menuShown = $state(false);
-
-  // The album left its library (moved, replaced, deleted): gone at once, before the list is read again.
-  function gone(source: string, id: string) {
-    const v = library.view;
-    if (v) v.sources = v.sources.map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== id) } : s));
-  }
 
   // A server's list could not be read while albums are shown (they stay): one toast says so, not a line that comes and
   // goes; it goes when the list reads again. With nothing to show, the page says it in place.
@@ -116,11 +109,11 @@
     };
   });
 
-  // An album's menu: what its library allows depends on the library and what Cratarr may do there.
+  // An album's menu.
   function openMenu(shelf: ShelfSource, a: ListedAlbum) {
     const s = sources?.find((x) => x.id === shelf.id);
     if (!s) return;
-    menu = { source: s.id, a, offer: offerIn(s, a) };
+    menu = { source: s.id, a };
     menuShown = true;
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
@@ -235,11 +228,7 @@
   <AlbumMenu
     source={m.source}
     album={m.a}
-    offer={m.offer}
-    {trashDays}
-    {music}
     onclose={() => (menuShown = false)}
-    ongone={() => gone(m.source, m.a.id)}
     onundone={reload}
   />
 {/if}

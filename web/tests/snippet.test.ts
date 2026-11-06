@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DUCK, EDGE, FADE_MS, FIXED_AT, NEAR, SHORT_S, SNAP_S, SNIPPET_S, duckGain, ease, pickSnippet, snapToBeat, snippetGain, snippetOf } from '../src/lib/snippet.ts';
+import { readFileSync } from 'node:fs';
+import { DUCK, EDGE, FADE_MS, FIXED_AT, NEAR, SHORT_S, SNAP_S, SNIPPET_S, duckGain, ease, pickSnippet, snapToBeat, snippetAsk, snippetGain, snippetOf, snippetStream } from '../src/lib/snippet.ts';
 
 /** 512 bins of a quiet track with a loud stretch from `a` to `b` (shares of the track). */
 function bins(a: number, b: number, loud = 240, quiet = 40): Uint8Array {
@@ -118,4 +119,25 @@ test('the duck: 1 to DUCK over FADE_MS and back, from wherever it stands', () =>
   assert.equal(duckGain(FADE_MS, false, 0.6), 1);
   assert.equal(ease(-1), 0);
   assert.equal(ease(2), 1);
+});
+
+// An intake card is about the copy waiting (`page 56`, `77`): a track of a record is one id in every copy.
+test("a snippet naming its copy asks the stream for that copy, a library's slashes kept", () => {
+  const url = snippetStream({ source: 'cratarr', id: 'tr-1', from: 'cratarr//own/cy' }, 61_000);
+  assert.equal(url, '/api/stream/cratarr/tr-1?from_ms=61000&mp3_from=1&from=cratarr%2F%2Fown%2Fcy');
+});
+
+test('a snippet naming no copy asks for the copy that plays', () => {
+  assert.equal(snippetStream({ source: 'cratarr', id: 'tr-1' }, 0), '/api/stream/cratarr/tr-1?from_ms=0&mp3_from=1');
+  assert.equal(snippetStream({ source: 'cratarr', id: 'tr-1', from: null }, 0), '/api/stream/cratarr/tr-1?from_ms=0&mp3_from=1');
+});
+
+test('the app is told the same copy, and nothing where none is named', () => {
+  const stretch = { from: 61, to: 81 };
+  assert.deepEqual(snippetAsk({ source: 'cratarr', id: 'tr-1', from: 'in' }, stretch), { source: 'cratarr', id: 'tr-1', from: 'in', from_ms: 61_000, to_ms: 81_000, fade_ms: FADE_MS, duck: DUCK });
+  assert.equal('from' in snippetAsk({ source: 'cratarr', id: 'tr-1' }, stretch), false);
+});
+
+test("an intake card's snippets hear the copy it is about", () => {
+  assert.match(readFileSync(new URL('../src/lib/IntakeCard.svelte', import.meta.url), 'utf8'), /heard = \{ source: c\.source, id: t\.id, from: c\.library,/);
 });

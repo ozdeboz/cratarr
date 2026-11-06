@@ -45,7 +45,7 @@
   import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
   import { withHeard } from './trackFacts.svelte';
   import type { IconName } from './Icon.svelte';
-  import MarkLoader from './MarkLoader.svelte';
+  import Asking from './Asking.svelte';
   import Notice from './Notice.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
@@ -143,14 +143,20 @@
   const onDevice = $derived(t?.source === 'device' || onServer);
   // Another track's playlists and heart, asked for when its menu opens.
   let other = $state<TrackState | null>(null);
+  let otherFailed = $state(false);
   $effect(() => {
     if (forPlaying || !track || track.source === 'device') return;
     const { source, id } = track;
     (isServerSource(source) ? serverTrackMenuState(source, id) : trackState(source, id)).then(
       (v) => (other = v),
-      (e) => toast.fail(e, "This track's playlists couldn't be loaded"),
+      (e) => {
+        otherFailed = true;
+        toast.fail(e, "This track's playlists couldn't be loaded");
+      },
     );
   });
+  /** Opened at its playlists (a row's mark): their place holds the wait, never "0 playlists" before the answer. */
+  const listsWait = $derived(!forPlaying && !!track && track.source !== 'device' && !other && !otherFailed);
 
   const src = $derived(
     forPlaying ? shownCover() : track ? (track.album_id ? albumCoverUrl(track.source, track.album_id) : coverUrl(track)) : null,
@@ -594,7 +600,9 @@
     {:else if step === 'tempo'}
       <TempoStep source={t.source} tracks={[{ id: t.id, name: t.name }]} />
     {:else if step === 'lists'}
-      {#if onServer && track}
+      {#if listsWait}
+        <Asking />
+      {:else if onServer && track}
         {@const tr = track}
         <!-- A server's playlists (decision 0098): added to there; which hold it is not known, so no ticks. -->
         <PlaylistToggles title="Add to playlist" {playlists} ticked={() => false}>
@@ -613,7 +621,7 @@
       </PlaylistToggles>
       {/if}
     {:else if step === 'versions' && !versions}
-      {#if versionsError}<Notice text={versionsError} onretry={() => versionsAgain++} />{:else if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
+      {#if versionsError}<Notice text={versionsError} onretry={() => versionsAgain++} />{:else if versionsAnswered}<p class="failed">No other versions found.</p>{:else}<Asking />{/if}
     {:else if step === 'versions' && versions}
       {@const v = versions}
       <p class="work">{v.work.title}{#if v.composers.length} · {v.composers.map((c) => c.name).join(', ')}{/if}</p>
@@ -640,7 +648,7 @@
       {:else if detailsFailed}
         <p class="failed">The file can't be read.</p>
       {:else}
-        <div class="loading"><MarkLoader size={40} /></div>
+        <Asking />
       {/if}
     {/if}
   </MenuSheet>
@@ -671,11 +679,6 @@
     color: var(--danger-ink);
   }
 
-  .loading {
-    display: grid;
-    place-items: center;
-    padding: 16px 0;
-  }
   /* The work Other versions are of, and its composers, over them. */
   .work {
     margin: 0 4px 10px;

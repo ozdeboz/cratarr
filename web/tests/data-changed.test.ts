@@ -50,3 +50,18 @@ test("a change of words (decision 0097) reads what shows words again, and nothin
   offWords();
   offFiles();
 });
+
+test('a pick told on the live channel reads what plays again; another preference does not', async () => {
+  let picks = 0;
+  const off = whenChanged(['picks'], () => picks++);
+  emit('changed', { area: 'preferences', key: 'pinned' });
+  await sleep(400);
+  assert.equal(picks, 0);
+  emit('changed', { area: 'preferences', key: 'copy_picks' });
+  await sleep(400);
+  assert.equal(picks, 1);
+  emit('changed', { area: 'preferences' });
+  await sleep(400);
+  assert.equal(picks, 2, 'changes too fast to name may hold one');
+  off();
+});

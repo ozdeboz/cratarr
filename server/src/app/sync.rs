@@ -561,8 +561,7 @@ impl Translate {
 
     /// A track's playlist line: its path relative to the Music folder.
     fn line(&self, track: i64) -> Option<String> {
-        let (folder, rel) = self.cat.file_of(track)?;
-        self.line_at(folder, rel)
+        self.cat.row_line(track)
     }
 
     /// A file's playlist line: relative to the Music folder (the first in use).
@@ -585,11 +584,14 @@ impl Translate {
         with_vanished_kept(base, items, |t| if self.line(t).is_some() { None } else { Some(self.line_any(t)) })
     }
 
-    fn lines(&self, items: &[Item]) -> Vec<String> {
+    /// `items` as lines. A track still in `was`, the playlist as it stands, keeps its line there: on another copy that line
+    /// is as good as the row copy's, and a sync must not rewrite a playlist that says the same.
+    fn lines(&self, items: &[Item], was: &[String]) -> Vec<String> {
+        let kept: HashMap<i64, &String> = self.items(was).into_iter().zip(was).filter_map(|(i, l)| if let Item::Track(t) = i { Some((t, l)) } else { None }).collect();
         items
             .iter()
             .filter_map(|i| match i {
-                Item::Track(t) => self.line(*t),
+                Item::Track(t) => kept.get(t).map(|l| (*l).clone()).or_else(|| self.line(*t)),
                 Item::Missing(l) => Some(l.clone()),
             })
             .collect()
@@ -798,7 +800,7 @@ pub(super) async fn sync_server(
                             Err(e) => bail!("cannot restore it: {e:?}"),
                         }
                         let (t, back) = (tr.clone(), tracks.clone());
-                        let new_lines = blocking(move || t.lines(&back.into_iter().map(Item::Track).collect::<Vec<_>>())).await?;
+                        let new_lines = blocking(move || t.lines(&back.into_iter().map(Item::Track).collect::<Vec<_>>(), &[])).await?;
                         // Into the empty file just made (a file made meanwhile is left as it is, for the next pass).
                         store.set_entries_if(&l.name, &[], &new_lines).await.map_err(|e| anyhow::anyhow!("cannot restore it: {e:?}"))?;
                         state.revive_targets(&l.name)?;
@@ -1038,8 +1040,8 @@ async fn sync_content(
     // Reordered on both sides: the server's order.
     let newer = if server_changed { Newer::Server } else { Newer::File };
     let merged = if once { merge_once(&link.base, &items, &server_tracks, newer) } else { merge(&link.base, &items, &server_tracks, newer) };
-    let (t, m, aw) = (tr.clone(), merged.clone(), away.clone());
-    let (new_lines, on_server) = blocking(move || (t.lines(&m), t.on_server(&m, &aw))).await?;
+    let (t, m, aw, was) = (tr.clone(), merged.clone(), away.clone(), lines.to_vec());
+    let (new_lines, on_server) = blocking(move || (t.lines(&m, &was), t.on_server(&m, &aw))).await?;
     let on_server = if once {
         let mut seen = std::collections::HashSet::new();
         on_server.into_iter().filter(|(x, _)| seen.insert(*x)).collect()
@@ -1730,6 +1732,33 @@ mod tests {
         sync().await.unwrap();
         assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]));
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_line_on_another_copy_stays_through_a_sync() {
+        let (d, cat, store) = library();
+        // The first track's other copy, in a library beside Music, and a playlist that names it there.
+        let other = d.with_file_name(format!("{}-other", d.file_name().unwrap().to_string_lossy()));
+        std::fs::create_dir_all(other.join("A")).unwrap();
+        std::fs::write(other.join("A/01.mp3"), "track 1").unwrap();
+        cat.set_folders(vec![d.clone(), other.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        cat.give_track_for_tests(1, "A/01.mp3", cat.track_of(0, "A/01.mp3").unwrap());
+        let there = format!("../{}/A/01.mp3", other.file_name().unwrap().to_string_lossy());
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        store.create("Chill").await.unwrap();
+        store.set_entries("Chill", &lines(&[there.as_str(), "A/02.mp3"])).await.unwrap();
+        let sync = || run(&store, &cat, &srv, &state);
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2"]), "one track, whichever copy the line names");
+        // Added on the server: the list is written here, and the line that was there stays as it was.
+        srv.edit("Chill", |v| v.push("s3".into()));
+        sync().await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&[there.as_str(), "A/02.mp3", "A/03.mp3"]));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::remove_dir_all(&other).ok();
     }
 
     #[tokio::test]

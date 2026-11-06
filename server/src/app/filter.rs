@@ -246,7 +246,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         _ => false,
     };
     let lib = app.playlists.crate_library_for(&all, want, if drawn { &r.without } else { &[] }).await?;
-    let by_line: HashMap<&str, &Facts> = lib.files().map(|f| (f.rel.as_str(), f)).collect();
+    let by_line = crates::by_line(lib.files());
     let none = Facts::default();
     let uses = lib.uses();
     let one = |key: String, line: Option<&str>| Item::of(key, vec![facts_of(&by_line, &none, line)], 0);
@@ -265,11 +265,12 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         List::Crate { .. } => (Items::Tracks, lib.select(&shown).iter().map(|l| one(String::new(), Some(l.as_str()))).collect()),
         List::Playlist { id } => {
             let rows = app.playlists.entries(id).await?;
-            let row = |l: &String| {
-                let f = facts_of(&by_line, &none, Some(l.as_str()));
+            let led = app.playlists.led_entries(id).await?;
+            let row = |(l, at): (&String, &String)| {
+                let f = facts_of(&by_line, &none, Some(at.as_str()));
                 Item::of(l.clone(), vec![f], unless(!on("unplayed") || never_played(f, uses), bit("unplayed")) | unless(!on("missing") || !f.rel.is_empty(), bit("missing")))
             };
-            (Items::Tracks, rows.iter().map(row).collect())
+            (Items::Tracks, rows.iter().zip(&led).map(row).collect())
         }
         List::Playlists => {
             let lists = app.playlists.snapshot().await?;
@@ -305,7 +306,12 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
             // Another server's albums by their folder: its tracks are the files whose lines are in its folder's.
             let mut by_dir: HashMap<&str, Vec<&Facts>> = HashMap::new();
             for f in lib.files() {
-                by_dir.entry(f.rel.rsplit_once('/').map_or("", |(d, _)| d)).or_default().push(f);
+                for line in f.every_line() {
+                    let tracks = by_dir.entry(line.rsplit_once('/').map_or("", |(d, _)| d)).or_default();
+                    if !tracks.last().is_some_and(|t| std::ptr::eq(*t, f)) {
+                        tracks.push(f);
+                    }
+                }
             }
             let tracks_of = |a: &Listed| match own.get(&a.id) {
                 Some(files) => files.clone(),
@@ -403,7 +409,7 @@ fn by_album<'a>(files: impl Iterator<Item = &'a Facts>, album_of: &HashMap<Strin
 async fn row_lines(app: &Arc<App>, source: &str, rows: Vec<super::playlists::PlaylistRow>) -> Vec<(String, Option<String>)> {
     let (c, sid, ids) = (app.library.catalogue(), source.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
     let lines: Vec<Option<String>> = tokio::task::spawn_blocking(move || {
-        ids.iter().map(|id| c.track_of_source(&sid, id).and_then(|t| c.file_of(t)).and_then(|(f, rel)| c.line_of(f, &rel))).collect()
+        ids.iter().map(|id| c.track_of_source(&sid, id).and_then(|t| c.row_line(t))).collect()
     })
     .await
     .unwrap_or_default();
@@ -430,7 +436,11 @@ async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> (Ve
     let cat = app.library.catalogue();
     let folders = cat.folders();
     let album_artists = |artist: Option<String>, artists: Vec<String>| -> Vec<String> { if artists.is_empty() { artist.into_iter().collect() } else { artists } };
-    let (on, off): (Vec<_>, Vec<_>) = s.albums.into_iter().partition(|a| a.library.as_ref().is_none_or(|l| !without.contains(&format!("{source}/{l}"))));
+    // On while any copy is: a record's list entry names the copy that plays, and that one can be the library switched off.
+    let (on, off): (Vec<_>, Vec<_>) = s.albums.into_iter().partition(|a| {
+        let held = a.libraries();
+        held.is_empty() || held.iter().any(|l| !without.contains(&format!("{source}/{l}")))
+    });
     let listed = on
         .into_iter()
         .map(|a| {
