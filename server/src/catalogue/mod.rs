@@ -1039,7 +1039,8 @@ impl Catalogue {
     /// Use these folders, each by its id for life (0101 point 1, the owner 2026-11-04): a folder in use keeps its id, one
     /// that comes back takes its own id again, and a new one takes an id never given before (`InUse`). A folder whose
     /// path changed keeps its id and rows when the same files are there under the new path (a mount moved, say `/music`
-    /// to `/media/Music`), and nothing is read again.
+    /// to `/media/Music`), and nothing is read again: named in the same breath, or after a start found it not there and parked
+    /// it.
     ///
     /// A folder that is no longer in use is parked, not forgotten: its rows (files, tags, links to the servers' ids)
     /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, with its files
@@ -1099,8 +1100,9 @@ impl Catalogue {
             stepped.push(lowest);
         }
         // 2. Each wanted folder not in use takes the rows kept under its path (parked a while, or only just stepped
-        //    aside), when its files are still there; else the rows of a folder that stepped aside and whose files are
-        //    here now (a mount that moved). Either comes back under its own id; anything else is new, with a new id.
+        //    aside), when its files are still there; else the rows of a folder that stepped aside, or was parked with nothing
+        //    left at its path, and whose files are here now (a mount that moved). Either comes back under its own id; anything
+        //    else is new, with a new id.
         let mut forget: Vec<i64> = Vec::new();
         for path in &wanted {
             let rows = known(&tx)?;
@@ -1119,8 +1121,11 @@ impl Catalogue {
             let taken = match taken {
                 Some(p) => Some(p),
                 None => {
+                    // A mount is changed first: a start finds its library not there and parks it, and Settings names the new
+                    // place after. Where the parked folder still holds its files, what is here is a copy of it, a folder of its own.
+                    let left = rows.iter().filter(|(id, q, _)| *id < 0 && !stepped.contains(id) && holds_nothing(q)).map(|(id, _, _)| *id);
                     let mut moved = None;
-                    for &p in &stepped {
+                    for p in stepped.iter().copied().chain(left) {
                         let unclaimed = rows.iter().any(|(id, q, _)| *id == p && !wanted.contains(q));
                         if unclaimed && same_files(p, path)? {
                             moved = Some(p);
@@ -6621,6 +6626,39 @@ mod tests {
         assert_eq!(cat.status().unwrap().files, 0, "different files: the rows go");
         std::fs::remove_dir_all(&moved).ok();
         std::fs::remove_dir_all(&empty).ok();
+    }
+
+    /// A mount is changed first, so a start finds its library not there and parks it, and Settings names the new place afterwards:
+    /// taken for a new folder, every file of it read as new and every id it held lost. A copy of a folder is another matter: the one
+    /// parked still holds its files, so it stays what it is, to come back.
+    #[test]
+    fn a_folder_renamed_first_and_named_after_keeps_its_id_and_its_tracks() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
+        let renamed = b.with_extension("renamed");
+        std::fs::rename(&b, &renamed).unwrap();
+        cat.set_folders(vec![a.clone()]).unwrap();
+        cat.set_folders(vec![a.clone(), renamed.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&renamed), Some(1), "its own id");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "and its rows");
+
+        cat.set_folders(vec![a.clone()]).unwrap();
+        let copy = renamed.with_extension("copy");
+        std::fs::create_dir_all(copy.join("A - B (2020)")).unwrap();
+        for file in ["01 One.mp3", "02 Two.flac"] {
+            std::fs::copy(renamed.join("A - B (2020)").join(file), copy.join("A - B (2020)").join(file)).unwrap();
+        }
+        cat.set_folders(vec![a.clone(), copy.clone()]).unwrap();
+        assert_eq!(cat.folders().id_of(&copy), Some(2), "a folder of its own");
+        cat.set_folders(vec![a.clone(), copy.clone(), renamed.clone()]).unwrap();
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), Some(one), "the one parked comes back as itself");
+        for d in [&a, &renamed, &copy] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[test]
