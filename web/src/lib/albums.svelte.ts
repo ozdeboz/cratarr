@@ -26,7 +26,7 @@ import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
 import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
-import { dotsOf, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
+import { dotsOf, withCopyMoved, withCopyPicked, withoutCopy, type Dot, type Held } from './copiesRule';
 import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
@@ -39,8 +39,8 @@ let reading: Promise<void> | null = null;
 let lastRead: { text: string; sources: AlbumsView['sources'] | null } = { text: '', sources: null };
 /** Reads it (`fresh`: past the service worker's copy); one read at a time. */
 // The Library's list read again whenever its records' files or places changed (lib/dataChanged: a fix's titles, years
-// or lengths written; a record kept or moved), once it has been read.
-whenChanged(['files', 'collection', 'words'], () => void (library.view && readLibrary(true).catch(() => {})));
+// or lengths written; a record kept or moved; another copy picked), once it has been read.
+whenChanged(['files', 'collection', 'words', 'picks'], () => void (library.view && readLibrary(true).catch(() => {})));
 
 export function readLibrary(fresh: boolean): Promise<void> {
   reading ??= getAlbums(prefs.source || undefined, fresh)
@@ -119,6 +119,11 @@ export function copiesGone<G extends { source: string; id: string; from?: string
 /** Copies moved: their records stay, each copy in its new library. */
 export function copiesMoved(moved: { source: string; id: string; from?: string; to: string }[]) {
   changeListed(moved, (a, i) => withCopyMoved(a, moved[i].from, moved[i].to));
+}
+
+/** A copy picked to play from: its card says so at once, the server's word coming with the next read. */
+export function copyPicked(source: string, id: string, chosen: string) {
+  changeListed([{ source, id }], (a) => withCopyPicked(a, chosen));
 }
 
 /** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;
@@ -285,9 +290,10 @@ export async function rateAlbum(source: string, id: string, stars: number) {
 /** An artist's picture on this device: kept as an album's cover is (lib/localCovers), under an id no album has. */
 export const artistPictureId = (name: string) => `artist:${name}`;
 
-export const lossless = (a: ListedAlbum) => a.format === 'FLAC';
+type Quality = Pick<ListedAlbum, 'format' | 'bitrate_kbps'>;
+export const lossless = (a: Quality) => a.format === 'FLAC';
 /** "FLAC", "MP3 256 kbps", "Mixed formats". */
-export const quality = (a: ListedAlbum) =>
+export const quality = (a: Quality) =>
   [a.format ?? 'Mixed formats', lossless(a) || a.bitrate_kbps === null ? null : `${a.bitrate_kbps} kbps`].filter(Boolean).join(' ');
 /** Lossy below 320 kbps somewhere. */
 export const weak = (a: ListedAlbum) => !lossless(a) && a.bitrate_kbps !== null && a.bitrate_kbps < 320;

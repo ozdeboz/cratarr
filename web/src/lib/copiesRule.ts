@@ -183,3 +183,26 @@ export function withCopyMoved<A extends Copied>(a: A, from: string | undefined, 
   const at = a.copies.findIndex((c) => c.library === from);
   return led(a, a.copies.map((c, i) => (i === at ? { ...c, library: to } : c)));
 }
+
+/** A record's card as the switches stand now: its format and bitrate are the copy that plays, and a switch thrown on the
+ *  page moves that with no new list. */
+export function heardAs<A extends Copied>(a: A, info: LibraryInfo[] | undefined, on: On): A {
+  const c = (a.copies?.length ?? 0) > 1 ? copyPlaying(a, info, on) : null;
+  return c && (c.format !== a.format || c.kbps !== a.bitrate_kbps) ? { ...a, format: c.format, bitrate_kbps: c.kbps } : a;
+}
+
+/** What "Plays from" offers: a copy for each library on, an Incoming one too, as a pick is how that is heard. Nothing where
+ *  fewer than two could be: there is no choice to make, and a pick in a library off would never play. */
+export function copiesToHear(a: Held, on: On): AlbumCopy[] {
+  const each = (a.copies ?? []).filter((c, i, all) => on(c.library) && all.findIndex((x) => x.library === c.library) === i);
+  return each.length > 1 ? each : [];
+}
+
+/** A record once the viewer picked its copy in `library`: that copy goes first, as `copy_for` puts a pick, and the card
+ *  says so. There is no taking a pick back, only another pick. */
+export function withCopyPicked<A extends Copied>(a: A, library: string): A {
+  const chosen = a.copies?.find((c) => c.library === library);
+  if (!chosen) return a;
+  const others = a.copies!.filter((c) => c !== chosen).map((c) => ({ ...c, picked: false, plays: false }));
+  return led(a, [{ ...chosen, picked: true, plays: true }, ...others]);
+}

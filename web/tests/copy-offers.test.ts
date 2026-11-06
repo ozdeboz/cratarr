@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import type { AlbumCopy, AlbumsSource, LibraryInfo, Verdict } from '../src/lib/api.ts';
 
-const { adds, deleteEntries, deleteGroups, moveEntries, moveGroups, offersOf, replaceEntries, withCopyMoved, withoutCopy } = await import('../src/lib/copiesRule.ts');
+const { adds, copiesToHear, deleteEntries, deleteGroups, heardAs, moveEntries, moveGroups, offersOf, replaceEntries, withCopyMoved, withCopyPicked, withoutCopy } = await import('../src/lib/copiesRule.ts');
 
 const library = (id: string, kind: LibraryInfo['kind'], more: Partial<LibraryInfo> = {}) => ({ id, name: id.toUpperCase(), kind, ...more }) as LibraryInfo;
 const INFO = [library('music', 'main'), library('more', 'main'), library('in', 'incoming'), library('in2', 'incoming'), library('own', 'own', { mine: true }), library('theirs', 'own')];
@@ -219,4 +219,61 @@ test('a moved copy lies in its new library, and nothing leaves', () => {
 
 test('an album with no copies listed moves by its one library', () => {
   assert.equal(withCopyMoved({ library: 'in', format: null, bitrate_kbps: null }, 'in', 'music').library, 'music');
+});
+
+// Plays from (docs/records-and-copies.md, rule 1).
+const on = (...off: string[]) => (l: string) => !off.includes(l);
+
+test('Plays from offers a copy per library on, an Incoming one too', () => {
+  assert.deepEqual(copiesToHear({ copies: [copy('music'), copy('in'), copy('own')] }, on('own')).map((c) => c.library), ['music', 'in']);
+});
+
+test('with fewer than two copies to hear there is no choice to offer', () => {
+  assert.deepEqual(copiesToHear({ copies: [copy('music')] }, on()), []);
+  assert.deepEqual(copiesToHear({ copies: [copy('music'), copy('in')] }, on('in')), []);
+  assert.deepEqual(copiesToHear({ library: 'music' }, on()), []);
+});
+
+test('two folders of one library are one choice, as a pick names a library', () => {
+  assert.deepEqual(copiesToHear({ copies: [copy('music'), copy('music')] }, on()), []);
+});
+
+test('a pick plays at once: first in the list, marked, the card reading it', () => {
+  const a = held(copy('music', { format: 'FLAC', kbps: 900, plays: true }), copy('in', { format: 'MP3', kbps: 320 }));
+  const picked = withCopyPicked(a, 'in');
+  assert.deepEqual(picked.copies?.map((c) => [c.library, c.picked, c.plays]), [
+    ['in', true, true],
+    ['music', false, false],
+  ]);
+  assert.deepEqual([picked.library, picked.format, picked.bitrate_kbps], ['in', 'MP3', 320]);
+});
+
+test('another pick takes the place of the one before', () => {
+  const a = held(copy('in', { picked: true, plays: true }), copy('music'));
+  assert.deepEqual(withCopyPicked(a, 'music').copies?.map((c) => [c.library, c.picked]), [
+    ['music', true],
+    ['in', false],
+  ]);
+});
+
+test('a library holding no copy picks nothing', () => {
+  const a = held(copy('music'));
+  assert.equal(withCopyPicked(a, 'in'), a);
+});
+
+test('a switch thrown on the page moves the card to the next copy on', () => {
+  const a = held(copy('music', { format: 'FLAC', kbps: 900 }), copy('more', { format: 'MP3', kbps: 320 }));
+  assert.deepEqual([heardAs(a, INFO, on('music')).format, heardAs(a, INFO, on('music')).bitrate_kbps], ['MP3', 320]);
+});
+
+test('a record whose card is already true stays the same object, so a list of thousands costs nothing', () => {
+  const a = held(copy('music', { format: 'FLAC', kbps: 900 }), copy('more', { format: 'MP3', kbps: 320 }));
+  assert.equal(heardAs(a, INFO, on()), a);
+  const single = held(copy('music'));
+  assert.equal(heardAs(single, INFO, on('music')), single);
+});
+
+test('with no copy that can play the card keeps what the server said', () => {
+  const a = held(copy('music', { format: 'FLAC' }), copy('in', { format: 'MP3' }));
+  assert.equal(heardAs(a, INFO, on('music')), a);
 });

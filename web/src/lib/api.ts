@@ -2507,6 +2507,9 @@ export const movePreview = (source: string, album: string, from: string | undefi
  *  with lossless files above that library's quality limit it is queued. */
 export const moveAlbum = (source: string, album: string, from: string | undefined, to: string, year?: string) =>
   request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year }));
+/** "Plays from": the account plays this record from its copy in `library`, until it picks another or that copy goes.
+ *  Through the outbox, as the account's other marks. */
+export const setCopyPick = (source: string, album: string, library: string) => laterJson<{ library: string }>(`${albumPath(source, album)}/copy-pick`, { library }, () => ({ library }), 'PUT');
 /** Delete a copy, into its library's trash (Undo brings it back). The record stays while another copy does. */
 export const deleteAlbum = (source: string, album: string, from: string | undefined) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, asJson({ from }));
 /** Delete a record's copy in someone's own music from the Users panel: an administrator's, only there. */

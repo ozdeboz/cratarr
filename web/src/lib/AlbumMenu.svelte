@@ -46,12 +46,15 @@
     type CoverChoice,
     replacePreview,
     setAlbumFavorite,
+    setCopyPick,
     type AlbumMoved,
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
-  import { adds, deleteEntries, moveEntries, replaceEntries } from './copiesRule';
+  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, copyPicked, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, quality, rateAlbum, readLibrary } from './albums.svelte';
+  import ChoiceList from './ChoiceList.svelte';
+  import { adds, copiesToHear, copyPlaying, deleteEntries, moveEntries, replaceEntries } from './copiesRule';
+  import { shownIn } from './sources.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
@@ -90,7 +93,7 @@
   import { withUndo } from './undo.svelte';
   import { can, findsTracks, offers } from './capabilities.svelte';
 
-  type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
+  type Ask = 'plays' | 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
   let {
     source: givenSource,
     album: givenAlbum,
@@ -379,6 +382,24 @@
   const fromName = $derived(copy?.name ?? 'Incoming');
   const primary = $derived(copy?.from?.kind === 'main');
   const severalCopies = $derived(copyOffers.length > 1);
+  // Plays from (docs/records-and-copies.md, rule 1): the account's own choice of what it hears, so only with an account.
+  // A step, as Move's; long names go on a sheet (lib/ChoiceList). A pick is left only by another pick.
+  const toHear = $derived(listedHere && me.name ? copiesToHear(listedHere.a, shownIn(source)) : []);
+  const playsNow = $derived(toHear.length ? (copyPlaying(listedHere!.a, listedHere!.s.library_info, shownIn(source)) ?? toHear[0]) : null);
+  const libraryName = (id: string) => listedHere?.s.library_info.find((l) => l.id === id)?.name ?? id;
+  async function pick(chosen: string) {
+    const [src, id, already] = [source, a.id, playsNow?.library === chosen && playsNow.picked];
+    onclose();
+    if (already) return;
+    navigator.vibrate?.(8);
+    copyPicked(src, id, chosen);
+    try {
+      await setCopyPick(src, id, chosen);
+    } catch (e) {
+      toast.fail(e, "It didn't change");
+      readLibrary(true).catch(() => {});
+    }
+  }
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
@@ -664,6 +685,8 @@
     <!-- No Read the cover again (the owner, 2026-10-26): a cover's address carries its stamp (lib/coverStamps), so a
          changed one shows by itself. Only a picture chosen on this device is undone here. -->
     {#if ownCover}<MenuEntry icon="imageOff" label="Use the server's cover" onclick={serverCover} />{/if}
+  {:else if e === 'playsFrom'}
+    {#if playsNow}<MenuEntry icon="disc" label={`Plays from ${libraryName(playsNow.library)}`} onclick={() => (ask = 'plays')} />{/if}
   {:else if e === 'cancelConversion'}
     {#if me.admin}
       {#each new Set(copyOffers.flatMap((o) => o.job ?? [])) as job (job)}<MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />{/each}
@@ -815,6 +838,15 @@
         {/each}
       </ul>
     {/if}
+  {:else if ask === 'plays'}
+    <div class="form">
+      <ChoiceList
+        label="Plays from"
+        options={toHear.map((c) => ({ value: c.library, label: libraryName(c.library), line: quality({ format: c.format, bitrate_kbps: c.kbps }) }))}
+        value={playsNow?.library ?? ''}
+        onchange={pick}
+      />
+    </div>
   {:else if ask === 'delete'}
     <div class="form">
       <p class="ask">Delete {a.title}{severalCopies ? ` from ${fromName}` : ''}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
