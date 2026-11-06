@@ -2404,6 +2404,14 @@ impl Catalogue {
         Ok((moved, fresh))
     }
 
+    /// Every track not retired, its files listed or parked with their library. Blocking.
+    pub fn tracks_alive(&self) -> Result<Vec<i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id FROM tracks WHERE retired_at IS NULL")?;
+        let rows = st.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Whether a track in use has no record yet, or is back from retirement and not yet held against its album: only then,
     /// or with a stray in an album (`AlbumCopy::split`), is [`Self::assign_records`] worth its reading. Blocking.
     pub fn records_unsettled(&self) -> bool {

@@ -463,7 +463,9 @@ impl Serve {
         if let Err(e) = self.follow_taken() {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "what names taken tracks has not followed them yet");
         }
-        let songs = self.library.all_song_ids()?.into_iter().collect();
+        // A track away with its library is still that track: no song holds it for now, and one tagged alike is another record's.
+        let mut songs: std::collections::HashSet<String> = self.library.all_song_ids()?.into_iter().collect();
+        songs.extend(self.catalogue().tracks_alive()?.into_iter().map(ids::song));
         let moved = self.userdata.follow_pids(&self.library.pids()?, &songs)?;
         if moved > 0 {
             tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
@@ -962,6 +964,24 @@ mod tests {
         assert!(serve.library.roots().contains(&(1, renamed.display().to_string())), "{:?}", serve.library.roots());
         std::fs::remove_dir_all(&roots[0]).ok();
         std::fs::remove_dir_all(&renamed).ok();
+    }
+
+    /// Two records tagged alike, a track more making the second one, are told apart by their ids alone. One's library taken away, a
+    /// persistent id on one song reads as a rebuilt catalogue would, and a play went over to the other record and never came back.
+    #[test]
+    fn what_lies_on_a_track_away_with_its_library_stays_on_it() {
+        let (roots, cat, serve) = on_two_folders("away");
+        add(&cat, &roots[0], 0, &[("A/01 One.flac", "One")]);
+        add(&cat, &roots[1], 1, &[("A/01 One.flac", "One"), ("A/02 Two.flac", "Two")]);
+        checked_again(&serve);
+        let song_in = |folder: i64| ids::song(cat.track_of(folder, "A/01 One.flac").unwrap());
+        let (here, away) = (song_in(0), song_in(1));
+        assert_ne!(here, away, "two records");
+        crate::app::listening::heard_blocking(&serve, "me", &away, &Heard::counted(100)).unwrap();
+        cat.set_folders(vec![roots[0].clone()]).unwrap();
+        checked_again(&serve);
+        assert_eq!((plays_of(&serve, &away), plays_of(&serve, &here)), (1, 0), "on its own track, and nothing on the other");
+        roots.iter().for_each(|r| drop(std::fs::remove_dir_all(r)));
     }
 
     #[test]
