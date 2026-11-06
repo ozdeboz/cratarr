@@ -187,8 +187,11 @@ stops the start, as Cratarr does not run on half-moved data. The way back is the
   then Incoming, and what no list shows after all of those, so a file that went decides nothing.
 - **What no list shows gets its record too:** files gone a while, in a trash, or in a parked folder, by the id they were served
   under. With none, an Undo or a source switched on again brings back an album that has lost what named it.
-- **A Keep left its plays under the id it had in Incoming**, which no album has now. That id is worked out for each Incoming folder
-  and kept for the album, unless a real album holds it.
+- **An album can be named by an id it does not have now.** A Keep left its plays under the id it had in Incoming. A copy kept in Music
+  and gone left what went by Music's id while the release waits in Incoming, and that id survives only as the album's `base`, which no
+  table of ids walks. A folder's id was its place in a sorted list, so a library added in front moved the next one along, and what came
+  before lies under the place it had, beside what came after. So each album keeps the ids it would have had in Music and in each
+  Incoming folder, unless a real album holds one, and what lies under two of them folds as any two ids of one record do.
 - **What stops it:** a library not there, which says which, and a catalogue whose ids were lost, or one lost before 0.16 remembered
   it, as what names its ids would all read as matching nothing.
 - **What matches nothing stays and is counted,** as a tag's hash from before a retag cannot be read back. A left-out line on a file
