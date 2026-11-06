@@ -288,6 +288,16 @@ impl App {
     }
 }
 
+/// Whether the viewer may delete what a Delete of this listed album lands on: with no copy named, the one that plays. The
+/// view's `deletable` goes by id, so it holds while any copy of the record may go, and a requester's right to their Incoming
+/// copy must not reach the kept one beside it.
+fn may_delete_listed(deletable: &[String], a: &source::Album) -> bool {
+    match a.copies.iter().find(|c| c.plays) {
+        Some(c) => c.deletable,
+        None => deletable.contains(&a.id),
+    }
+}
+
 /// How a record's copies stand for one viewer: what `fold` needs of the library, so `fold` stays pure.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PlayOrder {
@@ -394,7 +404,7 @@ impl App {
     /// Delete an album the viewer may (the view's `deletable`), into its library's trash (decision 0034).
     pub async fn delete_album(&self, source: &str, album: &str) -> Result<super::DeleteResult, ToggleError> {
         let (s, a) = self.listed_album(source, album).await?;
-        if !s.deletable.contains(&a.id) {
+        if !may_delete_listed(&s.deletable, &a) {
             return Err(ToggleError::Refused("That isn't yours to delete".into()));
         }
         self.incoming.delete_listed(source, a).await
@@ -625,6 +635,22 @@ mod tests {
         assert!(kept.deletable && !kept.keepable && kept.keep_to.is_none() && kept.lacks.is_empty() && kept.job.is_none());
         assert!(!waiting.deletable && waiting.keepable);
         assert_eq!((waiting.keep_to.as_deref(), waiting.lacks.as_slice(), waiting.job, waiting.bits, waiting.added), (Some("music"), &["cover".to_string()][..], Some(7), Some(24), Some(50)));
+    }
+
+    /// A requester may delete their Incoming copy, so the record's id is in the view's `deletable`; a Delete with no copy
+    /// named lands on the copy that plays, the kept one, which is not theirs.
+    #[test]
+    fn a_right_to_one_copy_does_not_delete_another() {
+        let mut waiting = listed("al-1", 2, "incoming", "FLAC");
+        waiting.copies[0].deletable = true;
+        let folded = fold(vec![listed("al-1", 0, "music", "MP3"), waiting], &order(&[0, 2], 0));
+        let deletable = ["al-1".to_string()];
+        assert!(!may_delete_listed(&deletable, &folded[0]), "the kept copy plays, and that is not theirs");
+        let mut theirs = listed("al-1", 2, "incoming", "FLAC");
+        theirs.copies[0].deletable = true;
+        assert!(may_delete_listed(&deletable, &theirs), "with one copy, as it was");
+        let other = album("x", "jellyfin-music", "/m/x");
+        assert!(may_delete_listed(&["x".to_string()], &other) && !may_delete_listed(&[], &other), "another server's goes by id");
     }
 
     /// The page's contract, `AlbumCopy` in `lib/api.ts`, and what stays out of it: a record's place is no business of a page.
