@@ -562,7 +562,9 @@ internal object KeptFile {
     }
 
     /** The holders in [file], each download's, by its id; none there yet is an empty map. One that is there and cannot be
-     *  read throws, as [list]: nothing held, every account's downloads would be free to go. */
+     *  read throws, as [list]: nothing held, every account's downloads would be free to go. A download with no holder
+     *  of today's shape is left out, not read as held by nothing, which a pass would remove: as one nothing has heard of,
+     *  it stays. */
     fun holders(file: File): MutableMap<String, MutableSet<String>> {
         if (!file.exists()) return mutableMapOf()
         return try {
@@ -570,7 +572,7 @@ internal object KeptFile {
             o.keys().asSequence().associateWith { k ->
                 val a = o.getJSONArray(k)
                 (0 until a.length()).map { a.getString(it) }.filter { '\t' in it }.toMutableSet()
-            }.toMutableMap()
+            }.filterValues { it.isNotEmpty() }.toMutableMap()
         } catch (e: JSONException) {
             throw IOException("${file.name} cannot be read: ${e.message}", e)
         }

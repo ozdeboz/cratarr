@@ -114,10 +114,13 @@ class KeptFileTest {
     }
 
     @Test
-    fun a_holder_of_no_one_is_not_read() {
+    fun a_download_held_only_in_an_old_shape_is_not_there_for_a_pass_to_find_nothing_holds_it() {
+        // Read as held by nothing a pass would remove it. A device that kept its data past 0.16 keeps its files, unseen.
         val file = holders()
-        file.writeText("""{"cratarr/tr-1":["manual"]}""")
-        assertEquals(mapOf("cratarr/tr-1" to emptySet<String>()), KeptFile.holders(file))
+        file.writeText("""{"cratarr/tr-1":["manual"],"cratarr/tr-2":["@ann\tmanual","album:cratarr/al-1"]}""")
+        val h = KeptFile.holders(file)
+        assertEquals(mapOf("cratarr/tr-2" to setOf("@ann\tmanual")), h)
+        assertEquals(emptyList<String>(), KeptHolds.afterPass(h, emptyMap()))
     }
 
     @Test
