@@ -205,9 +205,10 @@ fn on_failed(i: &mut Item, why: String) -> bool {
     }
 }
 
-/// AcoustID could not be asked about the file: nothing is known of it or its user, so no user failed, and no next
-/// candidate is fetched by itself. The item stops here and says why; Search now takes it up again. A fetch lives in
-/// memory, and fetching the file again on a timer would be just the unattended fetching this queue exists not to do.
+/// AcoustID could not be asked about the file, or slskd for it: nothing is known of it or its user, so no user failed,
+/// and no next candidate is fetched by itself. The item stops here and says why; Search now takes it up again. A fetch
+/// lives in memory, and fetching the file again on a timer would be just the unattended fetching this queue exists not to
+/// do.
 fn on_no_verdict(i: &mut Item, why: String) {
     (i.state, i.why, i.fetch) = (State::Failed, Some(why), None);
 }
@@ -358,6 +359,7 @@ async fn fetch(id: &str) {
     with_item(id, |i| i.state = State::Fetching);
     let fid = match super::track_fetch::fetch(&sid, candidate).await {
         Ok(f) => f,
+        Err(e) if e.is::<crate::slskd::Away>() => return with_item(id, |i| on_no_verdict(i, format!("{e:#}"))),
         // The user refused it or is offline: the next candidate.
         Err(e) => {
             return with_item(id, |i| {

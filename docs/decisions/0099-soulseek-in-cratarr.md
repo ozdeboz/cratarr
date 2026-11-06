@@ -84,3 +84,7 @@ folder go when a file fails; an outage is not a failed file.
 - **One held can leave the list**, and what it fetched with it.
 - **The bulk intake** has no folder to wait in: the track stops, says why, and Search now takes it up again. No user is
   remembered and no next candidate fetched.
+- **slskd could not be asked** (no answer, its key refused, not up, or not signed in to Soulseek): no user failed. An
+  approved record stays approved with its folders, a fetch under way keeps its batch and is followed again, and a search
+  counts no miss. Tried again in five minutes. Only slskd answering that it no longer knows a batch ends that fetch. The
+  bulk intake's track stops and says why, as above.

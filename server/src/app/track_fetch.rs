@@ -281,8 +281,8 @@ pub struct FetchView {
     pub why: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
-    /// Refused for want of an answer ([`NotAsked`]): nothing is known of the file or its user. The page reads it as any
-    /// refusal, with its why; the bulk intake holds nothing against the user for it.
+    /// Refused for want of an answer ([`NotAsked`], [`crate::slskd::Away`]): nothing is known of the file or its user. The
+    /// page reads it as any refusal, with its why; the bulk intake holds nothing against the user for it.
     #[serde(skip)]
     pub no_verdict: bool,
 }
@@ -408,7 +408,7 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
         let staged = match got {
             Ok(p) => p,
             Err(e) => {
-                set(&|f| (f.view.state, f.view.why) = (Fetching::Refused, Some(format!("{e:#}"))));
+                set(&|f| (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), e.is::<crate::slskd::Away>()));
                 return;
             }
         };

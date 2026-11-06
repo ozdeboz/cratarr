@@ -15,7 +15,8 @@
 //!   2026's unattended batches cannot happen again). The folder's tracks come in one batch from its user.
 //! - **The next folder when a user fails** (the owner, 2026-11-03): refused, offline, an error, or queued over 30
 //!   minutes; the user is remembered as failed for the record, and the next best folder is fetched without asking
-//!   again. A read of slskd that fails once is not the end of a fetch.
+//!   again. A read of slskd that fails once is not the end of a fetch, and slskd itself away is no failed user: the
+//!   record stays as it is, a fetch under way keeps its batch, and it is taken up again (`hold`).
 //! - **Every file gated** (single-track intake's gate, 0080: decoded whole, the recording's length, its sound, AcoustID).
 //!   A folder with a file that fails is set aside whole with why per file (the owner, 2026-11-03), its user remembered,
 //!   and the next folder tried. Only a whole, checked record goes on. AcoustID that could not be asked is no failed file:
@@ -34,7 +35,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::track_fetch::{NotAsked, ReleaseTrack, ReleaseView};
-use crate::slskd::{Answer, Offered, Slskd};
+use crate::slskd::{Answer, Away, Offered, Slskd};
 
 /// The fetcher's name in a library's setting (`settings::LibrarySetting::fetcher`).
 pub const FETCHER: &str = "soulseek";
@@ -48,6 +49,10 @@ const QUEUED_FOR: Duration = Duration::from_secs(30 * 60);
 const FETCH_AT_MOST: Duration = Duration::from_secs(4 * 3600);
 /// Reads of slskd that may fail in a row before a fetch is given up.
 const READS: u32 = 15;
+/// Between two such reads.
+const READ_AGAIN: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 4 });
+/// A record held for slskd is tried again after this long.
+const SLSKD_AGAIN: i64 = 300;
 /// Folders a record shows, best first.
 const SHOWN: usize = 5;
 /// The most approved Requests read.
@@ -660,17 +665,22 @@ async fn search(id: &str) {
             Err(e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Stuck, Some(format!("{e:#}")), now() + wait_after(3))),
         }
     }
-    let Some(it) = item(id) else { return };
     let slskd = match super::track_fetch::slskd_ready().await {
         Ok((s, _)) => s,
         Err(e) => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
     };
+    search_through(id, &slskd).await;
+}
+
+/// The ladder's rungs in turn, through this slskd, until one finds folders.
+async fn search_through(id: &str, slskd: &Slskd) {
+    let Some(it) = item(id) else { return };
     let mut why = None;
     for (n, q) in ladder(&it.record).iter().enumerate() {
         if n > 0 {
             tokio::time::sleep(PACE).await;
         }
-        match answers(&slskd, q).await {
+        match answers(slskd, q).await {
             Ok(a) => {
                 let found = folders_of(&a, &it.tracks, &it.failed);
                 if !found.is_empty() {
@@ -680,6 +690,8 @@ async fn search(id: &str) {
                     });
                 }
             }
+            // slskd away says nothing of the record: no miss, or a week's wait would meet it when slskd came back.
+            Err(e) if e.is::<Away>() => return with_item(id, |i| (i.state, i.why, i.due) = (State::Waiting, Some(format!("{e:#}")), now() + ROUND_AT_LEAST)),
             Err(e) => why = Some(format!("{e:#}")),
         }
     }
@@ -706,12 +718,8 @@ async fn answers(slskd: &Slskd, q: &str) -> Result<Vec<Answer>> {
 async fn fetch(id: &str) {
     let (slskd, folder) = match super::track_fetch::slskd_ready().await {
         Ok(s) => s,
-        Err(e) => {
-            // Waits for slskd: tried again in a while.
-            with_item(id, |i| i.why = Some(format!("{e:#}")));
-            tokio::time::sleep(Duration::from_secs(300)).await;
-            return;
-        }
+        // Waits for slskd: tried again in a while.
+        Err(e) => return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN)),
     };
     fetch_from(id, &slskd, &folder, |file, track| async move { super::track_fetch::gate_track(&file, &track).await }).await;
 }
@@ -733,6 +741,7 @@ where
                 with_item(id, |i| (i.state, i.batch, i.percent, i.why) = (State::Fetching, Some(b.clone()), 0.0, None));
                 b
             }
+            Err(e) if e.is::<Away>() => return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN)),
             Err(e) => {
                 with_item(id, |i| {
                     on_failed(i, &f.user, format!("{e:#}"));
@@ -748,6 +757,12 @@ where
     } else {
         match follow(slskd, id, &batch).await {
             Ok(t) => t,
+            // Its batch stays: slskd may well finish it, and it is followed again rather than left to run with no one to
+            // clean its folder.
+            Err(e) if e.is::<Away>() => {
+                tracing::warn!(target: "soulseek", record = %format!("{} - {}", it.record.artist, it.record.album), reason = %format!("{e:#}"), "held for slskd");
+                return with_item(id, |i| hold(i, format!("{e:#}"), SLSKD_AGAIN));
+            }
             Err(e) => {
                 for t in slskd.transfers(&batch).await.unwrap_or_default() {
                     slskd.drop_transfer(&f.user, &t.id).await;
@@ -809,9 +824,9 @@ async fn follow(slskd: &Slskd, id: &str, batch: &str) -> Result<Vec<crate::slskd
             other => {
                 failed_reads += 1;
                 if failed_reads >= READS {
-                    bail!("slskd could not be read: {}", other.err().map_or("no transfers".to_string(), |e| format!("{e:#}")));
+                    return Err(other.map_or_else(|e| e.context("slskd could not be read"), |_| anyhow::anyhow!("slskd could not be read: no transfers")));
                 }
-                tokio::time::sleep(Duration::from_secs(4)).await;
+                tokio::time::sleep(READ_AGAIN).await;
                 continue;
             }
         };
@@ -1139,6 +1154,82 @@ mod tests {
         let second = |file: PathBuf, _| std::future::ready(if file.ends_with("01 One.flac") { Err(acoustid_away()) } else { Err(anyhow::anyhow!("2 frames would not decode")) });
         assert_eq!(check(&dir, &f, &release, &second).await.unwrap_err(), "AcoustID could not be reached");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A slskd nothing is listening at.
+    async fn slskd_gone() -> Slskd {
+        let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+        Slskd::new(&format!("http://{gone}"), "key").unwrap()
+    }
+
+    fn never_gated(_: PathBuf, _: ReleaseTrack) -> std::future::Ready<Result<f32>> {
+        panic!("nothing was fetched to check")
+    }
+
+    #[tokio::test]
+    async fn slskd_gone_leaves_an_approved_record_as_it_is_and_blames_no_user() {
+        let id = "ss-away";
+        listed(id, State::Approved, None);
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-away-{}", std::process::id()));
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.chosen, i.folders.len(), i.batch.clone()), (State::Approved, Some(0), 2, None), "its tick and its folders stay");
+        assert!(i.failed.is_empty(), "no user failed");
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd could not be reached")), "{:?}", i.why);
+        // Not taken again at once, which is what went through every folder in seconds.
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due - 1), None);
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due), Some(id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_user_who_refuses_still_hands_the_record_to_the_next_folder() {
+        let id = "ss-refused";
+        listed(id, State::Approved, None);
+        let refused = axum::Router::new().route("/api/v0/transfers/downloads/batches", axum::routing::post(|| std::future::ready(axum::http::StatusCode::NOT_FOUND)));
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-refused-{}", std::process::id()));
+        fetch_from(id, &slskd_at(refused).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.chosen, i.failed.clone(), i.folders[0].user.as_str(), i.why.as_deref()), (State::Approved, Some(0), vec!["a".to_string()], "b", Some("a is offline")));
+    }
+
+    #[tokio::test]
+    async fn a_fetch_slskd_stops_answering_keeps_its_batch_and_is_followed_again() {
+        let (id, batch) = ("ss-reads", "b-reads");
+        listed(id, State::Fetching, Some(batch));
+        let d = fetched_to("reads", batch);
+        fetch_from(id, &slskd_gone().await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.batch.as_deref(), i.chosen, i.folders.len()), (State::Fetching, Some(batch), Some(0), 2), "the batch kept, for slskd may well finish it");
+        assert!(i.failed.is_empty());
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd could not be read: slskd could not be reached")), "{:?}", i.why);
+        assert_eq!(next_of(std::slice::from_ref(&i), i.due - 1), None);
+        // Back, with the batch finished meanwhile: followed from where it was, and on to its check.
+        with_item(id, |i| i.due = 0);
+        fetch_from(id, &slskd_at(all_in()).await, &d, |_, _| std::future::ready(Err(acoustid_away()))).await;
+        assert_eq!(item(id).unwrap().state, State::Checking, "followed to its end");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_batch_slskd_answers_it_does_not_know_is_a_fetch_gone_and_held_for_nothing() {
+        let (id, batch) = ("ss-gone", "b-gone");
+        listed(id, State::Fetching, Some(batch));
+        let d = std::env::temp_dir().join(format!("cratarr-soulseek-gone-{}", std::process::id()));
+        fetch_from(id, &slskd_at(axum::Router::new()).await, &d, never_gated).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.batch.clone(), i.failed.clone()), (State::Approved, None, vec!["a".to_string()]), "the next folder: holding it would wait for ever");
+    }
+
+    #[tokio::test]
+    async fn a_search_slskd_could_not_make_is_no_miss() {
+        let id = "ss-search";
+        listed(id, State::Searching, None);
+        with_item(id, |i| i.misses = 3);
+        search_through(id, &slskd_gone().await).await;
+        let i = item(id).unwrap();
+        assert_eq!((i.state, i.misses), (State::Waiting, 3), "the ladder's waits are for records not found");
+        assert!(i.due <= now() + ROUND_AT_LEAST, "searched again soon");
+        assert!(i.why.as_deref().is_some_and(|w| w.starts_with("slskd could not be reached")), "{:?}", i.why);
     }
 
     #[test]
