@@ -867,8 +867,29 @@ pub struct Catalogue {
     /// Its track ids lost (0101, the owner 2026-11-04: Cratarr stops and says so): a catalogue made anew while the user
     /// data remembers another. No ids are given out meanwhile (`identify`).
     ids_lost: std::sync::atomic::AtomicBool,
+    /// How many album actions are moving a copy's files now (`copies_moving`).
+    moving: Arc<AtomicU64>,
+    /// One was when the albums `assign_records` is about to be given were read (`reading_albums`).
+    read_half_way: std::sync::atomic::AtomicBool,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
     file: Option<PathBuf>,
+}
+
+/// An album action moving a copy's files, for as long as one of these lives ([`Catalogue::copies_moving`]). A clone goes
+/// with the blocking move: a request dropped half way ends the action's future, not its move.
+pub struct CopiesMoving(Arc<AtomicU64>);
+
+impl Clone for CopiesMoving {
+    fn clone(&self) -> Self {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for CopiesMoving {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn now() -> i64 {
@@ -922,6 +943,8 @@ impl Catalogue {
             facts: Mutex::default(),
             facts_written,
             ids_lost: Default::default(),
+            moving: Default::default(),
+            read_half_way: Default::default(),
             file: file.map(Path::to_path_buf),
         };
         // A better reader may read what an older one could not.
@@ -2409,14 +2432,39 @@ impl Catalogue {
     pub fn assign_records(&self, albums: &[AlbumCopy]) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let (given, _) = Self::assign_in(&tx, albums, now())?;
+        let read_half_way = self.read_half_way.swap(false, Ordering::SeqCst);
+        let (given, _) = Self::assign(&tx, albums, now(), read_half_way || self.copies_are_moving())?;
         tx.commit()?;
         Ok(given)
+    }
+
+    /// An album action is moving a copy's files, until this goes. Passes do not stop for one, and `identify` pairs what has
+    /// arrived with its gone row, so a pass sees a copy half way with nothing saying it lacks anything for now: no copy leaves
+    /// its record meanwhile. What really differs goes at the first build after.
+    pub fn copies_moving(&self) -> CopiesMoving {
+        self.moving.fetch_add(1, Ordering::SeqCst);
+        CopiesMoving(self.moving.clone())
+    }
+
+    /// Whether an album action is moving a copy's files now.
+    pub fn copies_are_moving(&self) -> bool {
+        self.moving.load(Ordering::SeqCst) > 0
+    }
+
+    /// A build is about to read the albums it gives [`Self::assign_records`]: what it reads half way is no better for the
+    /// action ending before it gets there, and a read takes seconds.
+    pub fn reading_albums(&self) {
+        self.read_half_way.store(self.copies_are_moving(), Ordering::SeqCst);
     }
 
     /// `assign_records` in the caller's transaction, as the first start's merge commits with its map (`first_records`): the
     /// tracks given a record, taken or let go of, and each album's record, none where nothing there can take one.
     fn assign_in(tx: &Connection, albums: &[AlbumCopy], now: i64) -> Result<(usize, Vec<Option<i64>>)> {
+        Self::assign(tx, albums, now, false)
+    }
+
+    /// `assign_in`, `moving` saying these albums may be half way through an action, so none of them leaves.
+    fn assign(tx: &Connection, albums: &[AlbumCopy], now: i64, moving: bool) -> Result<(usize, Vec<Option<i64>>)> {
         let mut held = Held::read(tx)?;
         held.ranked(albums);
         // Who to hold a new album against: the albums that have a record, by name and by release, then the new ones as
@@ -2439,7 +2487,7 @@ impl Catalogue {
         // album retagged, the first by kind keeps the record, then the largest, then the first met (CR18: nobody has checked an
         // Incoming copy, and one account's own is no one else's), and the others are held against the rest as a new album is:
         // two albums, as a deluxe edition is its own record. What the ids hold together stays together whatever the tags say,
-        // or a length fix in one copy would split it. A file gone for now splits nothing.
+        // or a length fix in one copy would split it. A file gone for now splits nothing, nor a copy an album action is moving.
         let mut voting: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
         for (i, r) in records.iter().enumerate() {
             if let Some(r) = r {
@@ -2461,7 +2509,7 @@ impl Catalogue {
                 let (lacking, more): (Vec<i64>, Vec<i64>) = (theirs.difference(&mine).copied().collect(), mine.difference(&theirs).copied().collect());
                 if held.lacks_for_now(&albums[i], &lacking) && held.lacks_for_now(&albums[keeps], &more) {
                     take = named;
-                } else {
+                } else if !moving {
                     records[i] = None;
                 }
             }
@@ -5675,6 +5723,37 @@ mod tests {
         cat.assign_records(&[more, back.clone()]).unwrap();
         assert_eq!(record_of(&cat, back.tracks[2].0), record_of(&cat, left.tracks[0].0), "in its copy's record");
     }
+
+    /// A Keep across a mount lands a file at a time, and `identify` pairs what has arrived with its gone row, so nothing says it
+    /// lacks anything for now. While an album action is open no copy leaves: what is half way is no copy that stopped being one.
+    #[test]
+    fn a_copy_half_way_through_a_move_keeps_its_tracks() {
+        let cat = tracks(6);
+        let (kept, second, _) = two_copies(&cat);
+        cat.db().execute("UPDATE files SET rel = 'Third/4.flac' WHERE rel = ?1", [&second.files[0].1]).unwrap();
+        let left = AlbumCopy { files: second.files[1..].to_vec(), ..copy(None, "A", "Three", &[(2, "Two", 200_000), (3, "Three", 200_000)]) };
+        let arrived = AlbumCopy { files: vec![(0, "Third/4.flac".to_string())], ..copy(None, "A", "Three", &[(1, "One", 200_000)]) };
+        let moving = cat.copies_moving();
+        assert_eq!(cat.assign_records(&[kept.clone(), left.clone(), arrived.clone()]).unwrap(), 0);
+        assert_eq!((cat.track_of(0, "Third/4.flac"), cat.track_of(0, &second.files[1].1)), (Some(1), Some(2)));
+        drop(moving);
+        assert!(cat.assign_records(&[kept, left, arrived]).unwrap() > 0, "with none open, what is apart is apart");
+    }
+
+    /// A read takes seconds, and an action can end inside it: what was read is half way all the same.
+    #[test]
+    fn albums_read_half_way_let_nothing_leave_though_the_move_has_ended() {
+        let cat = tracks(6);
+        let (kept, second, _) = two_copies(&cat);
+        let left = the_first(2, &second);
+        let moving = cat.copies_moving();
+        cat.reading_albums();
+        drop(moving);
+        assert_eq!(cat.assign_records(&[kept.clone(), left.clone()]).unwrap(), 0);
+        cat.reading_albums();
+        assert!(cat.assign_records(&[kept, left]).unwrap() > 0, "read with none open, what is apart is apart");
+    }
+
 
     /// Copies are held together by their ids once taken: a retag or a length fix in one is no reason to split them.
     #[test]

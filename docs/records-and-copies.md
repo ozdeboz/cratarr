@@ -64,10 +64,10 @@ record. Who keeps the record, its id and what points at it goes by kind first: a
 Incoming. So Music keeps it from an Incoming copy with a track more, and one account's own copy never takes it from Music.
 Between copies of one kind the one with more tracks keeps it, the first on an equal count. The other is held against the rest
 as a new folder is, with tracks of its own. That goes ahead of "a track keeps its record for life".
-A copy that lost a file for good leaves the same way; a file gone a while or not read splits nothing, and the record lists the
-track from the copy that has it. Among copies of one kind, where one gained more than it held no majority holds it to the
-record, so it leaves whatever its count: the record stays with the copy that is still it. Copies of a lower kind do not count
-against it there.
+A copy that lost a file for good leaves the same way; a file gone a while or not read splits nothing, nor does a copy an album
+action is moving, and the record lists the track from the copy that has it. Among copies of one kind, where one gained more
+than it held no majority holds it to the record, so it leaves whatever its count: the record stays with the copy that is still
+it. Copies of a lower kind do not count against it there.
 
 Once it has a record, a folder's tracks say which it is, while more than half of them hold it, or nothing else does: a
 folder holding every file of a record that is left keeps it, however many tracks came in beside them. Short of that it is

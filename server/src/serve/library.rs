@@ -839,6 +839,7 @@ impl Library {
                 })
                 .collect::<Result<Vec<_>>>()
         };
+        cat.reading_albums();
         let mut folders = read()?;
         // New tracks get their records first, and strays their albums': what the library lists is what a record is.
         let mut copies = album_copies(&folders, rules);

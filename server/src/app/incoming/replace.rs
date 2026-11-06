@@ -642,11 +642,15 @@ impl IncomingService {
             return Err(ToggleError::Refused(format!("{title} is already back in Incoming")));
         }
         let steps = self.undo_steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
-        let files = self.files.clone();
-        tokio::task::spawn_blocking(move || files.move_all(&steps))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        let moving = self.lib.catalogue().copies_moving();
+        let (files, held) = (self.files.clone(), moving.clone());
+        tokio::task::spawn_blocking(move || {
+            let _held = held;
+            files.move_all(&steps)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         self.finish_replace(&entry.event, true, false).await;
         self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
