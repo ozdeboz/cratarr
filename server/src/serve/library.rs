@@ -2170,12 +2170,31 @@ mod tests {
     fn a_retagged_track_builds_its_album_again_and_nothing_else() {
         let after = with(sample(), |rows| tag(&mut rows[1], "genre", "Electronic; Trip Hop"));
         assert_eq!(same_as_whole(&sample(), &after, |_| {}), 1);
-        // A new album artist: a new album id, the old artist gone.
+        // A new album artist: the old artist gone.
         let after = with(sample(), |rows| {
             tag(&mut rows[2], "artist", "Orbital");
             tag(&mut rows[2], "albumartist", "Orbital");
         });
         assert_eq!(same_as_whole(&sample(), &after, |_| {}), 1);
+    }
+
+    /// As the catalogue has it, a retag changes an album's group and its record stays: `with_records` alone would give it
+    /// another by hash, and these two retags would never meet a group new to a known record.
+    #[test]
+    fn a_retag_keeps_its_record_and_builds_as_a_whole_build_would() {
+        let kinds = [(0, Kind::Main)];
+        let before = || vec![in_folder(0, copy_rows(1, "A/Album", 5, "FLAC", 900))];
+        let genre = with(before(), |rows| tag(&mut rows[1], "genre", "Electronic; Trip Hop"));
+        assert_eq!(same_as_whole_in(&kinds, &before(), &genre), 1);
+        let renamed = with(before(), |rows| {
+            for r in rows.iter_mut() {
+                tag(r, "artist", "Orbital");
+                tag(r, "albumartist", "Orbital");
+            }
+        });
+        assert_eq!(same_as_whole_in(&kinds, &before(), &renamed), 1);
+        let lib = built_with(&kinds, &renamed);
+        assert_eq!(lib.db().query_row("SELECT id FROM albums", [], |r| r.get::<_, String>(0)).unwrap(), "al-5", "a new group, the same record");
     }
 
     #[test]
