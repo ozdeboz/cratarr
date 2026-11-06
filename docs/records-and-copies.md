@@ -40,7 +40,8 @@ track" and "how a record's copies behave"); this says how they are built, and in
 
 ## The same record
 
-As the owner decided, the same record is the same tracks. A folder is identified once, when its files are read:
+As the owner decided, the same record is the same tracks. A folder is identified when its files are read, once, or over its
+first day where it arrives file by file:
 
 1. The tracklists must match, always: as many tracks, each one's length within 2 seconds, its title the same by the
    loose key. A guest in a title is recognised: "Embrace (feat. X)" is the title "Embrace" with a guest, so it matches

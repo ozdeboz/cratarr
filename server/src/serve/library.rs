@@ -3217,7 +3217,7 @@ mod tests {
         assert_eq!(built_with(&TWO_KEPT, &two_copies()).pids().unwrap().len(), 2, "two files of one track are one song");
     }
 
-    /// An Incoming copy plays only when picked, though it is the better, and it is no album of its own beside the kept one.
+    /// An Incoming copy plays only when named, though it is the better, and it is no album of its own beside the kept one.
     #[test]
     fn an_incoming_copy_of_a_kept_record_is_a_copy_not_an_album() {
         let kinds = [(0, Kind::Main), (1, Kind::Incoming)];

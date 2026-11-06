@@ -4873,7 +4873,7 @@ mod tests {
 
     /// A file of a track, as `identify` leaves it.
     pub(super) fn file_of_track(cat: &Catalogue, rel: &str, track: i64) {
-        cat.db().execute("INSERT INTO files (folder, rel, size, mtime, track) VALUES (0, ?1, 1, 1, ?2)", params![rel, track]).unwrap();
+        cat.db().execute("INSERT INTO files (folder, rel, size, mtime, track, state) VALUES (0, ?1, 1, 1, ?2, ?3)", params![rel, track, READ]).unwrap();
     }
 
     /// One album of `tracks`, each given a title and length by its id.
@@ -5677,7 +5677,7 @@ mod tests {
         let record = record_of(&cat, 4);
         assert_ne!(record, record_of(&cat, 1));
         older.facts.title = identity::fold("Three");
-        cat.db().execute("UPDATE records SET born = born - ?2 WHERE id = ?1", params![record, GONE_KEEP_SECS + 1]).unwrap();
+        cat.db().execute("UPDATE records SET born = born - ?1", [GONE_KEEP_SECS + 1]).unwrap();
         cat.assign_records(&[kept.clone(), older.clone()]).unwrap();
         assert!(cat.moved_tracks().unwrap().is_empty());
         assert_eq!(record_of(&cat, 4), record);
@@ -5699,6 +5699,8 @@ mod tests {
         cat.assign_records(&[kept.clone(), young.clone(), beside.clone()]).unwrap();
         file_of_track(&cat, "Beside/4.flac", 4);
         young.facts.title = identity::fold("Three");
+        let record = record_of(&cat, 1);
+        cat.db().execute("UPDATE records SET born = born - ?2 WHERE id = ?1", params![record, GONE_KEEP_SECS + 1]).unwrap();
         cat.assign_records(&[kept, young]).unwrap();
         assert!(cat.moved_tracks().unwrap().is_empty());
     }
