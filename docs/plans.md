@@ -563,5 +563,12 @@ Liked, not taken up:
 - The visuals' VJ ideas: fused passes, a blur pyramid, the loop at a lower resolution, layers at half rate, an A/B
   crossfade between racks, ISF shaders, a meter of each module's cost.
 - Discover's Weekly (a handful of records each week) and a pick of the day.
+- A measured seek ("beat jump"): a seek snaps to its place in the measure, only where the beat grid (0049) passed its
+  confidence gate, with bars from the downbeats and the time signature. Elsewhere, a plain seek.
+- An equalizer behind the auto-gain button.
+- The full-screen player's spacing: on some devices the waveform sits too close to the play row, so the cover gets
+  smaller, with care.
+- Giving back to MusicBrainz, very far down the line: a record Cratarr knows that has no entry there is offered back
+  through MusicBrainz's own form, filled in for a person to check and send. Nothing writes to it unattended.
 
 Shelved by the owner: a live DJ mix between tracks (Auto DJ), and an MCP server in the desktop app.
