@@ -61,25 +61,22 @@ function worker(store = storage()) {
   const net = { answer: (path: string) => Promise.resolve(new Response(JSON.stringify({ path }))) as Promise<Response> };
   const fetchHere = (r: string | { url: string }) => net.answer(new URL(typeof r === 'string' ? r : r.url, ORIGIN).pathname);
   new Function('self', 'caches', 'fetch', SW)(self, store.caches, fetchHere);
-  let waits: Promise<unknown>[] = [];
-  const settled = async () => {
-    while (waits.length) {
-      const now = waits;
-      waits = [];
-      await Promise.allSettled(now);
-    }
+  /** All of `waits`, those added while waiting too. */
+  const settled = async (waits: Promise<unknown>[]) => {
+    for (let done = 0; done < waits.length; done = waits.length) await Promise.allSettled(waits);
   };
   return {
     store,
     net,
-    settled,
     tell: async (data: unknown) => {
+      const waits: Promise<unknown>[] = [];
       for (const f of on.message) f({ data, waitUntil: (p: Promise<unknown>) => void waits.push(p) });
-      await settled();
+      await settled(waits);
     },
     /** Asks for `path` through the worker; undefined: left to the browser. */
     ask: async (path: string, more: Record<string, unknown> = {}) => {
       let answer: Promise<Response> | undefined;
+      const waits: Promise<unknown>[] = [];
       for (const f of on.fetch)
         f({
           request: { method: 'GET', url: ORIGIN + path, mode: 'cors', cache: 'default', ...more },
@@ -87,12 +84,13 @@ function worker(store = storage()) {
           waitUntil: (p: Promise<unknown>) => void waits.push(p),
         });
       const r = await answer;
-      await settled();
+      await settled(waits);
       return r;
     },
     activate: async () => {
+      const waits: Promise<unknown>[] = [];
       for (const f of on.activate) f({ waitUntil: (p: Promise<unknown>) => void waits.push(p) });
-      await settled();
+      await settled(waits);
     },
   };
 }
@@ -117,4 +115,140 @@ test('a read of the sign-in page that is no navigation changes nothing', async (
   await w.ask('/signin');
   await w.ask('/api/albums');
   assert.ok(has(w, DATA + '@ann', '/api/albums'));
+});
+
+/** A network answer held back until `go`: an answer that comes after whatever the test does meanwhile. */
+function later(w: ReturnType<typeof worker>) {
+  let go: (r: Response) => void = () => {};
+  const held = new Promise<Response>((done) => (go = done));
+  w.net.answer = () => held;
+  return go;
+}
+
+test("a read is the account's who asked: its answer, come after another signed in, is never kept as the other's", async () => {
+  const w = worker();
+  await w.tell(signedIn('ann'));
+  const answer = later(w);
+  const asked = w.ask('/api/playlists');
+  await w.tell(signedIn('bo'));
+  answer(new Response('{"hers":true}'));
+  await asked;
+  assert.equal(has(w, DATA + '@bo', '/api/playlists'), false);
+  assert.ok(has(w, DATA + '@ann', '/api/playlists'), 'hers, for her return');
+});
+
+test("the album list the same, each way it is asked", async () => {
+  const w = worker();
+  await w.tell(signedIn('ann'));
+  for (const cache of ['default', 'no-cache']) {
+    const answer = later(w);
+    const asked = w.ask('/api/albums', { cache });
+    await w.tell(signedIn('bo'));
+    answer(new Response('{"hers":true}'));
+    await asked;
+    assert.equal(has(w, DATA + '@bo', '/api/albums'), false, cache);
+    await w.tell(signedIn('ann'));
+  }
+});
+
+test('nor kept for nobody, signed out as the answer came', async () => {
+  const w = worker();
+  await w.tell(signedIn('ann'));
+  const answer = later(w);
+  const asked = w.ask('/api/playlists');
+  await w.tell(signedIn(null));
+  answer(new Response('{}'));
+  await asked;
+  assert.deepEqual([...w.store.all.keys()].filter((n) => n.startsWith(DATA) && n !== DATA + '@ann'), []);
+});
+
+test('a worker woken by a read, told whose it is while it reads the name kept, stays told', async () => {
+  const store = storage();
+  (await store.caches.open(WHO)).put('/__who', new Response('@ann'));
+  let slow: () => void = () => {};
+  let first = true;
+  const open = store.caches.open;
+  store.caches.open = async (n: string) => {
+    const c = await open(n);
+    if (n !== WHO || !first) return c;
+    first = false;
+    // The name as it stood when read, delivered late.
+    const match = async (k: string) => {
+      const read = await c.match(k);
+      await new Promise<void>((done) => (slow = done));
+      return read;
+    };
+    return { ...c, match };
+  };
+  const w = worker(store);
+  const asked = w.ask('/api/playlists');
+  await new Promise((r) => setTimeout(r));
+  await w.tell(signedIn('bo'));
+  slow();
+  await asked;
+  await w.ask('/api/crates');
+  assert.ok(has(w, DATA + '@bo', '/api/crates'), 'the name told, not the one read a moment too late');
+});
+
+test("out of reach each account has its own last copies, and none of another's", async () => {
+  const w = worker();
+  await w.tell(signedIn('ann'));
+  w.net.answer = () => Promise.resolve(new Response('{"hers":true}'));
+  await w.ask('/api/playlists');
+  w.net.answer = () => Promise.reject(new TypeError('no network'));
+  assert.deepEqual(await (await w.ask('/api/playlists'))!.json(), { hers: true });
+  await w.tell(signedIn('bo'));
+  assert.equal((await w.ask('/api/playlists'))!.type, 'error', 'he has none');
+  await w.tell(signedIn(null));
+  assert.equal((await w.ask('/api/playlists'))!.type, 'error', 'nor has nobody');
+  await w.tell(signedIn('ann'));
+  assert.deepEqual(await (await w.ask('/api/playlists'))!.json(), { hers: true }, 'and hers again at her return');
+});
+
+test('nobody keeps nothing', async () => {
+  const w = worker();
+  await w.ask('/api/playlists');
+  await w.ask('/api/albums');
+  await w.tell({ type: 'keep-covers', urls: ['/api/albums/cratarr/al-1/cover'] });
+  assert.deepEqual([...w.store.all.keys()].filter((n) => n !== WHO), []);
+});
+
+test("the covers kept are each account's, its list touching no other's", async () => {
+  const w = worker();
+  const cover = '/api/albums/cratarr/al-1/cover';
+  await w.tell(signedIn('ann'));
+  await w.tell({ type: 'keep-covers', urls: [cover] });
+  await w.tell(signedIn('bo'));
+  await w.tell({ type: 'keep-covers', urls: [] });
+  assert.ok(has(w, COVERS + '@ann', cover), 'his list says nothing of hers');
+  w.net.answer = () => Promise.reject(new TypeError('no network'));
+  assert.equal((await w.ask(cover))!.type, 'error', 'he has no copy of hers');
+  await w.tell(signedIn('ann'));
+  assert.ok((await w.ask(cover))!.ok);
+});
+
+test("a cover's answer goes to the copy of the account who asked", async () => {
+  const w = worker();
+  const cover = '/api/albums/cratarr/al-1/cover';
+  await w.tell(signedIn('ann'));
+  await w.tell({ type: 'keep-covers', urls: [cover] });
+  await w.tell(signedIn('bo'));
+  await w.tell({ type: 'keep-covers', urls: [cover] });
+  await w.tell(signedIn('ann'));
+  const answer = later(w);
+  const asked = w.ask(cover);
+  await w.tell(signedIn('bo'));
+  answer(new Response('hers, new'));
+  await asked;
+  await new Promise((r) => setTimeout(r));
+  assert.notEqual(await (await w.store.caches.match(cover, { cacheName: COVERS + '@bo' }))!.text(), 'hers, new');
+});
+
+test('activation keeps every account\'s copies and whose they are, and lets go of those under names raised since', async () => {
+  const w = worker();
+  const now = [DATA + '@ann', DATA + '@', COVERS + '@ann', WHO, OFFLINE, name('CACHE')];
+  const before = ['cratarr-data', 'cratarr-data@ann', 'cratarr-covers', 'cratarr-covers@ann', 'cratarr-offline', 'cratarr-v4'];
+  for (const n of [...now, ...before]) await w.store.caches.open(n);
+  await w.activate();
+  assert.deepEqual([...w.store.all.keys()].sort(), [...now].sort());
 });
