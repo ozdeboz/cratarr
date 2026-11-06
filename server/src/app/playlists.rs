@@ -424,7 +424,7 @@ impl CrateLibrary {
 
     /// Whether the file at a place (`alike`'s, the files' order) is in a library switched on.
     pub(super) fn on(&self, i: usize) -> bool {
-        self.files.get(i).is_some_and(|f| !self.switched_off.contains(&f.folder))
+        self.files.get(i).is_some_and(|f| crates::on_for(&f.folders, &self.switched_off))
     }
 
     /// Whether these conditions can be worked out: what they need of the favourites is known.
@@ -435,7 +435,7 @@ impl CrateLibrary {
 
     /// The files of the libraries switched on, newest first.
     pub(super) fn files(&self) -> impl Iterator<Item = &crates::Facts> {
-        self.files.iter().filter(|f| !self.switched_off.contains(&f.folder))
+        self.files.iter().filter(|f| crates::on_for(&f.folders, &self.switched_off))
     }
 
     /// This library as the rules work a crate out over it.
@@ -2555,7 +2555,7 @@ impl PlaylistService {
             None => (HashMap::new(), None),
         };
         let (songs, played) = songs_played;
-        let facts: HashMap<&str, &crates::Facts> = lib.files.iter().chain(every.iter().flat_map(|e| e.files.iter())).map(|f| (f.rel.as_str(), f)).collect();
+        let facts = crates::by_line(lib.files.iter().chain(every.iter().flat_map(|e| e.files.iter())));
         let now = super::moment::now_secs();
         let images = self.crate_images();
         Ok(all
@@ -2819,7 +2819,7 @@ impl PlaylistService {
         let lib = self.crate_library(None, false, false, &[]).await?;
         let traits = tokio::task::spawn_blocking(move || {
             let all: Vec<&crates::Facts> = lib.files.iter().collect();
-            let turned: Vec<&crates::Facts> = all.iter().copied().filter(|f| down.contains(&f.rel)).collect();
+            let turned: Vec<&crates::Facts> = all.iter().copied().filter(|f| f.every_line().any(|l| down.contains(l))).collect();
             (crates::learned(&turned, &all), turned.len())
         })
         .await
@@ -3361,9 +3361,9 @@ impl PlaylistService {
     /// of each track and when it last played it (Cratarr's own plays, by the line's song, whatever server the crate is
     /// shown for), and when it came into the library (the catalogue's first sight of it).
     async fn with_plays_and_added(&self, rows: &mut [PlaylistRow], lib: &CrateLibrary) {
-        let born: HashMap<&str, i64> = lib.files.iter().filter_map(|f| Some((f.rel.as_str(), f.born?))).collect();
+        let facts = crates::by_line(lib.files.iter());
         for r in rows.iter_mut() {
-            r.added = born.get(r.entry.as_str()).copied();
+            r.added = facts.get(r.entry.as_str()).and_then(|f| f.born);
         }
         let Some(serve) = self.served.clone() else { return };
         let Some(me) = serve.current_user() else { return };
@@ -3465,7 +3465,7 @@ impl PlaylistService {
             let w = lib.world();
             let among: Vec<&crates::Facts> = lib
                 .files()
-                .filter(|f| !excluded.contains(&f.rel) && !crates::credits_out(f, &artists) && !out.holds(f) && crates::holds_besides_like(&conditions, f, &w))
+                .filter(|f| !f.every_line().any(|l| excluded.contains(l)) && !crates::credits_out(f, &artists) && !out.holds(f) && crates::holds_besides_like(&conditions, f, &w))
                 .collect();
             let closest = crates::closest_weighted(&of, &weights, mode, lib.alike(), &among, lib.by());
             let alike = closest.iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect();
@@ -4387,7 +4387,7 @@ mod library_tests {
 
     /// Music's files (folder 0) and an Incoming folder's (1), newest first; "../in/X/1.flac" is in a playlist.
     fn library(switched_off: &[i64]) -> CrateLibrary {
-        let f = |line: &str, folder: i64, genre: &str| crates::Facts { rel: line.into(), folder, genres: vec![genre.into()], ..Default::default() };
+        let f = |line: &str, folder: i64, genre: &str| crates::Facts { rel: line.into(), folders: vec![folder], genres: vec![genre.into()], ..Default::default() };
         let files = vec![f("../in/X/1.flac", 1, "Dub"), f("A/1.flac", 0, "Dub"), f("../in/X/2.flac", 1, "Jazz"), f("B/1.flac", 0, "Rock")];
         let membership = HashMap::from([("../in/X/1.flac".to_string(), vec!["Road".to_string()])]);
         CrateLibrary {

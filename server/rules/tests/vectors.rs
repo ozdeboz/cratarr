@@ -182,7 +182,8 @@ impl File {
     fn facts(&self) -> Facts {
         Facts {
             rel: self.rel.clone(),
-            folder: self.folder,
+            lines: Vec::new(),
+            folders: vec![self.folder],
             born: Some(self.born),
             genres: self.genres.clone(),
             year: self.year,

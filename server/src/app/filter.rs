@@ -246,7 +246,7 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
         _ => false,
     };
     let lib = app.playlists.crate_library_for(&all, want, if drawn { &r.without } else { &[] }).await?;
-    let by_line: HashMap<&str, &Facts> = lib.files().map(|f| (f.rel.as_str(), f)).collect();
+    let by_line = crates::by_line(lib.files());
     let none = Facts::default();
     let uses = lib.uses();
     let one = |key: String, line: Option<&str>| Item::of(key, vec![facts_of(&by_line, &none, line)], 0);
@@ -305,7 +305,12 @@ async fn work_out(app: &Arc<App>, want: Option<&str>, r: &Request, causes: &Caus
             // Another server's albums by their folder: its tracks are the files whose lines are in its folder's.
             let mut by_dir: HashMap<&str, Vec<&Facts>> = HashMap::new();
             for f in lib.files() {
-                by_dir.entry(f.rel.rsplit_once('/').map_or("", |(d, _)| d)).or_default().push(f);
+                for line in f.every_line() {
+                    let tracks = by_dir.entry(line.rsplit_once('/').map_or("", |(d, _)| d)).or_default();
+                    if !tracks.last().is_some_and(|t| std::ptr::eq(*t, f)) {
+                        tracks.push(f);
+                    }
+                }
             }
             let tracks_of = |a: &Listed| match own.get(&a.id) {
                 Some(files) => files.clone(),

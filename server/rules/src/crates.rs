@@ -867,14 +867,19 @@ fn telling(list: &[&Facts], library: &HashMap<String, usize>, total: usize, name
     weighed.into_iter().take(TELLING).map(|(_, n)| n).collect()
 }
 
-/// What the axes test about one file of the libraries.
+/// What the axes test about one track of the libraries: read from one of its files, the copy that plays for most people.
+/// A file with no track yet stands for itself.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
-    /// The playlist line: relative to Music, climbing out of it for a file in an Incoming folder
-    /// ("../lidarr-music/X/01.flac"), so a Music file's line never is an Incoming one's.
+    /// The playlist line of the file it is read from: relative to Music, climbing out of it for a file in an Incoming
+    /// folder ("../lidarr-music/X/01.flac"), so a Music file's line never is an Incoming one's.
     pub rel: String,
-    /// The catalogue folder it is in: 0 is Music, 1 on the Incoming ones (what a library switched off leaves out).
-    pub folder: i64,
+    /// The lines of its other files. What was said of a track was said by the line of whichever file it was then, so what
+    /// is kept by line goes through `every_line`, or a playlist entry on another copy would seem to name nothing.
+    pub lines: Vec<String>,
+    /// The catalogue folders it lies in, the file it is read from first (what a library switched off leaves out:
+    /// `on_for`).
+    pub folders: Vec<i64>,
     /// When the catalogue first saw its track (epoch seconds; a moved file keeps it): when it came into the library.
     pub born: Option<i64>,
     pub genres: Vec<String>,
@@ -981,6 +986,22 @@ pub fn key_name(raw: &str) -> Option<String> {
 }
 
 impl Facts {
+    /// Every playlist line it goes by, the file it is read from first.
+    pub fn every_line(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.rel.as_str()).chain(self.lines.iter().map(String::as_str))
+    }
+
+    /// The playlists holding it, by any of its lines, each once.
+    fn lists<'a>(&self, membership: &'a HashMap<String, Vec<String>>) -> Vec<&'a String> {
+        let mut lists: Vec<&String> = Vec::new();
+        for l in self.every_line().filter_map(|l| membership.get(l)).flatten() {
+            if !lists.contains(&l) {
+                lists.push(l);
+            }
+        }
+        lists
+    }
+
     /// What the one similarity knows of the file from its facts (the radio's and the crates' alike: one reading of a
     /// track, the owner's "one profile computation", 2026-10-23): genres, AudioMuse's styles, year, tempo, energy,
     /// danceability and CLAP's moods. `intern` numbers a name of a kind (2 genres, 3 styles; any case). Its playlists,
@@ -1000,6 +1021,11 @@ impl Facts {
             ..Track::default()
         }
     }
+}
+
+/// The tracks by every line they go by: a line kept from before finds its track, whichever copy it names.
+pub fn by_line<'a>(files: impl IntoIterator<Item = &'a Facts>) -> HashMap<&'a str, &'a Facts> {
+    files.into_iter().flat_map(|f| f.every_line().map(move |l| (l, f))).collect()
 }
 
 /// A compilation's album artist ("Various Artists"): no artist.
@@ -1211,7 +1237,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "favourite" | "like" => f.rel.clone(),
                 // One album, one heart: its tracks are in one folder.
                 "favourite_album" => f.rel.rsplit_once('/').map_or("", |(d, _)| d).to_string(),
-                "playlist" => membership.and_then(|m| m.get(&f.rel)).map(|l| l.join("|")).unwrap_or_default(),
+                "playlist" => membership.map(|m| f.lists(m).into_iter().map(String::as_str).collect::<Vec<_>>().join("|")).unwrap_or_default(),
                 "genre" => f.genres.iter().map(|g| g.to_lowercase()).collect::<Vec<_>>().join("|"),
                 "artist" => f.credits.join("|"),
                 "album" => f.album.as_deref().unwrap_or_default().to_string(),
@@ -1249,7 +1275,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "playlist" => {
                     a.values = playlists.to_vec();
                     if let Some(m) = membership {
-                        let holds = |t: &[&Facts], p: &String| t.iter().any(|f| m.get(&f.rel).is_some_and(|l| l.contains(p)));
+                        let holds = |t: &[&Facts], p: &String| t.iter().any(|f| f.lists(m).contains(&p));
                         a.counts = playlists.iter().map(|p| items.iter().filter(|t| holds(t, p)).count()).collect();
                     }
                 }
@@ -1364,18 +1390,17 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("length", Value::Range { min, max }) => within(f.length.map(minutes), min, max),
         ("quality", Value::AnyOf { values }) => f.quality.as_ref().is_some_and(|q| values.contains(q)),
         ("key", Value::AnyOf { values }) => f.key.as_ref().is_some_and(|k| values.iter().any(|v| v.eq_ignore_ascii_case(k))),
-        ("favourite", Value::Yes) => w.favourites.is_some_and(|s| s.contains(&f.rel)),
-        ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| s.contains(&f.rel)),
-        ("fit", Value::Yes) => w.fits.is_some_and(|s| s.contains(&f.rel)),
+        ("favourite", Value::Yes) => w.favourites.is_some_and(|s| f.every_line().any(|l| s.contains(l))),
+        ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| f.every_line().any(|l| s.contains(l))),
+        ("fit", Value::Yes) => w.fits.is_some_and(|s| f.every_line().any(|l| s.contains(l))),
         ("four", Value::Yes) => four_on_the_floor(f),
         ("meter", Value::AnyOf { values }) => f.meter.as_ref().is_some_and(|m| values.iter().any(|v| v.eq_ignore_ascii_case(m))),
-        (LEFT_OUT, Value::AnyOf { values }) => values.iter().any(|v| *v == f.rel),
+        (LEFT_OUT, Value::AnyOf { values }) => f.every_line().any(|l| values.iter().any(|v| v == l)),
         (CREDITED, Value::AnyOf { values }) => values.iter().any(|v| f.credits.contains(v)),
-        ("playlist", Value::AnyOf { values }) => match w.membership.get(&f.rel) {
-            None => false,
-            Some(lists) if values.is_empty() => !lists.is_empty(),
-            Some(lists) => values.iter().any(|v| lists.contains(v)),
-        },
+        ("playlist", Value::AnyOf { values }) => {
+            let lists = f.lists(w.membership);
+            if values.is_empty() { !lists.is_empty() } else { values.iter().any(|v| lists.contains(&v)) }
+        }
         ("genre", Value::AnyOf { values }) => values.iter().any(|v| f.genres.iter().any(|g| g.eq_ignore_ascii_case(v))),
         ("year", Value::Range { min, max }) => within(f.year, min, max),
         ("bpm", Value::Range { min, max }) => within(f.bpm, min, max),
@@ -1388,7 +1413,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("tag", Value::AllOf { values }) => all_of(values, f.tags.as_slice()),
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
-        ("like", Value::Within { lines, .. }) => lines.contains(&f.rel),
+        ("like", Value::Within { lines, .. }) => f.every_line().any(|l| lines.contains(l)),
         _ => false,
     }
 }
@@ -1479,15 +1504,16 @@ pub fn resolved_in(conditions: &[Condition], alike: &Alike, among: &[&Facts], by
                 // Its own left out before the closest are picked, so they take no place among them (`SeedsOut`).
                 let out = SeedsOut::of(of, *fresh, *own, alike);
                 let among: Vec<&Facts> = among.iter().copied().filter(|f| !out.holds(f)).collect();
-                let mut ranked: Vec<String> = closest_fit(of, weights, mode.unwrap_or_default(), avoid, alike, &among, by)
+                let picks: Vec<(&Facts, f64)> = closest_fit(of, weights, mode.unwrap_or_default(), avoid, alike, &among, by)
                     .into_iter()
                     // How alike falls down the list (`closest_fit`): the cut is where it goes below `min`.
                     .take_while(|(_, x)| min.is_none_or(|m| *x >= f64::from(m)))
                     .take(if *unlisted { count + LEAN_POOL } else { *count })
-                    .map(|(f, _)| f.rel.clone())
                     .collect();
+                let mut ranked: Vec<String> = picks.iter().map(|(f, _)| f.rel.clone()).collect();
                 if *unlisted {
-                    lean_unlisted(&mut ranked, |l| membership.get(l).is_some_and(|m| !m.is_empty()));
+                    let listed: HashSet<&str> = picks.iter().filter(|(f, _)| !f.lists(membership).is_empty()).map(|(f, _)| f.rel.as_str()).collect();
+                    lean_unlisted(&mut ranked, |l| listed.contains(l));
                     ranked.truncate(*count);
                 }
                 Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) }, ..c.clone() }
@@ -1594,13 +1620,14 @@ impl Alike {
         let mut sounds = Vec::with_capacity(all.len());
         for f in all {
             let mut t = f.like(|kind, name| intern(kind, name));
-            t.playlists = membership.get(&f.rel).map(|ps| ps.iter().map(|p| intern(0, p)).collect()).unwrap_or_default();
+            t.playlists = f.lists(membership).into_iter().map(|p| intern(0, p)).collect();
             t.artists = f.artists.iter().map(|a| intern(1, a)).collect();
             tracks.push(t);
             sounds.push(f.sound.as_deref().map(<[f32]>::to_vec));
         }
         let lib = Library::new(&tracks, sounds);
-        let place = all.iter().enumerate().map(|(i, f)| (f.rel.clone(), i)).collect();
+        // By every line: a playlist's entry or a track left out may name any copy.
+        let place = all.iter().enumerate().flat_map(|(i, f)| f.every_line().map(move |l| (l.to_string(), i))).collect();
         let of_track = all.iter().enumerate().filter_map(|(i, f)| Some((f.track?, i))).collect();
         let mut albums: HashMap<Arc<str>, Vec<usize>> = HashMap::new();
         let mut credited: HashMap<String, Vec<usize>> = HashMap::new();
@@ -2166,6 +2193,13 @@ impl Judged {
     }
 }
 
+/// Whether what lies in these catalogue folders is on, the libraries in `off` switched off: a track or a record is on while
+/// any copy is. An Incoming copy counts though it does not play by itself: with the kept library off, that is where the
+/// page finds the record (its `recordOn`). What lies nowhere has nothing to switch off.
+pub fn on_for(folders: &[i64], off: &HashSet<i64>) -> bool {
+    folders.is_empty() || folders.iter().any(|f| !off.contains(f))
+}
+
 /// The library as one viewer looks at it, and the last step of working a crate out over it (point 17: one engine, so a
 /// player that plays on its own answers as the server does). Conditions come in with their words already spelled as
 /// the library spells them, as that store is the caller's: one for one, so a cause's place among them holds.
@@ -2185,7 +2219,7 @@ pub struct View<'a, A> {
 impl<'a, A: Fn() -> &'a Alike> View<'a, A> {
     /// The files of the libraries switched on, or every library's (`every`: what switching them all on would show).
     fn files_of(&self, every: bool) -> impl Iterator<Item = &'a Facts> {
-        self.files.iter().filter(move |f| every || !self.switched_off.contains(&f.folder))
+        self.files.iter().filter(move |f| every || on_for(&f.folders, self.switched_off))
     }
 
     /// The conditions with their Sounds like worked out (`resolved_in`), once for all the files.
@@ -2213,7 +2247,7 @@ impl<'a, A: Fn() -> &'a Alike> View<'a, A> {
         let resolved = self.resolved(conditions, false);
         let ranked: Vec<bool> = conditions.iter().map(|c| c.value.ranks()).collect();
         let at: Vec<std::ops::Range<usize>> = causes.iter().map(|c| c.at.clone()).collect();
-        let (lines, verdicts) = select_saying(self.files.iter(), |f| self.switched_off.contains(&f.folder), &resolved, &ranked, &at, explain, &self.world);
+        let (lines, verdicts) = select_saying(self.files.iter(), |f| !on_for(&f.folders, self.switched_off), &resolved, &ranked, &at, explain, &self.world);
         let mut lines: Vec<String> = lines.into_iter().map(str::to_string).collect();
         closest_first(&mut lines, &resolved);
         // The causes as the verdicts' bits number them: the libraries switched off last, when any of this source's is.
@@ -2924,11 +2958,11 @@ mod tests {
     #[test]
     fn a_selection_says_which_cause_kept_what_out() {
         let (mut files, membership, favourites) = library();
-        files[2].folder = 1;
+        files[2].folders = vec![1];
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
         let genre = |g: &str| Condition::new("genre", false, Value::AnyOf { values: vec![g.into()] });
         let saying = |conditions: &[Condition], causes: &[std::ops::Range<usize>], off: bool| {
-            let (lines, verdicts) = select_saying(&files, |f| off && f.folder == 1, conditions, &[], causes, false, &w);
+            let (lines, verdicts) = select_saying(&files, |f| off && f.folders == [1], conditions, &[], causes, false, &w);
             (lines.into_iter().map(str::to_string).collect::<Vec<_>>(), verdicts.per_cause(causes.len() + 1), verdicts.all())
         };
         // Emptied by the library switched off: "c" alone is Indie, and would come back.
@@ -3478,9 +3512,30 @@ mod tests {
         assert!(alike.seed_places("ar-8").is_empty(), "a name without an id is no seed");
     }
 
+    #[test]
+    fn what_is_kept_by_line_holds_a_track_by_any_of_its_lines() {
+        let other = "../own/A/1.flac".to_string();
+        let f = Facts { rel: "A/1.flac".into(), lines: vec![other.clone()], track: Some(1), ..Facts::default() };
+        let membership = HashMap::from([(other.clone(), vec!["Road".to_string()])]);
+        let said = HashSet::from([other.clone()]);
+        let w = World { membership: &membership, favourites: Some(&said), favourite_albums: Some(&said), uses: None, now: 0, fits: Some(&said) };
+        for axis in ["favourite", "favourite_album", "fit"] {
+            assert!(matches(&Condition::new(axis, false, Value::Yes), &f, &w), "{axis}");
+        }
+        for values in [vec![], vec!["Road".to_string()]] {
+            assert!(matches(&Condition::new("playlist", false, Value::AnyOf { values }), &f, &w));
+        }
+        assert!(matches(&Condition::new(LEFT_OUT, false, Value::AnyOf { values: vec![other.clone()] }), &f, &w));
+        let files = [f];
+        assert_eq!(by_line(&files).len(), 2);
+        let alike = Alike::of(&files, &membership, &HashMap::new());
+        assert_eq!((alike.place_of_line("A/1.flac"), alike.place_of_line(&other)), (Some(0), Some(0)));
+        assert_eq!(alike.tracks[0].playlists.len(), 1, "its playlist counts in what it is like");
+    }
+
     /// Two libraries: folder 0 holds the seed and a track far from it, folder 1 a track near it.
     fn two_libraries() -> Vec<Facts> {
-        let heard = |rel: &str, track: i64, folder: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), folder, sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
+        let heard = |rel: &str, track: i64, folder: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), folders: vec![folder], sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
         vec![heard("seed.flac", 1, 0, [1.0, 0.0]), heard("near.flac", 2, 1, [0.999, 0.045]), heard("far.flac", 3, 0, [0.0, 1.0])]
     }
 

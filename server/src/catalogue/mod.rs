@@ -14,7 +14,7 @@ pub mod normalise;
 pub mod tags;
 pub mod walk;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -399,6 +399,16 @@ fn count_facts_writes(conn: &Connection, written: Arc<AtomicU64>) -> Result<()> 
         }
     }
     Ok(())
+}
+
+/// A file's place in the catalogue: its folder and path there.
+type Place = (i64, String);
+
+/// The tracks with more than one file present: a record's copies. Few, so reading them first costs next to nothing.
+fn tracks_of_several(db: &Connection) -> Result<Vec<i64>> {
+    let mut st = db.prepare(&format!("SELECT track FROM files WHERE track IS NOT NULL AND {PRESENT} GROUP BY track HAVING count(*) > 1"))?;
+    let tracks = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(tracks)
 }
 
 /// File states.
@@ -1344,9 +1354,23 @@ impl Catalogue {
         let was = kept.take().map(|k| Arc::downgrade(&k.facts));
         // Beside the catalogue, not under its one lock: a play starting and every writer would wait out the whole read.
         let reader = self.reader();
+        let shared = match &reader {
+            Some(c) => tracks_of_several(c)?,
+            None => tracks_of_several(&self.db())?,
+        };
+        // Asked first, as nothing here may wait on the library with the catalogue held.
+        let mut several: HashMap<i64, Option<Place>> = shared.iter().map(|t| (*t, None)).collect();
+        if let Some(s) = served.as_ref().filter(|_| !shared.is_empty()) {
+            let songs: Vec<String> = shared.iter().map(|t| crate::serve::ids::song(*t)).collect();
+            for (song, place) in s.library.song_places(&songs)? {
+                if let Some(t) = crate::serve::ids::track_of(&song) {
+                    several.insert(t, Some(place));
+                }
+            }
+        }
         let mut facts = match &reader {
-            Some(c) => Self::read_crate_facts(c, &folders)?,
-            None => Self::read_crate_facts(&self.db(), &folders)?,
+            Some(c) => Self::read_crate_facts(c, &folders, &several)?,
+            None => Self::read_crate_facts(&self.db(), &folders, &several)?,
         };
         drop(reader);
         if let Some(s) = &served
@@ -1396,8 +1420,10 @@ impl Catalogue {
         Ok(facts)
     }
 
-    fn read_crate_facts(db: &Connection, folders: &InUse) -> Result<Vec<crate::crates::Facts>> {
-        type Place = (i64, String);
+    /// One `Facts` a track: `several` holds each track with more than one file present, by the place its row copy has in the
+    /// library (none: the first by folder). The other files lend their lines and folders and are read no further, so a
+    /// second copy costs no memory here: this read is what the 768 MB limit is tightest on.
+    fn read_crate_facts(db: &Connection, folders: &InUse, several: &HashMap<i64, Option<Place>>) -> Result<Vec<crate::crates::Facts>> {
         // Every file present, newest first, with its track (the one similarity finds a file by it, heard or not), its
         // length and its format and bitrate (the crates' Length and Quality).
         type File = (i64, String, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<i64>);
@@ -1408,12 +1434,39 @@ impl Catalogue {
         let files: Vec<File> = st
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?
             .collect::<rusqlite::Result<_>>()?;
+        let mut copies: HashMap<i64, Vec<(Place, String)>> = HashMap::new();
+        for (folder, rel, _, track, ..) in &files {
+            if let Some(t) = track.filter(|t| several.contains_key(t))
+                && let Some(line) = line_in(folders, *folder, rel)
+            {
+                copies.entry(t).or_default().push(((*folder, rel.clone()), line));
+            }
+        }
+        // What each such track's `Facts` takes from its other files, and those files, left out of every read below.
+        let mut lent: HashMap<i64, (Vec<String>, Vec<i64>)> = HashMap::new();
+        let mut left: HashSet<Place> = HashSet::new();
+        for (track, mut held) in copies {
+            held.sort();
+            let row = several.get(&track).and_then(Option::as_ref).and_then(|p| held.iter().position(|(h, _)| h == p)).unwrap_or(0);
+            let ((row_place, _), mut lines, mut in_folders) = (held.remove(row), Vec::new(), Vec::new());
+            in_folders.push(row_place.0);
+            for (place, line) in held {
+                lines.push(line);
+                if !in_folders.contains(&place.0) {
+                    in_folders.push(place.0);
+                }
+                left.insert(place);
+            }
+            lent.insert(track, (lines, in_folders));
+        }
         // The key its tags say (ID3v2 TKEY, Vorbis INITIALKEY or KEY).
         let mut st = db.prepare("SELECT folder, rel, value FROM tags WHERE folder >= 0 AND raw IN ('TKEY', 'INITIALKEY', 'KEY') ORDER BY folder, rel, n")?;
         let mut tag_keys: HashMap<Place, String> = HashMap::new();
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
             let (place, value) = row?;
-            tag_keys.entry(place).or_insert(value);
+            if !left.contains(&place) {
+                tag_keys.entry(place).or_insert(value);
+            }
         }
         // Its labels (0.11, quick crates): Vorbis LABEL or ORGANIZATION and MP4's LABEL (read as "label"), ID3v2 TPUB and
         // Vorbis PUBLISHER (lofty reads those as the publisher: kept by their raw keys). Every tag is kept, so no file
@@ -1422,6 +1475,9 @@ impl Catalogue {
         let mut tag_labels: HashMap<Place, Vec<String>> = HashMap::new();
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
             let (place, value) = row?;
+            if left.contains(&place) {
+                continue;
+            }
             let into = tag_labels.entry(place).or_default();
             for l in crate::crates::labels_of(&value) {
                 if !into.iter().any(|x| x.eq_ignore_ascii_case(&l)) {
@@ -1435,7 +1491,9 @@ impl Catalogue {
         let mut by: HashMap<Place, Vec<(String, String)>> = HashMap::new();
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
             let (place, name, value) = row?;
-            by.entry(place).or_default().push((name, value));
+            if !left.contains(&place) {
+                by.entry(place).or_default().push((name, value));
+            }
         }
         // The tempo where the file has no BPM tag: its analysis' when sure enough (decision 0035), while the file is as
         // it was then. The tag comes first. With it, four on the floor (0.15), measured in the same analysis.
@@ -1455,14 +1513,14 @@ impl Catalogue {
         let mut meters: HashMap<Place, u8> = st
             .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, i64>(2)?.clamp(0, 255) as u8)))?
             .collect::<rusqlite::Result<_>>()?;
-        // AudioMuse's (decision 0054), where it heard the file: energy, style tags, CLAP's moods.
-        type Muse = (Option<f64>, Option<String>, Option<String>, i64, Option<Vec<u8>>, Option<String>);
+        // AudioMuse's (decision 0054), where it heard the track: energy, style tags, CLAP's moods. By track: every file of
+        // it is the one sound, and a track of two files must not weigh double in what stands out below.
+        type Muse = (Option<f64>, Option<String>, Option<String>, Option<Vec<u8>>, Option<String>);
         let mut st = db.prepare(&format!(
-            "SELECT f.folder, f.rel, a.energy, a.style, a.moods, a.track, a.embedding, a.key FROM audiomuse a JOIN files f ON f.track = a.track WHERE {PRESENT_F}"
+            "SELECT a.track, a.energy, a.style, a.moods, a.embedding, a.key FROM audiomuse a WHERE EXISTS (SELECT 1 FROM files f WHERE f.track = a.track AND {PRESENT_F})"
         ))?;
-        let mut muse: HashMap<Place, Muse> = st
-            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))))?
-            .collect::<rusqlite::Result<_>>()?;
+        let mut muse: HashMap<i64, Muse> =
+            st.query_map([], |r| Ok((r.get::<_, i64>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))))?.collect::<rusqlite::Result<_>>()?;
         // A mood a file has: one that stands out against the library's (the owner, 2026-10-23: CLAP scores every mood
         // between about 0.5 and 0.65, so a fixed 0.3 gave every heard file all five, every mood pill the same count).
         let stand_out = crate::app::audiomuse::stand_out(muse.values().filter_map(|m| crate::app::audiomuse::mood_scores(m.2.as_deref())));
@@ -1470,6 +1528,9 @@ impl Catalogue {
             .into_iter()
             .filter_map(|(folder, rel, born, file_track, duration_ms, format, bitrate)| {
                 let place = (folder, rel);
+                if left.contains(&place) {
+                    return None;
+                }
                 // A file no line can name (in a folder there is no way to from Music) is in no crate.
                 let line = line_in(folders, place.0, &place.1)?;
                 let tags = by.remove(&place).unwrap_or_default();
@@ -1499,9 +1560,7 @@ impl Catalogue {
                     }
                 }
                 let (mut energy, mut danceability, mut moods, mut styles, mut sound, mut clap_moods, mut muse_key) = (None, None, Vec::new(), Vec::new(), None, None, None);
-                let mut track = file_track;
-                if let Some((e, style, clap, t, embedding, k)) = muse.remove(&place) {
-                    track = Some(t);
+                if let Some((e, style, clap, embedding, k)) = file_track.and_then(|t| muse.remove(&t)) {
                     muse_key = k;
                     // Its "sounds like" (decision 0054), of unit length: what a Sounds like condition compares.
                     let v: Vec<f32> = embedding.unwrap_or_default().chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
@@ -1517,6 +1576,7 @@ impl Catalogue {
                 // The files' STYLE and MOOD words apart from AudioMuse's: the words' store weighs them (decision 0097).
                 let file_words = (!file_styles.is_empty() || !file_moods.is_empty()).then(|| Box::new((file_styles, file_moods)));
                 let (credits, credit_names) = crate::app::excluded_artists::credited(&artists.iter().chain(&listed).collect::<Vec<_>>());
+                let (lines, in_folders) = file_track.and_then(|t| lent.remove(&t)).unwrap_or_else(|| (Vec::new(), vec![place.0]));
                 Some(crate::crates::Facts {
                     year: crate::crates::year_of(&first),
                     bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&place).and_then(|a| a.0).map(f64::round)),
@@ -1524,13 +1584,14 @@ impl Catalogue {
                     meter: meters.remove(&place).map(crate::analysis::rhythm::meter_name),
                     genres,
                     rel: line,
-                    folder: place.0,
+                    lines,
+                    folders: in_folders,
                     born,
                     energy,
                     danceability,
                     moods,
                     styles,
-                    track,
+                    track: file_track,
                     sound,
                     credits,
                     credit_names,
@@ -1940,6 +2001,12 @@ impl Catalogue {
     #[cfg(test)]
     pub fn pretend_read_for_tests(&self) {
         self.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
+    }
+
+    /// Tests elsewhere: a file on a track, as the take will leave a record's copies.
+    #[cfg(test)]
+    pub fn give_track_for_tests(&self, folder: i64, rel: &str, track: i64) {
+        self.db().execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, track]).unwrap();
     }
 
     /// Tests elsewhere: a file's tags as a read would leave them.
@@ -4954,7 +5021,7 @@ mod tests {
     }
 
     #[test]
-    fn crate_facts_hold_every_folder_in_use_each_file_as_its_line() {
+    fn crate_facts_hold_every_folder_in_use_each_track_by_its_line() {
         let root = music();
         let (m, inc) = (root.join("Music"), root.join("lidarr-music"));
         std::fs::create_dir_all(m.join("A")).unwrap();
@@ -4964,12 +5031,68 @@ mod tests {
         let cat = Catalogue::open(None, vec![m.clone(), inc.clone()]).unwrap();
         cat.walk_all();
         let facts = cat.crate_facts().unwrap();
-        let mut lines: Vec<(i64, &str)> = facts.iter().map(|f| (f.folder, f.rel.as_str())).collect();
+        let mut lines: Vec<(i64, &str)> = facts.iter().map(|f| (f.folders[0], f.rel.as_str())).collect();
         lines.sort();
         assert_eq!(lines, [(0, "A/01.mp3"), (1, "../lidarr-music/X/New/01.flac")], "Incoming's climb out of Music");
         // Out of use, a folder's files leave the crates.
         cat.set_folders(vec![m.clone()]).unwrap();
         assert_eq!(cat.crate_facts().unwrap().iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["A/01.mp3"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// One track with a file in Music and one in own music, told apart by their genres.
+    fn one_track_twice() -> (PathBuf, Catalogue) {
+        let root = music();
+        let (m, own) = (root.join("Music"), root.join("own"));
+        for dir in [&m, &own] {
+            std::fs::create_dir_all(dir.join("A")).unwrap();
+            std::fs::write(dir.join("A/01.mp3"), "a").unwrap();
+        }
+        let cat = Catalogue::open(None, vec![m, own]).unwrap();
+        cat.walk_all();
+        cat.db().execute("INSERT INTO tracks (id, born) VALUES (77, 5)", []).unwrap();
+        cat.give_track_for_tests(0, "A/01.mp3", 77);
+        cat.give_track_for_tests(1, "A/01.mp3", 77);
+        cat.tag_for_tests(0, "A/01.mp3", &[("genre", "Dub")]);
+        cat.tag_for_tests(1, "A/01.mp3", &[("genre", "Jazz")]);
+        (root, cat)
+    }
+
+    #[test]
+    fn a_track_in_two_folders_is_one_fact() {
+        let (root, cat) = one_track_twice();
+        cat.db().execute("INSERT INTO audiomuse (track, energy) VALUES (77, 0.5)", []).unwrap();
+        let facts = cat.crate_facts().unwrap();
+        assert_eq!(facts.len(), 1);
+        let f = &facts[0];
+        assert_eq!((f.rel.as_str(), f.lines.as_slice(), f.folders.as_slice()), ("A/01.mp3", ["../own/A/01.mp3".to_string()].as_slice(), [0, 1].as_slice()), "with no library: the first by folder");
+        assert_eq!((f.track, f.genres.as_slice(), f.energy), (Some(77), ["Dub".to_string()].as_slice(), Some(50.0)), "the facts of the one it is read from");
+        // With a library, the row copy's, wherever that lies.
+        let row = HashMap::from([(77, Some((1, "A/01.mp3".to_string())))]);
+        let read = Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &row).unwrap();
+        assert_eq!((read.len(), read[0].rel.as_str(), read[0].lines.as_slice(), read[0].folders.as_slice()), (1, "../own/A/01.mp3", ["A/01.mp3".to_string()].as_slice(), [1, 0].as_slice()));
+        assert_eq!(read[0].genres, ["Jazz"]);
+        // A row the catalogue no longer has: the first by folder, never nothing.
+        let gone = HashMap::from([(77, Some((1, "Gone/01.mp3".to_string())))]);
+        assert_eq!(Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &gone).unwrap()[0].rel, "A/01.mp3");
+        // Two files of no track are two.
+        cat.db().execute("UPDATE files SET track = NULL", []).unwrap();
+        assert_eq!(Catalogue::read_crate_facts(&cat.db(), &cat.folders(), &HashMap::new()).unwrap().len(), 2);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn two_copies_count_once_in_a_crate() {
+        let (root, cat) = one_track_twice();
+        let facts = cat.crate_facts().unwrap();
+        let membership = HashMap::new();
+        let w = crate::crates::World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0, fits: None };
+        let dub = crate::crates::Condition::new("genre", false, crate::crates::Value::AnyOf { values: vec!["Dub".into()] });
+        assert_eq!(crate::crates::select(facts.iter(), &[dub], &w), ["A/01.mp3"]);
+        let one: Vec<[&crate::crates::Facts; 1]> = facts.iter().map(|f| [f]).collect();
+        let items: Vec<&[&crate::crates::Facts]> = one.iter().map(|f| f.as_slice()).collect();
+        let genre = crate::crates::list_axes(&items, &[], None, None, 0).into_iter().find(|a| a.key == "genre").unwrap();
+        assert_eq!((genre.values, genre.counts), (vec!["Dub".to_string()], vec![1]));
         std::fs::remove_dir_all(&root).ok();
     }
 

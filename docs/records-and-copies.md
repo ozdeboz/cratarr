@@ -73,6 +73,9 @@ One pure function, `copy_for(copies, viewer, libraries_off)`, tested on its own 
 
 A tie goes by the libraries' order, then the path. Lossless copies not read since bit depth was kept rank last.
 
+The crates, the words and the taste read a track once: one `Facts`, from its row copy's file, holding the line and the folder of
+every file of it. A set kept by line finds the track through any of them.
+
 A stream resolves its file through it. `songs` holds one row per track, on the copy that plays for most people: `copy_for`
 with no viewer, where own music counts as off unless nothing else holds the record. The stream asks with who is asking;
 a copy lacking the track is passed over, and where nothing plays for them the row copy does. With no one in particular
