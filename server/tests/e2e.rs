@@ -1073,7 +1073,9 @@ async fn the_copy_named_is_the_copy_touched_end_to_end() {
     assert_eq!(s.get(&asked).await["refused"], Value::Null);
     let moved = s.ok(reqwest::Method::POST, &moving, json!({ "from": path(&incoming), "to": path(&second) })).await;
     assert!(!incoming.join(dir).exists(), "out of Incoming");
-    assert!(contents(&as_it_lies(&second.join(moved["folder"].as_str().unwrap()))) == contents(&waiting), "into the library named, the copy named");
+    // Its cover goes into its tracks on the way in, so by what they are: Incoming's MP3s, not Music's FLACs.
+    let arrived = audio_under(&second.join(moved["folder"].as_str().unwrap()));
+    assert!(arrived.len() == 3 && arrived.iter().all(|f| f.ends_with(".mp3")), "into the library named, the copy named: {arrived:?}");
     assert!(as_it_lies(&music.join(dir)) == kept, "the other copy stands");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
@@ -1137,6 +1139,48 @@ async fn the_card_hears_the_incoming_copy_end_to_end() {
     s.until("the copy written", Duration::from_secs(60), || async { as_it_lies(&incoming.join(dir)) != before }).await;
     assert!(as_it_lies(&music.join(dir)) == kept, "nothing of the kept copy");
     assert_eq!(vorbis(&music.join(dir).join("01 Landing.flac"), "GENRE"), ["Electronic"]);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A request of bob's waits in Incoming, and Music holds the same record, so the record's id is on his list of what he may delete.
+/// The right is his copy's: naming Music's is refused and leaves it there, and his own goes.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
+    let root = temp("requester");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, incoming) = (library.join("music"), library.join("incoming"));
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::POST, "/api/users", json!({ "name": "bob", "password": "bob's password" })).await;
+    let bob = s.sign_in("bob", "bob's password").await;
+    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    user.busy_timeout(Duration::from_secs(10)).unwrap();
+    user.execute("INSERT INTO request (user, album_key, artist_key, album, artist, at, status) VALUES ('bob', 'k', 'k', 'Both Shores', 'Salt Meridian', 1, 'approved')", []).unwrap();
+    drop(user);
+    let path = |p: &Path| p.to_string_lossy().to_string();
+    let copies = |a: &Value| a["copies"].as_array().cloned().unwrap_or_default();
+    let holds = |a: &Value, p: &Path| copies(a).iter().any(|c| c["library"].as_str() == Some(&*path(p)));
+    s.until("both copies read", Duration::from_secs(120), || async { bob.albums().await.iter().any(|a| a["title"] == "Both Shores" && holds(a, &music) && holds(a, &incoming)) }).await;
+    let album = bob.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap();
+    let of = |p: &Path| copies(&album).into_iter().find(|c| c["library"].as_str() == Some(&*path(p))).unwrap();
+    assert_eq!((of(&incoming)["deletable"].as_bool(), of(&music)["deletable"].as_bool()), (Some(true), Some(false)), "{album}");
+    let view = bob.get("/api/albums").await;
+    assert!(view["sources"][0]["deletable"].as_array().unwrap().contains(&album["id"]), "by id, the record is on his list: what must not count");
+
+    let (dir, deleting) = ("Salt Meridian/Both Shores (2018)", format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()));
+    let kept = as_it_lies(&music.join(dir));
+    assert_eq!(bob.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 409, "not his");
+    assert!(as_it_lies(&music.join(dir)) == kept, "the kept files are there");
+    bob.ok(reqwest::Method::POST, &deleting, json!({ "from": path(&incoming) })).await;
+    assert!(!incoming.join(dir).exists(), "his own request");
+    assert!(as_it_lies(&music.join(dir)) == kept);
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
