@@ -51,7 +51,8 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 ## How the repository is kept
 
 - `main` is what was released, and moves only at a release. GitHub's `main` gets one commit per release, its tree the
-  release's, made with `git commit-tree`; no development branch is published.
+  release's, made with `git commit-tree`; no development branch is published, and no tag on one: everything a tag
+  reaches goes with it, and a pushed history cannot be taken back.
 - `trunk` is the development branch: the next feature release (0.11 while 0.10 is out). It holds all of Cratarr: the
   server, the web app, the Android and desktop apps and the docs.
 - `release/X.Y` holds a released version and its fixes only (`release/0.10`: 0.10.0, 0.10.1, …). It is cut from `trunk`
@@ -74,9 +75,11 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
   - a new version (X.Y+1.0) is everything else: new features, changed behaviour, migrations, changes between the
     server and its apps. A fix that would need a migration goes there, or is made without one.
 - A release is its branch checked as a whole, with the version raised in one commit (`scripts/version.sh`: plain
-  `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and put on `main` as one commit.
+  `X.Y.Z`, the server, the web app, the Android and desktop apps), and put on `main` as one commit, which is tagged
+  `vX.Y.Z`.
   - A new version (X.Y.0) is made on `trunk`, and `release/X.Y` is cut there.
   - A fix (X.Y.Z) is made on `release/X.Y`.
+  - Only that commit and its tag are pushed, the tag by its name, never with `git push --tags`.
   - The tag builds the image for amd64 and arm64 and makes the GitHub release
     ([.github/workflows/release.yml](.github/workflows/release.yml)), so what runs can always be found again.
   - Once X.Y+1.0 is out, `release/X.Y` gets no more fixes.

@@ -1,8 +1,10 @@
-# A release: a version tag (v0.8.3) on main builds the image for amd64 and arm64, each on its own kind of machine
-# (no emulation: Rust under QEMU takes hours), pushes both under one name to ghcr.io, and makes the GitHub release.
-# Then SHA256SUMS of all of the release's files. The Android app joins the release once its release key is kept in the
-# repository's secrets. The desktop app is not released: it is built where it is used (decision 0078, amended
-# 2026-11-04).
+# A release: a version tag (v0.8.3) on the release's one commit on main builds the image for amd64 and arm64, each on
+# its own kind of machine (no emulation: Rust under QEMU takes hours), pushes both under one name to ghcr.io, and makes
+# the GitHub release. Then SHA256SUMS of all of the release's files. The Android app joins the release once its release
+# key is kept in the repository's secrets. The desktop app is not released: it is built where it is used (decision 0078,
+# amended 2026-11-04).
+# Only that tag is pushed, by its name, never with `git push --tags`: everything a tag reaches is published, so one on
+# trunk or a release branch would publish the whole development history, for good (RELEASING.md).
 name: Release
 
 on:
