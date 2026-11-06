@@ -26,19 +26,9 @@ function stored(): string | null | undefined {
   }
 }
 
-/** Cratarr's sign-in page just sent this page here: who came is /api/me's to say. The name kept may be of someone whose
- *  session ended with no page open, so until it answers the page is nobody's, never theirs for a moment. A reload of
- *  such a page, later and perhaps out of reach, is no sign-in. */
-function fromSignIn(): boolean {
-  try {
-    const open = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-    return open?.type !== 'reload' && new URL(document.referrer).pathname === '/signin';
-  } catch {
-    return false;
-  }
-}
-
-const kept = typeof window === 'undefined' ? undefined : fromSignIn() ? null : stored();
+// Cratarr's sign-in page writes nobody here (server/src/serve/signin.rs): a session over is known at the first line, whoever
+// signs in next, and however long it is before Cratarr can be asked.
+const kept = typeof window === 'undefined' ? undefined : stored();
 let key: string | null = kept ?? null;
 /** Learnt from /api/me in this page: the kept one read in late does not take its place. */
 let learnt = false;

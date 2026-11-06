@@ -3,7 +3,7 @@
 // show to be no change of anyone's preferences.
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { askSignOut, device, inModule, PAGE, signIn, signOut, storage } from './browser.mjs';
+import { askSignOut, device, inModule, PAGE, signIn, signInOnly, signOut, storage } from './browser.mjs';
 
 const PREFS = '/src/lib/prefs.svelte.ts';
 const ACCOUNT = '/src/lib/account.ts';
@@ -14,7 +14,8 @@ const changed = async (page, who) => JSON.parse((await storage(page))[`cratarr-p
 let d;
 before(async () => (d = await device()));
 after(async () => {
-  assert.deepEqual(d.errors, [], 'the page threw nothing');
+  // Here reads are cut on purpose, and a read with nothing to catch it says so.
+  assert.deepEqual(d.errors.filter((e) => !e.includes('Cannot reach')), [], 'the page threw nothing');
   await d.browser.close();
 });
 
@@ -92,8 +93,29 @@ test('another account in one tab starts another over at once: nothing is refused
   await other.close();
 });
 
-test('a sign-out that did not reach Cratarr: the next open is not hers, and the session is ended before anything else', async () => {
+test('Cratarr’s sign-in page is nobody’s: reached with the session over, the name kept goes, signed in or not', async () => {
   await signOut(d.page);
+  await signIn(d.page, 'ann', '/signin');
+  await d.page.goto('about:blank');
+  await d.page.context().clearCookies();
+  await d.page.goto(`${PAGE}/signin`);
+  assert.equal((await storage(d.page))['cratarr-who'], 'null');
+});
+
+test('signed in, Cratarr not reached again to say who: a reload is no one’s, not the name of whoever was here before', async () => {
+  // With no worker: a page's route does not see what a worker asks, and it is /api/me that has to go unanswered.
+  const context = await d.browser.newContext({ serviceWorkers: 'block' });
+  const page = await context.newPage();
+  await signIn(page, 'ann', '/signin');
+  await context.clearCookies();
+  await page.route('**/api/me', (r) => r.abort());
+  await signInOnly(page, 'bob', '/signin');
+  await page.reload();
+  assert.equal(await inModule(page, ACCOUNT, (m) => m.accountKey()), null);
+  await context.close();
+});
+
+test('a sign-out that did not reach Cratarr: the next open is not hers, and the session is ended before anything else', async () => {
   await signIn(d.page, 'ann', '/signin');
   await d.page.route('**/signout', (r) => r.abort());
   await askSignOut(d.page);

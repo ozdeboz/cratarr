@@ -2,6 +2,7 @@
 // before anything has been asked, so a name kept from before must never be taken for the one who just came.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import '../harness/pageGlobals.ts';
 
 const g = globalThis as Record<string, unknown>;
@@ -14,19 +15,15 @@ g.window = globalThis;
 g.addEventListener = (type: string, f: (e: unknown) => void) => void (listeners[type] ??= []).push(f);
 Object.assign(g.location as object, { reload: () => void reloads++, assign: (to: string) => void left.push(to) });
 Object.defineProperty(globalThis, 'navigator', { value: { serviceWorker: { controller: { postMessage: (m: unknown) => void worker.push(m) }, addEventListener() {} } }, configurable: true });
-const page = g.document as { referrer?: string };
-let navigation = 'navigate';
-performance.getEntriesByType = ((type: string) => (type === 'navigation' ? [{ type: navigation }] : [])) as typeof performance.getEntriesByType;
 
 const WHO = 'cratarr-who';
 let round = 0;
-/** A page opening, the store's name as `kept`, come from `referrer`. */
-async function opened(kept: string | null, referrer = '') {
+/** A page opening, the store's name as `kept`. */
+async function opened(kept: string | null) {
   for (const k of Object.keys(listeners)) delete listeners[k];
   worker.length = 0;
   if (kept === null) localStorage.removeItem(WHO);
   else localStorage.setItem(WHO, kept);
-  page.referrer = referrer;
   return (await import(`../../src/lib/account.ts?page=${++round}`)) as typeof import('../../src/lib/account.ts');
 }
 const fire = (type: string, e: unknown) => {
@@ -45,32 +42,14 @@ test('signed out is kept too: nobody, never the one before, whatever an older co
   localStorage.removeItem('cratarr-kept-account');
 });
 
-test('a page the sign-in page sent here is nobody until Cratarr says: the name kept may be of someone whose session ended', async () => {
-  const a = await opened('"ann"', 'http://cratarr.test/signin?next=%2F');
-  assert.equal(a.accountKey(), null);
-  assert.equal(a.perAccount('cratarr-shelf'), 'cratarr-shelf-');
-  a.accountLearnt('bo');
-  assert.equal(a.accountKey(), 'bo');
-  assert.equal(localStorage.getItem(WHO), '"bo"');
-});
-
-test('with the kept store holding the one before as well, the page stays nobody', async () => {
-  localStorage.setItem('cratarr-kept-account', '"ann"');
-  const a = await opened(null, 'http://cratarr.test/signin');
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(a.accountKey(), null);
-  localStorage.removeItem('cratarr-kept-account');
-});
-
-test('reloaded later, such a page is the account it learnt, out of reach too', async () => {
-  navigation = 'reload';
-  assert.equal((await opened('"bo"', 'http://cratarr.test/signin')).accountKey(), 'bo');
-  navigation = 'navigate';
-});
-
-test('any other page before it is no sign-in', async () => {
-  assert.equal((await opened('"ann"', 'http://cratarr.test/#/settings')).accountKey(), 'ann');
-  assert.equal((await opened('"ann"', 'https://elsewhere.test/signin/not')).accountKey(), 'ann');
+test("Cratarr's sign-in page says nobody in the page's own words, and that no sign-out is left to tell", () => {
+  const server = readFileSync(new URL('../../../server/src/serve/signin.rs', import.meta.url), 'utf8');
+  const account = readFileSync(new URL('../../src/lib/account.ts', import.meta.url), 'utf8');
+  const script = server.slice(server.indexOf('<script nonce='), server.indexOf('</script>'));
+  assert.ok(script.includes(`localStorage.setItem('${WHO}', 'null')`));
+  assert.ok(account.includes(`const LS = '${WHO}';`), 'the same name');
+  const owed = account.match(/const OWED = '([^']+)';/)![1];
+  assert.ok(script.includes(`localStorage.removeItem('${owed}')`));
 });
 
 test('the service worker hears whose the page is from its first line, before any read', async () => {
@@ -78,8 +57,6 @@ test('the service worker hears whose the page is from its first line, before any
   assert.deepEqual(worker, [{ type: 'account', name: 'ann' }]);
   await opened('null');
   assert.deepEqual(worker, [{ type: 'account', name: null }]);
-  await opened('"ann"', 'http://cratarr.test/signin');
-  assert.deepEqual(worker, [{ type: 'account', name: null }], 'come from the sign-in page: nobody, as the page is');
 });
 
 test('another tab signing out or in starts this page over: what it holds in memory is the one before\'s', async () => {
@@ -122,13 +99,6 @@ test("a page back from history after its own sign-out starts over: its stores ar
   assert.equal(reloads, 1);
   fire('pageshow', { persisted: false });
   assert.equal(reloads, 1, 'one opened as nobody, shown as any page is, stays');
-});
-
-test("a page just come from the sign-in page is not started over by its own showing, into the name kept", async () => {
-  await opened('"ann"', 'http://cratarr.test/signin');
-  reloads = 0;
-  fire('pageshow', { persisted: false });
-  assert.equal(reloads, 0);
 });
 
 test('Cratarr asking for its sign-in is nobody from then on, before the page leaves, the worker told', async () => {
