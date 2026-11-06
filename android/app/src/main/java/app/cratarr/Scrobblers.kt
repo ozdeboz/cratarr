@@ -43,14 +43,15 @@ object Scrobblers {
 
     /** Everyone's sign-ins, each [Who] key's apart. */
     private fun everyone(context: Context): JSONObject = sealed.read(context)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
-    /** The sign-ins of the one signed in now. */
-    private fun kept(context: Context): JSONObject = everyone(context).optJSONObject(Who.current(context)) ?: JSONObject()
+    /** The sign-ins of the one signed in now, or of [who]: what goes out to a service is the account's it was read for,
+     *  whoever has signed in by the time the service answers (a sign-out waits for it a few seconds at most). */
+    private fun kept(context: Context, who: String = Who.current(context)): JSONObject = everyone(context).optJSONObject(who) ?: JSONObject()
     @Synchronized
-    private fun seal(context: Context, k: JSONObject) {
-        sealed.write(context, everyone(context).put(Who.current(context), k).toString())
+    private fun seal(context: Context, k: JSONObject, who: String = Who.current(context)) {
+        sealed.write(context, everyone(context).put(who, k).toString())
     }
-    private fun keep(context: Context, k: JSONObject) {
-        seal(context, k)
+    private fun keep(context: Context, k: JSONObject, who: String = Who.current(context)) {
+        seal(context, k, who)
         onChanged?.invoke()
     }
 
@@ -95,14 +96,15 @@ object Scrobblers {
     /** Back from Last.fm's sign-in with its token: traded for the session (off the main thread); what went wrong, if
      *  anything. */
     fun lastFmBack(context: Context, token: String): String? {
-        val k = kept(context)
+        val who = Who.current(context)
+        val k = kept(context, who)
         val p = k.optJSONObject("lastfm_pending") ?: return "Give Last.fm's key and secret first"
         return try {
             val r = lfm(p.optString("key"), p.optString("secret"), "auth.getSession", mapOf("token" to token))
             val session = r.optJSONObject("session") ?: return "Last.fm gave no session"
             k.remove("lastfm_pending")
             k.put("lastfm", JSONObject().put("key", p.optString("key")).put("secret", p.optString("secret")).put("session", session.optString("key")).put("name", session.optString("name")))
-            keep(context, k)
+            keep(context, k, who)
             send(context)
             null
         } catch (e: Refused) {
@@ -163,7 +165,7 @@ object Scrobblers {
             .put("duration_secs", if (lengthMs > 0) lengthMs / 1000 else t.optLong("duration_secs"))
     }
 
-    private fun queue(context: Context): JSONObject = Prefs.shared(context).getString(Who.keyed(context, QUEUE), null)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
+    private fun queue(context: Context, who: String = Who.current(context)): JSONObject = Prefs.shared(context).getString(QUEUE + who, null)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
 
     @Synchronized
     private fun add(context: Context, store: String, play: JSONObject) {
@@ -194,10 +196,11 @@ object Scrobblers {
 
     @Synchronized
     private fun sendHere(context: Context) {
-        val q = queue(context)
+        val who = Who.current(context)
+        val q = queue(context, who)
         val plays = q.optJSONArray("plays") ?: return
         val sent = q.optJSONObject("sent") ?: JSONObject()
-        val k = kept(context)
+        val k = kept(context, who)
         val now = System.currentTimeMillis() / 1000
         val services = listOf("listenbrainz", "lastfm").filter { s -> k.optJSONObject(s)?.let { !it.has("broken") || it.isNull("broken") } == true }
         for (s in services) {
@@ -226,7 +229,7 @@ object Scrobblers {
                 } catch (e: Refused) {
                     if (e.signedOut) {
                         k.optJSONObject(s)?.put("broken", e.message)
-                        keep(context, k)
+                        keep(context, k, who)
                     }
                     break
                 } catch (e: Exception) {
@@ -245,12 +248,13 @@ object Scrobblers {
         val ids = (0 until left.length()).map { left.getJSONObject(it).optString("id") }.toSet()
         val kept = JSONObject()
         for (s in services) kept.put(s, JSONArray((sent.optJSONArray(s)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()).filter { it in ids }))
-        Prefs.shared(context).edit().putString(Who.keyed(context, QUEUE), JSONObject().put("plays", left).put("sent", kept).toString()).apply()
+        Prefs.shared(context).edit().putString(QUEUE + who, JSONObject().put("plays", left).put("sent", kept).toString()).apply()
     }
 
     @Synchronized
     private fun handOver(context: Context) {
-        val q = Prefs.shared(context).getString(Who.keyed(context, HANDOVER), null)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return
+        val who = Who.current(context)
+        val q = Prefs.shared(context).getString(HANDOVER + who, null)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return
         val plays = q.optJSONArray("plays") ?: return
         if (plays.length() == 0) return
         val batch = JSONArray()
@@ -266,7 +270,7 @@ object Scrobblers {
         if (!ok) return
         val rest = JSONArray()
         for (i in batch.length() until plays.length()) rest.put(plays.get(i))
-        Prefs.shared(context).edit().putString(Who.keyed(context, HANDOVER), JSONObject().put("plays", rest).toString()).apply()
+        Prefs.shared(context).edit().putString(HANDOVER + who, JSONObject().put("plays", rest).toString()).apply()
     }
 
     private fun toServer(context: Context, path: String, body: JSONObject): Boolean {

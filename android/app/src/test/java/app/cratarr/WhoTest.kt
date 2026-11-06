@@ -156,6 +156,17 @@ class WhoTest {
     }
 
     @Test
+    fun what_goes_out_to_a_service_comes_back_to_the_account_it_was_read_for() {
+        val scrobblers = source("Scrobblers.kt")
+        for (f in listOf("private fun sendHere(", "private fun handOver(", "fun lastFmBack(")) {
+            val body = scrobblers.substringAfter(f).substringBefore("\n    }\n")
+            assertTrue(f, "val who = Who.current(context)" in body)
+            assertFalse(f, "Who.keyed(" in body)
+            assertFalse("a sign-in sealed as whoever has signed in by then: $f", "keep(context, k)" in body)
+        }
+    }
+
+    @Test
     fun the_player_takes_up_whoever_it_is_by_then() {
         assertTrue("main.post { whoCame(Who.current(this)) }" in source("PlayerService.kt"))
     }
