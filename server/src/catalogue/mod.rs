@@ -4216,7 +4216,7 @@ mod tests {
                 release: release.map(str::to_string),
                 artist: identity::fold(artist),
                 title: identity::fold(title),
-                tracks: tracks.iter().map(|(_, t, ms)| identity::Listed { title: identity::fold(t), duration_ms: *ms }).collect(),
+                tracks: tracks.iter().map(|(_, t, ms)| identity::Listed::of(t, *ms)).collect(),
             },
             title: title.to_string(),
             artist: artist.to_string(),

@@ -1402,7 +1402,7 @@ pub fn album_copies(folders: &[FolderRows], rules: &Rules) -> Vec<crate::catalog
                     release: list.iter().find_map(|s| s.row.first("musicbrainz_albumid")).map(str::to_lowercase),
                     artist: fold(&first.album_artist),
                     title: fold(&first.album),
-                    tracks: list.iter().map(|s| Listed { title: fold(&s.title), duration_ms: s.row.duration_ms.unwrap_or(0) as i64 }).collect(),
+                    tracks: list.iter().map(|s| Listed::of(&s.title, s.row.duration_ms.unwrap_or(0) as i64)).collect(),
                 },
                 title: first.album.clone(),
                 artist: first.album_artist.clone(),

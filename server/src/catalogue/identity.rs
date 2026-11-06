@@ -146,19 +146,92 @@ fn pairs_by(rule: Rule, new: &[FileFacts], gone: &[FileFacts], new_here: &[usize
     pairs
 }
 
-/// A track of a folder as a record's tracklist compares it: folded title and length.
+/// The words that name a guest in a title, longest first so "feat." is not read as "feat" and a dot.
+const GUEST_WORDS: [&str; 4] = ["featuring", "feat.", "feat", "ft."];
+
+/// How long the guest word starting at `at` is, where one starts there as a word of its own ("Defeat" holds none).
+fn guest_word(lower: &str, at: usize) -> Option<usize> {
+    if lower[..at].chars().next_back().is_some_and(char::is_alphanumeric) {
+        return None;
+    }
+    GUEST_WORDS.iter().find(|w| lower[at..].starts_with(**w) && !lower[at + w.len()..].chars().next().is_some_and(char::is_alphanumeric)).map(|w| w.len())
+}
+
+/// A title as its bare name and the guests it names, as written (the owner, 2026-11-06: a guest is recognised, not
+/// ignored): "Embrace (feat. Phoebe Killdeer)" is the title "Embrace" with a guest. "feat.", "feat", "ft." and "featuring",
+/// in brackets or not: out of brackets the guests run to the next bracket or the end, so "A feat. B (Remix)" stays
+/// "A (Remix)". A word that leaves no name ("Feat of Clay") is the title's own.
+pub fn title_and_guests(title: &str) -> (String, Vec<String>) {
+    let (mut bare, mut guests) = (title.to_string(), Vec::new());
+    let mut from = 0;
+    loop {
+        // Lower case by ASCII alone: every place in it is the same place in `bare`.
+        let lower = bare.to_ascii_lowercase();
+        let Some((at, len)) = lower.char_indices().filter(|(i, _)| *i >= from).find_map(|(i, _)| guest_word(&lower, i).map(|n| (i, n))) else { break };
+        let names = at + len;
+        let before = bare[..at].trim_end();
+        // In brackets of its own when a bracket opens right before the word.
+        let (start, end, past) = match before.chars().next_back().filter(|c| "([{".contains(*c)) {
+            Some(open) => {
+                let close = match open {
+                    '(' => ')',
+                    '[' => ']',
+                    _ => '}',
+                };
+                let end = bare[names..].find(close).map_or(bare.len(), |i| names + i);
+                (before.len() - 1, end, (end + 1).min(bare.len()))
+            }
+            None => {
+                let end = bare[names..].find(['(', ')', '[', ']', '{', '}']).map_or(bare.len(), |i| names + i);
+                (at, end, end)
+            }
+        };
+        let left = format!("{}{}", &bare[..start], &bare[past..]);
+        if fold(&left).is_empty() {
+            from = names;
+            continue;
+        }
+        guests.extend(guests_in(&bare[names..end]));
+        bare = left;
+        from = start;
+    }
+    (bare.trim().to_string(), guests)
+}
+
+/// The guests in the words after a guest word: "A, B & C and D".
+fn guests_in(names: &str) -> Vec<String> {
+    names.replace(" and ", ",").replace(" And ", ",").split([',', '&']).map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).collect()
+}
+
+/// A track of a folder as a record's tracklist compares it: its bare name and guests, folded, and its length.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
     pub title: String,
+    /// Sorted: one list of guests in two orders is one list.
+    pub guests: Vec<String>,
     pub duration_ms: i64,
 }
 
+impl Listed {
+    /// A track by its title as tagged.
+    pub fn of(title: &str, duration_ms: i64) -> Self {
+        let (bare, guests) = title_and_guests(title);
+        let mut guests: Vec<String> = guests.iter().map(|g| fold(g)).filter(|g| !g.is_empty()).collect();
+        guests.sort_unstable();
+        guests.dedup();
+        Self { title: fold(&bare), guests, duration_ms }
+    }
+
+    /// One name: the bare names match, and the guests agree or one side names none. Two different guests are two tracks.
+    fn same_name(&self, other: &Self) -> bool {
+        !self.title.is_empty() && self.title == other.title && (self.guests == other.guests || self.guests.is_empty() || other.guests.is_empty())
+    }
+}
+
 /// Whether two tracklists, in order, are the same tracks (0101: the same record is the same tracks): as many, each the
-/// same title, each within [`SAME_LENGTH_MS`]. An empty list is nothing's tracklist.
+/// same name, each within [`SAME_LENGTH_MS`]. An empty list is nothing's tracklist.
 pub fn same_tracks(a: &[Listed], b: &[Listed]) -> bool {
-    !a.is_empty()
-        && a.len() == b.len()
-        && a.iter().zip(b).all(|(x, y)| !x.title.is_empty() && x.title == y.title && (x.duration_ms - y.duration_ms).abs() <= SAME_LENGTH_MS)
+    !a.is_empty() && a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.same_name(y) && (x.duration_ms - y.duration_ms).abs() <= SAME_LENGTH_MS)
 }
 
 /// What decides whether two folders are copies of one record ([`same_record`]), folded.
@@ -193,7 +266,7 @@ mod tests {
             release: release.map(fold),
             artist: fold(artist),
             title: fold(title),
-            tracks: tracks.iter().map(|(t, ms)| Listed { title: fold(t), duration_ms: *ms }).collect(),
+            tracks: tracks.iter().map(|(t, ms)| Listed::of(t, *ms)).collect(),
         }
     }
 
@@ -218,6 +291,45 @@ mod tests {
         assert!(!same_record(&tagged, &rec(Some("r1"), "A", "B", &[("One", 200_000)])), "a folder missing a track is no copy");
         assert!(same_record(&tagged, &rec(None, "A", "B", &two)), "one side without a release: artist and title");
         assert!(!same_record(&rec(None, "", "", &[]), &rec(None, "", "", &[])), "nothing is no record");
+    }
+
+    #[test]
+    fn a_title_splits_into_its_name_and_its_guests() {
+        let split = |t: &str| title_and_guests(t);
+        let guest = |n: &str, g: &[&str]| (n.to_string(), g.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+        assert_eq!(split("Embrace (feat. Phoebe Killdeer)"), guest("Embrace", &["Phoebe Killdeer"]));
+        assert_eq!(split("Embrace [Feat Phoebe Killdeer]"), guest("Embrace", &["Phoebe Killdeer"]));
+        assert_eq!(split("Embrace ft. Phoebe Killdeer"), guest("Embrace", &["Phoebe Killdeer"]));
+        assert_eq!(split("Embrace FEATURING A, B & C and D"), guest("Embrace", &["A", "B", "C", "D"]));
+        assert_eq!(split("Sloth feat. Mood Tattooed (Remix)"), guest("Sloth (Remix)", &["Mood Tattooed"]));
+        assert_eq!(split("Sloth (feat. Mood Tattooed) [Live]"), guest("Sloth  [Live]", &["Mood Tattooed"]));
+        assert_eq!(split("Sloth (feat. A) (ft. B)"), guest("Sloth", &["A", "B"]));
+        assert_eq!(split("Defeat Of Ft Lauderdale"), guest("Defeat Of Ft Lauderdale", &[]));
+        assert_eq!(split("Feat of Clay"), guest("Feat of Clay", &[]), "a word that leaves no name is the name");
+        assert_eq!(split("(feat. Nobody)"), guest("(feat. Nobody)", &[]));
+        assert_eq!(split("Ålborg (feat. Bjørk)"), guest("Ålborg", &["Bjørk"]));
+    }
+
+    /// The real library's Agoria: every length and the release agree, the Music copy names the guest and the Incoming copy
+    /// does not.
+    #[test]
+    fn a_guest_named_on_one_copy_is_the_same_track() {
+        let plain = rec(Some("r1"), "Agoria", "Drift", &[("Embrace", 300_000), ("Scala", 240_000)]);
+        let named = rec(Some("r1"), "Agoria", "Drift", &[("Embrace (feat. Phoebe Killdeer)", 300_100), ("Scala", 240_000)]);
+        assert!(same_record(&plain, &named));
+        assert!(same_record(&named, &plain), "either way round");
+        let both = rec(Some("r1"), "Agoria", "Drift", &[("Embrace ft. Phoebe Killdeer", 300_000), ("Scala", 240_000)]);
+        assert!(same_record(&named, &both), "the same guest, written otherwise");
+        let longer = rec(Some("r1"), "Agoria", "Drift", &[("Embrace (feat. Phoebe Killdeer)", 310_000), ("Scala", 240_000)]);
+        assert!(!same_record(&plain, &longer), "a length still decides");
+    }
+
+    #[test]
+    fn two_different_guests_are_two_tracks() {
+        let one = rec(None, "A", "B", &[("Song (feat. X)", 200_000)]);
+        assert!(!same_record(&one, &rec(None, "A", "B", &[("Song (feat. Y)", 200_000)])));
+        assert!(!same_record(&one, &rec(None, "A", "B", &[("Song (feat. X & Y)", 200_000)])), "another list of guests");
+        assert!(same_record(&rec(None, "A", "B", &[("Song (feat. X & Y)", 200_000)]), &rec(None, "A", "B", &[("Song feat. Y, X", 200_000)])), "in another order");
     }
 
     fn f(name: &str, ms: i64, recording: Option<&str>, title: Option<&str>, artist: Option<&str>) -> FileFacts {
