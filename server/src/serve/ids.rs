@@ -211,6 +211,7 @@ mod tests {
         use std::collections::{BTreeMap, BTreeSet};
         let (catalogue, userdata) = (include_str!("../../tests/fixtures/0.15/catalogue.sql"), include_str!("../../tests/fixtures/0.15/userdata.sql"));
         let stores = [include_str!("../../tests/fixtures/0.15/crates.json"), include_str!("../../tests/fixtures/0.15/users/bob/crates.json")];
+        let more = [include_str!("../../tests/fixtures/0.15/queues.json"), include_str!("../../tests/fixtures/0.15/journal.sql"), include_str!("../../tests/fixtures/0.15/convert-queue.json"), include_str!("../../tests/fixtures/0.15/track-intake.json")];
         let db = rusqlite::Connection::open_in_memory().unwrap();
         db.execute_batch(catalogue).unwrap();
         db.execute_batch(userdata).unwrap();
@@ -239,6 +240,9 @@ mod tests {
             assert!(!album_ids.is_empty() && !artist_ids.is_empty(), "the ids there are found");
             assert!(album_ids.is_subset(&albums), "no such album: {:?}", album_ids.difference(&albums).collect::<Vec<_>>());
             assert!(artist_ids.is_subset(&artists), "no such artist: {:?}", artist_ids.difference(&artists).collect::<Vec<_>>());
+        }
+        for text in more {
+            assert!(named(text, ALBUM).is_subset(&albums), "no such album: {text}");
         }
 
         let tables: BTreeSet<String> = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();

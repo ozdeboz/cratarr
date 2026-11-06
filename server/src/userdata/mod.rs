@@ -33,6 +33,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use moved::Moves;
+
 // journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
@@ -56,8 +58,8 @@ CREATE TABLE IF NOT EXISTS app_queue (
   user TEXT NOT NULL, client TEXT NOT NULL, songs TEXT NOT NULL, current INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, PRIMARY KEY (user, client)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
--- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `tracks`,
--- `records`, `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
+-- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `records`,
+-- `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
 CREATE TABLE IF NOT EXISTS migration_report (part TEXT PRIMARY KEY, at INTEGER NOT NULL, report TEXT NOT NULL) WITHOUT ROWID;
 -- What was said of a copy that waited in Incoming: `folder` is its catalogue folder, -1 from before records had copies.
 CREATE TABLE IF NOT EXISTS album_review (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,

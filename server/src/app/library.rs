@@ -5,13 +5,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::naming::Template;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
 use super::ToggleError;
+use super::first_start::FirstStart;
 use crate::catalogue::Catalogue;
 use crate::placement::{self, Placement};
 use crate::playlists::Store;
@@ -230,7 +231,7 @@ const TOP_KEY: &str = "catalogue_top";
 /// What the user data remembers of the catalogue, against the catalogue open now.
 #[derive(Debug, PartialEq, Eq)]
 enum Ids {
-    /// Nothing yet (a first start, or 0.16's): this one is remembered.
+    /// Nothing yet (a first start, or 0.16's first): this one is remembered.
     Remember,
     Same,
     /// Another catalogue: the ids the user data holds are not this one's.
@@ -321,6 +322,13 @@ async fn music_store(db: &Arc<crate::userdata::UserData>, cat: &Arc<Catalogue>, 
 /// A "stopped processing" notice that nothing confirmed again is dropped after this long.
 const STUCK_SECS: i64 = 30 * 60;
 
+/// `Library::folder_kinds`, of these folders.
+fn kinds_of(f: &Folders, in_use: &crate::catalogue::InUse) -> Vec<(i64, LibraryKind)> {
+    let main = f.music.iter().chain(&f.more_main).map(|p| (p, LibraryKind::Main));
+    let listed = main.chain(f.own.iter().map(|p| (p, LibraryKind::Own))).chain(f.incoming.iter().map(|p| (p, LibraryKind::Incoming)));
+    listed.filter_map(|(p, kind)| in_use.iter().find(|(_, q)| q.as_path() == Path::new(p)).map(|(id, _)| (id, kind))).collect()
+}
+
 impl Library {
     /// `last_music`: where the Music libraries were last found (or CRATARR_PLAYLIST_DIR), used until a server answers.
     /// `playlists_db`: where the playlists are kept (the user data).
@@ -354,7 +362,13 @@ impl Library {
         // The catalogue's track ids are the truth (0101, the owner 2026-11-04): the user data remembers which catalogue
         // its ids are of, and the highest id given out. Another catalogue (a lost one made anew) gives no ids until it is
         // restored from the backup or an administrator starts afresh (`fresh_track_ids`).
-        match ids_state(playlists_db.meta(CATALOGUE_KEY)?.as_deref(), &catalogue.generation()) {
+        let state = match ids_state(playlists_db.meta(CATALOGUE_KEY)?.as_deref(), &catalogue.generation()) {
+            // 0.15 remembered none, so a catalogue lost there reads as a first start: one that never gave an id, beside user
+            // data that names them. Taken for new, the first start would write everything off as unmatched, for good.
+            Ids::Remember if catalogue.top_id() == 0 && !playlists_db.track_references()?.0.is_empty() => Ids::Lost,
+            state => state,
+        };
+        match state {
             Ids::Remember => playlists_db.set_meta(CATALOGUE_KEY, &catalogue.generation())?,
             Ids::Same => {}
             Ids::Lost => {
@@ -362,6 +376,11 @@ impl Library {
                 catalogue.set_ids_lost(true);
             }
         }
+        // Here, as nothing has read a store yet, and no list has been built: `playlists::import` below reads what it leaves.
+        let unplaced = active.iter().flat_map(|a| &a.placement.libraries).filter(|l| l.folders.is_empty()).flat_map(|l| l.paths.iter().chain([&l.id])).map(PathBuf::from).collect();
+        let kinds = kinds_of(&folders, &catalogue.folders());
+        let start = FirstStart { catalogue: catalogue.clone(), userdata: playlists_db.clone(), data: data_dir.as_deref().map(PathBuf::from), kinds, unplaced, rules: tag_rules.clone() };
+        start.run().await.context("the first start of 0.16 did not finish")?;
         if !catalogue.ids_lost() {
             playlists_db.set_meta(TOP_KEY, &catalogue.top_id().to_string())?;
         }
@@ -583,11 +602,7 @@ impl Library {
     /// What each catalogue folder's library is, in the libraries' order: the main ones, own music, Incoming. What the
     /// served library judges a copy by.
     pub fn folder_kinds(&self) -> Vec<(i64, LibraryKind)> {
-        let f = self.folders();
-        let in_use = self.catalogue.folders();
-        let main = f.music.iter().chain(&f.more_main).map(|p| (p, LibraryKind::Main));
-        let listed = main.chain(f.own.iter().map(|p| (p, LibraryKind::Own))).chain(f.incoming.iter().map(|p| (p, LibraryKind::Incoming)));
-        listed.filter_map(|(p, kind)| in_use.iter().find(|(_, q)| q.as_path() == std::path::Path::new(p)).map(|(id, _)| (id, kind))).collect()
+        kinds_of(&self.folders(), &self.catalogue.folders())
     }
 
     /// `account`'s own music as a library, its id (0101 point 9): its subfolder of the own-music folder, made at its first
@@ -748,6 +763,24 @@ impl Library {
 #[cfg(test)]
 mod switched_off_tests {
     use super::*;
+
+    /// 0.15 remembered no catalogue, so one lost there reads as a first start: every id in the user data would be written off as
+    /// unmatched, and the once-guard would stand in the way of the restore. It waits, as a catalogue lost later does.
+    #[tokio::test]
+    async fn a_catalogue_lost_before_the_first_start_is_no_first_start() {
+        let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
+        db.set_starred("ann", crate::userdata::Kind::Song, &["tr-5".to_string()], true).unwrap();
+        let lib = Library::new(None, None, Vec::new(), Default::default(), None, db.clone()).await.unwrap();
+        assert!(lib.catalogue().ids_lost());
+        assert!(!db.first_start_done().unwrap());
+        assert_eq!(db.meta(CATALOGUE_KEY).unwrap(), None, "the restored catalogue is the one remembered");
+
+        // Nothing named: a new data folder, with its report.
+        let db = Arc::new(crate::userdata::UserData::open(None).unwrap());
+        let lib = Library::new(None, None, Vec::new(), Default::default(), None, db.clone()).await.unwrap();
+        assert!(!lib.catalogue().ids_lost());
+        assert!(db.first_start_done().unwrap());
+    }
 
     /// CR3: crates, queues and waiting jobs name albums too, in a store no table scan sees.
     #[test]

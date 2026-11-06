@@ -4,10 +4,8 @@
 //! could never be worked out again, and the user data's step, last, may need it after a stop. What was read comes from the
 //! catalogue, as a new layout has dropped 0.15's `library.sqlite` by now. Once done it says so, and is not done again.
 
-#![allow(dead_code)] // the first start's (C34)
-
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -49,12 +47,20 @@ pub struct First {
     pub artists: u64,
 }
 
-/// Where a library's albums come in (N4): the main libraries first, in their order, as of two tracks found to be one the first
-/// met stays, and of two rows that cannot both stand, the first met does. A folder listed nowhere comes last.
-fn place_of(kinds: &[(i64, Kind)], folder: i64) -> (bool, usize) {
+/// Where a library's albums come in (N4, CR18): the main libraries, then own music, then Incoming, each in the libraries' order,
+/// as of two tracks found to be one the first met stays, and of two rows that cannot both stand, the first met does. A folder
+/// listed nowhere comes last.
+fn place_of(kinds: &[(i64, Kind)], folder: i64) -> (u8, usize) {
     match kinds.iter().position(|(f, _)| *f == folder) {
-        Some(at) => (kinds[at].1 != Kind::Main, at),
-        None => (true, kinds.len()),
+        Some(at) => (
+            match kinds[at].1 {
+                Kind::Main => 0,
+                Kind::Own => 1,
+                Kind::Incoming => 2,
+            },
+            at,
+        ),
+        None => (3, kinds.len()),
     }
 }
 
@@ -127,14 +133,20 @@ impl Catalogue {
         folders.into_iter().map(|(id, home)| Ok((id, home.unwrap_or(id), rows_in(&db, id, None, UNSERVED)?))).collect()
     }
 
-    /// The libraries that hold files and show none, as a mount that is not up looks. Blocking.
-    pub fn folders_not_there(&self) -> Result<Vec<std::path::PathBuf>> {
-        let held: HashSet<i64> = {
+    /// The libraries that hold files and cannot be seen, as a mount that is not up looks: in use and showing nothing, or parked
+    /// where a server's library has no folder now (`unplaced`, its paths): a folder that is gone is out of use as far as `open`
+    /// can tell, and only the settings say it was meant to be there. Blocking.
+    pub fn folders_not_there(&self, unplaced: &[PathBuf]) -> Result<Vec<PathBuf>> {
+        let (held, parked): (HashSet<i64>, Vec<PathBuf>) = {
             let db = self.db();
             let mut st = db.prepare(&format!("SELECT DISTINCT folder FROM files WHERE {}", super::PRESENT))?;
-            st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            let held = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let mut st = db.prepare("SELECT path FROM folders d WHERE id < 0 AND EXISTS (SELECT 1 FROM files f WHERE f.folder = d.id)")?;
+            let parked = st.query_map([], |r| Ok(PathBuf::from(r.get::<_, String>(0)?)))?.collect::<rusqlite::Result<_>>()?;
+            (held, parked)
         };
-        Ok(self.folders().iter().filter(|(id, path)| held.contains(id) && super::holds_nothing(&path.to_string_lossy())).map(|(_, path)| path.clone()).collect())
+        let empty = self.folders().iter().filter(|(id, path)| held.contains(id) && super::holds_nothing(&path.to_string_lossy())).map(|(_, path)| path.clone()).collect::<Vec<_>>();
+        Ok(empty.into_iter().chain(parked.into_iter().filter(|path| unplaced.contains(path))).collect())
     }
 
     /// Gives every album its record, its copies one set of tracks, and every name its artist's id, and keeps what each old id
@@ -283,6 +295,19 @@ mod tests {
         cat.first_records(found(vec![in_third, first, second]), &kinds).unwrap();
         assert_eq!(cat.track_of(0, "First/7.flac"), Some(4), "the first main library in the list is folder 1 here");
         assert_eq!(cat.track_of(2, "Third/1.flac"), Some(4));
+    }
+
+    /// CR18: main, then someone's own music, then Incoming, whatever the list's order and whichever came first.
+    #[test]
+    fn own_music_comes_after_a_main_library_and_before_incoming() {
+        let cat = tracks(6);
+        let (waiting, own) = (three(&cat, 1, [1, 2, 3], "In", "pid"), three(&cat, 2, [4, 5, 6], "Own", "pid"));
+        cat.first_records(found(vec![waiting, own]), &[(1, Kind::Incoming), (2, Kind::Own)]).unwrap();
+        assert_eq!(cat.track_of(1, "In/1.flac"), Some(4));
+        let cat = tracks(6);
+        let (own, kept) = (three(&cat, 2, [1, 2, 3], "Own", "pid"), three(&cat, 0, [4, 5, 6], "Kept", "pid"));
+        cat.first_records(found(vec![own, kept]), &[(2, Kind::Own), (0, Kind::Main)]).unwrap();
+        assert_eq!(cat.track_of(2, "Own/1.flac"), Some(4));
     }
 
     /// One base, two records: the same tags on other tracks. Tags and words kept by the base go to both.
@@ -453,8 +478,6 @@ mod tests {
         assert_eq!(lines["../in/Gone/1.mp3"], "tr-1", "a file gone a while follows its track");
     }
 
-    use std::path::PathBuf;
-
     #[test]
     fn a_folder_that_shows_nothing_is_named_and_one_with_no_files_is_not() {
         let root = std::env::temp_dir().join(format!("cratarr-first-{}", std::process::id()));
@@ -465,8 +488,19 @@ mod tests {
         std::fs::write(up.join("a.flac"), b"x").unwrap();
         let cat = Catalogue::open(None, vec![up.clone(), down.clone(), new]).unwrap();
         cat.db().execute_batch("INSERT INTO files (folder, rel, size, mtime) VALUES (0, 'a.flac', 1, 1), (1, 'b.flac', 1, 1);").unwrap();
-        assert_eq!(cat.folders_not_there().unwrap(), [down], "its files are in the catalogue and not there; the third never had any");
+        assert_eq!(cat.folders_not_there(&[]).unwrap(), [down], "its files are in the catalogue and not there; the third never had any");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A folder that is gone reads as out of use, its rows parked: only the libraries can say it was meant to be there. One taken
+    /// out of use on purpose stays no reason to stop.
+    #[test]
+    fn a_library_parked_as_it_is_gone_is_named_and_one_out_of_use_is_not() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/kept")]).unwrap();
+        cat.db().execute_batch("INSERT INTO folders (id, path) VALUES (-1, '/gone'), (-2, '/left'), (-3, '/nothing');
+             INSERT INTO files (folder, rel, size, mtime) VALUES (-1, 'a.flac', 1, 1), (-2, 'b.flac', 1, 1);").unwrap();
+        assert_eq!(cat.folders_not_there(&[PathBuf::from("/gone"), PathBuf::from("/nothing")]).unwrap(), [PathBuf::from("/gone")]);
+        assert!(cat.folders_not_there(&[]).unwrap().is_empty());
     }
 
     /// CR13's other half: what `unserved_rows` reads, and only that.

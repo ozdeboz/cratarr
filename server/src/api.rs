@@ -338,8 +338,9 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/catalogue", get(catalogue_status))
             // Lost track ids started afresh (0101, the owner: a lost catalogue.sqlite stops Cratarr until this or a restore).
             .route("/api/catalogue/fresh-ids", post(catalogue_fresh_ids))
-            // The 0.16 first start's migration report (decision 0101), every part.
+            // The 0.16 first start's migration report (decision 0101), every part, and what each old id became.
             .route("/api/admin/migration", get(migration_report))
+            .route("/api/admin/migration/moved", get(migration_moved))
             .route("/api/health/report", get(health_report))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
@@ -1554,12 +1555,27 @@ async fn album_view(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> 
         Ok(v) => Ok(v),
         Err(e) => Err(e),
     };
+    // A link from before 0.16 opens its record, which the answer's id says. A record nothing plays of now is no answer: that
+    // album's fate is what its old id finds.
+    if source == crate::source::cratarr::KIND.id
+        && let Some(record) = moved_to(&app, &album).await
+        && let Ok(v) = app.playing.album_view(&source, &record).await
+        && !v.rows.is_empty()
+    {
+        return Ok(Json(v));
+    }
     match app.incoming.album_fate(&source, &album).await {
         Some(AlbumFate::Moved(now)) if now != album => Ok(Json(app.playing.album_view(&source, &now).await?)),
         Some(AlbumFate::NotYet(title)) => Err(ToggleError::Refused(format!("{title} is in Music now. The server has not added it yet.")).into()),
         Some(AlbumFate::Deleted(title)) => Err(ToggleError::Refused(format!("{title} was deleted.")).into()),
         _ => Ok(Json(failed?)),
     }
+}
+
+/// What an id from before 0.16 is now (`Catalogue::named_now`).
+async fn moved_to(app: &Arc<App>, old: &str) -> Option<String> {
+    let (catalogue, old) = (app.library.catalogue(), old.to_string());
+    tokio::task::spawn_blocking(move || catalogue.named_now(&old)).await.ok().flatten()
 }
 
 /// A Bandcamp album in the panel (decision 0071, the owner 2026-10-25: "I don't see why not"): its tracks as its page
@@ -4417,6 +4433,17 @@ async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::cat
     let c = app.library.catalogue();
     let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(status.map_err(ToggleError::from)?))
+}
+
+/// What each id that changed at the 0.16 first start became (decision 0101 point 22: what the release run rewrites Home
+/// Assistant's references by; `/api/playlists/moved`'s pattern), as served: `{albums, artists, tracks}`, old id to new. An album
+/// goes by what one copy was known by, the form a link or a reference holds.
+async fn migration_moved(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let catalogue = app.library.catalogue();
+    let moved = tokio::task::spawn_blocking(move || catalogue.moved()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
+    let of = |prefix: &str| moved.ids.iter().filter(|(old, _)| old.starts_with(prefix)).collect::<std::collections::BTreeMap<_, _>>();
+    use crate::serve::ids::{ALBUM, ARTIST, SONG};
+    Ok(Json(json!({ "albums": of(ALBUM), "artists": of(ARTIST), "tracks": of(SONG) })))
 }
 
 /// The 0.16 first start's migration report (decision 0101's rehearsal: compared with production's copy), by part:

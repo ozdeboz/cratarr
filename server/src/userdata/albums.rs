@@ -2,8 +2,7 @@
 //! docs/records-and-copies.md). An album had two old ids and every table goes by one of them: a copy's own (`albums.id`: what
 //! was played, starred or heard), or the Music-form one (`albums.base_id`: tags, hand facts, words, so they followed an album
 //! kept from Incoming). For a Music album the two are one string, and an Incoming album's base can be a Music album's id, so
-//! the two lists stay apart all the way. What a table's rows do when they meet on one record is that table's own rule. Nothing
-//! calls this until the first start does.
+//! the two lists stay apart all the way. What a table's rows do when they meet on one record is that table's own rule.
 
 use std::collections::{HashMap, HashSet};
 

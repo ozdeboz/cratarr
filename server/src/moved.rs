@@ -2,15 +2,13 @@
 //! JSON stores in the data folder, and the JSON inside the journal's `changes` and a preference. One map goes through them all,
 //! made by whoever calls: nothing here reads the catalogue, so a hand-made map tests it. Each store is written beside and
 //! renamed, so a stop leaves it whole, old or new, and a second run finds nothing old to move. An id no map holds stays as it
-//! is, and is counted. Nothing calls this until the first start does.
-
-#![allow(dead_code)] // the first start's (C34)
+//! is, and is counted.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::crates::{self, Condition};
@@ -18,7 +16,7 @@ use crate::serve::ids;
 
 /// A table or a store as the migration's report reads it (`userdata::put_migration_part`): its rows before and after, how
 /// many ids in it moved, and how many rows met another under one key and became one with it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Table {
     pub name: String,
     pub before: u64,
@@ -28,7 +26,7 @@ pub struct Table {
 }
 
 /// What found no match in one place: how many, and up to ten of them, each named once. They stay as they were.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Unmatched {
     pub what: String,
     pub count: u64,
@@ -40,7 +38,7 @@ const SAMPLES: usize = 10;
 
 /// What a step of the move found, in the report's lists. `differed`: two rows of one record said different things where only
 /// one can stand; the first met stood, so the other is gone, counted as `Unmatched` is, by the record it spoke of.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub tables: Vec<Table>,
     pub unmatched: Vec<Unmatched>,
@@ -84,11 +82,13 @@ impl Report {
     }
 
     /// The rows of one table, by its name.
+    #[cfg(test)]
     pub fn table_named(&self, name: &str) -> Option<&Table> {
         self.tables.iter().find(|t| t.name == name)
     }
 
     /// How many found no match, in all.
+    #[cfg(test)]
     pub fn unmatched_count(&self) -> u64 {
         self.unmatched.iter().map(|u| u.count).sum()
     }

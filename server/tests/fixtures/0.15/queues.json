@@ -1,0 +1,23 @@
+{
+  "a player": {
+    "version": 7,
+    "tracks": [
+      { "entry": "e1", "source": "cratarr", "id": "tr-19", "name": "Landing", "artist": "Salt Meridian", "album": "Both Shores", "album_id": "al-0K3QLxUBwKPLshc0VyNQJ7", "duration_secs": 2.0 },
+      { "entry": "e2", "source": "cratarr", "id": "tr-83", "name": "Slack Water", "artist": "Glass Harbour", "album": "Tide Tables", "album_id": "al-4FwVmWLNdYpZZSEtkan6Uy", "duration_secs": 3.0 }
+    ],
+    "autoplay": { "seed": ["tr-19"], "within": { "kind": "album", "source": "cratarr", "id": "al-0K3QLxUBwKPLshc0VyNQJ7" } },
+    "entry": "e1",
+    "position_ms": 1500,
+    "playing": false,
+    "heard_at": 1760999000,
+    "kept": [
+      {
+        "version": 3,
+        "tracks": [{ "entry": "e3", "source": "cratarr", "id": "tr-8", "name": "Landing", "album_id": "al-7ATEPHL21gflZtRCnZNzGM" }],
+        "autoplay": { "within": { "kind": "crate", "id": "like:al-4Jx9dQszNKgnbo4mZtic7y@50" } },
+        "entry": "e3",
+        "updated": 1760998000
+      }
+    ]
+  }
+}

@@ -26,7 +26,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub use first::FirstAlbums;
+pub use first::{First, FirstAlbums};
 pub use normalise::Rules;
 
 use crate::source::Source;

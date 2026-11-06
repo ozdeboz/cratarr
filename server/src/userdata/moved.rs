@@ -13,9 +13,13 @@ use anyhow::Result;
 use rusqlite::types::Value;
 use rusqlite::{Transaction, params, params_from_iter};
 
+use super::albums::{Albums, move_albums};
+use super::artists::move_artists;
 use super::offline::{ChangeKind, Op, item_id, log};
-use super::{Annotation, UserData};
-use crate::moved::{Report, Table};
+use super::preferences::move_filters;
+use super::{Annotation, UserData, now_ms, put_migration_part};
+use crate::catalogue::First;
+use crate::moved::{Moved, Report, Table};
 use crate::serve::ids;
 
 /// A table's row: its values, in the order of `Columns`.
@@ -304,36 +308,123 @@ fn log_moved(tx: &Transaction, moved: &HashMap<String, String>) -> Result<u64> {
     Ok(logged.len() as u64)
 }
 
+/// `UserData::move_tracks` in the caller's transaction, as the first start's is one for all of the user data.
+fn move_tracks(tx: &Transaction, moved: &[(i64, i64)]) -> Result<Vec<(&'static str, u64)>> {
+    if moved.is_empty() {
+        return Ok(Vec::new());
+    }
+    let song = crate::serve::ids::song;
+    let songs: HashMap<String, String> = moved.iter().map(|(old, new)| (song(*old), song(*new))).collect();
+    let own = crate::source::cratarr::KIND.id;
+    let items: HashMap<String, String> = songs.iter().map(|(old, new)| (item_id("track", own, old), item_id("track", own, new))).collect();
+    let mut counts = vec![
+        ("annotation", fold(tx, "annotation", "item", "kind = 'song'", &songs, annotations)?),
+        ("imported", fold(tx, "imported", "item", "kind = 'song'", &songs, imports)?),
+        ("bookmark", fold(tx, "bookmark", "item", "1", &songs, bookmarks)?),
+        ("track_words", fold(tx, "track_words", "track", "1", &songs, words)?),
+        ("change_at", fold(tx, "change_at", "item", "1", &items, last_change)?),
+        ("change_log", log_moved(tx, &items)?),
+        ("app_queue", queues(tx, &songs)?),
+    ];
+    hold(tx, &songs)?;
+    for (table, column) in [("plays", "song"), ("scrobble_queue", "song"), ("playlist_item", "track"), ("visual_rating", "track")] {
+        counts.push((table, plain(tx, table, column)?));
+    }
+    counts.retain(|(_, n)| *n > 0);
+    Ok(counts)
+}
+
+/// Where tracks are named, as the report says each: its name there, `move_tracks`' for it, and which rows.
+const TRACK_PLACES: [(&str, &str, &str); 11] = [
+    ("annotation: tracks", "annotation", "annotation WHERE kind = 'song'"),
+    ("imported: tracks", "imported", "imported WHERE kind = 'song'"),
+    ("bookmark", "bookmark", "bookmark"),
+    ("track_words", "track_words", "track_words"),
+    ("change_at: tracks", "change_at", "change_at WHERE item LIKE 'track:%'"),
+    ("change_log: tracks", "change_log", "change_log WHERE item LIKE 'track:%'"),
+    ("app_queue", "app_queue", "app_queue"),
+    ("plays", "plays", "plays"),
+    ("scrobble_queue", "scrobble_queue", "scrobble_queue"),
+    ("playlist_item", "playlist_item", "playlist_item"),
+    ("visual_rating", "visual_rating", "visual_rating"),
+];
+
+/// `move_tracks` as the report reads it: every place's rows before and after, none moved too, so it says it looked.
+fn tracks_reported(tx: &Transaction, moved: &[(i64, i64)]) -> Result<Report> {
+    let rows = |from: &str| -> Result<u64> { Ok(tx.query_row(&format!("SELECT count(*) FROM {from}"), [], |r| r.get::<_, i64>(0))? as u64) };
+    let before: Vec<u64> = TRACK_PLACES.iter().map(|(_, _, from)| rows(from)).collect::<Result<_>>()?;
+    let counts: HashMap<&str, u64> = move_tracks(tx, moved)?.into_iter().collect();
+    let mut report = Report::default();
+    for ((name, key, from), before) in TRACK_PLACES.iter().zip(before) {
+        let after = rows(from)?;
+        report.tables.push(Table { name: name.to_string(), before, after, moved: counts.get(key).copied().unwrap_or(0), merged: before.saturating_sub(after) });
+    }
+    Ok(report)
+}
+
+/// What the first start's last step moves by.
+pub struct Moves<'a> {
+    pub albums: &'a Albums,
+    /// Each artist's old id to the new, as `Catalogue::artists_moved` gives them.
+    pub artists: &'a HashMap<String, String>,
+    /// (what went, what took it).
+    pub tracks: &'a [(i64, i64)],
+    /// What a preference's JSON moves by.
+    pub stored: &'a Moved,
+}
+
+/// In `meta`, by step: what the first start's steps before the last found. No part of the report can be written until it is
+/// whole, and a start that went over them again would report what is done as nothing moved.
+const FOUND: &str = "first_start:";
+
+/// The report's part that says the first start is over.
+const PART: &str = "records";
+
 impl UserData {
     /// Everything that names one of these tracks, (old, new), moves to the new one, in one transaction: a play or a
     /// favourite on the old id is on the new id after, and none is lost or counted twice. Rows moved by table, the tables
     /// with none left out. Blocking.
     pub fn move_tracks(&self, moved: &[(i64, i64)]) -> Result<Vec<(&'static str, u64)>> {
-        if moved.is_empty() {
-            return Ok(Vec::new());
-        }
-        let song = crate::serve::ids::song;
-        let songs: HashMap<String, String> = moved.iter().map(|(old, new)| (song(*old), song(*new))).collect();
-        let own = crate::source::cratarr::KIND.id;
-        let items: HashMap<String, String> = songs.iter().map(|(old, new)| (item_id("track", own, old), item_id("track", own, new))).collect();
         let mut db = self.db();
         let tx = db.transaction()?;
-        let mut counts = vec![
-            ("annotation", fold(&tx, "annotation", "item", "kind = 'song'", &songs, annotations)?),
-            ("imported", fold(&tx, "imported", "item", "kind = 'song'", &songs, imports)?),
-            ("bookmark", fold(&tx, "bookmark", "item", "1", &songs, bookmarks)?),
-            ("track_words", fold(&tx, "track_words", "track", "1", &songs, words)?),
-            ("change_at", fold(&tx, "change_at", "item", "1", &items, last_change)?),
-            ("change_log", log_moved(&tx, &items)?),
-            ("app_queue", queues(&tx, &songs)?),
-        ];
-        hold(&tx, &songs)?;
-        for (table, column) in [("plays", "song"), ("scrobble_queue", "song"), ("playlist_item", "track"), ("visual_rating", "track")] {
-            counts.push((table, plain(&tx, table, column)?));
-        }
+        let counts = move_tracks(&tx, moved)?;
         tx.commit()?;
-        counts.retain(|(_, n)| *n > 0);
         Ok(counts)
+    }
+
+    /// Whether the first start is over: its last step's commit says so, and nothing else does. Blocking.
+    pub fn first_start_done(&self) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM migration_report WHERE part = ?1")?.exists([PART])?)
+    }
+
+    /// What a step of the first start found at an earlier start. Blocking.
+    pub fn step_found(&self, step: &str) -> Result<Option<Report>> {
+        Ok(self.meta(&format!("{FOUND}{step}"))?.map(|kept| serde_json::from_str(&kept)).transpose()?)
+    }
+
+    /// Keeps what a step found: it is done. Blocking.
+    pub fn keep_step_found(&self, step: &str, found: &Report) -> Result<()> {
+        self.set_meta(&format!("{FOUND}{step}"), &serde_json::to_string(found)?)
+    }
+
+    /// The first start's last step, in one transaction: every album, artist and track the user data names moves, and the
+    /// report goes in last, `steps` what the steps before found and `first` the catalogue's. Its commit is the migration's. Blocking.
+    pub fn finish_move(&self, moves: &Moves<'_>, steps: Report, first: &First) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut report = steps;
+        report.extend(move_albums(&tx, moves.albums)?);
+        report.extend(move_artists(&tx, moves.artists)?);
+        report.extend(tracks_reported(&tx, moves.tracks)?);
+        report.extend(move_filters(&tx, moves.stored, now_ms())?);
+        tx.execute("DELETE FROM meta WHERE key LIKE ?1", [format!("{FOUND}%")])?;
+        let mut part = serde_json::to_value(first)?;
+        if let (Some(part), serde_json::Value::Object(found)) = (part.as_object_mut(), serde_json::to_value(&report)?) {
+            part.extend(found);
+        }
+        put_migration_part(&tx, PART, &part)?;
+        tx.commit()?;
+        Ok(())
     }
 }
 

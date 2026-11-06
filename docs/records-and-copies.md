@@ -162,6 +162,26 @@ One transaction in each database, its report the `records` part:
 The old-to-new map is kept: old shared links open through it, and the release run rewrites Home Assistant's references
 through it (point 22). Devices start fresh (point 23). Other Subsonic apps and Kodi see new album ids once.
 
+It runs at the first start, before anything has read a store, before the first build and before the first request
+(`app::first_start`). First the catalogue, in one transaction: every album's record, the merge, each id's map (`album_moved`,
+`artist_moved`, `track_moved`). Then the journal's changes, the sync's agreed lists and the JSON stores, then the user data, in one
+transaction, the `records` part written last in it. No commit spans the databases, so each step is safe to go over again, and that
+part alone says it is over: a stop anywhere finishes at the next start, and leaves what a start that never stopped leaves. A failure
+stops the start, as Cratarr does not run on half-moved data. The way back is the copy from before (point 24).
+
+- **An old id names one copy**, so one record, and the map keeps its folder: `album_moved` form `id`. Music's form of it, `base`, can
+  name two records, as the same tags on other tracks are two records, and what went by it goes to both.
+- **Of two tracks found to be one the main library's stays:** albums come in main libraries first, in their order, and what no list
+  shows after all of those, so a file that went decides nothing.
+- **What no list shows gets its record too:** files gone a while, in a trash, or in a parked folder, by the id they were served
+  under. With none, an Undo or a source switched on again brings back an album that has lost what named it.
+- **A Keep left its plays under the id it had in Incoming**, which no album has now. That id is worked out for each Incoming folder
+  and kept for the album, unless a real album holds it.
+- **What stops it:** a library not there, which says which, and a catalogue whose ids were lost, or one lost before 0.16 remembered
+  it, as what names its ids would all read as matching nothing.
+- **What matches nothing stays and is counted,** as a tag's hash from before a retag cannot be read back. A left-out line on a file
+  in a trash stays a line too: its path went with it.
+
 ## Order of work
 
 Each step leaves the server working and its tests green:

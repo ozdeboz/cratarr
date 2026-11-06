@@ -3,7 +3,7 @@
 //! rating (`annotation`); what an import brought (`imported`, which the next import reads by id: left behind, it counts
 //! everything as new); the words (`words`, `words_asked`: left behind, every source is asked again); and the library's
 //! artists inside `related_artists.found`. What goes by a MusicBrainz id or a loose name stays as it is (Q21, `rest` 8.22
-//! to 8.28). Nothing calls this until the first start does.
+//! to 8.28).
 
 use std::collections::HashMap;
 

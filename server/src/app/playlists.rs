@@ -2706,11 +2706,22 @@ impl PlaylistService {
     /// A crate's definition: a permanent one, or one's own; a fixed one with the conditions the account added to it
     /// (decision 0083: Not in this crate).
     pub async fn crate_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
+        let now = self.like_now(id).await;
+        let id = now.as_deref().unwrap_or(id);
         let mut def = self.made_def(id).await?;
         if crates::is_fixed(id) {
             def.conditions.extend(self.own_crates()?.added(&crates::kept_id(id)).await?);
         }
         Ok(def)
+    }
+
+    /// A Sounds like as a link from before 0.16 names it: its seed went, so the crate is the one of what the seed became, its count
+    /// kept. None for any other.
+    async fn like_now(&self, id: &str) -> Option<String> {
+        let (seed, _) = crates::like_of(id)?;
+        let (catalogue, old) = (self.lib.catalogue(), seed.to_string());
+        let now = tokio::task::spawn_blocking(move || catalogue.named_now(&old)).await.ok()??;
+        Some(id.replacen(seed, &now, 1))
     }
 
     /// The names of the library ids in conditions (0.13, decision 0088: `crates::named_ids`, a Sounds like's seeds, the
