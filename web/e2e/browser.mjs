@@ -21,9 +21,11 @@ export async function device() {
   return { browser, page, errors };
 }
 
-/** `user` signs in through Cratarr's own sign-in page, and the page has learnt whose it is (lib/account). */
-export async function signIn(page, user) {
-  await page.goto(`${PAGE}/`);
+/** `user` signs in through Cratarr's own sign-in page, and the page has learnt whose it is (lib/account). `at`: the address
+ *  gone to first: the page finds out it has no session; the sign-in page itself, as a server sends one there with no page
+ *  run at all. */
+export async function signIn(page, user, at = '/') {
+  await page.goto(`${PAGE}${at}`);
   await page.waitForURL(/\/signin/, { timeout: 20_000 });
   await page.fill('input[name=username]', user);
   await page.fill('input[name=password]', passwords[user]);
