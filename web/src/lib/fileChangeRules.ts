@@ -1,6 +1,6 @@
 // One way to change files (decision 0092; the owner, 2026-11-01: a review sheet before, the record's state line, one
 // list of runs), the words and the merging, pure so the tests take them as they are.
-import type { FileField, FileRun, FilesState } from './api';
+import type { FileField, FileRun, FilesState, LibraryInfo } from './api';
 
 /** A plan as its crumb names it (what proposes it). */
 const PLANS: Record<string, string> = { types: 'Types and years' };
@@ -9,6 +9,16 @@ export const planTitle = (kind: string) => PLANS[kind] ?? 'Changes to review';
 /** A field as the review sheet names it. */
 const FIELDS: Record<string, string> = { releasetype: 'Type', date: 'Date', genre: 'Genre' };
 export const fieldLabel = (field: string) => FIELDS[field] ?? field.charAt(0).toUpperCase() + field.slice(1);
+
+/** A row of a record's changes as the sheet names it: its track, else its field. Where a track's copies, or a cover's,
+ *  change differently their rows read alike but for the library, so each says that. The server gives it as a record's
+ *  `copies` do, by the folder's path: `libraries` has its name, and one not among them goes unsaid, as a path says
+ *  nothing on a sheet. */
+export function rowLabel(f: Pick<FileField, 'field' | 'track' | 'library'>, libraries: readonly Pick<LibraryInfo, 'id' | 'name'>[]): string {
+  const name = f.track ?? fieldLabel(f.field);
+  const library = libraries.find((l) => l.id === f.library)?.name;
+  return library ? `${name} · ${library}` : name;
+}
 
 /** A field's change as the sheet says it: values added (+), taken away (struck), or one set of them for another. */
 export function changeOf(f: Pick<FileField, 'before' | 'after'>): { gone: string[]; came: string[]; kind: 'add' | 'remove' | 'set' } {

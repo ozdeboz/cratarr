@@ -1152,6 +1152,9 @@ export const setTrackWords = (source: string, id: string, words: TrackWords) =>
 export type FileField = {
   field: string;
   track?: string;
+  /** The library it is in, as a record's `copies` name it, only where that tells two rows apart: a track's copies, or a
+   *  cover's, changing differently. */
+  library?: string;
   before: string[];
   after: string[];
   from: string;
