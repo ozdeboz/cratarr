@@ -325,7 +325,7 @@ struct Held {
     shared: std::collections::HashSet<i64>,
     /// Tracks back from retirement, not yet held against their albums.
     back: std::collections::HashSet<i64>,
-    /// Where each track has a file gone a while: (folder, its folder there).
+    /// Where each track has a file gone a while, or there and not read: (folder, its folder there).
     gone: HashMap<i64, Vec<Place>>,
 }
 
@@ -345,9 +345,9 @@ impl Held {
         }
         let mut st = db.prepare("SELECT track FROM files WHERE track IS NOT NULL GROUP BY track HAVING count(*) > 1")?;
         held.shared = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        let mut st = db.prepare(&format!("SELECT t.record, count(*) FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IS NOT NULL AND {PRESENT_F} GROUP BY t.record"))?;
+        let mut st = db.prepare(&format!("SELECT t.record, count(*) FROM files f JOIN tracks t ON t.id = f.track WHERE t.record IS NOT NULL AND {PRESENT_F} AND {} GROUP BY t.record", served("f.")))?;
         held.files = st.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?.collect::<rusqlite::Result<_>>()?;
-        let mut st = db.prepare("SELECT track, folder, rel FROM files WHERE track IS NOT NULL AND gone_at IS NOT NULL")?;
+        let mut st = db.prepare(&format!("SELECT track, folder, rel FROM files WHERE track IS NOT NULL AND (gone_at IS NOT NULL OR ({PRESENT} AND NOT {}))", served("")))?;
         for row in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))? {
             let (track, folder, rel) = row?;
             held.gone.entry(track).or_default().push((folder, dir_of(&rel).to_string()));
@@ -355,8 +355,9 @@ impl Held {
         Ok(held)
     }
 
-    /// Whether `album` lacks these tracks only for now: each has a file gone a while from where the album lies. A mount that
-    /// blinks must not split a record: a gone file comes back, or goes for good within the day.
+    /// Whether `album` lacks these tracks only for now: each has a file gone a while from where the album lies, or there and
+    /// not read. A mount that blinks must not split a record: a gone file comes back, or goes for good within the day, and one
+    /// that could not be read is read again when it changes, however long that takes.
     fn lacks_for_now(&self, album: &AlbumCopy, tracks: &[i64]) -> bool {
         let lies = |place: &Place| album.files.iter().any(|(folder, rel)| *folder == place.0 && dir_of(rel) == place.1);
         tracks.iter().all(|t| self.gone.get(t).is_some_and(|places| places.iter().any(lies)))
@@ -4901,6 +4902,15 @@ mod tests {
         cat.db().execute("UPDATE files SET gone_at = 1 WHERE track = 4", []).unwrap();
         cat.assign_records(&[album("Grown", &[1, 2, 3, 5, 6, 7, 8, 9, 10, 11])]).unwrap();
         assert_eq!(record_of(&cat, 11), kept);
+
+        // So does one not read: it is no file here for any list.
+        let cat = tracks(11);
+        on_files(&cat, 1..=11);
+        cat.assign_records(&[album("Grown", &[1, 2, 3, 4])]).unwrap();
+        let kept = record_of(&cat, 1);
+        cat.db().execute("UPDATE files SET state = ?1 WHERE track = 4", [FAILED]).unwrap();
+        cat.assign_records(&[album("Grown", &[1, 2, 3, 5, 6, 7, 8, 9, 10, 11])]).unwrap();
+        assert_eq!(record_of(&cat, 11), kept);
     }
 
     /// Where a record has a file in another album it has somewhere to be, and the majority rule stands.
@@ -5431,6 +5441,23 @@ mod tests {
         assert_ne!(left.tracks[0].0, 1);
         assert_ne!(record_of(&cat, left.tracks[0].0), Some(record));
         assert_eq!(cat.files_of(3).len(), 1);
+    }
+
+    /// `three` as a copy lacking the tracks after the first `n`, its files those of `a`.
+    fn the_first(n: usize, a: &AlbumCopy) -> AlbumCopy {
+        let names = [(1, "One", 200_000), (2, "Two", 200_000), (3, "Three", 200_000)];
+        AlbumCopy { files: a.files[..n].to_vec(), ..copy(None, "A", "Three", &names[..n]) }
+    }
+
+    /// A file that cannot be read is no gone file, and nothing reads it again until it changes. A tagger writing as a pass reads,
+    /// or a mount dropped during a read, must not split a record: its copy lacks it for now, however long.
+    #[test]
+    fn a_file_not_read_splits_nothing() {
+        let cat = tracks(6);
+        let (kept, second, _) = two_copies(&cat);
+        cat.db().execute("UPDATE files SET state = ?2 WHERE rel = ?1", params![second.files[2].1, FAILED]).unwrap();
+        assert_eq!(cat.assign_records(&[kept, the_first(2, &second)]).unwrap(), 0);
+        assert_eq!(cat.track_of(0, &second.files[0].1), Some(1));
     }
 
     /// Copies are held together by their ids once taken: a retag or a length fix in one is no reason to split them.
