@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 
 pub use cratarr_rules::crates::*;
 
-/// Each artist the files name, their library id by their name, for `Alike::of`: an id is a hash of the name, and a hash
-/// is no rule.
-pub fn artist_ids(all: &[Facts]) -> HashMap<String, String> {
-    credited_names(all).into_keys().map(|n| (n.to_string(), crate::serve::ids::artist(n))).collect()
+/// Each artist the files name, their library id by their name, for `Alike::of`, `known` being the catalogue's ids by key: the
+/// catalogue is no rule. A part of a credit no one is named by alone has no id: nothing lists them, so nothing seeds by them.
+pub fn artist_ids(all: &[Facts], known: &HashMap<String, i64>) -> HashMap<String, String> {
+    use crate::serve::ids;
+    credited_names(all).into_keys().filter_map(|n| Some((n.to_string(), ids::artist(*known.get(&ids::artist_key(n))?)))).collect()
 }
 
 // --- Freshness of the media server's favourites (decision 0024, issue 5) ---
@@ -332,11 +333,14 @@ mod tests {
     fn an_artist_seed_finds_their_songs_by_the_id_the_library_makes() {
         let (credits, credit_names) = crate::app::excluded_artists::credited(&["Air feat. Beck"]);
         let files = vec![Facts { rel: "a.flac".into(), artists: vec!["Air feat. Beck".into()], credits, credit_names, ..Facts::default() }];
-        let alike = Alike::of(&files, &HashMap::new(), &artist_ids(&files));
-        let places = |name: &str| alike.seed_places(&crate::serve::ids::artist(name));
-        assert_eq!(places("Beck"), [0], "a credit");
-        assert_eq!(places("air feat. beck"), [0], "a credit as the tags write it, any case");
-        assert!(places("Cy").is_empty());
+        use crate::serve::ids;
+        let known: HashMap<String, i64> = [(ids::artist_key("Beck"), 7), (ids::artist_key("Air feat. Beck"), 8), (ids::artist_key("Cy"), 9)].into();
+        let alike = Alike::of(&files, &HashMap::new(), &artist_ids(&files, &known));
+        let places = |id: i64| alike.seed_places(&ids::artist(id));
+        assert_eq!(places(7), [0], "a credit");
+        assert_eq!(places(8), [0], "a credit as the tags write it");
+        assert!(places(9).is_empty(), "credited on nothing here");
+        assert!(artist_ids(&files, &HashMap::new()).is_empty(), "no id is made up");
     }
 
     #[tokio::test]

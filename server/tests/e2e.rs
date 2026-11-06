@@ -453,6 +453,56 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// An artist's id for life on a running server: what the library serves, the panel's heart by name, an artist seed's crate
+/// by id, and all of it the same after a restart. A heart on a name no file credits yet is kept too, as it was under the hash.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn an_artist_is_one_id_by_name_and_by_number_end_to_end() {
+    let root = temp("artist-id");
+    let (music, data) = (root.join("music"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-fixtures").arg(&music).status().unwrap().success(), "the fixture library is made");
+    settings_0_15(&data, &music.to_string_lossy());
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    s.until("the fixture library read", Duration::from_secs(120), || async { s.albums().await.len() == 12 }).await;
+    // A heart is an account's.
+    s.ok(reqwest::Method::POST, "/api/users", json!({ "name": "ann", "password": "ann's password", "admin": true })).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+
+    let served = |name: &str| -> String {
+        let db = rusqlite::Connection::open(data.join("library.sqlite")).unwrap();
+        db.query_row("SELECT id FROM artists WHERE name = ?1", [name], |r| r.get(0)).unwrap()
+    };
+    let harbour = served("Glass Harbour");
+    assert!(harbour.strip_prefix("ar-").is_some_and(|n| n.parse::<i64>().is_ok()), "a number: {harbour}");
+    let heart = |name: &str, on: bool| format!("/api/artists/cratarr/favorite?name={}&on={on}", name.replace(' ', "%20"));
+    let hearted = |name: &str| format!("/api/artists/cratarr/favorite?name={}", name.replace(' ', "%20"));
+    assert_eq!(ann.get(&hearted("Glass Harbour")).await["favorite"], false);
+    ann.ok(reqwest::Method::POST, &heart("Glass Harbour", true), json!({})).await;
+    ann.ok(reqwest::Method::POST, &heart("Nobody Yet", true), json!({})).await;
+    assert_eq!(ann.get(&hearted("GLASS HARBOUR")).await["favorite"], true, "any case is the same name");
+    assert_eq!(ann.get(&hearted("Nobody Yet")).await["favorite"], true);
+    assert_eq!(ann.get(&hearted("Never Asked")).await["favorite"], false);
+    let stars = |item: &str| -> i64 {
+        let db = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+        db.query_row("SELECT count(*) FROM annotation WHERE kind = 'artist' AND item = ?1 AND starred = 1", [item], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(stars(&harbour), 1, "by the id the library serves");
+
+    // An artist seed finds their tracks through the catalogue's ids, as it found them by the name's hash.
+    let rows = ann.get(&format!("/api/crates/like:{harbour}/rows")).await;
+    assert!(!rows["rows"].as_array().unwrap().is_empty(), "{rows}");
+    s.stop();
+
+    let s = Server::start(&data).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    assert_eq!(served("Glass Harbour"), harbour, "for life");
+    assert_eq!(ann.get(&hearted("Glass Harbour")).await["favorite"], true);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// What the migration's run stands on (decision 0101 point 28): 0.15's data opens on what is built now, its files found as
 /// they were left and nothing taken for new. A fixture whose rows did not fit its files would give them fresh tracks, and
 /// `tr-<n>` in the user data would point at nothing, so the proof on it would prove nothing (`ready` E10).

@@ -384,7 +384,8 @@ fn shared_alike(files: &Arc<Vec<crates::Facts>>, membership: &HashMap<String, Ve
     }
     // The one before let go first: two at once over every file is what the limit cannot hold.
     *kept = None;
-    let made = Arc::new(crates::Alike::of(files, membership, &crates::artist_ids(files)));
+    let known = crate::serve::instance().and_then(|s| s.artist_ids().inspect_err(|e| tracing::warn!(reason = %format!("{e:#}"), "the artists' ids could not be read: no artist seeds")).ok());
+    let made = Arc::new(crates::Alike::of(files, membership, &crates::artist_ids(files, &known.unwrap_or_default())));
     *kept = Some((key.0, key.1, made.clone()));
     made
 }

@@ -556,13 +556,13 @@ impl Source for CratarrSource {
         })
     }
 
-    // An artist is their name's id (as Subsonic apps see them): the albums crediting it, the songs crediting it. Plays
-    // and the heart are the owner's.
+    // An artist by name, as the page asks: the albums crediting them, the songs crediting them. A name with no id is
+    // credited on nothing, so the empty id finds nothing. Plays and the heart are the owner's.
     fn artist_works<'a>(&'a self, name: &'a str) -> Fut<'a, Option<super::ArtistWorks>> {
         Box::pin(async move {
             let s = server()?;
             let o = owner(&s)?;
-            let id = crate::serve::ids::artist(name);
+            let id = s.artist_id(name)?.unwrap_or_default();
             let (lib, aid) = (s.library.clone(), id.clone());
             let (own, on, songs) = blocking(move || lib.artist_works(&aid)).await?;
             let ids: Vec<String> = songs.iter().map(|t| t.id.clone()).collect();
@@ -602,7 +602,9 @@ impl Source for CratarrSource {
         Box::pin(async move {
             let s = server()?;
             let o = owner(&s)?;
-            s.userdata.set_starred(&o, Item::Artist, &[crate::serve::ids::artist(name)], on)?;
+            // Any name: a heart on someone no file credits yet is theirs once one does, so they get their id now.
+            let id = crate::serve::ids::artist(s.catalogue().artist_for(name)?);
+            s.userdata.set_starred(&o, Item::Artist, &[id], on)?;
             Ok(on)
         })
     }
@@ -612,7 +614,7 @@ impl Source for CratarrSource {
             let s = server()?;
             let o = owner(&s)?;
             // As artist_works reads it: the same name, the same id.
-            let id = crate::serve::ids::artist(name);
+            let Some(id) = s.artist_id(name)? else { return Ok(Some(false)) };
             Ok(Some(s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some())))
         })
     }

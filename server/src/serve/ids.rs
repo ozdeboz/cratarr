@@ -1,6 +1,6 @@
 //! Ids the OpenSubsonic API hands out (decision 0030). Songs are Cratarr's own track ids, which survive moves
 //! (decision 0011). Albums are records (0100): `al-<record>`, the catalogue's number for life, whatever copies it has
-//! and wherever they lie. Artists are hashes of their names, so they survive a rebuilt catalogue. Each song also has a
+//! and wherever they lie. Artists too: `ar-<id>`, one name one artist until references split them. Each song also has a
 //! persistent id from its tags, by which user data finds it again when the catalogue is rebuilt and its track ids
 //! renumbered.
 //!
@@ -53,13 +53,20 @@ pub fn clear(s: &str) -> String {
         .collect()
 }
 
-/// An artist's id from its name: the same name (ignoring case and typographic quotes) is the same artist.
-pub fn artist(name: &str) -> String {
-    format!("{ARTIST}{}", artist_hash(name))
+/// An artist's id as it is served: their number in the catalogue, for life.
+pub fn artist(id: i64) -> String {
+    format!("{ARTIST}{id}")
 }
 
+/// What makes two names one artist: the same name, ignoring case and typographic quotes.
+pub fn artist_key(name: &str) -> String {
+    clear(&name.to_lowercase())
+}
+
+/// The name's hash, which was an artist's id until 0.16: what a persistent id is made of, and how the ids kept from then are
+/// told.
 fn artist_hash(name: &str) -> String {
-    hash(&[&clear(&name.to_lowercase())])
+    hash(&[&artist_key(name)])
 }
 
 /// The first field group of a spec with any value, its values joined by `\` (Navidrome's `computePID`).
@@ -155,8 +162,8 @@ mod tests {
 
     #[test]
     fn the_same_artist_whatever_the_case_or_quotes() {
-        assert_eq!(artist("Guns N’ Roses"), artist("guns n' roses"));
-        assert_ne!(artist("Björk"), artist("Bjork"));
+        assert_eq!(artist_key("Guns N’ Roses"), artist_key("guns n' roses"));
+        assert_ne!(artist_key("Björk"), artist_key("Bjork"));
     }
 
     #[test]

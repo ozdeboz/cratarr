@@ -424,7 +424,7 @@ mod release_type_tests {
 }
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 17;
+const LAYOUT: i64 = 18;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -473,6 +473,8 @@ pub struct Library {
     incomplete: Mutex<HashMap<String, Whole>>,
     /// A record's facts set by hand (0.13), by its Music-form id (user data `record_overrides`).
     overrides: Mutex<HashMap<String, Overrides>>,
+    /// Every artist's id for life, by `ids::artist_key`: the catalogue's, as `credit` last read them.
+    artists: Mutex<HashMap<String, i64>>,
     /// What each catalogue folder's library is, in the libraries' order (`set_kinds`).
     kinds: Mutex<Vec<(i64, Kind)>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
@@ -665,6 +667,7 @@ impl Library {
             release_types: Mutex::default(),
             incomplete: Mutex::default(),
             overrides: Mutex::default(),
+            artists: Mutex::default(),
             kinds: Mutex::default(),
             building: Mutex::new(()),
         })
@@ -673,6 +676,22 @@ impl Library {
     /// The added dates known better than the catalogue's (by album id); a change builds the library again.
     pub fn set_added(&self, added: HashMap<String, i64>) {
         *self.added.lock().unwrap_or_else(|p| p.into_inner()) = added;
+    }
+
+    /// The artists' ids for life, by `ids::artist_key`.
+    pub fn set_artists(&self, artists: HashMap<String, i64>) {
+        *self.artists.lock().unwrap_or_else(|p| p.into_inner()) = artists;
+    }
+
+    /// Every name these rows credit has its id, a new one given by the catalogue. What is kept is good for life, so the
+    /// catalogue is asked only for a name not among it, and a restart, which keeps nothing, asks once.
+    fn credit<'r>(&self, cat: &crate::catalogue::Catalogue, rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &Rules) -> Result<()> {
+        let names = credited_artists(rows, rules);
+        let known = |artists: &HashMap<String, i64>| names.iter().all(|n| artists.contains_key(&ids::artist_key(n)));
+        if !known(&self.artists.lock().unwrap_or_else(|p| p.into_inner())) {
+            self.set_artists(cat.artists_for(&names).context("giving the artists their ids")?);
+        }
+        Ok(())
     }
 
     /// The original years known from MusicBrainz (by MusicBrainz release); a change builds the library again.
@@ -837,6 +856,8 @@ impl Library {
             }
         }
         drop(copies);
+        // As for records: a new name has its id before anything written names it.
+        self.credit(cat, folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules)?;
         let covers = match &reader {
             Some(c) => crate::catalogue::cover_prints(c)?,
             None => cat.cover_prints()?,
@@ -879,13 +900,23 @@ impl Library {
             release_types: self.release_types.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             incomplete: self.incomplete.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             overrides: self.overrides.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            artists: self.artists.lock().unwrap_or_else(|p| p.into_inner()).clone(),
             kinds: self.kinds(),
         }
     }
 
     #[cfg(test)]
     fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
+        self.credit_in_tests(folders, rules);
         self.build_with(&with_records(folders, rules), rules, &Covers::new())
+    }
+
+    /// Stands in for `build_from` giving these rows' names their ids, in tests that write with no catalogue.
+    #[cfg(test)]
+    fn credit_in_tests(&self, folders: &[FolderRows], rules: &Rules) {
+        for name in credited_artists(folders.iter().flat_map(|f| f.rows.iter().map(move |r| (f.folder, r))), rules) {
+            self.artists.lock().unwrap_or_else(|p| p.into_inner()).entry(ids::artist_key(&name)).or_insert(artist_number_in_tests(&name));
+        }
     }
 
     /// Builds the whole library from these files; `covers`, each folder's cover files (`catalogue::cover_prints`).
@@ -966,7 +997,6 @@ impl Library {
         rules: &Rules,
         covers: &Covers,
     ) -> Result<usize> {
-        let facts = self.facts();
         // The folders' rows, and every folder their albums (as built, and as they would be now) reach.
         let mut rows: Vec<(i64, ServedRow)> = Vec::new();
         let mut read: BTreeSet<(i64, String)> = BTreeSet::new();
@@ -988,6 +1018,8 @@ impl Library {
         if !dirs.is_subset(&read) {
             anyhow::bail!("the albums reach further than they were followed");
         }
+        // Here, not before the rows: `update_files` gives their new names ids as it reads them.
+        let facts = self.facts();
         let refs: Vec<(i64, &ServedRow)> = rows.iter().map(|(f, r)| (*f, r)).collect();
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -1167,7 +1199,13 @@ impl Library {
         }
         let covers = cat.cover_prints()?;
         let roots: HashMap<i64, &str> = roots_now.iter().map(|(f, r)| (*f, r.as_str())).collect();
-        self.rebuild_dirs(dirs, &mut |folder, dir| cat.served_rows_in(folder, dir), &roots, rules, &covers)
+        // No `build_from` came first: a retag can bring a name no build has met, and after a restart no id is kept yet.
+        let mut rows_of = |folder: i64, dir: &str| -> Result<Vec<ServedRow>> {
+            let rows = cat.served_rows_in(folder, dir)?;
+            self.credit(cat, rows.iter().map(|r| (folder, r)), rules)?;
+            Ok(rows)
+        };
+        self.rebuild_dirs(dirs, &mut rows_of, &roots, rules, &covers)
     }
 
     /// Where each catalogue folder was at the last build: (folder, path).
@@ -1383,7 +1421,16 @@ struct Facts {
     release_types: HashMap<String, Kept>,
     incomplete: HashMap<String, Whole>,
     overrides: HashMap<String, Overrides>,
+    artists: HashMap<String, i64>,
     kinds: Vec<(i64, Kind)>,
+}
+
+impl Facts {
+    /// An artist's id as served. `credit` gave every name one, so one without is a fault there: a build that went on
+    /// would serve someone under no id.
+    fn artist(&self, name: &str) -> Result<String> {
+        self.artists.get(&ids::artist_key(name)).map(|id| ids::artist(*id)).with_context(|| format!("{name} has no id"))
+    }
 }
 
 /// A file as built: its folder there, its album and its row's print.
@@ -1554,6 +1601,27 @@ fn row_copy_of(copies: &[Gathered]) -> usize {
 /// a build of some folders write the same one.
 fn written_first<'a>(s: &'a Song) -> (bool, i64, i64, &'a str) {
     (s.row.record != Some(s.record), s.record, s.folder, s.row.rel.as_str())
+}
+
+/// Every name these rows credit, as a song reads them. One song at a time: at a real library's size a list of them is not
+/// worth holding for this. A song's album artists are never settled to a name no song of that folder credits, so this holds
+/// what `one_album_per_folder` leaves too.
+fn credited_artists<'r>(rows: impl Iterator<Item = (i64, &'r ServedRow)>, rules: &Rules) -> BTreeSet<String> {
+    rows.filter(|(_, r)| r.track.is_some())
+        .flat_map(|(folder, r)| {
+            let s = song(r, folder, rules);
+            s.artists.into_iter().chain(s.album_artists)
+        })
+        .collect()
+}
+
+/// Stands in for the catalogue's artists in tests with no catalogue, as `with_records` does for records: a stable number from
+/// the name.
+#[cfg(test)]
+fn artist_number_in_tests(name: &str) -> i64 {
+    use md5::Digest;
+    let hash = md5::Md5::digest(ids::artist_key(name).as_bytes());
+    (u64::from_le_bytes(hash[..8].try_into().unwrap_or_default()) >> 2) as i64
 }
 
 /// Stands in for `assign_records` in tests with no catalogue: each group a record of its own, from a stable hash of it,
@@ -1744,7 +1812,7 @@ fn write_albums(
             ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
             ins_tri.execute(params![n, s.title])?;
             for (i, name) in s.artists.iter().enumerate() {
-                let aid = ids::artist(name);
+                let aid = facts.artist(name)?;
                 ins_artist.execute(params![id, aid, name, i as i64])?;
                 credited.insert(aid);
             }
@@ -1825,7 +1893,7 @@ fn write_albums(
         let dir = &row.copy.dir;
         let discs = songs.iter().filter_map(|s| s.row.first("discnumber").and_then(leading_number)).max().unwrap_or(1);
         let compilation = songs.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
-        let artist_id = ids::artist(&first.album_artists[0]);
+        let artist_id = facts.artist(&first.album_artists[0])?;
         // The art's id: the album's, with a fingerprint of its picture (see `art`).
         let root = roots.get(&first.folder).copied().unwrap_or("");
         let first_track = songs.iter().map(|s| &s.row.rel).min().map(|r| Path::new(root).join(r));
@@ -1883,7 +1951,7 @@ fn write_albums(
         ins_fts.execute(params![n, first.album, first.album_artist])?;
         ins_tri.execute(params![n, first.album])?;
         for (i, name) in first.album_artists.iter().enumerate() {
-            let aid = ids::artist(name);
+            let aid = facts.artist(name)?;
             let mbid = if i == 0 { first.row.first("musicbrainz_albumartistid") } else { None };
             ins_aa.execute(params![album_id, aid, name, i as i64, mbid])?;
             credited.insert(aid);
@@ -2139,6 +2207,7 @@ mod tests {
         let step = Library::open(None).unwrap();
         step.build(before, &rules).unwrap();
         facts(&step);
+        step.credit_in_tests(after, &rules);
         let n = step.update_rows(&with_records(after, &rules), &rules, &Covers::new()).unwrap();
         let whole = Library::open(None).unwrap();
         facts(&whole);
@@ -2310,6 +2379,101 @@ mod tests {
     fn build_now(lib: &Library, cat: &crate::catalogue::Catalogue) -> (bool, usize) {
         let (_, print) = lib.change(cat, &Rules::default()).unwrap();
         lib.build_from(cat, &Rules::default(), &print).unwrap()
+    }
+
+    /// A file's artist tags as a person's tagger leaves them, read back by the next pass.
+    fn credit(cat: &crate::catalogue::Catalogue, rel: &str, album: &str, artist: &str, title: &str) {
+        cat.tag_for_tests(0, rel, &[("album", album), ("albumartist", artist), ("artist", artist), ("title", title)]);
+    }
+
+    fn served_artists(lib: &Library) -> Vec<(String, String)> {
+        lib.db().prepare("SELECT id, name FROM artists ORDER BY name").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// An id for life (0.16): nothing a name goes through without becoming another name moves it. Spelt in capitals by a
+    /// tagger, gone from the library, back again: what the user data holds under it still finds them.
+    #[test]
+    fn an_artist_keeps_its_id_across_a_rename_of_nothing() {
+        let d = std::env::temp_dir().join(format!("cratarr-artist-for-life-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let cat = crate::catalogue::Catalogue::open(None, vec![d.clone()]).unwrap();
+        let lib = Library::open(None).unwrap();
+        add_files(&cat, &d, &[("A/01 a.flac", "Early", "One"), ("B/01 b.flac", "Later", "Two")]);
+        credit(&cat, "A/01 a.flac", "Early", "Salt Meridian", "One");
+        credit(&cat, "B/01 b.flac", "Later", "Orbit Lane", "Two");
+        build_now(&lib, &cat);
+        let id = cat.artist_of("Salt Meridian").unwrap().expect("an id, given by the build");
+        assert_eq!(id, cat.artist_of("salt meridian").unwrap().unwrap());
+        let served = ids::artist(id);
+        assert!(served.starts_with("ar-") && served[3..].parse::<i64>().is_ok(), "{served}");
+        assert!(served_artists(&lib).contains(&(served.clone(), "Salt Meridian".to_string())));
+
+        credit(&cat, "A/01 a.flac", "Early", "SALT MERIDIAN", "One");
+        build_now(&lib, &cat);
+        assert!(served_artists(&lib).contains(&(served.clone(), "SALT MERIDIAN".to_string())), "the same id, as the files now spell them");
+
+        credit(&cat, "A/01 a.flac", "Early", "Orbit Lane", "One");
+        build_now(&lib, &cat);
+        assert!(!served_artists(&lib).iter().any(|(a, _)| *a == served), "no file credits them");
+        credit(&cat, "A/01 a.flac", "Early", "Salt Meridian", "One");
+        build_now(&lib, &cat);
+        assert!(served_artists(&lib).contains(&(served, "Salt Meridian".to_string())), "back on their id");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A name first met in a build of some folders is given its id like any other, and what that build writes names it: songs,
+    /// the album's artist and the artist's own row all agree, as a whole build would have them.
+    #[test]
+    fn a_new_name_in_a_build_of_one_folder_is_served_by_its_id() {
+        let d = std::env::temp_dir().join(format!("cratarr-artist-partial-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        let cat = crate::catalogue::Catalogue::open(None, vec![d.clone()]).unwrap();
+        let lib = Library::open(None).unwrap();
+        add_files(&cat, &d, &[("A/01 a.flac", "Early", "One")]);
+        build_now(&lib, &cat);
+        add_files(&cat, &d, &[("A/01 a.flac", "Early", "One"), ("B/01 b.flac", "Later", "Two")]);
+        credit(&cat, "B/01 b.flac", "Later", "Orbit Lane", "Two");
+        let (whole, _) = build_now(&lib, &cat);
+        assert!(!whole, "a build of the folder that came");
+        let orbit = ids::artist(cat.artist_of("Orbit Lane").unwrap().unwrap());
+        let of = |sql: &str| -> String { lib.db().query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(of("SELECT artist_id FROM albums WHERE name = 'Later'"), orbit);
+        assert_eq!(of("SELECT artist_id FROM song_artists WHERE name = 'Orbit Lane'"), orbit);
+        assert_eq!(of("SELECT artist_id FROM album_artists WHERE name = 'Orbit Lane'"), orbit);
+        assert_eq!(of("SELECT id FROM artists WHERE name = 'Orbit Lane'"), orbit);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Cratarr's own write builds at once by `update_files`, with no `build_from` before it: after a restart no id has been
+    /// read yet, and a retag can bring a name no build has met. Either would stop the write from showing until the next pass.
+    #[test]
+    fn a_write_after_a_restart_finds_its_artists_and_gives_a_new_name_its_id() {
+        let d = std::env::temp_dir().join(format!("cratarr-artist-write-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let (root, file, rel) = (d.join("music"), d.join("library.sqlite"), "A/01 a.flac");
+        let cat = crate::catalogue::Catalogue::open(None, vec![root.clone()]).unwrap();
+        let lib = Library::open(Some(&file)).unwrap();
+        add_files(&cat, &root, &[(rel, "Early", "One")]);
+        build_now(&lib, &cat);
+        drop(lib);
+
+        let lib = Library::open(Some(&file)).unwrap();
+        let wrote = |lib: &Library| lib.update_files(&cat, &Rules::default(), &[root.join(rel)]).unwrap();
+        cat.tag_for_tests(0, rel, &[("album", "Early"), ("albumartist", "Artist"), ("title", "One again")]);
+        assert_eq!(wrote(&lib), 1, "a name built before");
+        credit(&cat, rel, "Early", "Orbit Lane", "One again");
+        assert_eq!(wrote(&lib), 1, "a name no build has met");
+        let orbit = ids::artist(cat.artist_of("Orbit Lane").unwrap().unwrap());
+        assert!(served_artists(&lib).contains(&(orbit, "Orbit Lane".to_string())));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// `build_from` gives every name its id: one without is a fault there, and must stop the write, not reach the lists.
+    #[test]
+    fn a_build_refuses_a_name_with_no_id() {
+        let facts = Library::open(None).unwrap().facts();
+        assert!(facts.artist("Nobody").unwrap_err().to_string().contains("Nobody"));
     }
 
     fn record_at(cat: &crate::catalogue::Catalogue, rel: &str) -> Option<i64> {
@@ -2541,6 +2705,7 @@ mod tests {
     fn same_as_whole_in(kinds: &[(i64, Kind)], before: &[FolderRows], after: &[FolderRows]) -> usize {
         let rules = Rules::default();
         let step = built_with(kinds, before);
+        step.credit_in_tests(after, &rules);
         let n = step.update_rows(&with_records(after, &rules), &rules, &Covers::new()).unwrap();
         let whole = built_with(kinds, after);
         let (a, b) = (dump(&step), dump(&whole));
@@ -2787,6 +2952,7 @@ mod tests {
         let mut rows = copy_rows(1, "A/Album", 5, "FLAC", 900);
         rows[1].record = None;
         let folders = [in_folder(0, rows)];
+        lib.credit_in_tests(&folders, &rules);
         lib.build_with(&folders, &rules, &Covers::new()).unwrap();
         assert_eq!(lib.counts().unwrap().0, 1);
         assert_eq!(one_number(&lib, "SELECT count(*) FROM copy_files"), 1);
@@ -2802,6 +2968,7 @@ mod tests {
         let covers = |at: i64, print: &str| Covers::from([((at, "A/Album".to_string()), print.to_string())]);
         let lib = Library::open(None).unwrap();
         lib.set_kinds(TWO_KEPT.to_vec());
+        lib.credit_in_tests(&folders, &rules);
         lib.build_with(&folders, &rules, &covers(1, "a")).unwrap();
         assert_eq!(lib.update_rows(&folders, &rules, &covers(1, "a")).unwrap(), 0);
         let both = Covers::from([((0, "A/Album".to_string()), "b".to_string()), ((1, "A/Album".to_string()), "a".to_string())]);
@@ -3219,7 +3386,7 @@ mod tests {
         let lib = Library::open(None).unwrap();
         lib.refresh(&sample(), &Rules::default()).unwrap();
         let homogenic: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
-        let (bjork, hunter) = (ids::artist("Björk"), ids::song(1));
+        let (bjork, hunter) = (ids::artist(artist_number_in_tests("Björk")), ids::song(1));
         let asked = [bjork.clone(), homogenic.clone(), hunter.clone(), "tr-999".to_string(), "ar-nobody".to_string(), "al-none".to_string(), "Björk".to_string()];
         let names = lib.names_of(&asked).unwrap();
         assert_eq!(names.len(), 3, "{names:?}");
@@ -3294,7 +3461,7 @@ mod tests {
             ],
         }];
         lib.refresh(&folders, &Rules::default()).unwrap();
-        let (own, on, songs) = lib.artist_works(&super::super::ids::artist("a")).unwrap();
+        let (own, on, songs) = lib.artist_works(&ids::artist(artist_number_in_tests("a"))).unwrap();
         let names = |l: &[crate::serve::api::Album]| l.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&own), ["New", "Old"]);
         assert_eq!(names(&on), ["Mix"], "credited on a track only");
@@ -3566,6 +3733,7 @@ mod tests {
             tag(&mut rows[2], "title", "Perpetual Dawn");
             tag(&mut rows[2], "artist", "Orbital");
         });
+        lib.credit_in_tests(&changed, &rules);
         lib.update_rows(&with_records(&changed, &rules), &rules, &Covers::new()).unwrap();
         tri_in_step(&lib);
         assert_eq!((tri_found(&lib, "songs_tri_fts", "littlefluffyclouds"), tri_found(&lib, "songs_tri_fts", "perpetualdawn")), (0, 1));
