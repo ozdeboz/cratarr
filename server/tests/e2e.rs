@@ -1517,7 +1517,10 @@ async fn a_records_fact_reaches_every_copy_and_its_undo_takes_it_out_end_to_end(
 async fn a_length_fix_stays_in_its_file_end_to_end() {
     let (s, root, music, second, _) = on_two_copies("length-copies", ["main", "main"], "second").await;
     let rel = format!("{SHORES}/01 Landing.flac");
-    let (track, other) = (second.join(&rel), music.join(&rel));
+    // By quality either can play, and on the copy that plays a fix by the track would find the same file.
+    let plays = s.read_in("Both Shores", &music).await["library"].as_str().unwrap().to_string();
+    let (fixed, playing) = if plays == music.to_string_lossy() { (&second, &music) } else { (&music, &second) };
+    let (track, other) = (fixed.join(&rel), playing.join(&rel));
     let (before, kept) = (std::fs::read(&track).unwrap(), std::fs::read(&other).unwrap());
 
     // What a decode leaves, put there by hand, as in the length fix above: on that file alone.
@@ -1525,7 +1528,7 @@ async fn a_length_fix_stays_in_its_file_end_to_end() {
     db.busy_timeout(Duration::from_secs(10)).unwrap();
     let heard = "INSERT INTO analysis (folder, rel, size, mtime, version, duration_secs, analysed_at)
                  SELECT f.folder, f.rel, f.size, f.mtime, 1, 1.0, 0 FROM files f JOIN folders d ON d.id = f.folder WHERE f.rel = ?1 AND d.path = ?2";
-    assert_eq!(db.execute(heard, [rel.as_str(), &second.to_string_lossy()]).unwrap(), 1);
+    assert_eq!(db.execute(heard, [rel.as_str(), &fixed.to_string_lossy()]).unwrap(), 1);
     drop(db);
 
     s.write_sheet("fix:files:sound-breaks").await;
