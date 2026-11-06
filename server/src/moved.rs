@@ -432,7 +432,7 @@ impl Moved {
         let mut report = Report::default();
         self.store(&data.join("crates.json"), "crates.json", &mut report, |v, walk| self.crates(v, walk))?;
         if let Ok(users) = std::fs::read_dir(data.join("users")) {
-            for user in users.flatten() {
+            for user in users.flatten().filter(|user| user.file_type().is_ok_and(|kind| kind.is_dir())) {
                 let name = format!("users/{}/crates.json", user.file_name().to_string_lossy());
                 self.store(&user.path().join("crates.json"), &name, &mut report, |v, walk| self.crates(v, walk))?;
             }
