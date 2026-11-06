@@ -22,7 +22,8 @@ use crate::serve::review::JOB;
 pub struct OldCopy {
     pub id: String,
     pub record: String,
-    /// The catalogue folder it was the id of: a row of 0.15 says which copy it is of by the id alone.
+    /// The catalogue folder of the copy it names: a row of 0.15 says which copy it is of by the id alone. For an id worked out, where
+    /// that copy lies now, not the place the id was worked out for.
     pub folder: i64,
 }
 

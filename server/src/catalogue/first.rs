@@ -113,12 +113,13 @@ fn note_albums(tx: &Connection, albums: &[AlbumCopy], records: &[Option<i64>], k
     // What names an album by an id it does not have now. A Keep left its plays under the id it had in Incoming (`data` section 10), a
     // copy kept in Music and gone left what went by Music's while the release waits in Incoming, and a folder's id was its place in a
     // sorted list, so a library that moved along left its rows under the place it had. They are found by working the id out for Music
-    // and for each Incoming folder, after every real id, so the album's own row stands over them.
+    // and for each Incoming folder, after every real id, so the album's own row stands over them. Each is of the copy there is, where
+    // it lies now: a row by the place it was worked out for would read on a copy nobody reviewed, or miss the one somebody did.
     let incoming: Vec<i64> = kinds.iter().filter(|(_, kind)| *kind == Kind::Incoming).map(|(folder, _)| *folder).collect();
     let after = albums.len() as i64;
     for (rank, a, record) in given() {
         for folder in std::iter::once(&0).chain(&incoming) {
-            id.execute(params![ids::album_at(&a.pid, *folder), record, folder, after + rank])?;
+            id.execute(params![ids::album_at(&a.pid, *folder), record, a.folder, after + rank])?;
         }
     }
     Ok(())
