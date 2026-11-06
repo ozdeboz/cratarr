@@ -170,6 +170,63 @@ mod tests {
         assert_ne!(album(&plain, "Björk", 0), album(&row(&[("album", "Homogenic"), ("date", "1998")]), "Björk", 0));
     }
 
+    /// The ids in `tests/fixtures/0.15` are written down, not made, as nothing here can run 0.15: each must be what 0.15 made
+    /// of the tags beside it, or the migration is proved on ids nobody ever had. The tables are the tag's, so what came after
+    /// must be missing and what the migration moves must hold a row.
+    #[test]
+    fn every_id_the_data_of_0_15_names_is_the_hash_of_its_tags() {
+        use std::collections::{BTreeMap, BTreeSet};
+        let (catalogue, userdata) = (include_str!("../../tests/fixtures/0.15/catalogue.sql"), include_str!("../../tests/fixtures/0.15/userdata.sql"));
+        let stores = [include_str!("../../tests/fixtures/0.15/crates.json"), include_str!("../../tests/fixtures/0.15/users/bob/crates.json")];
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(catalogue).unwrap();
+        db.execute_batch(userdata).unwrap();
+
+        let mut files: BTreeMap<(i64, String), ServedRow> = BTreeMap::new();
+        let mut st = db.prepare("SELECT folder, rel, name, value FROM tags ORDER BY folder, rel, n").unwrap();
+        let tags = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))).unwrap();
+        for tag in tags {
+            let (folder, rel, name, value) = tag.unwrap();
+            files.entry((folder, rel)).or_default().tags.push((name, value));
+        }
+        let (mut albums, mut artists) = (BTreeSet::new(), BTreeSet::new());
+        for ((folder, _), row) in &files {
+            let by = row.first("albumartist").unwrap();
+            albums.extend([album(row, by, *folder), album(row, by, 0)]);
+            artists.extend(row.all("artist").chain([by]).map(|n| format!("{ARTIST}{}", artist_hash(n))));
+        }
+        // A hash is 22 letters and digits: a shorter word that happens to hold the prefix is no id.
+        let named = |text: &str, prefix: &str| -> BTreeSet<String> {
+            let word = |c: char| c.is_ascii_alphanumeric();
+            let hashes = text.match_indices(prefix).filter(|(at, _)| !text[..*at].ends_with(word)).map(|(at, _)| &text[at..at + prefix.len() + text[at + prefix.len()..].chars().take_while(|c| word(*c)).count()]);
+            hashes.filter(|id| id.len() == prefix.len() + 22).map(str::to_string).collect()
+        };
+        for text in std::iter::once(userdata).chain(stores) {
+            let (album_ids, artist_ids) = (named(text, ALBUM), named(text, ARTIST));
+            assert!(!album_ids.is_empty() && !artist_ids.is_empty(), "the ids there are found");
+            assert!(album_ids.is_subset(&albums), "no such album: {:?}", album_ids.difference(&albums).collect::<Vec<_>>());
+            assert!(artist_ids.is_subset(&artists), "no such artist: {:?}", artist_ids.difference(&artists).collect::<Vec<_>>());
+        }
+
+        let tables: BTreeSet<String> = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        for later in ["records", "handovers", "migration_report", "playlist", "playlist_import", "playlist_item", "playlist_moved", "preference"] {
+            assert!(!tables.contains(later), "{later} came after 0.15");
+        }
+        let columns = |table: &str| -> BTreeSet<String> { db.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect() };
+        assert!(["record", "disc", "number"].iter().all(|c| !columns("tracks").contains(*c)) && !columns("folders").contains("home") && !columns("files").contains("came"));
+        let moved = [
+            "added", "album_review", "album_tags", "annotation", "record_overrides", "classical_marks", "album_matches", "album_complete", "intake_heard", "record_references",
+            "renumber_matched", "discogs_genres", "bandcamp_found", "request", "artist_person", "related_artists", "discography", "imported", "words", "words_asked", "discogs_facts",
+            "release_types", "change_at", "change_log", "bookmark", "plays", "scrobble_queue", "track_words", "app_queue", "visual_rating", "playlist_entry_id", "audiomuse", "source_ids",
+        ];
+        for table in moved {
+            assert!(db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get::<_, i64>(0)).unwrap() > 0, "{table} holds a row");
+        }
+        // A track retired before the migration has no file: the line and the plays on it are kept, missing.
+        let retired: i64 = db.query_row("SELECT count(*) FROM tracks WHERE retired_at IS NOT NULL AND id NOT IN (SELECT track FROM files)", [], |r| r.get(0)).unwrap();
+        assert_eq!(retired, 1);
+    }
+
     /// What a lost catalogue's floor is taken from: an id for life wherever it is written, and never a hash that begins
     /// with digits, or one album's name would lift every id by a number nobody chose.
     #[test]

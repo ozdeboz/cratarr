@@ -276,6 +276,49 @@ fn settings_0_15(data: &Path, folder: &str) {
     std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
 }
 
+/// A data folder as 0.15 left it over `--make-layout`'s files (`tests/fixtures/0.15`, written down from tag v0.15.0, as 0093
+/// keeps no binaries in git): its catalogue, so its track ids mean what its user data says they mean; its user data under
+/// 0.15's ids; each account's crates, playlists and settings. 0.15 had one Music folder, so the layout's second library is an
+/// Incoming there, and own music did not exist. The folders and each file's size and time are this run's: as they stand in
+/// the text, every file would read as changed.
+fn data_0_15(library: &Path, data: &Path) {
+    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/0.15");
+    let (music, incoming, second) = (library.join("music"), library.join("incoming"), library.join("second"));
+    let folders = [music.as_path(), incoming.as_path(), second.as_path()];
+    let text = |name: &str| {
+        let sql = std::fs::read_to_string(here.join(name)).unwrap();
+        let places = ["@music@", "@incoming@", "@second@"].into_iter().zip(folders);
+        format!("BEGIN;\n{}\nCOMMIT;", places.fold(sql, |sql, (name, folder)| sql.replace(name, &folder.to_string_lossy())))
+    };
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    db.execute_batch(&text("catalogue.sql")).unwrap();
+    for table in ["files", "cover_files"] {
+        let rows: Vec<(i64, String)> = db.prepare(&format!("SELECT folder, rel FROM {table}")).unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        for (folder, rel) in rows {
+            let meta = std::fs::metadata(folders[folder as usize].join(&rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+            db.execute(&format!("UPDATE {table} SET size = ?1, mtime = ?2 WHERE folder = ?3 AND rel = ?4"), rusqlite::params![meta.len() as i64, mtime, folder, rel]).unwrap();
+        }
+    }
+    drop(db);
+    rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap().execute_batch(&text("userdata.sql")).unwrap();
+    std::fs::create_dir_all(data.join("users/bob")).unwrap();
+    for file in ["crates.json", "users/bob/crates.json", "subsonic-users.json"] {
+        std::fs::copy(here.join(file), data.join(file)).unwrap();
+    }
+    std::fs::create_dir_all(music.join(".playlists/ann")).unwrap();
+    for list in ["Mix.m3u", "ann/Evening.m3u"] {
+        std::fs::copy(here.join("playlists").join(list), music.join(".playlists").join(list)).unwrap();
+    }
+    let (music, incoming, second) = (music.to_string_lossy(), incoming.to_string_lossy(), second.to_string_lossy());
+    let settings = json!({
+        "version": 3,
+        "music_folder": music,
+        "sources": [{ "id": "cratarr", "kind": "cratarr", "enabled": true, "libraries": { "music": [music], "incoming": [incoming, second] }, "values": { "folders": [music, incoming, second] } }],
+    });
+    std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+}
+
 /// Settings as 0.16 writes them: version 4, these libraries in order, each (folder, kind), and the own-music folder.
 fn settings(data: &Path, libraries: &[(&Path, &str)], own_music: &Path) {
     let folders: Vec<String> = libraries.iter().map(|(folder, _)| folder.to_string_lossy().to_string()).collect();
@@ -406,6 +449,56 @@ async fn the_playlists_of_0_15_come_into_the_database_end_to_end() {
     let view = s.get("/api/state").await;
     let list = view["playlists"].as_array().cloned().unwrap_or_default();
     assert_eq!(list.iter().filter(|p| p["name"] == "Mix").count(), 1);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// What the migration's run stands on (decision 0101 point 28): 0.15's data opens on what is built now, its files found as
+/// they were left and nothing taken for new. A fixture whose rows did not fit its files would give them fresh tracks, and
+/// `tr-<n>` in the user data would point at nothing, so the proof on it would prove nothing (`ready` E10).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_data_of_0_15_opens_on_its_own_tracks_end_to_end() {
+    let root = temp("data-0-15");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    data_0_15(&library, &data);
+    let tracks = |db: &rusqlite::Connection| -> Vec<(i64, String, i64)> {
+        db.prepare("SELECT folder, rel, track FROM files ORDER BY folder, rel").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+    };
+    let left = tracks(&rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap());
+    assert_eq!(left.len(), audio_under(&library.join("music")).len() + audio_under(&library.join("incoming")).len() + audio_under(&library.join("second")).len(), "a row for every file");
+
+    let s = Server::start(&data).await;
+    let ann = s.sign_in("ann", "ann's password").await;
+    ann.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    // Every library read: the albums' titles, 20 of the layout's 22, as its two accounts' own have no place in 0.15.
+    let titles = |albums: Vec<Value>| albums.iter().filter_map(|a| a["title"].as_str().map(str::to_string)).collect::<std::collections::BTreeSet<String>>();
+    s.until("every library read", Duration::from_secs(180), || async { titles(ann.albums().await).len() == 20 }).await;
+
+    // Its tracks are the ones it left, every file on the id its user data names.
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    assert_eq!(tracks(&db), left, "nothing new, nothing moved");
+    assert_eq!(db.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), left.len() as i64 + 1, "and the retired one");
+    let tide = ann.albums().await.into_iter().find(|a| a["title"] == "Tide Tables").unwrap();
+    let rows = ann.get(&format!("/api/albums/cratarr/{}", tide["id"].as_str().unwrap())).await;
+    let slack = left.iter().find(|(_, rel, _)| rel.ends_with("Slack Water.flac")).unwrap().2;
+    assert!(rows["rows"].as_array().unwrap().iter().any(|r| r["id"] == format!("tr-{slack}") && r["name"] == "Slack Water"), "{rows}");
+
+    // What is not a table came with it: the settings' roles, each account's crates, the playlists with their gone line.
+    let report = ann.get("/api/admin/migration").await;
+    assert_eq!(report["parts"]["libraries"]["sources"]["cratarr"], json!({ "main": 1, "incoming": 2 }));
+    assert_eq!((report["parts"]["playlists"]["playlists"].as_u64(), report["parts"]["playlists"]["lines"].as_u64()), (Some(2), Some(4)), "{report}");
+    let crates = ann.get("/api/crates").await;
+    assert!(crates.as_array().unwrap().iter().any(|c| c["name"] == "Like both shores"), "{crates}");
+    let bob = s.sign_in("bob", "bob's password").await;
+    let crates = bob.get("/api/crates").await;
+    assert!(crates.as_array().unwrap().iter().any(|c| c["name"] == "Like the rooms"), "{crates}");
+    let state = ann.get("/api/state").await;
+    let mix = state["playlists"].as_array().unwrap().iter().find(|p| p["name"] == "Mix").cloned().expect("Mix brought in");
+    let lines = ann.get(&format!("/api/playlists/{}/rows", mix["id"].as_str().unwrap())).await;
+    assert_eq!(lines["rows"].as_array().unwrap().iter().map(|r| r["missing"].as_bool().unwrap()).collect::<Vec<_>>(), [false, false, true]);
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
