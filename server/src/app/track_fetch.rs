@@ -181,7 +181,7 @@ fn release_id_of(served: &crate::serve::Serve, album: &str) -> Result<Option<Str
     if let Some(id) = found.and_then(|i| i.release_id) {
         return Ok(Some(id));
     }
-    if let Some(own) = served.library.album_place(album)?.and_then(|p| p.2).filter(|m| super::discogs::is_mbid(m)) {
+    if let Some(own) = served.library.album_names(album)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m)) {
         return Ok(Some(own));
     }
     Ok(served
@@ -906,7 +906,7 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
     let staged = staged.context("That track is not staged")?;
     let s = served()?;
     let status = super::file_runs::made(app, move || {
-        let (_, _, _, artist, title) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
+        let (_, artist, title) = s.library.album_names(&wanted.album)?.context("No such album in Cratarr's own library")?;
         let replaced = match &wanted.replace {
             Some(id) => super::renumber::tracks_of(&wanted.album)?.0.into_iter().find(|t| &t.id == id).map(|t| t.title),
             None => None,
@@ -943,7 +943,7 @@ pub async fn add(app: &std::sync::Arc<super::App>, fetch: &str) -> Result<super:
 
 /// Places a passed track in its album: where it went, and what its Undo needs (`undo_at`).
 fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Result<(PathBuf, PathBuf)> {
-    let (folder, dir, ..) = s.library.album_place(&wanted.album)?.context("No such album in Cratarr's own library")?;
+    let (folder, dir) = s.library.copies_of(&wanted.album)?.into_iter().next().context("No such album in Cratarr's own library")?;
     let root = PathBuf::from(s.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?);
     let (tracks, ..) = super::renumber::tracks_of(&wanted.album)?;
     let t = &wanted.track;

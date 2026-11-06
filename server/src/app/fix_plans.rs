@@ -83,7 +83,7 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
     for f in fixes {
         // A cover's: its folder's picture and its tracks', fetched once ticked (`apply`).
         if f.field == "cover" {
-            let Some((_, _, _, artist, title)) = served.library.album_place(&f.album)? else { continue };
+            let Some((_, artist, title)) = served.library.album_names(&f.album)? else { continue };
             if !p.records.iter().any(|r| r.album == f.album) {
                 p.records.push(RunRecord { album: f.album.clone(), title, artist });
             }
@@ -104,7 +104,7 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
         if super::length_fixes::FIELDS.contains(&f.field) {
             if let Some(w) = super::length_fixes::file_write(&served, f)? {
                 if !p.records.iter().any(|r| r.album == w.album)
-                    && let Some((_, _, _, artist, title)) = served.library.album_place(&w.album)?
+                    && let Some((_, artist, title)) = served.library.album_names(&w.album)?
                 {
                     p.records.push(RunRecord { album: w.album.clone(), title, artist });
                 }
@@ -119,7 +119,7 @@ fn proposal(kind: &str, fixes: &[Fix]) -> Result<(Proposal, Notes)> {
         }
     }
     for (album, fixes) in by_album {
-        let Some((_, _, _, artist, title)) = served.library.album_place(&album)? else { continue };
+        let Some((_, artist, title)) = served.library.album_names(&album)? else { continue };
         let names: HashMap<std::path::PathBuf, String> = super::renumber::tracks_of(&album).map(|t| t.0.into_iter().map(|t| (t.path, t.title)).collect()).unwrap_or_default();
         // Per file, every fix's tags, in the order the fixes come.
         let mut files: Vec<(std::path::PathBuf, Vec<(String, Vec<String>)>, Vec<(String, String)>)> = Vec::new();

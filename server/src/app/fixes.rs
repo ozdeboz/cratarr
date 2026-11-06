@@ -154,7 +154,7 @@ fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a
     let years = served.userdata.original_years()?;
     let mut out = Vec::new();
     for album in albums {
-        let Some((_, _, release, _, _)) = served.library.album_place(album)? else { continue };
+        let Some((release, _, _)) = served.library.album_names(album)? else { continue };
         // MusicBrainz's first release date, else Discogs' master's year (0.9.8).
         let (year, source, certainty, why) = match release.as_ref().and_then(|r| years.get(r)) {
             Some(y) => (*y, "MusicBrainz", "certain", "Its release's first release date on MusicBrainz"),

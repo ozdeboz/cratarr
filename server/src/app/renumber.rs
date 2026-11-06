@@ -339,22 +339,25 @@ async fn discogs(rg: Option<&str>, artist: &str, title: &str, tell: &(dyn Fn(u64
 
 pub(super) fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let (folder, _, mbid, artist, name) = served.library.album_place(album)?.context("No such album in Cratarr's own library")?;
-    let root = served.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+    let (mbid, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
+    let roots = served.library.roots();
     let tracks = served
         .library
         .album_tracks(album)?
         .into_iter()
-        .map(|(id, rel, title, ms, disc, track)| Track {
-            id,
-            file: Path::new(&rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.clone()),
-            path: Path::new(&root).join(&rel),
-            title,
-            secs: (ms / 1000) as u32,
-            disc,
-            track,
+        .map(|(id, folder, rel, title, ms, disc, track)| {
+            let root = roots.iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
+            Ok(Track {
+                id,
+                file: Path::new(&rel).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| rel.clone()),
+                path: Path::new(root).join(&rel),
+                title,
+                secs: (ms / 1000) as u32,
+                disc,
+                track,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok((tracks, mbid.filter(|m| super::discogs::is_mbid(m)), artist, name))
 }
 

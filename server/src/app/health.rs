@@ -622,12 +622,12 @@ impl App {
         if let Some(served) = self.served.clone().filter(|_| source == crate::source::cratarr::KIND.id) {
             let (c, id) = (self.library.catalogue(), album.to_string());
             wrong = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(String, Item)>> {
-                let Some((folder, ..)) = served.library.album_place(&id)? else { return Ok(Vec::new()) };
+                let Some((folder, _)) = served.library.copies_of(&id)?.into_iter().next() else { return Ok(Vec::new()) };
                 let tracks = served.library.album_tracks(&id)?;
-                let rels: Vec<String> = tracks.iter().map(|t| t.1.clone()).collect();
+                let rels: Vec<String> = tracks.iter().map(|t| t.2.clone()).collect();
                 let mut out = Vec::new();
                 for p in c.problems_in(folder, &rels)? {
-                    let Some((song, _, title, ..)) = tracks.iter().find(|t| t.1 == p.rel) else { continue };
+                    let Some((song, _, _, title, ..)) = tracks.iter().find(|t| t.2 == p.rel) else { continue };
                     let file = p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string();
                     let item = Item {
                         title: title.clone(),
@@ -750,7 +750,7 @@ impl App {
             let items = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
                 let mut items = Vec::new();
                 for a in &ruled {
-                    if let Some((_, _, _, artist, name)) = s.library.album_place(a)? {
+                    if let Some((_, artist, name)) = s.library.album_names(a)? {
                         items.push(Item { title: name, line: Some(artist), album: Some((crate::source::cratarr::KIND.id.to_string(), a.clone())), ..Item::default() });
                     }
                 }
@@ -774,7 +774,7 @@ impl App {
             for (album, json) in s.userdata.albums_incomplete()? {
                 let Ok(i) = serde_json::from_str::<super::incomplete::Incomplete>(&json) else { continue };
                 // One the library no longer has is left out.
-                let Some((_, _, _, artist, name)) = s.library.album_place(&album)? else { continue };
+                let Some((_, artist, name)) = s.library.album_names(&album)? else { continue };
                 found.push((album, name, artist, i));
             }
             // Gaps in the numbers where no release was held against the album (no MusicBrainz id, no match yet).

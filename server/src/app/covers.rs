@@ -59,7 +59,8 @@ struct Place {
 
 fn place(album: &str) -> Result<Place> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-    let (folder, dir, release, artist, name) = served.library.album_place(album)?.context("No such album in Cratarr's own library")?;
+    let (release, artist, name) = served.library.album_names(album)?.context("No such album in Cratarr's own library")?;
+    let (folder, dir) = served.library.copies_of(album)?.into_iter().next().context("No such album in Cratarr's own library")?;
     let root = served.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
     Ok(Place { dir: Path::new(&root).join(dir), release: release.filter(|r| super::discogs::is_mbid(r)), artist, name })
 }
@@ -313,7 +314,7 @@ pub async fn run(app: &std::sync::Arc<super::App>, album: &str, url: Option<&str
     let a = album.to_string();
     let p = tokio::task::spawn_blocking(move || -> Result<super::file_runs::Proposal> {
         let served = crate::serve::instance().context("Cratarr's own library is not open")?;
-        let (_, _, _, artist, title) = served.library.album_place(&a)?.context("No such album in Cratarr's own library")?;
+        let (_, artist, title) = served.library.album_names(&a)?.context("No such album in Cratarr's own library")?;
         let (keep, said) = prepare(&a, &data)?;
         let had = crate::serve::art::cover_file(&place(&a)?.dir).map_or("none".to_string(), |_| "its cover".to_string());
         Ok(super::file_runs::Proposal {

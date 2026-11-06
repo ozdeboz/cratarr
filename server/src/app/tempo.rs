@@ -87,7 +87,7 @@ pub(super) fn proposal(cat: &crate::catalogue::Catalogue, ids: &[String], how: A
         }
         let Some((_, _, album, title)) = served.library.song_file(id)? else { continue };
         if !p.records.iter().any(|r| r.album == album)
-            && let Some((_, _, _, artist, name)) = served.library.album_place(&album)?
+            && let Some((_, artist, name)) = served.library.album_names(&album)?
         {
             p.records.push(crate::journal::RunRecord { album: album.clone(), title: name, artist });
         }

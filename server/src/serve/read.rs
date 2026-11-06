@@ -777,20 +777,20 @@ impl Library {
     /// The album in a catalogue folder's folder (`dir`), by its id (0.9.5: Replace shows its cover).
     pub fn album_in(&self, folder: i64, dir: &str) -> Result<Option<String>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT id FROM albums WHERE folder = ?1 AND dir = ?2 ORDER BY n LIMIT 1")?;
+        let mut st = db.prepare_cached("SELECT a.id FROM copies c JOIN albums a ON a.id = c.album WHERE c.folder = ?1 AND c.dir = ?2 ORDER BY a.n LIMIT 1")?;
         Ok(st.query_map(rusqlite::params![folder, dir], |r| r.get::<_, String>(0))?.next().transpose()?)
     }
 
-    /// An album's tracks for Renumber (0.9.6): (song id, path in its catalogue folder, title, length in ms, disc, track),
-    /// in the album's order.
+    /// An album's tracks for Renumber (0.9.6): (song id, its catalogue folder, path in it, title, length in ms, disc,
+    /// track), in the album's order. Each with its own folder: a path means nothing beside another row's.
     #[allow(clippy::type_complexity)]
-    pub fn album_tracks(&self, album: &str) -> Result<Vec<(String, String, String, u64, Option<u32>, Option<u32>)>> {
+    pub fn album_tracks(&self, album: &str) -> Result<Vec<(String, i64, String, String, u64, Option<u32>, Option<u32>)>> {
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT id, rel, title, coalesce(duration_ms, 0), disc_no, track_no FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no, rel",
+            "SELECT id, folder, rel, title, coalesce(duration_ms, 0), disc_no, track_no FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no, rel",
         )?;
         let rows = st.query_map([album], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?.max(0) as u64, r.get::<_, Option<i64>>(4)?.map(|d| d.max(0) as u32), r.get::<_, Option<i64>>(5)?.map(|t| t.max(0) as u32)))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, i64>(4)?.max(0) as u64, r.get::<_, Option<i64>>(5)?.map(|d| d.max(0) as u32), r.get::<_, Option<i64>>(6)?.map(|t| t.max(0) as u32)))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -831,9 +831,6 @@ impl Library {
         Ok(out)
     }
 
-    /// An album's place: its catalogue folder and folder in it, its MusicBrainz release, artist and name (0.9.5: its
-    /// cover changed by hand).
-    #[allow(clippy::type_complexity)]
     /// A song's file and album (0.9.14, Health's fixes): its folder, its path in it, its album's id and its title.
     pub fn song_file(&self, id: &str) -> Result<Option<(i64, String, String, String)>> {
         let db = self.db();
@@ -848,10 +845,19 @@ impl Library {
         Ok(st.query_map(rusqlite::params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.next().transpose()?)
     }
 
-    pub fn album_place(&self, id: &str) -> Result<Option<(i64, String, Option<String>, String, String)>> {
+    /// An album's MusicBrainz release, artist and name (0.9.5: its cover changed by hand).
+    pub fn album_names(&self, id: &str) -> Result<Option<(Option<String>, String, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT folder, dir, mbid, artist, name FROM albums WHERE id = ?1")?;
-        Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.next().transpose()?)
+        let mut st = db.prepare_cached("SELECT mbid, artist, name FROM albums WHERE id = ?1")?;
+        Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.next().transpose()?)
+    }
+
+    /// An album's copies: each one's catalogue folder and folder in it, lowest catalogue folder first; none for an album
+    /// not in the library.
+    pub fn copies_of(&self, id: &str) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT folder, dir FROM copies WHERE album = ?1 ORDER BY folder, dir")?;
+        Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Every album's id, Music-form id, artist id and the files' genres (0.9.7: the library's words, `app::words`).
@@ -906,12 +912,17 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Each album's catalogue folder, by its id (the libraries switched on, the owner 2026-11-02).
-    pub fn album_folders(&self) -> Result<HashMap<String, i64>> {
+    /// Each album's catalogue folders, by its id, one for each of its copies (the libraries switched on, the owner
+    /// 2026-11-02).
+    pub fn album_folders(&self) -> Result<HashMap<String, Vec<i64>>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, folder FROM albums")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let mut st = db.prepare("SELECT album, folder FROM copies")?;
+        let mut out: HashMap<String, Vec<i64>> = HashMap::new();
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            let (album, folder) = row?;
+            out.entry(album).or_default().push(folder);
+        }
+        Ok(out)
     }
 
     /// Each song's album (0.9.7: a file's words are its album's).
@@ -1105,21 +1116,29 @@ impl Library {
         Ok(albums)
     }
 
-    /// The albums of one catalogue folder, newest first, at most `limit`, with what a source's album listing needs:
-    /// (album, its folder relative to the catalogue folder, format, lowest bitrate, length in seconds).
+    /// The albums of one catalogue folder, newest first, at most `limit`, with what a source's album listing needs: an
+    /// entry for each of its copies there, (album, the copy's folder relative to the catalogue folder, format, lowest
+    /// bitrate, length in seconds).
     #[allow(clippy::type_complexity)]
     pub fn albums_in(&self, folder: i64, limit: usize) -> Result<Vec<(Album, String, Option<String>, Option<u32>, Option<f64>)>> {
         let db = self.db();
-        let ns = numbers(&db, "SELECT n FROM albums WHERE folder = ?1 ORDER BY created DESC, n LIMIT ?2", &[&folder, &(limit as i64)])?;
+        let ns = numbers(
+            &db,
+            "SELECT n FROM albums a WHERE EXISTS (SELECT 1 FROM copies c WHERE c.album = a.id AND c.folder = ?1) ORDER BY created DESC, n LIMIT ?2",
+            &[&folder, &(limit as i64)],
+        )?;
         let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
         self.album_artists(&db, &mut albums)?;
-        let mut st = db.prepare_cached(&format!("SELECT dir, format, min_kbps, {ALBUM_LENGTH} FROM albums a WHERE a.id = ?1"))?;
+        let mut st = db.prepare_cached(&format!("SELECT c.dir, c.format, c.min_kbps, {ALBUM_LENGTH} FROM copies c JOIN albums a ON a.id = c.album WHERE c.album = ?1 AND c.folder = ?2 ORDER BY c.dir"))?;
         let mut out = Vec::with_capacity(albums.len());
         for a in albums {
-            let (dir, format, kbps, ms) = st.query_row([&a.id], |r| {
+            let copies = st.query_map(rusqlite::params![a.id, folder], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<u32>>(2)?, r.get::<_, Option<i64>>(3)?))
             })?;
-            out.push((a, dir, format, kbps, ms.map(|ms| ms as f64 / 1000.0)));
+            for copy in copies.collect::<rusqlite::Result<Vec<_>>>()? {
+                let (dir, format, kbps, ms) = copy;
+                out.push((a.clone(), dir, format, kbps, ms.map(|ms| ms as f64 / 1000.0)));
+            }
         }
         Ok(out)
     }
@@ -1187,8 +1206,6 @@ impl Library {
         Ok(st.query_map([song], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
     }
 
-    /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
-    /// the catalogue folder).
     /// Every album's cover stamp (0.9.7): its art's fingerprint, from its cover id (`<album>_<print>`); an album
     /// without a cover has none.
     pub fn cover_stamps(&self) -> Result<std::collections::HashMap<String, String>> {
@@ -1205,21 +1222,18 @@ impl Library {
         Ok(out)
     }
 
+    /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
+    /// the catalogue folder).
     pub fn album_art(&self, album: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT folder, dir, cover FROM albums WHERE id = ?1")?;
-        let found = st.query_map([album], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?.next().transpose()?;
-        let Some((folder, dir, cover)) = found else { return Ok(None) };
-        let mut first = db.prepare_cached("SELECT rel FROM songs WHERE album_id = ?1 ORDER BY rel LIMIT 1")?;
-        let rel = first.query_map([album], |r| r.get::<_, String>(0))?.next().transpose()?;
-        Ok(Some((folder, dir, cover, rel)))
-    }
-
-    /// An album's folder: (catalogue folder, path in it).
-    pub fn album_dir(&self, album: &str) -> Result<Option<(i64, String)>> {
-        let db = self.db();
-        let mut st = db.prepare_cached("SELECT folder, dir FROM albums WHERE id = ?1")?;
-        Ok(st.query_map([album], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
+        let mut st = db.prepare_cached("SELECT cover FROM albums WHERE id = ?1")?;
+        let Some(cover) = st.query_map([album], |r| r.get::<_, Option<String>>(0))?.next().transpose()? else { return Ok(None) };
+        // Folder and path from one row, and the copy from that folder: a path means nothing beside another row's folder.
+        let mut first = db.prepare_cached("SELECT folder, rel FROM songs WHERE album_id = ?1 ORDER BY rel LIMIT 1")?;
+        let Some((folder, rel)) = first.query_map([album], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?.next().transpose()? else { return Ok(None) };
+        let mut copy = db.prepare_cached("SELECT dir FROM copies WHERE album = ?1 AND folder = ?2 ORDER BY dir LIMIT 1")?;
+        let Some(dir) = copy.query_map(rusqlite::params![album, folder], |r| r.get::<_, String>(0))?.next().transpose()? else { return Ok(None) };
+        Ok(Some((folder, dir, cover, Some(rel))))
     }
 
     /// What a player reports about a song in Cratarr's ids (the pushed player state, decision 0031): the song id, its
@@ -1249,11 +1263,19 @@ impl Library {
         Ok(Some((pid, album, artists)))
     }
 
-    /// Every album's folder: (id, catalogue folder, path in it), to find an album by the folder a media server names.
+    /// Every copy's folder: (album id, catalogue folder, path in it), to find an album by the folder a media server names.
     pub fn album_places(&self) -> Result<Vec<(String, i64, String)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT id, folder, dir FROM albums")?;
+        let mut st = db.prepare("SELECT album, folder, dir FROM copies")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every album's id, in the library's order.
+    pub fn album_ids(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id FROM albums ORDER BY n")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

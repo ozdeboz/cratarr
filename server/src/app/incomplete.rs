@@ -120,7 +120,7 @@ pub async fn pass(served: &std::sync::Arc<crate::serve::Serve>, http: &reqwest::
             if at.is_some_and(|at| now - at < AGAIN) || failed(|f| f.get(&l.id).is_some_and(|t| now - t < FAILED_WAIT)) {
                 continue;
             }
-            let own = s.library.album_place(&l.id)?.and_then(|p| p.2).filter(|m| super::discogs::is_mbid(m));
+            let own = s.library.album_names(&l.id)?.and_then(|p| p.0).filter(|m| super::discogs::is_mbid(m));
             let release = match own {
                 Some(r) => Some(r),
                 None => s.userdata.album_matches(std::slice::from_ref(&l.id))?.remove(&l.id).and_then(|(_, j)| j).and_then(|j| serde_json::from_str::<super::matching::Match>(&j).ok()).map(|m| m.release),

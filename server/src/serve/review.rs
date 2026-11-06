@@ -65,7 +65,7 @@ async fn find(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String, St
     tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
         let base = s.library.album_base(&id)?.unwrap_or_else(|| id.clone());
-        let Some((folder, dir)) = s.library.album_dir(&id)? else { return Ok(None) };
+        let Some((folder, dir)) = s.library.copies_of(&id)?.into_iter().next() else { return Ok(None) };
         Ok(Some((album.name, album.artist, base, folder, dir)))
     })
     .await

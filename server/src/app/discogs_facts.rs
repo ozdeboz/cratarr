@@ -73,16 +73,16 @@ fn label_names(labels: &[super::discogs::Label]) -> Vec<String> {
 /// its artist and name).
 pub async fn album(served: &Arc<crate::serve::Serve>, album: &str) -> Result<Option<AlbumFacts>> {
     let (s, a) = (served.clone(), album.to_string());
-    let (subject, kept, place) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let (subject, kept, names) = tokio::task::spawn_blocking(move || -> Result<_> {
         let subject = album_subject(&s, &a)?;
-        Ok((subject.clone(), s.userdata.discogs_facts(&subject)?, s.library.album_place(&a)?))
+        Ok((subject.clone(), s.userdata.discogs_facts(&subject)?, s.library.album_names(&a)?))
     })
     .await??;
     let now = super::moment::now_secs();
     if !due(kept.as_ref(), now) {
         return Ok(parse(kept));
     }
-    let Some((_, _, release, artist, name)) = place else { return Ok(None) };
+    let Some((release, artist, name)) = names else { return Ok(None) };
     let group = match release.filter(|r| super::discogs::is_mbid(r)) {
         Some(r) => super::discogs::release_group_of(&super::discover::http()?, &r).await.ok().flatten(),
         None => None,

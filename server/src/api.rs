@@ -1027,7 +1027,7 @@ async fn classical_composers(ctx: Ctx, RawQuery(raw): RawQuery) -> Result<Json<V
         return Ok(Json(ix.composers.clone()));
     }
     let folders = tokio::task::spawn_blocking(move || served.library.album_folders()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?.map_err(ToggleError::from)?;
-    let on = |album: &String| folders.get(album).is_none_or(|f| !off.contains(f));
+    let on = |album: &String| folders.get(album).is_none_or(|on| on.iter().any(|f| !off.contains(f)));
     let composers = ix
         .composers
         .iter()
