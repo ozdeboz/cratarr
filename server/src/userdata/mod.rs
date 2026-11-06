@@ -56,8 +56,9 @@ CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, o
 -- The 0.16 first start's migration report (decision 0101's one-way migration), one row per part (`playlists`, `tracks`,
 -- `records`, `libraries`): when it ran (epoch s), and what it found as JSON (`put_migration_part`).
 CREATE TABLE IF NOT EXISTS migration_report (part TEXT PRIMARY KEY, at INTEGER NOT NULL, report TEXT NOT NULL) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
-  name TEXT NOT NULL, album_artist TEXT NOT NULL);
+-- What was said of a copy that waited in Incoming: `folder` is its catalogue folder, -1 from before records had copies.
+CREATE TABLE IF NOT EXISTS album_review (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
+  name TEXT NOT NULL, album_artist TEXT NOT NULL, PRIMARY KEY (album, folder));
 CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
 CREATE TABLE IF NOT EXISTS imported (
   account TEXT NOT NULL, source TEXT NOT NULL, server_user TEXT NOT NULL, kind TEXT NOT NULL, item TEXT NOT NULL,
@@ -429,6 +430,8 @@ pub struct Rating {
 pub struct Review {
     /// The album id it was asked by (its Incoming id).
     pub album: String,
+    /// The catalogue folder of the copy that waited: a later copy of the record, elsewhere, is not reviewed by this (Q24).
+    pub folder: i64,
     /// Its Music-form id (see `serve::ids::album`), the same before and after a Keep.
     pub base: String,
     /// "promoted" or "rejected".
@@ -557,6 +560,28 @@ fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
 }
 
 const SNAPSHOT_COLUMNS: &str = "id, name, settings, created, picture";
+
+/// The `folder` of what was kept by record before a record had copies: it goes for every copy.
+const NO_FOLDER: i64 = -1;
+
+/// Reviews from before a record had copies: by album alone, the key a table cannot change in place. Each stands for its
+/// whole record (`NO_FOLDER`). Safe to repeat.
+fn add_review_folder(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('album_review') WHERE name = 'folder'")?.exists([])?;
+    if !has {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE album_review RENAME TO album_review_by_album;
+             CREATE TABLE album_review (album TEXT NOT NULL, folder INTEGER NOT NULL DEFAULT -1, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
+               name TEXT NOT NULL, album_artist TEXT NOT NULL, PRIMARY KEY (album, folder));
+             INSERT INTO album_review (album, base, state, at, undo, name, album_artist) SELECT album, base, state, at, undo, name, album_artist FROM album_review_by_album;
+             DROP TABLE album_review_by_album;
+             CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
+             COMMIT;",
+        )?;
+    }
+    Ok(())
+}
 
 /// Listening services from before they could be switched off: on. Safe to repeat.
 fn add_scrobble_off(conn: &Connection) -> Result<()> {
@@ -716,6 +741,7 @@ impl UserData {
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
+        add_review_folder(&conn).context("keeping reviews by the copy that waited")?;
         conn.execute_batch(scrobbles::SCHEMA).context("keeping the plays devices hand over")?;
         scrobbles::add_named(&conn).context("queueing plays the library does not know")?;
         add_answer_names(&conn)?;
@@ -1897,20 +1923,25 @@ impl UserData {
         Ok(out)
     }
 
-    /// An album's review (promoted or rejected from Incoming) as asked by its id, and the undo key of what was done.
-    pub fn review(&self, album: &str) -> Result<Option<Review>> {
+    /// An album's review (promoted or rejected from Incoming) as asked by its id, and the undo key of what was done: of its
+    /// copy waiting in catalogue folder `folder`, or with none waiting the last said of it. One from before copies goes for any.
+    pub fn review(&self, album: &str, folder: Option<i64>) -> Result<Option<Review>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT album, base, state, at, undo, name, album_artist FROM album_review WHERE album = ?1 OR base = ?1 ORDER BY at DESC LIMIT 1")?;
+        let mut st = db.prepare_cached(&format!(
+            "SELECT album, folder, base, state, at, undo, name, album_artist FROM album_review
+             WHERE (album = ?1 OR base = ?1) AND (?2 IS NULL OR folder = ?2 OR folder = {NO_FOLDER}) ORDER BY at DESC LIMIT 1"
+        ))?;
         Ok(st
-            .query_map([album], |r| {
+            .query_map(params![album, folder], |r| {
                 Ok(Review {
                     album: r.get(0)?,
-                    base: r.get(1)?,
-                    state: r.get(2)?,
-                    at: r.get(3)?,
-                    undo: r.get(4)?,
-                    name: r.get(5)?,
-                    album_artist: r.get(6)?,
+                    folder: r.get(1)?,
+                    base: r.get(2)?,
+                    state: r.get(3)?,
+                    at: r.get(4)?,
+                    undo: r.get(5)?,
+                    name: r.get(6)?,
+                    album_artist: r.get(7)?,
                 })
             })?
             .next()
@@ -1919,15 +1950,15 @@ impl UserData {
 
     pub fn set_review(&self, r: &Review) -> Result<()> {
         self.db().execute(
-            "INSERT OR REPLACE INTO album_review (album, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![r.album, r.base, r.state, r.at, r.undo, r.name, r.album_artist],
+            "INSERT OR REPLACE INTO album_review (album, folder, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![r.album, r.folder, r.base, r.state, r.at, r.undo, r.name, r.album_artist],
         )?;
         Ok(())
     }
 
     /// Back to unreviewed.
-    pub fn clear_review(&self, album: &str) -> Result<()> {
-        self.db().execute("DELETE FROM album_review WHERE album = ?1", [album])?;
+    pub fn clear_review(&self, album: &str, folder: i64) -> Result<()> {
+        self.db().execute("DELETE FROM album_review WHERE album = ?1 AND folder = ?2", params![album, folder])?;
         Ok(())
     }
 
@@ -2851,5 +2882,52 @@ mod tests {
         assert_eq!(mine.iter().map(|x| (x.at, x.choice.as_str())).collect::<Vec<_>>(), [(1, "a"), (2, "b")]);
         assert_eq!(mine[0].a, serde_json::json!({ "seed": 1 }));
         assert_eq!(mine[0].context, serde_json::json!({ "secs": 20 }));
+    }
+
+    fn review(folder: i64, state: &str, at: i64) -> Review {
+        Review { album: "al-1".into(), folder, base: "base".into(), state: state.into(), at, undo: None, name: "A".into(), album_artist: "B".into() }
+    }
+
+    /// Keyed by record, a new Incoming copy of a kept record reads "was promoted already" and can never be reviewed (Q24).
+    #[test]
+    fn a_review_is_of_the_copy_that_waited() {
+        let u = UserData::open(None).unwrap();
+        u.set_review(&review(2, "promoted", 10)).unwrap();
+        assert_eq!(u.review("al-1", Some(2)).unwrap().map(|r| r.state).as_deref(), Some("promoted"));
+        assert!(u.review("al-1", Some(3)).unwrap().is_none(), "another Incoming's copy is unreviewed");
+        u.set_review(&review(3, "rejected", 20)).unwrap();
+        assert_eq!(u.review("al-1", Some(2)).unwrap().map(|r| r.state).as_deref(), Some("promoted"), "each keeps its own");
+        assert_eq!(u.review("al-1", None).unwrap().map(|r| r.state).as_deref(), Some("rejected"), "with none waiting, the last word");
+        assert_eq!(u.review("base", Some(3)).unwrap().map(|r| r.state).as_deref(), Some("rejected"), "by its Music-form id too");
+        u.clear_review("al-1", 3).unwrap();
+        assert!(u.review("al-1", Some(3)).unwrap().is_none());
+        assert!(u.review("al-1", Some(2)).unwrap().is_some(), "the other copy's stands");
+    }
+
+    /// A database from before copies: its reviews stand for the whole record, and the table takes more than one per record.
+    #[test]
+    fn a_review_from_before_copies_goes_for_any_copy() {
+        let dir = std::env::temp_dir().join(format!("cratarr-review-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("user.sqlite");
+        std::fs::remove_file(&file).ok();
+        {
+            let u = UserData::open(Some(&file)).unwrap();
+            u.db()
+                .execute_batch(
+                    "DROP TABLE album_review;
+                     CREATE TABLE album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT, name TEXT NOT NULL, album_artist TEXT NOT NULL);
+                     CREATE INDEX album_review_by_base ON album_review (base);
+                     INSERT INTO album_review VALUES ('al-1', 'base', 'rejected', 5, 'u', 'A', 'B');",
+                )
+                .unwrap();
+        }
+        let u = UserData::open(Some(&file)).unwrap();
+        assert_eq!(u.review("al-1", Some(7)).unwrap().map(|r| (r.folder, r.state, r.undo)), Some((NO_FOLDER, "rejected".to_string(), Some("u".to_string()))));
+        u.set_review(&review(7, "promoted", 9)).unwrap();
+        assert_eq!(u.review("al-1", Some(7)).unwrap().map(|r| r.state).as_deref(), Some("promoted"), "said since, of this copy");
+        drop(u);
+        UserData::open(Some(&file)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

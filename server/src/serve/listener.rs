@@ -41,6 +41,13 @@ impl Listener {
         self.among(track, cat.files_of(track))
     }
 
+    /// Whether what this listener hears of a server's item is one of `files`: a record's copies hold one track, so the
+    /// track alone cannot say. Not known counts as yes, which stops a player and never leaves one on a file that goes.
+    /// Blocking.
+    pub fn hears_one_of(&self, cat: &Catalogue, source: &str, item: &str, files: &[(i64, String)]) -> bool {
+        self.place(cat, source, item).is_none_or(|heard| files.contains(&heard))
+    }
+
     /// Which of a track's present files plays for this listener. With one, that one: whichever way `copy_for` went, it is
     /// the only file there is, so most streams never wait on the library. Blocking.
     pub fn among(&self, track: i64, mut files: Vec<(i64, String)>) -> Option<(i64, String)> {
@@ -207,6 +214,21 @@ mod tests {
         assert!(lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD2/1.flac"].map(String::from)).unwrap(), "two discs of one copy are that copy");
         assert!(!lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD3/new.flac"].map(String::from)).unwrap(), "a file not built yet is no file of it");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Both copies hold the track that plays. By the track a Delete of the copy no one hears stops the player, and it never
+    /// starts again; by the file, only the copy they hear does.
+    #[test]
+    fn deleting_a_copy_not_playing_leaves_the_player() {
+        let t = two("leaves");
+        let (flac, mp3) = (vec![(0, FLAC.to_string())], vec![(1, MP3.to_string())]);
+        let on_the_flac = t.who(Some("ann"), None, &[]);
+        assert!(!on_the_flac.hears_one_of(&t.cat, KIND.id, &t.song, &mp3), "the copy going is not the one they hear");
+        assert!(on_the_flac.hears_one_of(&t.cat, KIND.id, &t.song, &flac));
+        let on_their_own = t.who(Some("ann"), Some(1), &[]);
+        assert!(on_their_own.hears_one_of(&t.cat, KIND.id, &t.song, &mp3), "as each hears it");
+        assert!(!on_their_own.hears_one_of(&t.cat, KIND.id, &t.song, &flac));
+        assert!(on_the_flac.hears_one_of(&t.cat, KIND.id, "tr-999999", &mp3), "not known: stopped, the safe side");
     }
 
     #[test]

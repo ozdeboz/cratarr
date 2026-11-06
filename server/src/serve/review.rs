@@ -52,9 +52,9 @@ fn now() -> i64 {
 }
 
 /// An album's review state as the API shows it: its review when it has one, "unreviewed" while it waits in Incoming,
-/// null for an album of the curated library.
-pub fn state_of(serve: &Serve, album: &str, in_incoming: bool) -> anyhow::Result<Option<String>> {
-    if let Some(r) = serve.userdata.review(album)? {
+/// null for an album of the curated library. `waiting`: the catalogue folder of its copy in Incoming, what is reviewed.
+pub fn state_of(serve: &Serve, album: &str, waiting: Option<i64>, in_incoming: bool) -> anyhow::Result<Option<String>> {
+    if let Some(r) = serve.userdata.review(album, waiting)? {
         return Ok(Some(r.state));
     }
     Ok(in_incoming.then(|| UNREVIEWED.to_string()))
@@ -76,14 +76,17 @@ async fn find(serve: &Arc<Serve>, id: &str) -> Result<Option<(String, String, St
     .map_err(failed)
 }
 
-/// The Incoming album at this folder, as Incoming knows it: (server, the server's album id).
-async fn in_incoming(serve: &Serve, dir: &str) -> Option<(String, String)> {
+/// The Incoming album at this place, as Incoming knows it: (server, the server's album id, its library). Cratarr's own says
+/// where it lies; another server's is known by its path's end.
+async fn in_incoming(serve: &Serve, folder: i64, dir: &str) -> Option<(String, String, Option<String>)> {
     let incoming = serve.incoming()?;
     let view = incoming.list(None).await;
     let tail = format!("/{}", dir.trim_matches('/'));
-    view.sources.iter().find_map(|s| {
-        s.albums.iter().filter(|a| a.path.as_deref().is_some_and(|p| p.trim_end_matches('/').ends_with(&tail))).map(|a| (s.id.clone(), a.id.clone())).next()
-    })
+    let here = |a: &&crate::source::Album| match a.copies.first() {
+        Some(c) => c.folder == folder && c.dir == dir,
+        None => a.path.as_deref().is_some_and(|p| p.trim_end_matches('/').ends_with(&tail)),
+    };
+    view.sources.iter().find_map(|s| s.albums.iter().find(here).map(|a| (s.id.clone(), a.id.clone(), a.library.clone())))
 }
 
 fn answer(name: &str, artist: &str, review: &str, changed: bool) -> Response {
@@ -96,37 +99,39 @@ fn in_main(serve: &Serve, folder: i64) -> bool {
 }
 
 async fn act(serve: Arc<Serve>, id: String, wanted: &'static str, to: Option<String>) -> Response {
-    if let Ok(Some(done)) = serve.userdata.review(&id) {
+    let found = match find(&serve, &id).await {
+        Ok(found) => found,
+        Err(r) => return r,
+    };
+    // Of the copy that waits, so a new one of a record promoted from elsewhere is unreviewed; with none, the last word stands.
+    let waiting = found.as_ref().map(|f| f.3).filter(|folder| !in_main(&serve, *folder));
+    if let Ok(Some(done)) = serve.userdata.review(&id, waiting) {
         if done.state == wanted {
             return answer(&done.name, &done.album_artist, wanted, false);
         }
         return fail(StatusCode::CONFLICT, format!("{} was {} already: take that back first", done.name, done.state));
     }
-    let (name, artist, base, folder, dir) = match find(&serve, &id).await {
-        Ok(Some(found)) => found,
-        Ok(None) => return fail(StatusCode::NOT_FOUND, "no such album"),
-        Err(r) => return r,
-    };
+    let Some((name, artist, base, folder, dir)) = found else { return fail(StatusCode::NOT_FOUND, "no such album") };
     if in_main(&serve, folder) {
         return fail(StatusCode::CONFLICT, format!("{name} is in the library, not in Incoming"));
     }
     let Some(incoming) = serve.incoming().cloned() else { return fail(StatusCode::SERVICE_UNAVAILABLE, "Incoming is not ready yet") };
-    let Some((source, server_album)) = in_incoming(&serve, &dir).await else {
+    let Some((source, server_album, library)) = in_incoming(&serve, folder, &dir).await else {
         return fail(StatusCode::CONFLICT, format!("{name} is not in Incoming"));
     };
     let undo = if wanted == PROMOTED {
-        match incoming.keep(&source, &server_album, None, to.as_deref(), None).await {
+        match incoming.keep(&source, &server_album, library.as_deref(), to.as_deref(), None).await {
             // A Keep that waits for its conversion gets its undo key when the job is done: remember the job's album.
             Ok(k) => Some(k.undo.unwrap_or_else(|| format!("{JOB}{server_album}"))),
             Err(e) => return fail(StatusCode::CONFLICT, e.to_string()),
         }
     } else {
-        match incoming.delete(&source, &server_album, None).await {
+        match incoming.delete(&source, &server_album, library.as_deref()).await {
             Ok(d) => Some(d.undo),
             Err(e) => return fail(StatusCode::CONFLICT, e.to_string()),
         }
     };
-    let review = Review { album: id, base, state: wanted.into(), at: now(), undo, name: name.clone(), album_artist: artist.clone() };
+    let review = Review { album: id, folder, base, state: wanted.into(), at: now(), undo, name: name.clone(), album_artist: artist.clone() };
     if let Err(e) = serve.userdata.set_review(&review) {
         // Done, but not remembered: say so, so "take that back" is not promised.
         return failed(format!("{name} was {wanted}, but Cratarr could not remember it: {e:#}"));
@@ -151,7 +156,7 @@ async fn reject(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Resp
 
 /// Takes a promote or reject back: Incoming undoes the Keep or the Delete, and the album is unreviewed again.
 async fn unreview(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
-    let done = match serve.userdata.review(&id) {
+    let done = match serve.userdata.review(&id, None) {
         Ok(Some(r)) => r,
         Ok(None) => {
             return match find(&serve, &id).await {
@@ -181,7 +186,7 @@ async fn unreview(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Re
     if let Err(e) = incoming.undo(key).await {
         return fail(StatusCode::CONFLICT, e.to_string());
     }
-    if let Err(e) = serve.userdata.clear_review(&done.album) {
+    if let Err(e) = serve.userdata.clear_review(&done.album, done.folder) {
         return failed(e);
     }
     answer(&done.name, &done.album_artist, UNREVIEWED, true)
@@ -196,14 +201,15 @@ struct IncomingQuery {
 /// reviewed ones.
 async fn incoming(State(serve): State<Arc<Serve>>, Query(q): Query<IncomingQuery>) -> Response {
     let s = serve.clone();
-    let albums = match tokio::task::spawn_blocking(move || s.library.incoming_albums()).await {
+    let read = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((s.library.incoming_albums()?, s.library.waiting_copies()?)) }).await;
+    let (albums, waiting) = match read {
         Ok(Ok(a)) => a,
         Ok(Err(e)) => return failed(e),
         Err(e) => return failed(e),
     };
     let mut out = Vec::new();
     for a in albums {
-        let state = match state_of(&serve, &a.id, true) {
+        let state = match state_of(&serve, &a.id, waiting.get(&a.id).copied(), true) {
             Ok(st) => st.unwrap_or_else(|| UNREVIEWED.into()),
             Err(e) => return failed(e),
         };

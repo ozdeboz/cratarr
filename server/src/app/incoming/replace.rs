@@ -322,19 +322,12 @@ impl IncomingService {
         Ok(Some(folder))
     }
 
-    /// Where a record's copy in catalogue folder `folder` lies. Cratarr's own alone: another server's id is no record.
-    async fn copy_in(&self, album: &str, folder: i64) -> Option<String> {
-        let (served, id) = (crate::serve::instance()?, album.to_string());
-        let copies = tokio::task::spawn_blocking(move || served.library.copies_of(&id)).await.ok()?.ok()?;
-        copies.into_iter().find(|c| c.folder == folder).map(|c| c.dir)
-    }
-
     /// The album Replace takes the place of: its main library's catalogue folder and its folder there. Named (`into`, the
     /// library the page chose or the job was planned for), the record's copy there, else what is matched there; else the
     /// first match. Only an album matched in a main library is replaced (one matched in another library is only told).
     async fn replaced_copy(&self, at: &Located, into: Option<i64>) -> Result<(i64, String), ToggleError> {
         if let Some(folder) = into
-            && let Some(dir) = self.copy_in(&at.album.id, folder).await
+            && let Some(dir) = super::copy_dir_in(&at.album.id, folder).await
         {
             return Ok((folder, dir));
         }
@@ -442,8 +435,8 @@ impl IncomingService {
     /// so a refusal shows at once.
     #[allow(clippy::too_many_arguments)]
     pub async fn replace(&self, source_id: &str, album_id: &str, from: Option<&str>, to: Option<&str>, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
-        self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id, from).await?;
+        self.refuse_if_queued(album_id, at.dir.folder)?;
         let into = self.replaced_in(source_id, to)?;
         let planned = self.plan_replace(&at, into, year).await?.map_err(refused)?;
         let music = planned.root.clone();
@@ -488,13 +481,7 @@ impl IncomingService {
         let run = crate::app::file_runs::track("replace", format!("Replaced: {}", at.album.title));
         let done = self.replacing(at, into, year, converted, job).await;
         match &done {
-            Ok(k) => {
-                let (lib, journal, source, album) = (self.lib.clone(), self.journal.clone(), at.source.clone(), at.album.id.clone());
-                run.moved(k.undo.clone(), move || {
-                    let (lib, journal, source, album) = (lib.clone(), journal.clone(), source.clone(), album.clone());
-                    async move { matches!(super::fate_of(&lib, &journal, &source, &album).await, Some(super::AlbumFate::Moved(_))) }
-                });
-            }
+            Ok(k) => run.moved(k.undo.clone(), self.read_in(at, into)),
             Err(e) => run.failed(&at.album.id, e.to_string()),
         }
         done
@@ -544,10 +531,10 @@ impl IncomingService {
         // Before anything moves: what users did with the old tracks' server items (the server forgets them after);
         // the new items get it once they exist (the play-data handler).
         // Both copies count: the old album's tracks and their upgrades in Incoming (played while deciding), each
-        // user's data on the two combined into one for the track that lives on.
+        // user's data on the two combined into one for the track that lives on. Cratarr's own item is the track, which stays.
         let mut play: Vec<PlayData> = Vec::new();
         let kept: Vec<&TrackMove> = replaced.iter().filter(|r| r.track.is_some() && moves.iter().any(|m| m.track == r.track)).collect();
-        for (source, s) in self.lib.connected_sources() {
+        for (source, s) in self.lib.connected_sources().into_iter().filter(|(source, _)| source != crate::source::cratarr::KIND.id) {
             let old_rels: Vec<String> = kept.iter().map(|r| r.from.1.clone()).collect();
             let old_items = c.track_ids(&source, main, &old_rels).unwrap_or_default();
             let new_rels: Vec<String> = moves.iter().map(|m| m.from.1.clone()).collect();
@@ -556,6 +543,7 @@ impl IncomingService {
             let news = moves.iter().map(|m| m.track).zip(new_items);
             for (track, item) in olds.chain(news) {
                 let (Some(track), Some(item)) = (track, item) else { continue };
+                let Some(to) = moves.iter().find(|m| m.track == Some(track)).map(|m| m.to.clone()) else { continue };
                 let users = match s.user_data(&item).await {
                     Ok(u) => u,
                     Err(e) => {
@@ -566,7 +554,7 @@ impl IncomingService {
                 for (user, data) in users {
                     match play.iter_mut().find(|p| p.source == source && p.track == track && p.user == user) {
                         Some(p) => p.data = s.combine_user_data(&p.data, &data),
-                        None => play.push(PlayData { source: source.clone(), track, old_item: item.clone(), user, data }),
+                        None => play.push(PlayData { source: source.clone(), track, old_item: item.clone(), to: to.clone(), user, data }),
                     }
                 }
             }
@@ -591,14 +579,15 @@ impl IncomingService {
         self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
         // Playing from either copy: carried on with the new one after the move (the old items go). A file of the old
         // album is known by the id its upgrade takes over; a file of the upgrade by its own id until then.
-        let (order, before): (Vec<i64>, Vec<(i64, i64)>) = match &event {
-            Event::AlbumReplaced { moves, .. } => (
+        let (order, before, leaving): (Vec<i64>, Vec<(i64, i64)>, Vec<(i64, String)>) = match &event {
+            Event::AlbumReplaced { moves, replaced, .. } => (
                 moves.iter().filter_map(|m| m.track).collect(),
                 moves.iter().filter_map(|m| m.track.map(|t| (m.was.unwrap_or(t), t))).chain(moves.iter().filter_map(|m| m.track.map(|t| (t, t)))).collect(),
+                moves.iter().chain(replaced).map(|m| m.from.clone()).collect(),
             ),
-            _ => (Vec::new(), Vec::new()),
+            _ => Default::default(),
         };
-        let mut playing = self.playing_among(&order, &before).await;
+        let mut playing = self.playing_among(&order, &before, &leaving).await;
         if let Some(p) = playing.as_mut() {
             self.hold(p).await;
         }
@@ -616,7 +605,7 @@ impl IncomingService {
         }
         self.finish_replace(&event, false, playing.is_some()).await;
         self.journal.applied(id)?;
-        self.hidden.lock().await.insert(at.album.id.clone());
+        self.hidden.lock().await.insert(super::hidden_key(&at.album));
         *self.owned.lock().await = None;
         c.poke();
         if let Some(p) = playing {
@@ -648,7 +637,7 @@ impl IncomingService {
     /// Undo a Replace: the new files back into Incoming with their own ids, the old ones back from the trash with
     /// theirs, Lidarr fetching as before.
     pub(super) async fn undo_replace(&self, entry: &Entry) -> Result<String, ToggleError> {
-        let Event::AlbumReplaced { album_id, title, .. } = &entry.event else { unreachable!() };
+        let Event::AlbumReplaced { source, album_id, title, from_dir, .. } = &entry.event else { unreachable!() };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back in Incoming")));
         }
@@ -662,7 +651,7 @@ impl IncomingService {
         self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;
-        self.hidden.lock().await.remove(album_id);
+        self.unhide(source, album_id, from_dir.0).await;
         *self.owned.lock().await = None;
         self.lib.catalogue().poke();
         Ok(title.clone())

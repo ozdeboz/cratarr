@@ -954,6 +954,22 @@ impl Library {
         Ok(())
     }
 
+    /// Each record with a copy in Incoming: the catalogue folder of its first, what a review of it is of.
+    pub fn waiting_copies(&self) -> Result<HashMap<String, i64>> {
+        let places: Vec<(String, i64)> = {
+            let db = self.db();
+            let mut st = db.prepare("SELECT album, folder FROM copies ORDER BY folder, dir")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        let mut waiting = HashMap::new();
+        for (album, folder) in places {
+            if self.kind_of(folder).0 == Kind::Incoming {
+                waiting.entry(album).or_insert(folder);
+            }
+        }
+        Ok(waiting)
+    }
+
     /// Whether a copy at (`folder`, `dir`) holds all of `audio`, the audio files lying under `dir`, and no other copy lies
     /// inside it: what a Delete or a Move of that folder would take with it. A file the library has not built yet is no
     /// file of this copy, and it is told so until it has.

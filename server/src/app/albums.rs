@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::Serialize;
 
 use super::incoming::VerdictView;
-use super::{App, KeepPreview, KeepResult, ToggleError};
+use super::{App, JobView, KeepPreview, KeepResult, ToggleError};
 use super::library::{Active, epoch_now};
 use crate::serve::copies::{Copy, Viewer, copy_for, in_order};
 use crate::settings::{LibraryKind, Quality, YOUR_MUSIC};
@@ -229,8 +229,8 @@ impl App {
                 // cannot tell a record's copies apart, so the two are worked out here, before the copies are folded.
                 let told = |a: &source::Album, deletable: bool, incoming: bool| {
                     let mut a = a.clone();
-                    let (format, kbps, library) = (a.format.clone(), a.bitrate_kbps, a.library.clone());
-                    let job = jobs.iter().find(|j| j.source == id && j.album_id == a.id && j.from == library && j.at_work());
+                    let (format, kbps) = (a.format.clone(), a.bitrate_kbps);
+                    let job = job_on(&jobs, &id, &a);
                     let lacks: Vec<String> = i.filter(|_| incoming).and_then(|i| i.lacks.get(&a.id)).map(|l| l.iter().map(|w| w.to_string()).collect()).unwrap_or_default();
                     let keepable = incoming && may_keep(&a);
                     let keep_to = if keepable { keeps_to(&a) } else { None };
@@ -306,6 +306,16 @@ fn named_copy(a: &source::Album, from: Option<&str>) -> Result<source::Album, To
             _ => Err(ToggleError::Refused("It is in several libraries: say which copy".into())),
         },
     }
+}
+
+/// The conversion at work on this library's copy of a record: a record's other copies have nothing to do with it, and two
+/// folders of one library are told apart by place.
+fn job_on<'a>(jobs: &'a [JobView], source: &str, a: &source::Album) -> Option<&'a JobView> {
+    let here = |j: &JobView| match a.copies.first() {
+        Some(c) => j.place.0 == c.folder && j.place.1 == c.dir,
+        None => j.from == a.library,
+    };
+    jobs.iter().find(|j| j.source == source && j.album_id == a.id && j.at_work() && here(j))
 }
 
 /// Whether the viewer may delete this copy: the view's `deletable` goes by id, so it holds while any copy of the record may
@@ -705,6 +715,22 @@ mod tests {
         let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())) })]);
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), other], &order);
         assert_eq!(named_copy(&folded[0], Some("music")).unwrap().copies[0].dir, "B/Album");
+    }
+
+    /// A conversion of the Incoming copy is not the kept copy's: by id alone the kept one's menu would show it, and two folders
+    /// of one library would share it.
+    #[test]
+    fn a_job_shows_on_its_copy() {
+        let job = JobView::converting(7, "cratarr", "al-1", "incoming", 2, "A/Album");
+        let jobs = [job.clone()];
+        assert_eq!(job_on(&jobs, "cratarr", &listed("al-1", 2, "incoming", "FLAC")).map(|j| j.id), Some(7));
+        assert!(job_on(&jobs, "cratarr", &listed("al-1", 0, "music", "MP3")).is_none(), "the record's other copy");
+        let mut beside = listed("al-1", 2, "incoming", "FLAC");
+        beside.copies[0].dir = "B/Album".into();
+        assert!(job_on(&jobs, "cratarr", &beside).is_none(), "another folder of its library");
+        assert!(job_on(&[job.done()], "cratarr", &listed("al-1", 2, "incoming", "FLAC")).is_none(), "over");
+        let elsewhere = [JobView::converting(8, "jf", "x", "jellyfin-music", 0, "")];
+        assert!(job_on(&elsewhere, "jf", &album("x", "jellyfin-music", "/m/x")).is_some(), "another server's goes by its library");
     }
 
     /// The Users panel names the account's library: a record also in Music is found there, not refused as Music's.

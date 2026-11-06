@@ -81,7 +81,8 @@ async fn album(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Respo
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
         let base = s.library.album_base(&id)?.unwrap_or_else(|| id.clone());
         let in_incoming = s.library.in_incoming(&id)?;
-        let review = super::review::state_of(&s, &id, in_incoming)?;
+        let waiting = s.library.copies_of(&id)?.into_iter().find(|c| c.kind == super::copies::Kind::Incoming).map(|c| c.folder);
+        let review = super::review::state_of(&s, &id, waiting, in_incoming)?;
         Ok(Some((album, s.userdata.tags_of(&base)?, review)))
     })
     .await;
