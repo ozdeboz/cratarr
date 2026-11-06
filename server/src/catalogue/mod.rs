@@ -248,7 +248,7 @@ pub fn vote_of(said: &[Say], size: &dyn Fn(i64) -> usize) -> Option<i64> {
 
 /// A pass's take (docs/records-and-copies.md: a copy takes the record's track ids, track by track): the tracks found to be
 /// one, each to the one that stays. Read through `now`, as what took a track can itself be taken by a third copy.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Take {
     to: HashMap<i64, i64>,
 }
@@ -2429,15 +2429,19 @@ impl Catalogue {
         for (record, list) in voting.iter().filter(|(_, l)| l.len() > 1) {
             let Some(keeps) = list.iter().copied().max_by_key(|i| (albums[*i].tracks.len(), std::cmp::Reverse(*i))) else { continue };
             for i in list.iter().copied().filter(|i| *i != keeps) {
-                let same = identity::same_record(&albums[i].facts, &albums[keeps].facts);
-                if same {
+                if identity::same_record(&albums[i].facts, &albums[keeps].facts) {
                     take.place_by_place(&held, *record, &tracks[i], &tracks[keeps]);
-                } else {
-                    take.by_name(&held, *record, (&tracks[i], &albums[i].facts.tracks), (&tracks[keeps], &albums[keeps].facts.tracks));
+                    continue;
                 }
-                let (mine, theirs) = (take.all(&tracks[i]), take.all(&tracks[keeps]));
-                let lacking: Vec<i64> = theirs.difference(&mine).copied().collect();
-                if !same && mine != theirs && !(mine.is_subset(&theirs) && held.lacks_for_now(&albums[i], &lacking)) {
+                // A take cannot be undone, so one by name stands only where it leaves the two one set of tracks, but for what
+                // either lacks for now: a title two discs share is two tracks, and those discs go their own ways.
+                let mut named = take.clone();
+                named.by_name(&held, *record, (&tracks[i], &albums[i].facts.tracks), (&tracks[keeps], &albums[keeps].facts.tracks));
+                let (mine, theirs) = (named.all(&tracks[i]), named.all(&tracks[keeps]));
+                let (lacking, more): (Vec<i64>, Vec<i64>) = (theirs.difference(&mine).copied().collect(), mine.difference(&theirs).copied().collect());
+                if held.lacks_for_now(&albums[i], &lacking) && held.lacks_for_now(&albums[keeps], &more) {
+                    take = named;
+                } else {
                     records[i] = None;
                 }
             }
@@ -5476,6 +5480,52 @@ mod tests {
         cat.db().execute("UPDATE files SET gone_at = 1 WHERE rel = 'Second/CD2/6.flac'", []).unwrap();
         assert_eq!(cat.assign_records(&[kept, the_first(2, &second)]).unwrap(), 0);
         assert_eq!(cat.track_of(0, "Second/CD1/4.flac"), Some(1));
+    }
+
+    /// Each lacks what the other has, for now: that is no reason for one to leave.
+    #[test]
+    fn two_copies_each_lacking_a_file_for_now_stay_one() {
+        let cat = tracks(6);
+        let (kept, second, _) = two_copies(&cat);
+        for rel in [&kept.files[2].1, &second.files[1].1] {
+            cat.db().execute("UPDATE files SET gone_at = 1 WHERE rel = ?1", [rel]).unwrap();
+        }
+        let names = [(1, "One", 200_000), (3, "Three", 200_000)];
+        let other = AlbumCopy { files: vec![second.files[0].clone(), second.files[2].clone()], ..copy(None, "A", "Three", &names) };
+        assert_eq!(cat.assign_records(&[the_first(2, &kept), other]).unwrap(), 0);
+    }
+
+    /// `by_name` is for a file replaced in a copy, and a take cannot be undone. Two discs of one record that part hold no such
+    /// file: a title they share is two tracks, whose plays and entries stay on each.
+    #[test]
+    fn a_retagged_disc_keeps_a_title_it_shares_with_the_other_disc() {
+        let cat = tracks(4);
+        let names = [(1, "One", 200_000), (2, "Interlude", 60_000), (3, "Three", 200_000), (4, "Interlude", 61_500)];
+        let whole = lying_in(&cat, "Box", copy(None, "A", "Box", &names));
+        cat.assign_records(std::slice::from_ref(&whole)).unwrap();
+        let first = AlbumCopy { files: whole.files[..2].to_vec(), ..copy(None, "A", "Box", &names[..2]) };
+        let other = AlbumCopy { files: whole.files[2..].to_vec(), ..copy(None, "A", "Box", &names[2..]) };
+        cat.assign_records(&[first, other]).unwrap();
+        assert!(cat.moved_tracks().unwrap().is_empty());
+        assert_ne!(record_of(&cat, 1), record_of(&cat, 3), "two albums, as a retag makes them");
+    }
+
+    /// `pair`'s own guard, by the way that has none before it: of two albums not the same, a fresh file whose name fits a track of
+    /// another record that lies in the other album. The track stays that record's, and the file its own.
+    #[test]
+    fn a_track_of_another_record_is_not_taken_by_name_between_albums_that_differ() {
+        let cat = tracks(9);
+        let (kept, second, _) = two_copies(&cat);
+        let other = lying_in(&cat, "Other", album("Other", &[7]));
+        cat.assign_records(&[kept.clone(), second.clone(), other.clone()]).unwrap();
+        let elsewhere = record_of(&cat, 7);
+        cat.db().execute("UPDATE files SET track = 7 WHERE rel = ?1", [&kept.files[2].1]).unwrap();
+        cat.db().execute("UPDATE files SET track = 9 WHERE rel = ?1", [&second.files[2].1]).unwrap();
+        let mut renamed = as_it_stands(&cat, &second);
+        renamed.facts.title = identity::fold("Another Name");
+        cat.assign_records(&[as_it_stands(&cat, &kept), renamed, other]).unwrap();
+        assert!(!cat.moved_tracks().unwrap().contains_key(&9));
+        assert_eq!(record_of(&cat, 7), elsewhere);
     }
 
     /// Copies are held together by their ids once taken: a retag or a length fix in one is no reason to split them.
