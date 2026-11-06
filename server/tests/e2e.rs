@@ -10,6 +10,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -410,6 +412,96 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     // A server that asks for a sign-in starts as any other.
     let s = Server::start(&data).await;
     assert_eq!(s.sign_in("bob", "bob's password").await.get("/api/albums").await["sources"][0]["id"], "cratarr");
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A slskd for a fetch to meet: every batch taken and complete at once, `file` in the folder its batch names under
+/// `completed`. Its address, and how many batches it was asked for.
+async fn slskd_serving(completed: PathBuf, file: PathBuf) -> (String, Arc<AtomicUsize>) {
+    use axum::routing::{get, post};
+    let batches = Arc::new(AtomicUsize::new(0));
+    let asked = batches.clone();
+    let take = move |axum::Json(b): axum::Json<Value>| {
+        let (completed, file, asked) = (completed.clone(), file.clone(), asked.clone());
+        async move {
+            asked.fetch_add(1, Ordering::SeqCst);
+            let dir = completed.join("cratarr").join(b["id"].as_str().unwrap());
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::copy(&file, dir.join(file.file_name().unwrap())).unwrap();
+            axum::Json(json!({ "batch": { "transfers": [] } }))
+        }
+    };
+    let done = || async { axum::Json(json!({ "transfers": [{ "id": "t1", "filename": "x", "state": "Completed, Succeeded", "percentComplete": 100.0 }] })) };
+    let app = axum::Router::new().route("/api/v0/transfers/downloads/batches", post(take)).route("/api/v0/transfers/downloads/batches/{id}", get(done));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, batches)
+}
+
+/// Soulseek's queue as a next start reads it: one record approved, of one track, in two users' folders.
+fn soulseek_queue(data: &Path, file: &str) {
+    let folder = |user: &str| json!({ "user": user, "dir": "d", "format": "flac", "lossless": true, "free_slot": true, "queue": 0, "speed": 1, "extra": 0, "files": [{ "filename": format!("d\\{file}"), "size": 1 }] });
+    let record = json!({ "artist": "Glass Harbour", "album": "Tide Tables", "release_group": "rg", "request": 1 });
+    let item = json!({ "id": "ss-1", "record": record, "state": "approved", "tracks": [{ "disc": 1, "position": 1, "title": "Slack Water", "recording": "r1" }], "folders": [folder("ann"), folder("bo")], "chosen": 0 });
+    std::fs::write(data.join("soulseek.json"), serde_json::to_vec(&json!({ "next": 1, "items": [item] })).unwrap()).unwrap();
+}
+
+/// A service away is no bad file and no bad user (audit findings 11 and 12), on the real worker through a slskd's HTTP: with
+/// no AcoustID key the record waits at its check with both folders, across a restart, fetching nothing by itself; it can
+/// leave the list, and what it fetched with it. With slskd gone it stays approved and blames no one.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_record_whose_services_are_away_waits_and_blames_no_user_end_to_end() {
+    let root = temp("soulseek");
+    let (library, data, completed) = (root.join("library"), root.join("data"), root.join("slskd"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    settings(&data, &[(&library.join("music"), "main"), (&library.join("incoming"), "incoming")], &library.join("own"));
+    let file = library.join("music/Glass Harbour/Tide Tables (2012)/01 Slack Water.flac");
+    let name = file.file_name().unwrap().to_string_lossy().to_string();
+    let (url, batches) = slskd_serving(completed.clone(), file.clone()).await;
+    let record = |s: &Server| {
+        let http = (s.http.clone(), format!("{}/api/soulseek", s.base));
+        async move { http.0.get(http.1).send().await.unwrap().json::<Value>().await.unwrap()["items"][0].clone() }
+    };
+
+    // slskd first: the queue is read once, as the server starts.
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": url, "key": "k", "folder": completed, "enabled": true })).await;
+    s.stop();
+    soulseek_queue(&data, &name);
+    let s = Server::start(&data).await;
+    s.until("the fetch to reach its check", Duration::from_secs(60), || async { record(&s).await["why"].is_string() }).await;
+    let i = record(&s).await;
+    assert_eq!((i["state"].as_str(), i["why"].as_str()), (Some("checking"), Some("AcoustID is not set up: Settings › Server")), "{i}");
+    assert_eq!((i["folders"].as_array().unwrap().len(), &i["failed"], &i["set_aside"]), (2, &json!([]), &json!([])), "no user held to it, nothing set aside");
+    let fetched = completed.join("cratarr").join(i["batch"].as_str().unwrap());
+    assert!(fetched.join(&name).exists(), "what it fetched waits where it is");
+
+    // Across a restart: still held, and nothing fetched by itself.
+    s.stop();
+    let s = Server::start(&data).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(record(&s).await["state"], "checking");
+    assert_eq!(batches.load(Ordering::SeqCst), 1, "no next folder under the same tick");
+
+    // Out of the list, what it fetched with it: nothing else looks in a batch's folder.
+    s.ok(reqwest::Method::DELETE, "/api/soulseek/ss-1", json!({})).await;
+    assert_eq!(record(&s).await, Value::Null);
+    assert!(!fetched.exists());
+
+    // slskd gone: nothing listens there.
+    let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    s.ok(reqwest::Method::PUT, "/api/settings/slskd", json!({ "url": format!("http://{gone}") })).await;
+    s.stop();
+    soulseek_queue(&data, &name);
+    let s = Server::start(&data).await;
+    s.until("the fetch to find slskd gone", Duration::from_secs(60), || async { record(&s).await["why"].is_string() }).await;
+    let i = record(&s).await;
+    assert!(i["why"].as_str().unwrap().starts_with("slskd could not be reached"), "{i}");
+    assert_eq!((i["state"].as_str(), i["chosen"].as_i64(), i["folders"].as_array().unwrap().len(), &i["failed"]), (Some("approved"), Some(0), 2, &json!([])), "its tick and folders kept, no user failed");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }
