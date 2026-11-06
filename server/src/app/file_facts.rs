@@ -132,18 +132,20 @@ pub fn proposal(serve: &crate::serve::Serve, albums: Option<&[String]>) -> Resul
         let mut st = db.prepare(
             "SELECT a.id, a.name, a.artist, a.release_type, a.secondary, a.type_from, a.type_why, a.year, a.set_fields,
                c.folder, c.rel, s.title
-             FROM albums a JOIN copy_files c ON c.album = a.id JOIN songs s ON s.id = c.song ORDER BY a.n, s.disc_no, s.track_no, c.rel",
+             FROM albums a JOIN copy_files c ON c.album = a.id LEFT JOIN songs s ON s.id = c.song ORDER BY a.n, s.id IS NULL, s.disc_no, s.track_no, c.rel",
         )?;
         let rows = st.query_map([], |r| {
             Ok((
                 (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?),
                 (r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?),
                 (r.get::<_, Option<i64>>(7)?, r.get::<_, String>(8)?),
-                (r.get::<_, i64>(9)?, r.get::<_, String>(10)?, r.get::<_, String>(11)?),
+                (r.get::<_, i64>(9)?, r.get::<_, String>(10)?, r.get::<_, Option<String>>(11)?),
             ))
         })?;
         for row in rows {
-            let ((id, title, artist), (kind, secondary, from, why), (year, set), file) = row?;
+            let ((id, title, artist), (kind, secondary, from, why), (year, set), (folder, rel, track)) = row?;
+            // A copy with tracks of its own has no `songs` row, and is written all the same: the record's facts are its too.
+            let file = (folder, rel.clone(), track.unwrap_or_else(|| super::renumber::file_name(&rel)));
             if albums.is_some_and(|a| !a.contains(&id)) {
                 continue;
             }

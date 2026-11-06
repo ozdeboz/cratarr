@@ -48,6 +48,8 @@ pub mod words;
 pub mod harvest;
 pub mod fixes;
 pub mod fix_plans;
+#[cfg(test)]
+mod every_copy;
 pub mod intake_card;
 pub mod references;
 pub mod file_facts;

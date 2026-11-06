@@ -83,7 +83,11 @@ pub fn file_plan(has: &[String], words: &[super::words::store::Word]) -> Option<
 
 /// Every file of Cratarr's own records (only `albums` where given) whose `kind` differs from Cratarr's words. Blocking.
 pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
-    let stored = super::words::stored(serve)?;
+    proposal_of(serve, &*super::words::stored(serve)?, kind, albums)
+}
+
+/// `proposal`, from these words.
+fn proposal_of(serve: &crate::serve::Serve, stored: &super::words::Stored, kind: Kind, albums: Option<&[String]>) -> Result<Proposal> {
     let field = field_of(kind);
     let cat = serve.catalogue();
     let roots = cat.folders();
@@ -92,14 +96,16 @@ pub fn proposal(serve: &crate::serve::Serve, kind: Kind, albums: Option<&[String
     let db = serve.library.db();
     let mut st = db.prepare(
         "SELECT a.id, a.name, a.artist, c.song, c.folder, c.rel, s.title
-         FROM albums a JOIN copy_files c ON c.album = a.id JOIN songs s ON s.id = c.song ORDER BY a.n, s.disc_no, s.track_no, c.rel",
+         FROM albums a JOIN copy_files c ON c.album = a.id LEFT JOIN songs s ON s.id = c.song ORDER BY a.n, s.id IS NULL, s.disc_no, s.track_no, c.rel",
     )?;
     let rows = st.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?))
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?, r.get::<_, Option<String>>(6)?))
     })?;
     let none: Vec<String> = Vec::new();
     for row in rows {
         let (album, title, artist, song, folder, rel, track) = row?;
+        // A copy with tracks of its own has no `songs` row, and the record's words are its too.
+        let track = track.unwrap_or_else(|| super::renumber::file_name(&rel));
         if albums.is_some_and(|a| !a.contains(&album)) {
             continue;
         }
@@ -201,6 +207,24 @@ mod tests {
             assert!(proposal(&serve, kind, None).unwrap().files.is_empty(), "no words stored: nothing to write");
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A word is the record's or its track's: every copy's file gets it, and a copy on tracks of its own the record's.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_word_reaches_every_copy_and_its_undo_takes_it_out() {
+        use super::super::every_copy::{app, tag, two_copies, undone, written};
+        use super::super::words::store::{KindWords, Words};
+        for shared in [true, false] {
+            let (c, app) = (two_copies(&format!("words-{shared}"), shared), app(&format!("words-{shared}")).await);
+            let words = Words { kinds: vec![KindWords { kind: Kind::Mood, hand: false, words: vec![w("Calm", &[Source::Hand])] }], tracks: Vec::new() };
+            let stored = super::super::words::Stored { records: std::collections::HashMap::from([(c.album.clone(), words)]), ..Default::default() };
+            let p = proposal_of(&c.serve, &stored, Kind::Mood, None).unwrap();
+            assert_eq!(p.files.len(), 4, "every file of both copies");
+            let token = written(&app, p).await;
+            assert!(c.files().iter().all(|f| tag(f, "mood") == ["Calm"]));
+            undone(&app, &token).await;
+            assert!(c.files().iter().all(|f| tag(f, "mood").is_empty()));
+        }
     }
 
     #[test]

@@ -83,6 +83,11 @@ class CratarrWebViewClient(
         return true
     }
 
+    override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+        super.doUpdateVisitedHistory(view, url, isReload)
+        DeviceWatch.page = DeviceWatch.pageOf(url)
+    }
+
     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
         super.onPageStarted(view, url, favicon)
         fromCopy = bundled == withoutRoute(url)
@@ -133,7 +138,7 @@ class CratarrWebViewClient(
     }
 
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-        Log.w(TAG, "the page's renderer is gone (crashed: ${detail.didCrash()})")
+        DeviceWatch.rendererGone(view.context, detail.didCrash(), detail.rendererPriorityAtExit())
         onGone()
         return true
     }

@@ -3529,8 +3529,8 @@ impl PlaylistService {
         if !crate::serve::access::administering() {
             return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
         }
-        let (cat, list) = (self.lib.catalogue(), ids.to_vec());
-        let (p, tempos) = tokio::task::spawn_blocking(move || super::tempo::proposal(&cat, &list, how)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let (served, list) = (crate::serve::instance().ok_or_else(|| anyhow::anyhow!("Cratarr's own library is not open"))?, ids.to_vec());
+        let (p, tempos) = tokio::task::spawn_blocking(move || super::tempo::proposal(&served, &list, how)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let run = (!p.files.is_empty()).then(|| super::file_runs::start(app, p));
         Ok((tempos, run))
     }

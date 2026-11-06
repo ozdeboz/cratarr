@@ -865,8 +865,26 @@ impl Library {
     /// The song a file is (0.9.14, Health's items): its id, its album's, and its title.
     pub fn song_at(&self, folder: i64, rel: &str) -> Result<Option<(String, String, String)>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT c.song, c.album, s.title FROM copy_files c JOIN songs s ON s.id = c.song WHERE c.folder = ?1 AND c.rel = ?2")?;
-        Ok(st.query_map(rusqlite::params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.next().transpose()?)
+        // A copy with tracks of its own has no rows in `songs`: its file is still a file, named by its name.
+        let mut st = db.prepare_cached("SELECT c.song, c.album, s.title FROM copy_files c LEFT JOIN songs s ON s.id = c.song WHERE c.folder = ?1 AND c.rel = ?2")?;
+        let named = |title: Option<String>| title.unwrap_or_else(|| rel.rsplit('/').next().unwrap_or(rel).to_string());
+        Ok(st.query_map(rusqlite::params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?, named(r.get(2)?))))?.next().transpose()?)
+    }
+
+    /// Every file of a record, of every copy: (song id, its catalogue folder, its path there, its length in ms), the lowest
+    /// folder first. What a writer reaches, as `songs` holds one file a track.
+    pub fn files_of_record(&self, album: &str) -> Result<Vec<(String, i64, String, u64)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT song, folder, rel, coalesce(duration_ms, 0) FROM copy_files WHERE album = ?1 ORDER BY folder, rel")?;
+        let rows = st.query_map([album], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?.max(0) as u64)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every file of a track, of every copy: its catalogue folder and path there, the lowest folder first.
+    pub fn files_of_track(&self, song: &str) -> Result<Vec<(i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT folder, rel FROM copy_files WHERE song = ?1 ORDER BY folder, rel")?;
+        Ok(st.query_map([song], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
     }
 
     /// An album's MusicBrainz release, artist and name (0.9.5: its cover changed by hand).

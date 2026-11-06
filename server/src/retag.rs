@@ -23,6 +23,7 @@ pub fn rewrite(track: &Path, edit: impl FnOnce(&mut Tag), check: impl FnOnce(&Pa
 /// ID3v2 `TXXX:STYLE`, as the reader reads them): each named field's values replaced (none: the field gone).
 pub fn rewrite_named(track: &Path, edit: impl FnOnce(&mut Tag), by_name: &[(String, Vec<String>)], check: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::ogg::OggPictureStorage;
     use lofty::prelude::*;
     let kind = match track.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("flac") => Kind::Flac,
@@ -61,7 +62,12 @@ pub fn rewrite_named(track: &Path, edit: impl FnOnce(&mut Tag), by_name: &[(Stri
         match kind {
             Kind::Flac => {
                 let mut file = lofty::flac::FlacFile::read_from(&mut std::fs::File::open(&copy)?, options).with_context(|| format!("not a {named} file Cratarr can read"))?;
-                let own = file.remove_vorbis_comments().unwrap_or_default();
+                let mut own = file.remove_vorbis_comments().unwrap_or_default();
+                // lofty keeps a FLAC's pictures on the file, not in its comments: left there, `edit` could only ever add one
+                // beside them, and an Undo never take one out. In the comments they go back with them, changed or not.
+                for (picture, info) in file.remove_pictures() {
+                    own.insert_picture(picture, Some(info))?;
+                }
                 let (_, before) = own.clone().split_tag();
                 let mut after = before.clone();
                 edit(&mut after);
