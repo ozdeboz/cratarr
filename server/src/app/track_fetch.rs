@@ -281,6 +281,10 @@ pub struct FetchView {
     pub why: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
+    /// Refused for want of an answer ([`NotAsked`]): nothing is known of the file or its user. The page reads it as any
+    /// refusal, with its why; the bulk intake holds nothing against the user for it.
+    #[serde(skip)]
+    pub no_verdict: bool,
 }
 
 struct FetchJob {
@@ -383,7 +387,7 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
     let batch = slskd.fetch(&c.user, &c.offered).await?;
     let id = new_id();
     jobs(|j| {
-        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None }, staged: None });
+        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view: FetchView { state: Fetching::Queued, percent: 0.0, why: None, score: None, no_verdict: false }, staged: None });
     });
     let job = id.clone();
     tokio::spawn(async move {
@@ -412,7 +416,7 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
         let verdict = gate(&staged, &wanted.track).await;
         set(&|f| match &verdict {
             Ok(score) => (f.view.state, f.view.score) = (Fetching::Passed, Some(*score)),
-            Err(e) => (f.view.state, f.view.why) = (Fetching::Refused, Some(format!("{e:#}"))),
+            Err(e) => (f.view.state, f.view.why, f.view.no_verdict) = (Fetching::Refused, Some(format!("{e:#}")), e.is::<NotAsked>()),
         });
     });
     Ok(id)
@@ -579,6 +583,20 @@ async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid:
     crate::acoustid::lookup(&key, &print).await
 }
 
+/// The gate stopped short of a verdict: AcoustID could not be asked (away, over its limit, its key gone or never set).
+/// That says nothing of the file, so it is no refusal: what fetched the file on its own must not treat it as one
+/// (`soulseek::check`, `track_intake::fetch`). Reads as the failure it carries.
+#[derive(Debug)]
+pub struct NotAsked(pub(super) String);
+
+impl std::fmt::Display for NotAsked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotAsked {}
+
 /// [`gate`], asking `lookup` what AcoustID knows of the file (the tests' stands in for AcoustID).
 async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
 where
@@ -588,7 +606,7 @@ where
     let f = file.to_path_buf();
     let print = tokio::task::spawn_blocking(move || crate::acoustid::print(&f)).await??;
     refused_for(&print, track.length_ms)?;
-    let found = lookup(print).await?;
+    let found = lookup(print).await.map_err(|e| NotAsked(format!("{e:#}")))?;
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
 
@@ -774,7 +792,7 @@ pub async fn fetch_file(album: &str, recording: &str, replace: Option<String>, r
     let id = new_id();
     let to = staging.join(&id).join(from.file_name().context("no file name")?);
     jobs(|j| {
-        let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None };
+        let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None, no_verdict: false };
         j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view, staged: Some(to.clone()) });
     });
     tell(&id);
@@ -1461,6 +1479,25 @@ mod tests {
         let err = take(&from, &d.join("staging/f4/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
         assert_eq!(err.to_string(), "It is 20 s shorter than the recording");
         assert_eq!(std::fs::read(&from).unwrap(), before, "and the original still there");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn acoustid_that_could_not_be_asked_is_no_refusal_of_the_file() {
+        let d = dir("trackfile-notasked");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-notasked");
+        let track = track_of(delight(), "r7", false).unwrap();
+        let away = |_| std::future::ready(Err(anyhow::anyhow!("AcoustID could not be reached")));
+        let err = take(&from, &d.join("staging/f1/06 Bloom.flac"), &track, away).await.unwrap_err();
+        assert!(err.is::<NotAsked>());
+        assert_eq!(format!("{err:#}"), "AcoustID could not be reached", "said as it failed");
+        // Its own verdict, and one made before it is asked, are refusals.
+        let err = take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, acoustid_says(0.99, "r6")).await.unwrap_err();
+        assert!(!err.is::<NotAsked>());
+        let longer = ReleaseTrack { length_ms: Some(30_000), ..track.clone() };
+        let err = take(&from, &d.join("staging/f3/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
+        assert!(!err.is::<NotAsked>());
         std::fs::remove_dir_all(&d).ok();
     }
 

@@ -72,3 +72,15 @@ configuration that Lidarr abstracts for our app. But they are still siblings fro
 - The server's part (Soulseek's wanted list from Cratarr's Requests, a library's fetcher "lidarr" beside "soulseek")
   is a5's; the page's 632's.
 
+
+## Amendment (2026-11-06): what could not be asked is no verdict
+
+An outside service gone away says nothing of a file or a user (the audit's finding 11). Decision 0099 lets the next
+folder go when a file fails; an outage is not a failed file.
+
+- **AcoustID could not be asked** (away, over its limit, its key gone or never set): the record is held at its check,
+  as it is: its tick, its folders, what it fetched, its user. Its row says why, and it is checked again every quarter of
+  an hour. A file that failed before it stands: the folder is set aside.
+- **One held can leave the list**, and what it fetched with it.
+- **The bulk intake** has no folder to wait in: the track stops, says why, and Search now takes it up again. No user is
+  remembered and no next candidate fetched.

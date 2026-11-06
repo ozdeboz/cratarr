@@ -6583,7 +6583,7 @@ async fn soulseek_now(State(app): State<Arc<App>>, Path(id): Path<String>) -> Js
 
 /// A record taken off the list (not while fetched).
 async fn soulseek_drop(State(app): State<Arc<App>>, Path(id): Path<String>) -> Json<crate::app::soulseek::View> {
-    Json(crate::app::soulseek::drop_item(&app, &id))
+    Json(crate::app::soulseek::drop_item(&app, &id).await)
 }
 
 /// The placed records cleared.
