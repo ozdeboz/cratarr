@@ -343,6 +343,19 @@ impl Album {
             false => self.copies.iter().map(|c| c.library.as_str()).collect(),
         }
     }
+
+    /// One of its copies as that copy's library alone would list it: what acts on a copy takes it so, and a record listed
+    /// once says of itself only the copy that plays.
+    pub fn as_copy(&self, c: &AlbumCopy) -> Album {
+        Album {
+            library: Some(c.library.clone()),
+            path: Some(format!("{}/{}", c.library.trim_end_matches('/'), c.dir)),
+            format: c.format.clone(),
+            bitrate_kbps: c.kbps,
+            copies: vec![c.clone()],
+            ..self.clone()
+        }
+    }
 }
 
 /// What a source knows of an artist (the artist panel, decided 2026-10-16, as Symfonium's): the albums credited to them

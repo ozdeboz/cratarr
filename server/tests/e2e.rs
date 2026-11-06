@@ -520,6 +520,16 @@ async fn two_accounts_sign_in_on_every_kind_of_library_end_to_end() {
     assert_eq!(status, 200);
     assert!(bytes == std::fs::read(own.join("ann/Salt Meridian/Own Room (2018)/01 Own Room.mp3")).unwrap(), "not the file as it lies");
     assert_eq!(s.anyone().bytes(&file).await.0, 401);
+
+    // Someone's own copy of a record also in Music, deleted from the Users panel by naming their library: Music's stands.
+    let (shores, dir) = (ann.albums().await.into_iter().find(|a| a["title"] == "Both Shores").unwrap(), "Salt Meridian/Both Shores (2018)");
+    let deleting = format!("/api/albums/cratarr/{}/delete-own", shores["id"].as_str().unwrap());
+    let (theirs, kept) = (own.join("ann").join(dir), as_it_lies(&music.join(dir)));
+    assert_eq!(ann.send(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await.0, 409, "that is no one's own music");
+    assert!(theirs.exists());
+    ann.ok(reqwest::Method::POST, &deleting, json!({ "from": path(&own.join("ann")) })).await;
+    assert!(!theirs.exists(), "the owner's copy went");
+    assert!(as_it_lies(&music.join(dir)) == kept, "Music's stands");
     s.stop();
 
     // A server that asks for a sign-in starts as any other.
@@ -999,6 +1009,72 @@ async fn delete_goes_to_its_librarys_trash_and_its_undo_brings_it_back_end_to_en
         assert_eq!(s.songs_of(&back).await, songs, "{title}'s track ids");
         assert_eq!(s.send(reqwest::Method::POST, "/api/undo", tokens).await.0, 409, "{title} undone once");
     }
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A record in two libraries is one entry, so what acts on it must name a copy. Delete and Move land on the copy named and on no
+/// other, whichever plays; a record of several copies with none named is refused, and nothing moves. Each picture is its copy's.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn the_copy_named_is_the_copy_touched_end_to_end() {
+    let root = temp("named");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, second, incoming) = (library.join("music"), library.join("second"), library.join("incoming"));
+    let dir = "Salt Meridian/Both Shores (2018)";
+    // The second main library without its copy, for one to move to.
+    std::fs::remove_dir_all(second.join(dir)).unwrap();
+    for (folder, picture) in [(&music, b"\xff\xd8the kept copy's".as_slice()), (&incoming, b"\xff\xd8the waiting copy's".as_slice())] {
+        std::fs::write(folder.join(dir).join("cover.jpg"), picture).unwrap();
+    }
+    settings(&data, &[(&music, "main"), (&second, "main"), (&incoming, "incoming")], &library.join("own"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let path = |p: &Path| p.to_string_lossy().to_string();
+    s.read_in("Both Shores", &music).await;
+    let album = s.read_in("Both Shores", &incoming).await;
+    let id = album["id"].as_str().unwrap();
+    assert_eq!(album["library"].as_str(), Some(&*path(&music)), "the entry is the copy that plays");
+    let (kept, waiting) = (as_it_lies(&music.join(dir)), as_it_lies(&incoming.join(dir)));
+    let (deleting, moving) = (format!("/api/albums/cratarr/{id}/delete"), format!("/api/albums/cratarr/{id}/move"));
+
+    let picture = |library: &Path| format!("/api/albums/cratarr/{id}/cover?from={}", path(library).replace('/', "%2F"));
+    assert!(s.anyone().bytes(&picture(&music)).await.1.ends_with(b"the kept copy's"));
+    assert!(s.anyone().bytes(&picture(&incoming)).await.1.ends_with(b"the waiting copy's"));
+
+    assert_eq!(s.send(reqwest::Method::POST, &deleting, json!({})).await.0, 409, "two copies, none named");
+    assert_eq!(s.send(reqwest::Method::POST, &deleting, json!({ "from": path(&second) })).await.0, 409, "no copy there");
+    assert_eq!(s.send(reqwest::Method::POST, &moving, json!({ "to": path(&second) })).await.0, 409, "two copies, none named");
+    assert_eq!(s.send(reqwest::Method::POST, &moving, json!({ "from": path(&music), "to": path(&music) })).await.0, 409, "it is in that library already, and Incoming's folder of that name is not it");
+    assert!(as_it_lies(&music.join(dir)) == kept && as_it_lies(&incoming.join(dir)) == waiting, "a refusal moves nothing");
+
+    // The copy that does not play: the record stays, and the one that plays stays with it.
+    let gone = s.ok(reqwest::Method::POST, &deleting, json!({ "from": path(&incoming) })).await;
+    assert!(!incoming.join(dir).exists(), "the copy named went");
+    assert!(as_it_lies(&music.join(dir)) == kept, "the other copy stands");
+    s.until("Incoming to let its copy go", Duration::from_secs(120), || async { s.album_in("Both Shores", &incoming).await.is_none() }).await;
+    s.read_in("Both Shores", &music).await;
+    s.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    assert!(as_it_lies(&incoming.join(dir)) == waiting);
+    s.read_in("Both Shores", &incoming).await;
+
+    // The copy that plays: named, it goes, and Incoming's is left.
+    let gone = s.ok(reqwest::Method::POST, &deleting, json!({ "from": path(&music) })).await;
+    assert!(!music.join(dir).exists(), "the copy named went");
+    assert!(as_it_lies(&incoming.join(dir)) == waiting, "the other copy stands");
+    s.until("Music to let its copy go", Duration::from_secs(120), || async { s.album_in("Both Shores", &music).await.is_none() }).await;
+    s.ok(reqwest::Method::POST, "/api/undo", json!({ "tokens": [gone["undo"]] })).await;
+    s.read_in("Both Shores", &music).await;
+
+    // Moved out of Incoming, Music's stands.
+    let asked = format!("{moving}?from={}&to={}", path(&incoming).replace('/', "%2F"), path(&second).replace('/', "%2F"));
+    assert_eq!(s.get(&asked).await["refused"], Value::Null);
+    let moved = s.ok(reqwest::Method::POST, &moving, json!({ "from": path(&incoming), "to": path(&second) })).await;
+    assert!(!incoming.join(dir).exists(), "out of Incoming");
+    assert!(contents(&as_it_lies(&second.join(moved["folder"].as_str().unwrap()))) == contents(&waiting), "into the library named, the copy named");
+    assert!(as_it_lies(&music.join(dir)) == kept, "the other copy stands");
     s.stop();
     std::fs::remove_dir_all(&root).ok();
 }

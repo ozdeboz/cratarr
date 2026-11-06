@@ -501,7 +501,8 @@ impl IncomingService {
         };
         let done = match job.action {
             Action::Keep => self.keep_now(&at, job.target, job.year.as_deref(), converted.clone(), Some(job.id)).await,
-            Action::Replace => self.replace_now(&at, job.year.as_deref(), converted.clone(), Some(job.id)).await,
+            // The copy that was previewed, not whichever a match finds now.
+            Action::Replace => self.replace_now(&at, job.target, job.year.as_deref(), converted.clone(), Some(job.id)).await,
         };
         let outcome = match done {
             Ok(r) => Outcome::Done(r.undo),

@@ -168,6 +168,47 @@ mod tests {
         assert_eq!(joins, [(t.roots[1].join(MP3), Some(200_000)), (t.roots[1].join(MP3), Some(200_000))], "a wind goes through the same file");
     }
 
+    /// A library of one folder on the disk, of these files: each (its path, its album, its title).
+    fn built(name: &str, files: &[(&str, &str, &str)]) -> (std::path::PathBuf, Catalogue, Library) {
+        let root = std::env::temp_dir().join(format!("cratarr-listener-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        for (rel, ..) in files {
+            std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(root.join(rel), rel).unwrap();
+        }
+        let cat = Catalogue::open(None, vec![root.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        for (rel, album, title) in files {
+            cat.tag_for_tests(0, rel, &[("album", album), ("albumartist", "A"), ("title", title)]);
+        }
+        cat.identify().unwrap();
+        let lib = Library::open(None).unwrap();
+        lib.set_kinds(vec![(0, Kind::Main)]);
+        let (_, print) = lib.change(&cat, &Rules::default()).unwrap();
+        lib.build_from(&cat, &Rules::default(), &print).unwrap();
+        (root, cat, lib)
+    }
+
+    /// `albums.dir` is what a copy's files share. Over two folders of an artist it is the artist's, and a Delete of that folder
+    /// would take every other album in it: only what is the copy's alone may go whole.
+    #[test]
+    fn a_dir_holding_another_records_audio_is_refused() {
+        let (root, _cat, lib) = built(
+            "alone",
+            &[("Artist/Live/1.flac", "Spread", "One"), ("Artist/Live/2.flac", "Lone", "Two"), ("Artist/Studio/1.flac", "Spread", "Three"), ("Box/CD1/1.flac", "Set", "Four"), ("Box/CD2/1.flac", "Set", "Five")],
+        );
+        let album = |dir: &str| lib.album_in(0, dir).unwrap().unwrap();
+        let all = ["Artist/Live/1.flac", "Artist/Live/2.flac", "Artist/Studio/1.flac"].map(String::from);
+        let spread = album("Artist");
+        assert!(!lib.copy_holds_all(&spread, 0, "Artist", &all).unwrap(), "the other album lies under it, and in a copy of its own folder");
+        let (only_its_own, set) = (["Artist/Live/1.flac", "Artist/Studio/1.flac"].map(String::from), album("Box"));
+        assert!(!lib.copy_holds_all(&spread, 0, "Artist", &only_its_own).unwrap(), "another copy lies inside it, whatever the disk was seen to hold");
+        assert!(lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD2/1.flac"].map(String::from)).unwrap(), "two discs of one copy are that copy");
+        assert!(!lib.copy_holds_all(&set, 0, "Box", &["Box/CD1/1.flac", "Box/CD3/new.flac"].map(String::from)).unwrap(), "a file not built yet is no file of it");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn a_copy_lacking_the_track_is_passed_over() {
         let t = two("lacking");

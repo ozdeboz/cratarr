@@ -3009,7 +3009,7 @@ fn never_offline(t: &TrackRefOf) -> Option<serde_json::Value> {
 }
 
 /// A path segment, percent-encoded.
-fn form_urlencoded_segment(s: &str) -> String {
+pub(crate) fn form_urlencoded_segment(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
@@ -3804,54 +3804,75 @@ async fn play_album(State(app): State<Arc<App>>, Path((source, album)): Path<(St
     Ok(Json(json!({ "player": app.playing.play_album(&source, &album).await? })))
 }
 
+/// Which copy of a record an action is on: a library's id. It holds `/`, so it goes in the query or the body, never the
+/// path. With a record of several copies it must be said.
+#[derive(Deserialize, Default)]
+struct NamedCopy {
+    #[serde(default)]
+    from: Option<String>,
+}
+
 async fn delete_incoming(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
+    body: Option<Json<NamedCopy>>,
 ) -> Result<Json<crate::app::DeleteResult>, ApiError> {
-    Ok(Json(app.incoming.delete(&source, &album).await?))
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    Ok(Json(app.incoming.delete(&source, &album, b.from.as_deref()).await?))
 }
 
 
+/// Which copy Replace brings in (`from`) and the main library whose copy it takes the place of (`to`; none: the one
+/// matched); and what stands in for a missing release year (the page asks for it).
 #[derive(Deserialize, Default)]
-struct KeepYear {
-    /// Stands in for a missing release year (the page asks for it).
+struct ReplaceWhat {
     #[serde(default)]
-    year: Option<String>,
-}
-
-/// Where Keep puts an album (0101 point 2): a main library's id, else the server's first main library (`keep_to`);
-/// and the year when the album's tags lack it.
-#[derive(Deserialize, Default)]
-struct KeepInto {
+    from: Option<String>,
     #[serde(default)]
     to: Option<String>,
     #[serde(default)]
     year: Option<String>,
 }
 
-/// Where a move goes (decision 0034): a library's id, and the year when the album's tags lack it.
+/// Which copy Keep adds (`from`), where it puts it (0101 point 2): a main library's id, else the server's first main
+/// library (`keep_to`); and the year when the album's tags lack it.
+#[derive(Deserialize, Default)]
+struct KeepInto {
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    year: Option<String>,
+}
+
+/// Which copy moves (`from`), where it goes (decision 0034): a library's id, and the year when the album's tags lack it.
 #[derive(Deserialize)]
 struct MoveTo {
+    #[serde(default)]
+    from: Option<String>,
     to: String,
     #[serde(default)]
     year: Option<String>,
 }
 
-async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
-    Ok(Json(app.delete_album(&source, &album).await?))
+async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    Ok(Json(app.delete_album(&source, &album, b.from.as_deref()).await?))
 }
 
 /// An album of someone's own music deleted from the Users panel (the administrators' only way, the owner, 2026-11-04).
-async fn delete_own_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
-    Ok(Json(app.delete_own_album(&source, &album).await?))
+async fn delete_own_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, body: Option<Json<NamedCopy>>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    Ok(Json(app.delete_own_album(&source, &album, b.from.as_deref()).await?))
 }
 
 async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<MoveTo>) -> Result<Json<crate::app::KeepPreview>, ApiError> {
-    Ok(Json(app.move_preview(&source, &album, &q.to, q.year.as_deref()).await?))
+    Ok(Json(app.move_preview(&source, &album, q.from.as_deref(), &q.to, q.year.as_deref()).await?))
 }
 
 async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
-    Ok(Json(app.move_album(&source, &album, &b.to, b.year.as_deref()).await?))
+    Ok(Json(app.move_album(&source, &album, b.from.as_deref(), &b.to, b.year.as_deref()).await?))
 }
 
 async fn keep_preview(
@@ -3859,7 +3880,7 @@ async fn keep_preview(
     Path((source, album)): Path<(String, String)>,
     Query(q): Query<KeepInto>,
 ) -> Result<Json<crate::app::KeepPreview>, ApiError> {
-    Ok(Json(app.incoming.keep_preview(&source, &album, q.to.as_deref(), q.year.as_deref()).await?))
+    Ok(Json(app.incoming.keep_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
 }
 
 async fn keep_incoming(
@@ -3868,21 +3889,25 @@ async fn keep_incoming(
     body: Option<Json<KeepInto>>,
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(app.incoming.keep(&source, &album, b.to.as_deref(), b.year.as_deref()).await?))
+    Ok(Json(app.incoming.keep(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref()).await?))
 }
 
 async fn replace_preview(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
-    Query(q): Query<KeepYear>,
+    Query(q): Query<ReplaceWhat>,
 ) -> Result<Json<crate::app::ReplacePreview>, ApiError> {
-    Ok(Json(app.incoming.replace_preview(&source, &album, q.year.as_deref()).await?))
+    Ok(Json(app.incoming.replace_preview(&source, &album, q.from.as_deref(), q.to.as_deref(), q.year.as_deref()).await?))
 }
 
-/// Replace's ask (0.9.5): the year where the tags lack it, and the cover: `keep` the one in Music (the default, the
-/// owner's choice), or the `new` copy's.
+/// Replace's ask (0.9.5): the copies as `ReplaceWhat` names them, the year where the tags lack it, and the cover: `keep`
+/// the one in Music (the default, the owner's choice), or the `new` copy's.
 #[derive(Deserialize, Default)]
 struct ReplaceBody {
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
     #[serde(default)]
     year: Option<String>,
     #[serde(default)]
@@ -3903,7 +3928,7 @@ async fn replace_incoming(
         Some("new") => false,
         Some(_) => return Err(ToggleError::Refused("cover is keep or new".into()).into()),
     };
-    Ok(Json(app.incoming.replace(&source, &album, b.year.as_deref(), keep, b.carry).await?))
+    Ok(Json(app.incoming.replace(&source, &album, b.from.as_deref(), b.to.as_deref(), b.year.as_deref(), keep, b.carry).await?))
 }
 
 /// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.
@@ -3919,12 +3944,22 @@ async fn cancel_job(State(app): State<Arc<App>>, Path(id): Path<u64>) -> Result<
 struct CoverStamp {
     #[serde(default)]
     v: Option<String>,
+    /// The picture of its copy in this library, where it matters which: Replace shows two copies of one record side by side.
+    #[serde(default)]
+    from: Option<String>,
 }
 
 /// An album's cover. Asked by its stamp (`?v=`, 0.9.7): kept for good, a changed cover having another address; else
 /// for an hour (another server's album, a device's picture).
-async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
-    match app.playing.album_cover(&source, &album).await {
+async fn album_cover(ctx: Ctx, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
+    let found = match (q.from.as_deref(), ctx.served.as_ref()) {
+        (Some(library), Some(served)) if source == crate::source::cratarr::KIND.id => served.copy_cover_bytes(&album, library).await.unwrap_or_else(|e| {
+            tracing::warn!("cover of {album} in {library}: {e:#}");
+            None
+        }),
+        _ => ctx.app.playing.album_cover(&source, &album).await,
+    };
+    match found {
         Some((content_type, bytes)) => {
             // Another server's album comes with what that server says.
             let ct = HeaderValue::from_static(crate::serve::art::picture_type(Some(&content_type), &bytes));

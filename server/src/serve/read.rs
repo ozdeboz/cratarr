@@ -2,7 +2,7 @@
 //! (`persistence/sql_search.go`, translated): the page's row numbers first, over an index and without joins, then the
 //! details of just those rows. User data (stars, plays, ratings) is added by the caller (`annotate`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use rusqlite::{Connection, params_from_iter};
@@ -952,6 +952,30 @@ impl Library {
             song.replay_gain = ReplayGain::of(r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?);
         }
         Ok(())
+    }
+
+    /// Whether a copy at (`folder`, `dir`) holds all of `audio`, the audio files lying under `dir`, and no other copy lies
+    /// inside it: what a Delete or a Move of that folder would take with it. A file the library has not built yet is no
+    /// file of this copy, and it is told so until it has.
+    pub fn copy_holds_all(&self, album: &str, folder: i64, dir: &str, audio: &[String]) -> Result<bool> {
+        let db = self.db();
+        let prefix = format!("{dir}/");
+        let length = prefix.chars().count() as i64;
+        let inside: i64 = db.query_row("SELECT count(*) FROM copies WHERE folder = ?1 AND substr(dir, 1, ?2) = ?3", rusqlite::params![folder, length, prefix], |r| r.get(0))?;
+        if inside > 0 {
+            return Ok(false);
+        }
+        let mut st = db.prepare_cached("SELECT rel FROM copy_files WHERE folder = ?1 AND album = ?2 AND substr(rel, 1, ?3) = ?4")?;
+        let held: HashSet<String> = st.query_map(rusqlite::params![folder, album, length, prefix], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(audio.iter().all(|f| held.contains(f)))
+    }
+
+    /// The first file of a copy, by its path in the catalogue folder: where its picture lies when no cover file does.
+    pub fn first_file_of(&self, album: &str, folder: i64, dir: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let prefix = format!("{dir}/");
+        let mut st = db.prepare_cached("SELECT rel FROM copy_files WHERE folder = ?1 AND album = ?2 AND substr(rel, 1, ?3) = ?4 ORDER BY rel LIMIT 1")?;
+        Ok(st.query_map(rusqlite::params![folder, album, prefix.chars().count() as i64, prefix], |r| r.get(0))?.next().transpose()?)
     }
 
     /// Whether this record waits in Incoming: nothing else holds it. A kept record with a copy there is kept, so its review

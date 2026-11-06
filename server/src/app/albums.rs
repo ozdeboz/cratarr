@@ -288,14 +288,30 @@ impl App {
     }
 }
 
-/// Whether the viewer may delete what a Delete of this listed album lands on: with no copy named, the one that plays. The
-/// view's `deletable` goes by id, so it holds while any copy of the record may go, and a requester's right to their Incoming
-/// copy must not reach the kept one beside it.
-fn may_delete_listed(deletable: &[String], a: &source::Album) -> bool {
-    match a.copies.iter().find(|c| c.plays) {
-        Some(c) => c.deletable,
-        None => deletable.contains(&a.id),
+/// The copy of a listed record that an action names, as its library alone would list it. `from` is a library: of two folders
+/// of one library the first, as the record's copies stand (Q2). A record of several copies must be told which: what is
+/// done to its files cannot be left to which of them plays. Another server's album is its one library's.
+fn named_copy(a: &source::Album, from: Option<&str>) -> Result<source::Album, ToggleError> {
+    let elsewhere = || ToggleError::Refused("It has no copy in that library".into());
+    if a.copies.is_empty() {
+        return match from {
+            Some(f) if a.library.as_deref() != Some(f) => Err(elsewhere()),
+            _ => Ok(a.clone()),
+        };
     }
+    match from {
+        Some(f) => a.copies.iter().find(|c| c.library == f).map(|c| a.as_copy(c)).ok_or_else(elsewhere),
+        None => match a.copies.as_slice() {
+            [only] => Ok(a.as_copy(only)),
+            _ => Err(ToggleError::Refused("It is in several libraries: say which copy".into())),
+        },
+    }
+}
+
+/// Whether the viewer may delete this copy: the view's `deletable` goes by id, so it holds while any copy of the record may
+/// go, and a requester's right to their Incoming copy must not reach the kept one beside it.
+fn may_delete_copy(deletable: &[String], a: &source::Album) -> bool {
+    a.copies.first().map_or_else(|| deletable.contains(&a.id), |c| c.deletable)
 }
 
 /// How a record's copies stand for one viewer: what `fold` needs of the library, so `fold` stays pure.
@@ -393,18 +409,20 @@ impl App {
         }
     }
 
-    /// A listed album of a server (Music's or another library's), by id, as the viewer sees that server.
-    async fn listed_album(&self, source: &str, album: &str) -> Result<(AlbumsSourceView, source::Album), ToggleError> {
+    /// A listed album of a server (Music's or another library's), by id, as the viewer sees that server: the copy `from`
+    /// names (`named_copy`).
+    async fn listed_album(&self, source: &str, album: &str, from: Option<&str>) -> Result<(AlbumsSourceView, source::Album), ToggleError> {
         let view = self.albums(Some(source)).await;
         let s = view.sources.into_iter().find(|s| s.id == source).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
-        let a = s.albums.iter().find(|a| a.id == album).cloned().ok_or_else(|| ToggleError::Refused("that album is no longer listed".into()))?;
+        let a = s.albums.iter().find(|a| a.id == album).ok_or_else(|| ToggleError::Refused("that album is no longer listed".into()))?;
+        let a = named_copy(a, from)?;
         Ok((s, a))
     }
 
-    /// Delete an album the viewer may (the view's `deletable`), into its library's trash (decision 0034).
-    pub async fn delete_album(&self, source: &str, album: &str) -> Result<super::DeleteResult, ToggleError> {
-        let (s, a) = self.listed_album(source, album).await?;
-        if !may_delete_listed(&s.deletable, &a) {
+    /// Delete a copy the viewer may, into its library's trash (decision 0034). The record stays while another copy does.
+    pub async fn delete_album(&self, source: &str, album: &str, from: Option<&str>) -> Result<super::DeleteResult, ToggleError> {
+        let (s, a) = self.listed_album(source, album, from).await?;
+        if !may_delete_copy(&s.deletable, &a) {
             return Err(ToggleError::Refused("That isn't yours to delete".into()));
         }
         self.incoming.delete_listed(source, a).await
@@ -412,8 +430,8 @@ impl App {
 
     /// Delete an album of someone's own music from the Users panel: an administrator's, only there (the owner, 2026-11-04:
     /// "not anywhere else than in a control panel").
-    pub async fn delete_own_album(&self, source: &str, album: &str) -> Result<super::DeleteResult, ToggleError> {
-        let (_, a) = self.listed_album(source, album).await?;
+    pub async fn delete_own_album(&self, source: &str, album: &str, from: Option<&str>) -> Result<super::DeleteResult, ToggleError> {
+        let (_, a) = self.listed_album(source, album, from).await?;
         let live = self.library.live();
         let own = a.library.as_deref().and_then(|l| live.iter().find(|x| x.cfg.id == source)?.kind_of(l)) == Some(LibraryKind::Own);
         if !own {
@@ -428,11 +446,15 @@ impl App {
         let on = live.iter().find(|x| x.cfg.id == source).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
         let viewer = self.served.as_ref().and_then(|s| s.current_user());
         let viewers_own = viewer.as_ref().and_then(|v| on.own_of(v)).as_deref() == Some(to);
-        let default = s.keep_to.get(&a.id).map(String::as_str) == Some(to);
+        // A record's copies differ in both: only another server's album goes by its id.
+        let (keepable, default) = match a.copies.first() {
+            Some(c) => (c.keepable, c.keep_to.as_deref() == Some(to)),
+            None => (s.keepable.contains(&a.id), s.keep_to.get(&a.id).map(String::as_str) == Some(to)),
+        };
         let from = a.library.as_deref().and_then(|l| on.kind_of(l));
         let owner = on.libraries().into_iter().find(|u| a.library.as_deref() == Some(u.id.as_str())).and_then(|u| u.owner);
         let left = owner.is_some_and(|o| !self.account_on(&o));
-        if let Some(why) = move_refused(from, on.kind_of(to), crate::serve::access::administering(), s.keepable.contains(&a.id), default, viewers_own, left) {
+        if let Some(why) = move_refused(from, on.kind_of(to), crate::serve::access::administering(), keepable, default, viewers_own, left) {
             return Err(ToggleError::Refused(why.into()));
         }
         if on.used(to) {
@@ -443,16 +465,16 @@ impl App {
         made.ok_or_else(|| ToggleError::Refused("no own-music folder is set".into()))
     }
 
-    /// Move an album into another used library of its server (decision 0034).
-    pub async fn move_album(&self, source: &str, album: &str, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
-        let (s, a) = self.listed_album(source, album).await?;
+    /// Move a copy into another used library of its server (decision 0034).
+    pub async fn move_album(&self, source: &str, album: &str, from: Option<&str>, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let (s, a) = self.listed_album(source, album, from).await?;
         let to = self.move_target(source, &s, &a, to).await?;
         self.incoming.move_album(source, a, &to, year).await
     }
 
     /// What that move would do.
-    pub async fn move_preview(&self, source: &str, album: &str, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
-        let (s, a) = self.listed_album(source, album).await?;
+    pub async fn move_preview(&self, source: &str, album: &str, from: Option<&str>, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
+        let (s, a) = self.listed_album(source, album, from).await?;
         let to = self.move_target(source, &s, &a, to).await?;
         self.incoming.move_preview(source, a, &to, year).await
     }
@@ -637,20 +659,61 @@ mod tests {
         assert_eq!((waiting.keep_to.as_deref(), waiting.lacks.as_slice(), waiting.job, waiting.bits, waiting.added), (Some("music"), &["cover".to_string()][..], Some(7), Some(24), Some(50)));
     }
 
-    /// A requester may delete their Incoming copy, so the record's id is in the view's `deletable`; a Delete with no copy
-    /// named lands on the copy that plays, the kept one, which is not theirs.
+    /// A requester may delete their Incoming copy, so the record's id is in the view's `deletable`: the right that counts is
+    /// the copy's.
     #[test]
     fn a_right_to_one_copy_does_not_delete_another() {
         let mut waiting = listed("al-1", 2, "incoming", "FLAC");
         waiting.copies[0].deletable = true;
         let folded = fold(vec![listed("al-1", 0, "music", "MP3"), waiting], &order(&[0, 2], 0));
         let deletable = ["al-1".to_string()];
-        assert!(!may_delete_listed(&deletable, &folded[0]), "the kept copy plays, and that is not theirs");
-        let mut theirs = listed("al-1", 2, "incoming", "FLAC");
-        theirs.copies[0].deletable = true;
-        assert!(may_delete_listed(&deletable, &theirs), "with one copy, as it was");
+        let copy = |from: &str| named_copy(&folded[0], Some(from)).unwrap();
+        assert!(!may_delete_copy(&deletable, &copy("music")), "the kept copy is not theirs");
+        assert!(may_delete_copy(&deletable, &copy("incoming")), "their request is");
         let other = album("x", "jellyfin-music", "/m/x");
-        assert!(may_delete_listed(&["x".to_string()], &other) && !may_delete_listed(&[], &other), "another server's goes by id");
+        assert!(may_delete_copy(&["x".to_string()], &other) && !may_delete_copy(&[], &other), "another server's goes by id");
+    }
+
+    /// The entry stands for the copy that plays, and what is named must come out of it as that copy alone: its library, its
+    /// place, its numbers. This is what keeps a Delete off the copy that plays.
+    #[test]
+    fn a_named_copy_is_that_copy_and_not_the_one_that_plays() {
+        let folded = fold(vec![listed("al-1", 0, "music", "MP3"), listed("al-1", 2, "incoming", "FLAC")], &order(&[0, 2], 0));
+        assert_eq!(folded[0].library.as_deref(), Some("music"), "the card is the copy that plays");
+        let named = named_copy(&folded[0], Some("incoming")).unwrap();
+        assert_eq!((named.library.as_deref(), named.path.as_deref()), (Some("incoming"), Some("incoming/A/Album")));
+        assert_eq!(named.copies.iter().map(|c| (c.folder, c.library.as_str())).collect::<Vec<_>>(), [(2, "incoming")], "and nothing of the other");
+        assert!(matches!(named_copy(&folded[0], Some("second")), Err(ToggleError::Refused(_))), "no copy there");
+    }
+
+    /// Left to the copy that plays, an administrator's Delete would land on whatever plays for them today.
+    #[test]
+    fn a_record_of_several_copies_must_be_told_which() {
+        let folded = fold(vec![listed("al-1", 0, "music", "MP3"), listed("al-1", 2, "incoming", "FLAC")], &order(&[0, 2], 0));
+        assert!(matches!(named_copy(&folded[0], None), Err(ToggleError::Refused(_))));
+        assert_eq!(named_copy(&listed("al-2", 0, "music", "FLAC"), None).unwrap().copies[0].folder, 0, "with one, there is nothing to tell");
+        let other = album("x", "jellyfin-music", "/m/x");
+        assert!(named_copy(&other, None).is_ok() && named_copy(&other, Some("jellyfin-music")).is_ok());
+        assert!(named_copy(&other, Some("music")).is_err(), "another server's album is its one library's");
+    }
+
+    /// Q2: two folders of one library are two copies, and naming the library names the first as the record's copies stand.
+    #[test]
+    fn of_two_folders_of_one_library_the_first_is_named() {
+        let mut other = listed("al-1", 0, "music", "FLAC");
+        other.copies[0].dir = "B/Album".into();
+        let order = HashMap::from([("al-1".to_string(), PlayOrder { places: vec![(0, "B/Album".to_string()), (0, "A/Album".to_string())], plays: Some((0, "B/Album".to_string())) })]);
+        let folded = fold(vec![listed("al-1", 0, "music", "MP3"), other], &order);
+        assert_eq!(named_copy(&folded[0], Some("music")).unwrap().copies[0].dir, "B/Album");
+    }
+
+    /// The Users panel names the account's library: a record also in Music is found there, not refused as Music's.
+    #[test]
+    fn delete_own_finds_the_owners_copy_of_a_record_also_in_music() {
+        let folded = fold(vec![listed("al-1", 0, "music", "FLAC"), listed("al-1", 3, "/own/ann", "MP3")], &order(&[0, 3], 0));
+        assert_eq!(folded[0].library.as_deref(), Some("music"));
+        let named = named_copy(&folded[0], Some("/own/ann")).unwrap();
+        assert_eq!((named.library.as_deref(), named.copies[0].folder), (Some("/own/ann"), 3));
     }
 
     /// The page's contract, `AlbumCopy` in `lib/api.ts`, and what stays out of it: a record's place is no business of a page.

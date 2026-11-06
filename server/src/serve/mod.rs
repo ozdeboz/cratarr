@@ -581,25 +581,47 @@ impl Serve {
     /// its first track. Blocking.
     fn art_of(&self, album: &str) -> Result<Option<(String, Vec<u8>, String)>> {
         let Some((folder, dir, cover, first)) = self.library.album_art(album)? else { return Ok(None) };
+        let print = cover.as_deref().and_then(|c| c.split_once('_')).map(|(_, p)| p.to_string()).unwrap_or_default();
+        Ok(self.art_at(folder, &dir, first)?.map(|(ct, bytes)| (ct, bytes, print)))
+    }
+
+    /// The picture of what lies at (`folder`, `dir`): its cover file, else what is inside `first`, its first file.
+    fn art_at(&self, folder: i64, dir: &str, first: Option<String>) -> Result<Option<(String, Vec<u8>)>> {
         let Some(root) = self.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| PathBuf::from(r)) else {
             return Ok(None);
         };
-        let print = cover.as_deref().and_then(|c| c.split_once('_')).map(|(_, p)| p.to_string()).unwrap_or_default();
-        if let Some(file) = art::cover_file(&root.join(&dir))
+        if let Some(file) = art::cover_file(&root.join(dir))
             && std::fs::metadata(&file).is_ok_and(|m| m.len() <= art::MAX_BYTES)
             && let Ok(bytes) = std::fs::read(&file)
         {
             let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let ct = crate::covers::content_type(name).unwrap_or_else(|| art::sniff(&bytes));
-            return Ok(Some((ct.to_string(), bytes, print)));
+            return Ok(Some((ct.to_string(), bytes)));
         }
-        Ok(first.and_then(|rel| art::embedded(&root.join(rel))).map(|(ct, bytes)| (ct, bytes, print)))
+        Ok(first.and_then(|rel| art::embedded(&root.join(rel))))
     }
 
     /// An album's cover image as it is: (content type, bytes); `None` when it has none.
     pub async fn cover_bytes(self: &Arc<Self>, album: &str) -> Result<Option<(String, Vec<u8>)>> {
         let (me, album) = (self.clone(), album.to_string());
         Ok(tokio::task::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
+    }
+
+    /// The cover of a record's copy in `library`, as `cover_bytes` has it; none where it has no copy there.
+    pub async fn copy_cover_bytes(self: &Arc<Self>, album: &str, library: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let (me, album, library) = (self.clone(), album.to_string(), library.to_string());
+        tokio::task::spawn_blocking(move || {
+            let Some(folder) = me.folder_of_library(&library) else { return Ok(None) };
+            let Some(copy) = me.library.copies_of(&album)?.into_iter().find(|c| c.folder == folder) else { return Ok(None) };
+            let first = me.library.first_file_of(&album, folder, &copy.dir)?;
+            me.art_at(folder, &copy.dir, first)
+        })
+        .await?
+    }
+
+    /// The catalogue folder of one of Cratarr's own libraries: a library's id is its folder.
+    pub fn folder_of_library(&self, library: &str) -> Option<i64> {
+        self.library.roots().into_iter().find(|(_, r)| std::path::Path::new(r) == std::path::Path::new(library)).map(|(f, _)| f)
     }
 
     /// An album's (or a song's, or an artist's) cover, at most `size` pixels on its longer side when asked. An id with

@@ -115,13 +115,13 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str, to: Option<Str
         return fail(StatusCode::CONFLICT, format!("{name} is not in Incoming"));
     };
     let undo = if wanted == PROMOTED {
-        match incoming.keep(&source, &server_album, to.as_deref(), None).await {
+        match incoming.keep(&source, &server_album, None, to.as_deref(), None).await {
             // A Keep that waits for its conversion gets its undo key when the job is done: remember the job's album.
             Ok(k) => Some(k.undo.unwrap_or_else(|| format!("{JOB}{server_album}"))),
             Err(e) => return fail(StatusCode::CONFLICT, e.to_string()),
         }
     } else {
-        match incoming.delete(&source, &server_album).await {
+        match incoming.delete(&source, &server_album, None).await {
             Ok(d) => Some(d.undo),
             Err(e) => return fail(StatusCode::CONFLICT, e.to_string()),
         }
