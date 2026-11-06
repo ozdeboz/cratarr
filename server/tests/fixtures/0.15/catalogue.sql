@@ -1087,3 +1087,48 @@ INSERT INTO source_ids (source, track_id, library, folder, rel, seen) VALUES ('c
 INSERT INTO source_ids (source, track_id, library, folder, rel, seen) VALUES ('cratarr', 'tr-19', '@incoming@', 1, 'Salt Meridian/Both Shores (2018)/01 Landing.mp3', 1761000000);
 INSERT INTO audiomuse (track, energy, key, style, moods) VALUES (48, 0.5, 'D minor', 'dub:0.8', 'calm:0.6');
 INSERT INTO audiomuse (track, energy, key, style, moods) VALUES (19, 0.4, 'D minor', 'dub:0.7', 'calm:0.5');
+-- A library that changed place: 0.15's folder ids were places in a sorted list, and its `set_folders` took `analysis` along and
+-- left these behind, so Far Bank's shape and beats lie at the folder its library had.
+INSERT INTO analysis (folder, rel, size, mtime, version, analysed_at) VALUES (2, 'Salt Meridian/Far Bank (2018)/01 Far Bank.flac', 0, 0, 1, 1760990000);
+INSERT INTO analysis_shape (folder, rel, waveform) VALUES (1, 'Salt Meridian/Far Bank (2018)/01 Far Bank.flac', x'00');
+INSERT INTO beat_this (folder, rel, size, mtime, beats, downbeats, at) VALUES (1, 'Salt Meridian/Far Bank (2018)/01 Far Bank.flac', 0, 0, x'E8030000', x'E8030000', 1760990000);
+-- And the other way round, as a library can go back: Just Arrived's lie at the second place, and its library at the first.
+INSERT INTO analysis (folder, rel, size, mtime, version, analysed_at) VALUES (1, 'Salt Meridian/Just Arrived (2018)/01 Just Arrived.mp3', 0, 0, 1, 1760990000);
+INSERT INTO analysis_shape (folder, rel, waveform) VALUES (2, 'Salt Meridian/Just Arrived (2018)/01 Just Arrived.mp3', x'00');
+INSERT INTO beat_this (folder, rel, size, mtime, beats, downbeats, at) VALUES (2, 'Salt Meridian/Just Arrived (2018)/01 Just Arrived.mp3', 0, 0, x'E8030000', x'E8030000', 1760990000);
+-- What no list shows (CR13): a file gone a while, one in a trash, one in a folder parked before folders had ids for life. Their days
+-- lie far ahead: a server keeps such rows only so long, and a test must not meet that day.
+INSERT INTO folders (id, path) VALUES (-1, '/nowhere/put away');
+INSERT INTO tracks (id, born, retired_at) VALUES (88, 1758408088, NULL);
+INSERT INTO tracks (id, born, retired_at) VALUES (89, 1758408089, NULL);
+INSERT INTO tracks (id, born, retired_at) VALUES (90, 1758408090, NULL);
+INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, gone_at) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 0, 0, 1, 'FLAC', 200, 2000, 88, 4102444800);
+INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track, trashed) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 0, 0, 1, 'FLAC', 200, 2000, 89, '4102444800/Salt Meridian/Thrown Out (2017)');
+INSERT INTO files (folder, rel, size, mtime, state, format, bitrate, duration_ms, track) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 0, 0, 1, 'FLAC', 200, 2000, 90);
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 0, 'TITLE', 'title', 'Left Behind');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 1, 'ARTIST', 'artist', 'Salt Meridian');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 2, 'ALBUM', 'album', 'Left Behind');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 3, 'ALBUMARTIST', 'albumartist', 'Salt Meridian');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 4, 'TRACKNUMBER', 'tracknumber', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 5, 'TRACKTOTAL', 'totaltracks', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 6, 'DISCNUMBER', 'discnumber', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 7, 'DATE', 'date', '2017');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, 'Salt Meridian/Left Behind (2017)/01 Left Behind.flac', 8, 'GENRE', 'genre', 'Electronic');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 0, 'TITLE', 'title', 'Thrown Out');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 1, 'ARTIST', 'artist', 'Salt Meridian');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 2, 'ALBUM', 'album', 'Thrown Out');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 3, 'ALBUMARTIST', 'albumartist', 'Salt Meridian');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 4, 'TRACKNUMBER', 'tracknumber', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 5, 'TRACKTOTAL', 'totaltracks', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 6, 'DISCNUMBER', 'discnumber', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 7, 'DATE', 'date', '2017');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (1, '.cratarr-trash/4102444800/Salt Meridian/Thrown Out (2017)/01 Thrown Out.flac', 8, 'GENRE', 'genre', 'Electronic');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 0, 'TITLE', 'title', 'Put Away');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 1, 'ARTIST', 'artist', 'Salt Meridian');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 2, 'ALBUM', 'album', 'Put Away');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 3, 'ALBUMARTIST', 'albumartist', 'Salt Meridian');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 4, 'TRACKNUMBER', 'tracknumber', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 5, 'TRACKTOTAL', 'totaltracks', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 6, 'DISCNUMBER', 'discnumber', '1');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 7, 'DATE', 'date', '2017');
+INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (-1, 'Salt Meridian/Put Away (2017)/01 Put Away.flac', 8, 'GENRE', 'genre', 'Electronic');

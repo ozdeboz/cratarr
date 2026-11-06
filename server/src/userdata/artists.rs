@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(report.table_named("words_asked: artists").unwrap().moved, 1);
         assert_eq!(report.table_named("related_artists.found").unwrap().moved, 1);
         assert_eq!(held("SELECT count(*) FROM annotation WHERE kind = 'artist' AND length(item) > 15"), 0);
-        assert_eq!(held("SELECT count(*) FROM annotation WHERE kind = 'album' AND length(item) > 15"), 4, "the albums are the migration's other step");
+        assert_eq!(held("SELECT count(*) FROM annotation WHERE kind = 'album' AND length(item) > 15"), 16, "the albums are the migration's other step");
         drop(u);
         std::fs::remove_dir_all(&d).ok();
     }

@@ -103,6 +103,7 @@ mod tests {
     use super::*;
 
     const STEPS: [&str; 5] = ["catalogue", "journal", "sync", "stores", "user data"];
+    const CATALOGUE: &str = include_str!("../../tests/fixtures/0.15/catalogue.sql");
 
     /// One row of the report's `tables`.
     fn table<'a>(part: &'a Json, name: &str) -> &'a Json {
@@ -127,16 +128,10 @@ mod tests {
                 std::fs::write(library.join("a file"), b"x").unwrap();
             }
             let left = Self { data, libraries };
-            for (file, sql) in [
-                ("catalogue.sqlite", include_str!("../../tests/fixtures/0.15/catalogue.sql")),
-                ("userdata.sqlite", include_str!("../../tests/fixtures/0.15/userdata.sql")),
-                ("journal.sqlite", include_str!("../../tests/fixtures/0.15/journal.sql")),
-                ("playlist-sync.sqlite", include_str!("../../tests/fixtures/0.15/playlist-sync.sql")),
-            ] {
-                let places = ["@music@", "@incoming@", "@second@"].into_iter().zip(&left.libraries);
-                let sql = places.fold(sql.to_string(), |sql, (name, path)| sql.replace(name, &path.to_string_lossy()));
-                Connection::open(left.data.join(file)).unwrap().execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;")).unwrap();
-            }
+            left.write("catalogue.sqlite", CATALOGUE);
+            left.write("userdata.sqlite", include_str!("../../tests/fixtures/0.15/userdata.sql"));
+            left.write("journal.sqlite", include_str!("../../tests/fixtures/0.15/journal.sql"));
+            left.write("playlist-sync.sqlite", include_str!("../../tests/fixtures/0.15/playlist-sync.sql"));
             for (file, text) in [
                 ("crates.json", include_str!("../../tests/fixtures/0.15/crates.json")),
                 ("users/bob/crates.json", include_str!("../../tests/fixtures/0.15/users/bob/crates.json")),
@@ -147,6 +142,13 @@ mod tests {
                 std::fs::write(left.data.join(file), text).unwrap();
             }
             left
+        }
+
+        /// A database as 0.15 left it, over these libraries.
+        fn write(&self, file: &str, sql: &str) {
+            let places = ["@music@", "@incoming@", "@second@"].into_iter().zip(&self.libraries);
+            let sql = places.fold(sql.to_string(), |sql, (name, path)| sql.replace(name, &path.to_string_lossy()));
+            Connection::open(self.data.join(file)).unwrap().execute_batch(&format!("BEGIN;\n{sql}\nCOMMIT;")).unwrap();
         }
 
         /// What `Library::new` hands it: every database opened anew, as a start does.
@@ -179,7 +181,7 @@ mod tests {
                 let tables: Vec<String> = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
                 for table in tables {
                     let columns: Vec<String> = db.prepare(&format!("SELECT name FROM pragma_table_info('{table}')")).unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
-                    let kept: Vec<usize> = (0..columns.len()).filter(|i| !(TIMES.contains(&columns[*i].as_str()) && ["records", "tracks", "artists", "migration_report", "files", "preference", "track_moved"].contains(&table.as_str()))).collect();
+                    let kept: Vec<usize> = (0..columns.len()).filter(|i| !(TIMES.contains(&columns[*i].as_str()) && ["records", "tracks", "artists", "migration_report", "files", "preference", "track_moved", "change_log"].contains(&table.as_str()))).collect();
                     let mut st = db.prepare(&format!("SELECT * FROM \"{table}\"")).unwrap();
                     let root = self.data.parent().unwrap().to_string_lossy().to_string();
                     let mut rows: Vec<String> = st.query_map([], |r| Ok(kept.iter().map(|i| format!("{:?}", r.get::<_, Value>(*i).unwrap()).replace(&root, "")).collect::<Vec<_>>().join("|"))).unwrap().map(Result::unwrap).collect();
@@ -222,7 +224,17 @@ mod tests {
     }
 
     fn tide(left: &Left) -> String {
-        format!("al-{}", left.sql::<i64>("catalogue.sqlite", "SELECT record FROM tracks WHERE id = 83"))
+        on(left, 83)
+    }
+
+    /// The record a track holds, as it is served.
+    fn on(left: &Left, track: i64) -> String {
+        format!("al-{}", left.sql::<i64>("catalogue.sqlite", &format!("SELECT record FROM tracks WHERE id = {track}")))
+    }
+
+    /// One of an account's numbers on a record.
+    fn held(left: &Left, user: &str, what: &str, record: &str) -> i64 {
+        left.sql("userdata.sqlite", &format!("SELECT {what} FROM annotation WHERE user = '{user}' AND item = '{record}'"))
     }
 
     /// N4 on 0.15's data: the main library's tracks stand, whichever album a hash met first, and the report's numbers say so.
@@ -309,8 +321,8 @@ mod tests {
         assert_eq!(left.sql::<i64>("userdata.sqlite", "SELECT rating FROM annotation WHERE item = 'tr-48' AND user = 'ann'"), 5);
         let part = part(&left);
         let (rows, plays) = (table(&part, "annotation: tracks"), table(&part, "plays"));
-        assert_eq!((rows["before"].as_u64(), rows["after"].as_u64(), rows["merged"].as_u64()), (Some(5), Some(4), Some(1)), "{rows}");
-        assert_eq!((plays["before"].as_u64(), plays["after"].as_u64(), plays["moved"].as_u64()), (Some(5), Some(5), Some(1)));
+        assert_eq!((rows["before"].as_u64(), rows["after"].as_u64(), rows["merged"].as_u64()), (Some(6), Some(5), Some(1)), "{rows}");
+        assert_eq!((plays["before"].as_u64(), plays["after"].as_u64(), plays["moved"].as_u64()), (Some(6), Some(6), Some(2)));
         left.gone();
     }
 
@@ -430,6 +442,171 @@ mod tests {
         start.unplaced = vec![left.libraries[2].clone()];
         let refused = start.steps(&|_| Ok(())).unwrap_err().to_string();
         assert!(refused.contains(&*left.libraries[2].to_string_lossy()), "{refused}");
+        left.gone();
+    }
+
+    /// M2: a restore of less than everything. A backup of the catalogue from before the first start has the generation it always
+    /// had, so the user data takes it for its own, and its albums would come to other numbers than every row names: `al-5` another
+    /// album, with no error and no report.
+    #[test]
+    fn a_catalogue_from_before_the_first_start_stops_the_start() {
+        let left = moved("restored");
+        for file in ["catalogue.sqlite", "catalogue.sqlite-wal", "catalogue.sqlite-shm"] {
+            std::fs::remove_file(left.data.join(file)).ok();
+        }
+        left.write("catalogue.sqlite", CATALOGUE);
+        let start = left.start();
+        let rows = left.left();
+        let refused = start.steps(&|_| Ok(())).unwrap_err().to_string();
+        assert!(refused.contains("before the first start"), "{refused}");
+        drop(start);
+        assert_eq!(left.left(), rows, "nothing written");
+        left.gone();
+    }
+
+    /// S1: 0.15 served a file that failed its last read no more, and kept its format. A new reader makes it a row waiting, and a row
+    /// waiting with a format is served, so it came here with no tags, four of six enough to take the album's old id with them.
+    #[test]
+    fn a_file_that_failed_is_no_album_at_the_first_start() {
+        let left = Left::new("failed");
+        let failed = "rel LIKE 'Glass Harbour/Tide Tables%' AND rel NOT LIKE '%/01 %' AND rel NOT LIKE '%/02 %'";
+        let db = Connection::open(left.data.join("catalogue.sqlite")).unwrap();
+        db.execute_batch(&format!("UPDATE files SET state = 2 WHERE {failed}; DELETE FROM tags WHERE {failed};")).unwrap();
+        drop(db);
+        let start = left.start();
+        start.steps(&|_| Ok(())).unwrap();
+        assert_eq!(start.catalogue.named_now("al-4FwVmWLNdYpZZSEtkan6Uy"), Some(tide(&left)), "the id it was served by");
+        drop(start);
+        left.gone();
+    }
+
+    /// S3: a play written from a song's last play is safe to repeat by its event only while the song keeps its id, and a merge moves
+    /// the song and leaves the event. Told over at the next open, a play already there counts twice.
+    #[test]
+    fn a_restart_after_a_merge_adds_no_play() {
+        let left = moved("week");
+        let plays = |left: &Left| left.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM plays");
+        let before = plays(&left);
+        assert_eq!(left.sql::<i64>("userdata.sqlite", "SELECT count(*) FROM plays WHERE song = 'tr-47' AND context = 'backfill:annotation'"), 1, "moved, with its event");
+        drop(UserData::open(Some(&left.data.join("userdata.sqlite"))).unwrap());
+        assert_eq!(plays(&left), before);
+        left.gone();
+    }
+
+    /// A library that changed place: what came before went by the place it had and what came after by the place it has, a row of
+    /// each for one album, on the second day as on the first. They are one row, by each table's own rule. Either way round, as a
+    /// library can go back: Far Bank lies at the second place, under the first as well, and Just Arrived the other way about.
+    #[test]
+    fn an_albums_two_ids_are_one_row_with_what_each_held() {
+        let left = moved("two-ids");
+        for (who, plays, record) in [("ann", 4, on(&left, 5)), ("bob", 3, on(&left, 16))] {
+            let count = |table: &str, column: &str| left.sql::<i64>("userdata.sqlite", &format!("SELECT count(*) FROM {table} WHERE {column} = '{record}'"));
+            assert_eq!(left.sql::<i64>("userdata.sqlite", &format!("SELECT count(*) FROM annotation WHERE user = '{who}' AND item = '{record}'")), 1);
+            assert_eq!((held(&left, who, "play_count", &record), held(&left, who, "starred", &record), held(&left, who, "starred_at", &record)), (plays, 1, 1760880000), "the plays of one and the heart of the other");
+            assert_eq!(count("added", "album"), 1);
+            assert_eq!(left.sql::<String>("userdata.sqlite", &format!("SELECT at || ' ' || origin FROM added WHERE album = '{record}'")), "1760880000 jf", "the earlier, whole");
+            assert_eq!(count("album_complete", "album"), 1);
+            assert_eq!(left.sql::<Option<String>>("userdata.sqlite", &format!("SELECT found FROM album_complete WHERE album = '{record}'")), None, "the look under the id it has now, the later");
+        }
+        let differed = part(&left)["differed"].as_array().unwrap().iter().find(|d| d["what"] == "album_complete").cloned().unwrap();
+        assert_eq!(differed["count"].as_u64(), Some(2), "and what went with the other is there to read: {differed}");
+        // The same on a release both Incoming libraries hold: the first id real, the place the second had.
+        let both = shores(&left);
+        assert_eq!((held(&left, "bob", "play_count", &both), held(&left, "bob", "starred", &both)), (2, 1));
+        left.gone();
+    }
+
+    /// One place, two libraries, on a real first start: a release in both, on two records. What lay under the id of the place stays
+    /// with the album there now, a row being one row, and the other copy keeps what came to it under the place it has.
+    #[test]
+    fn what_a_place_held_stays_on_the_album_there_now() {
+        let left = Left::new("one-place");
+        let music = "folder = 0 AND rel LIKE 'Salt Meridian/Bonus Round%'";
+        let db = Connection::open(left.data.join("catalogue.sqlite")).unwrap();
+        db.execute_batch(&format!("UPDATE files SET folder = 1 WHERE {music}; UPDATE tags SET folder = 1 WHERE {music};")).unwrap();
+        drop(db);
+        let user = Connection::open(left.data.join("userdata.sqlite")).unwrap();
+        user.execute("INSERT INTO annotation (user, item, kind, play_count, rating, starred, own_count) VALUES ('ann', 'al-4NM6uQYT2XxMI7vrJ6L3oK', 'album', 9, 0, 0, 9)", []).unwrap();
+        drop(user);
+        left.start().steps(&|_| Ok(())).unwrap();
+        let (there_now, moved_along) = (on(&left, 51), on(&left, 12));
+        assert_ne!(there_now, moved_along, "two records");
+        assert_eq!((held(&left, "ann", "play_count", &there_now), held(&left, "ann", "play_count", &moved_along)), (6, 9));
+        left.gone();
+    }
+
+    /// Rows under an id no album has now, each through a real first start: a Keep's, under the id its album had in Incoming; one
+    /// under what Music called an album that waits in Incoming now; and, of a release on two records, one under a place in
+    /// Incoming, on the copy that lay there and not on Music's.
+    #[test]
+    fn rows_under_an_id_no_album_has_reach_their_record() {
+        let left = moved("worked-out");
+        assert_eq!(held(&left, "ann", "play_count", &on(&left, 63)), 3, "the Keep's");
+        assert_eq!(held(&left, "ann", "play_count", &on(&left, 16)), 5, "what Music called it");
+        assert_eq!(held(&left, "ann", "play_count", &on(&left, 12)), 6, "the copy in Incoming");
+        assert_eq!(left.sql::<i64>("userdata.sqlite", &format!("SELECT count(*) FROM annotation WHERE item = '{}'", on(&left, 51))), 0, "not Music's");
+        left.gone();
+    }
+
+    /// m1: a review and a hearing from before a library changed place read on the copy where it lies, or a card heard reads unheard.
+    #[test]
+    fn what_went_by_the_place_a_library_had_reads_on_the_copy_where_it_lies() {
+        let left = moved("place");
+        let bank = on(&left, 5);
+        let user = UserData::open(Some(&left.data.join("userdata.sqlite"))).unwrap();
+        assert_eq!(user.review(&bank, Some(2)).unwrap().map(|r| r.state).as_deref(), Some("rejected"));
+        assert!(user.intake_heard(&bank, Some(2)).unwrap().is_some());
+        drop(user);
+        left.gone();
+    }
+
+    /// m8 on 0.15's data: a file's shape and beats lay at the place its library had, and read as nothing there. Either way round:
+    /// Far Bank's at the first place for the second, Just Arrived's at the second for the first.
+    #[test]
+    fn a_files_shape_and_beats_follow_the_place_its_library_moved_to() {
+        let left = moved("shapes");
+        let folder = |table: &str, file: &str| left.sql::<i64>("catalogue.sqlite", &format!("SELECT folder FROM {table} WHERE rel LIKE '%/{file}'"));
+        for table in ["analysis_shape", "beat_this"] {
+            assert_eq!((folder(table, "01 Far Bank.flac"), folder(table, "01 Just Arrived.mp3")), (2, 1), "{table}");
+        }
+        let part = part(&left);
+        assert_eq!((part["shapes_moved"].as_u64(), part["beats_moved"].as_u64()), (Some(2), Some(2)), "{part}");
+        left.gone();
+    }
+
+    /// CR13 through the user data's step: what named a file gone a while, one in a trash and one in a folder parked by 0.15 is on
+    /// its record, as the album's return would need it to be.
+    #[test]
+    fn what_no_list_shows_keeps_what_named_it() {
+        let left = moved("unserved");
+        assert_eq!(held(&left, "ann", "play_count", &on(&left, 88)), 2, "gone a while");
+        assert_eq!(held(&left, "ann", "play_count", &on(&left, 89)), 1, "in a trash");
+        assert_eq!(left.sql::<i64>("userdata.sqlite", &format!("SELECT count(*) FROM album_tags WHERE album = '{}'", on(&left, 89))), 1, "by its base");
+        assert_eq!(held(&left, "ann", "play_count", &on(&left, 90)), 7, "parked");
+        assert_eq!(part(&left)["unmatched"].as_array().unwrap().iter().map(|u| u["count"].as_u64().unwrap()).sum::<u64>(), 0);
+        left.gone();
+    }
+
+    /// A device told of a heart hears it went from the track that left, and came to the one that stands.
+    #[test]
+    fn a_device_told_of_a_heart_hears_it_went_to_the_track_that_took_it() {
+        let left = moved("told");
+        let said = |track: &str| left.sql::<String>("userdata.sqlite", &format!("SELECT op FROM change_log WHERE item = 'track:cratarr/{track}'"));
+        assert_eq!((said("tr-19"), said("tr-48")), ("deleted".to_string(), "changed".to_string()));
+        left.gone();
+    }
+
+    /// By the map the first start made, not one a test makes from what it then looks for: no table of the user data, no change in
+    /// the journal and no store keeps an old id that had somewhere to go.
+    #[test]
+    fn nothing_with_somewhere_to_go_stays_under_an_old_id() {
+        let left = moved("scan");
+        let old = |text: &str| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|word| word.len() == 25 && (word.starts_with("al-") || word.starts_with("ar-")));
+        for (place, rows) in left.left() {
+            if !place.starts_with("catalogue") && !place.starts_with("playlist-sync") && place != "userdata.sqlite: migration_report" {
+                assert_eq!(rows.iter().find(|row| old(row)), None, "{place}");
+            }
+        }
         left.gone();
     }
 

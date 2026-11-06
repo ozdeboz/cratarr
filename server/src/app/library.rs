@@ -764,6 +764,64 @@ impl Library {
 mod switched_off_tests {
     use super::*;
 
+    /// A data folder of a test's own, and its user data.
+    fn data_folder(name: &str) -> (PathBuf, Arc<crate::userdata::UserData>) {
+        let d = std::env::temp_dir().join(format!("cratarr-library-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let db = Arc::new(crate::userdata::UserData::open(Some(&d.join("userdata.sqlite"))).unwrap());
+        (d, db)
+    }
+
+    async fn started(d: &Path, db: &Arc<crate::userdata::UserData>) -> Result<Arc<Library>> {
+        Library::new(Some(d.to_string_lossy().to_string()), None, Vec::new(), Default::default(), None, db.clone()).await
+    }
+
+    fn lost(d: &Path) {
+        for file in ["catalogue.sqlite", "catalogue.sqlite-wal", "catalogue.sqlite-shm"] {
+            std::fs::remove_file(d.join(file)).ok();
+        }
+    }
+
+    /// A catalogue lost after the first start and started afresh is the user data's, though it gave no record then: taken for one
+    /// from before the first start, it would stop every start from then on.
+    #[tokio::test]
+    async fn a_lost_catalogue_started_afresh_after_the_first_start_still_starts() {
+        let (d, db) = data_folder("afresh");
+        drop(started(&d, &db).await.unwrap());
+        assert!(db.first_start_done().unwrap());
+        lost(&d);
+        let lib = started(&d, &db).await.unwrap();
+        assert!(lib.catalogue().ids_lost());
+        lib.fresh_track_ids().unwrap();
+        drop(lib);
+        assert!(!started(&d, &db).await.expect("it starts").catalogue().ids_lost());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Before the first start the records are still to come, and a mark that they were given would leave every row unmatched.
+    #[tokio::test]
+    async fn a_lost_catalogue_started_afresh_before_the_first_start_still_gives_its_records() {
+        let (d, db) = data_folder("afresh-before");
+        db.set_starred("ann", crate::userdata::Kind::Song, &["tr-5".to_string()], true).unwrap();
+        let lib = started(&d, &db).await.unwrap();
+        assert!(lib.catalogue().ids_lost() && !db.first_start_done().unwrap());
+        lib.fresh_track_ids().unwrap();
+        assert_eq!(lib.catalogue().first_records_done().unwrap(), None);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A catalogue restored from before its last ids were given has not given them, and something names them: its next ids start
+    /// above, so an old id names something missing, never something else.
+    #[tokio::test]
+    async fn a_catalogue_older_than_the_user_data_gives_no_id_twice() {
+        let (d, db) = data_folder("older");
+        drop(started(&d, &db).await.unwrap());
+        db.set_meta(TOP_KEY, "500").unwrap();
+        assert_eq!(started(&d, &db).await.unwrap().catalogue().top_id(), 500);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     /// 0.15 remembered no catalogue, so one lost there reads as a first start: every id in the user data would be written off as
     /// unmatched, and the once-guard would stand in the way of the restore. It waits, as a catalogue lost later does.
     #[tokio::test]

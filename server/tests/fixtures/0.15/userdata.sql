@@ -150,6 +150,40 @@ INSERT INTO record_overrides (album, field, value, at) VALUES ('al-7ATEPHL21gflZ
 INSERT INTO record_overrides (album, field, value, at) VALUES ('al-4Jx9dQszNKgnbo4mZtic7y', 'genres', '["Dub"]', 1760999960);
 INSERT INTO change_at (account, kind, item, at) VALUES ('ann', 'favourite', 'album:cratarr/al-4FwVmWLNdYpZZSEtkan6Uy', 1760999700000);
 INSERT INTO change_at (account, kind, item, at) VALUES ('ann', 'favourite', 'track:cratarr/tr-83', 1760999500000);
-INSERT INTO change_log (rev, account, kind, item, op, at, shared, seen_by) VALUES (1, 'ann', 'favourite', 'album:cratarr/al-4FwVmWLNdYpZZSEtkan6Uy', 'set', 1760999700000, 0, '');
-INSERT INTO change_log (rev, account, kind, item, op, at, shared, seen_by) VALUES (2, 'ann', 'rating', 'track:cratarr/tr-83', 'set', 1760999800000, 0, '');
+INSERT INTO change_log (rev, account, kind, item, op, at, shared, seen_by) VALUES (1, 'ann', 'favourite', 'album:cratarr/al-4FwVmWLNdYpZZSEtkan6Uy', 'changed', 1760999700000, 0, '');
+INSERT INTO change_log (rev, account, kind, item, op, at, shared, seen_by) VALUES (2, 'ann', 'rating', 'track:cratarr/tr-83', 'changed', 1760999800000, 0, '');
 INSERT INTO excluded_artist (user, key, name, at) VALUES ('bob', 'kite theory', 'Kite Theory', 1760999970);
+INSERT INTO change_log (rev, account, kind, item, op, at, shared, seen_by) VALUES (3, 'ann', 'favourite', 'track:cratarr/tr-19', 'changed', 1760999600000, 0, '');
+-- The week before the log, as 0.15 wrote it from the last play of a track the merge takes.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'tr-18', 'song', '6KfTDBW4zmY8sJMfyOVTrz', 1, 1760912900, 0, 0, NULL, 1, 1760912900);
+INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event, followed) VALUES ('ann', 'tr-18', '6KfTDBW4zmY8sJMfyOVTrz', 1760912900, NULL, NULL, 'finished', 1, NULL, NULL, 'backfill:annotation', 'backfill:annotation:ann:tr-18:1760912900', 0);
+-- Rows under an id no album has now. A Keep left its plays under the id the album had in Incoming: Two Rooms.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-2NkuHxIRsSvRXBHij5Jj7H', 'album', NULL, 3, 1760880000, 0, 0, NULL, 3, 1760880000);
+-- A copy kept in Music left, and the release waits in Incoming: Just Arrived, by what Music called it.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-6D7A0468643kEoStkiZtlE', 'album', NULL, 5, 1760890000, 4, 0, NULL, 5, 1760890000);
+-- A library that changed place: Far Bank went by its first place until then, and by the second since, one row of each.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-16xHJujSyQP4kXgPnlrD5a', 'album', NULL, 0, NULL, 0, 1, 1760880000, 0, NULL);
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-4iYsod5k8p0gnwEbQmevTB', 'album', NULL, 4, 1760995000, 0, 0, NULL, 4, 1760995000);
+INSERT INTO added (album, at, origin) VALUES ('al-16xHJujSyQP4kXgPnlrD5a', 1760880000, 'jf');
+INSERT INTO added (album, at, origin) VALUES ('al-4iYsod5k8p0gnwEbQmevTB', 1760990000, 'scan');
+INSERT INTO album_complete (album, at, found, discs, rule) VALUES ('al-16xHJujSyQP4kXgPnlrD5a', 1760880000, '{"of":2,"has":1,"release":"Far Bank, 2018, CD","release_group":null,"release_id":null,"missing":[[1,2,"Near Bank"]]}', 1, 1);
+INSERT INTO album_complete (album, at, found, discs, rule) VALUES ('al-4iYsod5k8p0gnwEbQmevTB', 1760995000, NULL, 1, 1);
+INSERT INTO album_review (album, base, state, at, undo, name, album_artist) VALUES ('al-16xHJujSyQP4kXgPnlrD5a', 'al-3QRfi6o7OjZJyfmLivEPJF', 'rejected', 1760880000, NULL, 'Far Bank', 'Salt Meridian');
+INSERT INTO intake_heard (album, at, heard) VALUES ('al-16xHJujSyQP4kXgPnlrD5a', 1760880000, '{"tracks":[{"file":"01 Far Bank.flac","damaged":0,"recordings":[]}],"no_acoustid":true}');
+-- And back: Just Arrived's library took the first place again, so what came between went by the second.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('bob', 'al-5CBklbfbpDtbwWYNnJiHHl', 'album', NULL, 3, 1760995000, 0, 0, NULL, 3, 1760995000);
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('bob', 'al-5kyy3QkYKUCRrEIvEzhxHQ', 'album', NULL, 0, NULL, 0, 1, 1760880000, 0, NULL);
+INSERT INTO added (album, at, origin) VALUES ('al-5kyy3QkYKUCRrEIvEzhxHQ', 1760880000, 'jf');
+INSERT INTO added (album, at, origin) VALUES ('al-5CBklbfbpDtbwWYNnJiHHl', 1760990000, 'scan');
+INSERT INTO album_complete (album, at, found, discs, rule) VALUES ('al-5kyy3QkYKUCRrEIvEzhxHQ', 1760880000, '{"of":2,"has":1,"release":"Just Arrived, 2018, CD","release_group":null,"release_id":null,"missing":[[1,2,"Just Left"]]}', 1, 1);
+INSERT INTO album_complete (album, at, found, discs, rule) VALUES ('al-5CBklbfbpDtbwWYNnJiHHl', 1760995000, NULL, 1, 1);
+-- The same on a release both Incoming libraries hold: one record, an id each, and the first is the second's from before.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('bob', 'al-0K3QLxUBwKPLshc0VyNQJ7', 'album', NULL, 0, NULL, 0, 1, 1760880000, 0, NULL);
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('bob', 'al-4atTH2lV1wmvNeyF1zn8Rr', 'album', NULL, 2, 1760995000, 0, 0, NULL, 2, 1760995000);
+-- A release on two records, Music's and Incoming's: this id was Incoming's until its library changed place.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-4I3hKdUhPvMN5OjdbmOVtr', 'album', NULL, 6, 1760880000, 0, 0, NULL, 6, 1760880000);
+-- What no list shows (CR13): gone a while, by its own id; in a trash, by its own and its base; parked, by what Music called it.
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-1CS3f2lrsGgYjTeBz843i8', 'album', NULL, 2, 1760880000, 3, 0, NULL, 2, 1760880000);
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-3UHzSSlNKDLqekltbS5Jq9', 'album', NULL, 1, 1760880000, 0, 0, NULL, 1, 1760880000);
+INSERT INTO album_tags (album, tag, at) VALUES ('al-24DIhgl7Uwd1I5YdD7vYgT', 'evening', 1760880000);
+INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at, own_count, own_date) VALUES ('ann', 'al-2LUOgL2YVVkp2U1DSUnrEZ', 'album', NULL, 7, 1760880000, 2, 0, NULL, 7, 1760880000);

@@ -633,10 +633,10 @@ mod tests {
         assert_eq!((walk.moved, walk.unmatched.len()), (1, 0));
     }
 
-    /// On what 0.15 really left: every id in both stores has somewhere to go once the map says so, and each store reads back
-    /// as a server reads it, with no hash and no line left in it.
+    /// What the fixture's stores are made of reads back as a server reads it, moved by a map taken from their own words: it says
+    /// nothing of whether the first start's map holds them, which is `nothing_with_somewhere_to_go_stays_under_an_old_id`.
     #[tokio::test]
-    async fn the_crates_of_0_15_leave_no_old_id() {
+    async fn the_crates_of_0_15_read_back_as_a_server_reads_them() {
         let d = folder("0-15");
         std::fs::create_dir_all(d.join("users/bob")).unwrap();
         let (first, second) = (include_str!("../tests/fixtures/0.15/crates.json"), include_str!("../tests/fixtures/0.15/users/bob/crates.json"));
@@ -666,6 +666,30 @@ mod tests {
         assert_eq!(kept.left_out("c-shores").await.unwrap().tracks.len(), 1);
         assert_eq!(kept.excluded().await.unwrap().len(), 1);
         assert!(matches!(&kept.list().await.unwrap()[0].conditions[0].value, Value::Like { of, .. } if of.len() == 2));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// `queues.json` is its owner's alone: a store moved stays as private as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_stays_as_private_as_it_was() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = with_crates("private", serde_json::json!({ "version": 1, "excluded": ["A/1.flac"] }));
+        let file = d.join("crates.json");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        moved().stores(&d).unwrap();
+        assert!(std::fs::read_to_string(&file).unwrap().contains("tr-1"), "written");
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// What lies beside the accounts' folders is nobody's crates, and no reason to stop a start.
+    #[test]
+    fn a_file_among_the_accounts_stops_nothing() {
+        let d = folder("beside");
+        std::fs::create_dir_all(d.join("users")).unwrap();
+        std::fs::write(d.join("users/notes.txt"), b"not an account").unwrap();
+        moved().stores(&d).unwrap();
         std::fs::remove_dir_all(&d).ok();
     }
 

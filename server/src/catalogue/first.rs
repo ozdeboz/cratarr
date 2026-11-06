@@ -45,6 +45,10 @@ pub struct First {
     pub tracks_merged: u64,
     pub bases_on_two_records: u64,
     pub artists: u64,
+    pub shapes_moved: u64,
+    pub shapes_left: u64,
+    pub beats_moved: u64,
+    pub beats_left: u64,
 }
 
 /// Where a library's albums come in (N4, CR18): the main libraries, then own music, then Incoming, each in the libraries' order,
@@ -174,6 +178,7 @@ impl Catalogue {
             tracks_merged: count(&tx, "SELECT count(*) FROM track_moved")?,
             bases_on_two_records: count(&tx, "SELECT count(*) FROM (SELECT old FROM album_moved WHERE form = 'base' GROUP BY old HAVING count(*) > 1)")?,
             artists: count(&tx, "SELECT count(*) FROM artists")?,
+            ..First::default()
         };
         tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![DONE, serde_json::to_string(&first)?])?;
         tx.commit()?;
@@ -365,7 +370,68 @@ mod tests {
         assert_eq!(moved.copies.len(), 3);
         assert_eq!(moved.copies[0].id, kept.old_id, "its own id is met first, and a row of it stands");
         let folder_of = |folder: i64| moved.copies.iter().find(|c| c.id == ids::album_at("pid", folder)).map(|c| c.folder);
-        assert_eq!((folder_of(1), folder_of(2)), (Some(1), Some(2)), "each row of what waited in Incoming stays that copy's");
+        assert_eq!((folder_of(1), folder_of(2)), (Some(0), Some(0)), "of the copy there is: a new one in Incoming was reviewed by nobody");
+    }
+
+    /// A copy kept in Music left, and the same release waits in Incoming: what went by the id Music gave it is this album's, as a
+    /// Keep would have given it that id back. Music's own album holds its id all the same.
+    #[test]
+    fn an_id_music_gave_an_album_finds_it_in_incoming() {
+        let cat = tracks(3);
+        let waiting = three(&cat, 1, [1, 2, 3], "In", "pid");
+        cat.first_records(found(vec![waiting]), &[MAIN, INCOMING]).unwrap();
+        assert_eq!(cat.named_now(&ids::album_at("pid", 0)), Some(ids::record(record_of(&cat, 1).unwrap())));
+
+        let cat = tracks(7);
+        let plain = three(&cat, 0, [1, 2, 3], "Plain", "pid");
+        let extra = of(copy(None, "A", "Three", &[(4, "One", 200_000), (5, "Two", 200_000), (6, "Three", 200_000), (7, "Four", 200_000)]), 1, "pid");
+        cat.first_records(found(vec![extra, plain]), &[MAIN, INCOMING]).unwrap();
+        assert_eq!(cat.named_now(&ids::album_at("pid", 0)), Some(ids::record(record_of(&cat, 1).unwrap())), "Music's own");
+    }
+
+    /// 0.15's folder ids were places in a sorted list, so a library that came in front moved the next one along, and one that went
+    /// moved it back: its albums' rows lie under the place it had, and they are of the copy where it lies, or a card heard reads
+    /// unheard. Either way round.
+    #[test]
+    fn what_went_by_the_place_a_library_had_is_of_the_copy_where_it_lies() {
+        for (had, has) in [(1, 2), (2, 1)] {
+            let cat = tracks(3);
+            let moved_along = three(&cat, has, [1, 2, 3], "In", "pid");
+            cat.first_records(found(vec![moved_along]), &[MAIN, INCOMING, (2, Kind::Incoming)]).unwrap();
+            let moved = cat.albums_moved().unwrap();
+            let old = moved.copies.iter().find(|c| c.id == ids::album_at("pid", had)).expect("the place it had");
+            assert_eq!((old.record.as_str(), old.folder), (&*ids::record(record_of(&cat, 1).unwrap()), has));
+        }
+    }
+
+    /// One release on two records, Music's and Incoming's. The id of a place in Incoming was the copy's that lay there, whichever
+    /// place that is now: Music's has an id of its own, and a Keep's album on two records is the rarer of the two.
+    #[test]
+    fn of_two_records_the_id_of_a_place_in_incoming_is_the_copy_in_incoming() {
+        let cat = tracks(7);
+        let plain = three(&cat, 0, [1, 2, 3], "Plain", "pid");
+        let extra = of(copy(None, "A", "Three", &[(4, "One", 200_000), (5, "Two", 200_000), (6, "Three", 200_000), (7, "Four", 200_000)]), 2, "pid");
+        cat.first_records(found(vec![plain, extra]), &[MAIN, INCOMING, (2, Kind::Incoming)]).unwrap();
+        assert_eq!(cat.named_now(&ids::album_at("pid", 1)), Some(ids::record(record_of(&cat, 4).unwrap())));
+    }
+
+    /// One place, two libraries: the album there now has the id an older album's rows went by while its library stood there. Where
+    /// both hold a release on two records, the album that holds the id stands: what 0.15 shows on it, and what one row holds
+    /// nothing can part. Either way round, as a library can go back.
+    #[test]
+    fn of_two_libraries_on_one_place_the_album_that_holds_the_id_stands() {
+        for (here, there) in [(1, 2), (2, 1)] {
+            let cat = tracks(7);
+            let there_now = three(&cat, here, [1, 2, 3], "New", "pid");
+            let older = of(copy(None, "A", "Three", &[(4, "One", 200_000), (5, "Two", 200_000), (6, "Three", 200_000), (7, "Four", 200_000)]), there, "pid");
+            cat.first_records(found(vec![older, there_now]), &[MAIN, INCOMING, (2, Kind::Incoming)]).unwrap();
+            let (now, moved_along) = (record_of(&cat, 1).unwrap(), record_of(&cat, 4).unwrap());
+            assert_ne!(now, moved_along, "two records");
+            assert_eq!(cat.named_now(&ids::album_at("pid", here)), Some(ids::record(now)), "the real id");
+            assert_eq!(cat.named_now(&ids::album_at("pid", there)), Some(ids::record(moved_along)));
+            let first = if here == 1 { now } else { moved_along };
+            assert_eq!(cat.named_now(&ids::album_at("pid", 0)), Some(ids::record(first)), "what no album holds: the first by rank");
+        }
     }
 
     /// Smaller's C30: the plain album in Music and a deluxe in Incoming with the same tags. The id worked out for the plain one
@@ -513,6 +579,59 @@ mod tests {
              INSERT INTO files (folder, rel, size, mtime) VALUES (-1, 'a.flac', 1, 1), (-2, 'b.flac', 1, 1);").unwrap();
         assert_eq!(cat.folders_not_there(&[PathBuf::from("/gone"), PathBuf::from("/nothing")]).unwrap(), [PathBuf::from("/gone")]);
         assert!(cat.folders_not_there(&[]).unwrap().is_empty());
+    }
+
+    /// A server says a library's path as it sees it, and a source that cannot be placed says nothing, so the catalogue alone can
+    /// tell what this start parked: a folder with an id for life, which no folder parked by 0.15 has.
+    #[test]
+    fn a_library_a_server_names_by_its_own_path_is_missed_all_the_same() {
+        let cat = Catalogue::open(None, vec![PathBuf::from("/kept")]).unwrap();
+        cat.db().execute_batch("INSERT INTO folders (id, path, home) VALUES (-1, '/media/x', 1); INSERT INTO files (folder, rel, size, mtime) VALUES (-1, 'a.flac', 1, 1);").unwrap();
+        assert_eq!(cat.folders_not_there(&[PathBuf::from("/data/x")]).unwrap(), [PathBuf::from("/media/x")]);
+    }
+
+    /// Where each table's rows lie, by folder and path.
+    fn rows_of(cat: &Catalogue, table: &str) -> Vec<(i64, String)> {
+        let db = cat.db();
+        let mut st = db.prepare(&format!("SELECT folder, rel FROM {table} ORDER BY folder, rel")).unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// Three libraries, the shapes and beats of these paths as 0.15 left them.
+    fn left_behind(sql: &str) -> Catalogue {
+        let cat = Catalogue::open(None, ["/music", "/first", "/second"].map(PathBuf::from).to_vec()).unwrap();
+        cat.db().execute_batch(sql).unwrap();
+        cat
+    }
+
+    /// m8: 0.15's `set_folders` took `analysis` along and left these behind, so `analysis` says a file is done while its waveform,
+    /// gating blocks and beats lie at the place its library had, read by nothing. Either way round, as a library can go back.
+    #[test]
+    fn a_files_shape_and_beats_follow_it_to_the_place_its_library_has() {
+        let cat = left_behind(
+            "INSERT INTO files (folder, rel, size, mtime) VALUES (2, 'A/1.flac', 1, 1), (1, 'B/1.flac', 1, 1), (1, 'C/1.flac', 1, 1);
+             INSERT INTO analysis_shape (folder, rel) VALUES (1, 'A/1.flac'), (1, 'B/1.flac'), (2, 'C/1.flac'), (1, 'Nowhere/1.flac');
+             INSERT INTO beat_this (folder, rel, size, mtime, beats, downbeats, at) VALUES (1, 'A/1.flac', 1, 1, x'00', x'00', 1), (2, 'C/1.flac', 1, 1, x'00', x'00', 1);",
+        );
+        let done = cat.first_records(FirstAlbums::default(), &[MAIN, INCOMING, (2, Kind::Incoming)]).unwrap();
+        let at = |folder: i64, rel: &str| (folder, rel.to_string());
+        assert_eq!(rows_of(&cat, "analysis_shape"), [at(1, "B/1.flac"), at(1, "C/1.flac"), at(1, "Nowhere/1.flac"), at(2, "A/1.flac")], "what is at its file stays, and what has none has nowhere to go");
+        assert_eq!(rows_of(&cat, "beat_this"), [at(1, "C/1.flac"), at(2, "A/1.flac")]);
+        assert_eq!((done.shapes_moved, done.shapes_left, done.beats_moved, done.beats_left), (2, 0, 2, 0));
+    }
+
+    /// A path two libraries hold says nothing of which file a row is of: it stays and is counted, for a person to read. A file
+    /// with a row of its own has lost nothing, and Music's place never moved.
+    #[test]
+    fn a_shape_on_a_path_two_libraries_hold_stays_and_is_counted() {
+        let cat = left_behind(
+            "INSERT INTO files (folder, rel, size, mtime) VALUES (1, 'Both/1.flac', 1, 1), (2, 'Both/1.flac', 1, 1), (0, 'Two/1.flac', 1, 1), (2, 'Two/1.flac', 1, 1), (2, 'Own/1.flac', 1, 1), (0, 'Kept/1.flac', 1, 1), (2, 'Kept/1.flac', 1, 1);
+             INSERT INTO analysis_shape (folder, rel) VALUES (1, 'Both/1.flac'), (1, 'Two/1.flac'), (1, 'Own/1.flac'), (2, 'Own/1.flac'), (0, 'Kept/1.flac');",
+        );
+        let before = rows_of(&cat, "analysis_shape");
+        let done = cat.first_records(FirstAlbums::default(), &[MAIN, INCOMING, (2, Kind::Incoming)]).unwrap();
+        assert_eq!(rows_of(&cat, "analysis_shape"), before, "none of them can say where it goes");
+        assert_eq!((done.shapes_moved, done.shapes_left), (0, 2), "one beside a file in the other Incoming, one with two files to choose from");
     }
 
     /// CR13's other half: what `unserved_rows` reads, and only that.

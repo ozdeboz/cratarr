@@ -276,6 +276,9 @@ fn settings_0_15(data: &Path, folder: &str) {
     std::fs::write(data.join("settings.json"), serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
 }
 
+/// A file a list shows, as a catalogue says it.
+const PRESENT: &str = "folder >= 0 AND gone_at IS NULL AND trashed IS NULL";
+
 /// A data folder as 0.15 left it over `--make-layout`'s files (`tests/fixtures/0.15`, written down from tag v0.15.0, as 0093
 /// keeps no binaries in git): its catalogue, so its track ids mean what its user data says they mean; its user data, its journal
 /// and its sync under 0.15's ids; each account's crates, queues, jobs, playlists and settings. 0.15 had one Music folder, so the
@@ -292,8 +295,11 @@ fn data_0_15(library: &Path, data: &Path) {
     };
     let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
     db.execute_batch(&text("catalogue.sql")).unwrap();
-    for table in ["files", "cover_files"] {
-        let rows: Vec<(i64, String)> = db.prepare(&format!("SELECT folder, rel FROM {table}")).unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    // What no list shows has no file here, but a file in a trash has its place there, or the next pass lets it go.
+    let token: String = db.query_row("SELECT trashed FROM files WHERE trashed IS NOT NULL", [], |r| r.get(0)).unwrap();
+    std::fs::create_dir_all(incoming.join(".cratarr-trash").join(token)).unwrap();
+    for (table, here) in [("files", PRESENT), ("cover_files", "1")] {
+        let rows: Vec<(i64, String)> = db.prepare(&format!("SELECT folder, rel FROM {table} WHERE {here}")).unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
         for (folder, rel) in rows {
             let meta = std::fs::metadata(folders[folder as usize].join(&rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
             let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
@@ -873,8 +879,11 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
     user.execute("INSERT INTO annotation (user, item, kind, play_count, rating, starred, starred_at, own_count) VALUES ('ann', ?1, 'album', 7, 2, 1, 1760000000, 7)", [ORPHAN]).unwrap();
     drop(user);
-    let left = tracks_of_files(&rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap());
-    assert_eq!(left.len(), audio_under(&library.join("music")).len() + audio_under(&library.join("incoming")).len() + audio_under(&library.join("second")).len(), "a row for every file");
+    let db = rusqlite::Connection::open(data.join("catalogue.sqlite")).unwrap();
+    let left = tracks_of_files(&db);
+    let present = db.query_row(&format!("SELECT count(*) FROM files WHERE {PRESENT}"), [], |r| r.get::<_, i64>(0)).unwrap() as usize;
+    drop(db);
+    assert_eq!(present, audio_under(&library.join("music")).len() + audio_under(&library.join("incoming")).len() + audio_under(&library.join("second")).len(), "a row for every file");
     let (held_before, plays_before) = (held(&data), plays(&data));
 
     let s = Server::start(&data).await;
@@ -912,8 +921,14 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let unmatched: Vec<&Value> = part["unmatched"].as_array().unwrap().iter().filter(|u| u["count"].as_u64() != Some(0)).collect();
     assert_eq!(unmatched.len(), 1, "nothing unmatched that should match: {unmatched:?}");
     assert_eq!((&unmatched[0]["what"], unmatched[0]["count"].as_u64(), &unmatched[0]["sample"]), (&json!("annotation: albums"), Some(1), &json!([ORPHAN])));
-    assert_eq!(table_of(&part, "plays")["moved"], 1, "one play was on a copy's track");
-    assert_eq!((table_of(&part, "annotation: tracks")["before"].as_u64(), table_of(&part, "annotation: tracks")["after"].as_u64()), (Some(5), Some(4)));
+    assert_eq!(table_of(&part, "plays")["moved"], 2, "two plays were on a copy's track");
+    assert_eq!((table_of(&part, "annotation: tracks")["before"].as_u64(), table_of(&part, "annotation: tracks")["after"].as_u64()), (Some(6), Some(5)));
+    // A library that changed place, either way round: what 0.15 left at the folder it had lies at the folder it has.
+    let folder_of = |table: &str, file: &str| db.query_row(&format!("SELECT folder FROM {table} WHERE rel LIKE '%/{file}'"), [], |r| r.get::<_, i64>(0)).unwrap();
+    for table in ["analysis_shape", "beat_this"] {
+        assert_eq!((folder_of(table, "01 Far Bank.flac"), folder_of(table, "01 Just Arrived.mp3")), (2, 1), "{table}");
+    }
+    assert_eq!((part["shapes_moved"].as_u64(), part["beats_moved"].as_u64()), (Some(2), Some(2)), "{part}");
     assert_eq!(report["parts"]["libraries"]["sources"]["cratarr"], json!({ "main": 1, "incoming": 2 }));
     assert_eq!((report["parts"]["playlists"]["playlists"].as_u64(), report["parts"]["playlists"]["lines"].as_u64()), (Some(2), Some(4)), "{report}");
 
@@ -929,6 +944,19 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     let expected: Vec<(String, i64, String, String)> = plays_before.iter().map(|(who, at, event, song)| (who.clone(), *at, event.clone(), now(song))).collect();
     assert_eq!(plays(&data), expected, "every play once, on the track it is now");
 
+    // One album's two ids, from before its library changed place and after, either way round: one row of each, with what both held.
+    let user = rusqlite::Connection::open(data.join("userdata.sqlite")).unwrap();
+    for (who, plays, has, had) in [("ann", 4, "al-4iYsod5k8p0gnwEbQmevTB", "al-16xHJujSyQP4kXgPnlrD5a"), ("bob", 3, "al-5CBklbfbpDtbwWYNnJiHHl", "al-5kyy3QkYKUCRrEIvEzhxHQ")] {
+        let record = now(has);
+        assert_eq!(now(had), record, "the place it had");
+        let of_it = |sql: &str| user.query_row(sql, [&record, &who.to_string()], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(of_it("SELECT count(*) FROM annotation WHERE item = ?1 AND user = ?2"), 1);
+        assert_eq!((of_it("SELECT play_count FROM annotation WHERE item = ?1 AND user = ?2"), of_it("SELECT starred FROM annotation WHERE item = ?1 AND user = ?2")), (plays, 1), "the plays of one, the heart of the other");
+        assert_eq!((of_it("SELECT count(*) FROM added WHERE album = ?1 AND ?2 <> ''"), of_it("SELECT at FROM added WHERE album = ?1 AND ?2 <> ''")), (1, 1760880000), "the earlier");
+        assert_eq!((of_it("SELECT count(*) FROM album_complete WHERE album = ?1 AND ?2 <> ''"), of_it("SELECT found IS NULL FROM album_complete WHERE album = ?1 AND ?2 <> ''")), (1, 1), "the look under the id it has now");
+    }
+    drop(user);
+
     // Nothing that has somewhere to go stays behind, in any table of the user data or any store. Not named here: a scan has no list.
     let old: Vec<(String, String)> = every_text(&data.join("userdata.sqlite")).into_iter().filter(|(table, _)| table != "migration_report").flat_map(|(table, text)| hashes_in(&text).into_iter().map(move |id| (table.clone(), id))).collect();
     assert_eq!(old, [("annotation".to_string(), ORPHAN.to_string())], "the one no tag makes, kept");
@@ -941,7 +969,9 @@ async fn the_data_of_0_15_moves_onto_its_records_at_its_first_start_end_to_end()
     assert_eq!(every_text(&data.join("journal.sqlite")).iter().flat_map(|(_, text)| hashes_in(text)).collect::<Vec<_>>(), Vec::<String>::new());
     let gone = ["tr-19", "tr-18", "tr-17", "tr-8", "tr-7", "tr-6"];
     let names_one = |text: &str| gone.iter().any(|id| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|word| word == *id));
-    assert!(!every_text(&data.join("userdata.sqlite")).iter().any(|(table, text)| table != "migration_report" && names_one(text)), "an id the merge took");
+    // A device told of a heart hears it went, by the id it knew, and a play keeps the event it was told by.
+    let kept = |table: &str, text: &str| table == "migration_report" || table == "change_log" || text.starts_with("backfill:");
+    assert!(!every_text(&data.join("userdata.sqlite")).iter().any(|(table, text)| !kept(table, text) && names_one(text)), "an id the merge took");
     let sync: String = rusqlite::Connection::open(data.join("playlist-sync.sqlite")).unwrap().query_row("SELECT base FROM links", [], |r| r.get(0)).unwrap();
     assert_eq!(sync, "[83,48,87]", "an agreed list, place by place");
 

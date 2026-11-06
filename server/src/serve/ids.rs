@@ -226,7 +226,8 @@ mod tests {
         let (mut albums, mut artists) = (BTreeSet::new(), BTreeSet::new());
         for ((folder, _), row) in &files {
             let by = row.first("albumartist").unwrap();
-            albums.extend([album(row, by, *folder), album(row, by, 0)]);
+            // A row can name an album by any place it has had: a folder's id was its place in a list, and Music is one of them.
+            albums.extend([album(row, by, *folder), album(row, by, 0), album(row, by, 1), album(row, by, 2)]);
             artists.extend(row.all("artist").chain([by]).map(|n| format!("{ARTIST}{}", artist_hash(n))));
         }
         // A hash is 22 letters and digits: a shorter word that happens to hold the prefix is no id.

@@ -717,7 +717,8 @@ mod tests {
     }
 
     /// On what 0.15 really left (`tests/fixtures/0.15`). The map is by hand, the fixture's ids being the tag's: Both Shores is
-    /// in Music and in Incoming, one record, and Just Arrived waits in Incoming under a base of its own.
+    /// in Music and in both Incomings, one record, Just Arrived waits in Incoming under a base of its own, and the rest is what an
+    /// id no album has now finds, each by the copy where it lies.
     #[test]
     fn the_data_of_0_15_leaves_no_old_album_id_where_each_has_a_record() {
         let d = std::env::temp_dir().join(format!("cratarr-albums-0-15-{}", std::process::id()));
@@ -726,8 +727,8 @@ mod tests {
         let file = d.join("userdata.sqlite");
         Connection::open(&file).unwrap().execute_batch(include_str!("../../tests/fixtures/0.15/userdata.sql")).unwrap();
         let u = UserData::open(Some(&file)).unwrap();
-        let (shores, arrived) = ("al-2", "al-6");
-        let copies = vec![
+        let (shores, arrived, bank) = ("al-2", "al-6", "al-7");
+        let mut copies = vec![
             copy("al-4FwVmWLNdYpZZSEtkan6Uy", "al-1", 0),
             copy("al-4Jx9dQszNKgnbo4mZtic7y", shores, 0),
             copy("al-0K3QLxUBwKPLshc0VyNQJ7", shores, 1),
@@ -737,7 +738,19 @@ mod tests {
             copy("al-5CBklbfbpDtbwWYNnJiHHl", arrived, 1),
         ];
         let mut bases: Vec<(String, String)> = copies.iter().filter(|c| c.folder == 0).map(|c| base(&c.id, &c.record)).collect();
-        bases.push(base("al-6D7A0468643kEoStkiZtlE", arrived));
+        bases.extend([base("al-6D7A0468643kEoStkiZtlE", arrived), base("al-3QRfi6o7OjZJyfmLivEPJF", bank), base("al-24DIhgl7Uwd1I5YdD7vYgT", "al-10")]);
+        copies.extend([
+            copy("al-4atTH2lV1wmvNeyF1zn8Rr", shores, 2),
+            copy("al-2NkuHxIRsSvRXBHij5Jj7H", "al-3", 0),
+            copy("al-6D7A0468643kEoStkiZtlE", arrived, 1),
+            copy("al-5kyy3QkYKUCRrEIvEzhxHQ", arrived, 1),
+            copy("al-4iYsod5k8p0gnwEbQmevTB", bank, 2),
+            copy("al-16xHJujSyQP4kXgPnlrD5a", bank, 2),
+            copy("al-4I3hKdUhPvMN5OjdbmOVtr", "al-8", 2),
+            copy("al-1CS3f2lrsGgYjTeBz843i8", "al-9", 0),
+            copy("al-3UHzSSlNKDLqekltbS5Jq9", "al-10", 1),
+            copy("al-2LUOgL2YVVkp2U1DSUnrEZ", "al-11", -1),
+        ]);
         let report = u.move_albums(&Albums { copies, bases }).unwrap();
         assert_eq!(report.unmatched_count(), 0, "{:?}", report.unmatched);
         let hash = |text: &str| text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|w| w.len() == 25 && w.starts_with("al-"));
@@ -750,14 +763,16 @@ mod tests {
         }
         let ann = u.get("ann", Kind::Album, &[shores.to_string()]).unwrap().remove(shores).unwrap();
         assert_eq!(ann.play_count, 3, "both copies' plays");
-        assert_eq!(count(&u, &format!("annotation WHERE kind = 'album' AND item = '{shores}'")), 1);
+        assert_eq!(count(&u, &format!("annotation WHERE kind = 'album' AND user = 'ann' AND item = '{shores}'")), 1);
         assert_eq!(one::<i64>(&u, &format!("SELECT at FROM added WHERE album = '{shores}'")), 1760920000, "the earlier");
         let kept = u.review(shores, Some(1)).unwrap().unwrap();
         assert_eq!((kept.state.as_str(), kept.folder), ("promoted", 1));
         assert_eq!(u.review(arrived, Some(1)).unwrap().unwrap().undo, Some(format!("job:{arrived}")));
         assert!(u.intake_heard(arrived, Some(1)).unwrap().is_some());
+        assert_eq!(u.review(bank, Some(2)).unwrap().unwrap().state, "rejected", "from before its library changed place");
+        assert!(u.intake_heard(bank, Some(2)).unwrap().is_some());
         assert_eq!(one::<String>(&u, "SELECT value FROM record_overrides WHERE album = 'al-4' AND field = 'classical'"), "true", "the marks moved at open, then with the facts");
-        assert_eq!(count(&u, "change_log WHERE kind = 'favourite'"), 0);
+        assert_eq!(count(&u, "change_log WHERE kind = 'favourite' AND item LIKE 'album:%'"), 0);
         drop(u);
         std::fs::remove_dir_all(&d).ok();
     }

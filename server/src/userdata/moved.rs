@@ -508,6 +508,16 @@ mod tests {
         assert_eq!(one::<i64>(&u, "SELECT play_count FROM annotation WHERE item = 'tr-3'"), 3, "the new id with no row of its own");
     }
 
+    /// A star with no date reads as 0, which says nothing of when: of two the earlier stands, and that is the one with a date.
+    #[test]
+    fn of_two_stars_a_date_stands_over_none() {
+        for (first, second) in [("NULL", "90"), ("90", "NULL")] {
+            let u = with(&format!("INSERT INTO annotation (user, item, kind, starred, starred_at) VALUES ('me', 'tr-1', 'song', 1, {first}), ('me', 'tr-2', 'song', 1, {second});"));
+            u.move_tracks(&[(1, 2)]).unwrap();
+            assert_eq!(one::<i64>(&u, "SELECT starred_at FROM annotation WHERE item = 'tr-2'"), 90, "{first}, {second}");
+        }
+    }
+
     #[test]
     fn of_two_bookmarks_the_later_stays() {
         let u = with(
