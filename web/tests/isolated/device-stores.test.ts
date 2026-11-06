@@ -4,6 +4,7 @@
 // account leaves ends up as that one's, never the next one's.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { setTimeout as wait } from 'node:timers/promises';
 import { effects } from '../harness/pageGlobals.ts';
 import { databases, rowsOf } from '../harness/fakeIdb.ts';
@@ -79,6 +80,7 @@ const { chooseHomePicture, homePicture, localCovers, setLocalCover } = await imp
 const { readHere, scrobbling, send } = await import('../../src/lib/scrobbles.svelte.ts');
 const { mine } = await import('../../src/lib/mySettings.svelte.ts');
 const { exporting } = await import('../../src/lib/export.svelte.ts');
+const { later, waitingHere } = await import('../../src/lib/later.svelte.ts');
 
 const TRACK = { source: 'cratarr', id: 'tr-1', name: 'One', artist: 'Someone', album: 'A record', album_id: 'al-1' };
 const stream = '/api/stream/cratarr/tr-1';
@@ -256,6 +258,26 @@ test("Home's picture still being made as its account goes is held by no one else
   await turns();
   assert.equal(homePicture.held, null);
   assert.equal(localStorage.getItem('cratarr-home-picture@bo'), null);
+});
+
+test('what waits to be sent shows to its own account alone: another one sees neither how much nor what', async () => {
+  accountLearnt('ann');
+  await turns();
+  const change = (key: string, account?: string) => ({ key, at: Date.now(), path: '/api/playlists/pl-1/ops', method: 'POST', body: '{"ops":[]}', account });
+  const was = later.list;
+  later.list = [change('hers', 'ann'), change('his', 'bo')];
+  assert.deepEqual(waitingHere().map((c) => c.key), ['hers']);
+  accountLearnt('bo');
+  assert.deepEqual(waitingHere().map((c) => c.key), ['his']);
+  accountForgotten();
+  assert.deepEqual(waitingHere(), [], 'nobody sees none');
+  later.list = was;
+  // The two places that show what waits: read from their source, which says a line is there, not that it works.
+  for (const file of ['../../src/App.svelte', '../../src/lib/PlaylistView.svelte']) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.match(source, /waitingHere\(\)/, file);
+    assert.doesNotMatch(source, /later\.list/, file);
+  }
 });
 
 test("what an export was named is the account's: it follows her playlists' names, and is not to be read by the next", async () => {

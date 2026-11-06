@@ -47,6 +47,10 @@ function stamp() {
   if (account !== null && later.list.some((c) => c.account === undefined)) later.list = stamped(later.list, account);
 }
 
+/** What waits of the account signed in: another's waits for it here, and neither its number nor what it is shows to
+ *  anyone else (decision 0101). */
+export const waitingHere = () => later.list.filter((c) => ours(c, accountKey()));
+
 /** A key for a change, the same for its first try and every resend. */
 export const laterKey = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 

@@ -27,7 +27,7 @@
   import { keyboard } from './lib/keyboard.svelte';
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
-  import { later } from './lib/later.svelte';
+  import { waitingHere } from './lib/later.svelte';
   // What changed elsewhere while away, read again (decision 0087).
   import './lib/changes.svelte';
   // The person's preferences on their account (decision 0101 point 14).
@@ -861,7 +861,7 @@
 
   const connection = $derived(
     statusFailed
-      ? { ok: false, text: (reach.kept ? 'Offline · as last seen' : 'Cratarr server unreachable') + (later.list.length ? ` · ${later.list.length} to send` : '') }
+      ? { ok: false, text: (reach.kept ? 'Offline · as last seen' : 'Cratarr server unreachable') + (waitingHere().length ? ` · ${waitingHere().length} to send` : '') }
       : !status
         ? null
         : status.connected

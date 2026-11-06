@@ -120,7 +120,7 @@
   import Icon, { type IconName } from './Icon.svelte';
   import NavigationControls from './NavigationControls.svelte';
   import { can, offers } from './capabilities.svelte';
-  import { later, laterKey } from './later.svelte';
+  import { laterKey, waitingHere } from './later.svelte';
   import { applyOps, opsFor, type PlaylistOp } from './playlistOps';
   import { reach } from './reach.svelte';
   import ProgressRing from './ProgressRing.svelte';
@@ -1770,7 +1770,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const opsReady = (rs: readonly PlaylistRow[] | null | undefined) => can('playlist_ops') === true && !!rs?.length && rs.every((r) => !!r.entry_id);
   const opsPath = (list: string) => `/api/playlists/${encodeURIComponent(list)}/ops`;
   function withWaiting(list: string, rs: PlaylistRow[]): PlaylistRow[] {
-    const ops = later.list
+    const ops = waitingHere()
       .filter((c) => c.path === opsPath(list) && c.body)
       .flatMap((c): PlaylistOp[] => {
         try {
