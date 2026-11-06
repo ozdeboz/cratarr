@@ -6,7 +6,6 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Build
 import android.os.Debug
-import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import java.io.File
@@ -113,7 +112,7 @@ object DeviceWatch {
         loggedKb = rss
         loggedAt = now
         val am = context.getSystemService(ActivityManager::class.java)
-        val (stats, fresh) = stats(am)
+        val stats = Debug.MemoryInfo().also(Debug::getMemoryInfo)
         val system = ActivityManager.MemoryInfo().also(am::getMemoryInfo)
         val state = ActivityManager.RunningAppProcessInfo().also(ActivityManager::getMyMemoryState)
         LinkLog.add(
@@ -130,7 +129,6 @@ object DeviceWatch {
             "shared_mb" to kbOf(own, "RssShmem")?.let(::mb),
             "swap_mb" to kbOf(own, "VmSwap")?.let(::mb),
             "graphics_mb" to stat(stats, "summary.graphics"),
-            "graphics_fresh" to fresh,
             "java_mb" to stat(stats, "summary.java-heap"),
             "native_mb" to stat(stats, "summary.native-heap"),
             "code_mb" to stat(stats, "summary.code"),
@@ -139,16 +137,6 @@ object DeviceWatch {
             "device_low" to system.lowMemory,
             "device_swap_free_mb" to read("/proc/meminfo")?.let { kbOf(it, "SwapFree") }?.let(::mb),
         )
-    }
-
-    /**
-     * The process's memory by kind, and whether it is of this moment. Its own reading first; where a device keeps the
-     * graphics from an app, Android's, which holds on to a reading for some minutes.
-     */
-    private fun stats(am: ActivityManager): Pair<Debug.MemoryInfo, Boolean> {
-        val own = Debug.MemoryInfo().also(Debug::getMemoryInfo)
-        if ((own.getMemoryStat("summary.graphics")?.toLongOrNull() ?: 0L) > 0L) return own to true
-        return (am.getProcessMemoryInfo(intArrayOf(Process.myPid())).firstOrNull() ?: own) to false
     }
 
     private fun stat(m: Debug.MemoryInfo, name: String): Long? = m.getMemoryStat(name)?.toLongOrNull()?.let(::mb)
