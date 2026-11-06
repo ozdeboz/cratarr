@@ -37,8 +37,12 @@ test('a page opens as the account kept, so it works out of reach', async () => {
   assert.equal((await opened('"ann"')).accountKey(), 'ann');
 });
 
-test('signed out is kept too: nobody, never the one before', async () => {
-  assert.equal((await opened('null')).accountKey(), null);
+test('signed out is kept too: nobody, never the one before, whatever an older copy in the kept store says', async () => {
+  localStorage.setItem('cratarr-kept-account', '"ann"');
+  const a = await opened('null');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(a.accountKey(), null);
+  localStorage.removeItem('cratarr-kept-account');
 });
 
 test('a page the sign-in page sent here is nobody until Cratarr says: the name kept may be of someone whose session ended', async () => {

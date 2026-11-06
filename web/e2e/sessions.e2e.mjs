@@ -37,10 +37,16 @@ test('another one signing in is no change of anyone’s: nothing is stamped as m
 
 test('a crate being made and Home’s picture are hers here, under her name', async () => {
   await inModule(d.page, '/src/lib/crates.svelte.ts', (m) => m.keepDraft(null, { name: 'Her crate', conditions: [] }));
+  await inModule(d.page, '/src/lib/localCovers.svelte.ts', (m) => m.takeHomePicture('data:image/gif;base64,R0lGODlhAQABAAAAACw='));
   await settled();
   const s = await storage(d.page);
   assert.equal(JSON.parse(s['cratarr-prefs@ann']).crateDrafts.new.name, 'Her crate');
   assert.ok(!('crateDrafts' in JSON.parse(s['cratarr-prefs'])), 'none of it among the device’s');
+  assert.ok(s['cratarr-home-picture@ann'], 'the copy for her account');
+  assert.ok(!('cratarr-home-picture' in s), 'none under a name for no one');
+  const databases = await d.page.evaluate(async () => (await indexedDB.databases()).map((b) => b.name));
+  assert.ok(databases.includes('cratarr-covers@ann'), 'the picture itself, in her own database');
+  assert.ok(!databases.includes('cratarr-covers'));
 });
 
 test('a session that ended with no page open: whoever signs in next opens on nothing of hers, not for a moment', async () => {
