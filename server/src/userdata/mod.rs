@@ -453,8 +453,6 @@ pub struct Review {
     pub album: String,
     /// The catalogue folder of the copy that waited: a later copy of the record, elsewhere, is not reviewed by this (Q24).
     pub folder: i64,
-    /// Its Music-form id (see `serve::ids::album`), the same before and after a Keep.
-    pub base: String,
     /// "promoted" or "rejected".
     pub state: String,
     /// Epoch seconds.
@@ -1960,30 +1958,30 @@ impl UserData {
     pub fn review(&self, album: &str, folder: Option<i64>) -> Result<Option<Review>> {
         let db = self.db();
         let mut st = db.prepare_cached(&format!(
-            "SELECT album, folder, base, state, at, undo, name, album_artist FROM album_review
-             WHERE (album = ?1 OR base = ?1) AND (?2 IS NULL OR folder = ?2 OR folder = {NO_FOLDER}) ORDER BY at DESC LIMIT 1"
+            "SELECT album, folder, state, at, undo, name, album_artist FROM album_review
+             WHERE album = ?1 AND (?2 IS NULL OR folder = ?2 OR folder = {NO_FOLDER}) ORDER BY at DESC LIMIT 1"
         ))?;
         Ok(st
             .query_map(params![album, folder], |r| {
                 Ok(Review {
                     album: r.get(0)?,
                     folder: r.get(1)?,
-                    base: r.get(2)?,
-                    state: r.get(3)?,
-                    at: r.get(4)?,
-                    undo: r.get(5)?,
-                    name: r.get(6)?,
-                    album_artist: r.get(7)?,
+                    state: r.get(2)?,
+                    at: r.get(3)?,
+                    undo: r.get(4)?,
+                    name: r.get(5)?,
+                    album_artist: r.get(6)?,
                 })
             })?
             .next()
             .transpose()?)
     }
 
+    /// `base` stands in the table only for the rows of 0.15, which the first start finds through it: a new one's is the record.
     pub fn set_review(&self, r: &Review) -> Result<()> {
         self.db().execute(
-            "INSERT OR REPLACE INTO album_review (album, folder, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![r.album, r.folder, r.base, r.state, r.at, r.undo, r.name, r.album_artist],
+            "INSERT OR REPLACE INTO album_review (album, folder, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?1, ?3, ?4, ?5, ?6, ?7)",
+            params![r.album, r.folder, r.state, r.at, r.undo, r.name, r.album_artist],
         )?;
         Ok(())
     }
@@ -2920,7 +2918,7 @@ mod tests {
     }
 
     fn review(folder: i64, state: &str, at: i64) -> Review {
-        Review { album: "al-1".into(), folder, base: "base".into(), state: state.into(), at, undo: None, name: "A".into(), album_artist: "B".into() }
+        Review { album: "al-1".into(), folder, state: state.into(), at, undo: None, name: "A".into(), album_artist: "B".into() }
     }
 
     /// Keyed by record, a new Incoming copy of a kept record reads "was promoted already" and can never be reviewed (Q24).
@@ -2933,7 +2931,6 @@ mod tests {
         u.set_review(&review(3, "rejected", 20)).unwrap();
         assert_eq!(u.review("al-1", Some(2)).unwrap().map(|r| r.state).as_deref(), Some("promoted"), "each keeps its own");
         assert_eq!(u.review("al-1", None).unwrap().map(|r| r.state).as_deref(), Some("rejected"), "with none waiting, the last word");
-        assert_eq!(u.review("base", Some(3)).unwrap().map(|r| r.state).as_deref(), Some("rejected"), "by its Music-form id too");
         u.clear_review("al-1", 3).unwrap();
         assert!(u.review("al-1", Some(3)).unwrap().is_none());
         assert!(u.review("al-1", Some(2)).unwrap().is_some(), "the other copy's stands");

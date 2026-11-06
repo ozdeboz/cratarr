@@ -1100,8 +1100,8 @@ async fn mark_classical(ctx: Ctx, Path((source, album)): Path<(String, String)>,
     };
     let s = ctx.serve()?;
     let (classical, kept) = tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, Option<&'static str>)> {
-        let base = s.library.album_base(&album)?.ok_or_else(|| anyhow::anyhow!("That record is not in the library."))?;
-        s.userdata.set_classical_mark(&base, mark.map(Mark::as_str), crate::app::moment::now_secs())?;
+        anyhow::ensure!(s.library.has_album(&album)?, "That record is not in the library.");
+        s.userdata.set_classical_mark(&album, mark.map(Mark::as_str), crate::app::moment::now_secs())?;
         let ix = crate::app::classical::index(&s)?;
         let r = ix.records.get(&album);
         Ok((r.is_some_and(|r| r.classical), r.and_then(|r| r.mark).map(Mark::as_str)))
@@ -1122,7 +1122,7 @@ struct SetOverrides {
 /// Records' facts set by hand (0.13, the owner; decision 0089): `{albums: [ids], set: {field: value
 /// or null}}`, Cratarr's own library's albums. A field given is set (null: reset to what Cratarr finds), one left out
 /// is left as it is; the fields are `type`, `secondary`, `year`, `genres` and `classical` (`userdata::overrides`). Kept
-/// by each record's Music-form id, household-wide; the library is built again with them before the answer, and the
+/// by each record, household-wide; the library is built again with them before the answer, and the
 /// pages are told. `{albums: {id: {field: value}}}`: each record's facts set now.
 async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<serde_json::Value>, ApiError> {
     if b.albums.is_empty() || b.set.is_empty() {
@@ -1137,15 +1137,14 @@ async fn set_overrides(ctx: Ctx, Json(b): Json<SetOverrides>) -> Result<Json<ser
     let albums = b.albums;
     let b_words = facts.iter().any(|(f, _)| matches!(f.as_str(), "genres" | "styles" | "moods" | "tags"));
     let set = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
-        let mut bases = Vec::with_capacity(albums.len());
         for album in &albums {
-            bases.push(s.library.album_base(album)?.ok_or_else(|| anyhow::anyhow!("That record is not in the library."))?);
+            anyhow::ensure!(s.library.has_album(album)?, "That record is not in the library.");
         }
-        s.userdata.set_overrides(&bases, &facts, crate::app::moment::now_secs())?;
+        s.userdata.set_overrides(&albums, &facts, crate::app::moment::now_secs())?;
         s.refresh()?;
         let mut out = serde_json::Map::new();
-        for (album, base) in albums.iter().zip(&bases) {
-            out.insert(album.clone(), serde_json::to_value(s.userdata.overrides_of(base)?)?);
+        for album in &albums {
+            out.insert(album.clone(), serde_json::to_value(s.userdata.overrides_of(album)?)?);
         }
         Ok(out)
     })

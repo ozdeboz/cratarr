@@ -928,7 +928,6 @@ mod tests {
         let mut i = Inputs::default();
         let album = |id: &str, artist: &str, release: &str| WorkAlbum {
             id: id.into(),
-            base: id.into(),
             name: format!("{artist} plays"),
             artist: artist.into(),
             year: Some(1990),
@@ -972,7 +971,6 @@ mod tests {
         for (id, year, works) in records {
             i.albums.push(WorkAlbum {
                 id: id.into(),
-                base: id.into(),
                 name: format!("{id} record"),
                 artist: "Someone".into(),
                 year: Some(year),

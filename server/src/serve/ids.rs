@@ -5,7 +5,7 @@
 //! renumbered.
 //!
 //! An album's hash (`album`) is no id any more: it gathers one folder's files of an album, what its tags say, and it is
-//! what facts kept from before the flip are still found under, and what the migration reads the old ids by.
+//! what the first start reads the old ids by.
 //!
 //! The hashes and persistent ids are translated from Navidrome (`model/id/id.go`, `model/metadata/persistent_ids.go`,
 //! `utils/str/str.go`, `consts/consts.go`), Copyright the Navidrome authors, GPL-3.0-or-later
@@ -129,8 +129,8 @@ pub fn highest_named(text: &str) -> i64 {
 
 /// What gathers one folder's files of an album, never an id: the hash of its persistent id. `album_artist` is the album
 /// artist as shown (the song's artist when the file names none). Outside folder 0 the folder goes in front, as Navidrome's
-/// library id, so two folders' files stay two copies. It keeps the form of the ids albums had until 0.16, as what was
-/// kept under those is found by it until the migration has moved it.
+/// library id, so two folders' files stay two copies. It keeps the form of the ids albums had until 0.16, as the first start
+/// finds what was kept under those by it.
 pub(super) fn album(row: &ServedRow, album_artist: &str, folder: i64) -> String {
     album_at(&album_pid(row, album_artist), folder)
 }
