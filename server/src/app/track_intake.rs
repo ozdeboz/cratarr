@@ -419,6 +419,13 @@ async fn fetch(id: &str) {
 mod tests {
     use super::*;
 
+    /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: the queue reads it.
+    #[test]
+    fn the_tracks_waiting_in_0_15_are_read_as_the_queue_reads_them() {
+        let queue: Queue = serde_json::from_str(include_str!("../../tests/fixtures/0.15/track-intake.json")).unwrap();
+        assert_eq!((queue.next, queue.items[0].album.id.as_str(), queue.items[0].state), (2, "al-2c5BBHDvIsL51C4yFB1p80", State::Refused));
+    }
+
     fn item(id: &str, state: State) -> Item {
         Item {
             id: id.into(),

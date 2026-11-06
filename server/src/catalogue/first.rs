@@ -162,6 +162,8 @@ impl Catalogue {
         let FirstAlbums { served, unserved, names } = found;
         let (albums, records) = give_records(&tx, served, unserved, kinds, now)?;
         note_albums(&tx, &albums, &records, kinds)?;
+        // As old as what it holds: to the passes after this it is no folder still arriving, and all that names it stays (CR19).
+        tx.execute("UPDATE records SET born = COALESCE((SELECT min(t.born) FROM tracks t WHERE t.record = records.id), born)", [])?;
         artists::artists_in(&tx, &names, now)?;
         artists::note_artists_moved(&tx)?;
         // What Cratarr was handing a file names the track as it was (0101 point 11).
@@ -433,6 +435,16 @@ mod tests {
         let bjork = cat.artist_of("Björk").unwrap().unwrap();
         assert_eq!(cat.named_now("ar-5vcUvYmuWJAgyxLXEUmaPz"), Some(ids::artist(bjork)), "the hash 0.15 served");
         assert_eq!(cat.moved().unwrap().ids["ar-5vcUvYmuWJAgyxLXEUmaPz"], ids::artist(bjork));
+    }
+
+    /// CR19 lets a young record, a folder still arriving, join another. One given here holds years of plays, and is no such thing.
+    #[test]
+    fn a_first_record_is_as_old_as_its_oldest_track() {
+        let cat = tracks(3);
+        cat.db().execute_batch("UPDATE tracks SET born = 700; UPDATE tracks SET born = 500 WHERE id = 2;").unwrap();
+        let kept = three(&cat, 0, [1, 2, 3], "Kept", "pid");
+        cat.first_records(found(vec![kept]), &[MAIN]).unwrap();
+        assert_eq!(cat.db().query_row("SELECT born FROM records", [], |r| r.get::<_, i64>(0)).unwrap(), 500);
     }
 
     /// A file being handed a track that went is handed what took it, gone rows and trashed ones following too.

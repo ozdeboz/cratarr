@@ -1304,6 +1304,22 @@ mod undo_tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// `data` section 9: a Sounds like kept as a link goes to the crate of what its seed became, its count kept. Anything else is
+    /// what it says it is.
+    #[tokio::test]
+    async fn an_old_sounds_like_is_the_crate_of_what_its_seed_became() {
+        let (d, s) = service().await;
+        s.lib.catalogue().artist_for("Björk").unwrap();
+        s.lib.catalogue().note_artists_moved().unwrap();
+        let old = "ar-5vcUvYmuWJAgyxLXEUmaPz";
+        assert_eq!(s.like_now(&format!("like:{old}@50")).await.as_deref(), Some("like:ar-1@50"));
+        assert_eq!(s.like_now(&format!("like:{old}")).await.as_deref(), Some("like:ar-1"));
+        for stands in ["like:ar-1", "like:al-5vcUvYmuWJAgyxLXEUmaPz", "like:list:Chill", "genre:Dub", "c-mine"] {
+            assert_eq!(s.like_now(stands).await, None, "{stands}");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[tokio::test]
     async fn an_artist_is_excluded_everywhere_once_per_account_and_taken_back() {
         let served = crate::serve::Serve::open(None, crate::catalogue::Rules::default(), &|_| None).unwrap();

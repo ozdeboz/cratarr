@@ -3537,6 +3537,15 @@ fn write_private(path: &std::path::Path, body: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// The fixture's store is what 0.15 left, or a move proved on it proves nothing: a player reads it.
+    #[test]
+    fn the_queues_of_0_15_are_read_as_a_player_reads_them() {
+        let saved: HashMap<String, Saved> = serde_json::from_str(include_str!("../../tests/fixtures/0.15/queues.json")).unwrap();
+        let player = &saved["a player"];
+        assert_eq!((player.queue.tracks.len(), player.kept.len(), player.position_ms), (2, 1, 1500));
+        assert_eq!(player.kept[0].queue.autoplay.as_ref().and_then(|a| a.within.clone()), Some(Within::Crate { id: "like:al-4Jx9dQszNKgnbo4mZtic7y@50".into(), without: Vec::new() }));
+    }
+
     /// A queue is what plays on: each track by its id, its album for its cover, what its Autoplay stays close to and inside,
     /// and the queues it left behind. The store goes through the mover as JSON and comes back as a server reads it.
     #[test]
