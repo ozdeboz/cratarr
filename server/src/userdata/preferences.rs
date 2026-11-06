@@ -60,6 +60,24 @@ pub fn refusal(key: &str, value: &serde_json::Value) -> Option<String> {
     (value.to_string().len() > MOST_BYTES).then(|| format!("A preference holds at most {} KB", MOST_BYTES / 1024))
 }
 
+/// Each account's filters moved (`Moved::filters`), in the caller's transaction. One that moved is changed `now` (epoch ms): the
+/// latest change wins, so a device's copy from before must not win back the old ids. One that did not keep its time.
+pub(crate) fn move_filters(conn: &rusqlite::Connection, moved: &crate::moved::Moved, now: i64) -> Result<crate::moved::Report> {
+    let rows: Vec<(String, String)> = conn.prepare("SELECT account, value FROM preference WHERE key = 'filters'")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let (n, mut walk) = (rows.len() as u64, crate::moved::Walk::default());
+    for (account, text) in rows {
+        let Ok(mut filters) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        let was = filters.clone();
+        moved.filters(&mut filters, &mut walk);
+        if filters != was {
+            conn.execute("UPDATE preference SET value = ?2, changed = ?3 WHERE account = ?1 AND key = 'filters'", params![account, filters.to_string(), now])?;
+        }
+    }
+    let mut report = crate::moved::Report::default();
+    report.walked("preference: filters", n, walk);
+    Ok(report)
+}
+
 impl UserData {
     /// Every preference `account` keeps, by key. Blocking.
     pub fn preferences(&self, account: &str) -> Result<BTreeMap<String, Preference>> {
@@ -97,6 +115,15 @@ impl UserData {
             let _ = self.preferences.send(PreferenceChanged { account: account.to_string(), key: key.to_string() });
         }
         Ok(Preference { value: serde_json::from_str(&value).unwrap_or(serde_json::Value::Null), changed })
+    }
+
+    /// `move_filters`, in a transaction of its own. Blocking.
+    pub fn move_filters(&self, moved: &crate::moved::Moved) -> Result<crate::moved::Report> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let report = move_filters(&tx, moved, super::now_ms())?;
+        tx.commit()?;
+        Ok(report)
     }
 
     /// The libraries `account` has switched off, as `source/library`. Blocking.
@@ -201,6 +228,27 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A device's copy of a filter holds the old ids and an older time. The latest change wins, so the move is dated now, or
+    /// the copy wins and the old ids come back; one that holds nothing to move keeps its time.
+    #[test]
+    fn a_filter_that_moved_is_the_latest_change() {
+        let u = UserData::open(None).unwrap();
+        let album = |id: &str| json!({ "albums": { "on": [], "conditions": [{ "axis": "album", "not": false, "value": { "kind": "any_of", "values": [id] } }] } });
+        u.set_preference("ann", "filters", &album("al-old"), 100).unwrap();
+        u.set_preference("bob", "filters", &album("al-5"), 100).unwrap();
+        u.set_preference("ann", "pinned", &json!(["al-old"]), 100).unwrap();
+        let moved = crate::moved::Moved { ids: [("al-old".to_string(), "al-7".to_string())].into(), ..Default::default() };
+        let report = u.move_filters(&moved).unwrap();
+        let kept = |who: &str, key: &str| u.preferences(who).unwrap().remove(key).unwrap();
+        assert_eq!(kept("ann", "filters").value, album("al-7"));
+        assert!(kept("ann", "filters").changed > 100);
+        assert_eq!(kept("bob", "filters").changed, 100, "nothing moved, nothing changed");
+        assert_eq!(kept("ann", "pinned").value, json!(["al-old"]), "another preference is no filter");
+        assert_eq!(u.set_preference("ann", "filters", &album("al-old"), 200).unwrap().value, album("al-7"), "the device's copy loses");
+        let t = report.table_named("preference: filters").unwrap();
+        assert_eq!((t.before, t.moved), (2, 1));
+    }
 
     /// 0101 point 6: someone's own music starts off for the others, beside what they have off; only at its making.
     #[test]

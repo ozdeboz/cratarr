@@ -1194,6 +1194,39 @@ pub fn named_ids(conditions: &[Condition]) -> Vec<String> {
     ids
 }
 
+/// The same ids moved (the first start of 0.16): `new` says what an id became, none for one that stays as it is. Two that become
+/// one are one, a seed's weight added to the seed it joined, as both counted. What `named_ids` reads and this moves must be the
+/// same places, or a saved crate shows one seed and keeps another.
+pub fn move_named(conditions: &mut [Condition], new: &mut dyn FnMut(&str) -> Option<String>) {
+    for c in conditions {
+        let (these, weights) = match (&mut c.value, c.axis.as_str()) {
+            (Value::Like { of, weights, .. }, _) => (of, Some(weights)),
+            (Value::AnyOf { values } | Value::AllOf { values }, "album") => (values, None),
+            _ => continue,
+        };
+        let (mut moved, mut weighed): (Vec<String>, Vec<f32>) = (Vec::with_capacity(these.len()), Vec::new());
+        for (i, id) in these.iter().enumerate() {
+            let id = if NameKind::of(id).is_some() { new(id).unwrap_or_else(|| id.clone()) } else { id.clone() };
+            let weight = weights.as_ref().and_then(|w| w.get(i)).copied();
+            match moved.iter().position(|m| *m == id) {
+                Some(at) => {
+                    if let (Some(w), Some(kept)) = (weight, weighed.get_mut(at)) {
+                        *kept += w;
+                    }
+                }
+                None => {
+                    moved.push(id);
+                    weighed.extend(weight);
+                }
+            }
+        }
+        *these = moved;
+        if let Some(weights) = weights {
+            *weights = weighed;
+        }
+    }
+}
+
 /// The axes with their domains in this library: genres, moods and styles most common first, the years', BPMs',
 /// energies' and danceabilities' span.
 // The tests' own: nothing else uses it (no warning in the server's build).
@@ -3539,6 +3572,42 @@ mod tests {
 
     /// A track left out or excluded is the track, on every copy of it (0101: lines to tracks): the file a crate reads it from
     /// can change, and a line would have to be every line it ever went by.
+    #[test]
+    fn moving_named_ids_moves_what_named_ids_reads_and_nothing_else() {
+        let like = |of: &[&str], weights: &[f32]| {
+            Value::Like { of: of.iter().map(|s| s.to_string()).collect(), count: 5, min: None, own: None, mode: None, fresh: false, weights: weights.to_vec(), unlisted: false, avoid: Avoid::default() }
+        };
+        let values = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut conditions = vec![
+            Condition::new("like", false, like(&["al-old", "bandcamp:x", "tr-1"], &[])),
+            Condition::new("album", true, Value::AnyOf { values: values(&["al-old", "al-2"]) }),
+            Condition::new("album", false, Value::AllOf { values: values(&["al-old"]) }),
+            Condition::new("genre", false, Value::AnyOf { values: values(&["al-old"]) }),
+        ];
+        let before = named_ids(&conditions);
+        let mut asked = Vec::new();
+        move_named(&mut conditions, &mut |id| {
+            asked.push(id.to_string());
+            (id == "al-old").then(|| "al-1".to_string())
+        });
+        let mut once: Vec<String> = Vec::new();
+        asked.into_iter().for_each(|a| if !once.contains(&a) { once.push(a) });
+        assert_eq!(once, before, "the same places, each read");
+        assert_eq!(named_ids(&conditions), ["al-1", "tr-1", "al-2"]);
+        assert!(matches!(&conditions[0].value, Value::Like { of, .. } if of[1] == "bandcamp:x"), "a preview's is no library id");
+        assert!(matches!(&conditions[3].value, Value::AnyOf { values } if values[0] == "al-old"), "a genre is a name");
+    }
+
+    /// Two copies' ids were two seeds of one crate. They are one record now: one seed, and its weight, or the seeds and their
+    /// weights no longer line up and every seed after it counts as the one before.
+    #[test]
+    fn two_seeds_of_one_record_are_one_with_both_their_weights() {
+        let like = Value::Like { of: vec!["al-a".into(), "al-b".into(), "tr-1".into()], count: 5, min: None, own: None, mode: None, fresh: false, weights: vec![1.0, 2.0, 4.0], unlisted: false, avoid: Avoid::default() };
+        let mut conditions = vec![Condition::new("like", false, like)];
+        move_named(&mut conditions, &mut |id| id.starts_with("al-").then(|| "al-7".to_string()));
+        assert!(matches!(&conditions[0].value, Value::Like { of, weights, .. } if *of == ["al-7", "tr-1"] && *weights == [3.0, 4.0]), "{:?}", conditions[0].value);
+    }
+
     #[test]
     fn what_is_left_out_is_a_track_whichever_file_it_is_read_from() {
         let membership = HashMap::new();

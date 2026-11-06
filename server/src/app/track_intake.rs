@@ -441,6 +441,23 @@ mod tests {
         }
     }
 
+    /// What waits finds its album by its id when its turn comes.
+    #[test]
+    fn a_track_waiting_keeps_its_album_after_the_move() {
+        let d = std::env::temp_dir().join(format!("cratarr-intake-moved-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let q = Queue { running: false, next: 2, items: vec![item("a", State::Queued)] };
+        std::fs::write(d.join("track-intake.json"), serde_json::to_vec(&q).unwrap()).unwrap();
+        let moved = crate::moved::Moved { ids: [("al-1".to_string(), "al-7".to_string())].into(), ..Default::default() };
+        let report = moved.stores(&d).unwrap();
+        let back: Queue = serde_json::from_slice(&std::fs::read(d.join("track-intake.json")).unwrap()).unwrap();
+        assert_eq!((back.items[0].album.id.as_str(), back.next), ("al-7", 2));
+        let t = report.table_named("track-intake.json").unwrap();
+        assert_eq!((t.before, t.moved), (1, 1));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn an_approved_file_goes_before_the_next_search_and_finished_ones_wait() {
         let items = [item("a", State::Added), item("b", State::Queued), item("c", State::Approved), item("d", State::Queued)];

@@ -17,6 +17,22 @@ pub fn artist_ids(all: &[Facts], known: &HashMap<String, i64>) -> HashMap<String
     credited_names(all).into_keys().filter_map(|n| Some((n.to_string(), ids::artist(*known.get(&ids::artist_key(n))?)))).collect()
 }
 
+/// A crate's picture's file name: its id where that is a plain name, else the id in hex.
+pub fn image_file(id: &str) -> String {
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        format!("{id}.jpg")
+    } else {
+        format!("x{}.jpg", id.bytes().map(|b| format!("{b:02x}")).collect::<String>())
+    }
+}
+
+/// The crate a picture in hex is of: `image_file` read back. None for a plain name, whose crate is one's own and keeps it.
+pub fn image_crate(file: &str) -> Option<String> {
+    let hex = file.strip_prefix('x')?.strip_suffix(".jpg")?;
+    let bytes: Option<Vec<u8>> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()).collect();
+    String::from_utf8(bytes?).ok().filter(|id| image_file(id) == file)
+}
+
 // --- Freshness of the media server's favourites (decision 0024, issue 5) ---
 
 /// The favourites Cratarr itself changed, numbered: (number, server, track id, favourite now). The kept favourites
@@ -341,6 +357,16 @@ mod tests {
         assert_eq!(places(8), [0], "a credit as the tags write it");
         assert!(places(9).is_empty(), "credited on nothing here");
         assert!(artist_ids(&files, &HashMap::new()).is_empty(), "no id is made up");
+    }
+
+    #[test]
+    fn a_pictures_name_reads_back_as_its_crate() {
+        assert_eq!(image_crate(&image_file("like:al-1")).as_deref(), Some("like:al-1"));
+        assert_eq!(image_crate(&image_file("../x")).as_deref(), Some("../x"));
+        assert_eq!(image_crate("c-12ab.jpg"), None, "one's own, by its own name");
+        assert_eq!(image_crate("xylophone.jpg"), None, "no hex");
+        assert_eq!(image_crate("xabc.jpg"), None, "half a byte");
+        assert_eq!(image_crate("x41.jpg"), None, "one's own, whose name reads as hex");
     }
 
     #[tokio::test]

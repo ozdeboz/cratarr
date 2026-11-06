@@ -778,15 +778,6 @@ pub struct CoverRef {
     pub album_id: String,
 }
 
-/// A crate's picture's file name: its id where that is a plain name, else the id in hex.
-fn image_file(id: &str) -> String {
-    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        format!("{id}.jpg")
-    } else {
-        format!("x{}.jpg", id.bytes().map(|b| format!("{b:02x}")).collect::<String>())
-    }
-}
-
 /// A crate's card from its lines (`now`: epoch seconds).
 fn crate_stats(
     lines: &[String],
@@ -976,8 +967,8 @@ mod card_tests {
         assert_eq!(s.genres, vec!["Dub", "Jazz", "Reggae"], "spelt as first met, counted regardless of capitals");
         assert_eq!(s.covers.iter().map(|c| c.album_id.as_str()).collect::<Vec<_>>(), vec!["al-a", "al-b"]);
         assert_eq!(crate_stats(&lines, &by, &songs, None, now).unplayed, None, "no owner: not known");
-        assert_eq!(image_file("c-12ab"), "c-12ab.jpg");
-        assert_eq!(image_file("../x"), "x2e2e2f78.jpg");
+        assert_eq!(crates::image_file("c-12ab"), "c-12ab.jpg");
+        assert_eq!(crates::image_file("../x"), "x2e2e2f78.jpg");
     }
 
     #[test]
@@ -2596,7 +2587,7 @@ impl PlaylistService {
                     favourite_albums,
                     left_out: left.len(),
                     stats,
-                    image: images.as_ref().is_some_and(|d| d.join(image_file(&c.id)).is_file()),
+                    image: images.as_ref().is_some_and(|d| d.join(crates::image_file(&c.id)).is_file()),
                     id: c.id,
                     name: c.name,
                     permanent,
@@ -2615,7 +2606,7 @@ impl PlaylistService {
         self.crate_def(id).await?;
         self.may_picture(id)?;
         let Some(dir) = self.crate_images() else { return Err(ToggleError::SettingsReadOnly) };
-        let file = dir.join(image_file(id));
+        let file = dir.join(crates::image_file(id));
         tokio::task::spawn_blocking(move || -> Result<()> {
             let jpeg = crate::serve::art::jpeg_within(&data, 800)?;
             std::fs::create_dir_all(&dir)?;
@@ -2632,7 +2623,7 @@ impl PlaylistService {
     /// A crate's own picture and when it was set; `None` when it has none.
     pub async fn crate_image(&self, id: &str) -> Option<(Vec<u8>, std::time::SystemTime)> {
         self.crate_def(id).await.ok()?;
-        let file = self.crate_images()?.join(image_file(id));
+        let file = self.crate_images()?.join(crates::image_file(id));
         tokio::task::spawn_blocking(move || {
             let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok()?;
             Some((std::fs::read(&file).ok()?, modified))
@@ -2646,7 +2637,7 @@ impl PlaylistService {
     pub async fn remove_crate_image(&self, id: &str) -> Result<(), ToggleError> {
         self.crate_def(id).await?;
         self.may_picture(id)?;
-        if let Some(file) = self.crate_images().map(|d| d.join(image_file(id))) {
+        if let Some(file) = self.crate_images().map(|d| d.join(crates::image_file(id))) {
             match tokio::fs::remove_file(&file).await {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

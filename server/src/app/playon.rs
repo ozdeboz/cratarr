@@ -3532,6 +3532,51 @@ fn write_private(path: &std::path::Path, body: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// A queue is what plays on: each track by its id, its album for its cover, what its Autoplay stays close to and inside,
+    /// and the queues it left behind. The store goes through the mover as JSON and comes back as a server reads it.
+    #[test]
+    fn a_queue_keeps_playing_after_the_move() {
+        const OLD: &str = "al-5vcUvYmuWJAgyxLXEUmaPz";
+        let d = std::env::temp_dir().join(format!("cratarr-queue-moved-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let track = |id: &str, entry: &str| QueueTrack { source: "cratarr".into(), id: id.into(), album_id: Some(OLD.into()), entry: entry.into(), ..QueueTrack::default() };
+        let queue = |within| Queue {
+            tracks: vec![track("tr-9", "e1"), track("tr-2", "e2")],
+            autoplay: Some(Autoplay { seed: vec!["tr-9".into()], within: Some(within), ..Autoplay::default() }),
+            ..Queue::default()
+        };
+        let source = "cratarr".to_string();
+        let saved = Saved {
+            queue: queue(Within::Album { source: source.clone(), id: OLD.into() }),
+            entry: Some("e1".into()),
+            position_ms: 5000,
+            playing: true,
+            kept: vec![
+                Kept { queue: queue(Within::Crate { id: format!("like:{OLD}@50"), without: Vec::new() }), ..Kept::default() },
+                Kept { queue: queue(Within::Tracks { source: source.clone(), ids: vec!["tr-9".into(), "tr-2".into()] }), ..Kept::default() },
+            ],
+            ..Saved::default()
+        };
+        std::fs::write(d.join("queues.json"), serde_json::to_vec(&HashMap::from([("Kitchen".to_string(), saved)])).unwrap()).unwrap();
+        let moved = crate::moved::Moved { ids: [(OLD, "al-7"), ("tr-9", "tr-4")].map(|(a, b)| (a.to_string(), b.to_string())).into(), ..Default::default() };
+        let report = moved.stores(&d).unwrap();
+        let back: HashMap<String, Saved> = serde_json::from_slice(&std::fs::read(d.join("queues.json")).unwrap()).unwrap();
+        let kitchen = &back["Kitchen"];
+        let ids = |q: &Queue| q.tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&kitchen.queue), ["tr-4", "tr-2"]);
+        assert!(kitchen.queue.tracks.iter().all(|t| t.album_id.as_deref() == Some("al-7")), "a cover found by its album");
+        assert_eq!((kitchen.entry.as_deref(), kitchen.position_ms, kitchen.playing), (Some("e1"), 5000, true), "where it stood, by its entry");
+        let autoplay = |q: &Queue| q.autoplay.clone().unwrap();
+        assert_eq!(autoplay(&kitchen.queue).seed, ["tr-4"]);
+        assert_eq!(autoplay(&kitchen.queue).within, Some(Within::Album { source: source.clone(), id: "al-7".into() }));
+        assert_eq!(ids(&kitchen.kept[0].queue), ["tr-4", "tr-2"], "a queue left behind too");
+        assert_eq!(autoplay(&kitchen.kept[0].queue).within, Some(Within::Crate { id: "like:al-7@50".into(), without: Vec::new() }));
+        assert_eq!(autoplay(&kitchen.kept[1].queue).within, Some(Within::Tracks { source, ids: vec!["tr-4".into(), "tr-2".into()] }));
+        assert_eq!(report.table_named("queues.json").unwrap().before, 1);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn a_webhook_failure_is_logged_with_its_causes() {
         #[derive(Debug, thiserror::Error)]
