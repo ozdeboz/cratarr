@@ -712,7 +712,7 @@ impl App {
         let Some(served) = self.served.clone() else { return Ok(Vec::new()) };
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
         let (rows, numbering, matched, released) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            Ok((lib.lacking()?, lib.numbering(None)?, ud.renumber_matched()?, ud.album_discs()?))
+            Ok((lib.lacking()?, lib.numbering()?, ud.renumber_matched()?, ud.album_discs()?))
         })
         .await??;
         // Disc numbers lost (0.13) first: such an album's numbers twice are that, not Track numbers.
@@ -781,7 +781,7 @@ impl App {
             let checked = s.userdata.album_complete_at()?;
             let totals = s.library.track_totals()?;
             let mut gaps = Vec::new();
-            for (id, name, artist, numbers) in s.library.numbering(None)? {
+            for (id, name, artist, numbers) in s.library.numbering()? {
                 if checked.contains_key(&id) {
                     continue;
                 }
@@ -1178,12 +1178,11 @@ mod tests {
 
     #[test]
     fn every_librarys_albums_are_found_each_opening_its_own_record() {
-        // An Incoming album (folder 1, its id its own: `serve::ids::album`) beside Music's of the same name.
-        let lacks = |id: &str, folder: i64| crate::serve::library::Lacks {
+        // An Incoming album (its id its own: `serve::ids::album`) beside Music's of the same name.
+        let lacks = |id: &str| crate::serve::library::Lacks {
             id: id.into(),
             name: "Zebra".into(),
             artist: "Arp".into(),
-            folder,
             cover: true,
             year: false,
             genre: false,
@@ -1192,7 +1191,7 @@ mod tests {
             musicbrainz: false,
         };
         let numbers = [("al-in".to_string(), "Heads".to_string(), "Ott".to_string(), "01 twice".to_string())];
-        let found = library(&[lacks("al-music", 0), lacks("al-in", 1)], &numbers, &[]);
+        let found = library(&[lacks("al-music"), lacks("al-in")], &numbers, &[]);
         assert_eq!(found.iter().map(|f| (f.key.as_str(), f.title.as_str())).collect::<Vec<_>>(), [("library:cover", "2 records without a cover"), ("library:track-numbers", "1 record with track numbers off")]);
         let opens = |f: &Finding| f.items.iter().map(|i| i.album.clone().unwrap().1).collect::<Vec<_>>();
         assert_eq!(opens(&found[0]), ["al-music", "al-in"]);

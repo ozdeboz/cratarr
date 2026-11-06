@@ -1219,16 +1219,21 @@ impl Library {
         Ok(st.query_row([name], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
     }
 
-    /// Every album artist's albums: (artist id, name, MusicBrainz id, album id, its catalogue folder, its tracks).
-    /// Home's Artists to explore.
+    /// Every album artist's albums: (artist id, name, MusicBrainz id, album id, its copies' catalogue folders, its
+    /// tracks). Home's Artists to explore.
     #[allow(clippy::type_complexity)]
-    pub fn artist_albums(&self) -> Result<Vec<(String, String, Option<String>, String, i64, i64)>> {
+    pub fn artist_albums(&self) -> Result<Vec<(String, String, Option<String>, String, Vec<i64>, i64)>> {
         let db = self.db();
         let mut st = db.prepare(
-            "SELECT ar.id, ar.name, ar.mbid, al.id, al.folder, al.song_count FROM album_artists aa
+            "SELECT ar.id, ar.name, ar.mbid, al.id, (SELECT group_concat(c.folder) FROM copies c WHERE c.album = al.id), al.song_count FROM album_artists aa
              JOIN albums al ON al.id = aa.album_id JOIN artists ar ON ar.id = aa.artist_id",
         )?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?;
+        let rows = st
+            .query_map([], |r| {
+                let folders = r.get::<_, Option<String>>(4)?.unwrap_or_default().split(',').filter_map(|f| f.parse().ok()).collect();
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, folders, r.get(5)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
 
@@ -1247,7 +1252,7 @@ impl Library {
     fn lacks_where(&self, filter: &str, album: Option<&str>) -> Result<Vec<Lacks>> {
         let db = self.db();
         let mut st = db.prepare(&format!(
-            "SELECT al.id, al.name, al.artist, al.folder,
+            "SELECT al.id, al.name, al.artist,
                     al.cover IS NULL,
                     al.year IS NULL OR al.year = 0,
                     al.genres = '',
@@ -1263,13 +1268,12 @@ impl Library {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     artist: r.get(2)?,
-                    folder: r.get(3)?,
-                    cover: r.get(4)?,
-                    year: r.get(5)?,
-                    genre: r.get(6)?,
-                    album_artist: r.get(7)?,
-                    track_no: r.get(8)?,
-                    musicbrainz: r.get(9)?,
+                    cover: r.get(3)?,
+                    year: r.get(4)?,
+                    genre: r.get(5)?,
+                    album_artist: r.get(6)?,
+                    track_no: r.get(7)?,
+                    musicbrainz: r.get(8)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1292,14 +1296,15 @@ impl Library {
         Ok(ids)
     }
 
-    /// Each of these songs' catalogue folder (those the library has).
-    pub fn song_folders(&self, ids: &[String]) -> Result<std::collections::HashMap<String, i64>> {
+    /// Each of these songs' catalogue folders, one for each of its files (those the library has).
+    pub fn song_folders(&self, ids: &[String]) -> Result<std::collections::HashMap<String, Vec<i64>>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT folder FROM songs WHERE id = ?1")?;
+        let mut st = db.prepare_cached("SELECT folder FROM copy_files WHERE song = ?1")?;
         let mut out = std::collections::HashMap::new();
         for id in ids {
-            if let Ok(f) = st.query_row([id], |r| r.get::<_, i64>(0)) {
-                out.insert(id.clone(), f);
+            let folders = st.query_map([id], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            if !folders.is_empty() {
+                out.insert(id.clone(), folders);
             }
         }
         Ok(out)
@@ -2319,6 +2324,63 @@ mod tests {
         assert!(files.contains(&(song, album, 1, other.to_string())), "{files:?}");
     }
 
+    /// The filters ask `copies` and `copy_files`, as `songs` and `albums` hold one place for what can lie in two. A library
+    /// off takes a track away only when no file of it is left on.
+    #[test]
+    fn a_song_is_listed_by_any_folder_it_has_a_file_in() {
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        lib.db()
+            .execute_batch(
+                "INSERT INTO copy_files SELECT 1, 'Elsewhere/' || rel, 'Elsewhere', song, album, src, size, suffix, kbps, duration_ms, bpm,
+                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak FROM copy_files WHERE dir = 'Björk/Homogenic (1997)';
+                 INSERT INTO copies SELECT album, 1, 'Elsewhere', format, min_kbps, size, added, tracks, bits, rate FROM copies WHERE dir = 'Björk/Homogenic (1997)';",
+            )
+            .unwrap();
+        let titles = |songs: &[super::super::api::Song]| {
+            let mut t: Vec<String> = songs.iter().map(|s| s.title.clone()).collect();
+            t.sort();
+            t
+        };
+        let both = ["Hunter", "Jóga"];
+        for folder in [Some(0), Some(1)] {
+            let albums = lib.album_list(&super::super::read::AlbumOrder::ByName, 10, 0, folder).unwrap();
+            assert!(albums.iter().any(|a| a.name == "Homogenic"), "{folder:?}");
+            assert_eq!(titles(&lib.random_songs(10, Some("Art Pop"), (None, None), folder).unwrap()), both, "{folder:?}");
+            assert_eq!(titles(&lib.songs_by_genre("Art Pop", 10, 0, folder).unwrap()), both, "{folder:?}");
+            for query in ["", "Homogenic"] {
+                let (_, albums, songs) = lib.search(query, (0, 0), (10, 0), (10, 0), folder).unwrap();
+                assert!(albums.iter().any(|a| a.name == "Homogenic"), "{query:?} in {folder:?}");
+                assert!(both.iter().all(|t| songs.iter().any(|s| s.title == *t)), "{query:?} in {folder:?}");
+            }
+        }
+        assert_eq!(lib.album_list(&super::super::read::AlbumOrder::ByName, 10, 0, Some(1)).unwrap().len(), 1, "the other album has no copy there");
+        assert!(lib.album_list(&super::super::read::AlbumOrder::ByName, 10, 0, Some(2)).unwrap().is_empty());
+        assert!(lib.random_songs(10, None, (None, None), Some(2)).unwrap().is_empty());
+        assert!(lib.songs_by_genre("Art Pop", 10, 0, Some(2)).unwrap().is_empty());
+        let (_, albums, songs) = lib.search("Homogenic", (0, 0), (10, 0), (10, 0), Some(2)).unwrap();
+        assert!(albums.is_empty() && songs.is_empty());
+
+        let on = |off: &[i64]| {
+            let mut t: Vec<String> = lib.track_rows(&[], off).unwrap().into_iter().map(|r| r.title).collect();
+            t.sort();
+            t
+        };
+        assert_eq!(on(&[0]), both, "Music off: the file in the other folder keeps it");
+        assert_eq!(on(&[1]).len(), 3, "the other folder off: Music holds all three");
+        assert!(on(&[0, 1]).is_empty(), "both off");
+
+        let album: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
+        let hunter = ids::song(1);
+        assert_eq!(lib.song_folders(std::slice::from_ref(&hunter)).unwrap()[&hunter].iter().copied().collect::<BTreeSet<i64>>(), [0, 1].into());
+        assert_eq!(lib.album_folders().unwrap()[&album].iter().copied().collect::<BTreeSet<i64>>(), [0, 1].into());
+        let folders = lib.artist_albums().unwrap().into_iter().find(|r| r.3 == album).unwrap().4;
+        assert_eq!(folders.into_iter().collect::<BTreeSet<i64>>(), [0, 1].into());
+        assert_eq!(lib.albums_in(1, 10).unwrap().iter().map(|(a, dir, ..)| (a.id.clone(), dir.clone())).collect::<Vec<_>>(), [(album.clone(), "Elsewhere".to_string())], "the copy's own folder");
+        assert_eq!(lib.copies_of(&album).unwrap(), [(0, "Björk/Homogenic (1997)".to_string()), (1, "Elsewhere".to_string())]);
+        assert_eq!(lib.album_in(1, "Elsewhere").unwrap(), Some(album));
+    }
+
     /// `album_arrivals` gives a row per copy and per file, where Insights once had a row per album and per song. The same
     /// record in a second folder, under the ids it will share, is what Insights must still read as one album.
     #[test]
@@ -2911,7 +2973,6 @@ pub struct Lacks {
     pub id: String,
     pub name: String,
     pub artist: String,
-    pub folder: i64,
     pub cover: bool,
     pub year: bool,
     pub genre: bool,

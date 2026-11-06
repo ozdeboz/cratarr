@@ -5758,8 +5758,8 @@ async fn home_artists(ctx: Ctx, Query(q): Query<TasteQuery>) -> Result<Json<serd
     .map_err(ToggleError::from)?;
     // Per artist, their albums in the libraries switched on, the biggest first.
     let mut by: std::collections::BTreeMap<String, (String, Option<String>, Vec<(i64, String)>)> = Default::default();
-    for (artist, name, mbid, album, folder, tracks) in rows {
-        if crate::crates::various(&name) || on.as_ref().is_some_and(|on| !on.contains(&folder)) {
+    for (artist, name, mbid, album, folders, tracks) in rows {
+        if crate::crates::various(&name) || on.as_ref().is_some_and(|on| !folders.iter().any(|f| on.contains(f))) {
             continue;
         }
         by.entry(artist).or_insert_with(|| (name, mbid, Vec::new())).2.push((tracks, album));
@@ -6166,7 +6166,7 @@ async fn history_listening(ctx: Ctx, Query(q): Query<ListeningQuery>, RawQuery(r
             ids.sort();
             ids.dedup();
             let folders = served.library.song_folders(&ids)?;
-            rows.retain(|r| folders.get(&r.song).is_some_and(|f| on.contains(f)));
+            rows.retain(|r| folders.get(&r.song).is_some_and(|found| found.iter().any(|f| on.contains(f))));
         }
         let mut ids: Vec<String> = rows.iter().map(|r| r.song.clone()).collect();
         ids.sort();

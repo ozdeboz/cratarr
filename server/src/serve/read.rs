@@ -166,6 +166,17 @@ fn release_of(kind: Option<String>, from: Option<String>, secondary: Option<&str
     }
 }
 
+/// The filter on one catalogue folder for a query on `albums` under the name `table`: an album is in every folder a copy
+/// of it is in. Nothing without a folder.
+fn album_in_folder(folder: Option<i64>, table: &str) -> String {
+    folder.map_or(String::new(), |f| format!(" AND EXISTS (SELECT 1 FROM copies c WHERE c.album = {table}.id AND c.folder = {f})"))
+}
+
+/// The same for a query on `songs`: a song is in every folder a file of it is in.
+fn song_in_folder(folder: Option<i64>, table: &str) -> String {
+    folder.map_or(String::new(), |f| format!(" AND EXISTS (SELECT 1 FROM copy_files c WHERE c.song = {table}.id AND c.folder = {f})"))
+}
+
 /// Rows by number, in the order given (the second phase).
 fn by_numbers<T>(db: &Connection, table: &str, cols: &str, alias: &str, ns: &[i64], f: fn(&rusqlite::Row) -> rusqlite::Result<T>) -> Result<Vec<T>> {
     if ns.is_empty() {
@@ -202,7 +213,7 @@ pub struct Found {
 }
 
 /// One track of the Library page's Tracks list (0.9.4): what its row shows. `plays` and `favorite` are the asking
-/// account's, filled in by `app::tracks`; `folder` and `order_title` only order and filter it.
+/// account's, filled in by `app::tracks`; `order_title` only orders it.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct TrackRow {
     pub id: String,
@@ -237,8 +248,6 @@ pub struct TrackRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_played: Option<i64>,
     #[serde(skip)]
-    pub folder: i64,
-    #[serde(skip)]
     pub order_title: String,
 }
 
@@ -258,16 +267,15 @@ fn track_row(r: &rusqlite::Row) -> rusqlite::Result<TrackRow> {
         favorite: false,
         format: r.get::<_, Option<String>>(10)?.filter(|s| !s.is_empty()),
         bitrate: r.get(11)?,
-        folder: r.get(12)?,
-        order_title: r.get(13)?,
-        bpm: r.get::<_, Option<i64>>(14)?.filter(|b| *b > 0),
-        album_artist: r.get::<_, Option<String>>(15)?.filter(|a| !a.is_empty()),
+        order_title: r.get(12)?,
+        bpm: r.get::<_, Option<i64>>(13)?.filter(|b| *b > 0),
+        album_artist: r.get::<_, Option<String>>(14)?.filter(|a| !a.is_empty()),
         last_played: None,
     })
 }
 
 const TRACK_ROW_COLS: &str = "s.id, s.title, coalesce(s.artist, ''), s.album, s.album_id, s.track_no, s.disc_no, s.duration_ms, s.year, s.created,
-  s.suffix, s.kbps, s.folder, s.order_title, s.bpm, s.album_artist";
+  s.suffix, s.kbps, s.order_title, s.bpm, s.album_artist";
 
 /// How many albums, artists, tracks and genres a search matches in all (decision 0072: a group's header counts them).
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -388,7 +396,7 @@ impl Library {
     /// A page of albums in one of the library's own orders; `folder` limits it to one music folder.
     pub fn album_list(&self, order: &AlbumOrder, size: usize, offset: usize, folder: Option<i64>) -> Result<Vec<Album>> {
         let db = self.db();
-        let f = folder.map_or(String::new(), |f| format!(" AND folder = {f}"));
+        let f = album_in_folder(folder, "albums");
         let (filter, by): (String, &str) = match order {
             AlbumOrder::Newest => (String::new(), "created DESC, n"),
             AlbumOrder::ByName => (String::new(), "order_name, n"),
@@ -548,9 +556,7 @@ impl Library {
         if let Some(y) = years.1 {
             sql.push_str(&format!(" AND year <= {y}"));
         }
-        if let Some(f) = folder {
-            sql.push_str(&format!(" AND folder = {f}"));
-        }
+        sql.push_str(&song_in_folder(folder, "songs"));
         sql.push_str(&format!(" ORDER BY random() LIMIT {size}"));
         let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| b.as_ref()).collect();
         let ns = numbers(&db, &sql, &refs)?;
@@ -562,7 +568,7 @@ impl Library {
     /// Songs of a genre, by title.
     pub fn songs_by_genre(&self, genre: &str, size: usize, offset: usize, folder: Option<i64>) -> Result<Vec<Song>> {
         let db = self.db();
-        let f = folder.map_or(String::new(), |f| format!(" AND folder = {f}"));
+        let f = song_in_folder(folder, "songs");
         let ns = numbers(
             &db,
             &format!("SELECT n FROM songs WHERE {}{f} ORDER BY order_title, n LIMIT ?2 OFFSET ?3", any_genre(1)),
@@ -579,12 +585,12 @@ impl Library {
     pub fn search(&self, query: &str, artists: (usize, usize), albums: (usize, usize), songs: (usize, usize), folder: Option<i64>) -> Result<(Vec<Artist>, Vec<Album>, Vec<Song>)> {
         let db = self.db();
         let q = query.trim().trim_matches('"');
-        let f = folder.map_or(String::new(), |f| format!(" AND folder = {f}"));
+        let (album_f, song_f) = (album_in_folder(folder, "a"), song_in_folder(folder, "s"));
         let (artist_ns, album_ns, song_ns) = if q.is_empty() {
             (
                 numbers(&db, "SELECT n FROM artists WHERE album_count > 0 ORDER BY order_name, n LIMIT ?1 OFFSET ?2", &[&(artists.0 as i64), &(artists.1 as i64)])?,
-                numbers(&db, &format!("SELECT n FROM albums WHERE 1=1{f} ORDER BY order_name, n LIMIT ?1 OFFSET ?2"), &[&(albums.0 as i64), &(albums.1 as i64)])?,
-                numbers(&db, &format!("SELECT n FROM songs WHERE 1=1{f} ORDER BY order_title, n LIMIT ?1 OFFSET ?2"), &[&(songs.0 as i64), &(songs.1 as i64)])?,
+                numbers(&db, &format!("SELECT n FROM albums a WHERE 1=1{album_f} ORDER BY order_name, n LIMIT ?1 OFFSET ?2"), &[&(albums.0 as i64), &(albums.1 as i64)])?,
+                numbers(&db, &format!("SELECT n FROM songs s WHERE 1=1{song_f} ORDER BY order_title, n LIMIT ?1 OFFSET ?2"), &[&(songs.0 as i64), &(songs.1 as i64)])?,
             )
         } else if let Some(fq) = fts_query(q) {
             // bm25 column weights as Navidrome's: the name counts most.
@@ -592,12 +598,12 @@ impl Library {
                 numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2 OFFSET ?3", &[&fq, &(artists.0 as i64), &(artists.1 as i64)])?,
                 numbers(
                     &db,
-                    &format!("SELECT f.rowid FROM albums_fts f JOIN albums a ON a.n = f.rowid WHERE albums_fts MATCH ?1{} ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2 OFFSET ?3", f.replace("folder", "a.folder")),
+                    &format!("SELECT f.rowid FROM albums_fts f JOIN albums a ON a.n = f.rowid WHERE albums_fts MATCH ?1{album_f} ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2 OFFSET ?3"),
                     &[&fq, &(albums.0 as i64), &(albums.1 as i64)],
                 )?,
                 numbers(
                     &db,
-                    &format!("SELECT f.rowid FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1{} ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2 OFFSET ?3", f.replace("folder", "s.folder")),
+                    &format!("SELECT f.rowid FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1{song_f} ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2 OFFSET ?3"),
                     &[&fq, &(songs.0 as i64), &(songs.1 as i64)],
                 )?,
             )
@@ -795,15 +801,14 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Every album's numbering in a catalogue folder (all without one) for Health (0.9.6): (album id, name, artist, each
-    /// track's (disc, track)).
+    /// Every album's numbering for Health (0.9.6): (album id, name, artist, each track's (disc, track)).
     #[allow(clippy::type_complexity)]
-    pub fn numbering(&self, folder: Option<i64>) -> Result<Vec<(String, String, String, Vec<(Option<u32>, Option<u32>)>)>> {
+    pub fn numbering(&self) -> Result<Vec<(String, String, String, Vec<(Option<u32>, Option<u32>)>)>> {
         let db = self.db();
         let mut albums: Vec<(String, String, String, Vec<(Option<u32>, Option<u32>)>)> = Vec::new();
         let mut at: HashMap<String, usize> = HashMap::new();
-        let mut st = db.prepare("SELECT id, name, artist FROM albums WHERE ?1 IS NULL OR folder = ?1")?;
-        for row in st.query_map([folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+        let mut st = db.prepare("SELECT id, name, artist FROM albums")?;
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
             let (id, name, artist) = row?;
             at.insert(id.clone(), albums.len());
             albums.push((id, name, artist, Vec::new()));
@@ -1062,20 +1067,25 @@ impl Library {
     }
 
     /// Every track for the Library page's Tracks (0.9.4): those whose title, artist and album hold the words (every one
-    /// without any), but those in the catalogue folders `off` (libraries switched off); in no order.
+    /// without any), but those with every file in the catalogue folders `off` (libraries switched off); in no order.
     pub fn track_rows(&self, words: &[String], off: &[i64]) -> Result<Vec<TrackRow>> {
         let db = self.db();
-        let rows: Vec<TrackRow> = match typo_fts_query(&db, words)? {
+        let on = if off.is_empty() {
+            String::new()
+        } else {
+            let off = off.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            format!(" AND EXISTS (SELECT 1 FROM copy_files c WHERE c.song = s.id AND c.folder NOT IN ({off}))")
+        };
+        Ok(match typo_fts_query(&db, words)? {
             Some(fq) => {
-                let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1"))?;
+                let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1{on}"))?;
                 st.query_map([fq], track_row)?.collect::<rusqlite::Result<_>>()?
             }
             None => {
-                let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs s"))?;
+                let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs s WHERE 1=1{on}"))?;
                 st.query_map([], track_row)?.collect::<rusqlite::Result<_>>()?
             }
-        };
-        Ok(rows.into_iter().filter(|r| !off.contains(&r.folder)).collect())
+        })
     }
 
     /// These tracks' rows, as the Tracks list has them (0.9.8: what a device keeps for offline play); unknown ids left
@@ -1104,7 +1114,7 @@ impl Library {
         let db = self.db();
         let mut ns = Vec::new();
         {
-            let mut st = db.prepare_cached("SELECT n FROM albums WHERE base_id = ?1 ORDER BY folder")?;
+            let mut st = db.prepare_cached("SELECT n FROM albums WHERE base_id = ?1 ORDER BY (SELECT min(c.folder) FROM copies c WHERE c.album = albums.id)")?;
             for b in bases {
                 for n in st.query_map([b], |r| r.get::<_, i64>(0))? {
                     ns.push(n?);
@@ -1164,7 +1174,7 @@ impl Library {
     /// The albums outside the Music folder (waiting in Incoming), newest first.
     pub fn incoming_albums(&self) -> Result<Vec<Album>> {
         let db = self.db();
-        let ns = numbers(&db, "SELECT n FROM albums WHERE folder > 0 ORDER BY created DESC, n", &[])?;
+        let ns = numbers(&db, "SELECT n FROM albums a WHERE EXISTS (SELECT 1 FROM copies c WHERE c.album = a.id AND c.folder > 0) ORDER BY created DESC, n", &[])?;
         let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
         self.album_artists(&db, &mut albums)?;
         Ok(albums)
