@@ -5,13 +5,15 @@
  * downloaded is stored once (Kept's holders).
  * The key: `@name` for an account, `@` with signing in off (one user), [NONE] for the device's no-account side: signed
  * out, Local still plays, and the servers added then are its own.
- * Learnt from Cratarr's `/api/me` (Plays) and from the page; signed out at the page's Sign out, and when Cratarr says no
- * one is signed in. Those listening ([changed]) put the one left's things by and take up the one come.
+ * Learnt from Cratarr's `/api/me` (Plays) and from the page; signed out at the page's Sign out, when Cratarr says no one
+ * is signed in, and at Cratarr's sign-in page (whoever signs in there is not known yet). Those listening ([changed]) put
+ * the one left's things by and take up the one come; what is only a setting goes over here ([Prefs.handOver]).
  */
 package app.cratarr
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArraySet
 
 object Who {
@@ -33,6 +35,9 @@ object Who {
     /** The account signed in now: its name, `""` with signing in off; null for nobody. */
     fun account(context: Context): String? = current(context).takeIf { it != NONE }?.removePrefix("@")
 
+    /** [who] in the page's own words (lib/account's `cratarr-who`, as JSON): the name, or null for nobody. */
+    fun forPage(who: String): String = if (who == NONE) "null" else JSONObject.quote(who.removePrefix("@"))
+
     /** A device setting's name for the one whose it is now (`scrobble_queue@name`). */
     fun keyed(context: Context, name: String): String = name + current(context)
 
@@ -41,9 +46,11 @@ object Who {
         val app = context.applicationContext
         val to = keyOf(account)
         val from = synchronized(this) {
-            val was = current(app)
+            val p = Prefs.shared(app)
+            val was = current(p)
             if (was == to) return
-            Prefs.shared(app).edit().putString(KEY, to).commit()
+            Prefs.handOver(p, was, to)
+            p.edit().putString(KEY, to).commit()
             was
         }
         for (f in changed) f(from, to)

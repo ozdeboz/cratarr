@@ -401,8 +401,9 @@ class PlayerService : MediaSessionService() {
         return true
     }
 
-    /** Another one's things are this device's ([Who], decision 0101): told on any thread, done on the player's. */
-    private val whoChanged: (String, String) -> Unit = { _, to -> main.post { whoCame(to) } }
+    /** Another one's things are this device's ([Who], decision 0101): told on any thread, done on the player's, for
+     *  whoever it is by then: two told close together from two threads may come here the other way round. */
+    private val whoChanged: (String, String) -> Unit = { _, _ -> main.post { whoCame(Who.current(this)) } }
 
     /**
      * The queue and the mode of the one who left are put by under them, and the one come's taken up, paused, as at a

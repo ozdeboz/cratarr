@@ -590,6 +590,35 @@ class Prefs(context: Context) {
         const val CRATARR_QUEUE = "cratarr_queue"
         const val SERVER_QUEUE = "queue_"
 
+        /** What goes with an account's queue beyond what [savedQueue] keeps of it: which queue it is and its name, Radio and
+         *  Autoplay as they ran (a seed and what it stays inside are that account's tracks), and where its controls point. */
+        private val CARRIED = listOf(QUEUE_ID, QUEUE_NAME, RADIO_ON, RADIO_BY, RADIO_COUNT, SKIP_FAVOURITES, AUTOPLAY, TARGET, TARGET_WHY)
+        private const val CARRIED_OF = "carried"
+
+        /**
+         * Another one's things are this device's ([Who]): what [from] carried is put by under them, and what [to] carried
+         * taken up. With [Who]'s own change, so it holds with the player's service stopped. One with none kept starts as
+         * a device new to it, its controls here: said, not left out, or the page would give the app its last choice while it
+         * is still the one before's.
+         */
+        fun handOver(p: SharedPreferences, from: String, to: String) {
+            val now = p.all
+            val left = org.json.JSONObject()
+            for (k in CARRIED) now[k]?.let { left.put(k, it) }
+            val come = p.getString(CARRIED_OF + to, null)?.let { runCatching { org.json.JSONObject(it) }.getOrNull() } ?: org.json.JSONObject()
+            val e = p.edit().putString(CARRIED_OF + from, left.toString())
+            for (k in CARRIED) {
+                when (val v = come.opt(k)) {
+                    is Boolean -> e.putBoolean(k, v)
+                    is Int -> e.putInt(k, v)
+                    is String -> e.putString(k, v)
+                    else -> e.remove(k)
+                }
+            }
+            if (!come.has(TARGET)) e.putString(TARGET, TARGET_SELF)
+            e.apply()
+        }
+
         /** A mode as kept: one of the three kinds, else Cratarr's. */
         fun known(mode: String?): String = when {
             mode == MODE_DEVICE -> MODE_DEVICE
