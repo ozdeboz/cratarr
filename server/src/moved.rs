@@ -397,7 +397,7 @@ impl Moved {
         let rows = walk_it(&mut value, &mut walk);
         if value != was {
             let beside = file.with_extension("json.moving");
-            std::fs::write(&beside, serde_json::to_vec_pretty(&value)?).with_context(|| format!("writing {}", beside.display()))?;
+            write_beside(&beside, file, &serde_json::to_vec_pretty(&value)?).with_context(|| format!("writing {}", beside.display()))?;
             std::fs::rename(&beside, file).with_context(|| format!("writing {}", file.display()))?;
         }
         report.walked(name, rows, walk);
@@ -443,6 +443,15 @@ impl Moved {
         self.store(&data.join("track-intake.json"), "track-intake.json", &mut report, |v, walk| self.jobs(v, "items", walk))?;
         Ok(report)
     }
+}
+
+/// What takes `file`'s place, as private as it was, and on the disk before it takes the name: after a power cut an empty store
+/// would stop the next start, and the old one is gone by then.
+fn write_beside(beside: &Path, file: &Path, text: &[u8]) -> std::io::Result<()> {
+    let mut out = std::fs::File::create(beside)?;
+    out.set_permissions(std::fs::metadata(file)?.permissions())?;
+    std::io::Write::write_all(&mut out, text)?;
+    out.sync_all()
 }
 
 #[cfg(test)]
