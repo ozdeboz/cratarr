@@ -7,6 +7,7 @@ pub mod along;
 pub mod api;
 pub mod art;
 pub mod auth_check;
+pub mod copies;
 pub mod files;
 pub mod guest;
 pub mod ids;
