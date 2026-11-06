@@ -796,7 +796,16 @@ impl PlayingService {
         let (mut albums, mut appears_on) = (w.albums, w.appears_on);
         // Of the libraries switched on: an album of one switched off goes, and its tracks with it.
         if !without.is_empty() {
-            let off = |a: &source::Album| a.library.as_ref().is_some_and(|l| without.contains(&format!("{source_id}/{l}")));
+            // Cratarr's own records by their copies: its list names the copy that plays, and that one can be the library off.
+            let held = match self.playlists.served() {
+                Some(served) if source_id == crate::source::cratarr::KIND.id => tokio::task::spawn_blocking(move || served.library.album_folders()).await.ok().and_then(Result::ok).unwrap_or_default(),
+                _ => Default::default(),
+            };
+            let folders_off: std::collections::HashSet<i64> = self.lib.folders_off(without).into_iter().collect();
+            let off = |a: &source::Album| match held.get(&a.id) {
+                Some(folders) => !crate::crates::on_for(folders, &folders_off),
+                None => a.library.as_ref().is_some_and(|l| without.contains(&format!("{source_id}/{l}"))),
+            };
             let gone: std::collections::HashSet<String> = albums.iter().chain(&appears_on).filter(|a| off(a)).map(|a| a.id.clone()).collect();
             albums.retain(|a| !off(a));
             appears_on.retain(|a| !off(a));

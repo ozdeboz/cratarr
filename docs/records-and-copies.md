@@ -89,7 +89,9 @@ gains, is the file that plays, so a waveform's ETag names the file.
   would play for that viewer, `copy_for` asked again of what is left, and a copy in a library off keeps its place, so the
   first one on is what plays and a switch thrown on the page needs no new list. The card's format and bitrate are the
   copy that plays. Dots: one per copy,
-  the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on.
+  the rule of two or more libraries on standing. A record shows when any of its copies is in a library switched on, and so
+  does a track, in every list and count: `crates::on_for`, the one test. An Incoming copy counts there, though it plays only
+  when picked: with the kept library off, that is where the record is found.
 - An Incoming copy of a record already kept shows only on Incoming's list until it is added: no dot on the record's card.
 - Its menu names the copy where it has several: "Delete from Music", "Delete from Your music", and "Plays from …" to pick.
   The record stays while one copy is left.

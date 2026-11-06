@@ -3533,6 +3533,13 @@ mod tests {
         assert_eq!(alike.tracks[0].playlists.len(), 1, "its playlist counts in what it is like");
     }
 
+    #[test]
+    fn on_is_any_copy_outside_the_libraries_off() {
+        let off = HashSet::from([0, 2]);
+        assert!(on_for(&[0, 1], &off) && on_for(&[1], &off) && on_for(&[], &off));
+        assert!(!on_for(&[0, 2], &off) && !on_for(&[0], &off));
+    }
+
     /// Two libraries: folder 0 holds the seed and a track far from it, folder 1 a track near it.
     fn two_libraries() -> Vec<Facts> {
         let heard = |rel: &str, track: i64, folder: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), folders: vec![folder], sound: Some(Arc::from(v.as_slice())), ..Facts::default() };

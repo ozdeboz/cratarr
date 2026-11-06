@@ -4405,6 +4405,33 @@ mod library_tests {
     }
 
     #[test]
+    fn a_track_is_on_while_any_copy_is() {
+        let unlisted = &crates::permanent()[0].conditions;
+        let held = |off: &[i64]| {
+            let mut lib = library(off);
+            let mut files = lib.files.to_vec();
+            // Rock's track has a copy in own music, folder 2, beside the one in Music.
+            files[3].folders = vec![0, 2];
+            lib.files = Arc::new(files);
+            lib
+        };
+        let lib = held(&[0]);
+        assert_eq!(lib.select(unlisted), ["../in/X/2.flac", "B/1.flac"], "Music off: it stays, by its other copy");
+        assert!(lib.on(3));
+        assert_eq!(lib.files().count(), 3);
+        let lib = held(&[2]);
+        assert!(lib.on(3) && lib.select(unlisted).contains(&"B/1.flac".to_string()), "own music off: it stays, by Music's");
+        let lib = held(&[0, 2]);
+        assert!(!lib.on(3) && !lib.select(unlisted).contains(&"B/1.flac".to_string()), "with every copy off it goes");
+        assert_eq!(lib.files().count(), 2);
+        let (facts, album_of) = (held(&[]).files, HashMap::from([("tr-4".to_string(), "al-1".to_string())]));
+        let mut files = facts.to_vec();
+        files[3].track = Some(4);
+        let words = |off: &[i64]| super::super::words::index(&files, &album_of, &off.iter().copied().collect()).len();
+        assert_eq!((words(&[0]), words(&[0, 2])), (1, 0), "a word's count too");
+    }
+
+    #[test]
     fn a_crate_draws_from_every_library_switched_on() {
         let unlisted = &crates::permanent()[0].conditions;
         assert_eq!(library(&[]).select(unlisted), ["A/1.flac", "../in/X/2.flac", "B/1.flac"], "Incoming's tracks too, newest first");

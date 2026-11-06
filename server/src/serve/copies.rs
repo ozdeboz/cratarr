@@ -2,7 +2,8 @@
 //!
 //! A copy is one folder's files of a record. Whoever asks, a copy in a library switched off never plays. Then a copy
 //! picked by hand; then the viewer's own music, even at a lower quality; then the best quality among the kept libraries.
-//! An Incoming copy of a kept record plays only when picked.
+//! An Incoming copy of a kept record plays only when picked. Whether a record or a track shows is another question, and
+//! has its own one answer: `crates::on_for`.
 
 pub use crate::settings::LibraryKind as Kind;
 
@@ -93,12 +94,6 @@ pub fn in_order(copies: &[Copy], viewer: Option<&Viewer>) -> Vec<Copy> {
     order
 }
 
-/// Whether a record plays for this viewer: what every list's "is it switched on" comes to.
-#[allow(dead_code)] // the lists, once a track lies in several libraries
-pub fn on_for(copies: &[Copy], viewer: Option<&Viewer>, off: &[i64]) -> bool {
-    copy_for(copies, viewer, off).is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,8 +169,6 @@ mod tests {
     fn a_copy_in_a_library_off_never_plays() {
         let copies = [flac(0, Kind::Main)];
         assert_eq!(copy_for(&copies, Some(&viewer(None, None)), &[0]), None);
-        assert!(!on_for(&copies, Some(&viewer(None, None)), &[0]));
-        assert!(on_for(&copies, Some(&viewer(None, None)), &[1]));
     }
 
     #[test]

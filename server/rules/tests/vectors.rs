@@ -234,7 +234,7 @@ impl Shared {
             .map(|f| {
                 let playlists = self.playlists.get(&f.rel).into_iter().flatten().map(|p| lists.of(p)).collect();
                 let like = Track { playlists, artists: f.artists.iter().map(|a| artists.of(a)).collect(), ..Track::default() };
-                Song { id: song(f.track), title: f.rel.clone(), album: f.album.clone(), album_id: f.album.clone(), album_n: albums.of(&f.album), like, folder: f.folder, ..Song::default() }
+                Song { id: song(f.track), title: f.rel.clone(), album: f.album.clone(), album_id: f.album.clone(), album_n: albums.of(&f.album), like, folders: vec![f.folder], ..Song::default() }
             })
             .collect();
         Index::new(songs).with_facts(&self.facts())
