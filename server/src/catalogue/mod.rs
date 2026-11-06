@@ -357,9 +357,10 @@ impl Held {
 
     /// Whether `album` lacks these tracks only for now: each has a file gone a while from where the album lies, or there and
     /// not read. A mount that blinks must not split a record: a gone file comes back, or goes for good within the day, and one
-    /// that could not be read is read again when it changes, however long that takes.
+    /// that could not be read is read again when it changes, however long that takes. By the library, not the folder: a disc
+    /// gone whole leaves no file of the album in its folder.
     fn lacks_for_now(&self, album: &AlbumCopy, tracks: &[i64]) -> bool {
-        let lies = |place: &Place| album.files.iter().any(|(folder, rel)| *folder == place.0 && dir_of(rel) == place.1);
+        let lies = |place: &Place| album.files.iter().any(|(folder, _)| *folder == place.0);
         tracks.iter().all(|t| self.gone.get(t).is_some_and(|places| places.iter().any(lies)))
     }
 
@@ -5458,6 +5459,23 @@ mod tests {
         cat.db().execute("UPDATE files SET state = ?2 WHERE rel = ?1", params![second.files[2].1, FAILED]).unwrap();
         assert_eq!(cat.assign_records(&[kept, the_first(2, &second)]).unwrap(), 0);
         assert_eq!(cat.track_of(0, &second.files[0].1), Some(1));
+    }
+
+    /// A disc gone whole leaves no file of the album in its folder, so the album's other folder has to say where it lay.
+    #[test]
+    fn a_disc_gone_a_while_splits_nothing() {
+        let cat = tracks(6);
+        let kept = lying_in(&cat, "Kept", three([1, 2, 3]));
+        cat.assign_records(std::slice::from_ref(&kept)).unwrap();
+        let mut second = three([4, 5, 6]);
+        second.files = [(4, "Second/CD1/4.flac"), (5, "Second/CD1/5.flac"), (6, "Second/CD2/6.flac")].map(|(t, rel)| {
+            file_of_track(&cat, rel, t);
+            (0, rel.to_string())
+        }).to_vec();
+        cat.assign_records(&[kept.clone(), second.clone()]).unwrap();
+        cat.db().execute("UPDATE files SET gone_at = 1 WHERE rel = 'Second/CD2/6.flac'", []).unwrap();
+        assert_eq!(cat.assign_records(&[kept, the_first(2, &second)]).unwrap(), 0);
+        assert_eq!(cat.track_of(0, "Second/CD1/4.flac"), Some(1));
     }
 
     /// Copies are held together by their ids once taken: a retag or a length fix in one is no reason to split them.
