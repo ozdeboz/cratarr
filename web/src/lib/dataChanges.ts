@@ -7,10 +7,9 @@
 //   incoming    an Incoming library changed (`changed`: incoming)
 //   playlists   playlists changed (`changed`: playlists)
 //   words       a record's or a track's words, a kind's sources or its spellings (`changed`: words; decision 0097)
-//   picks       a copy picked to play from, on any of the account's devices (`changed`: preferences, `copy_picks`)
 // A run's own view follows the run as it goes (lib/fileRuns); this is for everything else that shows its outcome.
 
-export type DataKind = 'files' | 'collection' | 'incoming' | 'playlists' | 'words' | 'picks';
+export type DataKind = 'files' | 'collection' | 'incoming' | 'playlists' | 'words';
 type On = <T>(name: string, handler: (data: T) => void) => () => void;
 
 /** How long changes close together wait to be read as one. */
@@ -34,10 +33,8 @@ export function changesOn(on: On) {
     if (listening) return;
     listening = true;
     on<{ state?: string }>('file_run', (r) => void (r.state === 'done' && changed('files')));
-    on<{ area?: string; key?: string }>('changed', ({ area, key }) => {
+    on<{ area?: string }>('changed', ({ area }) => {
       if (area === 'collection' || area === 'incoming' || area === 'playlists' || area === 'words') changed(area);
-      // No key: changes came too fast to name, a pick perhaps among them.
-      if (area === 'preferences' && (!key || key === 'copy_picks')) changed('picks');
     });
   }
   /** `read` again whenever data of these kinds changed on the server (a few changes together read once). Until the

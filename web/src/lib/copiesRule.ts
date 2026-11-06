@@ -35,12 +35,13 @@ export function dotsOf(a: Held, info: LibraryInfo[] | undefined, on: On): Dot[] 
 }
 
 /** The copy that plays, as the switches stand now. The server decides (`copy_for`) and lists the copies in its order
- *  for this viewer, off or not, so the first one on is it. Only rule 4 is the page's: an Incoming copy plays when
- *  picked, or when the server says so (a record only in Incoming). Null: none can, or the list names no copies, and
- *  the record's own `format` and `bitrate_kbps` are all there is. */
+ *  for this viewer, off or not, so the first one on is it. One rule is the page's: nobody has checked an Incoming copy,
+ *  so beside a kept one it never plays by itself, and it counts only where the server says it plays (a record only in
+ *  Incoming). Null: none can, or the list names no copies, and the record's own `format` and `bitrate_kbps` are all
+ *  there is. */
 export function copyPlaying(a: Held, info: LibraryInfo[] | undefined, on: On): AlbumCopy | null {
   const incoming = (c: AlbumCopy) => info?.find((l) => l.id === c.library)?.kind === 'incoming';
-  return a.copies?.find((c) => on(c.library) && (c.picked || c.plays || !incoming(c))) ?? null;
+  return a.copies?.find((c) => on(c.library) && (c.plays || !incoming(c))) ?? null;
 }
 
 /** What one copy of a record allows (decision 0034): moves into the server's other used libraries, Replace for an
@@ -191,18 +192,13 @@ export function heardAs<A extends Copied>(a: A, info: LibraryInfo[] | undefined,
   return c && (c.format !== a.format || c.kbps !== a.bitrate_kbps) ? { ...a, format: c.format, bitrate_kbps: c.kbps } : a;
 }
 
-/** What "Plays from" offers: a copy for each library on, an Incoming one too, as a pick is how that is heard. Nothing where
- *  fewer than two could be: there is no choice to make, and a pick in a library off would never play. */
-export function copiesToHear(a: Held, on: On): AlbumCopy[] {
-  const each = (a.copies ?? []).filter((c, i, all) => on(c.library) && all.findIndex((x) => x.library === c.library) === i);
-  return each.length > 1 ? each : [];
-}
-
-/** A record once the viewer picked its copy in `library`: that copy goes first, as `copy_for` puts a pick, and the card
- *  says so. There is no taking a pick back, only another pick. */
-export function withCopyPicked<A extends Copied>(a: A, library: string): A {
-  const chosen = a.copies?.find((c) => c.library === library);
-  if (!chosen) return a;
-  const others = a.copies!.filter((c) => c !== chosen).map((c) => ({ ...c, picked: false, plays: false }));
-  return led(a, [{ ...chosen, picked: true, plays: true }, ...others]);
+/** A record's "Play from" entries: each other copy it can be heard from once, by its library's name. An Incoming copy
+ *  counts, as this is how one waiting is heard; two folders of one library are one entry, as `from` names a library.
+ *  Not a copy in a library off, which a stream never plays, nor the copy that plays, whose entry would only be Play
+ *  again. None for a record of one copy, nor for a list that names no copies. */
+export function playFromEntries(a: Held, info: LibraryInfo[] | undefined, on: On) {
+  const held = new Set(a.copies?.map((c) => c.library));
+  if (held.size < 2) return [];
+  const playing = copyPlaying(a, info, on)?.library;
+  return [...held].filter((id) => on(id) && id !== playing).map((library) => ({ library, label: `Play from ${info?.find((l) => l.id === library)?.name ?? library}` }));
 }

@@ -21,10 +21,10 @@
   // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable),
   // related ones joined: where to go (View, each of its artists, its genres); its rating; Add to playlist (all its
   // tracks, the playlists as toggle cards in a step, as a track's), Download…, Sync to this device and Share; Web search
-  // and Genius search; its cover on this device (a picture chosen here, or the server's read again); what its copies
-  // allow (Move to another, Replace in Music; decision 0034), each question asked in place and of one copy, named where
-  // it has several; Remove resume point and Delete last. Wherever it was opened from, the Library's list says what
-  // its copies are.
+  // and Genius search; its cover on this device (a picture chosen here, or the server's read again); Play from, a queue
+  // of it from another of its copies; what its copies allow (Move to another, Replace in Music; decision 0034), each
+  // question asked in place and of one copy, named where it has several; Remove resume point and Delete last. Wherever
+  // it was opened from, the Library's list says what its copies are.
   import {
     albumCoverUrl,
     albumResume,
@@ -46,14 +46,12 @@
     type CoverChoice,
     replacePreview,
     setAlbumFavorite,
-    setCopyPick,
     type AlbumMoved,
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, copyPicked, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, quality, rateAlbum, readLibrary } from './albums.svelte';
-  import ChoiceList from './ChoiceList.svelte';
-  import { adds, copiesToHear, copyPlaying, deleteEntries, moveEntries, replaceEntries } from './copiesRule';
+  import { albumOfDownload, albumPlay, albumRatings, copiesGone, copiesMoved, goToArtist as showArtist, library, listedAlbum, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum, readLibrary } from './albums.svelte';
+  import { adds, deleteEntries, moveEntries, playFromEntries, replaceEntries } from './copiesRule';
   import { shownIn } from './sources.svelte';
   import RatingStars from './RatingStars.svelte';
   import { downloads, inApp, removeDownloads } from './app.svelte';
@@ -75,7 +73,8 @@
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { recordWord } from './recordTypeRules';
-  import { playPlaylistFrom } from './output.svelte';
+  import { playPlaylistFrom, playsHere } from './output.svelte';
+  import { followedLeader } from './playOn.svelte';
   import { shuffled } from './shuffle';
   import { albumGone, albumSubject, panel, viewOver } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
@@ -93,7 +92,7 @@
   import { withUndo } from './undo.svelte';
   import { can, findsTracks, offers } from './capabilities.svelte';
 
-  type Ask = 'plays' | 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
+  type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
   let {
     source: givenSource,
     album: givenAlbum,
@@ -382,24 +381,10 @@
   const fromName = $derived(copy?.name ?? 'Incoming');
   const primary = $derived(copy?.from?.kind === 'main');
   const severalCopies = $derived(copyOffers.length > 1);
-  // Plays from (docs/records-and-copies.md, rule 1): the account's own choice of what it hears, so only with an account.
-  // A step, as Move's; long names go on a sheet (lib/ChoiceList). A pick is left only by another pick.
-  const toHear = $derived(listedHere && me.name ? copiesToHear(listedHere.a, shownIn(source)) : []);
-  const playsNow = $derived(toHear.length ? (copyPlaying(listedHere!.a, listedHere!.s.library_info, shownIn(source)) ?? toHear[0]) : null);
-  const libraryName = (id: string) => listedHere?.s.library_info.find((l) => l.id === id)?.name ?? id;
-  async function pick(chosen: string) {
-    const [src, id, already] = [source, a.id, playsNow?.library === chosen && playsNow.picked];
-    onclose();
-    if (already) return;
-    navigator.vibrate?.(8);
-    copyPicked(src, id, chosen);
-    try {
-      await setCopyPick(src, id, chosen);
-    } catch (e) {
-      toast.fail(e, "It didn't change");
-      readLibrary(true).catch(() => {});
-    }
-  }
+  // Play from: a queue of the record from another of its copies. It goes with that queue, so it needs no account and
+  // nothing is asked first. `from` reaches only what streams on this device: a player elsewhere is told its queue through
+  // Cratarr, which keeps no `from`, and would play the best copy under this entry's name.
+  const playFrom = $derived(listedHere && playsHere() && !followedLeader() && !followingNow() ? playFromEntries(listedHere.a, listedHere.s.library_info, shownIn(source)) : []);
   // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = $derived(`Lidarr isn't set up in Settings, so it may fetch this ${word} again.`);
   // Said when files convert first: only lossless ones above the library's quality limit, to FLAC (the owner,
@@ -685,8 +670,8 @@
     <!-- No Read the cover again (the owner, 2026-10-26): a cover's address carries its stamp (lib/coverStamps), so a
          changed one shows by itself. Only a picture chosen on this device is undone here. -->
     {#if ownCover}<MenuEntry icon="imageOff" label="Use the server's cover" onclick={serverCover} />{/if}
-  {:else if e === 'playsFrom'}
-    {#if playsNow}<MenuEntry icon="disc" label={`Plays from ${libraryName(playsNow.library)}`} onclick={() => (ask = 'plays')} />{/if}
+  {:else if e === 'playFrom'}
+    {#each playFrom as p (p.library)}<MenuEntry icon="play" label={p.label} onclick={() => run(() => playListedAlbum(source, a as ListedAlbum, p.library))} />{/each}
   {:else if e === 'cancelConversion'}
     {#if me.admin}
       {#each new Set(copyOffers.flatMap((o) => o.job ?? [])) as job (job)}<MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />{/each}
@@ -838,15 +823,6 @@
         {/each}
       </ul>
     {/if}
-  {:else if ask === 'plays'}
-    <div class="form">
-      <ChoiceList
-        label="Plays from"
-        options={toHear.map((c) => ({ value: c.library, label: libraryName(c.library), line: quality({ format: c.format, bitrate_kbps: c.kbps }) }))}
-        value={playsNow?.library ?? ''}
-        onchange={pick}
-      />
-    </div>
   {:else if ask === 'delete'}
     <div class="form">
       <p class="ask">Delete {a.title}{severalCopies ? ` from ${fromName}` : ''}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>

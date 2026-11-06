@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import type { AlbumCopy, AlbumsSource, LibraryInfo, Verdict } from '../src/lib/api.ts';
 
-const { adds, copiesToHear, deleteEntries, deleteGroups, heardAs, moveEntries, moveGroups, offersOf, replaceEntries, withCopyMoved, withCopyPicked, withoutCopy } = await import('../src/lib/copiesRule.ts');
+const { adds, deleteEntries, deleteGroups, heardAs, moveEntries, moveGroups, offersOf, playFromEntries, replaceEntries, withCopyMoved, withoutCopy } = await import('../src/lib/copiesRule.ts');
 
 const library = (id: string, kind: LibraryInfo['kind'], more: Partial<LibraryInfo> = {}) => ({ id, name: id.toUpperCase(), kind, ...more }) as LibraryInfo;
 const INFO = [library('music', 'main'), library('more', 'main'), library('in', 'incoming'), library('in2', 'incoming'), library('own', 'own', { mine: true }), library('theirs', 'own')];
@@ -151,7 +151,7 @@ test('out of Incoming or into own music is an add, between main libraries a move
   assert.equal(adds(INFO[0], INFO[1]), false);
 });
 
-// Several ticked records (Q17: one entry per library, as `moves` groups; no Plays from).
+// Several ticked records (Q17: one entry per library, as `moves` groups; no Play from).
 const ticked = (id: string, ...copies: AlbumCopy[]) => ({ id, offers: offersOf(list(), { id, copies }, true, none) });
 
 test('ticked records of one copy each keep one Delete, for all of them', () => {
@@ -221,44 +221,55 @@ test('an album with no copies listed moves by its one library', () => {
   assert.equal(withCopyMoved({ library: 'in', format: null, bitrate_kbps: null }, 'in', 'music').library, 'music');
 });
 
-// Plays from (docs/records-and-copies.md, rule 1).
+// Play from (docs/records-and-copies.md).
 const on = (...off: string[]) => (l: string) => !off.includes(l);
+const playFrom = (a: Parameters<typeof playFromEntries>[0], lit = on()) => playFromEntries(a, INFO, lit).map((e) => e.label);
 
-test('Plays from offers a copy per library on, an Incoming one too', () => {
-  assert.deepEqual(copiesToHear({ copies: [copy('music'), copy('in'), copy('own')] }, on('own')).map((c) => c.library), ['music', 'in']);
-});
-
-test('with fewer than two copies to hear there is no choice to offer', () => {
-  assert.deepEqual(copiesToHear({ copies: [copy('music')] }, on()), []);
-  assert.deepEqual(copiesToHear({ copies: [copy('music'), copy('in')] }, on('in')), []);
-  assert.deepEqual(copiesToHear({ library: 'music' }, on()), []);
-});
-
-test('two folders of one library are one choice, as a pick names a library', () => {
-  assert.deepEqual(copiesToHear({ copies: [copy('music'), copy('music')] }, on()), []);
-});
-
-test('a pick plays at once: first in the list, marked, the card reading it', () => {
-  const a = held(copy('music', { format: 'FLAC', kbps: 900, plays: true }), copy('in', { format: 'MP3', kbps: 320 }));
-  const picked = withCopyPicked(a, 'in');
-  assert.deepEqual(picked.copies?.map((c) => [c.library, c.picked, c.plays]), [
-    ['in', true, true],
-    ['music', false, false],
-  ]);
-  assert.deepEqual([picked.library, picked.format, picked.bitrate_kbps], ['in', 'MP3', 320]);
-});
-
-test('another pick takes the place of the one before', () => {
-  const a = held(copy('in', { picked: true, plays: true }), copy('music'));
-  assert.deepEqual(withCopyPicked(a, 'music').copies?.map((c) => [c.library, c.picked]), [
-    ['music', true],
-    ['in', false],
+test('Play from names each other copy by its library, an Incoming one too, and says which library it asks for', () => {
+  const a = held(copy('music'), copy('more'), copy('in'));
+  assert.deepEqual(playFromEntries(a, INFO, on()), [
+    { library: 'more', label: 'Play from MORE' },
+    { library: 'in', label: 'Play from IN' },
   ]);
 });
 
-test('a library holding no copy picks nothing', () => {
-  const a = held(copy('music'));
-  assert.equal(withCopyPicked(a, 'in'), a);
+test('the copy that plays has no entry, wherever the list puts it', () => {
+  assert.deepEqual(playFrom(held(copy('in'), copy('music'))), ['Play from IN']);
+});
+
+test('the entries follow a switch: with the first copy off the next one on plays, and the first has none', () => {
+  assert.deepEqual(playFrom(held(copy('music'), copy('more'), copy('own')), on('music')), ['Play from OWN']);
+});
+
+test('a copy in a library off has no entry, as a stream never plays it', () => {
+  assert.deepEqual(playFrom(held(copy('music'), copy('in')), on('in')), []);
+});
+
+test('with the kept library off an Incoming copy is offered, as this is the one way to hear it', () => {
+  assert.deepEqual(playFrom(held(copy('music'), copy('in')), on('music')), ['Play from IN']);
+});
+
+test('a record only in Incoming has no entry: its one copy plays', () => {
+  assert.deepEqual(playFrom(held(copy('in', { plays: true }))), []);
+});
+
+test('a record of one copy has no entry, nor has a list that names no copies', () => {
+  assert.deepEqual(playFrom(held(copy('music'))), []);
+  assert.deepEqual(playFrom(held(copy('in'))), [], 'not even a lone copy the server has not said plays');
+  assert.deepEqual(playFrom({ library: 'music' }), []);
+  assert.deepEqual(playFrom({}), []);
+});
+
+test('two folders of one library are one entry, as `from` names a library', () => {
+  assert.deepEqual(playFrom(held(copy('music'), copy('in'), copy('in'))), ['Play from IN']);
+});
+
+test('two folders of the library that plays are no other copy', () => {
+  assert.deepEqual(playFrom(held(copy('music'), copy('music'))), []);
+});
+
+test('a library the list does not name goes by its id', () => {
+  assert.deepEqual(playFrom(held(copy('music'), copy('gone'))), ['Play from gone']);
 });
 
 test('a switch thrown on the page moves the card to the next copy on', () => {

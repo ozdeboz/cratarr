@@ -13,7 +13,7 @@
   // them at least and done to those it applies to. Start radio; the rating, all to the same stars; Sync to this device
   // and Remove from this device (in the app); what their copies allow (Cancel conversion, Move to another, Delete;
   // administrators, decision 0034), Move and Delete asked once for them all, with one Undo. Of records with several
-  // copies Delete is an entry per library, as Move's; Plays from stays one record's own choice.
+  // copies Delete is an entry per library, as Move's. No Play from: it starts one record's queue.
   import { offersIn } from './AlbumMenu.svelte';
   import { deleteGroups, moveGroups, type AlbumOffer } from './copiesRule';
   import { albumOfDownload, albumRatings, copiesGone, copiesMoved, library, loadAlbumRating, loadAlbumUses, rateAlbum, readLibrary, useOf } from './albums.svelte';

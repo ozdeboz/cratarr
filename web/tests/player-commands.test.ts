@@ -22,6 +22,13 @@ test('the ops that are named otherwise', () => {
   assert.deepEqual(commandOf('sleep', { atMs: null, endOfTrack: true }), { command: 'sleep', at_ms: null, end_of_track: true });
 });
 
+test("a track's copy goes to the player with it, whichever op takes it there", () => {
+  const named = { ...t, from: 'cratarr//in' };
+  assert.deepEqual(commandOf('queue', { tracks: [named], index: 0, positionMs: 0 }), { command: 'play', tracks: [named], index: 0, position_ms: 0 });
+  assert.deepEqual(commandOf('add', { tracks: [named] }), { command: 'add', tracks: [named] });
+  assert.deepEqual(commandOf('upcoming', { tracks: [named] }), { command: 'upcoming', tracks: [named] });
+});
+
 test('the ops that are the command by name, with their fields as given', () => {
   assert.deepEqual(commandOf('add', { at: 3, tracks: [t] }), { command: 'add', tracks: [t], at: 3 });
   assert.deepEqual(commandOf('add', { at: 3, tracks: [t], after: 'e1' }), { command: 'add', tracks: [t], at: 3, after: 'e1' });

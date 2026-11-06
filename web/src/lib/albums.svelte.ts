@@ -26,7 +26,7 @@ import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
 import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
-import { dotsOf, withCopyMoved, withCopyPicked, withoutCopy, type Dot, type Held } from './copiesRule';
+import { dotsOf, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
 import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
@@ -39,8 +39,8 @@ let reading: Promise<void> | null = null;
 let lastRead: { text: string; sources: AlbumsView['sources'] | null } = { text: '', sources: null };
 /** Reads it (`fresh`: past the service worker's copy); one read at a time. */
 // The Library's list read again whenever its records' files or places changed (lib/dataChanged: a fix's titles, years
-// or lengths written; a record kept or moved; another copy picked), once it has been read.
-whenChanged(['files', 'collection', 'words', 'picks'], () => void (library.view && readLibrary(true).catch(() => {})));
+// or lengths written; a record kept or moved), once it has been read.
+whenChanged(['files', 'collection', 'words'], () => void (library.view && readLibrary(true).catch(() => {})));
 
 export function readLibrary(fresh: boolean): Promise<void> {
   reading ??= getAlbums(prefs.source || undefined, fresh)
@@ -121,11 +121,6 @@ export function copiesMoved(moved: { source: string; id: string; from?: string; 
   changeListed(moved, (a, i) => withCopyMoved(a, moved[i].from, moved[i].to));
 }
 
-/** A copy picked to play from: its card says so at once, the server's word coming with the next read. */
-export function copyPicked(source: string, id: string, chosen: string) {
-  changeListed([{ source, id }], (a) => withCopyPicked(a, chosen));
-}
-
 /** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;
  *  else (a download from before a playlist's rows said their albums; a record's id does not move) the Library's album of
  *  that name on its server, the track's artist's when several have the name. Else its own id, or null. */
@@ -140,12 +135,13 @@ export function albumOfDownload(t: DownloadedTrack): string | null {
 /** The album being started (its Play buttons wait meanwhile). */
 export const albumPlay = $state({ starting: null as string | null });
 
-/** Plays an album where the page plays (decision 0022); with no player to play on, it says so (0.12). */
-export async function playListedAlbum(source: string, a: Pick<ListedAlbum, 'id' | 'title'>) {
+/** Plays an album where the page plays (decision 0022); with no player to play on, it says so (0.12). `copy`: Play from,
+ *  its copy in this library, for that queue alone. */
+export async function playListedAlbum(source: string, a: Pick<ListedAlbum, 'id' | 'title'>, copy?: string) {
   if (albumPlay.starting) return;
   albumPlay.starting = a.id;
   try {
-    if (!(await playAlbumHere(source, a.id, a.title))) choosePlayer();
+    if (!(await playAlbumHere(source, a.id, a.title, copy))) choosePlayer();
   } catch (e) {
     toast.fail(e, 'Could not start playing');
   } finally {
