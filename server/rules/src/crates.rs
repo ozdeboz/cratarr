@@ -2965,14 +2965,15 @@ mod tests {
 
     #[test]
     fn tracks_left_out_by_hand_stay_out_over_conditions_and_both_toggles() {
-        let (files, membership, favourites) = library();
+        let (mut files, membership, favourites) = library();
+        files[0].track = Some(1);
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0, fits: None };
-        let left = vec!["a".to_string()];
+        let left = vec!["tr-1".to_string()];
         // "a" is a favourite: left out, it stays out with only favourites shown.
         assert_eq!(select(&files, &leaving_out(&left, &Favourites::Only.with(&[])), &w), vec!["b"]);
         assert_eq!(select(&files, &leaving_out(&left, &[]), &w), vec!["b", "c", "d"]);
         assert_eq!(leaving_out(&[], &[]), Vec::new(), "nothing left out, nothing added");
-        assert!(!is_axis("line"), "not an axis one builds with");
+        assert!(!is_axis(LEFT_OUT), "not an axis one builds with");
     }
 
     #[test]
