@@ -2509,8 +2509,8 @@ export const moveAlbum = (source: string, album: string, from: string | undefine
   request<AlbumMoved>(`${albumPath(source, album)}/move`, asJson({ from, to, year }));
 /** Delete a copy, into its library's trash (Undo brings it back). The record stays while another copy does. */
 export const deleteAlbum = (source: string, album: string, from: string | undefined) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, asJson({ from }));
-/** Delete an album of someone's own music from the Users panel: an administrator's, only there. */
-export const deleteOwnAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete-own`, { method: 'POST' });
+/** Delete a record's copy in someone's own music from the Users panel: an administrator's, only there. */
+export const deleteOwnAlbum = (source: string, album: string, from: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete-own`, asJson({ from }));
 
 /** What Replace would do with an upgrade: the album in Music it replaces, how many of its tracks the new files take
  * over, new tracks, and where it goes; or why not (`unmatched`: old tracks without a match, by title). */

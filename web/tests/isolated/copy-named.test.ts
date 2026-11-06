@@ -2,9 +2,10 @@
 // library's id holds `/`, so `from` must arrive whole.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import '../harness/pageGlobals.ts';
 
-const { deleteAlbum, moveAlbum, movePreview, replaceIncoming, replacePreview } = await import('../../src/lib/api.ts');
+const { deleteAlbum, deleteOwnAlbum, moveAlbum, movePreview, replaceIncoming, replacePreview } = await import('../../src/lib/api.ts');
 
 const OWN = 'cratarr//own/cy';
 type Asked = { path: string; body: unknown };
@@ -50,4 +51,17 @@ test("Replace's preview names the copy and the main library it takes the place o
 test('Replace names both copies beside its cover and its carrying over', async () => {
   const { body } = await asked(() => replaceIncoming('cratarr', 'al-1', 'in', 'music', '2001', 'new', true));
   assert.deepEqual(body, { from: 'in', to: 'music', year: '2001', cover: 'new', carry: true });
+});
+
+test("a delete from the Users panel names the owner's copy, not the one a record also has in Music", async () => {
+  const { path, body } = await asked(() => deleteOwnAlbum('cratarr', 'al-1', OWN));
+  assert.equal(path, '/api/albums/cratarr/al-1/delete-own');
+  assert.deepEqual(body, { from: OWN });
+});
+
+test("the Users panel's every act on someone's music names their library", () => {
+  const src = readFileSync(new URL('../../src/lib/settings/UsersPart.svelte', import.meta.url), 'utf8');
+  assert.match(src, /moveAlbum\(OWN, a\.id, u\.own_library!, to\.id\)/);
+  assert.match(src, /deleteOwnAlbum\(OWN, a\.id, u\.own_library!\)/);
+  assert.match(src, /deleteOne\(a, open!\.own_library!\)/);
 });

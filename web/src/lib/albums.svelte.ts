@@ -26,7 +26,7 @@ import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
 import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
-import { dotsOf, type Dot, type Held } from './copiesRule';
+import { dotsOf, withCopyMoved, withoutCopy, type Dot, type Held } from './copiesRule';
 import { shownIn } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { can } from './capabilities.svelte';
@@ -91,6 +91,34 @@ export function listedAlbum(source: string, id: string) {
   const s = library.view?.sources.find((x) => x.id === source);
   const a = s?.albums.find((x) => x.id === id);
   return s && a ? { s, a } : null;
+}
+
+/** Each listed record `changes` names, changed at once, before the list is read again: the Library's list and what its
+ *  ids are found by are replaced whole, and it is not taken for the list as last read. */
+function changeListed(changes: { source: string; id: string }[], change: (a: ListedAlbum, i: number) => ListedAlbum | null) {
+  const v = library.view;
+  if (!v) return;
+  const at = new Map(changes.map((c, i) => [`${c.source}/${c.id}`, i]));
+  const sources = v.sources.map((s) => ({
+    ...s,
+    albums: s.albums.flatMap((a) => {
+      const i = at.get(`${s.id}/${a.id}`);
+      return i === undefined ? a : (change(a, i) ?? []);
+    }),
+  }));
+  library.view = { ...v, sources };
+}
+
+/** Copies gone (deleted, or taken in by a Replace). Answers the records that went with them: a record stays while one
+ *  copy does, and it is what stays that the page goes on showing. */
+export function copiesGone<G extends { source: string; id: string; from?: string }>(gone: G[]): G[] {
+  changeListed(gone, (a, i) => withoutCopy(a, gone[i].from));
+  return gone.filter((g) => !listedAlbum(g.source, g.id));
+}
+
+/** Copies moved: their records stay, each copy in its new library. */
+export function copiesMoved(moved: { source: string; id: string; from?: string; to: string }[]) {
+  changeListed(moved, (a, i) => withCopyMoved(a, moved[i].from, moved[i].to));
 }
 
 /** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;

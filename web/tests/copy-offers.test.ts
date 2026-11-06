@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import type { AlbumCopy, AlbumsSource, LibraryInfo, Verdict } from '../src/lib/api.ts';
 
-const { adds, deleteEntries, moveEntries, offersOf, replaceEntries } = await import('../src/lib/copiesRule.ts');
+const { adds, deleteEntries, deleteGroups, moveEntries, moveGroups, offersOf, replaceEntries, withCopyMoved, withoutCopy } = await import('../src/lib/copiesRule.ts');
 
 const library = (id: string, kind: LibraryInfo['kind'], more: Partial<LibraryInfo> = {}) => ({ id, name: id.toUpperCase(), kind, ...more }) as LibraryInfo;
 const INFO = [library('music', 'main'), library('more', 'main'), library('in', 'incoming'), library('in2', 'incoming'), library('own', 'own', { mine: true }), library('theirs', 'own')];
@@ -149,4 +149,74 @@ test('out of Incoming or into own music is an add, between main libraries a move
   assert.equal(adds(INFO[2], INFO[0]), true);
   assert.equal(adds(INFO[0], INFO[4]), true);
   assert.equal(adds(INFO[0], INFO[1]), false);
+});
+
+// Several ticked records (Q17: one entry per library, as `moves` groups; no Plays from).
+const ticked = (id: string, ...copies: AlbumCopy[]) => ({ id, offers: offersOf(list(), { id, copies }, true, none) });
+
+test('ticked records of one copy each keep one Delete, for all of them', () => {
+  const groups = deleteGroups([ticked('al-1', copy('music')), ticked('al-2', copy('own'))]);
+  assert.deepEqual(groups.map((g) => [g.name, g.them.map((x) => x.offer.library)]), [[null, ['music', 'own']]]);
+});
+
+test('with a record of two copies among them, Delete is an entry per library', () => {
+  const groups = deleteGroups([ticked('al-1', copy('music')), ticked('al-2', copy('music'), copy('own'))]);
+  assert.deepEqual(groups.map((g) => [g.name, g.them.map((x) => x.item.id)]), [
+    ['MUSIC', ['al-1', 'al-2']],
+    ['OWN', ['al-2']],
+  ]);
+});
+
+test('a copy with a job or not deletable is in no Delete, and with nothing to delete there is none', () => {
+  const jobbed = { id: 'al-1', offers: offersOf(list(), { id: 'al-1', copies: [copy('music')] }, true, () => 7) };
+  assert.deepEqual(deleteGroups([jobbed, ticked('al-2', copy('own', { deletable: false }))]), []);
+});
+
+test('a record moves once into a library, by the first of its copies that can', () => {
+  const [more] = moveGroups([ticked('al-1', copy('music'), copy('in', { keepable: true }))]).filter((g) => g.name === 'MORE');
+  assert.deepEqual(more.them.map((x) => [x.item.id, x.offer.library]), [['al-1', 'music']]);
+});
+
+test('records move by library name, each its own copy, added only where every one is', () => {
+  const [more] = moveGroups([ticked('al-1', copy('music')), ticked('al-2', copy('in', { keepable: true }))]).filter((g) => g.name === 'MORE');
+  assert.deepEqual(more.them.map((x) => [x.offer.library, x.add]), [['music', false], ['in', true]]);
+  assert.equal(more.adding, false);
+  assert.equal(moveGroups([ticked('al-2', copy('in', { keepable: true }))]).every((g) => g.adding), true);
+});
+
+// What is left of a record: it stays while one copy does (docs/records-and-copies.md).
+const held = (...copies: AlbumCopy[]) => ({ library: copies[0]?.library, format: copies[0]?.format ?? null, bitrate_kbps: copies[0]?.kbps ?? null, copies });
+
+test('a record stays with its other copy when one goes, and its card reads what now plays', () => {
+  const a = held(copy('music', { format: 'FLAC', kbps: 900, plays: true }), copy('own', { format: 'MP3', kbps: 320 }));
+  const left = withoutCopy(a, 'music');
+  assert.deepEqual([left?.library, left?.format, left?.bitrate_kbps, left?.copies?.map((c) => [c.library, c.plays])], ['own', 'MP3', 320, [['own', true]]]);
+});
+
+test('a copy that does not play leaves the card as it was', () => {
+  const a = held(copy('music', { format: 'FLAC', kbps: 900, plays: true }), copy('in', { format: 'MP3', kbps: 128 }));
+  assert.deepEqual([withoutCopy(a, 'in')?.format, withoutCopy(a, 'in')?.copies?.length], ['FLAC', 1]);
+});
+
+test('a record goes with its last copy', () => {
+  assert.equal(withoutCopy(held(copy('music')), 'music'), null);
+});
+
+test('an album with no copies listed goes with its one library', () => {
+  assert.equal(withoutCopy({ library: 'music', format: null, bitrate_kbps: null }, 'music'), null);
+});
+
+test('of two folders of one library only the first goes, as `from` names it', () => {
+  const left = withoutCopy(held(copy('music', { format: 'FLAC' }), copy('music', { format: 'MP3' })), 'music');
+  assert.deepEqual(left?.copies?.map((c) => c.format), ['MP3']);
+});
+
+test('a moved copy lies in its new library, and nothing leaves', () => {
+  const moved = withCopyMoved(held(copy('in', { plays: true }), copy('own')), 'in', 'music');
+  assert.deepEqual(moved.copies?.map((c) => c.library), ['music', 'own']);
+  assert.equal(moved.library, 'music');
+});
+
+test('an album with no copies listed moves by its one library', () => {
+  assert.equal(withCopyMoved({ library: 'in', format: null, bitrate_kbps: null }, 'in', 'music').library, 'music');
 });

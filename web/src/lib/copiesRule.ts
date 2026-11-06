@@ -132,3 +132,54 @@ export const deleteEntries = (offers: AlbumOffer[], word: string) =>
   free(offers)
     .filter((o) => o.deletable)
     .map((offer) => ({ offer, label: offers.length > 1 ? `Delete from ${offer.name}` : `Delete ${word}` }));
+
+/** A ticked record with what each of its copies allows. */
+type Ticked = { offers: AlbumOffer[] };
+
+/** Several ticked records' Delete, what one has several have. While none of them has two copies, one entry: each its one
+ *  copy. Else one per library by its name (`name`), as Move's are, so what goes is said and a record of two copies never
+ *  loses both. */
+export function deleteGroups<T extends Ticked>(items: T[]) {
+  const able = items.flatMap((item) => free(item.offers).flatMap((offer) => (offer.deletable ? { item, offer } : [])));
+  if (!able.length) return [];
+  if (!items.some((x) => x.offers.length > 1)) return [{ name: null as string | null, them: able }];
+  return [...new Set(able.map((x) => x.offer.name))].map((name) => ({ name: name as string | null, them: able.filter((x) => x.offer.name === name) }));
+}
+
+/** Each library they can move into, by its name (whichever server's), with what would go. A record goes once: the first
+ *  of its copies that can, in the order they would play, as one entry cannot say which. */
+export function moveGroups<T extends Ticked>(items: T[]) {
+  const by = new Map<string, { item: T; offer: AlbumOffer; to: LibraryInfo; add: boolean }[]>();
+  for (const item of items)
+    for (const offer of free(item.offers))
+      for (const to of offer.targets) {
+        const them = by.get(to.name) ?? [];
+        if (!them.some((x) => x.item === item)) by.set(to.name, [...them, { item, offer, to, add: adds(offer.from, to) }]);
+      }
+  // Added where every one of them is (`adds`), else moved.
+  return [...by].map(([name, them]) => ({ name, them, adding: them.every((x) => x.add) }));
+}
+
+type Copied = Pick<ListedAlbum, 'library' | 'copies' | 'format' | 'bitrate_kbps'>;
+
+/** A record as these copies leave it: the card's facts are the one that plays, the next in the list's order if that went. */
+function led<A extends Copied>(a: A, copies: AlbumCopy[]): A {
+  const lead = copies.find((c) => c.plays) ?? copies[0];
+  return { ...a, copies: copies.map((c) => ({ ...c, plays: c === lead })), library: lead.library, format: lead.format, bitrate_kbps: lead.kbps };
+}
+
+/** A record once its copy in `library` went (of two folders the first, as `from` names it): null with its last. A record
+ *  stays while one copy does. An album of a list naming no copies is its one library's. */
+export function withoutCopy<A extends Copied>(a: A, library?: string): A | null {
+  if (!a.copies) return null;
+  const at = a.copies.findIndex((c) => c.library === library);
+  const rest = a.copies.filter((_, i) => i !== at);
+  return rest.length ? led(a, rest) : null;
+}
+
+/** A record once its copy in `from` moved into `to`: nothing leaves, the copy lies elsewhere. */
+export function withCopyMoved<A extends Copied>(a: A, from: string | undefined, to: string): A {
+  if (!a.copies) return { ...a, library: to };
+  const at = a.copies.findIndex((c) => c.library === from);
+  return led(a, a.copies.map((c, i) => (i === at ? { ...c, library: to } : c)));
+}
