@@ -370,7 +370,14 @@ impl Library {
         };
         match state {
             Ids::Remember => playlists_db.set_meta(CATALOGUE_KEY, &catalogue.generation())?,
-            Ids::Same => {}
+            // One restored from a backup has not given what it gave since, and those ids are named: its next ones start above them.
+            Ids::Same => {
+                let top: i64 = playlists_db.meta(TOP_KEY)?.and_then(|v| v.parse().ok()).unwrap_or(0);
+                if catalogue.top_id() < top {
+                    tracing::warn!("catalogue: older than the user data, which remembers id {top}: its next ids start above it");
+                    catalogue.number_above(top)?;
+                }
+            }
             Ids::Lost => {
                 tracing::error!("catalogue: its track ids were lost (catalogue.sqlite made anew): no ids until it is restored or started afresh");
                 catalogue.set_ids_lost(true);
@@ -485,6 +492,10 @@ impl Library {
         let stores = self.data_dir.as_deref().map_or(0, |d| top_in_stores(Path::new(d)));
         let floor = (remembered.max(named).max(ud.top_named()?).max(stores) / 1_000_000 + 1) * 1_000_000;
         self.catalogue.number_above(floor)?;
+        // Before the first start its records are still to come, and a catalogue saying they were given would leave every row unmatched.
+        if ud.first_start_done()? {
+            self.catalogue.first_records_over()?;
+        }
         ud.set_meta(CATALOGUE_KEY, &self.catalogue.generation())?;
         ud.set_meta(TOP_KEY, &floor.to_string())?;
         self.catalogue.set_ids_lost(false);

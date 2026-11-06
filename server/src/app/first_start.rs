@@ -52,6 +52,12 @@ impl FirstStart {
     /// `after` hears each step done: what a test stops it by.
     fn steps(&self, after: &dyn Fn(&str) -> Result<()>) -> Result<()> {
         if self.userdata.first_start_done()? {
+            // The catalogue must be past it too: one from before it numbers its albums anew, and every row would name another. A
+            // generation cannot say so, as a backup has the one it always had.
+            anyhow::ensure!(
+                self.catalogue.ids_lost() || self.catalogue.first_records_given()?,
+                "the catalogue is from before the first start of 0.16, the user data from after it: restore a later catalogue, or all of the copy from before"
+            );
             return Ok(());
         }
         // No ids to map: moved now, every row would be written off as unmatched, and nothing could move it later. What names

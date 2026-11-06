@@ -195,7 +195,9 @@ stops the start, as Cratarr does not run on half-moved data. The way back is the
   of the copy where it lies now, so a review or a hearing reads on that copy and on no other. Of a release on two records, the copy in
   Incoming comes first. Where a real album holds the id, it stands: that is what 0.15 shows on it, and one row cannot be parted.
 - **What stops it:** a library not there, which says which, and a catalogue whose ids were lost, or one lost before 0.16 remembered
-  it, as what names its ids would all read as matching nothing.
+  it, as what names its ids would all read as matching nothing. Once it is over, a catalogue from before it beside user data from after
+  it stops the start too: restored alone, it would number its albums anew under every row, with no error. A generation cannot tell, as
+  a backup has the one it always had, so the catalogue's own mark is asked, and one started afresh sets it.
 - **What matches nothing stays and is counted,** as a tag's hash from before a retag cannot be read back. A left-out line on a file
   in a trash stays a line too: its path went with it.
 

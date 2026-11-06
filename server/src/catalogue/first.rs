@@ -143,6 +143,18 @@ impl Catalogue {
         folders.into_iter().map(|(id, home)| Ok((id, home.unwrap_or(id), rows_in(&db, id, None, UNSERVED)?))).collect()
     }
 
+    /// Whether this catalogue has been through this step: all a start asks once the first start is over. Blocking.
+    pub fn first_records_given(&self) -> Result<bool> {
+        Ok(self.db().prepare_cached("SELECT 1 FROM meta WHERE key = ?1")?.exists([DONE])?)
+    }
+
+    /// Says this step is past, for a catalogue started afresh after the first start: it has nothing to give records to, and must not
+    /// read as one from before it. Blocking.
+    pub fn first_records_over(&self) -> Result<()> {
+        self.db().execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)", params![DONE, serde_json::to_string(&First::default())?])?;
+        Ok(())
+    }
+
     /// The libraries that hold files and cannot be seen, as a mount that is not up looks: in use and showing nothing, or parked
     /// where a server's library has no folder now (`unplaced`, its paths): a folder that is gone is out of use as far as `open`
     /// can tell, and only the settings say it was meant to be there. Blocking.
