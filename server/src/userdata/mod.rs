@@ -1587,6 +1587,12 @@ impl UserData {
         Ok(())
     }
 
+    /// The release group a fetcher found a request's album by, for one asked for by its names.
+    pub fn set_request_release_group(&self, id: i64, release_group: &str) -> Result<()> {
+        self.db().execute("UPDATE request SET release_group = ?2 WHERE id = ?1", params![id, release_group])?;
+        Ok(())
+    }
+
     /// How many requests wait for an answer (Health).
     pub fn requests_waiting(&self) -> Result<usize> {
         Ok(self.db().query_row("SELECT count(*) FROM request WHERE status = 'pending'", [], |r| r.get::<_, i64>(0))? as usize)
@@ -2586,6 +2592,8 @@ mod tests {
         assert_eq!(u.requests(None, Some("pending"), 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
         u.set_request_fetched(a, "Lidarr is looking for it").unwrap();
         assert_eq!(u.request(a).unwrap().unwrap().fetched.as_deref(), Some("Lidarr is looking for it"));
+        u.set_request_release_group(a, "rg-found").unwrap();
+        assert_eq!(u.request(a).unwrap().unwrap().release_group.as_deref(), Some("rg-found"));
         assert!(u.request(99).unwrap().is_none());
     }
 
