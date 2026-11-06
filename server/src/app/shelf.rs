@@ -114,10 +114,13 @@ impl Shelves {
         let mut albums = Vec::with_capacity(listed.len());
         let mut asked = false;
         for source::Listed { mut album, stamp } in listed {
-            let kept = self.details.lock().unwrap_or_else(|p| p.into_inner()).get(&key(&album.id)).filter(|(s, _)| *s == stamp).map(|(_, d)| d.clone());
+            // Cratarr's own lists each copy as it is: what is kept and what it says of an album are by record, so the row copy's.
+            let own = !album.copies.is_empty();
+            let kept = self.details.lock().unwrap_or_else(|p| p.into_inner()).get(&key(&album.id)).filter(|(s, _)| !own && *s == stamp).map(|(_, d)| d.clone());
             let found = album.path.as_deref().and_then(|p| details_at(&seen, &folders_of(album.library.as_deref()), p));
             let details = match found.or(kept) {
                 Some(d) => Some(d),
+                None if own => None,
                 None => match s.album_summary(&album.id).await {
                     Ok(Some(d)) => {
                         self.details.lock().unwrap_or_else(|p| p.into_inner()).insert(key(&album.id), (stamp.clone(), d.clone()));

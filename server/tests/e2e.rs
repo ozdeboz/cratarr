@@ -1185,6 +1185,45 @@ async fn a_requester_cannot_delete_the_kept_copy_end_to_end() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// One folder over two discs in two libraries: nothing lies right in it, so what the folders' facts say cannot reach it, and a list
+/// must not fall back on what the record plays from. Each lists its own format, and goes whole.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "the end-to-end suite: the Dockerfile's e2e stage"]
+async fn a_copy_over_two_folders_lists_its_own_format_end_to_end() {
+    let root = temp("two-folders");
+    let (library, data) = (root.join("library"), root.join("data"));
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(Command::new(BIN).arg("--make-layout").arg(&library).status().unwrap().success(), "the whole layout is made");
+    let (music, incoming) = (library.join("music"), library.join("incoming"));
+    let dir = "Salt Meridian/Both Shores (2018)";
+    for folder in [music.join(dir), incoming.join(dir)] {
+        let tracks = audio_under(&folder);
+        for (n, track) in tracks.iter().enumerate() {
+            let disc = folder.join(if n == 0 { "CD1" } else { "CD2" });
+            std::fs::create_dir_all(&disc).unwrap();
+            let file = Path::new(track).file_name().unwrap();
+            std::fs::rename(folder.join(file), disc.join(file)).unwrap();
+        }
+    }
+    settings(&data, &[(&music, "main"), (&incoming, "incoming")], &root.join("no-own-music"));
+    let s = Server::start(&data).await;
+    s.ok(reqwest::Method::PUT, "/api/settings/musicbrainz", json!({ "enabled": false })).await;
+    let path = |p: &Path| p.to_string_lossy().to_string();
+    s.read_in("Both Shores", &music).await;
+    let album = s.read_in("Both Shores", &incoming).await;
+    let format = |library: &Path| album["copies"].as_array().unwrap().iter().find(|c| c["library"].as_str() == Some(&*path(library))).unwrap()["format"].clone();
+    assert_eq!((format(&music), format(&incoming)), (json!("FLAC"), json!("MP3")), "{album}");
+    let listed = s.incoming_album("Both Shores").await;
+    assert_eq!(listed["format"], "MP3", "{listed}");
+
+    let (kept, gone) = (as_it_lies(&music.join(dir)), s.ok(reqwest::Method::POST, &format!("/api/albums/cratarr/{}/delete", album["id"].as_str().unwrap()), json!({ "from": path(&incoming) })).await);
+    assert_eq!(gone["title"], "Both Shores");
+    assert!(!incoming.join(dir).exists(), "both discs, the folder they share");
+    assert!(as_it_lies(&music.join(dir)) == kept);
+    s.stop();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// "Plays from", through the routes: a pick changes what plays for that account alone, and holds until its copy goes. An Undo
 /// brings the copy back, not the pick (Q13).
 #[tokio::test(flavor = "multi_thread")]
