@@ -1,5 +1,6 @@
 -- A catalogue as 0.15 left it, on the fixture layout's tags: schema from tag v0.15.0, rows for what `--make-layout` writes.
--- `@music@`, `@incoming@`, `@second@` are the folders, and size and mtime of 0 the files': `Data015` fills them in.
+-- `@music@`, `@incoming@`, `@second@` are the folders, and size and mtime of 0 the files': `data_0_15` in tests/e2e.rs fills them in.
+-- Tracks count down from the order of a walk: a catalogue made afresh counts up, so a lost one shows.
 CREATE TABLE folders (id INTEGER PRIMARY KEY, path TEXT NOT NULL);
 CREATE TABLE files ( folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, state INTEGER NOT NULL DEFAULT 0, format TEXT, bitrate INTEGER, duration_ms INTEGER, error TEXT, issue TEXT, issue_detail TEXT, track INTEGER, gone_at INTEGER, trashed TEXT, PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 CREATE TABLE cover_files ( folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, PRIMARY KEY (folder, rel)) WITHOUT ROWID;
