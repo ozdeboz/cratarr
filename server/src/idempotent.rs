@@ -50,6 +50,22 @@ impl Kept {
 
 static KEYS: LazyLock<Mutex<HashMap<(String, String), Kept>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// A key's "being made" mark, taken away however the making ends. A request dropped with its connection (a page
+/// reloaded, an app killed, a proxy giving up) never reaches the lines after its handler, and the mark left would answer
+/// every resend "still being made" for as long as a key is kept, with every later change of that page queued behind it.
+/// Sent again, such a change is made again: nothing says how far the one cut off got.
+struct Mark((String, String));
+
+impl Drop for Mark {
+    fn drop(&mut self) {
+        if let Ok(mut keys) = KEYS.lock()
+            && matches!(keys.get(&self.0), Some(Kept::Making { .. }))
+        {
+            keys.remove(&self.0);
+        }
+    }
+}
+
 /// A key as sent: up to 255 visible characters (a UUID, as the page makes them).
 fn key_of(request: &Request) -> Option<String> {
     let v = request.headers().get("idempotency-key")?.to_str().ok()?.trim();
@@ -112,12 +128,12 @@ pub async fn once(State(kept): State<Option<Arc<UserData>>>, request: Request, n
         // Being made from here: the same key at once waits for it, while the user data is asked below.
         keys.insert(id.clone(), Kept::Making { at: now, asked: asked.clone() });
     }
+    let _mark = Mark(id.clone());
     // Made before the memory forgot it (a restart, a day since): its first answer, from the user data.
     if let Some(ud) = kept.clone() {
         let (user, key) = id.clone();
         if let Ok(Ok(Some(k))) = tokio::task::spawn_blocking(move || ud.kept_answer(&user, &key)).await {
             if k.asked != asked {
-                KEYS.lock().unwrap().remove(&id);
                 return sent_with_another();
             }
             let status = StatusCode::from_u16(k.status).unwrap_or(StatusCode::OK);
@@ -132,15 +148,16 @@ pub async fn once(State(kept): State<Option<Arc<UserData>>>, request: Request, n
     let size = response.body().size_hint();
     let keep = !response.status().is_server_error() && size.upper().is_some_and(|u| u <= BIGGEST);
     if !keep {
-        KEYS.lock().unwrap().remove(&id);
         return response;
     }
     let (parts, body) = response.into_parts();
     let Ok(body) = axum::body::to_bytes(body, BIGGEST as usize).await else {
-        KEYS.lock().unwrap().remove(&id);
         return (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": "The answer could not be read." }))).into_response();
     };
     let kind = parts.headers.get(header::CONTENT_TYPE).cloned();
+    // In memory before anything else is waited for: the change is made, and a connection gone from here on must not lose
+    // that to the mark's going.
+    KEYS.lock().unwrap().insert(id.clone(), Kept::Done { at: now, asked: asked.clone(), status: parts.status, kind: kind.clone(), body: body.clone() });
     if let Some(ud) = kept.filter(|_| body.len() <= BIGGEST_KEPT) {
         let (user, key) = id.clone();
         let a = KeptAnswer {
@@ -154,7 +171,6 @@ pub async fn once(State(kept): State<Option<Arc<UserData>>>, request: Request, n
             failed => tracing::warn!("a change's answer not kept past a restart: {failed:?}"),
         }
     }
-    KEYS.lock().unwrap().insert(id, Kept::Done { at: now, asked, status: parts.status, kind, body: body.clone() });
     Response::from_parts(parts, Body::from(body))
 }
 
@@ -239,6 +255,52 @@ mod tests {
         let r = app(made.clone()).oneshot(ask("/api/broken", Some("k-broken-1"))).await.unwrap();
         assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
         assert!(!KEYS.lock().unwrap().contains_key(&(String::new(), "k-broken-1".to_string())));
+    }
+
+    /// An app whose change `/api/x` never ends the first time, as if its connection went while it was being made.
+    fn cut_off_once(made: Arc<AtomicUsize>) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/x",
+                post(move || {
+                    let made = made.clone();
+                    async move {
+                        if made.fetch_add(1, Ordering::SeqCst) == 0 {
+                            std::future::pending::<()>().await;
+                        }
+                        axum::Json(json!({ "made": made.load(Ordering::SeqCst) }))
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(None::<Arc<UserData>>, once))
+    }
+
+    #[tokio::test]
+    async fn a_change_cut_off_half_way_is_made_when_sent_again_and_stalls_nothing() {
+        let made = Arc::new(AtomicUsize::new(0));
+        let app = cut_off_once(made.clone());
+        let first = tokio::spawn(app.clone().oneshot(ask("/api/x", Some("k-cut-1"))));
+        while made.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let meanwhile = app.clone().oneshot(ask("/api/x", Some("k-cut-1"))).await.unwrap();
+        assert_eq!(meanwhile.status(), StatusCode::CONFLICT, "being made, the same key waits for it");
+        assert!(meanwhile.headers().contains_key(header::RETRY_AFTER));
+        // As hyper drops a request with its connection: nothing after the handler runs.
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let again = app.clone().oneshot(ask("/api/x", Some("k-cut-1"))).await.unwrap();
+        assert_eq!(again.status(), StatusCode::OK, "made now, where a day of 409s stalled every change behind it");
+        assert_eq!(text(again).await, r#"{"made":2}"#);
+        let replayed = app.oneshot(ask("/api/x", Some("k-cut-1"))).await.unwrap();
+        assert_eq!(replayed.headers().get("idempotent-replayed").unwrap(), "true", "and once made, answered as ever");
+    }
+
+    #[tokio::test]
+    async fn a_change_that_ended_keeps_its_answer_past_its_mark() {
+        let made = Arc::new(AtomicUsize::new(0));
+        app(made.clone()).oneshot(ask("/api/x", Some("k-mark-1"))).await.unwrap();
+        assert!(matches!(KEYS.lock().unwrap().get(&(String::new(), "k-mark-1".to_string())), Some(Kept::Done { .. })));
     }
 
     #[tokio::test]
