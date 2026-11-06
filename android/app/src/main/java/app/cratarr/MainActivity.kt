@@ -278,6 +278,7 @@ class MainActivity : AppCompatActivity() {
         network = NetState.Watch(this) { page?.postMessage(it.toString()) }
         Plays.onPlayedHere = { runOnUiThread { page?.postMessage(Plays.playedHere(this).toString()) } }
         Scrobblers.onChanged = { runOnUiThread { page?.postMessage(Scrobblers.here(this).toString()) } }
+        Who.changed.add(whoChanged)
         // The device's music changed (decision 0052): the page asks for it again when it shows it.
         contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
@@ -323,7 +324,24 @@ class MainActivity : AppCompatActivity() {
         PlayerService.ready(this)
     }
 
+    /** Another one's things are this device's ([Who], decision 0101): the page is told what is theirs, and their kept
+     *  items are brought in step. */
+    private val whoChanged: (String, String) -> Unit = { _, _ ->
+        runOnUiThread {
+            page?.let { p ->
+                p.postMessage(appMessage())
+                tellServers(p)
+                p.postMessage(Scrobblers.here(this).toString())
+            }
+            tellDownloads(now = true)
+            tellKept(now = true)
+            Kept.sync(this)
+            webView?.let(::keepPagePrefs)
+        }
+    }
+
     override fun onDestroy() {
+        Who.changed.remove(whoChanged)
         LiveSound.listener = null
         outputs?.stop()
         network?.stop()
@@ -446,6 +464,26 @@ class MainActivity : AppCompatActivity() {
                 followSession()
             }
             "network" -> reply.postMessage(NetState.now(this).toString())
+            // Whose this device's things are (decision 0101): the account the page learnt from `/api/me` (`""` with
+            // signing in off), at once rather than at the app's own next ask.
+            "account" -> {
+                val name = message.optString("name", "")
+                lifecycleScope.launch(Dispatchers.IO) { Who.set(this@MainActivity, name) }
+            }
+            // The page signing out: what waits of the account's goes first (a few seconds at most), its downloads go
+            // when asked, then nobody's things show; answered, so the page signs out after.
+            "sign-out" -> {
+                val remove = message.optBoolean("remove")
+                lifecycleScope.launch(Dispatchers.IO) {
+                    Plays.flush(this@MainActivity)
+                    Scrobblers.flush(this@MainActivity)
+                    if (remove) Kept.releaseAccount(this@MainActivity, Who.current(this@MainActivity))
+                    Who.set(this@MainActivity, null)
+                    withContext(Dispatchers.Main) { reply.postMessage(JSONObject().put("type", "signed-out").toString()) }
+                }
+            }
+            // This device's Remove for an account's share (decision 0101), by its name as the kept report gives it.
+            "account-downloads-remove" -> Kept.releaseAccount(this, Who.keyOf(message.optString("account", "")))
             "device-plays" -> reply.postMessage(Plays.playedHere(this).toString())
             "player" -> player?.handle(message) ?: waiting.add(message)
             // A track's snippet (0.12): played beside the music by the player service. Before the player is connected
@@ -557,9 +595,14 @@ class MainActivity : AppCompatActivity() {
                 )
                 Reach.checkSoon(this@MainActivity)
             }
-            "page-prefs" -> message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }?.let {
-                prefs.pagePrefs = it
-                webView?.let(::keepPagePrefs)
+            // The device's settings, and the person's own under whose they are (decision 0101).
+            "page-prefs" -> {
+                val device = message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }
+                val who = message.optString("who")
+                val mine = message.optString("mine").takeIf { it.isNotEmpty() && who.isNotEmpty() && it != prefs.pagePrefsOf(who) }
+                device?.let { prefs.pagePrefs = it }
+                mine?.let { prefs.keepPagePrefsOf(who, it) }
+                if (device != null || mine != null) webView?.let(::keepPagePrefs)
             }
             "device-set" -> {
                 message.optString("player").trim().takeIf { it.isNotEmpty() }?.let { prefs.playerName = it }
@@ -854,14 +897,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address. */
+    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address:
+     *  the device's, and the person's own of the one signed in now (decision 0101). */
     private fun keepPagePrefs(view: WebView) {
         pageScript?.remove()
         pageScript = null
         val saved = prefs.pagePrefs ?: return
+        val who = Who.current(this)
+        val mine = prefs.pagePrefsOf(who)?.let { "localStorage.setItem(${JSONObject.quote("cratarr-prefs$who")}, ${JSONObject.quote(it)});" }.orEmpty()
         val origins = prefs.origins()
         if (origins.isEmpty() || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-        val script = "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}"
+        val script = "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}); $mine } catch (e) {}"
         pageScript = Prefs.withoutRefused(origins) { WebViewCompat.addDocumentStartJavaScript(view, script, it) }
     }
 

@@ -5,12 +5,16 @@
 // list of what it holds. The service worker (public/sw.js) answers the player's stream request for a kept track from
 // that copy, whatever position it asks for: the player cuts what lies before it (its append window). Only where the page
 // is installed (a browser tab's storage is for the browser to drop), and never Bandcamp's previews (relays).
+// Each account keeps its own list (decision 0101), hidden while another is signed in; a stream two accounts keep is
+// stored once, and goes with the last one's.
+import { accountKey, perAccount, whenAccount, whoOf } from './account';
 import { desktop } from './desktop';
 import { losslessAs, playsSmaller } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 
-/** The cache the service worker reads kept streams from; the covers' and data's are its own. Their names are public/sw.js's:
- *  raised there, here too, and the list of what is held with them, or it would list what the worker let go. */
+/** The cache the service worker reads kept streams from (everyone's); the covers' and data's are each account's. Their
+ *  names are public/sw.js's: raised there, here too, and the list of what is held with them, or it would list what the
+ *  worker let go. */
 const OFFLINE = 'cratarr-offline-2';
 const COVERS = 'cratarr-covers-2';
 const DATA = 'cratarr-data-2';
@@ -32,7 +36,8 @@ export type KeptTrack = {
 /** A track on its way: waiting for Cratarr to make its copy, coming in, or failed (why, in a line). */
 export type Fetching = { state: 'waiting' | 'downloading' | 'failed'; percent?: number; why?: string };
 
-export const offline = $state({ kept: {} as Record<string, KeptTrack>, fetching: {} as Record<string, Fetching> });
+/** `who`: whose list it is (lib/account's whoOf). */
+export const offline = $state({ kept: {} as Record<string, KeptTrack>, fetching: {} as Record<string, Fetching>, who: whoOf(accountKey()) });
 
 /** Installed (on a home screen, as an app window, or in the desktop app): where this page keeps tracks. */
 export const installed =
@@ -47,17 +52,47 @@ export const isKept = (t: { source: string; id: string }) => !!offline.kept[keyO
 
 try {
   localStorage.removeItem(OLD_INDEX);
-  const saved = JSON.parse(localStorage.getItem(INDEX) ?? '{}');
-  if (saved && typeof saved === 'object') offline.kept = saved;
 } catch {
-  /* none kept, or no storage */
+  /* no storage */
 }
+/** Whose list [offline] holds: saved under them, even while another's comes in. */
+let listOf = perAccount(INDEX);
+function load() {
+  listOf = perAccount(INDEX);
+  offline.who = whoOf(accountKey());
+  offline.kept = {};
+  offline.fetching = {};
+  try {
+    const saved = JSON.parse(localStorage.getItem(listOf) ?? '{}');
+    if (saved && typeof saved === 'object') offline.kept = saved;
+  } catch {
+    /* none kept, or no storage */
+  }
+}
+load();
+whenAccount.add(() => {
+  if (perAccount(INDEX) !== listOf) load();
+});
 function save() {
   try {
-    localStorage.setItem(INDEX, JSON.stringify(offline.kept));
+    localStorage.setItem(listOf, JSON.stringify(offline.kept));
   } catch {
     /* kept for this visit */
   }
+}
+/** Whether another account's list here holds the track too (its stream then stays). */
+function keptByAnother(key: string): boolean {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const name = localStorage.key(i);
+      if (!name || name === listOf || !name.startsWith(INDEX)) continue;
+      if (key in (JSON.parse(localStorage.getItem(name) ?? '{}') ?? {})) return true;
+    }
+  } catch {
+    /* none read: kept as it is */
+    return true;
+  }
+  return false;
 }
 
 type Wanted = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null };
@@ -107,6 +142,8 @@ export async function keepOffline(tracks: Wanted[]) {
 
 async function fetchOne(t: Wanted, f: Facts) {
   const key = keyOf(t);
+  // The account it is fetched for: one signed in meanwhile does not get it.
+  const forList = listOf;
   offline.fetching[key] = { state: 'downloading', percent: 0 };
   try {
     const res = await fetch(f.file!.url);
@@ -126,9 +163,10 @@ async function fetchOne(t: Wanted, f: Facts) {
     const headers = new Headers(res.headers);
     headers.set('content-length', String(got));
     await (await caches.open(OFFLINE)).put(streamKey(t), new Response(new Blob(parts as BlobPart[], { type: res.headers.get('content-type') ?? '' }), { status: 200, headers }));
-    // Its cover and waveform where the service worker keeps them already.
-    if (f.cover) await keepBeside(COVERS, f.cover, new URL(f.cover, location.origin).pathname);
-    if (f.waveform) await keepBeside(DATA, f.waveform, f.waveform);
+    if (forList !== listOf) return;
+    // Its cover and waveform where the service worker keeps them already, the account's.
+    if (f.cover) await keepBeside(perAccount(COVERS), f.cover, new URL(f.cover, location.origin).pathname);
+    if (f.waveform) await keepBeside(perAccount(DATA), f.waveform, f.waveform);
     offline.kept[key] = {
       source: t.source,
       id: t.id,
@@ -156,11 +194,11 @@ async function keepBeside(cache: string, url: string, key: string) {
   }
 }
 
-/** Takes these tracks out of this browser. */
+/** Takes these tracks out of the account's list here; a stream another account keeps stays. */
 export async function forgetOffline(tracks: { source: string; id: string }[]) {
   const c = await caches.open(OFFLINE);
   for (const t of tracks) {
-    await c.delete(streamKey(t));
+    if (!keptByAnother(keyOf(t))) await c.delete(streamKey(t));
     delete offline.kept[keyOf(t)];
     delete offline.fetching[keyOf(t)];
   }

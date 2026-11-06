@@ -1,7 +1,9 @@
 // An album's cover on this device (Symfonium's "Change local thumbnail", decided 2026-10-16): a picture chosen here,
 // kept in this browser (IndexedDB) and shown wherever the album's cover is (lib/api's albumCoverUrl); and a cover read
 // again from the server (Symfonium's "Remove cached images"). Neither reaches the server or another device; Home's
-// picture alone does, as a copy on the account.
+// picture alone does, as a copy on the account. Each account's apart (decision 0101: `cratarr-covers@name`; Home's
+// header picture is the person's own), hidden while another is signed in.
+import { perAccount, whenAccount } from './account';
 
 const DB = 'cratarr-covers';
 const STORE = 'covers';
@@ -14,9 +16,12 @@ export const localCovers = $state<Record<string, string>>({});
 export const coverRounds = $state<Record<string, number>>({});
 export const coverKey = (source: string, album: string) => `${source}/${album}`;
 
+/** Whose pictures [localCovers] holds. */
+let ofWho = perAccount(DB);
+
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const r = indexedDB.open(DB, 1);
+    const r = indexedDB.open(ofWho, 1);
     r.onupgradeneeded = () => r.result.createObjectStore(STORE);
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
@@ -35,8 +40,13 @@ async function write(key: string, blob: Blob | null) {
   db.close();
 }
 
-// The pictures chosen before, as the page opens.
+// The pictures chosen before, as the page opens, and another account's when it signs in.
 async function load() {
+  ofWho = perAccount(DB);
+  for (const k of Object.keys(localCovers)) {
+    URL.revokeObjectURL(localCovers[k]);
+    delete localCovers[k];
+  }
   const db = await open();
   const tx = db.transaction(STORE, 'readonly');
   const cursor = tx.objectStore(STORE).openCursor();
@@ -49,7 +59,12 @@ async function load() {
     c.continue();
   };
 }
-if (typeof indexedDB !== 'undefined') load().catch(() => {});
+if (typeof indexedDB !== 'undefined') {
+  load().catch(() => {});
+  whenAccount.add(() => {
+    if (perAccount(DB) !== ofWho) load().catch(() => {});
+  });
+}
 
 /** A picture no larger than it needs to be (JPEG, its longest side at most `max`); as it is when it cannot be read. */
 async function shrink(file: Blob, max = MAX_PX): Promise<Blob> {

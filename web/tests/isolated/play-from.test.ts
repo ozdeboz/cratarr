@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { audio, fromRest, player, runFor, server, settle, track } from '../harness/fakeStream.ts';
 
 const { enqueue, keptHere, local, playOnCommand, playQueue, seek, setRepeat, switchLocal, windUrl } = player;
+const { perAccount } = await import('../../src/lib/account.ts');
 const { library, playListedAlbum } = await import('../../src/lib/albums.svelte.ts');
 const { heardAs } = await import('../../src/lib/copiesRule.ts');
 const { endPreview, startPreview } = await import('../../src/lib/preview.svelte.ts');
@@ -132,7 +133,7 @@ test('a queue left behind keeps its copy as kept for a reload, and taken up agai
   await play(COPY);
   playQueue([track('other', 100)]);
   await settle();
-  assert.equal(JSON.parse(localStorage.getItem('cratarr-queues')!)[0].tracks[0].from, COPY);
+  assert.equal(JSON.parse(localStorage.getItem(perAccount('cratarr-queues'))!)[0].tracks[0].from, COPY);
   switchLocal(keptHere.list[0].id);
   await settle();
   assert.deepEqual(asked().at(-1), ['r1', 0, COPY]);

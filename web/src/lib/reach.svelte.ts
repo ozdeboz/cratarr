@@ -88,11 +88,20 @@ export function refused() {
 export const asksSignIn = (res: Response) => res.status === 401 && /^Cookie\b.*realm="Cratarr"/i.test(res.headers.get('WWW-Authenticate') ?? '');
 
 let leaving = false;
+/** Set by lib/app: whether the sign-in waits, `go` called once it may (decision 0101: in the app, nobody signed in
+ *  still plays Local and other servers' modes, so the sign-in comes only in Cratarr's). */
+let holding: ((go: () => void) => boolean) | null = null;
+export const onSignInAsked = (f: (go: () => void) => boolean) => (holding = f);
 
 /** To Cratarr's sign-in page, once; it comes back here after (the #route too). The background requests wait meanwhile. */
 export function toSignIn() {
   if (leaving) return;
-  leaving = true;
   refusedUntil = Date.now() + REFUSED_MS;
+  if (holding?.(signIn)) return;
+  signIn();
+}
+function signIn() {
+  if (leaving) return;
+  leaving = true;
   location.assign(`/signin?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`);
 }

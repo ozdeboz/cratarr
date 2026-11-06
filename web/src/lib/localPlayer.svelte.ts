@@ -14,6 +14,7 @@
 // of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
+import { perAccount, whenAccount } from './account';
 import { playback } from './deviceLog';
 import { ask, heard as heardAsked, type Asked } from './player/asked';
 import { cue } from './queueCue.svelte';
@@ -2309,10 +2310,12 @@ export type KeptQueue = {
 const KEPT_KEY = 'cratarr-queues';
 /** Queues in all, with the one that plays. */
 const QUEUES = 20;
+/** Whose list it is: each account's apart (decision 0101), hidden while another is signed in. */
+let keptOf = perAccount(KEPT_KEY);
 
 function loadKept(): KeptQueue[] {
   try {
-    const list = JSON.parse(localStorage.getItem(KEPT_KEY) ?? '[]');
+    const list = JSON.parse(localStorage.getItem(keptOf) ?? '[]');
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
@@ -2324,11 +2327,20 @@ export const keptHere = $state({ list: loadKept(), id: '', renamed: false });
 
 function saveKept() {
   try {
-    localStorage.setItem(KEPT_KEY, JSON.stringify(keptHere.list));
+    localStorage.setItem(keptOf, JSON.stringify(keptHere.list));
   } catch {
     // A private window, or storage refused: the list lasts as long as the page.
   }
 }
+
+// Another account signed in, or nobody: the one leaving's list kept, the one come's read.
+whenAccount.add(() => {
+  const k = perAccount(KEPT_KEY);
+  if (k === keptOf) return;
+  saveKept();
+  keptOf = k;
+  keptHere.list = loadKept();
+});
 
 const newQueueId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 

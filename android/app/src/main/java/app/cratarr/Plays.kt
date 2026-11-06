@@ -7,7 +7,8 @@
  * it is left (skipped for another, stopped when nothing follows), with how much of it was heard.
  * Each kept play carries the account it was heard under, and is told only while that account is signed in (the owner,
  * 2026-11-02, a bug fixed in 0.13: plays kept while one account was signed in were told as the next one's); another
- * account's wait for it, 30 days at most.
+ * account's wait for it, 30 days at most. One heard with nobody signed in (decision 0101) is counted on this device
+ * only, never told as anyone's.
  */
 package app.cratarr
 
@@ -21,8 +22,6 @@ import java.util.concurrent.Executors
 object Plays {
     private const val TAG = "CratarrPlays"
     private const val PENDING = "plays_pending"
-    /** The account signed in as last learnt ([learn]): the plays heard from now on carry it. */
-    private const val ACCOUNT = "plays_account"
     private const val PLAYED_HERE = "plays_device"
     /** The device music's plays kept here, the latest tracks. */
     private const val PLAYED_HERE_MOST = 200
@@ -65,10 +64,11 @@ object Plays {
             .put("player", prefs.playerName)
         if (lengthMs > 0) play.put("length_secs", lengthMs / 1000.0)
         prefs.queueId.takeIf { it.isNotEmpty() }?.let { play.put("context", "queue:$it") }
-        Prefs.shared(context).getString(ACCOUNT, null)?.let { play.put("account", it) }
-        save(context, load(context).apply { add(play) })
+        // Whose it is: the account signed in now ([Who]); with nobody, the device's own count only.
+        val account = Who.account(context)
+        if (account != null) save(context, load(context).apply { add(play.put("account", account)) })
         if (source == DeviceMusic.SOURCE && counts) playedHere(context, id, atMs)
-        tell(context)
+        if (account != null) tell(context)
     }
 
     /**
@@ -93,19 +93,24 @@ object Plays {
     fun playedHere(context: Context): JSONObject =
         JSONObject().put("type", "device-plays").put("plays", JSONArray(loadArray(context, PLAYED_HERE)))
 
-    /** The page signed in (another session): whose it is, learnt now, so the plays heard from now on carry it; then that
-     *  account's own plays are told. Signed out (no session): the account is forgotten, so plays heard before the next
-     *  one is learnt wait unstamped and take its key, not the one signed out's (632's review, 2026-11-02); asked,
-     *  Cratarr would only refuse. */
+    /** The page signed in (another session): whose it is, learnt now ([Who]), so the plays heard from now on carry it;
+     *  then that account's own plays are told. No session: nobody is signed in. */
     fun signedIn(context: Context) {
         val app = context.applicationContext
         val server = Prefs(app).serverUrl?.trimEnd('/') ?: return
         if (Sessions.tokenIn(Net.cookie(server)) == null) {
-            Prefs.shared(app).edit().remove(ACCOUNT).apply()
+            Who.set(app, null)
             return
         }
         sender.execute { learn(app, server) }
         tell(app)
+    }
+
+    /** Tells them now and waits for it, a few seconds at most (blocking; the account signing out, decision 0101: its
+     *  plays go first, where Cratarr can be reached). */
+    fun flush(context: Context) {
+        tell(context)
+        runCatching { sender.submit {}.get(8, java.util.concurrent.TimeUnit.SECONDS) }
     }
 
     /** Tells Cratarr the plays not told yet of the account signed in; those it answers for are forgotten. */
@@ -117,7 +122,7 @@ object Plays {
             val account = learn(app, server) ?: return@execute
             val pending = synchronized(this) {
                 val now = System.currentTimeMillis()
-                val kept = stamped(load(app), account).filter { ours(it, account) || now - it.optLong("at") < KEEP_MS }
+                val kept = load(app).filter { ours(it, account) || now - it.optLong("at") < KEEP_MS }
                 save(app, kept)
                 kept.filter { ours(it, account) }
             }
@@ -135,9 +140,10 @@ object Plays {
         }
     }
 
-    /** The account signed in, as Cratarr's `/api/me` says (blocking), kept as the last learnt; null when it did not say
-     *  (not reached, not signed in): nothing is told then. */
+    /** The account signed in, as Cratarr's `/api/me` says (blocking), this device's from now on ([Who]); null when it
+     *  did not say (not reached; nobody signed in, which [Who] learns too): nothing is told then. */
     private fun learn(app: Context, server: String): String? {
+        var nobody = false
         val account = try {
             val c = Net.open(app, "$server/api/me")
             try {
@@ -145,6 +151,7 @@ object Plays {
                 c.readTimeout = 10_000
                 val code = Net.code(app, c)
                 val body = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }
+                nobody = signedOut(code, body)
                 accountOf(code, body)
             } finally {
                 c.disconnect()
@@ -152,7 +159,11 @@ object Plays {
         } catch (e: Exception) {
             null
         }
-        if (account == null) Log.i(TAG, "whose the plays are not known yet") else Prefs.shared(app).edit().putString(ACCOUNT, account).apply()
+        when {
+            account != null -> Who.set(app, account)
+            nobody -> Who.set(app, null)
+            else -> Log.i(TAG, "whose the plays are not known yet")
+        }
         return account
     }
 
@@ -163,10 +174,9 @@ object Plays {
         else -> null
     }
 
-    /** The account known: the plays carrying none take it (heard before one was learnt here, or kept before 0.13: the
-     *  account signed in then, as was taken until now). */
-    fun stamped(plays: List<JSONObject>, account: String): MutableList<JSONObject> =
-        plays.map { if (it.has("account")) it else JSONObject(it.toString()).put("account", account) }.toMutableList()
+    /** A `/api/me` answer saying nobody is signed in (not one that only did not come). */
+    fun signedOut(code: Int, body: String?): Boolean =
+        code == 401 || code == 403 || (code == 404 && body?.contains("No one is signed in") == true)
 
     /** Whether a play is [account]'s: only those are told. */
     fun ours(play: JSONObject, account: String): Boolean = play.has("account") && play.optString("account") == account
