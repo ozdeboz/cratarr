@@ -40,7 +40,8 @@ pub struct FirstAlbums {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct First {
     pub records: u64,
-    /// Albums given a record: two copies of one record count two.
+    /// Albums given a record: two copies of one record count two, and what no list shows counts too, so neither this nor `records`
+    /// is the number of albums listed.
     pub copies: u64,
     pub tracks_merged: u64,
     pub bases_on_two_records: u64,

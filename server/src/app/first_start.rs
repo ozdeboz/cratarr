@@ -37,7 +37,8 @@ impl FirstStart {
         tokio::task::spawn_blocking(move || self.steps(&|_| Ok(()))).await.context("it stopped")?
     }
 
-    /// What a step found: kept from an earlier start, or found now and kept.
+    /// What a step found: kept from an earlier start, or found now and kept. A stop inside a step goes over it again, and what it
+    /// had moved by then counts as none moved: the ids are right, and the count is short.
     fn step(&self, name: &str, work: impl FnOnce() -> Result<Report>) -> Result<Report> {
         if let Some(found) = self.userdata.step_found(name)? {
             return Ok(found);
